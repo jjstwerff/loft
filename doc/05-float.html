@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Float</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <span class="cur">Float</span> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Float</h1>
+<article>
+<p>A 'float' stores a number with a decimal point, like 3.14 or -0.001. It uses 64-bit precision (the same as f64 in Rust), which gives you about 15 significant digits — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>Write a decimal point in a literal and Loft treats the whole expression as a float. The usual arithmetic operators (+, -, *, /) all work the way you would expect.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1.5</span> + <span class="nm">0.5</span> == <span class="nm">2.0</span>, <span class="st">"Float addition"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3.0</span> / <span class="nm">2.0</span> == <span class="nm">1.5</span>, <span class="st">"Float division"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2.0</span> * <span class="nm">1.5</span> == <span class="nm">3.0</span>, <span class="st">"Float multiplication"</span>);</code></pre>
+<p>The 'f' suffix selects single-precision (32-bit) floats. Single-precision takes half the memory of a regular float and is common in graphics and audio code where exact decimal values matter less than speed or size.</p>
+<pre><code>    x = <span class="nm">0.1f</span> + <span class="nm">2</span> * <span class="nm">1.0f</span>;
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x == <span class="nm">2.1f</span>, <span class="st">"Single precision float"</span>);</code></pre>
+<p>'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float' parses the text back to a number.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span> == <span class="nm">3.0</span>, <span class="st">"Integer to float"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1.5"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span> == <span class="nm">1.5</span>, <span class="st">"Text to float"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.5}"</span> == <span class="st">"1.5"</span>, <span class="st">"Float formatted as text"</span>);</code></pre>
+<h2 id="formatting-floats">Formatting Floats</h2>
+<p>Put a colon after the value inside '{...}' to control how it looks. '{value:width.precision}' — 'width' is the minimum number of characters printed (padded with spaces on the left); 'precision' fixes the number of decimal places. You can use either part on its own: '{value:.2}' just fixes decimal places, '{value:5}' just sets the minimum width.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.2:4.2}"</span> == <span class="st">"1.20"</span>, <span class="st">"Float with width and precision"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{334.1:.2}"</span> == <span class="st">"334.10"</span>, <span class="st">"Float with precision only"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.4:5}"</span> == <span class="st">"  1.4"</span>, <span class="st">"Float with width only"</span>);</code></pre>
+<h2 id="math-functions">Math Functions</h2>
+<p>'PI' is a built-in constant (approximately 3.14159265358979). Multiplying it by 1000 and rounding gives 3142, which confirms the value is correct.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">round</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="nm">1000.0</span>) == <span class="nm">3142.0</span>, <span class="st">"PI constant"</span>);</code></pre>
+<p>'pow(base, exponent)' raises a number to a power — this is exponentiation. Note: '^' in Loft is bitwise XOR, NOT exponentiation. Always use pow() for powers. 'log(value, base)' is the inverse: log(x, b) answers "b to the what power equals x?" Here: 4^5 = 1024, and log(1024, 2) = 10 because 2^10 = 1024.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">log</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">4.0</span>, <span class="nm">5</span>), <span class="nm">2</span>) == <span class="nm">10.0</span>, <span class="st">"log base 2 of 4^5"</span>);</code></pre>
+<p>'sin' and 'cos' work in radians, not degrees. A full circle is 2*PI radians; a half circle (180 degrees) is PI radians. sin(PI) is theoretically zero but floating-point gives a tiny rounding error, so we use ceil() to snap it up. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 * 1000) lands at -1000.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">ceil</a></span>(<span class="bi"><a href="stdlib-math.html">sin</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span>) + <span class="bi"><a href="stdlib-math.html">cos</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span>) * <span class="nm">1000</span>) == -<span class="nm">1000.0</span>, <span class="st">"sin and cos"</span>);</code></pre>
+<p>'abs()' returns the absolute value — the distance from zero, always non-negative. Useful any time you care about magnitude but not direction.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2.5</span>) == <span class="nm">2.5</span>, <span class="st">"Absolute value of float"</span>);</code></pre>
+<p>'round()' picks the nearest whole number (0.5 rounds up). 'ceil()' always rounds up to the next whole number, even for 2.01. 'floor()' always rounds down to the previous whole number, even for 2.99. All three give back a float, not an integer — so 3.0, not 3.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">round</a></span>(<span class="nm">2.6</span>) == <span class="nm">3.0</span>, <span class="st">"round up"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">round</a></span>(<span class="nm">2.4</span>) == <span class="nm">2.0</span>, <span class="st">"round down"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">ceil</a></span>(<span class="nm">2.1</span>) == <span class="nm">3.0</span>, <span class="st">"ceil"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">floor</a></span>(<span class="nm">2.9</span>) == <span class="nm">2.0</span>, <span class="st">"floor"</span>);</code></pre>
+<p>Single-precision floats work inside format strings just like regular floats.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{0.1f + 2 * 1.0f}b"</span> == <span class="st">"a2.1b"</span>, <span class="st">"Single-precision format"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

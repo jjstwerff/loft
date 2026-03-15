@@ -1,0 +1,90 @@
+fn square(n: integer) -> integer { n * n }
+fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn test() {
+    result = apply(fn square, 7);
+    assert(result == 49, "expected 49, got {result}");
+}
+fn n_square(n:integer) -> integer {#block(1):integer
+  [1] OpMulInt(n(0), n(0));
+}#block(1):integer
+
+byte-code for fn_ref_as_parameter:n_square(n: integer[0]) -> integer
+   0[4]: return-address  @abs=2832
+   0[8]: [1] VarInt(var[0]) -> integer var=n[0]:integer
+   3[12]: VarInt(var[0]) -> integer var=n[0]:integer
+   6[16]: MulInt(v1: integer, v2: integer) -> integer
+   7[12]: Return(ret=4, value=4, discard=12) type=integer 0
+
+fn n_apply(f:function([integer(-2147483647, 2147483647)], integer(-2147483647, 2147483647)), x:integer) -> integer {#block(1):integer
+  [2] fn_ref[0](x(0));
+}#block(1):integer
+
+byte-code for fn_ref_as_parameter:n_apply(f: function([integer(-2147483647, 2147483647)], integer(-2147483647, 2147483647))[0], x: integer[4]) -> integer
+   0[8]: return-address  @abs=2845
+   0[12]: [2] VarInt(var[4]) -> integer var=x[4]:integer
+   3[16]: CallRef(fn_var=16, arg_size=4)
+   8[16]: Return(ret=8, value=4, discard=16) type=integer 0
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [4] result(1):integer = n_apply(411i32, 7i32);
+  [5] n_assert(OpEqInt(result(1), 49i32), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "expected 49, got ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(result(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "fn_ref_as_parameter", 5i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for fn_ref_as_parameter:n_test()
+   0[0]: return-address  @abs=2859
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [4] ConstInt(val=411) -> integer var=result[28]:integer
+   6[32]: ConstInt(val=7) -> integer
+  11[36]: Call(size=0, fn=n_apply)
+  18[32]: [5] VarInt(var[28]) -> integer var=result[28]:integer
+  21[36]: ConstInt(val=49) -> integer
+  26[40]: EqInt(v1: integer, v2: integer) -> boolean
+  27[33]: ClearText(var[4]) var=__work_1[4]:text
+  30[33]: ConstText(_value="expected 49, got ") -> text
+  49[49]: AppendText(var[4], v1: text)
+  52[33]: VarInt(var[28]) -> integer var=result[28]:integer
+  55[37]: ConvLongFromInt(v1: integer) -> long
+  56[41]: ConstInt(val=0) -> integer
+  61[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  68[33]: VarText(var[4]) -> text var=__work_1[4]:text
+  71[49]: ConstText(_value="fn_ref_as_parameter") -> text
+  92[65]: ConstInt(val=5) -> integer
+  97[69]: StaticCall(n_assert)
+ 100[32]: FreeText(var[4])
+ 103[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [4] Text()
+    1:[32] ConstInt(val=411) -> 411[32]
+    6:[36] ConstInt(val=7) -> 7[36]
+   11:[40] Call(size=0, fn=n_apply)
+ 2845:[44] VarInt(var[36]=x) -> 7[44]
+ 2848:[48] CallRef(fn_var=16, arg_size=4)
+ 2832:[52] VarInt(var[44]=n) -> 7[52]
+ 2835:[56] VarInt(var[44]=n) -> 7[56]
+ 2838:[60] MulInt(v1=7[52], v2=7[56]) -> 49[52]
+ 2839:[56] Return(ret=2853[48], value=4, discard=12) -> 49[44]
+ 2853:[48] Return(ret=2877[40], value=4, discard=16) -> 49[32]
+   18:[36] VarInt(var[32]=result) -> 49[36]
+   21:[40] ConstInt(val=49) -> 49[40]
+   26:[44] EqInt(v1=49[36], v2=49[40]) -> true[36]
+   27:[37] ClearText(var[8]=__work_1)
+   30:[37] ConstText(_value="expected 49, got ") -> "expected 49, got "[37]
+   49:[53] AppendText(var[8], v1="expected 49, got "[37])
+   52:[37] VarInt(var[32]=result) -> 49[37]
+   55:[41] ConvLongFromInt(v1=49[37]) -> 49[37]
+   56:[45] ConstInt(val=0) -> 0[45]
+   61:[49] FormatLong(var[8], val=49[37], radix=10, width=0[45], token=32, plus=false, note=false)
+   68:[37] VarText(var[8]=__work_1) -> "expected 49, got 49"[37]
+   71:[53] ConstText(_value="fn_ref_as_parameter") -> "fn_ref_as_parameter"[53]
+   92:[69] ConstInt(val=5) -> 5[69]
+   97:[73] StaticCall(n_assert)
+  100:[36] FreeText(var[8])
+  103:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished

@@ -1,0 +1,127 @@
+struct S {a: integer, b: integer, c:integer};
+struct Main { s: vector<S> };
+
+pub fn test() {
+    test_value = {m = Main{};
+sizeof(S) + 100 * sizeof(Main) + 10000 * sizeof(m) + 100000 * sizeof(vector<S>)};
+    assert(
+        test_value == 1240412,
+        "Test failed {test_value} != 1240412"
+    );
+}
+Type 18:S[12/4]: parents [Main 19]
+    a:integer[0]
+    b:integer[4]
+    c:integer[8]
+
+Type 19:Main[4/4]:
+    s:vector<S>[0]
+
+Type 20:vector<S>[4/4]:Vector(18)
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [5] test_value(1):integer = {#block(2):integer
+    m(2):ref(Main) = null;
+    OpDatabase(m(2), 19i32);
+    OpSetInt(m(2), 0i32, 0i32);
+    [6] OpAddInt(OpAddInt(OpAddInt(12i32, OpMulInt(100i32, 4i32)), OpMulInt(10000i32, OpSizeofRef(m(2)))), OpMulInt(100000i32, 12i32));
+    OpFreeRef(m(2));
+  }#block(2):integer;
+  [7] n_assert(OpEqInt(test_value(1), 1240412i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 1240412");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "vector_size", 8i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for vector_size:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [5] ConvRefFromNull() -> ref(reference) var=m[28]:ref(Main) ; [store-alloc]
+   2[40]: Database(var[28], db_tp=19) type=Main 19
+   7[40]: VarRef(var[28]) -> ref(reference) type=Main 19 var=m[28]:ref(Main)
+  10[52]: ConstInt(val=0) -> integer
+  15[56]: SetInt(v1: ref(reference), fld=0, val: integer)
+  18[40]: [6] ConstInt(val=12) -> integer
+  23[44]: ConstInt(val=100) -> integer
+  28[48]: ConstInt(val=4) -> integer
+  33[52]: MulInt(v1: integer, v2: integer) -> integer
+  34[48]: AddInt(v1: integer, v2: integer) -> integer
+  35[44]: ConstInt(val=10000) -> integer
+  40[48]: VarRef(var[28]) -> ref(reference) type=Main 19 var=m[28]:ref(Main)
+  43[60]: SizeofRef(val: ref(reference)) -> integer
+  44[52]: MulInt(v1: integer, v2: integer) -> integer
+  45[48]: AddInt(v1: integer, v2: integer) -> integer
+  46[44]: ConstInt(val=100000) -> integer
+  51[48]: ConstInt(val=12) -> integer
+  56[52]: MulInt(v1: integer, v2: integer) -> integer
+  57[48]: AddInt(v1: integer, v2: integer) -> integer
+  58[44]: VarRef(var[28]) -> ref(reference) type=Main 19 var=m[28]:ref(Main)
+  61[56]: FreeRef(v1: ref(reference)) ; [store-free]
+  62[44]: FreeStack(value=4, discard=16)
+  66[32]: [7] VarInt(var[28]) -> integer var=test_value[28]:integer
+  69[36]: ConstInt(val=1240412) -> integer
+  74[40]: EqInt(v1: integer, v2: integer) -> boolean
+  75[33]: ClearText(var[4]) var=__work_1[4]:text
+  78[33]: ConstText(_value="Test failed ") -> text
+  92[49]: AppendText(var[4], v1: text)
+  95[33]: VarInt(var[28]) -> integer var=test_value[28]:integer
+  98[37]: ConvLongFromInt(v1: integer) -> long
+  99[41]: ConstInt(val=0) -> integer
+ 104[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 111[33]: ConstText(_value=" != 1240412") -> text
+ 124[49]: AppendText(var[4], v1: text)
+ 127[33]: VarText(var[4]) -> text var=__work_1[4]:text
+ 130[49]: ConstText(_value="vector_size") -> text
+ 143[65]: ConstInt(val=8) -> integer
+ 148[69]: StaticCall(n_assert)
+ 151[32]: FreeText(var[4])
+ 154[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [5] Text()
+    1:[32] ConvRefFromNull() -> ref(1,0,8)[32]
+  ; store-alloc nr=1 max=2
+    2:[44] Database(var[32], db_tp=19)
+    7:[44] VarRef(var[32]=m) -> ref(1,1,8)={}[44]
+   10:[56] ConstInt(val=0) -> 0[56]
+   15:[60] SetInt(v1=ref(1,1,8)[44], fld=0, val=0[56])
+   18:[44] ConstInt(val=12) -> 12[44]
+   23:[48] ConstInt(val=100) -> 100[48]
+   28:[52] ConstInt(val=4) -> 4[52]
+   33:[56] MulInt(v1=100[48], v2=4[52]) -> 400[48]
+   34:[52] AddInt(v1=12[44], v2=400[48]) -> 412[44]
+   35:[48] ConstInt(val=10000) -> 10000[48]
+   40:[52] VarRef(var[32]=m) -> ref(1,1,8)={}[52]
+   43:[64] SizeofRef(val=ref(1,1,8)[52]) -> 4[52]
+   44:[56] MulInt(v1=10000[48], v2=4[52]) -> 40000[48]
+   45:[52] AddInt(v1=412[44], v2=40000[48]) -> 40412[44]
+   46:[48] ConstInt(val=100000) -> 100000[48]
+   51:[52] ConstInt(val=12) -> 12[52]
+   56:[56] MulInt(v1=100000[48], v2=12[52]) -> 1200000[48]
+   57:[52] AddInt(v1=40412[44], v2=1200000[48]) -> 1240412[44]
+   58:[48] VarRef(var[32]=m) -> ref(1,1,8)={}[48]
+   61:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+   62:[48] FreeStack(value=4, discard=16)
+   66:[36] VarInt(var[32]=test_value) -> 1240412[36]
+   69:[40] ConstInt(val=1240412) -> 1240412[40]
+   74:[44] EqInt(v1=1240412[36], v2=1240412[40]) -> true[36]
+   75:[37] ClearText(var[8]=__work_1)
+   78:[37] ConstText(_value="Test failed ") -> "Test failed "[37]
+   92:[53] AppendText(var[8], v1="Test failed "[37])
+   95:[37] VarInt(var[32]=test_value) -> 1240412[37]
+   98:[41] ConvLongFromInt(v1=1240412[37]) -> 1240412[37]
+   99:[45] ConstInt(val=0) -> 0[45]
+  104:[49] FormatLong(var[8], val=1240412[37], radix=10, width=0[45], token=32, plus=false, note=false)
+  111:[37] ConstText(_value=" != 1240412") -> " != 1240412"[37]
+  124:[53] AppendText(var[8], v1=" != 1240412"[37])
+  127:[37] VarText(var[8]=__work_1) -> "Test failed 1240412 != 1240412"[37]
+  130:[53] ConstText(_value="vector_size") -> "vector_size"[53]
+  143:[69] ConstInt(val=8) -> 8[69]
+  148:[73] StaticCall(n_assert)
+  151:[36] FreeText(var[8])
+  154:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished

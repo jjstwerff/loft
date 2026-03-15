@@ -1,0 +1,237 @@
+Type 7:vector<text>[4/4]:Vector(5)
+
+Type 8:Format[1/1]: parents [File 14]
+    TextFile
+    LittleEndian
+    BigEndian
+    Directory
+    NotExists
+
+Type 9:EnvVariable[8/4]:
+    name:text[0]
+    value:text[4]
+
+Type 10:Pixel[3/1]: parents [Image 12]
+    r:byte[0]
+    g:byte[1]
+    b:byte[2]
+
+Type 11:byte[1/1]:Byte(0, false)
+
+Type 12:Image[16/4]:
+    name:text[0]
+    width:integer[4]
+    height:integer[8]
+    data:vector<Pixel>[12]
+
+Type 13:vector<Pixel>[4/4]:Vector(10)
+
+Type 14:File[33/8]: parents [main_vector<File> 16]
+    path:text[24]
+    size:long[0]
+    format:Format[32]
+    ref:integer[28]
+    current:long[8]
+    next:long[16]
+
+Type 15:main_vector<text>[4/4]:
+    vector:vector<text>[0]
+
+Type 16:main_vector<File>[4/4]:
+    vector:vector<File>[0]
+
+Type 17:vector<File>[4/4]:Vector(14)
+
+fn t_5Pixel_value(self:Pixel) -> integer {#block(1):integer
+  [96] OpAddInt(OpAddInt(OpMulInt(OpGetByte(self(0), 0i32, 0i32), 65536i32), OpMulInt(OpGetByte(self(0), 1i32, 0i32), 256i32)), OpGetByte(self(0), 2i32, 0i32));
+}#block(1):integer
+
+fn t_4File_content(self:File, result:&text) -> text["result"] {#block(1):text["result"]
+  [102] result(0):&text = "";
+  [103] txt(1):text = "";
+  [104] OpGetFileText(self(0), OpCreateStack(txt(1)));
+  [105] OpAppendStackText(result(0), txt(1));
+  [106] OpFreeText(txt(1));
+  result(0);
+}#block(1):text["result"]
+
+fn t_4File_lines(self:File, result:vector<text>) -> vector<text>["??"] {#block(1):vector<text>["result"]
+  __work_1(1):text = "";
+  [112] OpClearVector(result(0));
+  [113] c(1):text = t_4File_content(self(0), {#default ref(2):ref(reference)["__work_1"]
+    OpCreateStack(__work_1(1));
+  }#default ref(2):ref(reference)["__work_1"]);
+  [114] p(1):integer = 0i32;
+  [115] {#For block(3):void
+    ch#index(3):integer = 0i32;
+    ch#next(3):integer = 0i32;
+    loop {#For loop_4
+      ch(4):character = {#for text next(5):character
+        ch#index(3):integer = ch#next(3);
+        _for_result_1(5):character = OpTextCharacter(c(1), ch#next(3));
+        ch#next(3):integer = OpAddInt(ch#next(3), OpLengthCharacter(_for_result_1(5)));
+        _for_result_1(5);
+      }#for text next(5):character;
+      if OpNot(OpConvBoolFromCharacter(ch(4))) {#break(6):void
+        break(0);
+      }#break(6):void else null;
+      {#block(7):void
+        [116] _elm_2(7):ref(boolean)["result"] = null;
+        if OpEqInt(OpConvIntFromCharacter(ch(4)), OpConvIntFromCharacter(10i32)) {#block(8):void
+          [117] _elm_2(7):ref(boolean)["result"] = OpNewRecord(result(0), 7i32, 65535i32);
+          OpSetText(_elm_2(7), 0i32, OpGetTextSub(c(1), p(1), ch#index(3)));
+          OpFinishRecord(result(0), _elm_2(7), 7i32, 65535i32);
+          [118] p(1):integer = ch#next(3);
+        }#block(8):void else null;
+      }#block(7):void;
+    }#For loop_4;
+  }#For block(3):void;
+  [121] _elm_3(1):ref(boolean)["result"] = null;
+  if OpLtInt(0i32, p(1)) {#block(9):void
+    [122] _elm_3(1):ref(boolean)["result"] = OpNewRecord(result(0), 7i32, 65535i32);
+    OpSetText(_elm_3(1), 0i32, OpGetTextSub(c(1), p(1), t_4text_len(c(1))));
+    OpFinishRecord(result(0), _elm_3(1), 7i32, 65535i32);
+  }#block(9):void else null;
+  [124] OpFreeText(c(1));
+  OpFreeText(__work_1(1));
+  result(0);
+}#block(1):vector<text>["result"]
+
+fn t_4text_split(self:text, separator:character, result:vector<text>) -> vector<text>["??"] {#block(1):vector<text>["result"]
+  [132] OpClearVector(result(0));
+  [133] p(1):integer = 0i32;
+  [134] {#For block(2):void
+    c#index(2):integer = 0i32;
+    c#next(2):integer = 0i32;
+    loop {#For loop_3
+      c(3):character = {#for text next(4):character
+        c#index(2):integer = c#next(2);
+        _for_result_1(4):character = OpTextCharacter(self(0), c#next(2));
+        c#next(2):integer = OpAddInt(c#next(2), OpLengthCharacter(_for_result_1(4)));
+        _for_result_1(4);
+      }#for text next(4):character;
+      if OpNot(OpConvBoolFromCharacter(c(3))) {#break(5):void
+        break(0);
+      }#break(5):void else null;
+      {#block(6):void
+        [135] _elm_2(6):ref(boolean)["result"] = null;
+        if OpEqInt(OpConvIntFromCharacter(c(3)), OpConvIntFromCharacter(separator(0))) {#block(7):void
+          [136] _elm_2(6):ref(boolean)["result"] = OpNewRecord(result(0), 7i32, 65535i32);
+          OpSetText(_elm_2(6), 0i32, OpGetTextSub(self(0), p(1), c#index(2)));
+          OpFinishRecord(result(0), _elm_2(6), 7i32, 65535i32);
+          [137] p(1):integer = c#next(2);
+        }#block(7):void else null;
+      }#block(6):void;
+    }#For loop_3;
+  }#For block(2):void;
+  [140] _elm_3(1):ref(boolean)["result"] = null;
+  if OpLtInt(0i32, p(1)) {#block(8):void
+    [141] _elm_3(1):ref(boolean)["result"] = OpNewRecord(result(0), 7i32, 65535i32);
+    OpSetText(_elm_3(1), 0i32, OpGetTextSub(self(0), p(1), t_4text_len(self(0))));
+    OpFinishRecord(result(0), _elm_3(1), 7i32, 65535i32);
+  }#block(8):void else null;
+  [143] result(0);
+}#block(1):vector<text>["result"]
+
+fn n_valid_path(path:text) -> boolean {#block(1):boolean
+  [150] depth(1):integer = 0i32;
+  [151] start(1):integer = 0i32;
+  [152] {#For block(2):void
+    c#index(2):integer = 0i32;
+    c#next(2):integer = 0i32;
+    loop {#For loop_3
+      c(3):character = {#for text next(4):character
+        c#index(2):integer = c#next(2);
+        _for_result_1(4):character = OpTextCharacter(path(0), c#next(2));
+        c#next(2):integer = OpAddInt(c#next(2), OpLengthCharacter(_for_result_1(4)));
+        _for_result_1(4);
+      }#for text next(4):character;
+      if OpNot(OpConvBoolFromCharacter(c(3))) {#break(5):void
+        break(0);
+      }#break(5):void else null;
+      {#block(6):void
+        [153] part(6):text = "";
+        if if OpEqInt(OpConvIntFromCharacter(c(3)), OpConvIntFromCharacter(47i32)) true else OpEqInt(OpConvIntFromCharacter(c(3)), OpConvIntFromCharacter(92i32)) {#block(7):void
+          [154] part(6):text = OpGetTextSub(path(0), start(1), c#index(2));
+          [155] start(1):integer = c#next(2);
+          [156] if OpEqText(part(6), "..") {#block(8):void
+            [157] depth(1):integer = OpMinInt(depth(1), 1i32);
+            [158] if OpLtInt(depth(1), 0i32) {#block(9):void
+              [159] false;
+              OpFreeText(part(6));
+              return null;
+            }#block(9):void else null;
+          }#block(8):void else if if OpNeText(part(6), ".") OpLtInt(0i32, t_4text_len(part(6))) else false {#block(10):void
+            [162] depth(1):integer = OpAddInt(depth(1), 1i32);
+          }#block(10):void else null;
+        }#block(7):void else null;
+        OpFreeText(part(6));
+      }#block(6):void;
+    }#For loop_3;
+  }#For block(2):void;
+  [166] if OpLtInt(start(1), t_4text_len(path(0))) {#block(11):void
+    [167] part(11):text = OpGetTextSub(path(0), start(1), t_4text_len(path(0)));
+    [168] if OpEqText(part(11), "..") {#block(12):void
+      [169] depth(1):integer = OpMinInt(depth(1), 1i32);
+    }#block(12):void else null;
+    OpFreeText(part(11));
+  }#block(11):void else null;
+  [172] OpLeInt(0i32, depth(1));
+}#block(1):boolean
+
+fn n_file(path:text, result:File) -> File["result"] {#block(1):ref(File)["result"]
+  [178] OpDatabase(result(0), 14i32);
+  OpSetText(result(0), 24i32, path(0));
+  OpSetInt(result(0), 28i32, OpConvIntFromNull());
+  OpSetLong(result(0), 0i32, 0i64);
+  OpSetEnum(result(0), 32i32, 0u8(8));
+  OpSetLong(result(0), 8i32, 0i64);
+  OpSetLong(result(0), 16i32, 0i64);
+  [179] if n_valid_path(path(0)) {#block(2):void
+    [180] drop OpGetFile(result(0));
+  }#block(2):void else {#block(3):void
+    [182] OpSetEnum(result(0), 32i32, 5u8(8));
+  }#block(3):void;
+  [184] result(0);
+}#block(1):ref(File)["result"]
+
+fn n_exists(path:text) -> boolean {#block(1):boolean
+  __ref_1(1):ref(File) = null;
+  [190] OpNeInt(OpConvIntFromEnum(OpGetEnum(n_file(path(0), __ref_1(1)), 32i32)), OpConvIntFromEnum(5u8(8)));
+  OpFreeRef(__ref_1(1));
+}#block(1):boolean
+
+fn n_delete(path:text) -> boolean {#block(1):boolean
+  [196] if n_exists(path(0)) OpDelete(path(0)) else false;
+}#block(1):boolean
+
+fn n_move(from:text, to:text) -> boolean {#block(1):boolean
+  [202] if if if n_valid_path(to(0)) n_exists(from(0)) else false OpNot(n_exists(to(0))) else false OpMoveFile(from(0), to(0)) else false;
+}#block(1):boolean
+
+fn t_4File_set_file_size(self:File, size:long) -> boolean {#block(1):boolean
+  [210] if if if OpNeInt(OpConvIntFromEnum(OpGetEnum(self(0), 32i32)), OpConvIntFromEnum(4u8(8))) OpNeInt(OpConvIntFromEnum(OpGetEnum(self(0), 32i32)), OpConvIntFromEnum(5u8(8))) else false OpLeLong(0i64, size(0)) else false OpTruncateFile(self(0), size(0)) else false;
+}#block(1):boolean
+
+fn t_4File_files(self:File, result:vector<ref(File)>) -> vector<ref(File)>["??"] {#block(1):vector<ref(File)>["result"]
+  [217] OpClearVector(result(0));
+  [218] if OpEqInt(OpConvIntFromEnum(OpGetEnum(self(0), 32i32)), OpConvIntFromEnum(4u8(8))) {#block(2):void
+    [219] drop OpGetDir(OpGetText(self(0), 24i32), result(0));
+  }#block(2):void else null;
+  [221] result(0);
+}#block(1):vector<ref(File)>["result"]
+
+fn t_4File_png(self:File, result:Image) -> Image["result"] {#block(1):ref(Image)["result"]
+  [232] if OpEqInt(OpConvIntFromEnum(OpGetEnum(self(0), 32i32)), OpConvIntFromEnum(1u8(8))) {#block(2):ref(Image)["result"]
+    [233] OpDatabase(result(0), 12i32);
+    OpSetText(result(0), 0i32, "");
+    OpSetInt(result(0), 4i32, 0i32);
+    OpSetInt(result(0), 8i32, 0i32);
+    OpSetInt(result(0), 12i32, 0i32);
+    [234] drop OpGetPngImage(OpGetText(self(0), 24i32), result(0));
+    [235] result(0);
+  }#block(2):ref(Image)["result"] else {#block(3):ref(Image)["result"]
+    [237] OpConvRefFromNull();
+  }#block(3):ref(Image)["result"];
+}#block(1):ref(Image)["result"]
+

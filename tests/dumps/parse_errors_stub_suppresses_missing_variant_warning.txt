@@ -1,0 +1,91 @@
+enum Shape {
+    Circle { r: float },
+    Rect { w: float, h: float }
+}
+fn area(self: Circle) -> float { self.r * self.r }
+fn area(self: Rect) -> float { }
+fn test() { 1 + 1; }
+Type 18:Shape[24/8]:
+    Circle:19
+    Rect:20
+
+Type 19:Circle[16/8]: EnumValue(1)
+    enum:byte[0]
+    r:float[8]
+
+Type 20:Rect[24/8]: EnumValue(2)
+    enum:byte[0]
+    w:float[8]
+    h:float[16]
+
+fn t_6Circle_area(self:Circle) -> float {#block(1):float
+  [5] OpMulFloat(OpGetFloat(self(0), 8i32), OpGetFloat(self(0), 8i32));
+}#block(1):float
+
+byte-code for stub_suppresses_missing_variant_warning:t_6Circle_area(self: ref(Circle)[0]) -> float
+   0[12]: return-address  @abs=2832
+   0[16]: [5] VarRef(var[0]) -> ref(reference) type=Circle 19 var=self[0]:ref(Circle)
+   3[28]: GetFloat(v1: ref(reference), fld=8) -> float
+   6[24]: VarRef(var[0]) -> ref(reference) type=Circle 19 var=self[0]:ref(Circle)
+   9[36]: GetFloat(v1: ref(reference), fld=8) -> float
+  12[32]: MulFloat(v1: float, v2: float) -> float
+  13[24]: Return(ret=12, value=8, discard=24) type=float 3
+
+fn t_4Rect_area(self:Rect) -> float 
+
+byte-code for stub_suppresses_missing_variant_warning:t_4Rect_area(self: ref(Rect)[0]) -> float
+   0[12]: return-address  @abs=2851
+   0[16]: Return(ret=12, value=8, discard=16) type=float 3
+
+fn n_test() {#block(1):void
+  [7] drop OpAddInt(1i32, 1i32);
+}#block(1):void
+
+byte-code for stub_suppresses_missing_variant_warning:n_test()
+   0[0]: return-address  @abs=2857
+   0[4]: [7] ConstInt(val=1) -> integer
+   5[8]: ConstInt(val=1) -> integer
+  10[12]: AddInt(v1: integer, v2: integer) -> integer
+  11[8]: FreeStack(value=0, discard=4)
+  15[4]: Return(ret=0, value=0, discard=4)
+
+fn t_5Shape_area(self:ref(Shape)) -> float {#dynamic_fn(1):float
+  if OpEqInt(OpConvIntFromEnum(OpGetEnum(self(0), 0i32)), 1i32) {#ret(2):void
+    return t_6Circle_area(self(0));
+  }#ret(2):void else null;
+  if OpEqInt(OpConvIntFromEnum(OpGetEnum(self(0), 0i32)), 2i32) {#ret(3):void
+    return t_4Rect_area(self(0));
+  }#ret(3):void else null;
+}#dynamic_fn(1):float
+
+byte-code for stub_suppresses_missing_variant_warning:t_5Shape_area(self: ref(Shape)[0]) -> float
+   0[12]: return-address  @abs=2878
+   0[16]: VarRef(var[0]) -> ref(reference) type=Shape 18 var=self[0]:ref(Shape)
+   3[28]: GetEnum(v1: ref(reference), fld=0) -> boolean
+   6[17]: ConvIntFromEnum(v1: boolean) -> integer
+   7[20]: ConstInt(val=1) -> integer
+  12[24]: EqInt(v1: integer, v2: integer) -> boolean
+  13[17]: GotoFalseWord(jump=36, if_false: boolean)
+  16[16]: VarRef(var[0]) -> ref(reference) type=Shape 18 var=self[0]:ref(Shape)
+  19[28]: Call(size=0, fn=t_6Circle_area)
+  26[24]: Return(ret=12, value=8, discard=24)
+  32[24]: FreeStack(value=0, discard=8)
+  36[16]: VarRef(var[0]) -> ref(reference) type=Shape 18 var=self[0]:ref(Shape)
+  39[28]: GetEnum(v1: ref(reference), fld=0) -> boolean
+  42[17]: ConvIntFromEnum(v1: boolean) -> integer
+  43[20]: ConstInt(val=2) -> integer
+  48[24]: EqInt(v1: integer, v2: integer) -> boolean
+  49[17]: GotoFalseWord(jump=72, if_false: boolean)
+  52[16]: VarRef(var[0]) -> ref(reference) type=Shape 18 var=self[0]:ref(Shape)
+  55[28]: Call(size=0, fn=t_4Rect_area)
+  62[24]: Return(ret=12, value=8, discard=24)
+  68[24]: FreeStack(value=0, discard=8)
+  72[16]: Return(ret=12, value=8, discard=16) type=float 3
+
+Execute test:
+    0:[8] ConstInt(val=1) -> 1[8]
+    5:[12] ConstInt(val=1) -> 1[12]
+   10:[16] AddInt(v1=1[8], v2=1[12]) -> 2[8]
+   11:[12] FreeStack(value=0, discard=4)
+   15:[8] Return(ret=4294967295[4], value=0, discard=4)
+Finished

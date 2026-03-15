@@ -1,0 +1,99 @@
+pub fn test() {
+    test_value = {a = "[ 1.2, -10.3, 1.812e4, 1.001e-8 ]" as vector<float>; a[2] + a[3]};
+    assert(
+        test_value == 18120.00000001001,
+        "Test failed {test_value} != 18120.00000001001"
+    );
+}
+Type 18:main_vector<float>[4/4]:
+    vector:vector<float>[0]
+
+Type 19:vector<float>[4/4]:Vector(3)
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [2] test_value(1):float = {#block(2):float
+    a(2):vector<float> = OpCastVectorFromText("[ 1.2, -10.3, 1.812e4, 1.001e-8 ]", 19i32);
+    OpAddFloat(OpGetFloat(OpGetVector(a(2), 8i32, 2i32), 0i32), OpGetFloat(OpGetVector(a(2), 8i32, 3i32), 0i32));
+    OpFreeRef(a(2));
+  }#block(2):float;
+  [3] n_assert(OpEqFloat(test_value(1), 18120.00000001001f64), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatFloat(__work_1(1), test_value(1), 0i32, 0i32);
+    OpAppendText(__work_1(1), " != 18120.00000001001");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "parse_vector", 4i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for parse_vector:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [2] ConstText(_value="[ 1.2, -10.3, 1.812e4, 1.001e-8 ]") -> text var=a[28]:vector<float>
+  36[44]: CastVectorFromText(val: text, db_tp=19) -> vector
+  39[40]: VarVector(var[28]) -> vector type=vector<float> 19 var=a[28]:vector<float>
+  42[52]: ConstInt(val=2) -> integer
+  47[56]: GetVector(r: vector, size=8, index: integer) -> ref(reference) type=float 3
+  50[52]: GetFloat(v1: ref(reference), fld=0) -> float
+  53[48]: VarVector(var[28]) -> vector type=vector<float> 19 var=a[28]:vector<float>
+  56[60]: ConstInt(val=3) -> integer
+  61[64]: GetVector(r: vector, size=8, index: integer) -> ref(reference) type=float 3
+  64[60]: GetFloat(v1: ref(reference), fld=0) -> float
+  67[56]: AddFloat(v1: float, v2: float) -> float
+  68[48]: VarVector(var[28]) -> vector type=vector<float> 19 var=a[28]:vector<float>
+  71[60]: FreeRef(v1: ref(reference)) ; [store-free]
+  72[48]: FreeStack(value=8, discard=20)
+  76[36]: [3] VarFloat(var[28]) -> float var=test_value[28]:float
+  79[44]: ConstFloat(val=18120.00000001001) -> float
+  88[52]: EqFloat(v1: float, v2: float) -> boolean
+  89[37]: ClearText(var[4]) var=__work_1[4]:text
+  92[37]: ConstText(_value="Test failed ") -> text
+ 106[53]: AppendText(var[4], v1: text)
+ 109[37]: VarFloat(var[28]) -> float var=test_value[28]:float
+ 112[45]: ConstInt(val=0) -> integer
+ 117[49]: ConstInt(val=0) -> integer
+ 122[53]: FormatFloat(var[4], val: float, width: integer, precision: integer)
+ 125[37]: ConstText(_value=" != 18120.00000001001") -> text
+ 148[53]: AppendText(var[4], v1: text)
+ 151[37]: VarText(var[4]) -> text var=__work_1[4]:text
+ 154[53]: ConstText(_value="parse_vector") -> text
+ 168[69]: ConstInt(val=4) -> integer
+ 173[73]: StaticCall(n_assert)
+ 176[36]: FreeText(var[4])
+ 179[36]: Return(ret=0, value=0, discard=36)
+
+Execute test:
+    0:[8] [2] Text()
+    1:[32] ConstText(_value="[ 1.2, -10.3, 1.812e4, 1.001e-8 ]") -> "[ 1.2, -10.3, 1.812e4, 1.001e-8 ]"[32]
+   36:[48] CastVectorFromText(val="[ 1.2, -10.3, 1.812e4, 1.001e-8 ]"[32], db_tp=19) -> ref(1,1,8)[32]
+   39:[44] VarVector(var[32]=a) -> ref(1,1,8)=[1.2,-10.3,18120,0.00000001001][44]
+   42:[56] ConstInt(val=2) -> 2[56]
+   47:[60] GetVector(r=ref(1,1,8)[44], size=8, index=2[56]) -> ref(1,9,24)=18120[44]
+   50:[56] GetFloat(v1=ref(1,9,24)[44], fld=0) -> 18120[44]
+   53:[52] VarVector(var[32]=a) -> ref(1,1,8)=[1.2,-10.3,18120,0.00000001001][52]
+   56:[64] ConstInt(val=3) -> 3[64]
+   61:[68] GetVector(r=ref(1,1,8)[52], size=8, index=3[64]) -> ref(1,9,32)=0.00000001001[52]
+   64:[64] GetFloat(v1=ref(1,9,32)[52], fld=0) -> 0.00000001001[52]
+   67:[60] AddFloat(v1=18120[44], v2=0.00000001001[52]) -> 18120.00000001001[44]
+   68:[52] VarVector(var[32]=a) -> ref(1,1,8)=[1.2,-10.3,18120,0.00000001001][52]
+   71:[64] FreeRef(v1=ref(1,1,8)[52]) ; store-free max=1
+   72:[52] FreeStack(value=8, discard=20)
+   76:[40] VarFloat(var[32]=test_value) -> 18120.00000001001[40]
+   79:[48] ConstFloat(val=18120.00000001001) -> 18120.00000001001[48]
+   88:[56] EqFloat(v1=18120.00000001001[40], v2=18120.00000001001[48]) -> true[40]
+   89:[41] ClearText(var[8]=__work_1)
+   92:[41] ConstText(_value="Test failed ") -> "Test failed "[41]
+  106:[57] AppendText(var[8], v1="Test failed "[41])
+  109:[41] VarFloat(var[32]=test_value) -> 18120.00000001001[41]
+  112:[49] ConstInt(val=0) -> 0[49]
+  117:[53] ConstInt(val=0) -> 0[53]
+  122:[57] FormatFloat(var[8], val=18120.00000001001[41], width=0[49], precision=0[53])
+  125:[41] ConstText(_value=" != 18120.00000001001") -> " != 18120.00000001001"[41]
+  148:[57] AppendText(var[8], v1=" != 18120.00000001001"[41])
+  151:[41] VarText(var[8]=__work_1) -> "Test failed 18120.00000001001 != 18120.00000001001"[41]
+  154:[57] ConstText(_value="parse_vector") -> "parse_vector"[57]
+  168:[73] ConstInt(val=4) -> 4[73]
+  173:[77] StaticCall(n_assert)
+  176:[40] FreeText(var[8])
+  179:[40] Return(ret=4294967295[4], value=0, discard=36)
+Finished

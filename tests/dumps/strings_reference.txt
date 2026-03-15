@@ -1,0 +1,108 @@
+fn add(a: &text, b: text=" world!") {
+    a += b;
+}
+
+pub fn test() {
+    test_value = {v = "Hello"; add(v); v};
+    assert(
+        test_value == "Hello world!",
+        "Test failed {test_value} != \"Hello world!\""
+    );
+}
+fn n_add(a:&text, b:text) {#block(1):void
+  [2] OpAppendStackText(a(0), b(0));
+}#block(1):void
+
+byte-code for reference:n_add(a: &text[0], b: text[12])
+   0[28]: return-address  @abs=2832
+   0[32]: [2] ArgText(var[12]) -> text var=b[12]:text
+   3[48]: AppendStackText(var[0], v1: text)
+   6[32]: Return(ret=28, value=0, discard=32)
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [6] v(1):text = "";
+  test_value(1):text["v"] = {#block(2):text["v"]
+    v(1):text = "Hello";
+    n_add(OpCreateStack(v(1)), " world!");
+    v(1);
+  }#block(2):text["v"];
+  [7] n_assert(OpEqText(test_value(1), "Hello world!"), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatText(__work_1(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_1(1), " != "Hello world!"");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "reference", 8i32);
+  OpFreeText(test_value(1));
+  OpFreeText(v(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for reference:n_test()
+   0[0]: return-address  @abs=2844
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [6] Text() var=v[28]:text
+   2[52]: Text() var=test_value[52]:text["v"]
+   3[76]: ClearText(var[28]) var=v[28]:text
+   6[76]: ConstText(_value="Hello") -> text
+  13[92]: AppendText(var[28], v1: text)
+  16[76]: CreateStack(var[28]) -> ref(reference)
+  19[88]: ConstText(_value=" world!") -> text
+  28[104]: Call(size=0, fn=n_add)
+  35[76]: VarText(var[28]) -> text var=v[28]:text
+  38[92]: AppendText(var[52], v1: text)
+  41[76]: [7] VarText(var[52]) -> text var=test_value[52]:text["v"]
+  44[92]: ConstText(_value="Hello world!") -> text
+  58[108]: EqText(v1: text, v2: text) -> boolean
+  59[77]: ClearText(var[4]) var=__work_1[4]:text
+  62[77]: ConstText(_value="Test failed ") -> text
+  76[93]: AppendText(var[4], v1: text)
+  79[77]: VarText(var[52]) -> text var=test_value[52]:text["v"]
+  82[93]: ConstInt(val=0) -> integer
+  87[97]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+  92[77]: ConstText(_value=" != "Hello world!"") -> text
+ 112[93]: AppendText(var[4], v1: text)
+ 115[77]: VarText(var[4]) -> text var=__work_1[4]:text
+ 118[93]: ConstText(_value="reference") -> text
+ 129[109]: ConstInt(val=8) -> integer
+ 134[113]: StaticCall(n_assert)
+ 137[76]: FreeText(var[52])
+ 140[76]: FreeText(var[28])
+ 143[76]: FreeText(var[4])
+ 146[76]: Return(ret=0, value=0, discard=76)
+
+Execute test:
+    0:[8] [6] Text()
+    1:[32] Text()
+    2:[56] Text()
+    3:[80] ClearText(var[32]=v)
+    6:[80] ConstText(_value="Hello") -> "Hello"[80]
+   13:[96] AppendText(var[32], v1="Hello"[80])
+   16:[80] CreateStack(var[32]) -> ref(0,1,40)[80]
+   19:[92] ConstText(_value=" world!") -> " world!"[92]
+   28:[108] Call(size=0, fn=n_add)
+ 2832:[112] ArgText(var[92]=b) -> " world!"[112]
+ 2835:[128] AppendStackText(var[80], v1=" world!"[112])
+ 2838:[112] Return(ret=2879[108], value=0, discard=32)
+   35:[80] VarText(var[32]=v) -> "Hello world!"[80]
+   38:[96] AppendText(var[56], v1="Hello world!"[80])
+   41:[80] VarText(var[56]=test_value) -> "Hello world!"[80]
+   44:[96] ConstText(_value="Hello world!") -> "Hello world!"[96]
+   58:[112] EqText(v1="Hello world!"[80], v2="Hello world!"[96]) -> true[80]
+   59:[81] ClearText(var[8]=__work_1)
+   62:[81] ConstText(_value="Test failed ") -> "Test failed "[81]
+   76:[97] AppendText(var[8], v1="Test failed "[81])
+   79:[81] VarText(var[56]=test_value) -> "Hello world!"[81]
+   82:[97] ConstInt(val=0) -> 0[97]
+   87:[101] FormatText(var[8], val="Hello world!"[81], width=0[97], dir=-1, token=32)
+   92:[81] ConstText(_value=" != "Hello world!"") -> " != \"Hello world!\""[81]
+  112:[97] AppendText(var[8], v1=" != \"Hello world!\""[81])
+  115:[81] VarText(var[8]=__work_1) -> "Test failed Hello world! != \"Hello world!\""[81]
+  118:[97] ConstText(_value="reference") -> "reference"[97]
+  129:[113] ConstInt(val=8) -> 8[113]
+  134:[117] StaticCall(n_assert)
+  137:[80] FreeText(var[56])
+  140:[80] FreeText(var[32])
+  143:[80] FreeText(var[8])
+  146:[80] Return(ret=4294967295[4], value=0, discard=76)
+Finished

@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// exp, ln, log2, log10 for single and float.
+
+fn main() {
+    // --- exp (float) ---
+    // exp(0) = 1, exp(1) = E, exp(ln(x)) = x
+    assert(round(exp(0.0) * 1000.0) == 1000.0, "float exp(0) == 1");
+    assert(round(exp(1.0) * 1000.0) == round(E * 1000.0), "float exp(1) == E");
+    assert(round(exp(2.0) * 1000.0) == round(E * E * 1000.0), "float exp(2) == E^2");
+
+    // --- exp (single) ---
+    assert(round(exp(0.0f) * 1000.0f) == 1000.0f, "single exp(0) == 1");
+    assert(round(exp(1.0f) * 1000.0f) == round(E as single * 1000.0f), "single exp(1) == E");
+
+    // --- ln (float) ---
+    // ln(1) = 0, ln(E) = 1, ln(exp(x)) = x
+    assert(round(ln(1.0) * 1000.0) == 0.0, "float ln(1) == 0");
+    assert(round(ln(E) * 1000.0) == 1000.0, "float ln(E) == 1");
+    assert(round(ln(exp(3.0)) * 1000.0) == 3000.0, "float ln(exp(3)) == 3");
+
+    // --- ln (single) ---
+    assert(round(ln(1.0f) * 1000.0f) == 0.0f, "single ln(1) == 0");
+    assert(round(ln(E as single) * 1000.0f) == 1000.0f, "single ln(E) == 1");
+
+    // --- log2 (float) ---
+    // log2(1) = 0, log2(2) = 1, log2(8) = 3
+    assert(round(log2(1.0) * 1000.0) == 0.0, "float log2(1) == 0");
+    assert(round(log2(2.0) * 1000.0) == 1000.0, "float log2(2) == 1");
+    assert(round(log2(8.0) * 1000.0) == 3000.0, "float log2(8) == 3");
+
+    // --- log2 (single) ---
+    assert(round(log2(1.0f) * 1000.0f) == 0.0f, "single log2(1) == 0");
+    assert(round(log2(2.0f) * 1000.0f) == 1000.0f, "single log2(2) == 1");
+    assert(round(log2(8.0f) * 1000.0f) == 3000.0f, "single log2(8) == 3");
+
+    // --- log10 (float) ---
+    // log10(1) = 0, log10(10) = 1, log10(100) = 2
+    assert(round(log10(1.0) * 1000.0) == 0.0, "float log10(1) == 0");
+    assert(round(log10(10.0) * 1000.0) == 1000.0, "float log10(10) == 1");
+    assert(round(log10(100.0) * 1000.0) == 2000.0, "float log10(100) == 2");
+
+    // --- log10 (single) ---
+    assert(round(log10(1.0f) * 1000.0f) == 0.0f, "single log10(1) == 0");
+    assert(round(log10(10.0f) * 1000.0f) == 1000.0f, "single log10(10) == 1");
+    assert(round(log10(100.0f) * 1000.0f) == 2000.0f, "single log10(100) == 2");
+
+    // --- inverse relationships ---
+    // exp(ln(x)) == x and ln(exp(x)) == x (round-trip)
+    assert(round(exp(ln(5.0)) * 1000.0) == 5000.0, "float exp(ln(5)) == 5");
+    assert(round(ln(exp(2.5)) * 1000.0) == 2500.0, "float ln(exp(2.5)) == 2.5");
+
+    // --- null propagation ---
+    // NaN input produces NaN output (consistent with all other float ops)
+    nan = 0.0 / 0.0;
+    assert(!exp(nan), "float exp(null) is null");
+    assert(!ln(nan),  "float ln(null) is null");
+    assert(!log2(nan), "float log2(null) is null");
+    assert(!log10(nan), "float log10(null) is null");
+}

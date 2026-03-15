@@ -1,0 +1,732 @@
+// Copyright 2022 - 2026, Jurjen J. Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+DX = 20.0;
+DY = -34.64101615137755;
+DZ = 8.0; // This is 1/5 of the width of a hex. Or about 30cm.
+
+// Open and close lines and hexes
+//         .         .         .         |         |
+//     .-`` ``-. .-`` ``-. .  ` `  . .-`` ``-. .-`` ``-.
+//    |         `         `         | ####### |         |
+//    |         .         .         | ####### |         |
+//     ``-. .-`` ``-. .-`` `  . .  ` `  . .-`` ``-. .-``
+//         |         |         `         | ####### |
+//         |         |         .         | ####### |
+//     .-`` ``-. .-`` ``-. .-`` `  . .  ` `  . .-`` `  .
+//    `         `         `         `         `         `
+
+
+//     nw   0   ne
+// 20   22  .   2   4
+//    . .-`` ``-. .
+// 18  `         `  6
+//     .         .  e
+//    ` ``-. .-`` `
+// 16    14 .  10   8
+//          12
+
+// Per 15 degrees the point to move to.
+STEP = [
+    0, 4, // 0,12.. via (1, 1), (0, 2), (1, 3)
+    2, 4,
+    4, 4, // 2
+    5, 3,
+    6, 2, // 4.. via (2, 0), (3, 1), (5, 1)
+    7, 1,
+    8, 0, // 6
+    7, -1,
+    6, -2, // 8.. via (1, -1), (3, -1), (4, -2)
+    5, -3,
+    4, -4, // 10
+    2, -4,
+    0, -4, // 12.. via (-1, -1), (0, -2), (-1, -3)
+    -2, -4,
+    -4, -4, // 14
+    -5, -3,
+    -6, -2, // 16.. via (-2, 0), (-3, -1), (-5, -2)
+    -7, -1,
+    -8, 0, // 18
+    -7, 1,
+    -6, 2, // 20.. via (-1, 1), (-3, 1), (-4, 2)
+    -5, 3,
+    -4, 4, // 22
+    -2, 4,
+];
+
+// Direction to actually move for each step in a direction. Repeats after 4 steps.
+STEP_DIR = [
+    2, 22, 2, 22, // 0
+    2, 2, 22, 2,
+    2, 2, 2, 2, // 2
+    2, 2, 6, 2,
+    6, 2, 6, 2, // 4
+    6, 6, 2, 6,
+    6, 6, 6, 6, // 6
+    6, 6, 10, 6,
+    10, 6, 10, 6, // 8
+    10, 10, 6, 10,
+    10, 10, 10, 10, // 10
+    10, 10, 14, 10,
+    14, 10, 14, 10, // 12
+    14, 14, 10, 14,
+    14, 14, 14, 14, // 14
+    14, 14, 18, 14,
+    18, 14, 18, 14, // 16
+    18, 18, 14, 18,
+    18, 18, 18, 18, // 18
+    18, 18, 22, 18,
+    22, 18, 22, 18, // 20
+    22, 22, 18, 22,
+    22, 22, 22, 22, // 22
+    22, 22, 2, 22
+];
+
+NORMAL = [
+    1.0, 0.0, // 0
+    0.965925826289068, 0.258819045102521,
+    0.866025403784439, 0.5, // 2
+    0.707106781186547, 0.707106781186547,
+    0.5, 0.866025403784439, // 4
+    0.258819045102521, 0.965925826289068,
+    0.0, 1.0, // 6
+    -0.258819045102521, 0.965925826289068,
+    -0.5, 0.866025403784439, // 8
+    -0.707106781186547, 0.707106781186547,
+    -0.866025403784439, 0.5, // 10
+    -0.965925826289068, 0.258819045102521,
+    -1.0, 0.0, // 12
+    -0.965925826289068, -0.258819045102521,
+    -0.866025403784439, -0.5, // 14
+    -0.707106781186547, -0.707106781186547,
+    -0.5, -0.866025403784439, // 16
+    -0.258819045102521, -0.965925826289068,
+    0.0, -1.0, // 18,
+    0.258819045102521, -0.965925826289068,
+    0.5, -0.866025403784439, // 10
+    0.707106781186547, -0.707106781186547,
+    0.866025403784439, -0.5, // 11
+    0.965925826289068, -0.258819045102521
+];
+
+// Coordinates of the corners of the hexes.
+const CORNER = [
+    0, 8, // 0
+    1, 7,
+    2, 6, // 2
+    3, 5,
+    4, 4, // 4
+    4, 2,
+    4, 0, // 6
+    4, -2,
+    4, -4, // 8
+    3, -5,
+    2, -6, // 10
+    1, -7,
+    0, -8, // 12
+    -1, -7,
+    -2, -6, // 14
+    -3, -5,
+    -4, -4, // 16
+    -4, -2,
+    -4, 0, // 18
+    -4, 2,
+    -4, 4, // 20
+    -3, 5,
+    -2, 6, // 22
+    -1, 7
+];
+
+// TODO: allow an item definition to be a Map
+
+// Move the direction a number of steps forwards. Moving back is 24-steps.
+fn plus(dir: u8, steps: u8) -> u8 {
+    (dir + steps) % 24
+}
+
+// Move the direction back till it is a whole number of steps.
+fn truncate(dir: u8, step: u8) -> u8 {
+    dir - dir % step
+}
+
+// Direction to move for a given step.
+fn steps(dir: u8, step: u16) -> u8 {
+    STEP_DIR[dir * 4 + step & 3]
+}
+
+// Read the corner position. Only correct for corners per 2 (0, 2, 4 .. 22).
+fn corner(dir: u8, p: Position) {
+    p.x += POINT[dir * 2] / 4;
+    p.y = p.y * 3 + POINT[dir * 2 + 1] / 4;
+}
+
+struct Item {
+    x: integer,
+    y: integer,
+    z: integer,
+    material: u8,
+    height: u16,
+    // hours of a clock * 1024
+    rotation: u16,
+    definition: u16,
+}
+
+enum Tile { // size 8
+    material: u8,
+    nw_wall_mat: u8,
+    ne_wall_mat: u8,
+    e_wall_mat: u8,
+    height: u16,
+    item: u16 // including 5 bits of rotation
+}
+
+struct Layer {
+    x: integer, // multiple of 32
+    y: integer, // multiple of 32
+    layer: u8,
+    tiles: vector<Tile>, // 32*32 tiles per layer
+}
+
+struct Map {
+    min_x: integer,
+    min_y: integer,
+    max_x: integer,
+    max_y: integer,
+    layers: index<Layer[x,y,layer]>,
+    l: hash<Layer[x,y,layer]>
+}
+
+// Restrictions on maps
+// - Each height in a higher layer should be higher than the one under it when there is a material there.
+// - Each adjacent and open hex is linked to the same layer. On a wall or gap it is possible to switch layers.
+
+// x = tx * 2 + y % 2
+// y = ty
+
+struct Point {
+    x: float default(0.0),
+    y: float default(0.0),
+    z: float default(0.0)
+}
+
+struct Position {
+    x: i32, // x-data = x << 1 ignore the first bit, for easier computations
+    y: i32,
+}
+
+fn valid(p: Position) {
+    assert!(p.x & 1 == p.y & 1, "Incorrect position ({p.x},{p.y})");
+}
+
+fn point(self: Position, p: Point) {
+    p.x = self.x * DX;
+    p.y = self.y * DY;
+}
+
+fn corner_point(self: Position, dir: u8, p: Point) {
+    p.x = (pos.x + CORNER[dir * 2]) * DX;
+    p.y = (pos.y + CORNER[dir * 2 + 1] / 3.0) * DY;
+}
+
+fn rotate(self: Position, d: u8, p: Point) {
+    px = self.x * DX;
+    py = self.y * DY;
+    // TODO this lookup and atan could probably be simplified
+    sx = STEP[d * 2];
+    sy = STEP[d * 2 + 1];
+    a = -atan(sy * DY / sx / DX);
+    p.x = px * cos(a) - py * sin(a);
+    p.y = px * sin(a) + py * cos(a);
+}
+
+fn normalize(x: &float, y: &float, z: &float) {
+    t = x * x + y * y + z * z;
+    if t > 0.1 {
+        l = sqrt(t);
+        x = x / l;
+        y = y / l;
+        z = z / l;
+    }
+}
+
+enum Change {
+    Left,
+    Right,
+}
+
+struct WallPoint {
+    x: integer,
+    y: integer,
+    d: u8,
+    // Direction of the wall towards this point.
+    dir: u8,
+    // Part of a specific line (vector position) `u16::MAX = none`
+    line: u16,
+    change: Change,
+}
+
+// A line in the drawing
+struct Line {
+    mat: u8,    // materials of the wall
+    nr: u16,    // number of the wall
+    start: u16, // start position on the wall
+    stop: u16,  // stop position on the wall
+    dir: u8,    // general direction of the wall, or start direction of a curve
+}
+
+// Limited to 24 directions.
+// Rotation should be 0 or higher and lower than 24 so not an Item rotation that holds 2048 steps per half hour.
+fn step(self: Position, rotation: u8, steps: i32, flipped: bool) {
+    if steps == 0 {
+        return;
+    }
+    valid(p);
+    // Small rotations.
+    if rotation & 1 == 1 && steps & 3 != 0 {
+        r_steps = steps & 3;
+        if steps > 3 { // Do only the complete steps
+            self.step(rotation, steps & -4, false);
+        }
+        if rotation & 3 == 1 {
+            // 1, 5, 9, 13, 17, 21 = [r+1, r-3, r+1]
+            self.step((rotation + 1) % 24, 1, false);
+            if r_steps > 1 {
+                self.step((rotation + 21) % 24, 1, false);
+            }
+            if r_steps > 2 {
+                self.step((rotation + 1) % 24, 1, false);
+            }
+            return;
+        }
+        // 3, 7, 11, 15, 19, 23 = [r-1, r+3, r-1]
+        self.step((rotation + 23) % 24, 1, false);
+        if r_steps > 1 {
+            self.step((rotation + 3) % 24, 1, false);
+        }
+        if r_steps > 2 {
+            self.step((rotation + 23) % 24, 1, false);
+        }
+        return;
+    } else if rotation & 3 != 2 && steps & 1 != 0 {
+        if steps > 1 {
+            self.step(rotation, steps - 1, false); // Do a one less far step
+        } else if steps < -1 {
+            self.step(rotation, steps + 1, false); // Do a one less far step
+        }
+        self.step(
+            (rotation + if flipped ^ (steps < 0) { 22 } else { 2 }) % 24,
+            steps % 2,
+            false,
+        );
+        return;
+    }
+    self.x += (STEP[rotation * 2] * steps) >> 2;
+    self.y += (STEP[rotation * 2 + 1] * steps) >> 2;
+    self.check();
+}
+
+fn tile(self: Map, layer: u8, pos: Position) -> Tile {
+    self.layers[pos.x & -64, pos.y & -32, layer].tiles[(pos.x & 63) / 2 + 32 * (pos.y & 31)]
+}
+
+// Check if there is a wall at the given position.
+fn wall(self: Map, layer: u8, pos: Position, dir: u8) -> u8 {
+    if dir > 6 and dir < 22 {
+        self.wall(layer, pos.step(dir, 1, false), (12 + dir) % 24)
+    } else {
+        t = self.tile(layer, pos);
+        if !t {
+            0
+        } else if dir == 22 {
+            t.nw_wall_mat
+        } else if dir == 2 {
+            t.ne_wall_mat
+        } else if dir == 6 {
+            t.e_wall_mat
+        } else {
+            panic("Illegal direction {dir}");
+        }
+    }
+}
+
+struct Wall {
+    nr: u16,
+    material: u8
+}
+
+struct WallData {
+    x: integer,
+    y: integer,
+    dir: u8, // direction used for the first point.
+    open: bool, // true if the wall is open here.
+    first: Point, // the first point
+    second: float // the height in the given direction
+}
+
+struct Done {
+    x: integer,
+    y: integer,
+    wall_nr: u16
+}
+
+struct WallPoint {
+    wall: u16,
+    nr: u16,
+    pos: Position, // original position (will not change with straightening)
+    dir: u8, // original position on the hexagon
+    towards: u8, // Direction of the wall towards this point.
+    /// Part of a specific line (vector position) `u16::MAX = none`
+    line: u16,
+    change: Change,
+}
+
+struct Line {
+    material: u8, // materials of the wall
+    nr: u16,      // number of the wall
+    start: u16,   // start position on the wall
+    stop: u16,    // stop position on the wall
+    dir: u8,      // general direction of the wall, or start direction of a curve
+}
+
+struct Height {
+    x: integer,
+    y: integer,
+    heights: vector<float> // per layer
+}
+
+fn height(self: Map, wall: WallData, layer: u8, pos: Position, dir: u8) -> float {
+    if !wall.second || !self.open {
+        wall.first.z
+    } else {
+        wall.second
+    }
+}
+
+fn other(self: Map, wall: WallData, layer: u8, pos: Position, dir: u8) -> float {
+    if !self.open {
+        self.second
+    } else {
+        self.first.z
+    }
+}
+
+// TODO reduce the number of structures here!
+struct Drawing {
+    walls: hash<Wall[nr]>,
+    wall_points: hash<WallPoint[wall,nr]>,
+    // TODO this has to be wrong, there can be multiple walls on a point.
+    points: hash<WallData[x,y]>, // y*3 with for each segment of a wall
+    done: hash<Done[x,y]>,
+    lines: vector<Line>,
+    heights: hash<Height[x,y]>
+}
+
+fn clear(self: Drawing) {
+    self.walls = {};
+    self.wall_points = {};
+    self.points = {};
+    self.done = {};
+    self.lines = [];
+    self.heights = {};
+}
+
+fn height(self: Drawing, pos: Position, cur: float) -> float {
+    heights = self.heights[pos.x, pos.y];
+    for h in heights[rev(0..heights.len())] {
+        if h > cor {
+            return h;
+        }
+    }
+}
+
+/// Two lines: first through p1 & p2, second through p3 & p4.
+fn intersect2d(p1: Point, p2x: float, p2y: float, p3: Point, p4x: float, py4: float) {
+    d = (p1.x - p2x) * (p3.y - p4y) - (p1.y - p2y) * (p3.x - p4x);
+    m1 = p1.x * p2y - p1.y * p2x;
+    m2 = p3.x * p4.y - p3.y * p4.x;
+    px = (m1 * (p3.x - p4x) - (p1.x - p2x) * m2) / d;
+    py = (m1 * (p3.y - p4y) - (p1.y - p2y) * m2) / d;
+    p3.x = px;
+    p3.y = py;
+    p3.z = p1.z;
+}
+
+// Move p to line from sp in direction dp.
+// See doc/Derivation_to_line.txt for the math behind these formula.
+fn to_line2d(sp: Point, dx: float, dy: float, p: Point) {
+    d = dx * dx + dy * dy;
+    c = dx * sp.y - dy * sp.x;
+    m = dx * p.x + dy * p.y;
+    p.x = (dx * m - dy * c) / d;
+    p.y = (dx * c + dy * m) / d;
+}
+
+fn move_line2d(sp: Point, line_dir: u8, p: Point) {
+    to_line2d(sp, STEP[line_dir * 2] * DX, STEP[line_dir * 2 + 1] * DY, p);
+}
+
+fn move_dir(dir: u8, line_p: Point, line_dir: u8, p: Point) {
+    dx = STEP[dir * 2] * DX;
+    dy = STEP[dir * 2 + 1] * DY;
+    mx = p.x - POINT[dir * 2] * DX;
+    my = p.y - POINT[dir * 2 + 1] * DY / 3;
+    intersect2d(line_p, line_p.x + dx, line_p.y + dy, p, mx, my);
+}
+
+PATTERNS = [
+    0b10110010,
+    0b01001101,
+    0b11001010,
+    0b01010011,
+    0b1100,
+    0b1010
+];
+
+enum Pattern {
+    HalfWobble {},
+    InverseHalfWobble {},
+    MovedHalfWobble {},
+    MovedInverseHalfWobble {},
+    BlockPattern {},
+    WobblePattern {}
+}
+
+fn pattern_length(p: Pattern) -> u8 {
+    if p < BlockPattern {
+        8
+    } else {
+        4
+    }
+}
+
+fn half_step(p: Point, dir: u8) {
+    p.x += POINT[dir * 2] / 8.0 * DX;
+    p.y += POINT[dir * 2 + 1] / 24.0 * DY;
+}
+
+fn routine(self: HalfWobble, sp: Point, s_dir: u8, p: Point) {
+    moves(p_dir, half_step(sp, plus(s_dir, 16)), plus(s_dir, 1), p);
+}
+
+fn routine(self: InverseHalfWobble, sp: Point, s_dir: u8, p: Point) {
+    moves(p_dir, half_step(sp, plus(s_dir, 8)), plus(s_dir, 23), p);
+}
+
+fn routine(self: MovedHalfWobble, sp: Point, s_dir: u8, p: Point) {
+    moves(
+        p_dir,
+        half_step(half_step(half_step(sp, s_dir), s_dir), plus(s_dir, 20)),
+        plus(s_dir, 1), p
+    );
+}
+
+fn routine(self: MovedInverseHalfWobble, sp: Point, s_dir: u8, p: Point) {
+    moves(
+        p_dir,
+        half_step(half_step(half_step(sp, s_dir), s_dir), plus(s_dir, 20)),
+        plus(s_dir, 23), p
+    );
+}
+
+fn routine(self: BlockPattern, sp: Point, s_dir: u8, p: Point) {
+    moves(half_step(sp, plus(s_dir, 16)), s_dir, p);
+}
+
+fn routine(self: WobblePattern, sp: Point, s_dir: u8, p: Point) {
+    moves(half_step(sp, plus(s_dir, 16)), plus(s_dir, 2), p);
+}
+
+fn apply_pattern(self: Drawing, l: Map, lay: u8, max: u16, wv: u8, nr: u16) {
+    // Does the wall loop back on itself?
+    let looping = self.walls[wv, nr, max]
+        == d.walls.get(&(wv, nr, 0)).unwrap().pos.point();
+    // Routine to try to match the pattern on each part of the wall.
+    // Extend the pattern both at the end of a match and possibly before
+    for p in PATTERNS {
+        pattern = p#index as Pattern;
+        length = pattern_length(pattern);
+        // perform the complete wall matching here.
+        let mut pnr = Walker::new(max, max + 1, p.length, looping);
+        while let Some(wp) = d.walls.get(&(wv, nr, pnr.act())) {
+            if claimed(wp, d, pnr) {
+                if !pnr.plus() {
+                    break;
+                }
+                continue;
+            }
+            // Try to match the whole pattern
+            let mut matched = true;
+            let mut stop = pnr;
+            let mut start = pnr;
+            let s_dir = wp.dir;
+            for pm in 0..p.length {
+                if pm > 0 && !stop.plus() {
+                    matched = false;
+                    break;
+                }
+                let Some(mp) = d.walls.get(&(wv, nr, stop.act())) else {
+                    break;
+                };
+                if claimed(mp, d, stop) || !p.matches(pm, mp.change) {
+                    matched = false;
+                    break;
+                }
+            }
+            if !matched {
+                if !pnr.plus() {
+                    break;
+                }
+                continue;
+            }
+            // Try to extend the pattern forwards
+            let mut pm = 0;
+            loop {
+                if !stop.plus() {
+                    break;
+                }
+                let Some(mp) = d.walls.get(&(wv, nr, stop.act())) else {
+                    break;
+                };
+                if claimed(mp, d, stop) {
+                    stop.min();
+                    break;
+                }
+                if !p.matches(pm, mp.change) {
+                    break;
+                }
+                pm = if pm == p.length - 1 { 0 } else { pm + 1 };
+            }
+            // Try to extend the pattern backwards
+            let mut pm = p.length - 1;
+            loop {
+                if !start.min() {
+                    break;
+                }
+                let Some(mp) = d.walls.get(&(wv, nr, start.act())) else {
+                    break;
+                };
+                if claimed(mp, d, start) {
+                    start.plus();
+                    break;
+                }
+                if !p.matches(pm, mp.change) {
+                    break;
+                }
+                pm = if pm == 0 { p.length - 1 } else { pm - 1 };
+            }
+            // Change points for the found range
+            let mut l_dir;
+            let mut step = start;
+            let original = wp.pos.point();
+            loop {
+                let cw = d.walls.get_mut(&(wv, nr, step.act())).unwrap();
+                let corner = cw.pos.corner();
+                let pt = if let Some(cp) = d.points.get(&corner) {
+                    cp.first
+                } else {
+                    cw.pos.point()
+                };
+                let (point, dir) = (p.routine)(
+                    original,
+                    s_dir.d,
+                    pt,
+                    if cw.line != u16::MAX && cw.line < d.lines.len() as u16 {
+                        d.lines[cw.line as usize].dir
+                    } else {
+                        255
+                    },
+                );
+                cw.line = d.lines.len() as u16;
+                let pp = cw.pos;
+                d.point(l, lay, pp, point);
+                l_dir = dir;
+                if step.pos() == stop.pos() || !step.plus() {
+                    break;
+                }
+            }
+            d.lines.push(Line {
+                mat: wv,
+                nr,
+                start: start.act(),
+                stop: stop.act(),
+                dir: l_dir,
+            });
+            if !pnr.plus() {
+                break;
+            }
+        }
+    }
+}
+
+// Try to walk along a wall.
+// Halts on a Y junction with the same wall type.
+// The walls will be drawn without shared direction characteristics.
+fn walk(self: Drawing, l: Map, lay: u8, ws: WallStep, wv: u8) {
+    if d.done.contains_key(&ws.pos.corner()) {
+        return;
+    }
+    let start = ws.pos.corner();
+    let mut nr = 0;
+    let mut s = ws;
+    let mut pnr = 1;
+    let mut reversed = false;
+    loop {
+        // Find the continuation of the wall. Halting a Y junctions or ends.
+        let Some(next) = walk_check(l, lay, s, wv, !reversed) else {
+            if reversed {
+                break;
+            }
+            if pnr == 1 {
+                break;
+            }
+            reverse(wv, nr, pnr, d);
+            reversed = true;
+            s = WallStep::new(
+                ws.pos,
+                ws.wall_dir,
+                ws.move_dir.plus(12),
+                ws.change == Change::Right,
+            );
+            // validate walk_check here!!
+            continue;
+        };
+        if start == s.pos.corner() && pnr > 1 {
+            break;
+        }
+        s = next;
+        if pnr == 1 {
+            nr = get_walk_nr(d, wv);
+            d.wall_nrs.push((wv, nr));
+            d.walls.insert((wv, nr, 0), wall_point(ws));
+        }
+        d.done.insert(s.pos.corner(), (wv, nr, pnr));
+        d.walls.insert((wv, nr, pnr), wall_point(s));
+        pnr += 1;
+    }
+    if pnr > 1 {
+        apply_pattern(l, lay, pnr - 1, wv, nr, d);
+    }
+}
+
+fn fill_drawing(self: Drawing, ls: Map, lay: u8, p: Position) -> bool {
+    let Some(l) = ls.maps.get(&p) else {
+        return false;
+    };
+    d.clear_layer();
+    // Fill wall structures
+    for x in 0..32 {
+        for y in 0..32 {
+            let pp = Position::data(x, y).add(&l.position);
+            for dir in 0..6 {
+                let wall_d = Direction::new(dir * 4 + 2);
+                let wv = wall(ls, lay, pp, wall_d.d);
+                if wv != 0 {
+                    let point = PointPos::new(&pp, wall_d.plus(2));
+                    let ws = WallStep::new(point, wall_d, wall_d.plus(18), false);
+                    walk(ls, lay, ws, wv, d);
+                }
+            }
+        }
+    }
+    true
+}

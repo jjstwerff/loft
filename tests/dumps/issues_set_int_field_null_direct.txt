@@ -1,0 +1,62 @@
+struct S { cur: integer }
+fn test() {
+    s = S { cur: 7 };
+    s.cur = null;
+    assert(s.cur == null, "expected null after direct assignment");
+}
+Type 18:S[4/4]:
+    cur:integer[0]
+
+fn n_test() {#block(1):void
+  [3] s(1):ref(S) = null;
+  OpDatabase(s(1), 18i32);
+  OpSetInt(s(1), 0i32, 7i32);
+  [4] OpSetInt(s(1), 0i32, OpConvIntFromNull());
+  [5] n_assert(OpEqInt(OpGetInt(s(1), 0i32), OpConvIntFromNull()), "expected null after direct assignment", "set_int_field_null_direct", 5i32);
+  OpFreeRef(s(1));
+}#block(1):void
+
+byte-code for set_int_field_null_direct:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: [3] ConvRefFromNull() -> ref(reference) var=s[4]:ref(S) ; [store-alloc]
+   1[16]: Database(var[4], db_tp=18) type=S 18
+   6[16]: VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+   9[28]: ConstInt(val=7) -> integer
+  14[32]: SetInt(v1: ref(reference), fld=0, val: integer)
+  17[16]: [4] VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+  20[28]: ConvIntFromNull() -> integer
+  21[32]: SetInt(v1: ref(reference), fld=0, val: integer)
+  24[16]: [5] VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+  27[28]: GetInt(v1: ref(reference), fld=0) -> integer
+  30[20]: ConvIntFromNull() -> integer
+  31[24]: EqInt(v1: integer, v2: integer) -> boolean
+  32[17]: ConstText(_value="expected null after direct assignment") -> text
+  71[33]: ConstText(_value="set_int_field_null_direct") -> text
+  98[49]: ConstInt(val=5) -> integer
+ 103[53]: StaticCall(n_assert)
+ 106[16]: VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+ 109[28]: FreeRef(v1: ref(reference)) ; [store-free]
+ 110[16]: Return(ret=0, value=0, discard=16)
+
+Execute test:
+    0:[8] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] Database(var[8], db_tp=18)
+    6:[20] VarRef(var[8]=s) -> ref(1,1,8)={}[20]
+    9:[32] ConstInt(val=7) -> 7[32]
+   14:[36] SetInt(v1=ref(1,1,8)[20], fld=0, val=7[32])
+   17:[20] VarRef(var[8]=s) -> ref(1,1,8)={cur:7}[20]
+   20:[32] ConvIntFromNull() -> -2147483648[32]
+   21:[36] SetInt(v1=ref(1,1,8)[20], fld=0, val=-2147483648[32])
+   24:[20] VarRef(var[8]=s) -> ref(1,1,8)={}[20]
+   27:[32] GetInt(v1=ref(1,1,8)[20], fld=0) -> -2147483648[20]
+   30:[24] ConvIntFromNull() -> -2147483648[24]
+   31:[28] EqInt(v1=-2147483648[20], v2=-2147483648[24]) -> true[20]
+   32:[21] ConstText(_value="expected null after direct assignment") -> "expected null after direct assignment"[21]
+   71:[37] ConstText(_value="set_int_field_null_direct") -> "set_int_field_null_direct"[37]
+   98:[53] ConstInt(val=5) -> 5[53]
+  103:[57] StaticCall(n_assert)
+  106:[20] VarRef(var[8]=s) -> ref(1,1,8)={}[20]
+  109:[32] FreeRef(v1=ref(1,1,8)[20]) ; store-free max=1
+  110:[20] Return(ret=4294967295[4], value=0, discard=16)
+Finished

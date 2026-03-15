@@ -1,0 +1,60 @@
+fn test() {
+    rand_seed(1);
+    a = rand(0, 1000000);
+    rand_seed(2);
+    b = rand(0, 1000000);
+    assert(a != b, "different seeds should give different values");
+}
+fn n_test() {#block(1):void
+  [2] n_rand_seed(OpConvLongFromInt(1i32));
+  [3] a(1):integer = n_rand(0i32, 1000000i32);
+  [4] n_rand_seed(OpConvLongFromInt(2i32));
+  [5] b(1):integer = n_rand(0i32, 1000000i32);
+  [6] n_assert(OpNeInt(a(1), b(1)), "different seeds should give different values", "rand_different_seeds", 6i32);
+}#block(1):void
+
+byte-code for rand_different_seeds:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: [2] ConstInt(val=1) -> integer
+   5[8]: ConvLongFromInt(v1: integer) -> long
+   6[12]: StaticCall(n_rand_seed)
+   9[4]: [3] ConstInt(val=0) -> integer var=a[4]:integer
+  14[8]: ConstInt(val=1000000) -> integer
+  19[12]: StaticCall(n_rand)
+  22[8]: [4] ConstInt(val=2) -> integer
+  27[12]: ConvLongFromInt(v1: integer) -> long
+  28[16]: StaticCall(n_rand_seed)
+  31[8]: [5] ConstInt(val=0) -> integer var=b[8]:integer
+  36[12]: ConstInt(val=1000000) -> integer
+  41[16]: StaticCall(n_rand)
+  44[12]: [6] VarInt(var[4]) -> integer var=a[4]:integer
+  47[16]: VarInt(var[8]) -> integer var=b[8]:integer
+  50[20]: NeInt(v1: integer, v2: integer) -> boolean
+  51[13]: ConstText(_value="different seeds should give different values") -> text
+  97[29]: ConstText(_value="rand_different_seeds") -> text
+ 119[45]: ConstInt(val=6) -> integer
+ 124[49]: StaticCall(n_assert)
+ 127[12]: Return(ret=0, value=0, discard=12)
+
+Execute test:
+    0:[8] ConstInt(val=1) -> 1[8]
+    5:[12] ConvLongFromInt(v1=1[8]) -> 1[8]
+    6:[16] StaticCall(n_rand_seed)
+    9:[8] ConstInt(val=0) -> 0[8]
+   14:[12] ConstInt(val=1000000) -> 1000000[12]
+   19:[16] StaticCall(n_rand)
+   22:[12] ConstInt(val=2) -> 2[12]
+   27:[16] ConvLongFromInt(v1=2[12]) -> 2[12]
+   28:[20] StaticCall(n_rand_seed)
+   31:[12] ConstInt(val=0) -> 0[12]
+   36:[16] ConstInt(val=1000000) -> 1000000[16]
+   41:[20] StaticCall(n_rand)
+   44:[16] VarInt(var[8]=a) -> 925641[16]
+   47:[20] VarInt(var[12]=b) -> 667783[20]
+   50:[24] NeInt(v1=925641[16], v2=667783[20]) -> true[16]
+   51:[17] ConstText(_value="different seeds should give different values") -> "different seeds should give different values"[17]
+   97:[33] ConstText(_value="rand_different_seeds") -> "rand_different_seeds"[33]
+  119:[49] ConstInt(val=6) -> 6[49]
+  124:[53] StaticCall(n_assert)
+  127:[16] Return(ret=4294967295[4], value=0, discard=12)
+Finished

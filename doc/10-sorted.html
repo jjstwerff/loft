@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Sorted</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <span class="cur">Sorted</span> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Sorted</h1>
+<article>
+<p>A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Elm</span> { key: <span class="ty"><a href="stdlib-types.html">text</a></span>, value: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
+<span class="kw">struct</span> <span class="en">Db</span> { map: <span class="ty"><a href="stdlib-collections.html">sorted</a></span>&lt;<span class="en">Elm</span>[-key]&gt; }</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="adding-elements">Adding Elements</h2>
+<p>You initialise a sorted collection the same way as a vector. The elements are automatically placed in the right position as you add them.</p>
+<pre><code>    db = <span class="en">Db</span> { map: [
+        <span class="en">Elm</span> { key: <span class="st">"One"</span>,   value: <span class="nm">1</span> },
+        <span class="en">Elm</span> { key: <span class="st">"Two"</span>,   value: <span class="nm">2</span> },
+        <span class="en">Elm</span> { key: <span class="st">"Three"</span>, value: <span class="nm">3</span> },
+        <span class="en">Elm</span> { key: <span class="st">"Four"</span>,  value: <span class="nm">4</span> }
+    ]};</code></pre>
+<h2 id="looking-up-by-key">Looking Up by Key</h2>
+<p>Use square brackets with the key value to find a record instantly. If the key is not present the result is null — you can check it with '!'.</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Two"</span>].value == <span class="nm">2</span>, <span class="st">"Key lookup: Two"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Three"</span>].value == <span class="nm">3</span>, <span class="st">"Key lookup: Three"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="st">"Five"</span>], <span class="st">"Missing key returns null"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="kw">null</span>], <span class="st">"Null key returns null"</span>);</code></pre>
+<p>Append new elements with '+='; they are placed in the correct sorted position.</p>
+<pre><code>    db.map += [<span class="en">Elm</span> { key: <span class="st">"Zero"</span>, value: <span class="nm">0</span> }];
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Zero"</span>].value == <span class="nm">0</span>, <span class="st">"Newly added element"</span>);</code></pre>
+<h2 id="iterating-in-order">Iterating in Order</h2>
+<p>A 'for' loop over a sorted collection visits elements in key order. Here the key is '-key' (descending text), so the order is: Zero, Two, Three, One, Four.</p>
+<pre><code>    sum = <span class="nm">0</span>;
+    <span class="kw">for</span> v <span class="kw">in</span> db.map {
+        sum = sum * <span class="nm">10</span> + v.value;
+    }</code></pre>
+<p>Zero(0), Two(2), Three(3), One(1), Four(4) → 0*10+2=2, *10+3=23, *10+1=231, *10+4=2314</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">2314</span>, <span class="st">"Sorted iteration total: {sum}"</span>);</code></pre>
+<h2 id="iterating-in-reverse">Iterating in Reverse</h2>
+<p>Wrap the collection in rev() to visit elements from last to first key order. Here the collection is sorted by '-key' (descending text), so the stored order is Zero, Two, Three, One, Four.  rev() visits them in the opposite order.</p>
+<pre><code>    rev_sum = <span class="nm">0</span>;
+    <span class="kw">for</span> v <span class="kw">in</span> <span class="bi">rev</span>(db.map) {
+        rev_sum = rev_sum * <span class="nm">10</span> + v.value;
+    }</code></pre>
+<p>Four(4), One(1), Three(3), Two(2), Zero(0) → 4*10+1=41, *10+3=413, *10+2=4132, *10+0=41320</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(rev_sum == <span class="nm">41320</span>, <span class="st">"Reverse iteration total: {rev_sum}"</span>);</code></pre>
+<h2 id="loop-helpers-first-count-and-remove">Loop Helpers: #first, #count, and #remove</h2>
+<p>'v#first' is true for the very first element visited. 'v#count' is a running index starting at 0. 'v#remove' removes the current element while iterating.</p>
+<pre><code>    first_key = <span class="st">""</span>;
+    labels = <span class="st">""</span>;
+    <span class="kw">for</span> v <span class="kw">in</span> db.map {
+        <span class="kw">if</span> v#first { first_key = v.key }
+        <span class="kw">if</span> !v#first { labels += <span class="st">","</span> }
+        labels += <span class="st">"{v#count}:{v.key}"</span>
+    }
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_key == <span class="st">"Zero"</span>, <span class="st">"First element: {first_key}"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"0:Zero,1:Two,2:Three,3:One,4:Four"</span>, <span class="st">"Labels: {labels}"</span>);</code></pre>
+<p>Remove elements with value &gt; 2 while iterating.</p>
+<pre><code>    <span class="kw">for</span> v <span class="kw">in</span> db.map <span class="kw">if</span> v.value &gt; <span class="nm">2</span> {
+        v#remove
+    }
+    sum2 = <span class="nm">0</span>;
+    <span class="kw">for</span> v <span class="kw">in</span> db.map { sum2 += v.value }</code></pre>
+<p>Remaining: Zero(0), Two(2), One(1) → sum = 3</p>
+<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">3</span>, <span class="st">"Sum after remove: {sum2}"</span>);</code></pre>
+<h2 id="removing-by-key">Removing by Key</h2>
+<p>Assigning null to a sorted subscript removes the element with that key. Removing a key that is not present is a safe no-op.</p>
+<pre><code>    db2 = <span class="en">Db</span> { map: [
+        <span class="en">Elm</span> { key: <span class="st">"A"</span>, value: <span class="nm">10</span> },
+        <span class="en">Elm</span> { key: <span class="st">"B"</span>, value: <span class="nm">20</span> },
+        <span class="en">Elm</span> { key: <span class="st">"C"</span>, value: <span class="nm">30</span> }
+    ]};
+    db2.map[<span class="st">"B"</span>] = <span class="kw">null</span>;
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db2.map[<span class="st">"B"</span>],          <span class="st">"B was removed"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"A"</span>].value == <span class="nm">10</span>, <span class="st">"A still present"</span>);
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"C"</span>].value == <span class="nm">30</span>, <span class="st">"C still present"</span>);
+    db2.map[<span class="st">"missing"</span>] = <span class="kw">null</span>;   <span class="cm">// no-op; does not panic</span>
+    sum3 = <span class="nm">0</span>;
+    <span class="kw">for</span> v <span class="kw">in</span> db2.map { sum3 += v.value }
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
+<p>Note: #index is not available on sorted — use #count for a sequential counter.</p>
+<pre><code>}</code></pre>
+<p>filling and finding values</p>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

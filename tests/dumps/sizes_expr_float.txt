@@ -1,0 +1,79 @@
+pub fn test() {
+    test_value = {a = 1.1; sizeof(float) + 10 * sizeof(a)};
+    assert(
+        test_value == 88,
+        "Test failed {test_value} != 88"
+    );
+}
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [2] test_value(1):integer = {#block(2):integer
+    a(2):float = 1.1f64;
+    OpAddInt(8i32, OpMulInt(10i32, 8i32));
+  }#block(2):integer;
+  [3] n_assert(OpEqInt(test_value(1), 88i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 88");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "expr_float", 4i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for expr_float:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [2] ConstFloat(val=1.1) -> float var=a[28]:float
+  10[36]: ConstInt(val=8) -> integer
+  15[40]: ConstInt(val=10) -> integer
+  20[44]: ConstInt(val=8) -> integer
+  25[48]: MulInt(v1: integer, v2: integer) -> integer
+  26[44]: AddInt(v1: integer, v2: integer) -> integer
+  27[40]: FreeStack(value=4, discard=12)
+  31[32]: [3] VarInt(var[28]) -> integer var=test_value[28]:integer
+  34[36]: ConstInt(val=88) -> integer
+  39[40]: EqInt(v1: integer, v2: integer) -> boolean
+  40[33]: ClearText(var[4]) var=__work_1[4]:text
+  43[33]: ConstText(_value="Test failed ") -> text
+  57[49]: AppendText(var[4], v1: text)
+  60[33]: VarInt(var[28]) -> integer var=test_value[28]:integer
+  63[37]: ConvLongFromInt(v1: integer) -> long
+  64[41]: ConstInt(val=0) -> integer
+  69[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  76[33]: ConstText(_value=" != 88") -> text
+  84[49]: AppendText(var[4], v1: text)
+  87[33]: VarText(var[4]) -> text var=__work_1[4]:text
+  90[49]: ConstText(_value="expr_float") -> text
+ 102[65]: ConstInt(val=4) -> integer
+ 107[69]: StaticCall(n_assert)
+ 110[32]: FreeText(var[4])
+ 113[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [2] Text()
+    1:[32] ConstFloat(val=1.1) -> 1.1[32]
+   10:[40] ConstInt(val=8) -> 8[40]
+   15:[44] ConstInt(val=10) -> 10[44]
+   20:[48] ConstInt(val=8) -> 8[48]
+   25:[52] MulInt(v1=10[44], v2=8[48]) -> 80[44]
+   26:[48] AddInt(v1=8[40], v2=80[44]) -> 88[40]
+   27:[44] FreeStack(value=4, discard=12)
+   31:[36] VarInt(var[32]=test_value) -> 88[36]
+   34:[40] ConstInt(val=88) -> 88[40]
+   39:[44] EqInt(v1=88[36], v2=88[40]) -> true[36]
+   40:[37] ClearText(var[8]=__work_1)
+   43:[37] ConstText(_value="Test failed ") -> "Test failed "[37]
+   57:[53] AppendText(var[8], v1="Test failed "[37])
+   60:[37] VarInt(var[32]=test_value) -> 88[37]
+   63:[41] ConvLongFromInt(v1=88[37]) -> 88[37]
+   64:[45] ConstInt(val=0) -> 0[45]
+   69:[49] FormatLong(var[8], val=88[37], radix=10, width=0[45], token=32, plus=false, note=false)
+   76:[37] ConstText(_value=" != 88") -> " != 88"[37]
+   84:[53] AppendText(var[8], v1=" != 88"[37])
+   87:[37] VarText(var[8]=__work_1) -> "Test failed 88 != 88"[37]
+   90:[53] ConstText(_value="expr_float") -> "expr_float"[53]
+  102:[69] ConstInt(val=4) -> 4[69]
+  107:[73] StaticCall(n_assert)
+  110:[36] FreeText(var[8])
+  113:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished

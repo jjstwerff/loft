@@ -1,0 +1,154 @@
+fn last(filename: text) -> text {
+    v = filename.rfind("/");
+    if v {
+        filename[v + 1..]
+    } else {
+        filename
+    }
+}
+
+pub fn test() {
+    test_value = {last("a/b/c") + last("d")};
+    assert(
+        test_value == "cd",
+        "Test failed {test_value} != \"cd\""
+    );
+}
+fn n_last(filename:text) -> text["filename"] {#block(1):text["filename"]
+  [2] v(1):integer = t_4text_rfind(filename(0), "/");
+  [3] if OpConvBoolFromInt(v(1)) {#block(2):text["filename"]
+    [4] OpGetTextSub(filename(0), OpAddInt(v(1), 1i32), 2147483647i32);
+  }#block(2):text["filename"] else {#block(3):text["filename"]
+    [6] filename(0);
+  }#block(3):text["filename"];
+}#block(1):text["filename"]
+
+byte-code for optional_remove:n_last(filename: text[0]) -> text["filename"]
+   0[16]: return-address  @abs=2832
+   0[20]: [2] ArgText(var[0]) -> text var=filename[0]:text
+   3[36]: ConstText(_value="/") -> text
+   6[52]: StaticCall(t_4text_rfind)
+   9[24]: [3] VarInt(var[20]) -> integer var=v[20]:integer
+  12[28]: ConvBoolFromInt(v1: integer) -> boolean
+  13[25]: GotoFalseWord(jump=37, if_false: boolean)
+  16[24]: [4] ArgText(var[0]) -> text var=filename[0]:text
+  19[40]: VarInt(var[20]) -> integer var=v[20]:integer
+  22[44]: ConstInt(val=1) -> integer
+  27[48]: AddInt(v1: integer, v2: integer) -> integer
+  28[44]: ConstInt(val=2147483647) -> integer
+  33[48]: GetTextSub(v1: text, from: integer, till: integer) -> text["filename"]
+  34[40]: GotoWord(jump=40)
+  37[24]: [6] ArgText(var[0]) -> text var=filename[0]:text
+  40[40]: Return(ret=16, value=16, discard=40) type=text 5
+
+fn n_test() {#block(1):void
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [11] test_value(1):text["__work_1"] = {#block(2):text["__work_1"]
+    {#Add text(3):text["__work_1"]
+      OpClearText(__work_1(1));
+      OpAppendText(__work_1(1), n_last("a/b/c"));
+      OpAppendText(__work_1(1), n_last("d"));
+      __work_1(1);
+    }#Add text(3):text["__work_1"];
+  }#block(2):text["__work_1"];
+  [12] n_assert(OpEqText(test_value(1), "cd"), {#Formatted string(4):text["__work_2"]
+    __work_2(1):text = "Test failed ";
+    OpFormatText(__work_2(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_2(1), " != "cd"");
+    __work_2(1);
+  }#Formatted string(4):text["__work_2"], "optional_remove", 13i32);
+  OpFreeText(test_value(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+}#block(1):void
+
+byte-code for optional_remove:n_test()
+   0[0]: return-address  @abs=2878
+   0[4]: Text() var=__work_2[4]:text
+   1[28]: Text() var=__work_1[28]:text
+   2[52]: [11] Text() var=test_value[52]:text["__work_1"]
+   3[76]: ClearText(var[28])
+   6[76]: ConstText(_value="a/b/c") -> text
+  13[92]: Call(size=0, fn=n_last)
+  20[92]: AppendText(var[28], v1: text)
+  23[76]: ConstText(_value="d") -> text
+  26[92]: Call(size=0, fn=n_last)
+  33[92]: AppendText(var[28], v1: text)
+  36[76]: VarText(var[28]) -> text var=__work_1[28]:text
+  39[92]: AppendText(var[52], v1: text)
+  42[76]: [12] VarText(var[52]) -> text var=test_value[52]:text["__work_1"]
+  45[92]: ConstText(_value="cd") -> text
+  49[108]: EqText(v1: text, v2: text) -> boolean
+  50[77]: ClearText(var[4]) var=__work_2[4]:text
+  53[77]: ConstText(_value="Test failed ") -> text
+  67[93]: AppendText(var[4], v1: text)
+  70[77]: VarText(var[52]) -> text var=test_value[52]:text["__work_1"]
+  73[93]: ConstInt(val=0) -> integer
+  78[97]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+  83[77]: ConstText(_value=" != "cd"") -> text
+  93[93]: AppendText(var[4], v1: text)
+  96[77]: VarText(var[4]) -> text var=__work_2[4]:text
+  99[93]: ConstText(_value="optional_remove") -> text
+ 116[109]: ConstInt(val=13) -> integer
+ 121[113]: StaticCall(n_assert)
+ 124[76]: FreeText(var[52])
+ 127[76]: FreeText(var[28])
+ 130[76]: FreeText(var[4])
+ 133[76]: Return(ret=0, value=0, discard=76)
+
+Execute test:
+    0:[8] Text()
+    1:[32] [11] Text()
+    2:[56] Text()
+    3:[80] ClearText(var[32])
+    6:[80] ConstText(_value="a/b/c") -> "a/b/c"[80]
+   13:[96] Call(size=0, fn=n_last)
+ 2832:[100] ArgText(var[80]=filename) -> "a/b/c"[100]
+ 2835:[116] ConstText(_value="/") -> "/"[116]
+ 2838:[132] StaticCall(t_4text_rfind)
+ 2841:[104] VarInt(var[100]=v) -> 3[104]
+ 2844:[108] ConvBoolFromInt(v1=3[104]) -> true[104]
+ 2845:[105] GotoFalseWord(jump=2869, if_false=true[104])
+ 2848:[104] ArgText(var[80]=filename) -> "a/b/c"[104]
+ 2851:[120] VarInt(var[100]=v) -> 3[120]
+ 2854:[124] ConstInt(val=1) -> 1[124]
+ 2859:[128] AddInt(v1=3[120], v2=1[124]) -> 4[120]
+ 2860:[124] ConstInt(val=2147483647) -> 2147483647[124]
+ 2865:[128] GetTextSub(v1="a/b/c"[104], from=4[120], till=2147483647[124]) -> "c"[104]
+ 2866:[120] GotoWord(jump=2872)
+ 2872:[120] Return(ret=2898[96], value=16, discard=40) -> "c"[80]
+   20:[96] AppendText(var[32], v1="c"[80])
+   23:[80] ConstText(_value="d") -> "d"[80]
+   26:[96] Call(size=0, fn=n_last)
+ 2832:[100] ArgText(var[80]=filename) -> "d"[100]
+ 2835:[116] ConstText(_value="/") -> "/"[116]
+ 2838:[132] StaticCall(t_4text_rfind)
+ 2841:[104] VarInt(var[100]=v) -> -2147483648[104]
+ 2844:[108] ConvBoolFromInt(v1=-2147483648[104]) -> false[104]
+ 2845:[105] GotoFalseWord(jump=2869, if_false=false[104])
+ 2869:[104] ArgText(var[80]=filename) -> "d"[104]
+ 2872:[120] Return(ret=2911[96], value=16, discard=40) -> "d"[80]
+   33:[96] AppendText(var[32], v1="d"[80])
+   36:[80] VarText(var[32]=__work_1) -> "cd"[80]
+   39:[96] AppendText(var[56], v1="cd"[80])
+   42:[80] VarText(var[56]=test_value) -> "cd"[80]
+   45:[96] ConstText(_value="cd") -> "cd"[96]
+   49:[112] EqText(v1="cd"[80], v2="cd"[96]) -> true[80]
+   50:[81] ClearText(var[8]=__work_2)
+   53:[81] ConstText(_value="Test failed ") -> "Test failed "[81]
+   67:[97] AppendText(var[8], v1="Test failed "[81])
+   70:[81] VarText(var[56]=test_value) -> "cd"[81]
+   73:[97] ConstInt(val=0) -> 0[97]
+   78:[101] FormatText(var[8], val="cd"[81], width=0[97], dir=-1, token=32)
+   83:[81] ConstText(_value=" != "cd"") -> " != \"cd\""[81]
+   93:[97] AppendText(var[8], v1=" != \"cd\""[81])
+   96:[81] VarText(var[8]=__work_2) -> "Test failed cd != \"cd\""[81]
+   99:[97] ConstText(_value="optional_remove") -> "optional_remove"[97]
+  116:[113] ConstInt(val=13) -> 13[113]
+  121:[117] StaticCall(n_assert)
+  124:[80] FreeText(var[56])
+  127:[80] FreeText(var[32])
+  130:[80] FreeText(var[8])
+  133:[80] Return(ret=4294967295[4], value=0, discard=76)
+Finished

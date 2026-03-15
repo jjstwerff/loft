@@ -1,0 +1,206 @@
+fn choice(a: text, b: text) -> text { if len(a) > len(b) { a } else { b } }
+
+pub fn test() {
+    test_value = {choice("{1:03}", "{2}1") + choice("2", "")};
+    assert(
+        test_value == "0012",
+        "Test failed {test_value} != \"0012\""
+    );
+}
+fn n_choice(a:text, b:text) -> text["a", "b"] {#block(1):text["a", "b"]
+  [1] if OpLtInt(t_4text_len(b(0)), t_4text_len(a(0))) {#block(2):text["a"]
+    a(0);
+  }#block(2):text["a"] else {#block(3):text["a"]
+    b(0);
+  }#block(3):text["a"];
+}#block(1):text["a", "b"]
+
+byte-code for call:n_choice(a: text[0], b: text[16]) -> text["a", "b"]
+   0[32]: return-address  @abs=2832
+   0[36]: [1] ArgText(var[16]) -> text var=b[16]:text
+   3[52]: Call(size=0, fn=t_4text_len)
+  10[40]: ArgText(var[0]) -> text var=a[0]:text
+  13[56]: Call(size=0, fn=t_4text_len)
+  20[44]: LtInt(v1: integer, v2: integer) -> boolean
+  21[37]: GotoFalseWord(jump=30, if_false: boolean)
+  24[36]: ArgText(var[0]) -> text var=a[0]:text
+  27[52]: GotoWord(jump=33)
+  30[36]: ArgText(var[16]) -> text var=b[16]:text
+  33[52]: Return(ret=32, value=16, discard=52) type=text 5
+
+fn n_test() {#block(1):void
+  __work_4(1):text = "";
+  __work_3(1):text = "";
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [4] test_value(1):text["__work_3"] = {#block(2):text["__work_3"]
+    {#Add text(3):text["__work_3"]
+      OpClearText(__work_3(1));
+      OpAppendText(__work_3(1), n_choice({#Formatted string(4):text["__work_1"]
+        __work_1(1):text = "";
+        OpFormatLong(__work_1(1), OpConvLongFromInt(1i32), 10i32, 3i32, 48i32, false, false);
+        __work_1(1);
+      }#Formatted string(4):text["__work_1"], {#Formatted string(5):text["__work_2"]
+        __work_2(1):text = "";
+        OpFormatLong(__work_2(1), OpConvLongFromInt(2i32), 10i32, 0i32, 32i32, false, false);
+        OpAppendText(__work_2(1), "1");
+        __work_2(1);
+      }#Formatted string(5):text["__work_2"]));
+      OpAppendText(__work_3(1), n_choice("2", ""));
+      __work_3(1);
+    }#Add text(3):text["__work_3"];
+  }#block(2):text["__work_3"];
+  [5] n_assert(OpEqText(test_value(1), "0012"), {#Formatted string(6):text["__work_4"]
+    __work_4(1):text = "Test failed ";
+    OpFormatText(__work_4(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_4(1), " != "0012"");
+    __work_4(1);
+  }#Formatted string(6):text["__work_4"], "call", 6i32);
+  OpFreeText(test_value(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+  OpFreeText(__work_3(1));
+  OpFreeText(__work_4(1));
+}#block(1):void
+
+byte-code for call:n_test()
+   0[0]: return-address  @abs=2871
+   0[4]: Text() var=__work_4[4]:text
+   1[28]: Text() var=__work_3[28]:text
+   2[52]: Text() var=__work_2[52]:text
+   3[76]: Text() var=__work_1[76]:text
+   4[100]: [4] Text() var=test_value[100]:text["__work_3"]
+   5[124]: ClearText(var[28])
+   8[124]: ClearText(var[76]) var=__work_1[76]:text
+  11[124]: ConstText(_value="") -> text
+  13[140]: ConstInt(val=1) -> integer
+  18[144]: ConvLongFromInt(v1: integer) -> long
+  19[148]: ConstInt(val=3) -> integer
+  24[152]: FormatLong(var[76], val: long, radix=10, width: integer, token=48, plus=false, note=false)
+  31[140]: VarText(var[76]) -> text var=__work_1[76]:text
+  34[156]: FreeStack(value=16, discard=32)
+  38[140]: ClearText(var[52]) var=__work_2[52]:text
+  41[140]: ConstText(_value="") -> text
+  43[156]: ConstInt(val=2) -> integer
+  48[160]: ConvLongFromInt(v1: integer) -> long
+  49[164]: ConstInt(val=0) -> integer
+  54[168]: FormatLong(var[52], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  61[156]: ConstText(_value="1") -> text
+  64[172]: AppendText(var[52], v1: text)
+  67[156]: VarText(var[52]) -> text var=__work_2[52]:text
+  70[172]: FreeStack(value=16, discard=32)
+  74[156]: Call(size=0, fn=n_choice)
+  81[140]: AppendText(var[28], v1: text)
+  84[124]: ConstText(_value="2") -> text
+  87[140]: ConstText(_value="") -> text
+  89[156]: Call(size=0, fn=n_choice)
+  96[140]: AppendText(var[28], v1: text)
+  99[124]: VarText(var[28]) -> text var=__work_3[28]:text
+ 102[140]: AppendText(var[100], v1: text)
+ 105[124]: [5] VarText(var[100]) -> text var=test_value[100]:text["__work_3"]
+ 108[140]: ConstText(_value="0012") -> text
+ 114[156]: EqText(v1: text, v2: text) -> boolean
+ 115[125]: ClearText(var[4]) var=__work_4[4]:text
+ 118[125]: ConstText(_value="Test failed ") -> text
+ 132[141]: AppendText(var[4], v1: text)
+ 135[125]: VarText(var[100]) -> text var=test_value[100]:text["__work_3"]
+ 138[141]: ConstInt(val=0) -> integer
+ 143[145]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+ 148[125]: ConstText(_value=" != "0012"") -> text
+ 160[141]: AppendText(var[4], v1: text)
+ 163[125]: VarText(var[4]) -> text var=__work_4[4]:text
+ 166[141]: ConstText(_value="call") -> text
+ 172[157]: ConstInt(val=6) -> integer
+ 177[161]: StaticCall(n_assert)
+ 180[124]: FreeText(var[100])
+ 183[124]: FreeText(var[76])
+ 186[124]: FreeText(var[52])
+ 189[124]: FreeText(var[28])
+ 192[124]: FreeText(var[4])
+ 195[124]: Return(ret=0, value=0, discard=124)
+
+Execute test:
+    0:[8] Text()
+    1:[32] Text()
+    2:[56] Text()
+    3:[80] [4] Text()
+    4:[104] Text()
+    5:[128] ClearText(var[32])
+    8:[128] ClearText(var[80]=__work_1)
+   11:[128] ConstText(_value="") -> ""[128]
+   13:[144] ConstInt(val=1) -> 1[144]
+   18:[148] ConvLongFromInt(v1=1[144]) -> 1[144]
+   19:[152] ConstInt(val=3) -> 3[152]
+   24:[156] FormatLong(var[80], val=1[144], radix=10, width=3[152], token=48, plus=false, note=false)
+   31:[144] VarText(var[80]=__work_1) -> "001"[144]
+   34:[160] FreeStack(value=16, discard=32)
+   38:[144] ClearText(var[56]=__work_2)
+   41:[144] ConstText(_value="") -> ""[144]
+   43:[160] ConstInt(val=2) -> 2[160]
+   48:[164] ConvLongFromInt(v1=2[160]) -> 2[160]
+   49:[168] ConstInt(val=0) -> 0[168]
+   54:[172] FormatLong(var[56], val=2[160], radix=10, width=0[168], token=32, plus=false, note=false)
+   61:[160] ConstText(_value="1") -> "1"[160]
+   64:[176] AppendText(var[56], v1="1"[160])
+   67:[160] VarText(var[56]=__work_2) -> "21"[160]
+   70:[176] FreeStack(value=16, discard=32)
+   74:[160] Call(size=0, fn=n_choice)
+ 2832:[164] ArgText(var[144]=b) -> "21"[164]
+ 2835:[180] Call(size=0, fn=t_4text_len)
+ 1068:[184] ArgText(var[164]=both) -> "21"[184]
+ 1071:[200] LengthText(v1="21"[184]) -> 2[184]
+ 1072:[188] Return(ret=2842[180], value=4, discard=24) -> 2[164]
+ 2842:[168] ArgText(var[128]=a) -> "001"[168]
+ 2845:[184] Call(size=0, fn=t_4text_len)
+ 1068:[188] ArgText(var[168]=both) -> "001"[188]
+ 1071:[204] LengthText(v1="001"[188]) -> 3[188]
+ 1072:[192] Return(ret=2852[184], value=4, discard=24) -> 3[168]
+ 2852:[172] LtInt(v1=2[164], v2=3[168]) -> true[164]
+ 2853:[165] GotoFalseWord(jump=2862, if_false=true[164])
+ 2856:[164] ArgText(var[128]=a) -> "001"[164]
+ 2859:[180] GotoWord(jump=2865)
+ 2865:[180] Return(ret=2952[160], value=16, discard=52) -> "001"[128]
+   81:[144] AppendText(var[32], v1="001"[128])
+   84:[128] ConstText(_value="2") -> "2"[128]
+   87:[144] ConstText(_value="") -> ""[144]
+   89:[160] Call(size=0, fn=n_choice)
+ 2832:[164] ArgText(var[144]=b) -> ""[164]
+ 2835:[180] Call(size=0, fn=t_4text_len)
+ 1068:[184] ArgText(var[164]=both) -> ""[184]
+ 1071:[200] LengthText(v1=""[184]) -> 0[184]
+ 1072:[188] Return(ret=2842[180], value=4, discard=24) -> 0[164]
+ 2842:[168] ArgText(var[128]=a) -> "2"[168]
+ 2845:[184] Call(size=0, fn=t_4text_len)
+ 1068:[188] ArgText(var[168]=both) -> "2"[188]
+ 1071:[204] LengthText(v1="2"[188]) -> 1[188]
+ 1072:[192] Return(ret=2852[184], value=4, discard=24) -> 1[168]
+ 2852:[172] LtInt(v1=0[164], v2=1[168]) -> true[164]
+ 2853:[165] GotoFalseWord(jump=2862, if_false=true[164])
+ 2856:[164] ArgText(var[128]=a) -> "2"[164]
+ 2859:[180] GotoWord(jump=2865)
+ 2865:[180] Return(ret=2967[160], value=16, discard=52) -> "2"[128]
+   96:[144] AppendText(var[32], v1="2"[128])
+   99:[128] VarText(var[32]=__work_3) -> "0012"[128]
+  102:[144] AppendText(var[104], v1="0012"[128])
+  105:[128] VarText(var[104]=test_value) -> "0012"[128]
+  108:[144] ConstText(_value="0012") -> "0012"[144]
+  114:[160] EqText(v1="0012"[128], v2="0012"[144]) -> true[128]
+  115:[129] ClearText(var[8]=__work_4)
+  118:[129] ConstText(_value="Test failed ") -> "Test failed "[129]
+  132:[145] AppendText(var[8], v1="Test failed "[129])
+  135:[129] VarText(var[104]=test_value) -> "0012"[129]
+  138:[145] ConstInt(val=0) -> 0[145]
+  143:[149] FormatText(var[8], val="0012"[129], width=0[145], dir=-1, token=32)
+  148:[129] ConstText(_value=" != "0012"") -> " != \"0012\""[129]
+  160:[145] AppendText(var[8], v1=" != \"0012\""[129])
+  163:[129] VarText(var[8]=__work_4) -> "Test failed 0012 != \"0012\""[129]
+  166:[145] ConstText(_value="call") -> "call"[145]
+  172:[161] ConstInt(val=6) -> 6[161]
+  177:[165] StaticCall(n_assert)
+  180:[128] FreeText(var[104])
+  183:[128] FreeText(var[80])
+  186:[128] FreeText(var[56])
+  189:[128] FreeText(var[32])
+  192:[128] FreeText(var[8])
+  195:[128] Return(ret=4294967295[4], value=0, discard=124)
+Finished

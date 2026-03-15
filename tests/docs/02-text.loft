@@ -1,0 +1,110 @@
+// Copyright (c) 2024-2025 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Texts
+// @TITLE: Text handling and functions
+
+// Text is one of the most frequently used types in any real program — for
+// output, for reading input, for building messages. This page shows you how
+// Loft stores and manipulates text, how to measure it, slice it, search it,
+// and format it exactly the way you need.
+//
+// The key thing to know upfront: Loft stores text as UTF-8, the same encoding
+// used on the web and in most modern systems. Nearly all operations work in
+// bytes rather than in Unicode characters. That makes them fast and simple,
+// but you need to keep multi-byte characters in mind when you slice by position.
+
+fn main() {
+    // ## Joining and measuring text
+    // Use '+' to join two pieces of text into one. The result is a new value —
+    // neither of the originals is modified.
+    // Placing a value name inside curly braces inside a format string inserts
+    // the value as text. You can also control the width: '{a:4}' pads the
+    // value on the right to at least 4 characters.
+    a = "1" + "2";
+    assert("'{a:4}'" == "'12  '", "Formatting text");
+    assert(len(a + "123") == 5, "Text length");
+
+    // 'len()' counts bytes, not visible characters.
+    // An emoji like '😃' takes 4 bytes in UTF-8, a heart symbol '♥' takes 3,
+    // and every plain ASCII letter takes exactly 1. Keep this in mind whenever
+    // you use len() to check how "long" something is to a human reader.
+    assert(len("😃") == 4, "Emoji byte length");
+    assert(len("♥") == 3, "Heart byte length");
+    assert(len("abc") == 3, "ASCII byte length");
+
+    // ## Reading individual characters
+    // Square brackets with a single byte index give you the character at that
+    // position. For plain ASCII text every byte is one character, so indexing
+    // by position is straightforward. Loft will return the full Unicode character
+    // even if it spans multiple bytes.
+    s = "ABCDE";
+    assert(s[0] == 'A', "Character at byte 0");
+    assert(s[2] == 'C', "Character at byte 2");
+
+    // ## Slicing text
+    // A slice 's[start..end]' gives you the bytes from 'start' up to but not
+    // including 'end'. You can omit the start to begin at 0, or omit the end
+    // to go all the way to the last byte. Loft snaps offsets to valid character
+    // boundaries so you can never accidentally cut a multi-byte character in half.
+    assert(s[0..2] == "AB", "Explicit start slice");
+    assert(s[..2] == "AB", "Open-start slice");
+    assert(s[1..4] == "BCD", "Sub-string by byte range");
+    assert(s[3..] == "DE", "Open-ended sub-string");
+
+    // A negative end index counts backwards from the end of the text.
+    // '-1' means "stop one byte before the very last byte". Combined with a
+    // start offset this lets you trim a known suffix without knowing the exact length.
+    txt = "12😊🙃45";
+    assert(txt[2..-1] == "😊🙃4", "UTF-8 sub-string by byte range");
+
+    // ## Iterating over characters
+    // A 'for' loop over a text value visits one Unicode character at a time,
+    // even when characters span multiple bytes. Two loop helpers give you
+    // position information without any extra code:
+    // 'c#index' is the byte offset where the current character starts.
+    // 'c#next' is the byte offset immediately after the current character ends.
+    // This makes it easy to build a byte-offset map or to collect characters
+    // starting from a specific position.
+    result = "";
+    positions = [];
+    nexts = [];
+    for c in "Hi 😊!" {
+        positions += [c#index];
+        nexts += [c#next];
+        if c#index >= 3 {
+            result += c;
+        }
+    }
+    assert(result == "😊!", "Character iteration was {result}");
+    assert("{positions}" == "[0,1,2,3,7]", "Character positions was {positions}");
+    assert("{nexts}" == "[1,2,3,7,8]", "Character nexts was {nexts}");
+
+    // ## Searching inside text
+    // These built-in functions answer common "does this text contain…?" questions.
+    // 'starts_with' and 'ends_with' check the boundaries.
+    // 'find' returns the byte offset of the first match, or null if not found.
+    // 'contains' is true if the needle appears anywhere in the text.
+    // All positions are byte offsets, consistent with 'len()' and slicing.
+    assert("something".starts_with("some"), "starts_with");
+    assert("something".ends_with("thing"), "ends_with");
+    assert("something".find("th") == 4, "find returns byte offset");
+    assert("a longer text".contains("longer"), "contains");
+
+    // 'trim()' removes spaces and other whitespace from both ends of a text value.
+    // It is useful when reading user input or parsing text from a file.
+    assert(trim("  hello  ") == "hello", "trim");
+
+    // ## Escaping braces in format strings
+    // Inside a format string '{' and '}' are special: they introduce an
+    // interpolated expression. To include a literal brace in the output,
+    // double it: '{{' produces '{' and '}}' produces '}'.
+    brace_inner = "cd";
+    assert("ab{{cd}}e" == "ab{{{brace_inner}}}e", "Escaping braces");
+
+    // ## Aligning text in a fixed-width field
+    // The ':' specifier controls alignment and width. '<' left-aligns the value,
+    // '>' right-aligns it (the default). The width can be a constant or a small
+    // arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
+    vr = "abc";
+    assert("1{vr:<2+3}2{vr}3{vr:6}4{vr:>7}" == "1abc  2abc3abc   4    abc", "Text alignment");
+}

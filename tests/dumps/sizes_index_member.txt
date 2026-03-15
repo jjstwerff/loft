@@ -1,0 +1,113 @@
+struct S {a: integer, b: long, c: integer};
+struct Main { s: index<S[a, -c]> };
+
+pub fn test() {
+    test_value = {m = Main {}; sizeof(S) + 100 * sizeof(m)};
+    assert(
+        test_value == 425,
+        "Test failed {test_value} != 425"
+    );
+}
+Type 18:S[25/8]: parents [Main 19]
+    a:integer[8]
+    b:long[0]
+    c:integer[12]
+    #left_1:integer[16]
+    #right_1:integer[20]
+    #color_1:boolean[24]
+
+Type 19:Main[4/4]:
+    s:index<S[a,-c]>[0]
+
+Type 20:index<S[a,-c]>[4/4]:Index(18, [(0, true), (2, false)], 3) keys [tp:1 desc:false field:8, tp:1 desc:true field:12, ]
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [5] test_value(1):integer = {#block(2):integer
+    m(2):ref(Main) = null;
+    OpDatabase(m(2), 19i32);
+    OpSetInt(m(2), 0i32, 0i32);
+    OpAddInt(25i32, OpMulInt(100i32, OpSizeofRef(m(2))));
+    OpFreeRef(m(2));
+  }#block(2):integer;
+  [6] n_assert(OpEqInt(test_value(1), 425i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 425");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "index_member", 7i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for index_member:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [5] ConvRefFromNull() -> ref(reference) var=m[28]:ref(Main) ; [store-alloc]
+   2[40]: Database(var[28], db_tp=19) type=Main 19
+   7[40]: VarRef(var[28]) -> ref(reference) type=Main 19 var=m[28]:ref(Main)
+  10[52]: ConstInt(val=0) -> integer
+  15[56]: SetInt(v1: ref(reference), fld=0, val: integer)
+  18[40]: ConstInt(val=25) -> integer
+  23[44]: ConstInt(val=100) -> integer
+  28[48]: VarRef(var[28]) -> ref(reference) type=Main 19 var=m[28]:ref(Main)
+  31[60]: SizeofRef(val: ref(reference)) -> integer
+  32[52]: MulInt(v1: integer, v2: integer) -> integer
+  33[48]: AddInt(v1: integer, v2: integer) -> integer
+  34[44]: VarRef(var[28]) -> ref(reference) type=Main 19 var=m[28]:ref(Main)
+  37[56]: FreeRef(v1: ref(reference)) ; [store-free]
+  38[44]: FreeStack(value=4, discard=16)
+  42[32]: [6] VarInt(var[28]) -> integer var=test_value[28]:integer
+  45[36]: ConstInt(val=425) -> integer
+  50[40]: EqInt(v1: integer, v2: integer) -> boolean
+  51[33]: ClearText(var[4]) var=__work_1[4]:text
+  54[33]: ConstText(_value="Test failed ") -> text
+  68[49]: AppendText(var[4], v1: text)
+  71[33]: VarInt(var[28]) -> integer var=test_value[28]:integer
+  74[37]: ConvLongFromInt(v1: integer) -> long
+  75[41]: ConstInt(val=0) -> integer
+  80[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  87[33]: ConstText(_value=" != 425") -> text
+  96[49]: AppendText(var[4], v1: text)
+  99[33]: VarText(var[4]) -> text var=__work_1[4]:text
+ 102[49]: ConstText(_value="index_member") -> text
+ 116[65]: ConstInt(val=7) -> integer
+ 121[69]: StaticCall(n_assert)
+ 124[32]: FreeText(var[4])
+ 127[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [5] Text()
+    1:[32] ConvRefFromNull() -> ref(1,0,8)[32]
+  ; store-alloc nr=1 max=2
+    2:[44] Database(var[32], db_tp=19)
+    7:[44] VarRef(var[32]=m) -> ref(1,1,8)={s:[]}[44]
+   10:[56] ConstInt(val=0) -> 0[56]
+   15:[60] SetInt(v1=ref(1,1,8)[44], fld=0, val=0[56])
+   18:[44] ConstInt(val=25) -> 25[44]
+   23:[48] ConstInt(val=100) -> 100[48]
+   28:[52] VarRef(var[32]=m) -> ref(1,1,8)={s:[]}[52]
+   31:[64] SizeofRef(val=ref(1,1,8)[52]) -> 4[52]
+   32:[56] MulInt(v1=100[48], v2=4[52]) -> 400[48]
+   33:[52] AddInt(v1=25[44], v2=400[48]) -> 425[44]
+   34:[48] VarRef(var[32]=m) -> ref(1,1,8)={s:[]}[48]
+   37:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+   38:[48] FreeStack(value=4, discard=16)
+   42:[36] VarInt(var[32]=test_value) -> 425[36]
+   45:[40] ConstInt(val=425) -> 425[40]
+   50:[44] EqInt(v1=425[36], v2=425[40]) -> true[36]
+   51:[37] ClearText(var[8]=__work_1)
+   54:[37] ConstText(_value="Test failed ") -> "Test failed "[37]
+   68:[53] AppendText(var[8], v1="Test failed "[37])
+   71:[37] VarInt(var[32]=test_value) -> 425[37]
+   74:[41] ConvLongFromInt(v1=425[37]) -> 425[37]
+   75:[45] ConstInt(val=0) -> 0[45]
+   80:[49] FormatLong(var[8], val=425[37], radix=10, width=0[45], token=32, plus=false, note=false)
+   87:[37] ConstText(_value=" != 425") -> " != 425"[37]
+   96:[53] AppendText(var[8], v1=" != 425"[37])
+   99:[37] VarText(var[8]=__work_1) -> "Test failed 425 != 425"[37]
+  102:[53] ConstText(_value="index_member") -> "index_member"[53]
+  116:[69] ConstInt(val=7) -> 7[69]
+  121:[73] StaticCall(n_assert)
+  124:[36] FreeText(var[8])
+  127:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished

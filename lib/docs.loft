@@ -1,0 +1,22 @@
+use lexer;
+
+fn convert(dir: text, into: text) {
+    l = lexer::Lexer {};
+    l.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
+    l.set_keywords(["for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or"]);
+    for f in file(dir).files() {
+        if f.path.ends_with(".lav") {
+            n = f.path[f.path.rfind("/")..];
+            i = into + f.path[f.path.rfind("/")..-4] + ".html";
+            l.parse_string(n, f.content());
+            to = file(i);
+            to.write("<html><body>\n");
+            to.write("<h1>{n}</h1>\n");
+            to.write("</body></html>\n");
+        }
+    }
+}
+
+fn main() {
+    convert("tests/suite", "doc")
+}

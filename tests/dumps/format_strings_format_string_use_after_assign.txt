@@ -1,0 +1,63 @@
+fn test() { cd = 5; s = "{cd}"; assert(s == "5", s); }
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [1] cd(1):integer = 5i32;
+  s(1):text["__work_1"] = {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(cd(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"];
+  n_assert(OpEqText(s(1), "5"), s(1), "format_string_use_after_assign", 1i32);
+  OpFreeText(s(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for format_string_use_after_assign:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [1] ConstInt(val=5) -> integer var=cd[28]:integer
+   6[32]: Text() var=s[32]:text["__work_1"]
+   7[56]: ClearText(var[4]) var=__work_1[4]:text
+  10[56]: ConstText(_value="") -> text
+  12[72]: VarInt(var[28]) -> integer var=cd[28]:integer
+  15[76]: ConvLongFromInt(v1: integer) -> long
+  16[80]: ConstInt(val=0) -> integer
+  21[84]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  28[72]: VarText(var[4]) -> text var=__work_1[4]:text
+  31[88]: FreeStack(value=16, discard=32)
+  35[72]: AppendText(var[32], v1: text)
+  38[56]: VarText(var[32]) -> text var=s[32]:text["__work_1"]
+  41[72]: ConstText(_value="5") -> text
+  44[88]: EqText(v1: text, v2: text) -> boolean
+  45[57]: VarText(var[32]) -> text var=s[32]:text["__work_1"]
+  48[73]: ConstText(_value="format_string_use_after_assign") -> text
+  80[89]: ConstInt(val=1) -> integer
+  85[93]: StaticCall(n_assert)
+  88[56]: FreeText(var[32])
+  91[56]: FreeText(var[4])
+  94[56]: Return(ret=0, value=0, discard=56)
+
+Execute test:
+    0:[8] [1] Text()
+    1:[32] ConstInt(val=5) -> 5[32]
+    6:[36] Text()
+    7:[60] ClearText(var[8]=__work_1)
+   10:[60] ConstText(_value="") -> ""[60]
+   12:[76] VarInt(var[32]=cd) -> 5[76]
+   15:[80] ConvLongFromInt(v1=5[76]) -> 5[76]
+   16:[84] ConstInt(val=0) -> 0[84]
+   21:[88] FormatLong(var[8], val=5[76], radix=10, width=0[84], token=32, plus=false, note=false)
+   28:[76] VarText(var[8]=__work_1) -> "5"[76]
+   31:[92] FreeStack(value=16, discard=32)
+   35:[76] AppendText(var[36], v1="5"[60])
+   38:[60] VarText(var[36]=s) -> "5"[60]
+   41:[76] ConstText(_value="5") -> "5"[76]
+   44:[92] EqText(v1="5"[60], v2="5"[76]) -> true[60]
+   45:[61] VarText(var[36]=s) -> "5"[61]
+   48:[77] ConstText(_value="format_string_use_after_assign") -> "format_string_use_after_assign"[77]
+   80:[93] ConstInt(val=1) -> 1[93]
+   85:[97] StaticCall(n_assert)
+   88:[60] FreeText(var[36])
+   91:[60] FreeText(var[8])
+   94:[60] Return(ret=4294967295[4], value=0, discard=56)
+Finished

@@ -1,0 +1,7 @@
+
+enum OverlandMap { // size 7
+    material: u8,
+    item: u16,
+    height: u16,
+    water: u16, // including 3 bits of water direction
+}

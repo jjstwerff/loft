@@ -1,0 +1,278 @@
+// Copyright (c) 2024 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+// --- File System ---
+// Types and functions for reading and writing files.
+// A File value is obtained via file() and carries the path, format, and an internal reference.
+
+// An environment variable as a name/value pair.
+pub struct EnvVariable {
+    name: text,
+    value: text
+}
+
+// Data per pixel of the png graph.
+// Fields r, g, b hold red, green and blue intensity, each 0–255.
+pub struct Pixel {
+    r: integer limit(0, 255) not null,
+    g: integer limit(0, 255) not null,
+    b: integer limit(0, 255) not null
+}
+
+// Database structure with image data.
+// The actual data is in height rows of width length.
+pub struct Image {
+    name: text,
+    width: integer,
+    height: integer,
+    data: vector<Pixel>
+}
+
+// Describes how a file is opened.
+// TextFile: read or write as UTF-8 text (default).
+// LittleEndian: binary mode, least-significant byte first.
+// BigEndian: binary mode, most-significant byte first.
+// Directory: represents a directory path.
+// NotExists: no file or directory exist.
+pub enum Format {
+    TextFile,
+    LittleEndian,
+    BigEndian,
+    Directory,
+    NotExists
+}
+
+// A handle to a filesystem entry.
+// Fields: path (full path), size (file size in bytes), format (open mode),
+// current (byte position after last read), next (byte position to read next).
+pub struct File {
+    path: text, // 24
+    size: long, // 0
+    format: Format, // 32
+    ref: i32, // 28
+    current: long, // 8
+    next: long // 16
+}
+
+fn OpGetFile(file: File) -> boolean;
+#rust "stores.get_file(&@file)"
+
+fn OpGetDir(path: text, result: vector<File>) -> boolean;
+#rust "stores.get_dir(@path, &@result)"
+
+fn OpGetPngImage(path: text, image: Image) -> boolean;
+#rust "stores.get_png(@path, &@image)"
+
+fn OpGetFileText(file: File, content: &text);
+
+fn OpWriteFile(file: File, val: reference, db_tp: const u16);
+
+fn OpReadFile(file: File, val: reference, bytes: i32, db_tp: const u16);
+
+fn OpSeekFile(file: File, pos: long);
+
+fn OpSizeFile(file: File) -> long;
+
+fn OpDelete(path: text) -> boolean;
+#rust "std::fs::remove_file(@path).is_ok()"
+
+fn OpMoveFile(from: text, to: text) -> boolean;
+#rust "std::fs::rename(@from, @to).is_ok()"
+
+fn OpTruncateFile(self: File, size: long) -> boolean;
+
+// Dynamic dispatch through a runtime function reference (fn-ref variable).
+// Placed here — after all file-I/O operators — so that it receives op_code 252 without
+// renumbering the operators defined earlier in this file.  Logically it belongs near
+// OpCall in 01_code.loft; relocate it there if the operator numbering is ever rebuilt.
+// fn_var  — byte distance from the current stack top to the i32 d_nr slot.
+// arg_size — total byte size of the already-pushed arguments.
+fn OpCallRef(fn_var: const u16, arg_size: const u16);
+#rust "s.fn_call_ref(@fn_var, @arg_size);"
+
+// Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
+// Use for fast colour comparison or storage.
+pub fn value(self: Pixel) -> integer {
+    self.r * 0x10000 + self.g * 0x100 + self.b
+}
+
+// Reads the entire file as a UTF-8 text value.
+// Use for small configuration files or scripts.
+pub fn content(self: File) -> text {
+    result = "";
+    txt = "";
+    OpGetFileText(self, txt);
+    result += txt;
+    result
+}
+
+// Reads the file and splits it into lines.
+// Use when processing line-by-line (logs, CSV, etc.).
+pub fn lines(self: File) -> vector<text> {
+    result = [];
+    c = self.content();
+    p = 0;
+    for ch in c {
+        if ch == '\n' {
+            result += [ c[p..ch#index] ];
+            p = ch#next;
+        }
+    }
+    if p > 0 {
+        result += [ c[p..c.len()] ];
+    }
+    result
+}
+
+// --- Text ---
+
+// Splits self on every occurrence of separator and returns the parts as a vector.
+// Use to parse CSV lines or space-separated tokens.
+pub fn split(self: text, separator: character) -> vector<text> {
+    result = [];
+    p = 0;
+    for c in self {
+        if c == separator {
+            result += [ self[p..c#index] ];
+            p = c#next;
+        }
+    }
+    if p > 0 {
+        result += [ self[p..self.len()] ];
+    }
+    result
+}
+
+// --- File System ---
+
+// Returns true if path stays within the project directory (no net upward traversal).
+fn valid_path(path: text) -> boolean {
+    depth = 0;
+    start = 0;
+    for c in path {
+        if c == '/' || c == '\\' {
+            part = path[start..c#index];
+            start = c#next;
+            if part == ".." {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            } else if part != "." && part.len() > 0 {
+                depth += 1;
+            }
+        }
+    }
+    if start < path.len() {
+        part = path[start..path.len()];
+        if part == ".." {
+            depth -= 1;
+        }
+    }
+    depth >= 0
+}
+
+// Use as the entry point for all file I/O.
+// Paths outside the project directory are treated as NotExists without touching the filesystem.
+pub fn file(path: text) -> File {
+    result = File { path: path, ref: null };
+    if valid_path(path) {
+        OpGetFile(result);
+    } else {
+        result.format = Format.NotExists;
+    }
+    result
+}
+
+// Use to check whether a path is accessible before reading or writing it.
+// Paths outside the project directory are always absent.
+pub fn exists(path: text) -> boolean {
+    file(path).format != Format.NotExists
+}
+
+// Use to remove a file after processing or as a cleanup step.
+// Returns false when the file did not exist or is outside the project directory.
+pub fn delete(path: text) -> boolean {
+    exists(path) && OpDelete(path)
+}
+
+// Use to rename or relocate a file within the project.
+// Both paths must stay within the project directory; the destination must not already exist.
+pub fn move(from: text, to: text) -> boolean {
+    valid_path(to) && exists(from) && !exists(to) && OpMoveFile(from, to)
+}
+
+// Truncate or extend the file to exactly `size` bytes.
+// Truncating removes bytes beyond `size`; extending fills with null bytes.
+// Returns false if the file is a directory, does not exist, or `size` is negative.
+// Any open handle to the file is closed; reopen the file for further I/O.
+pub fn set_file_size(self: File, size: long) -> boolean {
+    self.format != Format.Directory && self.format != Format.NotExists && size >= 0l && OpTruncateFile(self, size)
+}
+
+// Returns the entries inside a directory.
+// The File must have format == Format.Directory.
+// Use to iterate over all files in a folder.
+pub fn files(self: File) -> vector<File> {
+    result = [];
+    if self.format == Format.Directory {
+        OpGetDir(self.path, result);
+    }
+    result
+}
+
+// Writes v as UTF-8 text to the file. Overwrites existing content.
+pub fn write(self: File, v: text);
+#rust "stores.write_file(&@self, @v);"
+
+// Decodes a PNG file and returns an Image.
+// Returns null if the file is not in text format.
+// Use to load sprite sheets or textures.
+pub fn png(self: File) -> Image {
+    if self.format == Format.TextFile {
+        result = Image { };
+        OpGetPngImage(self.path, result);
+        result
+    } else {
+        null
+    }
+}
+
+// --- Environment ---
+
+// Returns all environment variables as a vector of EnvVariable records (fields: name, value).
+// Use to inspect or forward the full environment.
+pub fn env_variables() -> vector<EnvVariable>;
+#rust "stores.os_variables()"
+
+// Returns the value of the environment variable name, or null if it is not set.
+// Use to read configuration from the shell environment.
+pub fn env_variable(name: text) -> text;
+#rust "Stores::os_variable(@name)"
+
+// --- Random ---
+
+// Returns a random integer in [lo, hi] (inclusive).
+// Returns null when lo > hi or when either argument is null.
+pub fn rand(lo: integer, hi: integer) -> integer;
+#rust "external::rand_int(@lo, @hi)"
+
+// Seeds the thread-local random number generator with the given value.
+// Call this before rand() or rand_indices() to get reproducible sequences.
+pub fn rand_seed(seed: long);
+#rust "external::rand_seed(@seed);"
+
+// Returns a vector of n integers [0, 1, ..., n-1] in a random order.
+// Useful for random iteration, shuffling, or sampling without replacement.
+// Returns an empty vector when n is 0 or null.
+pub fn rand_indices(n: integer) -> vector<integer>;
+
+// --- Time ---
+
+// Returns the current wall-clock time as milliseconds since the Unix epoch
+// (1970-01-01T00:00:00 UTC). Use for timestamps and logging.
+pub fn now() -> long;
+
+// Returns microseconds elapsed since program start (monotonic clock).
+// Unaffected by system clock adjustments. Use for benchmarks and frame timing.
+pub fn ticks() -> long;

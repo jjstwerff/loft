@@ -1,0 +1,143 @@
+struct T { name: text }
+
+pub fn test() {
+    test_value = {a = T { name: "hello" };
+b = a;
+b.name += " world";
+a.name};
+    assert(
+        test_value == "hello",
+        "Test failed {test_value} != \"hello\""
+    );
+}
+Type 18:T[4/4]:
+    name:text[0]
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [4] a(1):ref(T) = null;
+  test_value(1):text["a"] = {#block(2):text["a"]
+    OpDatabase(a(1), 18i32);
+    OpSetText(a(1), 0i32, "hello");
+    [5] b(2):ref(T) = a(1);
+    [6] _field_1(2):text = OpGetText(b(2), 0i32);
+    OpAppendText(_field_1(2), " world");
+    OpSetText(b(2), 0i32, _field_1(2));
+    [7] OpGetText(a(1), 0i32);
+    OpFreeText(_field_1(2));
+    OpFreeRef(b(2));
+  }#block(2):text["a"];
+  [8] n_assert(OpEqText(test_value(1), "hello"), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatText(__work_1(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_1(1), " != "hello"");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "independent_strings", 9i32);
+  OpFreeText(test_value(1));
+  OpFreeRef(a(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for independent_strings:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [4] ConvRefFromNull() -> ref(reference) var=a[28]:ref(T) ; [store-alloc]
+   2[40]: Text() var=test_value[40]:text["a"]
+   3[64]: Database(var[28], db_tp=18) type=T 18
+   8[64]: VarRef(var[28]) -> ref(reference) type=T 18 var=a[28]:ref(T)
+  11[76]: ConstText(_value="hello") -> text
+  18[92]: SetText(v1: ref(reference), fld=0, val: text)
+  21[64]: [5] ConvRefFromNull() -> ref(reference) var=b[64]:ref(T) ; [store-alloc]
+  22[76]: Database(var[64], db_tp=18)
+  27[76]: VarRef(var[28]) -> ref(reference) type=T 18 var=a[28]:ref(T)
+  30[88]: VarRef(var[64]) -> ref(reference) type=T 18 var=b[64]:ref(T)
+  33[100]: CopyRecord(data: ref(reference), to: ref(reference), tp=18)
+  36[76]: [6] Text() var=_field_1[76]:text
+  37[100]: VarRef(var[64]) -> ref(reference) type=T 18 var=b[64]:ref(T)
+  40[112]: GetText(v1: ref(reference), fld=0) -> text["test_value"]
+  43[116]: AppendText(var[76], v1: text)
+  46[100]: ConstText(_value=" world") -> text
+  54[116]: AppendText(var[76], v1: text)
+  57[100]: VarRef(var[64]) -> ref(reference) type=T 18 var=b[64]:ref(T)
+  60[112]: VarText(var[76]) -> text var=_field_1[76]:text
+  63[128]: SetText(v1: ref(reference), fld=0, val: text)
+  66[100]: [7] VarRef(var[28]) -> ref(reference) type=T 18 var=a[28]:ref(T)
+  69[112]: GetText(v1: ref(reference), fld=0) -> text["test_value"]
+  72[116]: FreeText(var[76])
+  75[116]: VarRef(var[64]) -> ref(reference) type=T 18 var=b[64]:ref(T)
+  78[128]: FreeRef(v1: ref(reference)) ; [store-free]
+  79[116]: FreeStack(value=16, discard=52)
+  83[80]: AppendText(var[40], v1: text)
+  86[64]: [8] VarText(var[40]) -> text var=test_value[40]:text["a"]
+  89[80]: ConstText(_value="hello") -> text
+  96[96]: EqText(v1: text, v2: text) -> boolean
+  97[65]: ClearText(var[4]) var=__work_1[4]:text
+ 100[65]: ConstText(_value="Test failed ") -> text
+ 114[81]: AppendText(var[4], v1: text)
+ 117[65]: VarText(var[40]) -> text var=test_value[40]:text["a"]
+ 120[81]: ConstInt(val=0) -> integer
+ 125[85]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+ 130[65]: ConstText(_value=" != "hello"") -> text
+ 143[81]: AppendText(var[4], v1: text)
+ 146[65]: VarText(var[4]) -> text var=__work_1[4]:text
+ 149[81]: ConstText(_value="independent_strings") -> text
+ 170[97]: ConstInt(val=9) -> integer
+ 175[101]: StaticCall(n_assert)
+ 178[64]: FreeText(var[40])
+ 181[64]: VarRef(var[28]) -> ref(reference) type=T 18 var=a[28]:ref(T)
+ 184[76]: FreeRef(v1: ref(reference)) ; [store-free]
+ 185[64]: FreeText(var[4])
+ 188[64]: Return(ret=0, value=0, discard=64)
+
+Execute test:
+    0:[8] [4] Text()
+    1:[32] ConvRefFromNull() -> ref(1,0,8)[32]
+  ; store-alloc nr=1 max=2
+    2:[44] Text()
+    3:[68] Database(var[32], db_tp=18)
+    8:[68] VarRef(var[32]=a) -> ref(1,1,8)={}[68]
+   11:[80] ConstText(_value="hello") -> "hello"[80]
+   18:[96] SetText(v1=ref(1,1,8)[68], fld=0, val="hello"[80])
+   21:[68] ConvRefFromNull() -> ref(2,0,8)[68]
+  ; store-alloc nr=2 max=3
+   22:[80] Database(var[68], db_tp=18)
+   27:[80] VarRef(var[32]=a) -> ref(1,1,8)={name:"hello"}[80]
+   30:[92] VarRef(var[68]=b) -> ref(2,1,8)={}[92]
+   33:[104] CopyRecord(data=ref(1,1,8)[80], to=ref(2,1,8)[92], tp=18)
+   36:[80] Text()
+   37:[104] VarRef(var[68]=b) -> ref(2,1,8)={name:"hello"}[104]
+   40:[116] GetText(v1=ref(2,1,8)[104], fld=0) -> "hello"[104]
+   43:[120] AppendText(var[80], v1="hello"[104])
+   46:[104] ConstText(_value=" world") -> " world"[104]
+   54:[120] AppendText(var[80], v1=" world"[104])
+   57:[104] VarRef(var[68]=b) -> ref(2,1,8)={name:"hello"}[104]
+   60:[116] VarText(var[80]=_field_1) -> "hello world"[116]
+   63:[132] SetText(v1=ref(2,1,8)[104], fld=0, val="hello world"[116])
+   66:[104] VarRef(var[32]=a) -> ref(1,1,8)={name:"hello"}[104]
+   69:[116] GetText(v1=ref(1,1,8)[104], fld=0) -> "hello"[104]
+   72:[120] FreeText(var[80])
+   75:[120] VarRef(var[68]=b) -> ref(2,1,8)={name:"hello world"}[120]
+   78:[132] FreeRef(v1=ref(2,1,8)[120]) ; store-free max=2
+   79:[120] FreeStack(value=16, discard=52)
+   83:[84] AppendText(var[44], v1="hello"[68])
+   86:[68] VarText(var[44]=test_value) -> "hello"[68]
+   89:[84] ConstText(_value="hello") -> "hello"[84]
+   96:[100] EqText(v1="hello"[68], v2="hello"[84]) -> true[68]
+   97:[69] ClearText(var[8]=__work_1)
+  100:[69] ConstText(_value="Test failed ") -> "Test failed "[69]
+  114:[85] AppendText(var[8], v1="Test failed "[69])
+  117:[69] VarText(var[44]=test_value) -> "hello"[69]
+  120:[85] ConstInt(val=0) -> 0[85]
+  125:[89] FormatText(var[8], val="hello"[69], width=0[85], dir=-1, token=32)
+  130:[69] ConstText(_value=" != "hello"") -> " != \"hello\""[69]
+  143:[85] AppendText(var[8], v1=" != \"hello\""[69])
+  146:[69] VarText(var[8]=__work_1) -> "Test failed hello != \"hello\""[69]
+  149:[85] ConstText(_value="independent_strings") -> "independent_strings"[85]
+  170:[101] ConstInt(val=9) -> 9[101]
+  175:[105] StaticCall(n_assert)
+  178:[68] FreeText(var[44])
+  181:[68] VarRef(var[32]=a) -> ref(1,1,8)={name:"hello"}[68]
+  184:[80] FreeRef(v1=ref(1,1,8)[68]) ; store-free max=1
+  185:[68] FreeText(var[8])
+  188:[68] Return(ret=4294967295[4], value=0, discard=64)
+Finished

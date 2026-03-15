@@ -1,0 +1,134 @@
+struct Pt { x: integer, y: integer }
+fn dist2(self: Pt) -> integer { self.x * self.x + self.y * self.y }
+
+pub fn test() {
+    test_value = {Pt { x: 3, y: 4 }.dist2()};
+    assert(
+        test_value == 25,
+        "Test failed {test_value} != 25"
+    );
+}
+Type 18:Pt[8/4]:
+    x:integer[0]
+    y:integer[4]
+
+fn t_2Pt_dist2(self:Pt) -> integer {#block(1):integer
+  [2] OpAddInt(OpMulInt(OpGetInt(self(0), 0i32), OpGetInt(self(0), 0i32)), OpMulInt(OpGetInt(self(0), 4i32), OpGetInt(self(0), 4i32)));
+}#block(1):integer
+
+byte-code for method_on_constructor:t_2Pt_dist2(self: ref(Pt)[0]) -> integer
+   0[12]: return-address  @abs=2832
+   0[16]: [2] VarRef(var[0]) -> ref(reference) type=Pt 18 var=self[0]:ref(Pt)
+   3[28]: GetInt(v1: ref(reference), fld=0) -> integer
+   6[20]: VarRef(var[0]) -> ref(reference) type=Pt 18 var=self[0]:ref(Pt)
+   9[32]: GetInt(v1: ref(reference), fld=0) -> integer
+  12[24]: MulInt(v1: integer, v2: integer) -> integer
+  13[20]: VarRef(var[0]) -> ref(reference) type=Pt 18 var=self[0]:ref(Pt)
+  16[32]: GetInt(v1: ref(reference), fld=4) -> integer
+  19[24]: VarRef(var[0]) -> ref(reference) type=Pt 18 var=self[0]:ref(Pt)
+  22[36]: GetInt(v1: ref(reference), fld=4) -> integer
+  25[28]: MulInt(v1: integer, v2: integer) -> integer
+  26[24]: AddInt(v1: integer, v2: integer) -> integer
+  27[20]: Return(ret=12, value=4, discard=20) type=integer 0
+
+fn n_test() {#block(1):void
+  __ref_1(1):ref(Pt) = null;
+  __work_1(1):text = "";
+  [5] test_value(1):integer = {#block(2):integer
+    t_2Pt_dist2({#Object(3):ref(Pt)["__ref_1"]
+      OpDatabase(__ref_1(1), 18i32);
+      OpSetInt(__ref_1(1), 0i32, 3i32);
+      OpSetInt(__ref_1(1), 4i32, 4i32);
+      __ref_1(1);
+    }#Object(3):ref(Pt)["__ref_1"]);
+  }#block(2):integer;
+  [6] n_assert(OpEqInt(test_value(1), 25i32), {#Formatted string(4):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 25");
+    __work_1(1);
+  }#Formatted string(4):text["__work_1"], "method_on_constructor", 7i32);
+  OpFreeText(__work_1(1));
+  OpFreeRef(__ref_1(1));
+}#block(1):void
+
+byte-code for method_on_constructor:n_test()
+   0[0]: return-address  @abs=2865
+   0[4]: ConvRefFromNull() -> ref(reference) var=__ref_1[4]:ref(Pt) ; [store-alloc]
+   1[16]: Text() var=__work_1[16]:text
+   2[40]: [5] Database(var[4], db_tp=18) type=Pt 18 var=test_value[40]:integer
+   7[40]: VarRef(var[4]) -> ref(reference) type=Pt 18 var=__ref_1[4]:ref(Pt)
+  10[52]: ConstInt(val=3) -> integer
+  15[56]: SetInt(v1: ref(reference), fld=0, val: integer)
+  18[40]: VarRef(var[4]) -> ref(reference) type=Pt 18 var=__ref_1[4]:ref(Pt)
+  21[52]: ConstInt(val=4) -> integer
+  26[56]: SetInt(v1: ref(reference), fld=4, val: integer)
+  29[40]: VarRef(var[4]) -> ref(reference) type=Pt 18 var=__ref_1[4]:ref(Pt)
+  32[52]: Call(size=0, fn=t_2Pt_dist2)
+  39[44]: [6] VarInt(var[40]) -> integer var=test_value[40]:integer
+  42[48]: ConstInt(val=25) -> integer
+  47[52]: EqInt(v1: integer, v2: integer) -> boolean
+  48[45]: ClearText(var[16]) var=__work_1[16]:text
+  51[45]: ConstText(_value="Test failed ") -> text
+  65[61]: AppendText(var[16], v1: text)
+  68[45]: VarInt(var[40]) -> integer var=test_value[40]:integer
+  71[49]: ConvLongFromInt(v1: integer) -> long
+  72[53]: ConstInt(val=0) -> integer
+  77[57]: FormatLong(var[16], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  84[45]: ConstText(_value=" != 25") -> text
+  92[61]: AppendText(var[16], v1: text)
+  95[45]: VarText(var[16]) -> text var=__work_1[16]:text
+  98[61]: ConstText(_value="method_on_constructor") -> text
+ 121[77]: ConstInt(val=7) -> integer
+ 126[81]: StaticCall(n_assert)
+ 129[44]: FreeText(var[16])
+ 132[44]: VarRef(var[4]) -> ref(reference) type=Pt 18 var=__ref_1[4]:ref(Pt)
+ 135[56]: FreeRef(v1: ref(reference)) ; [store-free]
+ 136[44]: Return(ret=0, value=0, discard=44)
+
+Execute test:
+    0:[8] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] [5] Text()
+    2:[44] Database(var[8]=test_value, db_tp=18)
+    7:[44] VarRef(var[8]=__ref_1) -> ref(1,1,8)={}[44]
+   10:[56] ConstInt(val=3) -> 3[56]
+   15:[60] SetInt(v1=ref(1,1,8)[44], fld=0, val=3[56])
+   18:[44] VarRef(var[8]=__ref_1) -> ref(1,1,8)={x:3}[44]
+   21:[56] ConstInt(val=4) -> 4[56]
+   26:[60] SetInt(v1=ref(1,1,8)[44], fld=4, val=4[56])
+   29:[44] VarRef(var[8]=__ref_1) -> ref(1,1,8)={x:3,y:4}[44]
+   32:[56] Call(size=0, fn=t_2Pt_dist2)
+ 2832:[60] VarRef(var[44]=self) -> ref(1,1,8)={x:3,y:4}[60]
+ 2835:[72] GetInt(v1=ref(1,1,8)[60], fld=0) -> 3[60]
+ 2838:[64] VarRef(var[44]=self) -> ref(1,1,8)={x:3,y:4}[64]
+ 2841:[76] GetInt(v1=ref(1,1,8)[64], fld=0) -> 3[64]
+ 2844:[68] MulInt(v1=3[60], v2=3[64]) -> 9[60]
+ 2845:[64] VarRef(var[44]=self) -> ref(1,1,8)={x:3,y:4}[64]
+ 2848:[76] GetInt(v1=ref(1,1,8)[64], fld=4) -> 4[64]
+ 2851:[68] VarRef(var[44]=self) -> ref(1,1,8)={x:3,y:4}[68]
+ 2854:[80] GetInt(v1=ref(1,1,8)[68], fld=4) -> 4[68]
+ 2857:[72] MulInt(v1=4[64], v2=4[68]) -> 16[64]
+ 2858:[68] AddInt(v1=9[60], v2=16[64]) -> 25[60]
+ 2859:[64] Return(ret=2904[56], value=4, discard=20) -> 25[44]
+   39:[48] VarInt(var[44]=test_value) -> 25[48]
+   42:[52] ConstInt(val=25) -> 25[52]
+   47:[56] EqInt(v1=25[48], v2=25[52]) -> true[48]
+   48:[49] ClearText(var[20]=__work_1)
+   51:[49] ConstText(_value="Test failed ") -> "Test failed "[49]
+   65:[65] AppendText(var[20], v1="Test failed "[49])
+   68:[49] VarInt(var[44]=test_value) -> 25[49]
+   71:[53] ConvLongFromInt(v1=25[49]) -> 25[49]
+   72:[57] ConstInt(val=0) -> 0[57]
+   77:[61] FormatLong(var[20], val=25[49], radix=10, width=0[57], token=32, plus=false, note=false)
+   84:[49] ConstText(_value=" != 25") -> " != 25"[49]
+   92:[65] AppendText(var[20], v1=" != 25"[49])
+   95:[49] VarText(var[20]=__work_1) -> "Test failed 25 != 25"[49]
+   98:[65] ConstText(_value="method_on_constructor") -> "method_on_constructor"[65]
+  121:[81] ConstInt(val=7) -> 7[81]
+  126:[85] StaticCall(n_assert)
+  129:[48] FreeText(var[20])
+  132:[48] VarRef(var[8]=__ref_1) -> ref(1,1,8)={x:3,y:4}[48]
+  135:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+  136:[48] Return(ret=4294967295[4], value=0, discard=44)
+Finished

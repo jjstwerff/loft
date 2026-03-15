@@ -1,0 +1,126 @@
+enum Value {
+    S { data: sorted<Sort[nr]> },
+    I { data: index<Ind[nr]> },
+    H { data: hash<Elm[name]> }
+}
+
+struct Sort {
+    nr: i32,
+    d: Value
+}
+
+struct Ind {
+    nr: i32,
+    d: Value
+}
+
+struct Elm {
+    name: text,
+    d: Value
+}
+
+
+pub fn test() {
+    test_value = {1};
+    assert(
+        test_value == 1,
+        "Test failed {test_value} != 1"
+    );
+}
+Type 18:Value[8/4]: parents [Sort 20, Ind 23, Elm 26]
+    S:19
+    I:22
+    H:25
+
+Type 19:S[8/4]: EnumValue(1)
+    enum:byte[0]
+    data:sorted<Sort[nr]>[4]
+
+Type 20:Sort[12/4]: parents [S 19]
+    nr:integer[0]
+    d:Value[4]
+
+Type 21:sorted<Sort[nr]>[4/4]:Sorted(20, [(0, true)]) keys [tp:1 desc:false field:0, ]
+
+Type 22:I[8/4]: EnumValue(2)
+    enum:byte[0]
+    data:index<Ind[nr]>[4]
+
+Type 23:Ind[21/4]: parents [I 22]
+    nr:integer[0]
+    d:Value[4]
+    #left_1:integer[12]
+    #right_1:integer[16]
+    #color_1:boolean[20]
+
+Type 24:index<Ind[nr]>[4/4]:Index(23, [(0, true)], 2) keys [tp:1 desc:false field:0, ]
+
+Type 25:H[8/4]: EnumValue(3)
+    enum:byte[0]
+    data:hash<Elm[name]>[4]
+
+Type 26:Elm[12/4]: parents [H 25]
+    name:text[0]
+    d:Value[4]
+
+Type 27:hash<Elm[name]>[4/4]:Hash(26, [0]) keys [tp:6 desc:false field:0, ]
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [24] test_value(1):integer = {#block(2):integer
+    1i32;
+  }#block(2):integer;
+  [25] n_assert(OpEqInt(test_value(1), 1i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 1");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "types", 26i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for types:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [24] ConstInt(val=1) -> integer var=test_value[28]:integer
+   6[32]: [25] VarInt(var[28]) -> integer var=test_value[28]:integer
+   9[36]: ConstInt(val=1) -> integer
+  14[40]: EqInt(v1: integer, v2: integer) -> boolean
+  15[33]: ClearText(var[4]) var=__work_1[4]:text
+  18[33]: ConstText(_value="Test failed ") -> text
+  32[49]: AppendText(var[4], v1: text)
+  35[33]: VarInt(var[28]) -> integer var=test_value[28]:integer
+  38[37]: ConvLongFromInt(v1: integer) -> long
+  39[41]: ConstInt(val=0) -> integer
+  44[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  51[33]: ConstText(_value=" != 1") -> text
+  58[49]: AppendText(var[4], v1: text)
+  61[33]: VarText(var[4]) -> text var=__work_1[4]:text
+  64[49]: ConstText(_value="types") -> text
+  71[65]: ConstInt(val=26) -> integer
+  76[69]: StaticCall(n_assert)
+  79[32]: FreeText(var[4])
+  82[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [24] Text()
+    1:[32] ConstInt(val=1) -> 1[32]
+    6:[36] VarInt(var[32]=test_value) -> 1[36]
+    9:[40] ConstInt(val=1) -> 1[40]
+   14:[44] EqInt(v1=1[36], v2=1[40]) -> true[36]
+   15:[37] ClearText(var[8]=__work_1)
+   18:[37] ConstText(_value="Test failed ") -> "Test failed "[37]
+   32:[53] AppendText(var[8], v1="Test failed "[37])
+   35:[37] VarInt(var[32]=test_value) -> 1[37]
+   38:[41] ConvLongFromInt(v1=1[37]) -> 1[37]
+   39:[45] ConstInt(val=0) -> 0[45]
+   44:[49] FormatLong(var[8], val=1[37], radix=10, width=0[45], token=32, plus=false, note=false)
+   51:[37] ConstText(_value=" != 1") -> " != 1"[37]
+   58:[53] AppendText(var[8], v1=" != 1"[37])
+   61:[37] VarText(var[8]=__work_1) -> "Test failed 1 != 1"[37]
+   64:[53] ConstText(_value="types") -> "types"[53]
+   71:[69] ConstInt(val=26) -> 26[69]
+   76:[73] StaticCall(n_assert)
+   79:[36] FreeText(var[8])
+   82:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished

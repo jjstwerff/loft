@@ -1,0 +1,29 @@
+fn test() { const x = 42; assert(x == 42, "ok") }
+fn n_test() {#block(1):void
+  [1] x(1):integer = 42i32;
+  n_assert(OpEqInt(x(1), 42i32), "ok", "const_local_read_only", 1i32);
+}#block(1):void
+
+byte-code for const_local_read_only:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: [1] ConstInt(val=42) -> integer var=x[4]:integer
+   5[8]: VarInt(var[4]) -> integer var=x[4]:integer
+   8[12]: ConstInt(val=42) -> integer
+  13[16]: EqInt(v1: integer, v2: integer) -> boolean
+  14[9]: ConstText(_value="ok") -> text
+  18[25]: ConstText(_value="const_local_read_only") -> text
+  41[41]: ConstInt(val=1) -> integer
+  46[45]: StaticCall(n_assert)
+  49[8]: Return(ret=0, value=0, discard=8)
+
+Execute test:
+    0:[8] ConstInt(val=42) -> 42[8]
+    5:[12] VarInt(var[8]=x) -> 42[12]
+    8:[16] ConstInt(val=42) -> 42[16]
+   13:[20] EqInt(v1=42[12], v2=42[16]) -> true[12]
+   14:[13] ConstText(_value="ok") -> "ok"[13]
+   18:[29] ConstText(_value="const_local_read_only") -> "const_local_read_only"[29]
+   41:[45] ConstInt(val=1) -> 1[45]
+   46:[49] StaticCall(n_assert)
+   49:[12] Return(ret=4294967295[4], value=0, discard=8)
+Finished

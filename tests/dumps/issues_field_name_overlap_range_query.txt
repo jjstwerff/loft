@@ -1,0 +1,516 @@
+struct SortElm { key: text, value: integer }
+struct IdxElm  { nr: integer, key: text, value: integer }
+struct Db {
+    srt: sorted<SortElm[-key]>,
+    idx: index<IdxElm[nr, -key]>
+}
+fn test() {
+    db = Db {
+        srt: [
+            SortElm { key: "One",   value: 1 },
+            SortElm { key: "Two",   value: 2 },
+            SortElm { key: "Three", value: 3 }
+        ],
+        idx: [
+            IdxElm { nr: 10, key: "A", value: 100 },
+            IdxElm { nr: 10, key: "B", value: 200 },
+            IdxElm { nr: 20, key: "C", value: 300 }
+        ]
+    };
+    // Direct key lookup in sorted (must find correct field offset for SortElm)
+    srt_val = db.srt["Two"].value;
+    assert(srt_val == 2, "srt lookup: {srt_val}");
+    // Direct key lookup in index (must find correct field offsets for IdxElm)
+    idx_val = db.idx[10, "B"].value;
+    assert(idx_val == 200, "idx lookup: {idx_val}");
+    // Range: [10..20, "B"] = up to (not including) the element at (nr=20, key=B).
+    // In descending key order: (20,C) comes before (20,B), so it IS in range.
+    // Correct sum = 200 + 100 + 300 = 600.
+    sum = 0;
+    for e in db.idx[10..20, "B"] { sum += e.value };
+    assert(sum == 600, "range sum: {sum}");
+}
+Type 18:SortElm[8/4]: parents [Db 20]
+    key:text[0]
+    value:integer[4]
+
+Type 19:IdxElm[21/4]: parents [Db 20]
+    nr:integer[0]
+    key:text[4]
+    value:integer[8]
+    #left_1:integer[12]
+    #right_1:integer[16]
+    #color_1:boolean[20]
+
+Type 20:Db[8/4]:
+    srt:sorted<SortElm[-key]>[0]
+    idx:index<IdxElm[nr,-key]>[4]
+
+Type 21:sorted<SortElm[-key]>[4/4]:Sorted(18, [(0, false)]) keys [tp:6 desc:true field:0, ]
+
+Type 22:index<IdxElm[nr,-key]>[4/4]:Index(19, [(0, true), (1, false)], 3) keys [tp:1 desc:false field:0, tp:6 desc:true field:4, ]
+
+Type 23:vector<SortElm>[4/4]:Vector(18)
+
+Type 24:vector<IdxElm>[4/4]:Vector(19)
+
+fn n_test() {#block(1):void
+  __work_3(1):text = "";
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [8] db(1):ref(Db) = null;
+  OpDatabase(db(1), 20i32);
+  OpSetInt(db(1), 0i32, 0i32);
+  _elm_1(1):ref(SortElm)["db"] = OpNewRecord(db(1), 20i32, 0i32);
+  OpSetText(_elm_1(1), 0i32, "One");
+  OpSetInt(_elm_1(1), 4i32, 1i32);
+  OpFinishRecord(db(1), _elm_1(1), 20i32, 0i32);
+  _elm_1(1):ref(SortElm)["db"] = OpNewRecord(db(1), 20i32, 0i32);
+  OpSetText(_elm_1(1), 0i32, "Two");
+  OpSetInt(_elm_1(1), 4i32, 2i32);
+  OpFinishRecord(db(1), _elm_1(1), 20i32, 0i32);
+  _elm_1(1):ref(SortElm)["db"] = OpNewRecord(db(1), 20i32, 0i32);
+  OpSetText(_elm_1(1), 0i32, "Three");
+  OpSetInt(_elm_1(1), 4i32, 3i32);
+  OpFinishRecord(db(1), _elm_1(1), 20i32, 0i32);
+  OpSetInt(db(1), 4i32, 0i32);
+  _elm_2(1):ref(IdxElm)["db"] = OpNewRecord(db(1), 20i32, 1i32);
+  OpSetInt(_elm_2(1), 0i32, 10i32);
+  OpSetText(_elm_2(1), 4i32, "A");
+  OpSetInt(_elm_2(1), 8i32, 100i32);
+  OpFinishRecord(db(1), _elm_2(1), 20i32, 1i32);
+  _elm_2(1):ref(IdxElm)["db"] = OpNewRecord(db(1), 20i32, 1i32);
+  OpSetInt(_elm_2(1), 0i32, 10i32);
+  OpSetText(_elm_2(1), 4i32, "B");
+  OpSetInt(_elm_2(1), 8i32, 200i32);
+  OpFinishRecord(db(1), _elm_2(1), 20i32, 1i32);
+  _elm_2(1):ref(IdxElm)["db"] = OpNewRecord(db(1), 20i32, 1i32);
+  OpSetInt(_elm_2(1), 0i32, 20i32);
+  OpSetText(_elm_2(1), 4i32, "C");
+  OpSetInt(_elm_2(1), 8i32, 300i32);
+  OpFinishRecord(db(1), _elm_2(1), 20i32, 1i32);
+  [21] srt_val(1):integer = OpGetInt(OpGetRecord(OpGetField(db(1), 0i32, 21i32), 21i32, 1i32, "Two"), 4i32);
+  [22] n_assert(OpEqInt(srt_val(1), 2i32), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "srt lookup: ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(srt_val(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "field_name_overlap_range_query", 22i32);
+  [24] idx_val(1):integer = OpGetInt(OpGetRecord(OpGetField(db(1), 4i32, 22i32), 22i32, 2i32, 10i32, "B"), 8i32);
+  [25] n_assert(OpEqInt(idx_val(1), 200i32), {#Formatted string(3):text["__work_2"]
+    __work_2(1):text = "idx lookup: ";
+    OpFormatLong(__work_2(1), OpConvLongFromInt(idx_val(1)), 10i32, 0i32, 32i32, false, false);
+    __work_2(1);
+  }#Formatted string(3):text["__work_2"], "field_name_overlap_range_query", 25i32);
+  [29] sum(1):integer = 0i32;
+  [30] {#For block(4):void
+    _iter_3(4):long = OpIterate(OpGetField(db(1), 4i32, 22i32), 1i32, 20i32, &[Key { type_nr: 1, position: 0 }, Key { type_nr: -6, position: 4 }], 1i32, 10i32, 2i32, 20i32, "B");
+    loop {#For loop_5
+      e(5):ref(IdxElm)["db"] = {#Iterate keys(6):index<IdxElm,[("nr", true), ("key", false)]>["db"]
+        OpStep(_iter_3(4), OpGetField(db(1), 4i32, 22i32), 1i32, 20i32);
+      }#Iterate keys(6):index<IdxElm,[("nr", true), ("key", false)]>["db"];
+      if OpNot(OpConvBoolFromRef(e(5))) {#break(7):void
+        break(0);
+      }#break(7):void else null;
+      {#block(8):void
+        sum(1):integer = OpAddInt(sum(1), OpGetInt(e(5), 8i32));
+      }#block(8):void;
+    }#For loop_5;
+  }#For block(4):void;
+  [31] n_assert(OpEqInt(sum(1), 600i32), {#Formatted string(9):text["__work_3"]
+    __work_3(1):text = "range sum: ";
+    OpFormatLong(__work_3(1), OpConvLongFromInt(sum(1)), 10i32, 0i32, 32i32, false, false);
+    __work_3(1);
+  }#Formatted string(9):text["__work_3"], "field_name_overlap_range_query", 31i32);
+  OpFreeRef(db(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+  OpFreeText(__work_3(1));
+}#block(1):void
+
+byte-code for field_name_overlap_range_query:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_3[4]:text
+   1[28]: Text() var=__work_2[28]:text
+   2[52]: Text() var=__work_1[52]:text
+   3[76]: [8] ConvRefFromNull() -> ref(reference) var=db[76]:ref(Db) ; [store-alloc]
+   4[88]: Database(var[76], db_tp=20) type=Db 20
+   9[88]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+  12[100]: ConstInt(val=0) -> integer
+  17[104]: SetInt(v1: ref(reference), fld=0, val: integer)
+  20[88]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+  23[100]: NewRecord(data: ref(reference), parent_tp=20, fld=0) -> ref(reference)
+  28[100]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+  31[112]: ConstText(_value="One") -> text
+  36[128]: SetText(v1: ref(reference), fld=0, val: text)
+  39[100]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+  42[112]: ConstInt(val=1) -> integer
+  47[116]: SetInt(v1: ref(reference), fld=4, val: integer)
+  50[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+  53[112]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+  56[124]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=0)
+  61[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+  64[112]: NewRecord(data: ref(reference), parent_tp=20, fld=0) -> ref(reference)
+  69[112]: PutRef(var[88], value: ref(reference))
+  72[100]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+  75[112]: ConstText(_value="Two") -> text
+  80[128]: SetText(v1: ref(reference), fld=0, val: text)
+  83[100]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+  86[112]: ConstInt(val=2) -> integer
+  91[116]: SetInt(v1: ref(reference), fld=4, val: integer)
+  94[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+  97[112]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+ 100[124]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=0)
+ 105[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 108[112]: NewRecord(data: ref(reference), parent_tp=20, fld=0) -> ref(reference)
+ 113[112]: PutRef(var[88], value: ref(reference))
+ 116[100]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+ 119[112]: ConstText(_value="Three") -> text
+ 126[128]: SetText(v1: ref(reference), fld=0, val: text)
+ 129[100]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+ 132[112]: ConstInt(val=3) -> integer
+ 137[116]: SetInt(v1: ref(reference), fld=4, val: integer)
+ 140[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 143[112]: VarRef(var[88]) -> ref(reference) type=SortElm 18 var=_elm_1[88]:ref(SortElm)["db"]
+ 146[124]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=0)
+ 151[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 154[112]: ConstInt(val=0) -> integer
+ 159[116]: SetInt(v1: ref(reference), fld=4, val: integer)
+ 162[100]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 165[112]: NewRecord(data: ref(reference), parent_tp=20, fld=1) -> ref(reference)
+ 170[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 173[124]: ConstInt(val=10) -> integer
+ 178[128]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 181[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 184[124]: ConstText(_value="A") -> text
+ 187[140]: SetText(v1: ref(reference), fld=4, val: text)
+ 190[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 193[124]: ConstInt(val=100) -> integer
+ 198[128]: SetInt(v1: ref(reference), fld=8, val: integer)
+ 201[112]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 204[124]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 207[136]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=1)
+ 212[112]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 215[124]: NewRecord(data: ref(reference), parent_tp=20, fld=1) -> ref(reference)
+ 220[124]: PutRef(var[100], value: ref(reference))
+ 223[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 226[124]: ConstInt(val=10) -> integer
+ 231[128]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 234[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 237[124]: ConstText(_value="B") -> text
+ 240[140]: SetText(v1: ref(reference), fld=4, val: text)
+ 243[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 246[124]: ConstInt(val=200) -> integer
+ 251[128]: SetInt(v1: ref(reference), fld=8, val: integer)
+ 254[112]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 257[124]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 260[136]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=1)
+ 265[112]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 268[124]: NewRecord(data: ref(reference), parent_tp=20, fld=1) -> ref(reference)
+ 273[124]: PutRef(var[100], value: ref(reference))
+ 276[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 279[124]: ConstInt(val=20) -> integer
+ 284[128]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 287[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 290[124]: ConstText(_value="C") -> text
+ 293[140]: SetText(v1: ref(reference), fld=4, val: text)
+ 296[112]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 299[124]: ConstInt(val=300) -> integer
+ 304[128]: SetInt(v1: ref(reference), fld=8, val: integer)
+ 307[112]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 310[124]: VarRef(var[100]) -> ref(reference) type=IdxElm 19 var=_elm_2[100]:ref(IdxElm)["db"]
+ 313[136]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=1)
+ 318[112]: [21] VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 321[124]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<SortElm[-key]> 21
+ 324[124]: ConstText(_value="Two") -> text
+ 329[140]: GetRecord(data: ref(reference), db_tp=21, no_keys=1) -> ref(reference)
+ 333[124]: GetInt(v1: ref(reference), fld=4) -> integer
+ 336[116]: [22] VarInt(var[112]) -> integer var=srt_val[112]:integer
+ 339[120]: ConstInt(val=2) -> integer
+ 344[124]: EqInt(v1: integer, v2: integer) -> boolean
+ 345[117]: ClearText(var[52]) var=__work_1[52]:text
+ 348[117]: ConstText(_value="srt lookup: ") -> text
+ 362[133]: AppendText(var[52], v1: text)
+ 365[117]: VarInt(var[112]) -> integer var=srt_val[112]:integer
+ 368[121]: ConvLongFromInt(v1: integer) -> long
+ 369[125]: ConstInt(val=0) -> integer
+ 374[129]: FormatLong(var[52], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 381[117]: VarText(var[52]) -> text var=__work_1[52]:text
+ 384[133]: ConstText(_value="field_name_overlap_range_query") -> text
+ 416[149]: ConstInt(val=22) -> integer
+ 421[153]: StaticCall(n_assert)
+ 424[116]: [24] VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 427[128]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=index<IdxElm[nr,-key]> 22
+ 430[128]: ConstText(_value="B") -> text
+ 433[144]: ConstInt(val=10) -> integer
+ 438[148]: GetRecord(data: ref(reference), db_tp=22, no_keys=2) -> ref(reference)
+ 442[128]: GetInt(v1: ref(reference), fld=8) -> integer
+ 445[120]: [25] VarInt(var[116]) -> integer var=idx_val[116]:integer
+ 448[124]: ConstInt(val=200) -> integer
+ 453[128]: EqInt(v1: integer, v2: integer) -> boolean
+ 454[121]: ClearText(var[28]) var=__work_2[28]:text
+ 457[121]: ConstText(_value="idx lookup: ") -> text
+ 471[137]: AppendText(var[28], v1: text)
+ 474[121]: VarInt(var[116]) -> integer var=idx_val[116]:integer
+ 477[125]: ConvLongFromInt(v1: integer) -> long
+ 478[129]: ConstInt(val=0) -> integer
+ 483[133]: FormatLong(var[28], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 490[121]: VarText(var[28]) -> text var=__work_2[28]:text
+ 493[137]: ConstText(_value="field_name_overlap_range_query") -> text
+ 525[153]: ConstInt(val=25) -> integer
+ 530[157]: StaticCall(n_assert)
+ 533[120]: [29] ConstInt(val=0) -> integer var=sum[120]:integer
+ 538[124]: [30] VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 541[136]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=index<IdxElm[nr,-key]> 22
+ 544[136]: ConstInt(val=10) -> integer
+ 549[140]: ConstText(_value="B") -> text
+ 552[156]: ConstInt(val=20) -> integer
+ 557[160]: Iterate(data: ref(reference), on=1, arg=20, keys=[Key { type_nr: 1, position: 0 }, Key { type_nr: -6, position: 4 }], from_key=1, till_key=2) -> long
+ 570[132]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 573[144]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=index<IdxElm[nr,-key]> 22
+ 576[144]: Step(state_var=20, data: ref(reference), on=1, arg=20) -> ref(reference)
+ 582[144]: VarRef(var[132]) -> ref(reference) type=IdxElm 19 var=e[132]:ref(IdxElm)["db"]
+ 585[156]: ConvBoolFromRef(val: ref(reference)) -> boolean
+ 586[145]: Not(v1: boolean) -> boolean
+ 587[145]: GotoFalseWord(jump=597, if_false: boolean)
+ 590[144]: FreeStack(value=0, discard=12)
+ 594[132]: GotoWord(jump=617)
+ 597[144]: VarInt(var[120]) -> integer var=sum[120]:integer
+ 600[148]: VarRef(var[132]) -> ref(reference) type=IdxElm 19 var=e[132]:ref(IdxElm)["db"]
+ 603[160]: GetInt(v1: ref(reference), fld=8) -> integer
+ 606[152]: AddInt(v1: integer, v2: integer) -> integer
+ 607[148]: PutInt(var[120], value: integer)
+ 610[144]: FreeStack(value=0, discard=12)
+ 614[132]: GotoWord(jump=570)
+ 617[132]: FreeStack(value=0, discard=8)
+ 621[124]: [31] VarInt(var[120]) -> integer var=sum[120]:integer
+ 624[128]: ConstInt(val=600) -> integer
+ 629[132]: EqInt(v1: integer, v2: integer) -> boolean
+ 630[125]: ClearText(var[4]) var=__work_3[4]:text
+ 633[125]: ConstText(_value="range sum: ") -> text
+ 646[141]: AppendText(var[4], v1: text)
+ 649[125]: VarInt(var[120]) -> integer var=sum[120]:integer
+ 652[129]: ConvLongFromInt(v1: integer) -> long
+ 653[133]: ConstInt(val=0) -> integer
+ 658[137]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 665[125]: VarText(var[4]) -> text var=__work_3[4]:text
+ 668[141]: ConstText(_value="field_name_overlap_range_query") -> text
+ 700[157]: ConstInt(val=31) -> integer
+ 705[161]: StaticCall(n_assert)
+ 708[124]: VarRef(var[76]) -> ref(reference) type=Db 20 var=db[76]:ref(Db)
+ 711[136]: FreeRef(v1: ref(reference)) ; [store-free]
+ 712[124]: FreeText(var[52])
+ 715[124]: FreeText(var[28])
+ 718[124]: FreeText(var[4])
+ 721[124]: Return(ret=0, value=0, discard=124)
+
+Execute test:
+    0:[8] Text()
+    1:[32] Text()
+    2:[56] [8] Text()
+    3:[80] ConvRefFromNull() -> ref(1,0,8)[80]
+  ; store-alloc nr=1 max=2
+    4:[92] Database(var[80], db_tp=20)
+    9:[92] VarRef(var[80]=db) -> ref(1,1,8)={srt:[],idx:[]}[92]
+   12:[104] ConstInt(val=0) -> 0[104]
+   17:[108] SetInt(v1=ref(1,1,8)[92], fld=0, val=0[104])
+   20:[92] VarRef(var[80]=db) -> ref(1,1,8)={srt:[],idx:[]}[92]
+   23:[104] NewRecord(data=ref(1,1,8)[92], parent_tp=20, fld=0) -> ref(1,9,8)[92]
+   28:[104] VarRef(var[92]=_elm_1) -> ref(1,9,8)={}[104]
+   31:[116] ConstText(_value="One") -> "One"[116]
+   36:[132] SetText(v1=ref(1,9,8)[104], fld=0, val="One"[116])
+   39:[104] VarRef(var[92]=_elm_1) -> ref(1,9,8)={key:"One"}[104]
+   42:[116] ConstInt(val=1) -> 1[116]
+   47:[120] SetInt(v1=ref(1,9,8)[104], fld=4, val=1[116])
+   50:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[],idx:[]}[104]
+   53:[116] VarRef(var[92]=_elm_1) -> ref(1,9,8)={key:"One",value:1}[116]
+   56:[128] FinishRecord(data=ref(1,1,8)[104], rec=ref(1,9,8)[116], parent_tp=20, fld=0)
+   61:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"One",value:1}],idx:[]}[104]
+   64:[116] NewRecord(data=ref(1,1,8)[104], parent_tp=20, fld=0) -> ref(1,9,24)[104]
+   69:[116] PutRef(var[92], value=ref(1,9,24)[104])
+   72:[104] VarRef(var[92]=_elm_1) -> ref(1,9,24)={}[104]
+   75:[116] ConstText(_value="Two") -> "Two"[116]
+   80:[132] SetText(v1=ref(1,9,24)[104], fld=0, val="Two"[116])
+   83:[104] VarRef(var[92]=_elm_1) -> ref(1,9,24)={key:"Two"}[104]
+   86:[116] ConstInt(val=2) -> 2[116]
+   91:[120] SetInt(v1=ref(1,9,24)[104], fld=4, val=2[116])
+   94:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"One",value:1}],idx:[]}[104]
+   97:[116] VarRef(var[92]=_elm_1) -> ref(1,9,24)={key:"Two",value:2}[116]
+  100:[128] FinishRecord(data=ref(1,1,8)[104], rec=ref(1,9,24)[116], parent_tp=20, fld=0)
+  105:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"One",value:1}],idx:[]}[104]
+  108:[116] NewRecord(data=ref(1,1,8)[104], parent_tp=20, fld=0) -> ref(1,9,32)[104]
+  113:[116] PutRef(var[92], value=ref(1,9,32)[104])
+  116:[104] VarRef(var[92]=_elm_1) -> ref(1,9,32)={}[104]
+  119:[116] ConstText(_value="Three") -> "Three"[116]
+  126:[132] SetText(v1=ref(1,9,32)[104], fld=0, val="Three"[116])
+  129:[104] VarRef(var[92]=_elm_1) -> ref(1,9,32)={key:"Three"}[104]
+  132:[116] ConstInt(val=3) -> 3[116]
+  137:[120] SetInt(v1=ref(1,9,32)[104], fld=4, val=3[116])
+  140:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"One",value:1}],idx:[]}[104]
+  143:[116] VarRef(var[92]=_elm_1) -> ref(1,9,32)={key:"Three",value:3}[116]
+  146:[128] FinishRecord(data=ref(1,1,8)[104], rec=ref(1,9,32)[116], parent_tp=20, fld=0)
+  151:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[]}[104]
+  154:[116] ConstInt(val=0) -> 0[116]
+  159:[120] SetInt(v1=ref(1,1,8)[104], fld=4, val=0[116])
+  162:[104] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[]}[104]
+  165:[116] NewRecord(data=ref(1,1,8)[104], parent_tp=20, fld=1) -> ref(1,28,8)[104]
+  170:[116] VarRef(var[104]=_elm_2) -> ref(1,28,8)={}[116]
+  173:[128] ConstInt(val=10) -> 10[128]
+  178:[132] SetInt(v1=ref(1,28,8)[116], fld=0, val=10[128])
+  181:[116] VarRef(var[104]=_elm_2) -> ref(1,28,8)={nr:10}[116]
+  184:[128] ConstText(_value="A") -> "A"[128]
+  187:[144] SetText(v1=ref(1,28,8)[116], fld=4, val="A"[128])
+  190:[116] VarRef(var[104]=_elm_2) -> ref(1,28,8)={nr:10,key:"A"}[116]
+  193:[128] ConstInt(val=100) -> 100[128]
+  198:[132] SetInt(v1=ref(1,28,8)[116], fld=8, val=100[128])
+  201:[116] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[]}[116]
+  204:[128] VarRef(var[104]=_elm_2) -> ref(1,28,8)={nr:10,key:"A",value:100}[128]
+  207:[140] FinishRecord(data=ref(1,1,8)[116], rec=ref(1,28,8)[128], parent_tp=20, fld=1)
+  212:[116] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"A",value:100}]}[116]
+  215:[128] NewRecord(data=ref(1,1,8)[116], parent_tp=20, fld=1) -> ref(1,34,8)[116]
+  220:[128] PutRef(var[104], value=ref(1,34,8)[116])
+  223:[116] VarRef(var[104]=_elm_2) -> ref(1,34,8)={}[116]
+  226:[128] ConstInt(val=10) -> 10[128]
+  231:[132] SetInt(v1=ref(1,34,8)[116], fld=0, val=10[128])
+  234:[116] VarRef(var[104]=_elm_2) -> ref(1,34,8)={nr:10}[116]
+  237:[128] ConstText(_value="B") -> "B"[128]
+  240:[144] SetText(v1=ref(1,34,8)[116], fld=4, val="B"[128])
+  243:[116] VarRef(var[104]=_elm_2) -> ref(1,34,8)={nr:10,key:"B"}[116]
+  246:[128] ConstInt(val=200) -> 200[128]
+  251:[132] SetInt(v1=ref(1,34,8)[116], fld=8, val=200[128])
+  254:[116] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"A",value:100}]}[116]
+  257:[128] VarRef(var[104]=_elm_2) -> ref(1,34,8)={nr:10,key:"B",value:200}[128]
+  260:[140] FinishRecord(data=ref(1,1,8)[116], rec=ref(1,34,8)[128], parent_tp=20, fld=1)
+  265:[116] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100}]}[116]
+  268:[128] NewRecord(data=ref(1,1,8)[116], parent_tp=20, fld=1) -> ref(1,40,8)[116]
+  273:[128] PutRef(var[104], value=ref(1,40,8)[116])
+  276:[116] VarRef(var[104]=_elm_2) -> ref(1,40,8)={}[116]
+  279:[128] ConstInt(val=20) -> 20[128]
+  284:[132] SetInt(v1=ref(1,40,8)[116], fld=0, val=20[128])
+  287:[116] VarRef(var[104]=_elm_2) -> ref(1,40,8)={nr:20}[116]
+  290:[128] ConstText(_value="C") -> "C"[128]
+  293:[144] SetText(v1=ref(1,40,8)[116], fld=4, val="C"[128])
+  296:[116] VarRef(var[104]=_elm_2) -> ref(1,40,8)={nr:20,key:"C"}[116]
+  299:[128] ConstInt(val=300) -> 300[128]
+  304:[132] SetInt(v1=ref(1,40,8)[116], fld=8, val=300[128])
+  307:[116] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100}]}[116]
+  310:[128] VarRef(var[104]=_elm_2) -> ref(1,40,8)={nr:20,key:"C",value:300}[128]
+  313:[140] FinishRecord(data=ref(1,1,8)[116], rec=ref(1,40,8)[128], parent_tp=20, fld=1)
+  318:[116] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[116]
+  321:[128] GetField(v1=ref(1,1,8)[116], fld=0) -> ref(1,1,8)=[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}][116]
+  324:[128] ConstText(_value="Two") -> "Two"[128]
+  329:[144] GetRecord(data=ref(1,1,8)[116], db_tp=21, no_keys=1, key1="Two"[128]) -> ref(1,9,8)[116]
+  333:[128] GetInt(v1=ref(1,9,8)[116], fld=4) -> 2[116]
+  336:[120] VarInt(var[116]=srt_val) -> 2[120]
+  339:[124] ConstInt(val=2) -> 2[124]
+  344:[128] EqInt(v1=2[120], v2=2[124]) -> true[120]
+  345:[121] ClearText(var[56]=__work_1)
+  348:[121] ConstText(_value="srt lookup: ") -> "srt lookup: "[121]
+  362:[137] AppendText(var[56], v1="srt lookup: "[121])
+  365:[121] VarInt(var[116]=srt_val) -> 2[121]
+  368:[125] ConvLongFromInt(v1=2[121]) -> 2[121]
+  369:[129] ConstInt(val=0) -> 0[129]
+  374:[133] FormatLong(var[56], val=2[121], radix=10, width=0[129], token=32, plus=false, note=false)
+  381:[121] VarText(var[56]=__work_1) -> "srt lookup: 2"[121]
+  384:[137] ConstText(_value="field_name_overlap_range_query") -> "field_name_overlap_range_query"[137]
+  416:[153] ConstInt(val=22) -> 22[153]
+  421:[157] StaticCall(n_assert)
+  424:[120] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[120]
+  427:[132] GetField(v1=ref(1,1,8)[120], fld=4) -> ref(1,1,12)=[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}][120]
+  430:[132] ConstText(_value="B") -> "B"[132]
+  433:[148] ConstInt(val=10) -> 10[148]
+  438:[152] GetRecord(data=ref(1,1,12)[120], db_tp=22, no_keys=2, key1=10[148], key2="B"[132]) -> ref(1,34,8)[120]
+  442:[132] GetInt(v1=ref(1,34,8)[120], fld=8) -> 200[120]
+  445:[124] VarInt(var[120]=idx_val) -> 200[124]
+  448:[128] ConstInt(val=200) -> 200[128]
+  453:[132] EqInt(v1=200[124], v2=200[128]) -> true[124]
+  454:[125] ClearText(var[32]=__work_2)
+  457:[125] ConstText(_value="idx lookup: ") -> "idx lookup: "[125]
+  471:[141] AppendText(var[32], v1="idx lookup: "[125])
+  474:[125] VarInt(var[120]=idx_val) -> 200[125]
+  477:[129] ConvLongFromInt(v1=200[125]) -> 200[125]
+  478:[133] ConstInt(val=0) -> 0[133]
+  483:[137] FormatLong(var[32], val=200[125], radix=10, width=0[133], token=32, plus=false, note=false)
+  490:[125] VarText(var[32]=__work_2) -> "idx lookup: 200"[125]
+  493:[141] ConstText(_value="field_name_overlap_range_query") -> "field_name_overlap_range_query"[141]
+  525:[157] ConstInt(val=25) -> 25[157]
+  530:[161] StaticCall(n_assert)
+  533:[124] ConstInt(val=0) -> 0[124]
+  538:[128] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[128]
+  541:[140] GetField(v1=ref(1,1,8)[128], fld=4) -> ref(1,1,12)=[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}][128]
+  544:[140] ConstInt(val=10) -> 10[140]
+  549:[144] ConstText(_value="B") -> "B"[144]
+  552:[160] ConstInt(val=20) -> 20[160]
+  557:[164] Iterate(data=ref(1,1,12), on=1, arg=20, keys=[Key { type_nr: 1, position: 0 }, Key { type_nr: -6, position: 4 }], from=[Long(10)], till=[Long(20), "B"]) -> 171798691840[128]
+  570:[136] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[136]
+  573:[148] GetField(v1=ref(1,1,8)[136], fld=4) -> ref(1,1,12)=[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}][136]
+  576:[148] Step(state_var=20, data=ref(1,1,12)[136], on=1, arg=20) -> ref(1,34,8)[136]
+  582:[148] VarRef(var[136]=e) -> ref(1,34,8)={nr:10,key:"B",value:200}[148]
+  585:[160] ConvBoolFromRef(val=ref(1,34,8)[148]) -> true[148]
+  586:[149] Not(v1=true[148]) -> false[148]
+  587:[149] GotoFalseWord(jump=597, if_false=false[148])
+  597:[148] VarInt(var[124]=sum) -> 0[148]
+  600:[152] VarRef(var[136]=e) -> ref(1,34,8)={nr:10,key:"B",value:200}[152]
+  603:[164] GetInt(v1=ref(1,34,8)[152], fld=8) -> 200[152]
+  606:[156] AddInt(v1=0[148], v2=200[152]) -> 200[148]
+  607:[152] PutInt(var[124], value=200[148])
+  610:[148] FreeStack(value=0, discard=12)
+  614:[136] GotoWord(jump=570)
+  570:[136] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[136]
+  573:[148] GetField(v1=ref(1,1,8)[136], fld=4) -> ref(1,1,12)=[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}][136]
+  576:[148] Step(state_var=20, data=ref(1,1,12)[136], on=1, arg=20) -> ref(1,28,8)[136]
+  582:[148] VarRef(var[136]=e) -> ref(1,28,8)={nr:10,key:"A",value:100}[148]
+  585:[160] ConvBoolFromRef(val=ref(1,28,8)[148]) -> true[148]
+  586:[149] Not(v1=true[148]) -> false[148]
+  587:[149] GotoFalseWord(jump=597, if_false=false[148])
+  597:[148] VarInt(var[124]=sum) -> 200[148]
+  600:[152] VarRef(var[136]=e) -> ref(1,28,8)={nr:10,key:"A",value:100}[152]
+  603:[164] GetInt(v1=ref(1,28,8)[152], fld=8) -> 100[152]
+  606:[156] AddInt(v1=200[148], v2=100[152]) -> 300[148]
+  607:[152] PutInt(var[124], value=300[148])
+  610:[148] FreeStack(value=0, discard=12)
+  614:[136] GotoWord(jump=570)
+  570:[136] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[136]
+  573:[148] GetField(v1=ref(1,1,8)[136], fld=4) -> ref(1,1,12)=[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}][136]
+  576:[148] Step(state_var=20, data=ref(1,1,12)[136], on=1, arg=20) -> ref(1,40,8)[136]
+  582:[148] VarRef(var[136]=e) -> ref(1,40,8)={nr:20,key:"C",value:300}[148]
+  585:[160] ConvBoolFromRef(val=ref(1,40,8)[148]) -> true[148]
+  586:[149] Not(v1=true[148]) -> false[148]
+  587:[149] GotoFalseWord(jump=597, if_false=false[148])
+  597:[148] VarInt(var[124]=sum) -> 300[148]
+  600:[152] VarRef(var[136]=e) -> ref(1,40,8)={nr:20,key:"C",value:300}[152]
+  603:[164] GetInt(v1=ref(1,40,8)[152], fld=8) -> 300[152]
+  606:[156] AddInt(v1=300[148], v2=300[152]) -> 600[148]
+  607:[152] PutInt(var[124], value=600[148])
+  610:[148] FreeStack(value=0, discard=12)
+  614:[136] GotoWord(jump=570)
+  570:[136] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[136]
+  573:[148] GetField(v1=ref(1,1,8)[136], fld=4) -> ref(1,1,12)=[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}][136]
+  576:[148] Step(state_var=20, data=ref(1,1,12)[136], on=1, arg=20) -> ref(1,0,0)[136]
+  582:[148] VarRef(var[136]=e) -> ref(1,0,0)=null[148]
+  585:[160] ConvBoolFromRef(val=ref(1,0,0)[148]) -> false[148]
+  586:[149] Not(v1=false[148]) -> true[148]
+  587:[149] GotoFalseWord(jump=597, if_false=true[148])
+  590:[148] FreeStack(value=0, discard=12)
+  594:[136] GotoWord(jump=617)
+  617:[136] FreeStack(value=0, discard=8)
+  621:[128] VarInt(var[124]=sum) -> 600[128]
+  624:[132] ConstInt(val=600) -> 600[132]
+  629:[136] EqInt(v1=600[128], v2=600[132]) -> true[128]
+  630:[129] ClearText(var[8]=__work_3)
+  633:[129] ConstText(_value="range sum: ") -> "range sum: "[129]
+  646:[145] AppendText(var[8], v1="range sum: "[129])
+  649:[129] VarInt(var[124]=sum) -> 600[129]
+  652:[133] ConvLongFromInt(v1=600[129]) -> 600[129]
+  653:[137] ConstInt(val=0) -> 0[137]
+  658:[141] FormatLong(var[8], val=600[129], radix=10, width=0[137], token=32, plus=false, note=false)
+  665:[129] VarText(var[8]=__work_3) -> "range sum: 600"[129]
+  668:[145] ConstText(_value="field_name_overlap_range_query") -> "field_name_overlap_range_query"[145]
+  700:[161] ConstInt(val=31) -> 31[161]
+  705:[165] StaticCall(n_assert)
+  708:[128] VarRef(var[80]=db) -> ref(1,1,8)={srt:[{key:"Two",value:2},{key:"Three",value:3},{key:"One",value:1}],idx:[{nr:10,key:"B",value:200},{nr:10,key:"A",value:100},{nr:20,key:"C",value:300}]}[128]
+  711:[140] FreeRef(v1=ref(1,1,8)[128]) ; store-free max=1
+  712:[128] FreeText(var[56])
+  715:[128] FreeText(var[32])
+  718:[128] FreeText(var[8])
+  721:[128] Return(ret=4294967295[4], value=0, discard=124)
+Finished

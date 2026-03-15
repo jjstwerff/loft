@@ -1,0 +1,80 @@
+fn add(a: integer, b: integer) -> integer { a + b }
+fn test() {
+    f = fn add;
+    result = f(10, 32);
+    assert(result == 42, "expected 42, got {result}");
+}
+fn n_add(a:integer, b:integer) -> integer {#block(1):integer
+  [1] OpAddInt(a(0), b(0));
+}#block(1):integer
+
+byte-code for fn_ref_two_args:n_add(a: integer[0], b: integer[4]) -> integer
+   0[8]: return-address  @abs=2832
+   0[12]: [1] VarInt(var[0]) -> integer var=a[0]:integer
+   3[16]: VarInt(var[4]) -> integer var=b[4]:integer
+   6[20]: AddInt(v1: integer, v2: integer) -> integer
+   7[16]: Return(ret=8, value=4, discard=16) type=integer 0
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [3] f(1):function([integer(-2147483647, 2147483647), integer(-2147483647, 2147483647)], integer(-2147483647, 2147483647)) = 411i32;
+  [4] result(1):integer = fn_ref[0](10i32, 32i32);
+  [5] n_assert(OpEqInt(result(1), 42i32), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "expected 42, got ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(result(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "fn_ref_two_args", 5i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for fn_ref_two_args:n_test()
+   0[0]: return-address  @abs=2845
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [3] ConstInt(val=411) -> integer var=f[28]:function([integer(-2147483647, 2147483647), integer(-2147483647, 2147483647)], integer(-2147483647, 2147483647))
+   6[32]: [4] ConstInt(val=10) -> integer var=result[32]:integer
+  11[36]: ConstInt(val=32) -> integer
+  16[40]: CallRef(fn_var=12, arg_size=8)
+  21[36]: [5] VarInt(var[32]) -> integer var=result[32]:integer
+  24[40]: ConstInt(val=42) -> integer
+  29[44]: EqInt(v1: integer, v2: integer) -> boolean
+  30[37]: ClearText(var[4]) var=__work_1[4]:text
+  33[37]: ConstText(_value="expected 42, got ") -> text
+  52[53]: AppendText(var[4], v1: text)
+  55[37]: VarInt(var[32]) -> integer var=result[32]:integer
+  58[41]: ConvLongFromInt(v1: integer) -> long
+  59[45]: ConstInt(val=0) -> integer
+  64[49]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  71[37]: VarText(var[4]) -> text var=__work_1[4]:text
+  74[53]: ConstText(_value="fn_ref_two_args") -> text
+  91[69]: ConstInt(val=5) -> integer
+  96[73]: StaticCall(n_assert)
+  99[36]: FreeText(var[4])
+ 102[36]: Return(ret=0, value=0, discard=36)
+
+Execute test:
+    0:[8] [3] Text()
+    1:[32] ConstInt(val=411) -> 411[32]
+    6:[36] ConstInt(val=10) -> 10[36]
+   11:[40] ConstInt(val=32) -> 32[40]
+   16:[44] CallRef(fn_var=12, arg_size=8)
+ 2832:[48] VarInt(var[36]=a) -> 10[48]
+ 2835:[52] VarInt(var[40]=b) -> 32[52]
+ 2838:[56] AddInt(v1=10[48], v2=32[52]) -> 42[48]
+ 2839:[52] Return(ret=2866[44], value=4, discard=16) -> 42[36]
+   21:[40] VarInt(var[36]=result) -> 42[40]
+   24:[44] ConstInt(val=42) -> 42[44]
+   29:[48] EqInt(v1=42[40], v2=42[44]) -> true[40]
+   30:[41] ClearText(var[8]=__work_1)
+   33:[41] ConstText(_value="expected 42, got ") -> "expected 42, got "[41]
+   52:[57] AppendText(var[8], v1="expected 42, got "[41])
+   55:[41] VarInt(var[36]=result) -> 42[41]
+   58:[45] ConvLongFromInt(v1=42[41]) -> 42[41]
+   59:[49] ConstInt(val=0) -> 0[49]
+   64:[53] FormatLong(var[8], val=42[41], radix=10, width=0[49], token=32, plus=false, note=false)
+   71:[41] VarText(var[8]=__work_1) -> "expected 42, got 42"[41]
+   74:[57] ConstText(_value="fn_ref_two_args") -> "fn_ref_two_args"[57]
+   91:[73] ConstInt(val=5) -> 5[73]
+   96:[77] StaticCall(n_assert)
+   99:[40] FreeText(var[8])
+  102:[40] Return(ret=4294967295[4], value=0, discard=36)
+Finished

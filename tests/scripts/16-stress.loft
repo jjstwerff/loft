@@ -1,0 +1,258 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+// Stress tests for all four collection types: build large structures, verify
+// them, and remove elements in various ways — exercising store recycling paths.
+
+struct IntRec  { id: integer, val: integer }
+struct TextRec { id: integer, name: text }
+struct SortedDb { rows: sorted<IntRec[id]> }
+struct IndexDb  { rows: index<TextRec[id, -name]> }
+struct HashWord { word: text, count: integer }
+struct HashDb   { words: hash<HashWord[word]> }
+
+fn main() {
+    N = 100;
+
+    // ====== VECTOR: integers ======
+    // Build, verify sum, remove all via #remove, repeat.
+    v = [for i in 0..N { i }];
+    sum = 0;
+    for x in v { sum += x; }
+    // 0 + 1 + ... + 99 = 4950
+    assert(sum == 4950, "vector int sum {sum}");
+    for x in v { x#remove; }
+    assert(!v[0], "vector int empty after remove");
+
+    // Three fill-and-clear cycles to exercise store recycling.
+    for cycle in 0..3 {
+        v += [for i in 0..50 { i }];
+        cnt = 0;
+        for x in v { cnt += 1; }
+        assert(cnt == 50, "vector cycle {cycle} count {cnt}");
+        for x in v { x#remove; }
+    }
+    assert(!v[0], "vector empty after 3 cycles");
+
+    // Single-element: remove, reinsert, remove again.
+    sv = [42];
+    assert(sv[0] == 42, "single element read");
+    for x in sv { x#remove; }
+    assert(!sv[0], "single element removed");
+    sv += [99];
+    assert(sv[0] == 99, "single reinserted");
+    for x in sv { x#remove; }
+
+    // Out-of-bounds access must return null, not crash.
+    bounds = [10, 20, 30];
+    assert(!bounds[999], "vector oob null");
+    for x in bounds { x#remove; }
+
+    // Append-remove-append: verify buffer reuse.
+    for i in 0..20 { v += [i * i]; }
+    for x in v { x#remove; }
+    for i in 0..20 { v += [i]; }
+    v_sum2 = 0;
+    for x in v { v_sum2 += x; }
+    // 0 + 1 + ... + 19 = 190
+    assert(v_sum2 == 190, "vector reuse sum {v_sum2}");
+    for x in v { x#remove; }
+
+    // ====== VECTOR: text ======
+    tv = [for i in 0..N { "item{i}" }];
+    assert(tv[0] == "item0",       "text vector first");
+    assert(tv[N-1] == "item{N-1}", "text vector last");
+    tlen = 0;
+    for s in tv { tlen += len(s); }
+    // "item0".."item9" = 5 chars × 10, "item10".."item99" = 6 chars × 90 → 590
+    assert(tlen == 590, "text vector total length {tlen}");
+    for s in tv { s#remove; }
+    assert(!tv[0], "text vector empty after remove");
+
+    // Long strings (27 chars each): build 30, verify, free.
+    alphabet = "abcdefghijklmnopqrstuvwxyz";
+    tv2 = [for i in 0..30 { "{alphabet}{i}" }];
+    assert(tv2[0] == "{alphabet}0", "long-text first");
+    assert(len(tv2[0]) == 27,       "long-text length {len(tv2[0])}");
+    for s in tv2 { s#remove; }
+    assert(!tv2[0], "long-text vector empty");
+
+    // ====== SORTED ======
+
+    // Section A: key-null removal of N records.
+    sdb_a = SortedDb { rows: [] };
+    for i in 0..N { sdb_a.rows += [IntRec { id: i, val: i * 2 }]; }
+    assert(sdb_a.rows[0].val == 0,         "sorted first val");
+    assert(sdb_a.rows[N-1].val == (N-1)*2, "sorted last val");
+    scnt_a = 0;
+    for r in sdb_a.rows { scnt_a += 1; }
+    assert(scnt_a == N, "sorted count {scnt_a}");
+    for i in 0..N { sdb_a.rows[i] = null; }
+    scnt_a2 = 0;
+    for r in sdb_a.rows { scnt_a2 += 1; }
+    assert(scnt_a2 == 0, "sorted empty after key-null {scnt_a2}");
+
+    // Section B: loop #remove.
+    sdb_b = SortedDb { rows: [] };
+    for i in 0..N { sdb_b.rows += [IntRec { id: i, val: i }]; }
+    for r in sdb_b.rows { r#remove; }
+    scnt_b = 0;
+    for r in sdb_b.rows { scnt_b += 1; }
+    assert(scnt_b == 0, "sorted empty after loop-remove");
+
+    // Section C: two build/free cycles.
+    sdb_c = SortedDb { rows: [] };
+    for cycle in 0..2 {
+        for i in 0..N { sdb_c.rows += [IntRec { id: i, val: cycle }]; }
+        for r in sdb_c.rows { r#remove; }
+        scnt_c = 0;
+        for r in sdb_c.rows { scnt_c += 1; }
+        assert(scnt_c == 0, "sorted cycle {cycle} empty {scnt_c}");
+    }
+
+    // Section D: partial key-null removal, verify remainder.
+    sdb_d = SortedDb { rows: [] };
+    for i in 0..N { sdb_d.rows += [IntRec { id: i, val: i }]; }
+    for i in 0..50 { sdb_d.rows[i * 2] = null; }  // remove even ids
+    odd_count = 0;
+    odd_sum = 0;
+    for r in sdb_d.rows { odd_count += 1; odd_sum += r.val; }
+    assert(odd_count == 50, "sorted partial count {odd_count}");
+    // 1 + 3 + ... + 99 = 50^2 = 2500
+    assert(odd_sum == 2500, "sorted odd sum {odd_sum}");
+    for r in sdb_d.rows { r#remove; }
+
+    // Section E: filter loop removal — small (4 elements) and large (N=100).
+    sdb_e = SortedDb { rows: [] };
+    sdb_e.rows += [IntRec { id: 1, val: 1 }];
+    sdb_e.rows += [IntRec { id: 2, val: 2 }];
+    sdb_e.rows += [IntRec { id: 3, val: 3 }];
+    sdb_e.rows += [IntRec { id: 4, val: 4 }];
+    for r in sdb_e.rows if r.id % 2 == 0 { r#remove; }
+    fsum = 0;
+    for r in sdb_e.rows { fsum += r.val; }
+    assert(fsum == 4, "sorted filter-remove small {fsum}"); // 1+3=4
+    for r in sdb_e.rows { r#remove; }
+
+    // Large N filter loop removal: remove even ids, verify odd sum.
+    sdb_e2 = SortedDb { rows: [] };
+    for i in 0..N { sdb_e2.rows += [IntRec { id: i, val: i }]; }
+    for r in sdb_e2.rows if r.id % 2 == 0 { r#remove; }
+    odd_sum_e = 0;
+    for r in sdb_e2.rows { odd_sum_e += r.val; }
+    // 1 + 3 + ... + 99 = 50^2 = 2500
+    assert(odd_sum_e == 2500, "sorted filter-remove large odd sum {odd_sum_e}");
+
+    // Section F: missing-key and null-key safety.
+    sdb_f = SortedDb { rows: [] };
+    sdb_f.rows += [IntRec { id: 1, val: 10 }];
+    sdb_f.rows[999] = null;           // no-op: key not present
+    assert(sdb_f.rows[1].val == 10,   "sorted missing-key no-op");
+    assert(!sdb_f.rows[null],         "sorted null-key returns null");
+    sdb_f.rows[1] = null;
+
+    // ====== INDEX ======
+
+    // Section A: large N build, verify sum and specific lookups; then remove all by key.
+    idb_a = IndexDb { rows: [] };
+    for i in 0..N { idb_a.rows += [TextRec { id: i, name: "name{i}" }]; }
+    itotal = 0;
+    for ir in idb_a.rows { itotal += ir.id; }
+    assert(itotal == 4950, "index id sum {itotal}");
+    assert(idb_a.rows[0, "name0"].id == 0,         "index key lookup first");
+    assert(idb_a.rows[N-1, "name{N-1}"].id == N-1, "index key lookup last");
+    assert(!idb_a.rows[999, "none"],               "index missing key null");
+    // Key-null removal of all N records must leave count == 0 (T0-3 fix).
+    for i in 0..N { idb_a.rows[i, "name{i}"] = null; }
+    icnt_a = 0;
+    for ir in idb_a.rows { icnt_a += 1; }
+    assert(icnt_a == 0, "index empty after key-null {icnt_a}");
+
+    // Section A2: loop #remove of N records must leave count == 0 (T0-2 fix).
+    idb_a2 = IndexDb { rows: [] };
+    for i in 0..N { idb_a2.rows += [TextRec { id: i, name: "name{i}" }]; }
+    for ir in idb_a2.rows { ir#remove; }
+    icnt_a2 = 0;
+    for ir in idb_a2.rows { icnt_a2 += 1; }
+    assert(icnt_a2 == 0, "index empty after loop-remove {icnt_a2}");
+
+    // Section B: shared primary key (different secondary key).
+    idb_b = IndexDb { rows: [] };
+    idb_b.rows += [TextRec { id: 5, name: "gamma" }];
+    idb_b.rows += [TextRec { id: 5, name: "beta"  }];
+    idb_b.rows += [TextRec { id: 5, name: "alpha" }];
+    icnt_b = 0;
+    for ir in idb_b.rows { icnt_b += 1; }
+    assert(icnt_b == 3, "index 3 shared-primary {icnt_b}");
+    // Exact lookup by full compound key.
+    assert(idb_b.rows[5, "gamma"].name == "gamma", "index compound lookup gamma");
+    assert(!idb_b.rows[5, "delta"],                "index compound lookup absent");
+
+    // Section C: ascending iteration order check (id ascending, then name descending).
+    idb_c = IndexDb { rows: [] };
+    idb_c.rows += [TextRec { id: 1, name: "beta"  }];
+    idb_c.rows += [TextRec { id: 1, name: "alpha" }];
+    idb_c.rows += [TextRec { id: 2, name: "zeta"  }];
+    order = "";
+    for ir in idb_c.rows {
+        if !ir#first { order += ","; }
+        order += "{ir.id}:{ir.name}"
+    }
+    // id ascending; within same id, name descending: beta > alpha
+    assert(order == "1:beta,1:alpha,2:zeta", "index order {order}");
+
+    // ====== HASH ======
+
+    // Section A: build N, verify, remove all by key.
+    hdb_a = HashDb { words: [] };
+    for i in 0..N { hdb_a.words += [HashWord { word: "key{i}", count: i }]; }
+    assert(hdb_a.words["key0"].count == 0,      "hash first lookup");
+    assert(hdb_a.words["key{N-1}"].count == N-1, "hash last lookup");
+    assert(!hdb_a.words["absent"],               "hash missing key null");
+    assert(!hdb_a.words[null],                   "hash null key null");
+    for i in 0..N { hdb_a.words["key{i}"] = null; }
+    assert(!hdb_a.words["key0"],    "hash empty after key-null first");
+    assert(!hdb_a.words["key50"],   "hash empty after key-null mid");
+    assert(!hdb_a.words["key{N-1}"], "hash empty after key-null last");
+
+    // Section B: edge-case string keys from wordlist.
+    // Use `wlist` (not `words`) to avoid shadowing the `HashDb.words` field name.
+    wlist = file("tests/scripts/wordlist.txt").lines();
+    wlen = 0;
+    for wrd in wlist { wlen += 1; }
+    assert(wlen > 10, "wordlist has entries {wlen}");
+    hdb_b = HashDb { words: [] };
+    assert(!hdb_b.words["init"], "hash b initially empty");
+    for wrd in wlist {
+        // "repeat" appears twice — second insert must not crash.
+        hdb_b.words += [HashWord { word: wrd, count: len(wrd) }];
+    }
+    assert(hdb_b.words["apple"].count == len("apple"),           "hash wordlist apple");
+    assert(hdb_b.words["a"].count == 1,                          "hash wordlist single-char");
+    assert(hdb_b.words["{alphabet}"].count == len(alphabet),     "hash wordlist long key");
+    assert(hdb_b.words["key with spaces"].count > 0,             "hash wordlist spaces");
+    assert(hdb_b.words["0"].count == 1,                          "hash wordlist digit");
+    assert(hdb_b.words["-1"].count == 2,                         "hash wordlist negative");
+    assert(!hdb_b.words["not-in-wordlist"],                      "hash wordlist absent");
+    for wrd in wlist { hdb_b.words[wrd] = null; }
+    assert(!hdb_b.words["apple"],  "hash wordlist cleared a");
+    assert(!hdb_b.words["banana"], "hash wordlist cleared b");
+
+    // Section C: missing-key removal is a safe no-op.
+    hdb_c = HashDb { words: [] };
+    assert(!hdb_c.words["init"], "hash c initially empty");
+    hdb_c.words += [HashWord { word: "solo", count: 7 }];
+    hdb_c.words["nonexistent"] = null;
+    assert(hdb_c.words["solo"].count == 7, "hash no-op removal safe");
+    hdb_c.words["solo"] = null;
+
+    // Section D: three build-and-clear cycles.
+    hdb_d = HashDb { words: [] };
+    assert(!hdb_d.words["init"], "hash d initially empty");
+    for cycle in 0..3 {
+        for i in 0..50 { hdb_d.words += [HashWord { word: "c{cycle}w{i}", count: i }]; }
+        for i in 0..50 { hdb_d.words["c{cycle}w{i}"] = null; }
+        assert(!hdb_d.words["c{cycle}w0"],  "hash cycle {cycle} cleared first");
+        assert(!hdb_d.words["c{cycle}w49"], "hash cycle {cycle} cleared last");
+    }
+}

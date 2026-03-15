@@ -1,0 +1,114 @@
+struct Elm {n:text, c:integer}
+
+pub fn test() {
+    test_value = {v = "[ {{n:'hi', c:10 }}, {{n:'world', c:2 }} ]" as vector<Elm>; "{v}"};
+    assert(
+        test_value == "[{{n:\"hi\",c:10}},{{n:\"world\",c:2}}]",
+        "Test failed {test_value} != \"[{{n:\"hi\",c:10}},{{n:\"world\",c:2}}]\""
+    );
+}
+Type 18:Elm[8/4]: parents [main_vector<Elm> 19]
+    n:text[0]
+    c:integer[4]
+
+Type 19:main_vector<Elm>[4/4]:
+    vector:vector<Elm>[0]
+
+Type 20:vector<Elm>[4/4]:Vector(18)
+
+fn n_test() {#block(1):void
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [4] test_value(1):text["__work_1"] = {#block(2):text["__work_1"]
+    v(2):vector<ref(Elm)> = OpCastVectorFromText("[ {n:'hi', c:10 }, {n:'world', c:2 } ]", 20i32);
+    {#Formatted string(3):text["__work_1"]
+      __work_1(1):text = "";
+      OpFormatDatabase(__work_1(1), v(2), 20i32, 0i32);
+      OpFreeRef(v(2));
+      __work_1(1);
+    }#Formatted string(3):text["__work_1"];
+  }#block(2):text["__work_1"];
+  [5] n_assert(OpEqText(test_value(1), "[{n:"hi",c:10},{n:"world",c:2}]"), {#Formatted string(4):text["__work_2"]
+    __work_2(1):text = "Test failed ";
+    OpFormatText(__work_2(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_2(1), " != "[{n:"hi",c:10},{n:"world",c:2}]"");
+    __work_2(1);
+  }#Formatted string(4):text["__work_2"], "parse_objects", 6i32);
+  OpFreeText(test_value(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+}#block(1):void
+
+byte-code for parse_objects:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_2[4]:text
+   1[28]: Text() var=__work_1[28]:text
+   2[52]: [4] Text() var=test_value[52]:text["__work_1"]
+   3[76]: ConstText(_value="[ {n:'hi', c:10 }, {n:'world', c:2 } ]") -> text var=v[76]:vector<ref(Elm)>
+  43[92]: CastVectorFromText(val: text, db_tp=20) -> vector
+  46[88]: ClearText(var[28]) var=__work_1[28]:text
+  49[88]: ConstText(_value="") -> text
+  51[104]: VarVector(var[76]) -> vector type=vector<Elm> 20 var=v[76]:vector<ref(Elm)>
+  54[116]: FormatDatabase(var[28], val: ref(reference), db_tp=20, db_format=0)
+  60[104]: VarVector(var[76]) -> vector type=vector<Elm> 20 var=v[76]:vector<ref(Elm)>
+  63[116]: FreeRef(v1: ref(reference)) ; [store-free]
+  64[104]: VarText(var[28]) -> text var=__work_1[28]:text
+  67[120]: FreeStack(value=16, discard=32)
+  71[104]: FreeStack(value=16, discard=28)
+  75[92]: AppendText(var[52], v1: text)
+  78[76]: [5] VarText(var[52]) -> text var=test_value[52]:text["__work_1"]
+  81[92]: ConstText(_value="[{n:"hi",c:10},{n:"world",c:2}]") -> text
+ 114[108]: EqText(v1: text, v2: text) -> boolean
+ 115[77]: ClearText(var[4]) var=__work_2[4]:text
+ 118[77]: ConstText(_value="Test failed ") -> text
+ 132[93]: AppendText(var[4], v1: text)
+ 135[77]: VarText(var[52]) -> text var=test_value[52]:text["__work_1"]
+ 138[93]: ConstInt(val=0) -> integer
+ 143[97]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+ 148[77]: ConstText(_value=" != "[{n:"hi",c:10},{n:"world",c:2}]"") -> text
+ 187[93]: AppendText(var[4], v1: text)
+ 190[77]: VarText(var[4]) -> text var=__work_2[4]:text
+ 193[93]: ConstText(_value="parse_objects") -> text
+ 208[109]: ConstInt(val=6) -> integer
+ 213[113]: StaticCall(n_assert)
+ 216[76]: FreeText(var[52])
+ 219[76]: FreeText(var[28])
+ 222[76]: FreeText(var[4])
+ 225[76]: Return(ret=0, value=0, discard=76)
+
+Execute test:
+    0:[8] Text()
+    1:[32] [4] Text()
+    2:[56] Text()
+    3:[80] ConstText(_value="[ {n:'hi', c:10 }, {n:'world', c:2 } ]") -> "[ {n:'hi', c:10 }, {n:'world', c:2 } ]"[80]
+   43:[96] CastVectorFromText(val="[ {n:'hi', c:10 }, {n:'world', c:2 } ]"[80], db_tp=20) -> ref(1,1,8)[80]
+   46:[92] ClearText(var[32]=__work_1)
+   49:[92] ConstText(_value="") -> ""[92]
+   51:[108] VarVector(var[80]=v) -> ref(1,1,8)=[{n:"hi",c:10},{n:"world",c:2}][108]
+   54:[120] FormatDatabase(var[32], val=ref(1,1,8)[108], db_tp=20, db_format=0)
+   60:[108] VarVector(var[80]=v) -> ref(1,1,8)=[{n:"hi",c:10},{n:"world",c:2}][108]
+   63:[120] FreeRef(v1=ref(1,1,8)[108]) ; store-free max=1
+   64:[108] VarText(var[32]=__work_1) -> "[{n:\"hi\",c:10},{n:\"world\",c:2}]"[108]
+   67:[124] FreeStack(value=16, discard=32)
+   71:[108] FreeStack(value=16, discard=28)
+   75:[96] AppendText(var[56], v1="[{n:\"hi\",c:10},{n:\"world\",c:2}]"[80])
+   78:[80] VarText(var[56]=test_value) -> "[{n:\"hi\",c:10},{n:\"world\",c:2}]"[80]
+   81:[96] ConstText(_value="[{n:"hi",c:10},{n:"world",c:2}]") -> "[{n:\"hi\",c:10},{n:\"world\",c:2}]"[96]
+  114:[112] EqText(v1="[{n:\"hi\",c:10},{n:\"world\",c:2}]"[80], v2="[{n:\"hi\",c:10},{n:\"world\",c:2}]"[96]) -> true[80]
+  115:[81] ClearText(var[8]=__work_2)
+  118:[81] ConstText(_value="Test failed ") -> "Test failed "[81]
+  132:[97] AppendText(var[8], v1="Test failed "[81])
+  135:[81] VarText(var[56]=test_value) -> "[{n:\"hi\",c:10},{n:\"world\",c:2}]"[81]
+  138:[97] ConstInt(val=0) -> 0[97]
+  143:[101] FormatText(var[8], val="[{n:\"hi\",c:10},{n:\"world\",c:2}]"[81], width=0[97], dir=-1, token=32)
+  148:[81] ConstText(_value=" != "[{n:"hi",c:10},{n:"world",c:2}]"") -> " != \"[{n:\"hi\",c:10},{n:\"world\",c:2}]\""[81]
+  187:[97] AppendText(var[8], v1=" != \"[{n:\"hi\",c:10},{n:\"world\",c:2}]\""[81])
+  190:[81] VarText(var[8]=__work_2) -> "Test failed [{n:\"hi\",c:10},{n:\"world\",c:2}] != \"[{n:\"hi\",c:10},{n:\"world\",c:2}]\""[81]
+  193:[97] ConstText(_value="parse_objects") -> "parse_objects"[97]
+  208:[113] ConstInt(val=6) -> 6[113]
+  213:[117] StaticCall(n_assert)
+  216:[80] FreeText(var[56])
+  219:[80] FreeText(var[32])
+  222:[80] FreeText(var[8])
+  225:[80] Return(ret=4294967295[4], value=0, discard=76)
+Finished

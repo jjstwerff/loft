@@ -1,0 +1,77 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Boolean
+// @TITLE: True, false, and null
+
+// A boolean value is either 'true' or 'false'. Booleans appear naturally
+// wherever you make a decision: in 'if' conditions, loop filters, and
+// comparisons. Loft adds a third state called 'null' — meaning "no value" —
+// which behaves like false whenever a boolean is expected.
+//
+// This design means you rarely need to write a separate null-check: '!x' is
+// true both when x is false and when x is null.
+
+fn main() {
+    // A comparison produces a boolean result directly.
+    // '!' flips a boolean: true → false, false → true.
+    assert(!(3 > 2 + 4), "3 is not greater than 6");
+    assert(true as text == "true", "Convert boolean to text");
+
+    // ## Logical operators: and / or
+    // 'and' (also '&&') is true only when both sides are true.
+    // 'or'  (also '||') is true when at least one side is true.
+    // Both use short-circuit evaluation: the right side is only evaluated
+    // if the left side does not already determine the result. This matters
+    // when the right side could produce null or has a side effect.
+    assert(1 > 0 and 2 > 1, "Both conditions true");
+    assert(1 > 2 or 3 > 2,  "Second condition true");
+    assert(!(1 > 2 && 3 > 2), "First false → whole 'and' is false");
+    assert(!(1 > 2 || 3 > 4), "Both false → 'or' is false");
+
+    // ## Null in boolean context
+    // Division by zero (and other failed operations) produce null.
+    // Null in a boolean context is treated as false, so '!' is true.
+    // This lets you write guard clauses without a separate null-check syntax:
+    //   if !result { ... handle missing value ... }
+    zero = 0;
+    assert(!(12 / zero), "null from division-by-zero is false-like");
+    assert(12 > 0,       "positive integer is true");
+
+    // ## Bitwise operators
+    // While 'and'/'or' work on true/false values, bitwise operators work on
+    // the individual bits of an integer. They are useful for flags, masks,
+    // and low-level data manipulation.
+    //
+    //   '&'  — keeps only bits set in BOTH operands (AND)
+    //   '|'  — keeps bits set in EITHER operand (OR)
+    //   '<<' — shift bits left N positions  (×2^N)
+    //   '>>' — shift bits right N positions (÷2^N)
+    //
+    // Tip: '&' binds less tightly than comparison operators. Use parentheses
+    // when you mix bitwise and comparison expressions in the same condition.
+    assert((0x0f & 0xa8) == 8,   "Bitwise AND: keeps only bits in both");
+    assert((0xf0 | 0x0f) == 0xff,"Bitwise OR: combines bits from either");
+    assert(1 << 4 == 16,         "Left shift: 1 × 2^4 = 16");
+    assert(256 >> 3 == 32,       "Right shift: 256 ÷ 2^3 = 32");
+
+    // ## Negation
+    // '!' is the logical NOT operator. It flips any boolean expression.
+    assert(!false,      "not false is true");
+    assert(!(1 > 2),    "not false comparison is true");
+
+    // ## Formatting booleans
+    // Booleans can be embedded in a format string like any other value.
+    // The '^' alignment specifier centres the value in a field of given width.
+    // '<' aligns left, '>' aligns right (right-alignment is the default).
+    assert("1{true:^7}2" == "1 true  2", "Centred boolean in field of width 7");
+    assert("{false}" == "false", "Plain boolean format");
+
+    // ## Common pitfall: '&' vs 'and'
+    // '&' is bitwise AND on integers; 'and' (or '&&') is logical AND on booleans.
+    // Writing 'a & b' when you mean 'a and b' usually compiles but gives wrong
+    // results because it operates on the numeric representation of the booleans.
+    // Always use 'and' / '&&' for boolean logic.
+    flag_a = 3 > 1;   // true
+    flag_b = 4 > 2;   // true
+    assert(flag_a and flag_b, "Correct: logical AND on two booleans");
+}

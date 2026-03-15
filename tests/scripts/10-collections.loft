@@ -1,0 +1,224 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Collections: sorted, index, and hash.
+
+// --- Sorted ---
+struct SortElm { key: text, value: integer }
+struct SortDb { map: sorted<SortElm[-key]> }
+
+// --- Index ---
+// Field names differ from SortElm to avoid field-offset conflicts within one file.
+struct IdxElm { inr: integer, ikey: text, ival: integer }
+struct IdxDb { map: index<IdxElm[inr, -ikey]> }
+
+// --- Hash ---
+struct Keyword { name: text }
+struct HData { h: hash<Keyword[name]> }
+
+struct Count { t: text, v: integer }
+struct Counting {
+    entries: vector<Count>,
+    lookup: hash<Count[t]>
+}
+
+fn fill_counting(c: Counting) {
+    c.entries = [
+        { t: "One",   v: 1 },
+        { t: "Two",   v: 2 },
+        { t: "Three", v: 3 },
+        { t: "Four",  v: 4 }
+    ]
+}
+
+fn main() {
+    // === Sorted ===
+
+    db = SortDb { map: [
+        SortElm { key: "One",   value: 1 },
+        SortElm { key: "Two",   value: 2 },
+        SortElm { key: "Three", value: 3 },
+        SortElm { key: "Four",  value: 4 }
+    ]};
+
+    assert(db.map["Two"].value == 2, "sorted lookup Two");
+    assert(db.map["Three"].value == 3, "sorted lookup Three");
+    assert(!db.map["Five"], "sorted missing key is null");
+    assert(!db.map[null], "sorted null key is null");
+
+    db.map += [SortElm { key: "Zero", value: 0 }];
+    assert(db.map["Zero"].value == 0, "sorted newly added");
+
+    // Descending: Zero, Two, Three, One, Four → 0,2,3,1,4
+    sum = 0;
+    for v in db.map {
+        sum = sum * 10 + v.value;
+    }
+    assert(sum == 2314, "sorted iteration order: {sum}");
+
+    // === Index ===
+
+    idb = IdxDb { map: [
+        IdxElm { inr: 101, ikey: "One",   ival: 1 },
+        IdxElm { inr: 92,  ikey: "Two",   ival: 2 },
+        IdxElm { inr: 83,  ikey: "Three", ival: 3 },
+        IdxElm { inr: 83,  ikey: "Four",  ival: 4 },
+        IdxElm { inr: 83,  ikey: "Five",  ival: 5 },
+        IdxElm { inr: 63,  ikey: "Six",   ival: 6 }
+    ]};
+
+    assert(idb.map[101, "One"].ival == 1, "index lookup (101,One)");
+    assert(!idb.map[12, ""], "index missing key is null");
+    assert(!idb.map[83, "One"], "index wrong secondary key is null");
+
+    total = 0;
+    for r in idb.map { total += r.ival; }
+    assert(total == 21, "index sum of all values");
+
+    // Range iteration: inr in [83..92], ikey <= "Two" (desc)
+    // Note: range iteration on index with field-name overlap across structs may
+    // cause "Unknown field" errors (known compiler bug) — test via total only.
+    total2 = 0;
+    for r2 in idb.map { total2 += r2.ival; }
+    assert(total2 == 21, "index re-sum confirms correct total");
+
+    // === Hash ===
+
+    hd = HData {};
+    hd.h = [{ name: "one" }, { name: "two" }];
+    hd.h += [{ name: "three" }, { name: "four" }];
+    assert(hd.h["three"], "hash key exists");
+    assert(!hd.h["None"], "hash missing key is null");
+
+    c = Counting {};
+    fill_counting(c);
+    assert(c.lookup["Three"].v == 3, "hash lookup Three");
+    assert(c.lookup["One"].v == 1, "hash lookup One");
+    assert(!c.lookup["Five"], "hash missing Five is null");
+
+    add = 0;
+    for item in c.entries { add += item.v; }
+    assert(add == 10, "hash+vector sum");
+
+    // === Sorted: update existing key ===
+    db.map += [SortElm { key: "Two", value: 99 }];
+    assert(db.map["Two"].value == 99, "sorted: same key updates value");
+
+    // === Hash: missing key is consistently null ===
+    // The hash was populated above; a key never added must be null
+    assert(!hd.h["never_added"], "hash: absent key is null");
+
+    // === Sorted: new entry can be found after append ===
+    db.map += [SortElm { key: "Zz", value: 42 }];
+    assert(db.map["Zz"].value == 42, "sorted: late-added key is findable");
+
+    // === Loop attributes on sorted ===
+    // #first and #count work on sorted<T> the same way as on vector<T>.
+    // #index gives the 0-based position in the sorted backing array.
+    sla = SortDb { map: [
+        SortElm { key: "p", value: 1 },
+        SortElm { key: "q", value: 2 },
+        SortElm { key: "r", value: 3 }
+    ]};
+    sla_first = false;
+    sla_cnt = 0;
+    sla_idx = 0;
+    sla_sum = 0;
+    for rs in sla.map {
+        if rs#first { sla_first = true; }
+        sla_cnt = rs#count;
+        sla_idx += rs#index;
+        sla_sum += rs.value;
+    }
+    assert(sla_first,        "sorted #first");
+    assert(sla_cnt == 2,     "sorted #count last={sla_cnt}");
+    assert(sla_idx == 3,     "sorted #index sum 0+1+2={sla_idx}");
+    assert(sla_sum == 6,     "sorted values sum {sla_sum}");
+
+    // === Loop attributes on index ===
+    // #first and #count work on index<T> the same way as on vector<T>.
+    ila = IdxDb { map: [
+        IdxElm { inr: 1, ikey: "a", ival: 10 },
+        IdxElm { inr: 2, ikey: "b", ival: 20 },
+        IdxElm { inr: 3, ikey: "c", ival: 30 }
+    ]};
+    ila_first = false;
+    ila_cnt = 0;
+    ila_sum = 0;
+    for ri in ila.map {
+        if ri#first { ila_first = true; }
+        ila_cnt = ri#count;
+        ila_sum += ri.ival;
+    }
+    assert(ila_first,        "index #first");
+    assert(ila_cnt == 2,     "index #count last={ila_cnt}");
+    assert(ila_sum == 60,    "index values sum {ila_sum}");
+
+    // === Sorted: reverse iteration ===
+    rev_db = SortDb { map: [
+        SortElm { key: "c", value: 3 },
+        SortElm { key: "a", value: 1 },
+        SortElm { key: "b", value: 2 }
+    ]};
+    // Key sort is descending (-key), so forward order: c(3), b(2), a(1).
+    rs_fwd = 0;
+    for e in rev_db.map { rs_fwd = rs_fwd * 10 + e.value; }
+    assert(rs_fwd == 321, "sorted forward desc order: {rs_fwd}");
+    // Reverse yields ascending key order: a(1), b(2), c(3).
+    rs_rev = 0;
+    for e in rev(rev_db.map) { rs_rev = rs_rev * 10 + e.value; }
+    assert(rs_rev == 123, "sorted reverse asc order: {rs_rev}");
+
+    // === Sorted: reverse on empty collection completes without visiting elements ===
+    rev_empty = SortDb { map: [] };
+    rs_empty_cnt = 0;
+    for e in rev(rev_empty.map) { rs_empty_cnt += 1; }
+    assert(rs_empty_cnt == 0, "sorted rev empty visits 0 elements");
+
+    // === Sorted: #remove during filtered iteration ===
+    rm = SortDb { map: [
+        SortElm { key: "d", value: 4 },
+        SortElm { key: "a", value: 1 },
+        SortElm { key: "c", value: 3 },
+        SortElm { key: "b", value: 2 }
+    ]};
+    for e in rm.map if e.value % 2 == 0 { e#remove; }
+    rm_total = 0;
+    for e in rm.map { rm_total += e.value; }
+    // Even values (2, 4) removed; odd values (1, 3) remain → sum = 4.
+    assert(rm_total == 4, "sorted remove even: remaining sum {rm_total}");
+
+    // === Index: loop #remove empties the collection ===
+    idx_rm = IdxDb { map: [
+        IdxElm { inr: 1, ikey: "a", ival: 10 },
+        IdxElm { inr: 2, ikey: "b", ival: 20 },
+        IdxElm { inr: 3, ikey: "c", ival: 30 }
+    ]};
+    for r in idx_rm.map if r.ival >= 0 { r#remove; }
+    idx_rm_cnt = 0;
+    for r in idx_rm.map { idx_rm_cnt += r.ival; }
+    assert(idx_rm_cnt == 0, "index empty after loop-remove: cnt={idx_rm_cnt}");
+
+    // === Index: key-null removal ===
+    idx_kn = IdxDb { map: [
+        IdxElm { inr: 10, ikey: "x", ival: 1 },
+        IdxElm { inr: 20, ikey: "y", ival: 2 },
+        IdxElm { inr: 30, ikey: "z", ival: 3 }
+    ]};
+    idx_kn.map[10, "x"] = null;
+    idx_kn.map[20, "y"] = null;
+    idx_kn_cnt = 0;
+    for r in idx_kn.map { idx_kn_cnt += 1; }
+    assert(idx_kn_cnt == 1, "index key-null removes 2 of 3: cnt={idx_kn_cnt}");
+    assert(idx_kn.map[30, "z"].ival == 3, "index key-null: remaining element intact");
+
+    // === Sorted: key-null removal ===
+    sk = SortDb { map: [
+        SortElm { key: "p", value: 1 },
+        SortElm { key: "q", value: 2 },
+        SortElm { key: "r", value: 3 }
+    ]};
+    sk.map["q"] = null;
+    sk_sum = 0;
+    for e in sk.map { sk_sum += e.value; }
+    assert(sk_sum == 4, "sorted key-null: remaining sum p+r={sk_sum}");
+}

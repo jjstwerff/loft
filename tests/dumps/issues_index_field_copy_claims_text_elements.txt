@@ -1,0 +1,277 @@
+struct Tag { key: integer, label: text }
+struct Bag { tags: index<Tag[key]> }
+fn test() {
+    b = Bag {
+        tags: [Tag { key: 1, label: "alpha" }, Tag { key: 2, label: "beta" }]
+    };
+    copy = [b];
+    assert(copy[0].tags[1].label == "alpha", "label 1: {copy[0].tags[1].label}");
+    assert(copy[0].tags[2].label == "beta",  "label 2: {copy[0].tags[2].label}");
+}
+Type 18:Tag[17/4]: parents [Bag 19]
+    key:integer[0]
+    label:text[4]
+    #left_1:integer[8]
+    #right_1:integer[12]
+    #color_1:boolean[16]
+
+Type 19:Bag[4/4]: parents [main_vector<Bag> 21]
+    tags:index<Tag[key]>[0]
+
+Type 20:index<Tag[key]>[4/4]:Index(18, [(0, true)], 2) keys [tp:1 desc:false field:0, ]
+
+Type 21:main_vector<Bag>[4/4]:
+    vector:vector<Bag>[0]
+
+Type 22:vector<Bag>[4/4]:Vector(19)
+
+Type 23:vector<Tag>[4/4]:Vector(18)
+
+fn n_test() {#block(1):void
+  __ref_1(1):ref(main_vector<Bag>) = null;
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [4] b(1):ref(Bag) = null;
+  OpDatabase(b(1), 19i32);
+  OpSetInt(b(1), 0i32, 0i32);
+  _elm_1(1):ref(Tag)["b"] = OpNewRecord(b(1), 19i32, 0i32);
+  OpSetInt(_elm_1(1), 0i32, 1i32);
+  OpSetText(_elm_1(1), 4i32, "alpha");
+  OpFinishRecord(b(1), _elm_1(1), 19i32, 0i32);
+  _elm_1(1):ref(Tag)["b"] = OpNewRecord(b(1), 19i32, 0i32);
+  OpSetInt(_elm_1(1), 0i32, 2i32);
+  OpSetText(_elm_1(1), 4i32, "beta");
+  OpFinishRecord(b(1), _elm_1(1), 19i32, 0i32);
+  [7] OpDatabase(__ref_1(1), 21i32);
+  copy(1):vector<ref(Bag)["b"]>["__ref_1"] = OpGetField(__ref_1(1), 0i32, 22i32);
+  OpSetInt(__ref_1(1), 0i32, 0i32);
+  _elm_2(1):ref(Bag)["copy"] = OpNewRecord(copy(1), 22i32, 65535i32);
+  OpCopyRecord(b(1), _elm_2(1), 19i32);
+  OpFinishRecord(copy(1), _elm_2(1), 22i32, 65535i32);
+  [8] n_assert(OpEqText(OpGetText(OpGetRecord(OpGetField(OpGetVector(copy(1), 4i32, 0i32), 0i32, 20i32), 20i32, 1i32, 1i32), 4i32), "alpha"), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "label 1: ";
+    OpFormatText(__work_1(1), OpGetText(OpGetRecord(OpGetField(OpGetVector(copy(1), 4i32, 0i32), 0i32, 20i32), 20i32, 1i32, 1i32), 4i32), 0i32, -1i32, 32i32);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "index_field_copy_claims_text_elements", 8i32);
+  [9] n_assert(OpEqText(OpGetText(OpGetRecord(OpGetField(OpGetVector(copy(1), 4i32, 0i32), 0i32, 20i32), 20i32, 1i32, 2i32), 4i32), "beta"), {#Formatted string(3):text["__work_2"]
+    __work_2(1):text = "label 2: ";
+    OpFormatText(__work_2(1), OpGetText(OpGetRecord(OpGetField(OpGetVector(copy(1), 4i32, 0i32), 0i32, 20i32), 20i32, 1i32, 2i32), 4i32), 0i32, -1i32, 32i32);
+    __work_2(1);
+  }#Formatted string(3):text["__work_2"], "index_field_copy_claims_text_elements", 9i32);
+  OpFreeRef(b(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+  OpFreeRef(__ref_1(1));
+}#block(1):void
+
+byte-code for index_field_copy_claims_text_elements:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: ConvRefFromNull() -> ref(reference) var=__ref_1[4]:ref(main_vector<Bag>) ; [store-alloc]
+   1[16]: Text() var=__work_2[16]:text
+   2[40]: Text() var=__work_1[40]:text
+   3[64]: [4] ConvRefFromNull() -> ref(reference) var=b[64]:ref(Bag) ; [store-alloc]
+   4[76]: Database(var[64], db_tp=19) type=Bag 19
+   9[76]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+  12[88]: ConstInt(val=0) -> integer
+  17[92]: SetInt(v1: ref(reference), fld=0, val: integer)
+  20[76]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+  23[88]: NewRecord(data: ref(reference), parent_tp=19, fld=0) -> ref(reference)
+  28[88]: VarRef(var[76]) -> ref(reference) type=Tag 18 var=_elm_1[76]:ref(Tag)["b"]
+  31[100]: ConstInt(val=1) -> integer
+  36[104]: SetInt(v1: ref(reference), fld=0, val: integer)
+  39[88]: VarRef(var[76]) -> ref(reference) type=Tag 18 var=_elm_1[76]:ref(Tag)["b"]
+  42[100]: ConstText(_value="alpha") -> text
+  49[116]: SetText(v1: ref(reference), fld=4, val: text)
+  52[88]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+  55[100]: VarRef(var[76]) -> ref(reference) type=Tag 18 var=_elm_1[76]:ref(Tag)["b"]
+  58[112]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=19, fld=0)
+  63[88]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+  66[100]: NewRecord(data: ref(reference), parent_tp=19, fld=0) -> ref(reference)
+  71[100]: PutRef(var[76], value: ref(reference))
+  74[88]: VarRef(var[76]) -> ref(reference) type=Tag 18 var=_elm_1[76]:ref(Tag)["b"]
+  77[100]: ConstInt(val=2) -> integer
+  82[104]: SetInt(v1: ref(reference), fld=0, val: integer)
+  85[88]: VarRef(var[76]) -> ref(reference) type=Tag 18 var=_elm_1[76]:ref(Tag)["b"]
+  88[100]: ConstText(_value="beta") -> text
+  94[116]: SetText(v1: ref(reference), fld=4, val: text)
+  97[88]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+ 100[100]: VarRef(var[76]) -> ref(reference) type=Tag 18 var=_elm_1[76]:ref(Tag)["b"]
+ 103[112]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=19, fld=0)
+ 108[88]: [7] Database(var[4], db_tp=21) type=main_vector<Bag> 21
+ 113[88]: VarRef(var[4]) -> ref(reference) type=main_vector<Bag> 21 var=__ref_1[4]:ref(main_vector<Bag>)
+ 116[100]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=vector<Bag> 22
+ 119[100]: VarRef(var[4]) -> ref(reference) type=main_vector<Bag> 21 var=__ref_1[4]:ref(main_vector<Bag>)
+ 122[112]: ConstInt(val=0) -> integer
+ 127[116]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 130[100]: VarVector(var[88]) -> vector type=vector<Bag> 22 var=copy[88]:vector<ref(Bag)["b"]>["__ref_1"]
+ 133[112]: NewRecord(data: ref(reference), parent_tp=22, fld=65535) -> ref(reference)
+ 138[112]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+ 141[124]: VarRef(var[100]) -> ref(reference) type=Bag 19 var=_elm_2[100]:ref(Bag)["copy"]
+ 144[136]: CopyRecord(data: ref(reference), to: ref(reference), tp=19)
+ 147[112]: VarVector(var[88]) -> vector type=vector<Bag> 22 var=copy[88]:vector<ref(Bag)["b"]>["__ref_1"]
+ 150[124]: VarRef(var[100]) -> ref(reference) type=Bag 19 var=_elm_2[100]:ref(Bag)["copy"]
+ 153[136]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=22, fld=65535)
+ 158[112]: [8] VarVector(var[88]) -> vector type=vector<Bag> 22 var=copy[88]:vector<ref(Bag)["b"]>["__ref_1"]
+ 161[124]: ConstInt(val=0) -> integer
+ 166[128]: GetVector(r: vector, size=4, index: integer) -> ref(reference) type=Bag 19
+ 169[124]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=index<Tag[key]> 20
+ 172[124]: ConstInt(val=1) -> integer
+ 177[128]: GetRecord(data: ref(reference), db_tp=20, no_keys=1) -> ref(reference)
+ 181[124]: GetText(v1: ref(reference), fld=4) -> text["b"]
+ 184[128]: ConstText(_value="alpha") -> text
+ 191[144]: EqText(v1: text, v2: text) -> boolean
+ 192[113]: ClearText(var[40]) var=__work_1[40]:text
+ 195[113]: ConstText(_value="label 1: ") -> text
+ 206[129]: AppendText(var[40], v1: text)
+ 209[113]: VarVector(var[88]) -> vector type=vector<Bag> 22 var=copy[88]:vector<ref(Bag)["b"]>["__ref_1"]
+ 212[125]: ConstInt(val=0) -> integer
+ 217[129]: GetVector(r: vector, size=4, index: integer) -> ref(reference) type=Bag 19
+ 220[125]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=index<Tag[key]> 20
+ 223[125]: ConstInt(val=1) -> integer
+ 228[129]: GetRecord(data: ref(reference), db_tp=20, no_keys=1) -> ref(reference)
+ 232[125]: GetText(v1: ref(reference), fld=4) -> text["b"]
+ 235[129]: ConstInt(val=0) -> integer
+ 240[133]: FormatText(var[40], val: text, width: integer, dir=-1, token=32)
+ 245[113]: VarText(var[40]) -> text var=__work_1[40]:text
+ 248[129]: ConstText(_value="index_field_copy_claims_text_elements") -> text
+ 287[145]: ConstInt(val=8) -> integer
+ 292[149]: StaticCall(n_assert)
+ 295[112]: [9] VarVector(var[88]) -> vector type=vector<Bag> 22 var=copy[88]:vector<ref(Bag)["b"]>["__ref_1"]
+ 298[124]: ConstInt(val=0) -> integer
+ 303[128]: GetVector(r: vector, size=4, index: integer) -> ref(reference) type=Bag 19
+ 306[124]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=index<Tag[key]> 20
+ 309[124]: ConstInt(val=2) -> integer
+ 314[128]: GetRecord(data: ref(reference), db_tp=20, no_keys=1) -> ref(reference)
+ 318[124]: GetText(v1: ref(reference), fld=4) -> text["b"]
+ 321[128]: ConstText(_value="beta") -> text
+ 327[144]: EqText(v1: text, v2: text) -> boolean
+ 328[113]: ClearText(var[16]) var=__work_2[16]:text
+ 331[113]: ConstText(_value="label 2: ") -> text
+ 342[129]: AppendText(var[16], v1: text)
+ 345[113]: VarVector(var[88]) -> vector type=vector<Bag> 22 var=copy[88]:vector<ref(Bag)["b"]>["__ref_1"]
+ 348[125]: ConstInt(val=0) -> integer
+ 353[129]: GetVector(r: vector, size=4, index: integer) -> ref(reference) type=Bag 19
+ 356[125]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=index<Tag[key]> 20
+ 359[125]: ConstInt(val=2) -> integer
+ 364[129]: GetRecord(data: ref(reference), db_tp=20, no_keys=1) -> ref(reference)
+ 368[125]: GetText(v1: ref(reference), fld=4) -> text["b"]
+ 371[129]: ConstInt(val=0) -> integer
+ 376[133]: FormatText(var[16], val: text, width: integer, dir=-1, token=32)
+ 381[113]: VarText(var[16]) -> text var=__work_2[16]:text
+ 384[129]: ConstText(_value="index_field_copy_claims_text_elements") -> text
+ 423[145]: ConstInt(val=9) -> integer
+ 428[149]: StaticCall(n_assert)
+ 431[112]: VarRef(var[64]) -> ref(reference) type=Bag 19 var=b[64]:ref(Bag)
+ 434[124]: FreeRef(v1: ref(reference)) ; [store-free]
+ 435[112]: FreeText(var[40])
+ 438[112]: FreeText(var[16])
+ 441[112]: VarRef(var[4]) -> ref(reference) type=main_vector<Bag> 21 var=__ref_1[4]:ref(main_vector<Bag>)
+ 444[124]: FreeRef(v1: ref(reference)) ; [store-free]
+ 445[112]: Return(ret=0, value=0, discard=112)
+
+Execute test:
+    0:[8] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] Text()
+    2:[44] [4] Text()
+    3:[68] ConvRefFromNull() -> ref(2,0,8)[68]
+  ; store-alloc nr=2 max=3
+    4:[80] Database(var[68], db_tp=19)
+    9:[80] VarRef(var[68]=b) -> ref(2,1,8)={tags:[]}[80]
+   12:[92] ConstInt(val=0) -> 0[92]
+   17:[96] SetInt(v1=ref(2,1,8)[80], fld=0, val=0[92])
+   20:[80] VarRef(var[68]=b) -> ref(2,1,8)={tags:[]}[80]
+   23:[92] NewRecord(data=ref(2,1,8)[80], parent_tp=19, fld=0) -> ref(2,5,8)[80]
+   28:[92] VarRef(var[80]=_elm_1) -> ref(2,5,8)={}[92]
+   31:[104] ConstInt(val=1) -> 1[104]
+   36:[108] SetInt(v1=ref(2,5,8)[92], fld=0, val=1[104])
+   39:[92] VarRef(var[80]=_elm_1) -> ref(2,5,8)={key:1}[92]
+   42:[104] ConstText(_value="alpha") -> "alpha"[104]
+   49:[120] SetText(v1=ref(2,5,8)[92], fld=4, val="alpha"[104])
+   52:[92] VarRef(var[68]=b) -> ref(2,1,8)={tags:[]}[92]
+   55:[104] VarRef(var[80]=_elm_1) -> ref(2,5,8)={key:1,label:"alpha"}[104]
+   58:[116] FinishRecord(data=ref(2,1,8)[92], rec=ref(2,5,8)[104], parent_tp=19, fld=0)
+   63:[92] VarRef(var[68]=b) -> ref(2,1,8)={tags:[{key:1,label:"alpha"}]}[92]
+   66:[104] NewRecord(data=ref(2,1,8)[92], parent_tp=19, fld=0) -> ref(2,11,8)[92]
+   71:[104] PutRef(var[80], value=ref(2,11,8)[92])
+   74:[92] VarRef(var[80]=_elm_1) -> ref(2,11,8)={}[92]
+   77:[104] ConstInt(val=2) -> 2[104]
+   82:[108] SetInt(v1=ref(2,11,8)[92], fld=0, val=2[104])
+   85:[92] VarRef(var[80]=_elm_1) -> ref(2,11,8)={key:2}[92]
+   88:[104] ConstText(_value="beta") -> "beta"[104]
+   94:[120] SetText(v1=ref(2,11,8)[92], fld=4, val="beta"[104])
+   97:[92] VarRef(var[68]=b) -> ref(2,1,8)={tags:[{key:1,label:"alpha"}]}[92]
+  100:[104] VarRef(var[80]=_elm_1) -> ref(2,11,8)={key:2,label:"beta"}[104]
+  103:[116] FinishRecord(data=ref(2,1,8)[92], rec=ref(2,11,8)[104], parent_tp=19, fld=0)
+  108:[92] Database(var[8], db_tp=21)
+  113:[92] VarRef(var[8]=__ref_1) -> ref(1,1,8)={}[92]
+  116:[104] GetField(v1=ref(1,1,8)[92], fld=0) -> ref(1,1,8)=[][92]
+  119:[104] VarRef(var[8]=__ref_1) -> ref(1,1,8)={}[104]
+  122:[116] ConstInt(val=0) -> 0[116]
+  127:[120] SetInt(v1=ref(1,1,8)[104], fld=0, val=0[116])
+  130:[104] VarVector(var[92]=copy) -> ref(1,1,8)=[][104]
+  133:[116] NewRecord(data=ref(1,1,8)[104], parent_tp=22, fld=65535) -> ref(1,5,8)[104]
+  138:[116] VarRef(var[68]=b) -> ref(2,1,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[116]
+  141:[128] VarRef(var[104]=_elm_2) -> ref(1,5,8)={tags:[]}[128]
+  144:[140] CopyRecord(data=ref(2,1,8)[116], to=ref(1,5,8)[128], tp=19)
+  147:[116] VarVector(var[92]=copy) -> ref(1,1,8)=[][116]
+  150:[128] VarRef(var[104]=_elm_2) -> ref(1,5,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[128]
+  153:[140] FinishRecord(data=ref(1,1,8)[116], rec=ref(1,5,8)[128], parent_tp=22, fld=65535)
+  158:[116] VarVector(var[92]=copy) -> ref(1,1,8)=[{tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}][116]
+  161:[128] ConstInt(val=0) -> 0[128]
+  166:[132] GetVector(r=ref(1,1,8)[116], size=4, index=0[128]) -> ref(1,5,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[116]
+  169:[128] GetField(v1=ref(1,5,8)[116], fld=0) -> ref(1,5,8)=[{key:1,label:"alpha"},{key:2,label:"beta"}][116]
+  172:[128] ConstInt(val=1) -> 1[128]
+  177:[132] GetRecord(data=ref(1,5,8)[116], db_tp=20, no_keys=1, key1=1[128]) -> ref(1,12,8)[116]
+  181:[128] GetText(v1=ref(1,12,8)[116], fld=4) -> "alpha"[116]
+  184:[132] ConstText(_value="alpha") -> "alpha"[132]
+  191:[148] EqText(v1="alpha"[116], v2="alpha"[132]) -> true[116]
+  192:[117] ClearText(var[44]=__work_1)
+  195:[117] ConstText(_value="label 1: ") -> "label 1: "[117]
+  206:[133] AppendText(var[44], v1="label 1: "[117])
+  209:[117] VarVector(var[92]=copy) -> ref(1,1,8)=[{tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}][117]
+  212:[129] ConstInt(val=0) -> 0[129]
+  217:[133] GetVector(r=ref(1,1,8)[117], size=4, index=0[129]) -> ref(1,5,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[117]
+  220:[129] GetField(v1=ref(1,5,8)[117], fld=0) -> ref(1,5,8)=[{key:1,label:"alpha"},{key:2,label:"beta"}][117]
+  223:[129] ConstInt(val=1) -> 1[129]
+  228:[133] GetRecord(data=ref(1,5,8)[117], db_tp=20, no_keys=1, key1=1[129]) -> ref(1,12,8)[117]
+  232:[129] GetText(v1=ref(1,12,8)[117], fld=4) -> "alpha"[117]
+  235:[133] ConstInt(val=0) -> 0[133]
+  240:[137] FormatText(var[44], val="alpha"[117], width=0[133], dir=-1, token=32)
+  245:[117] VarText(var[44]=__work_1) -> "label 1: alpha"[117]
+  248:[133] ConstText(_value="index_field_copy_claims_text_elements") -> "index_field_copy_claims_text_elements"[133]
+  287:[149] ConstInt(val=8) -> 8[149]
+  292:[153] StaticCall(n_assert)
+  295:[116] VarVector(var[92]=copy) -> ref(1,1,8)=[{tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}][116]
+  298:[128] ConstInt(val=0) -> 0[128]
+  303:[132] GetVector(r=ref(1,1,8)[116], size=4, index=0[128]) -> ref(1,5,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[116]
+  306:[128] GetField(v1=ref(1,5,8)[116], fld=0) -> ref(1,5,8)=[{key:1,label:"alpha"},{key:2,label:"beta"}][116]
+  309:[128] ConstInt(val=2) -> 2[128]
+  314:[132] GetRecord(data=ref(1,5,8)[116], db_tp=20, no_keys=1, key1=2[128]) -> ref(1,18,8)[116]
+  318:[128] GetText(v1=ref(1,18,8)[116], fld=4) -> "beta"[116]
+  321:[132] ConstText(_value="beta") -> "beta"[132]
+  327:[148] EqText(v1="beta"[116], v2="beta"[132]) -> true[116]
+  328:[117] ClearText(var[20]=__work_2)
+  331:[117] ConstText(_value="label 2: ") -> "label 2: "[117]
+  342:[133] AppendText(var[20], v1="label 2: "[117])
+  345:[117] VarVector(var[92]=copy) -> ref(1,1,8)=[{tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}][117]
+  348:[129] ConstInt(val=0) -> 0[129]
+  353:[133] GetVector(r=ref(1,1,8)[117], size=4, index=0[129]) -> ref(1,5,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[117]
+  356:[129] GetField(v1=ref(1,5,8)[117], fld=0) -> ref(1,5,8)=[{key:1,label:"alpha"},{key:2,label:"beta"}][117]
+  359:[129] ConstInt(val=2) -> 2[129]
+  364:[133] GetRecord(data=ref(1,5,8)[117], db_tp=20, no_keys=1, key1=2[129]) -> ref(1,18,8)[117]
+  368:[129] GetText(v1=ref(1,18,8)[117], fld=4) -> "beta"[117]
+  371:[133] ConstInt(val=0) -> 0[133]
+  376:[137] FormatText(var[20], val="beta"[117], width=0[133], dir=-1, token=32)
+  381:[117] VarText(var[20]=__work_2) -> "label 2: beta"[117]
+  384:[133] ConstText(_value="index_field_copy_claims_text_elements") -> "index_field_copy_claims_text_elements"[133]
+  423:[149] ConstInt(val=9) -> 9[149]
+  428:[153] StaticCall(n_assert)
+  431:[116] VarRef(var[68]=b) -> ref(2,1,8)={tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}[116]
+  434:[128] FreeRef(v1=ref(2,1,8)[116]) ; store-free max=2
+  435:[116] FreeText(var[44])
+  438:[116] FreeText(var[20])
+  441:[116] VarRef(var[8]=__ref_1) -> ref(1,1,8)={vector:[{tags:[{key:1,label:"alpha"},{key:2,label:"beta"}]}]}[116]
+  444:[128] FreeRef(v1=ref(1,1,8)[116]) ; store-free max=1
+  445:[116] Return(ret=4294967295[4], value=0, discard=112)
+Finished

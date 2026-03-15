@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Report a problem</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Report a problem</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Report a problem</h1>
+<article>
+<p>Bug reports are filed as GitHub issues at <a href="https://github.com/jjstwerff/loft/issues">github.com/jjstwerff/loft/issues</a>. A good report makes the difference between a quick fix and a problem that sits unresolved because it cannot be reproduced.</p>
+
+<h2 id="before-reporting">Before reporting</h2>
+<p>Check whether the issue is already known:</p>
+<ul>
+<li>Search the <a href="https://github.com/jjstwerff/loft/issues">open issues</a> for a few keywords from your error message.</li>
+<li>Read the relevant language page — some behaviours that look like bugs are documented design choices. For example, <code>n / 0</code> returns null rather than crashing; <code>not null</code> fields default to zero rather than null.</li>
+</ul>
+<p>If you are not sure whether what you have found is a bug, open an issue anyway with the label <em>question</em>. It is better to ask than to sit with a broken program.</p>
+
+<h2 id="what-to-include">What to include</h2>
+<p>A report needs four things to be actionable. Missing any of them makes the problem much harder to fix.</p>
+
+<h3 id="version">1. Loft version and platform</h3>
+<p>Run <code>loft --version</code> and include the output. Also include your operating system and architecture (e.g. macOS 14 on Apple Silicon, Ubuntu 22.04 on x86-64, Windows 11).</p>
+<pre><code>$ loft --version
+loft 0.1.0</code></pre>
+<p>If you built from source, include the commit hash:</p>
+<pre><code>$ git -C "$(dirname $(which loft))" rev-parse HEAD 2>/dev/null || git log -1 --format=%H</code></pre>
+
+<h3 id="reproducer">2. A minimal reproducer</h3>
+<p>Paste the smallest loft program that demonstrates the problem. Aim for under 20 lines. Remove everything that is not necessary to trigger the bug — unused structs, unrelated functions, extra print statements. The smaller the program, the faster it gets fixed.</p>
+<p>A useful template:</p>
+<pre><code>fn main() {
+    // the smallest code that shows the problem
+}</code></pre>
+<p>If the problem only appears with large data (e.g. a crash with 10 000 elements but not 10), say so and include the generation code rather than a literal list.</p>
+<p>If the program reads a file, either include the file contents inline as a string literal, or attach the file to the issue.</p>
+
+<h3 id="actual">3. What actually happens</h3>
+<p>Include the exact output. For a compiler error, paste the full error message and the line it points at. For a wrong result, show the value that was printed. For a crash, include the panic message and, if available, the backtrace:</p>
+<pre><code>$ RUST_BACKTRACE=1 loft my_program.loft</code></pre>
+<p>If the program produces no output and exits silently, say so explicitly — "no output, exit code 0" is useful information.</p>
+
+<h3 id="expected">4. What you expected instead</h3>
+<p>State clearly what the correct result should be. "It should print <code>42</code>" or "it should compile without error" is more useful than "it is wrong". If your expectation is based on a specific section of the documentation, link to it.</p>
+
+<h2 id="problem-types">Types of problems</h2>
+
+<h3 id="unexpected-error">Unexpected compiler error</h3>
+<p>The compiler rejects a program you believe is valid. Include:</p>
+<ul>
+<li>The full error message with file, line, and column.</li>
+<li>Your reading of the language rules that led you to believe the program is correct.</li>
+</ul>
+<pre><code>Error: Cannot add elements to 'v' while it is being iterated
+  --> my_program.loft:8:5</code></pre>
+
+<h3 id="missing-error">Missing compiler error</h3>
+<p>The compiler accepts a program that it should reject. Include:</p>
+<ul>
+<li>The program and the rule you think it violates.</li>
+<li>What the program does at runtime (since it compiled and ran).</li>
+</ul>
+
+<h3 id="wrong-result">Wrong result</h3>
+<p>The program compiles and runs but produces incorrect output. Include:</p>
+<ul>
+<li>The program, the actual output, and the expected output side by side.</li>
+<li>Whether the problem is consistent or intermittent. Intermittent failures often indicate a parallel execution issue.</li>
+</ul>
+<pre><code>Expected: 55
+Actual:   0</code></pre>
+
+<h3 id="crash">Crash or panic</h3>
+<p>The interpreter panics or segfaults. Include the full panic message. Run the <strong>debug build</strong> for a clearer error — release builds sometimes produce a silent crash where the debug build gives a Rust panic with a location:</p>
+<pre><code>$ cargo build --bin loft              # builds the debug binary
+$ ./target/debug/loft my_program.loft</code></pre>
+<p>If you installed a release binary, try building from source to get the debug binary. Crashes in the debug build always include enough information to locate the problem.</p>
+
+<h3 id="unexpected-warning">Unexpected warning</h3>
+<p>The compiler emits a warning for code you believe is correct. Include the warning message and why you think the code is intentional.</p>
+
+<h2 id="reducing">Reducing to a minimal example</h2>
+<p>If your original program is large, reduce it before reporting. The process is mechanical:</p>
+<ol>
+<li>Delete any function or struct that is not involved in triggering the problem. Run after each deletion to confirm the bug is still present.</li>
+<li>Replace complex expressions with simpler ones — literals instead of computed values, small constants instead of large ones.</li>
+<li>If the problem only appears in a <code>for</code> loop, try to reproduce it with a plain assignment instead.</li>
+<li>Stop when removing anything else makes the bug disappear.</li>
+</ol>
+<p>A 5-line reproducer gets a fix in minutes. A 500-line reproducer may sit in the queue for weeks.</p>
+
+<h2 id="feature-requests">Feature requests and design questions</h2>
+<p>Use the GitHub issue tracker for feature requests too, with the label <em>enhancement</em>. Describe the problem you are trying to solve, not just the solution you have in mind — the best implementation may differ from what you imagined, and the problem description helps evaluate trade-offs.</p>
+<p>For questions about language behaviour ("is this a bug or by design?"), use the <em>question</em> label.</p>
+</article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

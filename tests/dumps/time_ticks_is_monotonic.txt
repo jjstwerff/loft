@@ -1,0 +1,70 @@
+fn test() {
+    t1 = ticks();
+    t2 = ticks();
+    assert(t2 >= t1, "ticks() went backwards: {t1} then {t2}");
+}
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [2] t1(1):long = n_ticks();
+  [3] t2(1):long = n_ticks();
+  [4] n_assert(OpLeLong(t1(1), t2(1)), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "ticks() went backwards: ";
+    OpFormatLong(__work_1(1), t1(1), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " then ");
+    OpFormatLong(__work_1(1), t2(1), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "ticks_is_monotonic", 4i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for ticks_is_monotonic:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [2] StaticCall(n_ticks) var=t1[28]:long
+   4[36]: [3] StaticCall(n_ticks) var=t2[36]:long
+   7[44]: [4] VarLong(var[28]) -> long var=t1[28]:long
+  10[52]: VarLong(var[36]) -> long var=t2[36]:long
+  13[60]: LeLong(v1: long, v2: long) -> boolean
+  14[45]: ClearText(var[4]) var=__work_1[4]:text
+  17[45]: ConstText(_value="ticks() went backwards: ") -> text
+  43[61]: AppendText(var[4], v1: text)
+  46[45]: VarLong(var[28]) -> long var=t1[28]:long
+  49[53]: ConstInt(val=0) -> integer
+  54[57]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  61[45]: ConstText(_value=" then ") -> text
+  69[61]: AppendText(var[4], v1: text)
+  72[45]: VarLong(var[36]) -> long var=t2[36]:long
+  75[53]: ConstInt(val=0) -> integer
+  80[57]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  87[45]: VarText(var[4]) -> text var=__work_1[4]:text
+  90[61]: ConstText(_value="ticks_is_monotonic") -> text
+ 110[77]: ConstInt(val=4) -> integer
+ 115[81]: StaticCall(n_assert)
+ 118[44]: FreeText(var[4])
+ 121[44]: Return(ret=0, value=0, discard=44)
+
+Execute test:
+    0:[8] [2] Text()
+    1:[32] StaticCall(n_ticks)
+    4:[40] StaticCall(n_ticks)
+    7:[48] VarLong(var[32]=t1) -> 109073[48]
+   10:[56] VarLong(var[40]=t2) -> 109162[56]
+   13:[64] LeLong(v1=109073[48], v2=109162[56]) -> true[48]
+   14:[49] ClearText(var[8]=__work_1)
+   17:[49] ConstText(_value="ticks() went backwards: ") -> "ticks() went backwards: "[49]
+   43:[65] AppendText(var[8], v1="ticks() went backwards: "[49])
+   46:[49] VarLong(var[32]=t1) -> 109073[49]
+   49:[57] ConstInt(val=0) -> 0[57]
+   54:[61] FormatLong(var[8], val=109073[49], radix=10, width=0[57], token=32, plus=false, note=false)
+   61:[49] ConstText(_value=" then ") -> " then "[49]
+   69:[65] AppendText(var[8], v1=" then "[49])
+   72:[49] VarLong(var[40]=t2) -> 109162[49]
+   75:[57] ConstInt(val=0) -> 0[57]
+   80:[61] FormatLong(var[8], val=109162[49], radix=10, width=0[57], token=32, plus=false, note=false)
+   87:[49] VarText(var[8]=__work_1) -> "ticks() went backwards: 109073 then 109162"[49]
+   90:[65] ConstText(_value="ticks_is_monotonic") -> "ticks_is_monotonic"[65]
+  110:[81] ConstInt(val=4) -> 4[81]
+  115:[85] StaticCall(n_assert)
+  118:[48] FreeText(var[8])
+  121:[48] Return(ret=4294967295[4], value=0, discard=44)
+Finished

@@ -1,0 +1,86 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Store Locks
+// @TITLE: Immutability with const and runtime store locks
+
+// Loft gives you two separate ways to protect a value from accidental changes:
+//
+// 1. **Compile-time const**: mark a variable or parameter with 'const' and the
+//    compiler refuses to compile any code that tries to reassign it. The check
+//    happens before the program even runs — zero runtime cost.
+//
+// 2. **Runtime lock**: the '#lock' attribute on a reference lets you lock a
+//    store at runtime so that any write attempt panics immediately, even across
+//    function boundaries. This is useful for debugging: turn it on when you
+//    suspect an unexpected mutation.
+
+struct Counter {
+    value: integer
+}
+
+// ## const parameters
+// 'const' on a parameter is a compile-time promise: "this function will not
+// modify this value." The compiler enforces it — any assignment to a const
+// parameter is a compile error, caught before you run anything.
+fn read_value(self: const Counter) -> integer {
+    self.value
+}
+
+// A non-const parameter leaves the store unlocked so the function can write.
+fn increment(self: Counter) {
+    self.value += 1
+}
+
+fn main() {
+    // ## const local variables
+    // Declare a local variable with 'const' to signal that it will not change
+    // after its first assignment. The compiler rejects any later assignment to
+    // it — reassigning or appending to a const variable is a compile error.
+    //
+    // This is handy for configuration values or lookup tables that should never
+    // be overwritten by accident deep inside a long function.
+    const limit = 100;
+    assert(limit == 100, "const integer is readable");
+
+    // const also works for struct references.
+    const cfg = Counter { value: 42 };
+    assert(cfg.value == 42, "const reference is readable");
+
+    // Passing a const reference to a const parameter is always allowed.
+    assert(read_value(cfg) == 42, "const passed to const param");
+
+    // ## Calling methods on const references
+    // A non-const method can still be called on a non-const variable even
+    // after you have manually locked the store; the lock is a runtime check.
+    c = Counter { value: 10 };
+    increment(c);
+    assert(c.value == 11, "increment modified c");
+
+    // ## Runtime store locks with #lock
+    // '#lock' is an attribute on any reference variable.
+    // Setting it to true turns on a runtime guard: any write to that store
+    // will panic immediately, wherever it happens.
+    // A freshly created reference starts unlocked.
+    d = Counter { value: 5 };
+    assert(!d#lock, "new store starts unlocked");
+
+    d#lock = true;
+    assert(d#lock, "store is locked after assignment");
+
+    // You can still read from a locked store — only writes are blocked.
+    assert(read_value(d) == 5, "locked store is still readable");
+
+    // ## When to use each approach
+    // * Use 'const' on parameters and locals to express your design intent
+    //   and get compile-time safety at zero cost.
+    // * Use '#lock = true' when you want a runtime tripwire: you suspect some
+    //   code path is mutating a value it should not touch, and you want the
+    //   program to panic with a precise location rather than corrupt silently.
+
+    // get_store_lock() is the function form of the #lock attribute.
+    // Both return the same boolean.
+    e = Counter { value: 99 };
+    assert(get_store_lock(e) == e#lock, "function form matches attribute before lock");
+    e#lock = true;
+    assert(get_store_lock(e) == e#lock, "function form matches attribute after lock");
+}

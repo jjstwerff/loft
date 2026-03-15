@@ -1,0 +1,110 @@
+fn return_ref() -> text {
+    a = "12345";
+    return a[0..4];
+}
+
+pub fn test() {
+    test_value = {return_ref()};
+    assert(
+        test_value == "1234",
+        "Test failed {test_value} != \"1234\""
+    );
+}
+fn n_return_ref(a:&text) -> text["a"] {#block(1):text["a"]
+  [2] a(0):&text = "12345";
+  [3] return OpGetTextSub(a(0), 0i32, 4i32);
+}#block(1):text["a"]
+
+byte-code for return_ref:n_return_ref(a: &text[0]) -> text["a"]
+   0[12]: return-address  @abs=2832
+   0[16]: [2] ConstText(_value="12345") -> text var=a[0]:&text
+   7[32]: AppendStackText(var[0], v1: text)
+  10[16]: [3] VarRef(var[0]) -> ref(reference) var=a[0]:&text
+  13[28]: GetStackText(r: ref(reference)) -> text["a"]
+  14[32]: ConstInt(val=0) -> integer
+  19[36]: ConstInt(val=4) -> integer
+  24[40]: GetTextSub(v1: text, from: integer, till: integer) -> text["a"]
+  25[32]: Return(ret=12, value=16, discard=32)
+
+fn n_test() {#block(1):void
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [7] test_value(1):text = {#block(2):text
+    n_return_ref({#default ref(3):ref(reference)["__work_1"]
+      OpCreateStack(__work_1(1));
+    }#default ref(3):ref(reference)["__work_1"]);
+  }#block(2):text;
+  [8] n_assert(OpEqText(test_value(1), "1234"), {#Formatted string(4):text["__work_2"]
+    __work_2(1):text = "Test failed ";
+    OpFormatText(__work_2(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_2(1), " != "1234"");
+    __work_2(1);
+  }#Formatted string(4):text["__work_2"], "return_ref", 9i32);
+  OpFreeText(test_value(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+}#block(1):void
+
+byte-code for return_ref:n_test()
+   0[0]: return-address  @abs=2863
+   0[4]: Text() var=__work_2[4]:text
+   1[28]: Text() var=__work_1[28]:text
+   2[52]: [7] Text() var=test_value[52]:text
+   3[76]: CreateStack(var[28]) -> ref(reference)
+   6[88]: Call(size=0, fn=n_return_ref)
+  13[92]: AppendText(var[52], v1: text)
+  16[76]: [8] VarText(var[52]) -> text var=test_value[52]:text
+  19[92]: ConstText(_value="1234") -> text
+  25[108]: EqText(v1: text, v2: text) -> boolean
+  26[77]: ClearText(var[4]) var=__work_2[4]:text
+  29[77]: ConstText(_value="Test failed ") -> text
+  43[93]: AppendText(var[4], v1: text)
+  46[77]: VarText(var[52]) -> text var=test_value[52]:text
+  49[93]: ConstInt(val=0) -> integer
+  54[97]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+  59[77]: ConstText(_value=" != "1234"") -> text
+  71[93]: AppendText(var[4], v1: text)
+  74[77]: VarText(var[4]) -> text var=__work_2[4]:text
+  77[93]: ConstText(_value="return_ref") -> text
+  89[109]: ConstInt(val=9) -> integer
+  94[113]: StaticCall(n_assert)
+  97[76]: FreeText(var[52])
+ 100[76]: FreeText(var[28])
+ 103[76]: FreeText(var[4])
+ 106[76]: Return(ret=0, value=0, discard=76)
+
+Execute test:
+    0:[8] Text()
+    1:[32] [7] Text()
+    2:[56] Text()
+    3:[80] CreateStack(var[32]) -> ref(0,1,40)[80]
+    6:[92] Call(size=0, fn=n_return_ref)
+ 2832:[96] ConstText(_value="12345") -> "12345"[96]
+ 2839:[112] AppendStackText(var[80], v1="12345"[96])
+ 2842:[96] VarRef(var[80]=a) -> ref(0,1,40)[96]
+ 2845:[108] GetStackText(r=ref(0,1,40)[96]) -> "12345"[96]
+ 2846:[112] ConstInt(val=0) -> 0[112]
+ 2851:[116] ConstInt(val=4) -> 4[116]
+ 2856:[120] GetTextSub(v1="12345"[96], from=0[112], till=4[116]) -> "1234"[96]
+ 2857:[112] Return(ret=2876[92], value=16, discard=32)
+   13:[96] AppendText(var[56], v1="1234"[80])
+   16:[80] VarText(var[56]=test_value) -> "1234"[80]
+   19:[96] ConstText(_value="1234") -> "1234"[96]
+   25:[112] EqText(v1="1234"[80], v2="1234"[96]) -> true[80]
+   26:[81] ClearText(var[8]=__work_2)
+   29:[81] ConstText(_value="Test failed ") -> "Test failed "[81]
+   43:[97] AppendText(var[8], v1="Test failed "[81])
+   46:[81] VarText(var[56]=test_value) -> "1234"[81]
+   49:[97] ConstInt(val=0) -> 0[97]
+   54:[101] FormatText(var[8], val="1234"[81], width=0[97], dir=-1, token=32)
+   59:[81] ConstText(_value=" != "1234"") -> " != \"1234\""[81]
+   71:[97] AppendText(var[8], v1=" != \"1234\""[81])
+   74:[81] VarText(var[8]=__work_2) -> "Test failed 1234 != \"1234\""[81]
+   77:[97] ConstText(_value="return_ref") -> "return_ref"[97]
+   89:[113] ConstInt(val=9) -> 9[113]
+   94:[117] StaticCall(n_assert)
+   97:[80] FreeText(var[56])
+  100:[80] FreeText(var[32])
+  103:[80] FreeText(var[8])
+  106:[80] Return(ret=4294967295[4], value=0, discard=76)
+Finished

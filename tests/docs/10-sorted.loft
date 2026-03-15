@@ -1,0 +1,99 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Sorted
+// @TITLE: Keeping records in sorted order automatically
+
+// A 'sorted' collection holds records in order by one or more key fields.
+// You can look up a record by key instantly and iterate all records in key order.
+// The collection stays sorted as you add new elements — no manual sorting needed.
+// Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
+struct Elm { key: text, value: integer }
+struct Db { map: sorted<Elm[-key]> }
+
+fn main() {
+    // ## Adding Elements
+    // You initialise a sorted collection the same way as a vector.
+    // The elements are automatically placed in the right position as you add them.
+    db = Db { map: [
+        Elm { key: "One",   value: 1 },
+        Elm { key: "Two",   value: 2 },
+        Elm { key: "Three", value: 3 },
+        Elm { key: "Four",  value: 4 }
+    ]};
+
+    // ## Looking Up by Key
+    // Use square brackets with the key value to find a record instantly.
+    // If the key is not present the result is null — you can check it with '!'.
+    assert(db.map["Two"].value == 2, "Key lookup: Two");
+    assert(db.map["Three"].value == 3, "Key lookup: Three");
+    assert(!db.map["Five"], "Missing key returns null");
+    assert(!db.map[null], "Null key returns null");
+
+    // Append new elements with '+='; they are placed in the correct sorted position.
+    db.map += [Elm { key: "Zero", value: 0 }];
+    assert(db.map["Zero"].value == 0, "Newly added element");
+
+    // ## Iterating in Order
+    // A 'for' loop over a sorted collection visits elements in key order.
+    // Here the key is '-key' (descending text), so the order is: Zero, Two, Three, One, Four.
+    sum = 0;
+    for v in db.map {
+        sum = sum * 10 + v.value;
+    }
+    // Zero(0), Two(2), Three(3), One(1), Four(4) → 0*10+2=2, *10+3=23, *10+1=231, *10+4=2314
+    assert(sum == 2314, "Sorted iteration total: {sum}");
+
+    // ## Iterating in Reverse
+    // Wrap the collection in rev() to visit elements from last to first key order.
+    // Here the collection is sorted by '-key' (descending text), so the stored order is
+    // Zero, Two, Three, One, Four.  rev() visits them in the opposite order.
+    rev_sum = 0;
+    for v in rev(db.map) {
+        rev_sum = rev_sum * 10 + v.value;
+    }
+    // Four(4), One(1), Three(3), Two(2), Zero(0) → 4*10+1=41, *10+3=413, *10+2=4132, *10+0=41320
+    assert(rev_sum == 41320, "Reverse iteration total: {rev_sum}");
+
+    // ## Loop Helpers: #first, #count, and #remove
+    // 'v#first' is true for the very first element visited.
+    // 'v#count' is a running index starting at 0.
+    // 'v#remove' removes the current element while iterating.
+    first_key = "";
+    labels = "";
+    for v in db.map {
+        if v#first { first_key = v.key }
+        if !v#first { labels += "," }
+        labels += "{v#count}:{v.key}"
+    }
+    assert(first_key == "Zero", "First element: {first_key}");
+    assert(labels == "0:Zero,1:Two,2:Three,3:One,4:Four", "Labels: {labels}");
+
+    // Remove elements with value > 2 while iterating.
+    for v in db.map if v.value > 2 {
+        v#remove
+    }
+    sum2 = 0;
+    for v in db.map { sum2 += v.value }
+    // Remaining: Zero(0), Two(2), One(1) → sum = 3
+    assert(sum2 == 3, "Sum after remove: {sum2}");
+
+    // ## Removing by Key
+    // Assigning null to a sorted subscript removes the element with that key.
+    // Removing a key that is not present is a safe no-op.
+    db2 = Db { map: [
+        Elm { key: "A", value: 10 },
+        Elm { key: "B", value: 20 },
+        Elm { key: "C", value: 30 }
+    ]};
+    db2.map["B"] = null;
+    assert(!db2.map["B"],          "B was removed");
+    assert(db2.map["A"].value == 10, "A still present");
+    assert(db2.map["C"].value == 30, "C still present");
+    db2.map["missing"] = null;   // no-op; does not panic
+    sum3 = 0;
+    for v in db2.map { sum3 += v.value }
+    assert(sum3 == 40, "Sum after key removal: {sum3}");
+
+    // Note: #index is not available on sorted — use #count for a sequential counter.
+}
+// filling and finding values

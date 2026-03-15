@@ -1,0 +1,264 @@
+struct Point { x: float, y: float }
+fn shifted(self: Point, dx: float, dy: float) -> Point {
+    Point { x: self.x + dx, y: self.y + dy }
+}
+fn test() {
+    p = Point { x: 1.0, y: 2.0 };
+    assert(p.shifted(1.0, 0.0).shifted(0.0, 3.0).x == 2.0, "double chain x");
+    assert(p.shifted(1.0, 0.0).shifted(0.0, 3.0).y == 5.0, "double chain y");
+}
+Type 18:Point[16/8]:
+    x:float[0]
+    y:float[8]
+
+fn t_5Point_shifted(self:Point, dx:float, dy:float) -> Point {#block(1):ref(Point)
+  __ref_1(1):ref(Point) = null;
+  [3] {#Object(2):ref(Point)["__ref_1"]
+    OpDatabase(__ref_1(1), 18i32);
+    OpSetFloat(__ref_1(1), 0i32, OpAddFloat(OpGetFloat(self(0), 0i32), dx(0)));
+    OpSetFloat(__ref_1(1), 8i32, OpAddFloat(OpGetFloat(self(0), 8i32), dy(0)));
+    __ref_1(1);
+  }#Object(2):ref(Point)["__ref_1"];
+}#block(1):ref(Point)
+
+byte-code for inline_ref_call_double_chain:t_5Point_shifted(self: ref(Point)[0], dx: float[12], dy: float[20]) -> ref(Point)
+   0[28]: return-address  @abs=2832
+   0[32]: ConvRefFromNull() -> ref(reference) var=__ref_1[32]:ref(Point) ; [store-alloc]
+   1[44]: [3] Database(var[32], db_tp=18) type=Point 18
+   6[44]: VarRef(var[32]) -> ref(reference) type=Point 18 var=__ref_1[32]:ref(Point)
+   9[56]: VarRef(var[0]) -> ref(reference) type=Point 18 var=self[0]:ref(Point)
+  12[68]: GetFloat(v1: ref(reference), fld=0) -> float
+  15[64]: VarFloat(var[12]) -> float var=dx[12]:float
+  18[72]: AddFloat(v1: float, v2: float) -> float
+  19[64]: SetFloat(v1: ref(reference), fld=0, val: float)
+  22[44]: VarRef(var[32]) -> ref(reference) type=Point 18 var=__ref_1[32]:ref(Point)
+  25[56]: VarRef(var[0]) -> ref(reference) type=Point 18 var=self[0]:ref(Point)
+  28[68]: GetFloat(v1: ref(reference), fld=8) -> float
+  31[64]: VarFloat(var[20]) -> float var=dy[20]:float
+  34[72]: AddFloat(v1: float, v2: float) -> float
+  35[64]: SetFloat(v1: ref(reference), fld=8, val: float)
+  38[44]: VarRef(var[32]) -> ref(reference) type=Point 18 var=__ref_1[32]:ref(Point)
+  41[56]: Return(ret=28, value=12, discard=56) type=Point 18
+
+fn n_test() {#block(1):void
+  [6] p(1):ref(Point) = null;
+  OpDatabase(p(1), 18i32);
+  OpSetFloat(p(1), 0i32, 1f64);
+  OpSetFloat(p(1), 8i32, 2f64);
+  [7] __ref_1(1):ref(Point) = null;
+  __ref_2(1):ref(Point) = null;
+  n_assert(OpEqFloat(OpGetFloat({#inline ref(2):ref(Point)["__ref_2"]
+    __ref_2(1):ref(Point) = t_5Point_shifted({#inline ref(3):ref(Point)["__ref_1"]
+      __ref_1(1):ref(Point) = t_5Point_shifted(p(1), 1f64, 0f64);
+      __ref_1(1);
+    }#inline ref(3):ref(Point)["__ref_1"], 0f64, 3f64);
+    __ref_2(1);
+  }#inline ref(2):ref(Point)["__ref_2"], 0i32), 2f64), "double chain x", "inline_ref_call_double_chain", 7i32);
+  [8] __ref_3(1):ref(Point) = null;
+  __ref_4(1):ref(Point) = null;
+  n_assert(OpEqFloat(OpGetFloat({#inline ref(4):ref(Point)["__ref_4"]
+    __ref_4(1):ref(Point) = t_5Point_shifted({#inline ref(5):ref(Point)["__ref_3"]
+      __ref_3(1):ref(Point) = t_5Point_shifted(p(1), 1f64, 0f64);
+      __ref_3(1);
+    }#inline ref(5):ref(Point)["__ref_3"], 0f64, 3f64);
+    __ref_4(1);
+  }#inline ref(4):ref(Point)["__ref_4"], 8i32), 5f64), "double chain y", "inline_ref_call_double_chain", 8i32);
+  OpFreeRef(__ref_4(1));
+  OpFreeRef(__ref_3(1));
+  OpFreeRef(__ref_2(1));
+  OpFreeRef(__ref_1(1));
+  OpFreeRef(p(1));
+}#block(1):void
+
+byte-code for inline_ref_call_double_chain:n_test()
+   0[0]: return-address  @abs=2879
+   0[4]: [6] ConvRefFromNull() -> ref(reference) var=p[4]:ref(Point) ; [store-alloc]
+   1[16]: Database(var[4], db_tp=18) type=Point 18
+   6[16]: VarRef(var[4]) -> ref(reference) type=Point 18 var=p[4]:ref(Point)
+   9[28]: ConstFloat(val=1) -> float
+  18[36]: SetFloat(v1: ref(reference), fld=0, val: float)
+  21[16]: VarRef(var[4]) -> ref(reference) type=Point 18 var=p[4]:ref(Point)
+  24[28]: ConstFloat(val=2) -> float
+  33[36]: SetFloat(v1: ref(reference), fld=8, val: float)
+  36[16]: [7] NullRefSentinel() -> ref(reference) var=__ref_1[16]:ref(Point)
+  37[28]: NullRefSentinel() -> ref(reference) var=__ref_2[28]:ref(Point)
+  38[40]: VarRef(var[4]) -> ref(reference) type=Point 18 var=p[4]:ref(Point)
+  41[52]: ConstFloat(val=1) -> float
+  50[60]: ConstFloat(val=0) -> float
+  59[68]: Call(size=0, fn=t_5Point_shifted)
+  66[52]: PutRef(var[16], value: ref(reference))
+  69[40]: VarRef(var[16]) -> ref(reference) type=Point 18 var=__ref_1[16]:ref(Point)
+  72[52]: ConstFloat(val=0) -> float
+  81[60]: ConstFloat(val=3) -> float
+  90[68]: Call(size=0, fn=t_5Point_shifted)
+  97[52]: PutRef(var[28], value: ref(reference))
+ 100[40]: VarRef(var[28]) -> ref(reference) type=Point 18 var=__ref_2[28]:ref(Point)
+ 103[52]: GetFloat(v1: ref(reference), fld=0) -> float
+ 106[48]: ConstFloat(val=2) -> float
+ 115[56]: EqFloat(v1: float, v2: float) -> boolean
+ 116[41]: ConstText(_value="double chain x") -> text
+ 132[57]: ConstText(_value="inline_ref_call_double_chain") -> text
+ 162[73]: ConstInt(val=7) -> integer
+ 167[77]: StaticCall(n_assert)
+ 170[40]: [8] NullRefSentinel() -> ref(reference) var=__ref_3[40]:ref(Point)
+ 171[52]: NullRefSentinel() -> ref(reference) var=__ref_4[52]:ref(Point)
+ 172[64]: VarRef(var[4]) -> ref(reference) type=Point 18 var=p[4]:ref(Point)
+ 175[76]: ConstFloat(val=1) -> float
+ 184[84]: ConstFloat(val=0) -> float
+ 193[92]: Call(size=0, fn=t_5Point_shifted)
+ 200[76]: PutRef(var[40], value: ref(reference))
+ 203[64]: VarRef(var[40]) -> ref(reference) type=Point 18 var=__ref_3[40]:ref(Point)
+ 206[76]: ConstFloat(val=0) -> float
+ 215[84]: ConstFloat(val=3) -> float
+ 224[92]: Call(size=0, fn=t_5Point_shifted)
+ 231[76]: PutRef(var[52], value: ref(reference))
+ 234[64]: VarRef(var[52]) -> ref(reference) type=Point 18 var=__ref_4[52]:ref(Point)
+ 237[76]: GetFloat(v1: ref(reference), fld=8) -> float
+ 240[72]: ConstFloat(val=5) -> float
+ 249[80]: EqFloat(v1: float, v2: float) -> boolean
+ 250[65]: ConstText(_value="double chain y") -> text
+ 266[81]: ConstText(_value="inline_ref_call_double_chain") -> text
+ 296[97]: ConstInt(val=8) -> integer
+ 301[101]: StaticCall(n_assert)
+ 304[64]: VarRef(var[52]) -> ref(reference) type=Point 18 var=__ref_4[52]:ref(Point)
+ 307[76]: FreeRef(v1: ref(reference)) ; [store-free]
+ 308[64]: VarRef(var[40]) -> ref(reference) type=Point 18 var=__ref_3[40]:ref(Point)
+ 311[76]: FreeRef(v1: ref(reference)) ; [store-free]
+ 312[64]: VarRef(var[28]) -> ref(reference) type=Point 18 var=__ref_2[28]:ref(Point)
+ 315[76]: FreeRef(v1: ref(reference)) ; [store-free]
+ 316[64]: VarRef(var[16]) -> ref(reference) type=Point 18 var=__ref_1[16]:ref(Point)
+ 319[76]: FreeRef(v1: ref(reference)) ; [store-free]
+ 320[64]: VarRef(var[4]) -> ref(reference) type=Point 18 var=p[4]:ref(Point)
+ 323[76]: FreeRef(v1: ref(reference)) ; [store-free]
+ 324[64]: Return(ret=0, value=0, discard=64)
+
+Execute test:
+    0:[8] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] Database(var[8], db_tp=18)
+    6:[20] VarRef(var[8]=p) -> ref(1,1,8)={}[20]
+    9:[32] ConstFloat(val=1) -> 1[32]
+   18:[40] SetFloat(v1=ref(1,1,8)[20], fld=0, val=1[32])
+   21:[20] VarRef(var[8]=p) -> ref(1,1,8)={x:1}[20]
+   24:[32] ConstFloat(val=2) -> 2[32]
+   33:[40] SetFloat(v1=ref(1,1,8)[20], fld=8, val=2[32])
+   36:[20] NullRefSentinel() -> ref(65535,0,0)[20]
+   37:[32] NullRefSentinel() -> ref(65535,0,0)[32]
+   38:[44] VarRef(var[8]=p) -> ref(1,1,8)={x:1,y:2}[44]
+   41:[56] ConstFloat(val=1) -> 1[56]
+   50:[64] ConstFloat(val=0) -> 0[64]
+   59:[72] Call(size=0, fn=t_5Point_shifted)
+ 2832:[76] [3] ConvRefFromNull() -> ref(2,0,8)[76]
+  ; store-alloc nr=2 max=3
+ 2833:[88] Database(var[76], db_tp=18)
+ 2838:[88] VarRef(var[76]=__ref_1) -> ref(2,1,8)={}[88]
+ 2841:[100] VarRef(var[44]=self) -> ref(1,1,8)={x:1,y:2}[100]
+ 2844:[112] GetFloat(v1=ref(1,1,8)[100], fld=0) -> 1[100]
+ 2847:[108] VarFloat(var[56]=dx) -> 1[108]
+ 2850:[116] AddFloat(v1=1[100], v2=1[108]) -> 2[100]
+ 2851:[108] SetFloat(v1=ref(2,1,8)[88], fld=0, val=2[100])
+ 2854:[88] VarRef(var[76]=__ref_1) -> ref(2,1,8)={x:2}[88]
+ 2857:[100] VarRef(var[44]=self) -> ref(1,1,8)={x:1,y:2}[100]
+ 2860:[112] GetFloat(v1=ref(1,1,8)[100], fld=8) -> 2[100]
+ 2863:[108] VarFloat(var[64]=dy) -> 0[108]
+ 2866:[116] AddFloat(v1=2[100], v2=0[108]) -> 2[100]
+ 2867:[108] SetFloat(v1=ref(2,1,8)[88], fld=8, val=2[100])
+ 2870:[88] VarRef(var[76]=__ref_1) -> ref(2,1,8)={x:2,y:2}[88]
+ 2873:[100] Return(ret=2945[72], value=12, discard=56) -> ref(2,1,8)={x:2,y:2}[44]
+   66:[56] PutRef(var[20], value=ref(2,1,8)[44])
+   69:[44] VarRef(var[20]=__ref_1) -> ref(2,1,8)={x:2,y:2}[44]
+   72:[56] ConstFloat(val=0) -> 0[56]
+   81:[64] ConstFloat(val=3) -> 3[64]
+   90:[72] Call(size=0, fn=t_5Point_shifted)
+ 2832:[76] [3] ConvRefFromNull() -> ref(3,0,8)[76]
+  ; store-alloc nr=3 max=4
+ 2833:[88] Database(var[76], db_tp=18)
+ 2838:[88] VarRef(var[76]=__ref_1) -> ref(3,1,8)={}[88]
+ 2841:[100] VarRef(var[44]=self) -> ref(2,1,8)={x:2,y:2}[100]
+ 2844:[112] GetFloat(v1=ref(2,1,8)[100], fld=0) -> 2[100]
+ 2847:[108] VarFloat(var[56]=dx) -> 0[108]
+ 2850:[116] AddFloat(v1=2[100], v2=0[108]) -> 2[100]
+ 2851:[108] SetFloat(v1=ref(3,1,8)[88], fld=0, val=2[100])
+ 2854:[88] VarRef(var[76]=__ref_1) -> ref(3,1,8)={x:2}[88]
+ 2857:[100] VarRef(var[44]=self) -> ref(2,1,8)={x:2,y:2}[100]
+ 2860:[112] GetFloat(v1=ref(2,1,8)[100], fld=8) -> 2[100]
+ 2863:[108] VarFloat(var[64]=dy) -> 3[108]
+ 2866:[116] AddFloat(v1=2[100], v2=3[108]) -> 5[100]
+ 2867:[108] SetFloat(v1=ref(3,1,8)[88], fld=8, val=5[100])
+ 2870:[88] VarRef(var[76]=__ref_1) -> ref(3,1,8)={x:2,y:5}[88]
+ 2873:[100] Return(ret=2976[72], value=12, discard=56) -> ref(3,1,8)={x:2,y:5}[44]
+   97:[56] PutRef(var[32], value=ref(3,1,8)[44])
+  100:[44] VarRef(var[32]=__ref_2) -> ref(3,1,8)={x:2,y:5}[44]
+  103:[56] GetFloat(v1=ref(3,1,8)[44], fld=0) -> 2[44]
+  106:[52] ConstFloat(val=2) -> 2[52]
+  115:[60] EqFloat(v1=2[44], v2=2[52]) -> true[44]
+  116:[45] ConstText(_value="double chain x") -> "double chain x"[45]
+  132:[61] ConstText(_value="inline_ref_call_double_chain") -> "inline_ref_call_double_chain"[61]
+  162:[77] ConstInt(val=7) -> 7[77]
+  167:[81] StaticCall(n_assert)
+  170:[44] NullRefSentinel() -> ref(65535,0,0)[44]
+  171:[56] NullRefSentinel() -> ref(65535,0,0)[56]
+  172:[68] VarRef(var[8]=p) -> ref(1,1,8)={x:1,y:2}[68]
+  175:[80] ConstFloat(val=1) -> 1[80]
+  184:[88] ConstFloat(val=0) -> 0[88]
+  193:[96] Call(size=0, fn=t_5Point_shifted)
+ 2832:[100] [3] ConvRefFromNull() -> ref(4,0,8)[100]
+  ; store-alloc nr=4 max=5
+ 2833:[112] Database(var[100], db_tp=18)
+ 2838:[112] VarRef(var[100]=__ref_1) -> ref(4,1,8)={}[112]
+ 2841:[124] VarRef(var[68]=self) -> ref(1,1,8)={x:1,y:2}[124]
+ 2844:[136] GetFloat(v1=ref(1,1,8)[124], fld=0) -> 1[124]
+ 2847:[132] VarFloat(var[80]=dx) -> 1[132]
+ 2850:[140] AddFloat(v1=1[124], v2=1[132]) -> 2[124]
+ 2851:[132] SetFloat(v1=ref(4,1,8)[112], fld=0, val=2[124])
+ 2854:[112] VarRef(var[100]=__ref_1) -> ref(4,1,8)={x:2}[112]
+ 2857:[124] VarRef(var[68]=self) -> ref(1,1,8)={x:1,y:2}[124]
+ 2860:[136] GetFloat(v1=ref(1,1,8)[124], fld=8) -> 2[124]
+ 2863:[132] VarFloat(var[88]=dy) -> 0[132]
+ 2866:[140] AddFloat(v1=2[124], v2=0[132]) -> 2[124]
+ 2867:[132] SetFloat(v1=ref(4,1,8)[112], fld=8, val=2[124])
+ 2870:[112] VarRef(var[100]=__ref_1) -> ref(4,1,8)={x:2,y:2}[112]
+ 2873:[124] Return(ret=3079[96], value=12, discard=56) -> ref(4,1,8)={x:2,y:2}[68]
+  200:[80] PutRef(var[44], value=ref(4,1,8)[68])
+  203:[68] VarRef(var[44]=__ref_3) -> ref(4,1,8)={x:2,y:2}[68]
+  206:[80] ConstFloat(val=0) -> 0[80]
+  215:[88] ConstFloat(val=3) -> 3[88]
+  224:[96] Call(size=0, fn=t_5Point_shifted)
+ 2832:[100] [3] ConvRefFromNull() -> ref(5,0,8)[100]
+  ; store-alloc nr=5 max=6
+ 2833:[112] Database(var[100], db_tp=18)
+ 2838:[112] VarRef(var[100]=__ref_1) -> ref(5,1,8)={}[112]
+ 2841:[124] VarRef(var[68]=self) -> ref(4,1,8)={x:2,y:2}[124]
+ 2844:[136] GetFloat(v1=ref(4,1,8)[124], fld=0) -> 2[124]
+ 2847:[132] VarFloat(var[80]=dx) -> 0[132]
+ 2850:[140] AddFloat(v1=2[124], v2=0[132]) -> 2[124]
+ 2851:[132] SetFloat(v1=ref(5,1,8)[112], fld=0, val=2[124])
+ 2854:[112] VarRef(var[100]=__ref_1) -> ref(5,1,8)={x:2}[112]
+ 2857:[124] VarRef(var[68]=self) -> ref(4,1,8)={x:2,y:2}[124]
+ 2860:[136] GetFloat(v1=ref(4,1,8)[124], fld=8) -> 2[124]
+ 2863:[132] VarFloat(var[88]=dy) -> 3[132]
+ 2866:[140] AddFloat(v1=2[124], v2=3[132]) -> 5[124]
+ 2867:[132] SetFloat(v1=ref(5,1,8)[112], fld=8, val=5[124])
+ 2870:[112] VarRef(var[100]=__ref_1) -> ref(5,1,8)={x:2,y:5}[112]
+ 2873:[124] Return(ret=3110[96], value=12, discard=56) -> ref(5,1,8)={x:2,y:5}[68]
+  231:[80] PutRef(var[56], value=ref(5,1,8)[68])
+  234:[68] VarRef(var[56]=__ref_4) -> ref(5,1,8)={x:2,y:5}[68]
+  237:[80] GetFloat(v1=ref(5,1,8)[68], fld=8) -> 5[68]
+  240:[76] ConstFloat(val=5) -> 5[76]
+  249:[84] EqFloat(v1=5[68], v2=5[76]) -> true[68]
+  250:[69] ConstText(_value="double chain y") -> "double chain y"[69]
+  266:[85] ConstText(_value="inline_ref_call_double_chain") -> "inline_ref_call_double_chain"[85]
+  296:[101] ConstInt(val=8) -> 8[101]
+  301:[105] StaticCall(n_assert)
+  304:[68] VarRef(var[56]=__ref_4) -> ref(5,1,8)={x:2,y:5}[68]
+  307:[80] FreeRef(v1=ref(5,1,8)[68]) ; store-free max=5
+  308:[68] VarRef(var[44]=__ref_3) -> ref(4,1,8)={x:2,y:2}[68]
+  311:[80] FreeRef(v1=ref(4,1,8)[68]) ; store-free max=4
+  312:[68] VarRef(var[32]=__ref_2) -> ref(3,1,8)={x:2,y:5}[68]
+  315:[80] FreeRef(v1=ref(3,1,8)[68]) ; store-free max=3
+  316:[68] VarRef(var[20]=__ref_1) -> ref(2,1,8)={x:2,y:2}[68]
+  319:[80] FreeRef(v1=ref(2,1,8)[68]) ; store-free max=2
+  320:[68] VarRef(var[8]=p) -> ref(1,1,8)={x:1,y:2}[68]
+  323:[80] FreeRef(v1=ref(1,1,8)[68]) ; store-free max=1
+  324:[68] Return(ret=4294967295[4], value=0, discard=64)
+Finished

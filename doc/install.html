@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Install</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <span class="cur">Install</span> · <a href="roadmap.html">Roadmap</a> · <a href="report.html">Report a problem</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Install</h1>
+<article>
+<p>Loft is a lightweight scripting language with null safety, built-in parallel execution, and a fast interpreter called <strong>loft</strong>. This page shows how to install loft and write your first program.</p>
+
+<h2 id="prerequisites">Prerequisites</h2>
+<p>Building from source requires the Rust toolchain (Rust 1.82 or later). Install it from <a href="https://rustup.rs">rustup.rs</a> if you do not already have it:</p>
+<pre><code>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
+
+<h2 id="install-from-source">Install from source</h2>
+<p>The quickest way to get the <code>loft</code> binary on your PATH:</p>
+<pre><code>cargo install --git https://github.com/jjstwerff/loft --bin loft</code></pre>
+<p>This compiles loft in release mode and places the binary in <code>~/.cargo/bin/</code>, which is already on your PATH if you used rustup.</p>
+
+<h2 id="build-locally">Build locally</h2>
+<p>Clone the repository and build with Cargo:</p>
+<pre><code>git clone https://github.com/jjstwerff/loft
+cd loft
+cargo build --release</code></pre>
+<p>The binary is at <code>target/release/loft</code>. Copy it anywhere on your PATH, for example:</p>
+<pre><code>cp target/release/loft ~/.local/bin/</code></pre>
+
+<h2 id="verify">Verify the installation</h2>
+<pre><code>loft --version</code></pre>
+
+<h2 id="hello-world">Hello, World</h2>
+<p>Create a file called <code>hello.loft</code>:</p>
+<pre><code>fn main() {
+    println("Hello, Loft!");
+}</code></pre>
+<p>Run it:</p>
+<pre><code>loft hello.loft</code></pre>
+<pre><code>Hello, Loft!</code></pre>
+
+<h2 id="second-program">A slightly bigger program</h2>
+<p>Variables, loops, and string interpolation all work without any ceremony:</p>
+<pre><code>fn main() {
+    // Variables are mutable by default; types are inferred.
+    total = 0;
+    for n in 1..=10 {
+        total += n;
+    }
+    println("Sum 1..10 = {total}");
+
+    // Vectors use square-bracket literals.
+    words = ["loft", "is", "fast"];
+    for w in words {
+        print("{w} ");
+    }
+    println("");
+}</code></pre>
+
+<h2 id="standard-library">Standard library</h2>
+<p>The standard library is a set of <code>.loft</code> files bundled alongside the loft binary. They are loaded automatically before your program runs — you do not need any <code>import</code> or <code>use</code> statement to call <code>println</code>, <code>assert</code>, or any other built-in function.</p>
+<p>The full function reference is in the <a href="stdlib.html">Standard Library</a> section of these docs.</p>
+
+<h2 id="using-libraries">Using libraries</h2>
+<p>Place a library file (e.g. <code>lib/myutil.loft</code>) next to your program, then bring it into scope:</p>
+<pre><code>use myutil;
+
+fn main() {
+    result = myutil::compute(42);
+    println("{result}");
+}</code></pre>
+<p>See <a href="17-libraries.html">Libraries</a> for the full search path and naming rules.</p>
+
+<h2 id="editor-setup">Editor setup</h2>
+<p>Loft syntax highlighting extensions are planned. In the meantime:</p>
+<ul>
+<li><strong>VS Code</strong> — use Rust syntax highlighting as a close approximation.</li>
+<li><strong>Vim / Neovim</strong> — associate <code>*.loft</code> with Rust via <code>autocmd BufRead *.loft set filetype=rust</code> in your <code>vimrc</code>.</li>
+<li><strong>Any editor</strong> — the <a href="roadmap.html">Web IDE</a> (in progress) provides syntax highlighting and navigation in the browser.</li>
+</ul>
+
+<h2 id="next-steps">Next steps</h2>
+<ul>
+<li>Read the language overview starting with <a href="01-keywords.html">Keywords and control flow</a>.</li>
+<li>See <a href="00-vs-rust.html">vs Rust</a> if you are coming from Rust.</li>
+<li>Browse the <a href="stdlib.html">Standard Library</a> reference for built-in functions.</li>
+<li>Check the <a href="roadmap.html">Roadmap</a> for planned features.</li>
+</ul>
+</article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

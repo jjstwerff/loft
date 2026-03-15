@@ -1,0 +1,89 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Loft Language
+// @TITLE: A statically-typed scripting language inspired by Rust.
+
+// Welcome to Loft! Loft is a concise, statically-typed language designed to be
+// safe and easy to embed in larger Rust projects. It is great for scripting
+// game logic, configuration, data transformations, and anywhere you want a
+// friendly language backed by a fast Rust runtime.
+//
+// These documentation pages are your guided tour — each page is also a live
+// test, so every example you see has already been verified to work exactly as
+// shown. The best way to get started is to read the pages in order. This first
+// page introduces the handful of ideas that shape every other part of the
+// language.
+
+// ## No type declarations for local variables
+// Loft figures out the type of a variable from what you assign to it.
+// You never write 'let x: integer = 5' — just write 'x = 5' and move on.
+// The compiler still checks types strictly; it just does the bookkeeping for you.
+// If you assign the wrong type later, you get a clear compile error, not a crash.
+
+// ## Implicit return
+// The last expression in a function body is automatically its return value.
+// Short helper functions need no 'return' statement, which keeps them clean.
+// You can still write 'return value;' to exit early from the middle of a function.
+
+// ## Null is visible, not hidden
+// Any value can be null unless you explicitly mark it otherwise.
+// Null means "no value" — like a missing search result or a failed conversion.
+// A null value behaves like false in a condition, so you can test for it with '!'.
+// There is no NullPointerException waiting to surprise you: null is just false.
+
+// ## Text is UTF-8
+// Text in Loft is stored as UTF-8, the same encoding used on the web.
+// 'len()' counts bytes, not visible characters.
+// Be mindful of multi-byte characters like emoji when slicing text by position.
+// Everything from ASCII to emoji to Chinese characters works correctly.
+
+// ## Collections share their records
+// Vectors, sorted trees, and hash maps are not separate silos.
+// They share their underlying storage and can be combined inside a single struct,
+// so you can index the same data in multiple ways without copying anything.
+// For example, a word-frequency counter can keep a vector (insertion order) and
+// a hash (fast name lookup) pointing at the same records simultaneously.
+
+// ## Hello, Loft!
+// Here is a small first program to make things concrete.
+// 'println' prints a line of text to standard output.
+// Format strings let you embed values directly: write the variable inside '{}'.
+
+fn main() {
+    // Variables are declared by assigning a value — no 'let', 'var', or type annotation.
+    // The type is inferred: greeting is text, x and y are integers.
+    greeting = "Hello, Loft!";
+    x = 6;
+    y = 7;
+    assert(x * y == 42, "Arithmetic works as you would expect");
+
+    // Format strings use '{expression}' — you can embed any expression, not just names.
+    assert("{greeting} The answer is {x * y}." == "Hello, Loft! The answer is 42.", "Format strings interpolate expressions");
+
+    // ## Null in practice
+    // Dividing by zero produces null instead of crashing.
+    // In a condition, null is treated as false, so '!' turns it into true.
+    // This makes it easy to handle unexpected values gracefully.
+    zero = 0;
+    result = 12 / zero;
+    assert(!result, "Dividing by zero gives null, which is false-like");
+
+    // ## if is an expression
+    // Every 'if/else' can be used on the right side of an assignment.
+    // The value of the chosen branch becomes the value of the whole expression.
+    label = if x * y == 42 { "correct" } else { "wrong" };
+    assert(label == "correct", "if-expression picked the right branch");
+
+    // ## A quick taste of collections
+    // A vector is an ordered list of values.
+    // Fill it with a list literal using square brackets.
+    // Access elements by 0-based index.
+    // 'len()' tells you how many elements there are.
+    scores = [10, 20, 30, 40];
+    assert(scores[2] == 30, "0-based indexing: element 2 is 30");
+    assert(len(scores) == 4, "len counts elements");
+
+    total = 0;
+    for s in scores { total += s; }
+    assert(total == 100, "Summed all scores: {total}");
+}

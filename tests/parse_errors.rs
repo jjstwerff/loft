@@ -1,0 +1,287 @@
+// Copyright (c) 2022-2025 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+extern crate loft;
+
+mod testing;
+
+#[test]
+fn wrong_parameter() {
+    code!("fn def(i: integer) { }\nfn test() { def(true); }")
+        .error("boolean should be integer on call to def at wrong_parameter:1:40")
+        .warning("Parameter i is never read at wrong_parameter:1:21");
+}
+
+#[test]
+fn wrong_boolean() {
+    code!("enum EType{ Val }\nfn def(t: EType) {}\nfn test() { def(true); }")
+        .error("boolean should be EType on call to def at wrong_boolean:2:38")
+        .warning("Parameter t is never read at wrong_boolean:2:19");
+}
+
+#[test]
+fn unknown_var() {
+    code!("fn test() { a == 1 }").error("Unknown variable 'a' at unknown_var:1:19");
+}
+
+#[test]
+fn use_before_define() {
+    code!("fn test() { if a == 1 { panic(); }; a = 1; }")
+        .error("Unknown variable 'a' at use_before_define:1:22");
+}
+
+#[test]
+fn wrong_text() {
+    code!("fn rout(a: integer) -> integer {if a > 4 {return \"a\"} 2}\nfn test() {}")
+        .error("text should be integer on return at wrong_text:1:53");
+}
+
+#[test]
+fn empty_return() {
+    code!("fn routine(a: integer) -> integer {if a > 4 {return} 1}\nfn test() {}")
+        .error("Expect expression after return at empty_return:1:53");
+}
+
+#[test]
+fn wrong_void() {
+    code!("fn rout(a: integer) {if a > 4 {return 12}}\nfn test() {}")
+        .error("Expect no expression after return at wrong_void:1:42");
+}
+
+#[test]
+fn wrong_break() {
+    code!("fn test() {break}").error("Cannot break outside a loop at wrong_break:1:18");
+}
+
+#[test]
+fn wrong_continue() {
+    code!("fn test() {continue}").error("Cannot continue outside a loop at wrong_continue:1:21");
+}
+
+#[test]
+fn double_field_name() {
+    code!("fn test(a: integer, b: integer, a: integer) { if a>b {} }")
+        .error("Double attribute 'test.a' at double_field_name:1:35");
+}
+
+#[test]
+fn incorrect_name() {
+    code!("type something;\nfn something(a: integer) {}")
+        .error("Cannot redefine Type something from incorrect_name:1:16 at incorrect_name:2:27")
+        .error("Expect type definitions to be in camel case style at incorrect_name:1:16");
+}
+
+#[test]
+fn wrong_compare() {
+    code!("enum EType{ V1 }\nenum Next{ V2 }\nfn test() { V1 == V2; }")
+        .error("No matching operator '==' on 'EType' and 'Next' at wrong_compare:3:21");
+}
+
+#[test]
+fn wrong_plus() {
+    code!("fn test() {(1 + \"a\")}")
+        .error("No matching operator '+' on 'integer' and 'text' at wrong_plus:1:20");
+}
+
+#[test]
+fn wrong_if() {
+    code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
+        .error("text should be integer on else at wrong_if:2:1");
+}
+
+#[test]
+fn wrong_assign() {
+    code!("enum EType { V1 }\nfn test() {a = 1; a = V1 }")
+        .error("Variable 'a' cannot change type from integer to EType at wrong_assign:2:27");
+}
+
+#[test]
+fn mixed_enums() {
+    code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(V1) }")
+        .error("E1 should be E2 on call to a at mixed_enums:4:19");
+}
+
+#[test]
+fn wrong_cast() {
+    code!("enum E1 { V1 }\nfn test() { V1 as float }")
+        .error("Unknown cast from E1 to float at wrong_cast:2:26");
+}
+
+#[test]
+fn field_type() {
+    code!("struct T { v: u8 }\nfn test() { r = T { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
+        .error("Cannot write integer(0, 255) on field T.v:text at field_type:2:29");
+}
+
+#[test]
+fn key_field() {
+    code!(
+        "struct T { n: text, v: u16 }
+struct N { d: vector<T>, h: hash<T[n]> }
+fn test() {
+  s = N { d:[T {n: \"a\", v:12} ] };
+  s.d[0].v = 13;
+  s.d[0].n = \"b\";
+}"
+    )
+    .error("Cannot write to key field T.n create a record instead at key_field:6:18");
+}
+
+#[test]
+fn undefined() {
+    code!("fn test(v: V) -> V { v }").error("Undefined type V at undefined:1:14");
+}
+
+#[test]
+fn undefined_return() {
+    code!("fn test(v: integer) -> V { v }").error("Undefined type V at undefined_return:1:27");
+}
+
+#[test]
+fn undefined_as() {
+    code!("fn test(v: integer) -> long { v as V }").error("Undefined type V at undefined_as:1:39");
+}
+
+#[test]
+fn undefined_enum() {
+    code!("enum E1 { V1 }\nfn test(v: E1) -> boolean { v > V2 }")
+        .error("Unknown variable 'V2' at undefined_enum:2:37");
+}
+
+#[test]
+fn unknown_sizeof() {
+    code!("fn test() { sizeof(C); }")
+        .error("Expect a variable or type after sizeof at unknown_sizeof:1:22")
+        .error("Unknown variable 'C' at unknown_sizeof:1:22");
+}
+
+#[test]
+fn index_non_indexable() {
+    code!("fn test() { v = 5; v[1]; }").error("Indexing a non vector at index_non_indexable:1:23");
+}
+
+#[test]
+fn fn_name_as_param_type() {
+    code!("fn helper() {}\nfn test(v: helper) {}")
+        .error("Undefined type helper at fn_name_as_param_type:2:19");
+}
+
+#[test]
+fn fn_name_as_typedef() {
+    code!("fn helper() {}\ntype Alias = helper;\nfn test() { 1 }")
+        .error("Undefined type helper at fn_name_as_typedef:2:21");
+}
+
+#[test]
+fn missing_variant_impl() {
+    // area() is only defined for Circle; Rect has no area() — expect a warning at Rect's definition.
+    code!(
+        "enum Shape {\n    Circle { r: float },\n    Rect { w: float, h: float }\n}\nfn area(self: Circle) -> float { self.r * self.r }\nfn test() { 1 + 1; }"
+    )
+    .warning("no implementation of 'area' for variant 'Rect' at missing_variant_impl:3:11");
+}
+
+#[test]
+fn stub_suppresses_missing_variant_warning() {
+    // Rect has an empty-body stub — no warning should be emitted for either variant.
+    code!(
+        "enum Shape {\n    Circle { r: float },\n    Rect { w: float, h: float }\n}\nfn area(self: Circle) -> float { self.r * self.r }\nfn area(self: Rect) -> float { }\nfn test() { 1 + 1; }"
+    );
+    // no .warning() → assert_diagnostics expects an empty diagnostic set
+}
+
+// Direct call to stub (empty-body variant method) must not panic
+#[test]
+fn direct_call_to_stub() {
+    // Calling r.area() where area is a stub for Rect must compile without panic.
+    code!(
+        "enum Shape { Circle { r: float }, Rect { w: float, h: float } }
+fn area(self: Circle) -> float { self.r * self.r }
+fn area(self: Rect) -> float { }
+fn test() { r = Rect { w: 3.0, h: 4.0 }; r.area(); }"
+    );
+    // no .error() → compilation must succeed
+}
+
+// Direct call to a method that exists on the enum but has no implementation for the variant
+#[test]
+fn direct_call_unimplemented_variant() {
+    // r.area() where Rect has no area method at all must give an error, not a panic.
+    code!(
+        "enum Shape { Circle { r: float }, Rect { w: float, h: float } }
+fn area(self: Circle) -> float { self.r * self.r }
+fn test() { r = Rect { w: 3.0, h: 4.0 }; r.area(); }"
+    )
+    .error("Unknown field Rect.area at direct_call_unimplemented_variant:3:49")
+    .warning(
+        "no implementation of 'area' for variant 'Rect' at direct_call_unimplemented_variant:1:41",
+    );
+}
+
+// --- parallel_for: extra context-argument count validation ---
+
+#[test]
+fn parallel_for_missing_context_arg() {
+    // Worker expects 1 extra context arg (m) but none is provided.
+    code!(
+        "struct Item { v: integer } \
+         fn scale(r: const Item, m: integer) -> integer { r.v * m } \
+         fn test() { items = [Item{v:1}]; parallel_for(fn scale, items, 1); }"
+    )
+    .error("parallel_for: wrong number of extra arguments: worker expects 1, got 0 at parallel_for_missing_context_arg:1:153");
+}
+
+#[test]
+fn parallel_for_unexpected_context_arg() {
+    // Worker expects 0 extra args but 1 is provided.
+    code!(
+        "struct Item { v: integer } \
+         fn id(r: const Item) -> integer { r.v } \
+         fn test() { items = [Item{v:1}]; mult = 3; parallel_for(fn id, items, 1, mult); }"
+    )
+    .error("parallel_for: wrong number of extra arguments: worker expects 0, got 1 at parallel_for_unexpected_context_arg:1:147");
+}
+
+#[test]
+fn parallel_for_too_many_context_args() {
+    // Worker expects 1 extra arg but 2 are provided.
+    code!(
+        "struct Item { v: integer } \
+         fn scale(r: const Item, m: integer) -> integer { r.v * m } \
+         fn test() { items = [Item{v:1}]; a = 2; b = 3; parallel_for(fn scale, items, 1, a, b); }"
+    )
+    .error("parallel_for: wrong number of extra arguments: worker expects 1, got 2 at parallel_for_too_many_context_args:1:173");
+}
+
+// --- For-loop mutation guards ---
+
+#[test]
+fn add_to_iterated_vector() {
+    // `v += elem` where v is currently being iterated is unsound: get_vector re-reads
+    // the length each step, so new elements are visited — risking an infinite loop.
+    code!("fn test() { v = [1, 2, 3]; for e in v { v += [4]; } }")
+        .error("Cannot add elements to 'v' while it is being iterated — use a separate collection or add after the loop at add_to_iterated_vector:1:47");
+}
+
+#[test]
+fn remove_from_iterated_vector_is_allowed() {
+    // `e#remove` adjusts the iterator position after removal — it is the designed,
+    // safe way to remove the current element during iteration.  No error expected.
+    code!("fn test() { v = [1, 2, 3]; for e in v if e > 1 { e#remove; } }");
+}
+
+#[test]
+fn add_to_outer_loop_iterated() {
+    // The guard catches mutations of a collection iterated by an *outer* loop too.
+    code!(
+        "fn test() { v = [1, 2, 3]; for e in v { for n in 1..3 { v += [n]; } } }"
+    )
+    .error("Cannot add elements to 'v' while it is being iterated — use a separate collection or add after the loop at add_to_outer_loop_iterated:1:63");
+}
+
+#[test]
+fn spacial_not_implemented() {
+    // spacial<T> is a reserved keyword; all uses must produce a compile error.
+    code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point, x, y> }\nfn test() {}")
+        .error("spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
+}

@@ -1,0 +1,201 @@
+struct Rec { x: integer }
+fn test() {
+    total = 0;
+    { f = Rec { x: 1 }; total += f.x; }
+    { f = Rec { x: 2 }; total += f.x; }
+    c = Rec { x: 99 };
+    { f = Rec { x: 3 }; total += f.x; }
+    total += c.x;
+    assert(total == 6 + 99, "total: {total}");
+}
+Type 18:Rec[4/4]:
+    x:integer[0]
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [3] total(1):integer = 0i32;
+  [4] {#block(2):void
+    f(2):ref(Rec) = null;
+    OpDatabase(f(2), 18i32);
+    OpSetInt(f(2), 0i32, 1i32);
+    total(1):integer = OpAddInt(total(1), OpGetInt(f(2), 0i32));
+    OpFreeRef(f(2));
+  }#block(2):void;
+  [5] {#block(3):void
+    f(3):ref(Rec) = null;
+    OpDatabase(f(3), 18i32);
+    OpSetInt(f(3), 0i32, 2i32);
+    total(1):integer = OpAddInt(total(1), OpGetInt(f(3), 0i32));
+    OpFreeRef(f(3));
+  }#block(3):void;
+  [6] c(1):ref(Rec) = null;
+  OpDatabase(c(1), 18i32);
+  OpSetInt(c(1), 0i32, 99i32);
+  [7] {#block(4):void
+    f(4):ref(Rec) = null;
+    OpDatabase(f(4), 18i32);
+    OpSetInt(f(4), 0i32, 3i32);
+    total(1):integer = OpAddInt(total(1), OpGetInt(f(4), 0i32));
+    OpFreeRef(f(4));
+  }#block(4):void;
+  [8] total(1):integer = OpAddInt(total(1), OpGetInt(c(1), 0i32));
+  [9] n_assert(OpEqInt(total(1), OpAddInt(6i32, 99i32)), {#Formatted string(5):text["__work_1"]
+    __work_1(1):text = "total: ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(total(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(5):text["__work_1"], "issue_29_reused_refname_with_later_different_var", 9i32);
+  OpFreeRef(c(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for issue_29_reused_refname_with_later_different_var:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [3] ConstInt(val=0) -> integer var=total[28]:integer
+   6[32]: [4] ConvRefFromNull() -> ref(reference) var=f[32]:ref(Rec) ; [store-alloc]
+   7[44]: Database(var[32], db_tp=18) type=Rec 18
+  12[44]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=f[32]:ref(Rec)
+  15[56]: ConstInt(val=1) -> integer
+  20[60]: SetInt(v1: ref(reference), fld=0, val: integer)
+  23[44]: VarInt(var[28]) -> integer var=total[28]:integer
+  26[48]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=f[32]:ref(Rec)
+  29[60]: GetInt(v1: ref(reference), fld=0) -> integer
+  32[52]: AddInt(v1: integer, v2: integer) -> integer
+  33[48]: PutInt(var[28], value: integer)
+  36[44]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=f[32]:ref(Rec)
+  39[56]: FreeRef(v1: ref(reference)) ; [store-free]
+  40[44]: FreeStack(value=0, discard=12)
+  44[32]: [5] ConvRefFromNull() -> ref(reference) var=f[32]:ref(Rec) ; [store-alloc]
+  45[44]: Database(var[32], db_tp=18) type=Rec 18
+  50[44]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=f[32]:ref(Rec)
+  53[56]: ConstInt(val=2) -> integer
+  58[60]: SetInt(v1: ref(reference), fld=0, val: integer)
+  61[44]: VarInt(var[28]) -> integer var=total[28]:integer
+  64[48]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=f[32]:ref(Rec)
+  67[60]: GetInt(v1: ref(reference), fld=0) -> integer
+  70[52]: AddInt(v1: integer, v2: integer) -> integer
+  71[48]: PutInt(var[28], value: integer)
+  74[44]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=f[32]:ref(Rec)
+  77[56]: FreeRef(v1: ref(reference)) ; [store-free]
+  78[44]: FreeStack(value=0, discard=12)
+  82[32]: [6] ConvRefFromNull() -> ref(reference) var=c[32]:ref(Rec) ; [store-alloc]
+  83[44]: Database(var[32], db_tp=18) type=Rec 18
+  88[44]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=c[32]:ref(Rec)
+  91[56]: ConstInt(val=99) -> integer
+  96[60]: SetInt(v1: ref(reference), fld=0, val: integer)
+  99[44]: [7] ConvRefFromNull() -> ref(reference) var=f[44]:ref(Rec) ; [store-alloc]
+ 100[56]: Database(var[44], db_tp=18) type=Rec 18
+ 105[56]: VarRef(var[44]) -> ref(reference) type=Rec 18 var=f[44]:ref(Rec)
+ 108[68]: ConstInt(val=3) -> integer
+ 113[72]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 116[56]: VarInt(var[28]) -> integer var=total[28]:integer
+ 119[60]: VarRef(var[44]) -> ref(reference) type=Rec 18 var=f[44]:ref(Rec)
+ 122[72]: GetInt(v1: ref(reference), fld=0) -> integer
+ 125[64]: AddInt(v1: integer, v2: integer) -> integer
+ 126[60]: PutInt(var[28], value: integer)
+ 129[56]: VarRef(var[44]) -> ref(reference) type=Rec 18 var=f[44]:ref(Rec)
+ 132[68]: FreeRef(v1: ref(reference)) ; [store-free]
+ 133[56]: FreeStack(value=0, discard=12)
+ 137[44]: [8] VarInt(var[28]) -> integer var=total[28]:integer
+ 140[48]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=c[32]:ref(Rec)
+ 143[60]: GetInt(v1: ref(reference), fld=0) -> integer
+ 146[52]: AddInt(v1: integer, v2: integer) -> integer
+ 147[48]: PutInt(var[28], value: integer)
+ 150[44]: [9] VarInt(var[28]) -> integer var=total[28]:integer
+ 153[48]: ConstInt(val=6) -> integer
+ 158[52]: ConstInt(val=99) -> integer
+ 163[56]: AddInt(v1: integer, v2: integer) -> integer
+ 164[52]: EqInt(v1: integer, v2: integer) -> boolean
+ 165[45]: ClearText(var[4]) var=__work_1[4]:text
+ 168[45]: ConstText(_value="total: ") -> text
+ 177[61]: AppendText(var[4], v1: text)
+ 180[45]: VarInt(var[28]) -> integer var=total[28]:integer
+ 183[49]: ConvLongFromInt(v1: integer) -> long
+ 184[53]: ConstInt(val=0) -> integer
+ 189[57]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 196[45]: VarText(var[4]) -> text var=__work_1[4]:text
+ 199[61]: ConstText(_value="issue_29_reused_refname_with_later_different_var") -> text
+ 249[77]: ConstInt(val=9) -> integer
+ 254[81]: StaticCall(n_assert)
+ 257[44]: VarRef(var[32]) -> ref(reference) type=Rec 18 var=c[32]:ref(Rec)
+ 260[56]: FreeRef(v1: ref(reference)) ; [store-free]
+ 261[44]: FreeText(var[4])
+ 264[44]: Return(ret=0, value=0, discard=44)
+
+Execute test:
+    0:[8] [3] Text()
+    1:[32] ConstInt(val=0) -> 0[32]
+    6:[36] ConvRefFromNull() -> ref(1,0,8)[36]
+  ; store-alloc nr=1 max=2
+    7:[48] Database(var[36], db_tp=18)
+   12:[48] VarRef(var[36]=f) -> ref(1,1,8)={}[48]
+   15:[60] ConstInt(val=1) -> 1[60]
+   20:[64] SetInt(v1=ref(1,1,8)[48], fld=0, val=1[60])
+   23:[48] VarInt(var[32]=total) -> 0[48]
+   26:[52] VarRef(var[36]=f) -> ref(1,1,8)={x:1}[52]
+   29:[64] GetInt(v1=ref(1,1,8)[52], fld=0) -> 1[52]
+   32:[56] AddInt(v1=0[48], v2=1[52]) -> 1[48]
+   33:[52] PutInt(var[32], value=1[48])
+   36:[48] VarRef(var[36]=f) -> ref(1,1,8)={x:1}[48]
+   39:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+   40:[48] FreeStack(value=0, discard=12)
+   44:[36] ConvRefFromNull() -> ref(1,0,8)[36]
+  ; store-alloc nr=1 max=2
+   45:[48] Database(var[36], db_tp=18)
+   50:[48] VarRef(var[36]=f) -> ref(1,1,8)={}[48]
+   53:[60] ConstInt(val=2) -> 2[60]
+   58:[64] SetInt(v1=ref(1,1,8)[48], fld=0, val=2[60])
+   61:[48] VarInt(var[32]=total) -> 1[48]
+   64:[52] VarRef(var[36]=f) -> ref(1,1,8)={x:2}[52]
+   67:[64] GetInt(v1=ref(1,1,8)[52], fld=0) -> 2[52]
+   70:[56] AddInt(v1=1[48], v2=2[52]) -> 3[48]
+   71:[52] PutInt(var[32], value=3[48])
+   74:[48] VarRef(var[36]=f) -> ref(1,1,8)={x:2}[48]
+   77:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+   78:[48] FreeStack(value=0, discard=12)
+   82:[36] ConvRefFromNull() -> ref(1,0,8)[36]
+  ; store-alloc nr=1 max=2
+   83:[48] Database(var[36], db_tp=18)
+   88:[48] VarRef(var[36]=c) -> ref(1,1,8)={}[48]
+   91:[60] ConstInt(val=99) -> 99[60]
+   96:[64] SetInt(v1=ref(1,1,8)[48], fld=0, val=99[60])
+   99:[48] ConvRefFromNull() -> ref(2,0,8)[48]
+  ; store-alloc nr=2 max=3
+  100:[60] Database(var[48], db_tp=18)
+  105:[60] VarRef(var[48]=f) -> ref(2,1,8)={}[60]
+  108:[72] ConstInt(val=3) -> 3[72]
+  113:[76] SetInt(v1=ref(2,1,8)[60], fld=0, val=3[72])
+  116:[60] VarInt(var[32]=total) -> 3[60]
+  119:[64] VarRef(var[48]=f) -> ref(2,1,8)={x:3}[64]
+  122:[76] GetInt(v1=ref(2,1,8)[64], fld=0) -> 3[64]
+  125:[68] AddInt(v1=3[60], v2=3[64]) -> 6[60]
+  126:[64] PutInt(var[32], value=6[60])
+  129:[60] VarRef(var[48]=f) -> ref(2,1,8)={x:3}[60]
+  132:[72] FreeRef(v1=ref(2,1,8)[60]) ; store-free max=2
+  133:[60] FreeStack(value=0, discard=12)
+  137:[48] VarInt(var[32]=total) -> 6[48]
+  140:[52] VarRef(var[36]=c) -> ref(1,1,8)={x:99}[52]
+  143:[64] GetInt(v1=ref(1,1,8)[52], fld=0) -> 99[52]
+  146:[56] AddInt(v1=6[48], v2=99[52]) -> 105[48]
+  147:[52] PutInt(var[32], value=105[48])
+  150:[48] VarInt(var[32]=total) -> 105[48]
+  153:[52] ConstInt(val=6) -> 6[52]
+  158:[56] ConstInt(val=99) -> 99[56]
+  163:[60] AddInt(v1=6[52], v2=99[56]) -> 105[52]
+  164:[56] EqInt(v1=105[48], v2=105[52]) -> true[48]
+  165:[49] ClearText(var[8]=__work_1)
+  168:[49] ConstText(_value="total: ") -> "total: "[49]
+  177:[65] AppendText(var[8], v1="total: "[49])
+  180:[49] VarInt(var[32]=total) -> 105[49]
+  183:[53] ConvLongFromInt(v1=105[49]) -> 105[49]
+  184:[57] ConstInt(val=0) -> 0[57]
+  189:[61] FormatLong(var[8], val=105[49], radix=10, width=0[57], token=32, plus=false, note=false)
+  196:[49] VarText(var[8]=__work_1) -> "total: 105"[49]
+  199:[65] ConstText(_value="issue_29_reused_refname_with_later_different_var") -> "issue_29_reused_refname_with_later_different_var"[65]
+  249:[81] ConstInt(val=9) -> 9[81]
+  254:[85] StaticCall(n_assert)
+  257:[48] VarRef(var[36]=c) -> ref(1,1,8)={x:99}[48]
+  260:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+  261:[48] FreeText(var[8])
+  264:[48] Return(ret=4294967295[4], value=0, discard=44)
+Finished

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Math</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <span class="cur">Math</span> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Math</h1>
+<article>
+<div class="section-desc"><p>Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision.</p></div>
+<div class="item">
+<pre><code>pub fn abs(both: integer) -&gt; integer</code></pre>
+<p>Absolute value. Removes the sign from a negative integer.</p>
+</div>
+<div class="item">
+<pre><code>pub fn abs(both: long) -&gt; long</code></pre>
+<p>Absolute value for long integers.</p>
+</div>
+<div class="item">
+<pre><code>pub fn abs(both: single) -&gt; single</code></pre>
+<p>Absolute value for single-precision floats.</p>
+</div>
+<div class="item">
+<pre><code>pub fn cos(both: single) -&gt; single</code></pre>
+<p>Cosine. Use for circular motion: x = r * cos(angle).</p>
+</div>
+<div class="item">
+<pre><code>pub fn sin(both: single) -&gt; single</code></pre>
+<p>Sine. Use for circular motion: y = r * sin(angle).</p>
+</div>
+<div class="item">
+<pre><code>pub fn tan(both: single) -&gt; single</code></pre>
+<p>Tangent. Use for slopes and perspective projection.</p>
+</div>
+<div class="item">
+<pre><code>pub fn acos(both: single) -&gt; single</code></pre>
+<p>Arc cosine. Returns the angle (in radians) whose cosine is v.</p>
+</div>
+<div class="item">
+<pre><code>pub fn asin(both: single) -&gt; single</code></pre>
+<p>Arc sine. Returns the angle whose sine is v.</p>
+</div>
+<div class="item">
+<pre><code>pub fn atan(both: single) -&gt; single</code></pre>
+<p>Arc tangent of a single value. Returns angle in (-PI/2, PI/2).</p>
+</div>
+<div class="item">
+<pre><code>pub fn ceil(both: single) -&gt; single</code></pre>
+<p>Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.</p>
+</div>
+<div class="item">
+<pre><code>pub fn floor(both: single) -&gt; single</code></pre>
+<p>Round down to the nearest integer value. Use to convert a float position to a tile index.</p>
+</div>
+<div class="item">
+<pre><code>pub fn round(both: single) -&gt; single</code></pre>
+<p>Round to the nearest integer value (half rounds away from zero).</p>
+</div>
+<div class="item">
+<pre><code>pub fn sqrt(both: single) -&gt; single</code></pre>
+<p>Square root. Use for distances and normalization.</p>
+</div>
+<div class="item">
+<pre><code>pub fn atan2(both: single, v2: single) -&gt; single</code></pre>
+<p>Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when you have separate x/y components.</p>
+</div>
+<div class="item">
+<pre><code>pub fn log(both: single, v2: single) -&gt; single</code></pre>
+<p>Logarithm of v in the given base. Use for converting between scales (e.g., decibels).</p>
+</div>
+<div class="item">
+<pre><code>pub fn pow(both: single, v2: single) -&gt; single</code></pre>
+<p>Raises base to the power exp. Use for exponential growth curves and scaling.</p>
+</div>
+<div class="item">
+<pre><code>pub fn abs(both: float) -&gt; float</code></pre>
+<p>Absolute value for double-precision floats.</p>
+</div>
+<div class="item">
+<pre><code>pub PI = OpMathPiFloat()</code></pre>
+<p>The ratio of a circle's circumference to its diameter (3.14159...).</p>
+</div>
+<div class="item">
+<pre><code>pub E = OpMathEFloat()</code></pre>
+<p>Euler's number, the base of natural logarithms (2.71828...).</p>
+</div>
+<div class="item">
+<pre><code>pub fn cos(both: float) -&gt; float</code></pre>
+<p>Cosine. Use for circular motion: x = r * cos(angle).</p>
+</div>
+<div class="item">
+<pre><code>pub fn sin(both: float) -&gt; float</code></pre>
+<p>Sine. Use for circular motion: y = r * sin(angle).</p>
+</div>
+<div class="item">
+<pre><code>pub fn tan(both: float) -&gt; float</code></pre>
+<p>Tangent. Use for slopes and perspective projection.</p>
+</div>
+<div class="item">
+<pre><code>pub fn acos(both: float) -&gt; float</code></pre>
+<p>Arc cosine. Returns the angle (in radians) whose cosine is v.</p>
+</div>
+<div class="item">
+<pre><code>pub fn asin(both: float) -&gt; float</code></pre>
+<p>Arc sine. Returns the angle whose sine is v.</p>
+</div>
+<div class="item">
+<pre><code>pub fn atan(both: float) -&gt; float</code></pre>
+<p>Arc tangent of a single value. Returns angle in (-PI/2, PI/2).</p>
+</div>
+<div class="item">
+<pre><code>pub fn ceil(both: float) -&gt; float</code></pre>
+<p>Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.</p>
+</div>
+<div class="item">
+<pre><code>pub fn floor(both: float) -&gt; float</code></pre>
+<p>Round down to the nearest integer value. Use to convert a float position to a tile index.</p>
+</div>
+<div class="item">
+<pre><code>pub fn round(both: float) -&gt; float</code></pre>
+<p>Round to the nearest integer value (half rounds away from zero).</p>
+</div>
+<div class="item">
+<pre><code>pub fn sqrt(both: float) -&gt; float</code></pre>
+<p>Square root. Use for distances and normalization.</p>
+</div>
+<div class="item">
+<pre><code>pub fn atan2(both: float, v2: float) -&gt; float</code></pre>
+<p>Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when you have separate x/y components.</p>
+</div>
+<div class="item">
+<pre><code>pub fn log(both: float, v2: float) -&gt; float</code></pre>
+<p>Logarithm of v in the given base. Use for converting between scales (e.g., decibels).</p>
+</div>
+<div class="item">
+<pre><code>pub fn pow(both: float, v2: float) -&gt; float</code></pre>
+<p>Raises base to the power exp. Use for exponential growth curves and scaling.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

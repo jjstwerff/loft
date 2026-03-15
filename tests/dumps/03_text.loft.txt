@@ -1,0 +1,28 @@
+fn n_join(parts:vector<text>, sep:text, result:&text) -> text["result"] {#block(1):text["result"]
+  [107] result(0):&text = "";
+  [108] {#For block(2):void
+    p#count(2):integer = 0i32;
+    _vector_1(2):vector<text>["parts"] = parts(0);
+    p#index(2):integer = -1i32;
+    loop {#For loop_3
+      p(3):text["_vector_1"] = {#iter next(4):text
+        p#index(2):integer = OpAddInt(p#index(2), 1i32);
+        OpGetText(OpGetVector(_vector_1(2), 4i32, p#index(2)), 0i32);
+      }#iter next(4):text;
+      if OpNot(OpConvBoolFromText(p(3))) {#break(5):void
+        OpFreeText(p(3));
+        break(0);
+      }#break(5):void else null;
+      {#block(6):void
+        [109] if OpNot(OpEqInt(p#count(2), 0i32)) {#block(7):void
+          OpAppendStackText(result(0), sep(0));
+        }#block(7):void else null;
+        [110] OpAppendStackText(result(0), p(3));
+      }#block(6):void;
+      p#count(2):integer = OpAddInt(p#count(2), 1i32);
+      OpFreeText(p(3));
+    }#For loop_3;
+  }#For block(2):void;
+  [112] result(0);
+}#block(1):text["result"]
+

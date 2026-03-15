@@ -1,0 +1,1207 @@
+fn test() {
+    f = file("tests/scripts/no-such-file.loft");
+    assert(!f#exists, "expected exists to be false");
+}
+fn n_test() {#block(1):void
+  __ref_1(1):ref(File) = null;
+  [2] f(1):ref(File)["__ref_1"] = n_file("tests/scripts/no-such-file.loft", __ref_1(1));
+  [3] n_assert(OpNot(OpNeInt(OpConvIntFromEnum(OpGetEnum(f(1), 32i32)), OpConvIntFromEnum(5u8(8)))), "expected exists to be false", "file_exists_false", 3i32);
+  OpFreeRef(__ref_1(1));
+}#block(1):void
+
+byte-code for file_exists_false:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: ConvRefFromNull() -> ref(reference) var=__ref_1[4]:ref(File) ; [store-alloc]
+   1[16]: [2] ConstText(_value="tests/scripts/no-such-file.loft") -> text var=f[16]:ref(File)["__ref_1"]
+  34[32]: VarRef(var[4]) -> ref(reference) type=File 14 var=__ref_1[4]:ref(File)
+  37[44]: Call(size=0, fn=n_file)
+  44[28]: [3] VarRef(var[16]) -> ref(reference) type=File 14 var=f[16]:ref(File)["__ref_1"]
+  47[40]: GetEnum(v1: ref(reference), fld=32) -> boolean
+  50[29]: ConvIntFromEnum(v1: boolean) -> integer
+  51[32]: ConstEnum(val=5) -> boolean type=Format 8
+  53[33]: ConvIntFromEnum(v1: boolean) -> integer
+  54[36]: NeInt(v1: integer, v2: integer) -> boolean
+  55[29]: Not(v1: boolean) -> boolean
+  56[29]: ConstText(_value="expected exists to be false") -> text
+  85[45]: ConstText(_value="file_exists_false") -> text
+ 104[61]: ConstInt(val=3) -> integer
+ 109[65]: StaticCall(n_assert)
+ 112[28]: VarRef(var[4]) -> ref(reference) type=File 14 var=__ref_1[4]:ref(File)
+ 115[40]: FreeRef(v1: ref(reference)) ; [store-free]
+ 116[28]: Return(ret=0, value=0, discard=28)
+
+Execute test:
+    0:[8] [2] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] ConstText(_value="tests/scripts/no-such-file.loft") -> "tests/scripts/no-such-file.loft"[20]
+   34:[36] VarRef(var[8]=__ref_1) -> ref(1,0,8)=null[36]
+   37:[48] Call(size=0, fn=n_file)
+ 2066:[52] Database(var[36], db_tp=14)
+ 2071:[52] VarRef(var[36]=result) -> ref(1,1,8)={}[52]
+ 2074:[64] ArgText(var[20]=path) -> "tests/scripts/no-such-file.loft"[64]
+ 2077:[80] SetText(v1=ref(1,1,8)[52], fld=24, val="tests/scripts/no-such-file.loft"[64])
+ 2080:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft"}[52]
+ 2083:[64] ConvIntFromNull() -> -2147483648[64]
+ 2084:[68] SetInt(v1=ref(1,1,8)[52], fld=28, val=-2147483648[64])
+ 2087:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft"}[52]
+ 2090:[64] ConstLong(val=0) -> 0[64]
+ 2099:[72] SetLong(v1=ref(1,1,8)[52], fld=0, val=0[64])
+ 2102:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0}[52]
+ 2105:[64] ConstEnum(val=0) -> null(0)[64]
+ 2107:[65] SetEnum(v1=ref(1,1,8)[52], fld=32, val=0[64])
+ 2110:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0}[52]
+ 2113:[64] ConstLong(val=0) -> 0[64]
+ 2122:[72] SetLong(v1=ref(1,1,8)[52], fld=8, val=0[64])
+ 2125:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0,current:0}[52]
+ 2128:[64] ConstLong(val=0) -> 0[64]
+ 2137:[72] SetLong(v1=ref(1,1,8)[52], fld=16, val=0[64])
+ 2140:[52] ArgText(var[20]=path) -> "tests/scripts/no-such-file.loft"[52]
+ 2143:[68] Call(size=0, fn=n_valid_path)
+ 1747:[72] ConstInt(val=0) -> 0[72]
+ 1752:[76] ConstInt(val=0) -> 0[76]
+ 1757:[80] ConstInt(val=0) -> 0[80]
+ 1762:[84] ConstInt(val=0) -> 0[84]
+ 1767:[88] VarInt(var[84]=c#next) -> 0[88]
+ 1770:[92] PutInt(var[80], value=0[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 0[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=0[104]) -> 't'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 0[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 't'[96]
+ 1786:[100] LengthCharacter(v1='t'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=0[92], v2=1[96]) -> 1[92]
+ 1788:[96] PutInt(var[84], value=1[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 't'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 't'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='t'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1817:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=116[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1835:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=116[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 1[88]
+ 1770:[92] PutInt(var[80], value=1[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 1[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=1[104]) -> 'e'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 1[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'e'[96]
+ 1786:[100] LengthCharacter(v1='e'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=1[92], v2=1[96]) -> 2[92]
+ 1788:[96] PutInt(var[84], value=2[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'e'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'e'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='e'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'e'[116]
+ 1817:[120] ConvIntFromCharacter(v1='e'[116]) -> 101[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=101[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'e'[116]
+ 1835:[120] ConvIntFromCharacter(v1='e'[116]) -> 101[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=101[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 2[88]
+ 1770:[92] PutInt(var[80], value=2[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 2[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=2[104]) -> 's'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 2[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 's'[96]
+ 1786:[100] LengthCharacter(v1='s'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=2[92], v2=1[96]) -> 3[92]
+ 1788:[96] PutInt(var[84], value=3[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 's'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 's'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='s'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1817:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=115[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1835:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=115[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 3[88]
+ 1770:[92] PutInt(var[80], value=3[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 3[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=3[104]) -> 't'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 3[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 't'[96]
+ 1786:[100] LengthCharacter(v1='t'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=3[92], v2=1[96]) -> 4[92]
+ 1788:[96] PutInt(var[84], value=4[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 't'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 't'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='t'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1817:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=116[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1835:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=116[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 4[88]
+ 1770:[92] PutInt(var[80], value=4[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 4[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=4[104]) -> 's'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 4[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 's'[96]
+ 1786:[100] LengthCharacter(v1='s'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=4[92], v2=1[96]) -> 5[92]
+ 1788:[96] PutInt(var[84], value=5[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 's'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 's'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='s'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1817:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=115[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1835:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=115[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 5[88]
+ 1770:[92] PutInt(var[80], value=5[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 5[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=5[104]) -> '/'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 5[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> '/'[96]
+ 1786:[100] LengthCharacter(v1='/'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=5[92], v2=1[96]) -> 6[92]
+ 1788:[96] PutInt(var[84], value=6[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> '/'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> '/'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='/'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> '/'[116]
+ 1817:[120] ConvIntFromCharacter(v1='/'[116]) -> 47[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=47[116], v2=47[120]) -> true[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=true[116])
+ 1828:[116] ConstTrue() -> true[116]
+ 1829:[117] GotoWord(jump=1843)
+ 1843:[117] GotoFalseWord(jump=1965, if_false=true[116])
+ 1846:[116] ClearText(var[92]=part)
+ 1849:[116] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[116]
+ 1852:[132] VarInt(var[76]=start) -> 0[132]
+ 1855:[136] VarInt(var[80]=c#index) -> 5[136]
+ 1858:[140] GetTextSub(v1="tests/scripts/no-such-file.loft"[116], from=0[132], till=5[136]) -> "tests"[116]
+ 1859:[132] AppendText(var[92], v1="tests"[116])
+ 1862:[116] VarInt(var[84]=c#next) -> 6[116]
+ 1865:[120] PutInt(var[76], value=6[116])
+ 1868:[116] VarText(var[92]=part) -> "tests"[116]
+ 1871:[132] ConstText(_value="..") -> ".."[132]
+ 1875:[148] EqText(v1="tests"[116], v2=".."[132]) -> false[116]
+ 1876:[117] GotoFalseWord(jump=1920, if_false=false[116])
+ 1920:[116] VarText(var[92]=part) -> "tests"[116]
+ 1923:[132] ConstText(_value=".") -> "."[132]
+ 1926:[148] NeText(v1="tests"[116], v2="."[132]) -> true[116]
+ 1927:[117] GotoFalseWord(jump=1949, if_false=true[116])
+ 1930:[116] ConstInt(val=0) -> 0[116]
+ 1935:[120] VarText(var[92]=part) -> "tests"[120]
+ 1938:[136] Call(size=0, fn=t_4text_len)
+ 1068:[140] ArgText(var[120]=both) -> "tests"[140]
+ 1071:[156] LengthText(v1="tests"[140]) -> 5[140]
+ 1072:[144] Return(ret=1945[136], value=4, discard=24) -> 5[120]
+ 1945:[124] LtInt(v1=0[116], v2=5[120]) -> true[116]
+ 1946:[117] GotoWord(jump=1950)
+ 1950:[117] GotoFalseWord(jump=1965, if_false=true[116])
+ 1953:[116] VarInt(var[72]=depth) -> 0[116]
+ 1956:[120] ConstInt(val=1) -> 1[120]
+ 1961:[124] AddInt(v1=0[116], v2=1[120]) -> 1[116]
+ 1962:[120] PutInt(var[72], value=1[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 6[88]
+ 1770:[92] PutInt(var[80], value=6[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 6[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=6[104]) -> 's'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 6[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 's'[96]
+ 1786:[100] LengthCharacter(v1='s'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=6[92], v2=1[96]) -> 7[92]
+ 1788:[96] PutInt(var[84], value=7[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 's'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 's'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='s'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1817:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=115[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1835:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=115[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 7[88]
+ 1770:[92] PutInt(var[80], value=7[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 7[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=7[104]) -> 'c'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 7[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'c'[96]
+ 1786:[100] LengthCharacter(v1='c'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=7[92], v2=1[96]) -> 8[92]
+ 1788:[96] PutInt(var[84], value=8[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'c'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'c'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='c'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'c'[116]
+ 1817:[120] ConvIntFromCharacter(v1='c'[116]) -> 99[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=99[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'c'[116]
+ 1835:[120] ConvIntFromCharacter(v1='c'[116]) -> 99[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=99[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 8[88]
+ 1770:[92] PutInt(var[80], value=8[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 8[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=8[104]) -> 'r'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 8[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'r'[96]
+ 1786:[100] LengthCharacter(v1='r'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=8[92], v2=1[96]) -> 9[92]
+ 1788:[96] PutInt(var[84], value=9[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'r'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'r'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='r'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'r'[116]
+ 1817:[120] ConvIntFromCharacter(v1='r'[116]) -> 114[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=114[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'r'[116]
+ 1835:[120] ConvIntFromCharacter(v1='r'[116]) -> 114[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=114[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 9[88]
+ 1770:[92] PutInt(var[80], value=9[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 9[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=9[104]) -> 'i'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 9[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'i'[96]
+ 1786:[100] LengthCharacter(v1='i'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=9[92], v2=1[96]) -> 10[92]
+ 1788:[96] PutInt(var[84], value=10[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'i'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'i'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='i'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'i'[116]
+ 1817:[120] ConvIntFromCharacter(v1='i'[116]) -> 105[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=105[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'i'[116]
+ 1835:[120] ConvIntFromCharacter(v1='i'[116]) -> 105[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=105[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 10[88]
+ 1770:[92] PutInt(var[80], value=10[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 10[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=10[104]) -> 'p'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 10[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'p'[96]
+ 1786:[100] LengthCharacter(v1='p'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=10[92], v2=1[96]) -> 11[92]
+ 1788:[96] PutInt(var[84], value=11[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'p'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'p'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='p'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'p'[116]
+ 1817:[120] ConvIntFromCharacter(v1='p'[116]) -> 112[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=112[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'p'[116]
+ 1835:[120] ConvIntFromCharacter(v1='p'[116]) -> 112[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=112[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 11[88]
+ 1770:[92] PutInt(var[80], value=11[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 11[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=11[104]) -> 't'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 11[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 't'[96]
+ 1786:[100] LengthCharacter(v1='t'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=11[92], v2=1[96]) -> 12[92]
+ 1788:[96] PutInt(var[84], value=12[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 't'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 't'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='t'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1817:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=116[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1835:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=116[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 12[88]
+ 1770:[92] PutInt(var[80], value=12[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 12[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=12[104]) -> 's'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 12[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 's'[96]
+ 1786:[100] LengthCharacter(v1='s'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=12[92], v2=1[96]) -> 13[92]
+ 1788:[96] PutInt(var[84], value=13[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 's'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 's'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='s'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1817:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=115[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1835:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=115[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 13[88]
+ 1770:[92] PutInt(var[80], value=13[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 13[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=13[104]) -> '/'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 13[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> '/'[96]
+ 1786:[100] LengthCharacter(v1='/'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=13[92], v2=1[96]) -> 14[92]
+ 1788:[96] PutInt(var[84], value=14[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> '/'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> '/'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='/'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> '/'[116]
+ 1817:[120] ConvIntFromCharacter(v1='/'[116]) -> 47[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=47[116], v2=47[120]) -> true[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=true[116])
+ 1828:[116] ConstTrue() -> true[116]
+ 1829:[117] GotoWord(jump=1843)
+ 1843:[117] GotoFalseWord(jump=1965, if_false=true[116])
+ 1846:[116] ClearText(var[92]=part)
+ 1849:[116] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[116]
+ 1852:[132] VarInt(var[76]=start) -> 6[132]
+ 1855:[136] VarInt(var[80]=c#index) -> 13[136]
+ 1858:[140] GetTextSub(v1="tests/scripts/no-such-file.loft"[116], from=6[132], till=13[136]) -> "scripts"[116]
+ 1859:[132] AppendText(var[92], v1="scripts"[116])
+ 1862:[116] VarInt(var[84]=c#next) -> 14[116]
+ 1865:[120] PutInt(var[76], value=14[116])
+ 1868:[116] VarText(var[92]=part) -> "scripts"[116]
+ 1871:[132] ConstText(_value="..") -> ".."[132]
+ 1875:[148] EqText(v1="scripts"[116], v2=".."[132]) -> false[116]
+ 1876:[117] GotoFalseWord(jump=1920, if_false=false[116])
+ 1920:[116] VarText(var[92]=part) -> "scripts"[116]
+ 1923:[132] ConstText(_value=".") -> "."[132]
+ 1926:[148] NeText(v1="scripts"[116], v2="."[132]) -> true[116]
+ 1927:[117] GotoFalseWord(jump=1949, if_false=true[116])
+ 1930:[116] ConstInt(val=0) -> 0[116]
+ 1935:[120] VarText(var[92]=part) -> "scripts"[120]
+ 1938:[136] Call(size=0, fn=t_4text_len)
+ 1068:[140] ArgText(var[120]=both) -> "scripts"[140]
+ 1071:[156] LengthText(v1="scripts"[140]) -> 7[140]
+ 1072:[144] Return(ret=1945[136], value=4, discard=24) -> 7[120]
+ 1945:[124] LtInt(v1=0[116], v2=7[120]) -> true[116]
+ 1946:[117] GotoWord(jump=1950)
+ 1950:[117] GotoFalseWord(jump=1965, if_false=true[116])
+ 1953:[116] VarInt(var[72]=depth) -> 1[116]
+ 1956:[120] ConstInt(val=1) -> 1[120]
+ 1961:[124] AddInt(v1=1[116], v2=1[120]) -> 2[116]
+ 1962:[120] PutInt(var[72], value=2[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 14[88]
+ 1770:[92] PutInt(var[80], value=14[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 14[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=14[104]) -> 'n'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 14[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'n'[96]
+ 1786:[100] LengthCharacter(v1='n'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=14[92], v2=1[96]) -> 15[92]
+ 1788:[96] PutInt(var[84], value=15[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'n'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'n'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='n'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'n'[116]
+ 1817:[120] ConvIntFromCharacter(v1='n'[116]) -> 110[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=110[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'n'[116]
+ 1835:[120] ConvIntFromCharacter(v1='n'[116]) -> 110[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=110[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 15[88]
+ 1770:[92] PutInt(var[80], value=15[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 15[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=15[104]) -> 'o'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 15[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'o'[96]
+ 1786:[100] LengthCharacter(v1='o'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=15[92], v2=1[96]) -> 16[92]
+ 1788:[96] PutInt(var[84], value=16[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'o'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'o'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='o'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'o'[116]
+ 1817:[120] ConvIntFromCharacter(v1='o'[116]) -> 111[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=111[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'o'[116]
+ 1835:[120] ConvIntFromCharacter(v1='o'[116]) -> 111[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=111[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 16[88]
+ 1770:[92] PutInt(var[80], value=16[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 16[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=16[104]) -> '-'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 16[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> '-'[96]
+ 1786:[100] LengthCharacter(v1='-'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=16[92], v2=1[96]) -> 17[92]
+ 1788:[96] PutInt(var[84], value=17[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> '-'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> '-'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='-'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> '-'[116]
+ 1817:[120] ConvIntFromCharacter(v1='-'[116]) -> 45[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=45[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> '-'[116]
+ 1835:[120] ConvIntFromCharacter(v1='-'[116]) -> 45[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=45[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 17[88]
+ 1770:[92] PutInt(var[80], value=17[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 17[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=17[104]) -> 's'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 17[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 's'[96]
+ 1786:[100] LengthCharacter(v1='s'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=17[92], v2=1[96]) -> 18[92]
+ 1788:[96] PutInt(var[84], value=18[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 's'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 's'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='s'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1817:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=115[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 's'[116]
+ 1835:[120] ConvIntFromCharacter(v1='s'[116]) -> 115[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=115[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 18[88]
+ 1770:[92] PutInt(var[80], value=18[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 18[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=18[104]) -> 'u'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 18[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'u'[96]
+ 1786:[100] LengthCharacter(v1='u'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=18[92], v2=1[96]) -> 19[92]
+ 1788:[96] PutInt(var[84], value=19[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'u'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'u'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='u'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'u'[116]
+ 1817:[120] ConvIntFromCharacter(v1='u'[116]) -> 117[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=117[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'u'[116]
+ 1835:[120] ConvIntFromCharacter(v1='u'[116]) -> 117[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=117[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 19[88]
+ 1770:[92] PutInt(var[80], value=19[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 19[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=19[104]) -> 'c'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 19[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'c'[96]
+ 1786:[100] LengthCharacter(v1='c'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=19[92], v2=1[96]) -> 20[92]
+ 1788:[96] PutInt(var[84], value=20[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'c'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'c'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='c'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'c'[116]
+ 1817:[120] ConvIntFromCharacter(v1='c'[116]) -> 99[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=99[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'c'[116]
+ 1835:[120] ConvIntFromCharacter(v1='c'[116]) -> 99[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=99[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 20[88]
+ 1770:[92] PutInt(var[80], value=20[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 20[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=20[104]) -> 'h'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 20[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'h'[96]
+ 1786:[100] LengthCharacter(v1='h'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=20[92], v2=1[96]) -> 21[92]
+ 1788:[96] PutInt(var[84], value=21[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'h'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'h'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='h'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'h'[116]
+ 1817:[120] ConvIntFromCharacter(v1='h'[116]) -> 104[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=104[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'h'[116]
+ 1835:[120] ConvIntFromCharacter(v1='h'[116]) -> 104[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=104[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 21[88]
+ 1770:[92] PutInt(var[80], value=21[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 21[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=21[104]) -> '-'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 21[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> '-'[96]
+ 1786:[100] LengthCharacter(v1='-'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=21[92], v2=1[96]) -> 22[92]
+ 1788:[96] PutInt(var[84], value=22[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> '-'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> '-'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='-'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> '-'[116]
+ 1817:[120] ConvIntFromCharacter(v1='-'[116]) -> 45[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=45[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> '-'[116]
+ 1835:[120] ConvIntFromCharacter(v1='-'[116]) -> 45[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=45[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 22[88]
+ 1770:[92] PutInt(var[80], value=22[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 22[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=22[104]) -> 'f'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 22[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'f'[96]
+ 1786:[100] LengthCharacter(v1='f'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=22[92], v2=1[96]) -> 23[92]
+ 1788:[96] PutInt(var[84], value=23[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'f'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'f'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='f'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'f'[116]
+ 1817:[120] ConvIntFromCharacter(v1='f'[116]) -> 102[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=102[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'f'[116]
+ 1835:[120] ConvIntFromCharacter(v1='f'[116]) -> 102[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=102[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 23[88]
+ 1770:[92] PutInt(var[80], value=23[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 23[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=23[104]) -> 'i'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 23[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'i'[96]
+ 1786:[100] LengthCharacter(v1='i'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=23[92], v2=1[96]) -> 24[92]
+ 1788:[96] PutInt(var[84], value=24[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'i'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'i'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='i'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'i'[116]
+ 1817:[120] ConvIntFromCharacter(v1='i'[116]) -> 105[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=105[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'i'[116]
+ 1835:[120] ConvIntFromCharacter(v1='i'[116]) -> 105[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=105[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 24[88]
+ 1770:[92] PutInt(var[80], value=24[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 24[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=24[104]) -> 'l'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 24[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'l'[96]
+ 1786:[100] LengthCharacter(v1='l'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=24[92], v2=1[96]) -> 25[92]
+ 1788:[96] PutInt(var[84], value=25[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'l'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'l'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='l'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'l'[116]
+ 1817:[120] ConvIntFromCharacter(v1='l'[116]) -> 108[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=108[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'l'[116]
+ 1835:[120] ConvIntFromCharacter(v1='l'[116]) -> 108[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=108[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 25[88]
+ 1770:[92] PutInt(var[80], value=25[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 25[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=25[104]) -> 'e'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 25[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'e'[96]
+ 1786:[100] LengthCharacter(v1='e'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=25[92], v2=1[96]) -> 26[92]
+ 1788:[96] PutInt(var[84], value=26[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'e'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'e'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='e'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'e'[116]
+ 1817:[120] ConvIntFromCharacter(v1='e'[116]) -> 101[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=101[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'e'[116]
+ 1835:[120] ConvIntFromCharacter(v1='e'[116]) -> 101[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=101[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 26[88]
+ 1770:[92] PutInt(var[80], value=26[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 26[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=26[104]) -> '.'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 26[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> '.'[96]
+ 1786:[100] LengthCharacter(v1='.'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=26[92], v2=1[96]) -> 27[92]
+ 1788:[96] PutInt(var[84], value=27[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> '.'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> '.'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='.'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> '.'[116]
+ 1817:[120] ConvIntFromCharacter(v1='.'[116]) -> 46[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=46[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> '.'[116]
+ 1835:[120] ConvIntFromCharacter(v1='.'[116]) -> 46[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=46[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 27[88]
+ 1770:[92] PutInt(var[80], value=27[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 27[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=27[104]) -> 'l'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 27[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'l'[96]
+ 1786:[100] LengthCharacter(v1='l'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=27[92], v2=1[96]) -> 28[92]
+ 1788:[96] PutInt(var[84], value=28[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'l'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'l'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='l'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'l'[116]
+ 1817:[120] ConvIntFromCharacter(v1='l'[116]) -> 108[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=108[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'l'[116]
+ 1835:[120] ConvIntFromCharacter(v1='l'[116]) -> 108[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=108[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 28[88]
+ 1770:[92] PutInt(var[80], value=28[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 28[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=28[104]) -> 'o'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 28[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'o'[96]
+ 1786:[100] LengthCharacter(v1='o'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=28[92], v2=1[96]) -> 29[92]
+ 1788:[96] PutInt(var[84], value=29[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'o'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'o'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='o'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'o'[116]
+ 1817:[120] ConvIntFromCharacter(v1='o'[116]) -> 111[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=111[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'o'[116]
+ 1835:[120] ConvIntFromCharacter(v1='o'[116]) -> 111[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=111[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 29[88]
+ 1770:[92] PutInt(var[80], value=29[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 29[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=29[104]) -> 'f'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 29[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 'f'[96]
+ 1786:[100] LengthCharacter(v1='f'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=29[92], v2=1[96]) -> 30[92]
+ 1788:[96] PutInt(var[84], value=30[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 'f'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 'f'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='f'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 'f'[116]
+ 1817:[120] ConvIntFromCharacter(v1='f'[116]) -> 102[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=102[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 'f'[116]
+ 1835:[120] ConvIntFromCharacter(v1='f'[116]) -> 102[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=102[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 30[88]
+ 1770:[92] PutInt(var[80], value=30[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 30[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=30[104]) -> 't'[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 30[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> 't'[96]
+ 1786:[100] LengthCharacter(v1='t'[96]) -> 1[96]
+ 1787:[100] AddInt(v1=30[92], v2=1[96]) -> 31[92]
+ 1788:[96] PutInt(var[84], value=31[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> 't'[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> 't'[92]
+ 1801:[96] ConvBoolFromCharacter(v1='t'[92]) -> true[92]
+ 1802:[93] Not(v1=true[92]) -> false[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=false[92])
+ 1813:[92] Text()
+ 1814:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1817:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1818:[120] ConstInt(val=47) -> 47[120]
+ 1823:[124] ConvIntFromCharacter(v1='/'[120]) -> 47[120]
+ 1824:[124] EqInt(v1=116[116], v2=47[120]) -> false[116]
+ 1825:[117] GotoFalseWord(jump=1832, if_false=false[116])
+ 1832:[116] VarCharacter(var[88]=c) -> 't'[116]
+ 1835:[120] ConvIntFromCharacter(v1='t'[116]) -> 116[116]
+ 1836:[120] ConstInt(val=92) -> 92[120]
+ 1841:[124] ConvIntFromCharacter(v1='\'[120]) -> 92[120]
+ 1842:[124] EqInt(v1=116[116], v2=92[120]) -> false[116]
+ 1843:[117] GotoFalseWord(jump=1965, if_false=false[116])
+ 1965:[116] FreeText(var[92])
+ 1968:[116] FreeStack(value=0, discard=24)
+ 1972:[92] FreeStack(value=0, discard=4)
+ 1976:[88] GotoWord(jump=1767)
+ 1767:[88] VarInt(var[84]=c#next) -> 31[88]
+ 1770:[92] PutInt(var[80], value=31[88])
+ 1773:[88] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[88]
+ 1776:[104] VarInt(var[84]=c#next) -> 31[104]
+ 1779:[108] TextCharacter(v1="tests/scripts/no-such-file.loft"[88], v2=31[104]) -> null[88]
+ 1780:[92] VarInt(var[84]=c#next) -> 31[92]
+ 1783:[96] VarCharacter(var[88]=_for_result_1) -> null[96]
+ 1786:[100] LengthCharacter(v1=null[96]) -> 0[96]
+ 1787:[100] AddInt(v1=31[92], v2=0[96]) -> 31[92]
+ 1788:[96] PutInt(var[84], value=31[92])
+ 1791:[92] VarCharacter(var[88]=_for_result_1) -> null[92]
+ 1794:[96] FreeStack(value=4, discard=8)
+ 1798:[92] VarCharacter(var[88]=c) -> null[92]
+ 1801:[96] ConvBoolFromCharacter(v1=null[92]) -> false[92]
+ 1802:[93] Not(v1=false[92]) -> true[92]
+ 1803:[93] GotoFalseWord(jump=1813, if_false=true[92])
+ 1806:[92] FreeStack(value=0, discard=4)
+ 1810:[88] GotoWord(jump=1979)
+ 1979:[88] FreeStack(value=0, discard=8)
+ 1983:[80] VarInt(var[76]=start) -> 14[80]
+ 1986:[84] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[84]
+ 1989:[100] Call(size=0, fn=t_4text_len)
+ 1068:[104] ArgText(var[84]=both) -> "tests/scripts/no-such-file.loft"[104]
+ 1071:[120] LengthText(v1="tests/scripts/no-such-file.loft"[104]) -> 31[104]
+ 1072:[108] Return(ret=1996[100], value=4, discard=24) -> 31[84]
+ 1996:[88] LtInt(v1=14[80], v2=31[84]) -> true[80]
+ 1997:[81] GotoFalseWord(jump=2051, if_false=true[80])
+ 2000:[80] Text()
+ 2001:[104] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[104]
+ 2004:[120] VarInt(var[76]=start) -> 14[120]
+ 2007:[124] ArgText(var[52]=path) -> "tests/scripts/no-such-file.loft"[124]
+ 2010:[140] Call(size=0, fn=t_4text_len)
+ 1068:[144] ArgText(var[124]=both) -> "tests/scripts/no-such-file.loft"[144]
+ 1071:[160] LengthText(v1="tests/scripts/no-such-file.loft"[144]) -> 31[144]
+ 1072:[148] Return(ret=2017[140], value=4, discard=24) -> 31[124]
+ 2017:[128] GetTextSub(v1="tests/scripts/no-such-file.loft"[104], from=14[120], till=31[124]) -> "no-such-file.loft"[104]
+ 2018:[120] AppendText(var[80], v1="no-such-file.loft"[104])
+ 2021:[104] VarText(var[80]=part) -> "no-such-file.loft"[104]
+ 2024:[120] ConstText(_value="..") -> ".."[120]
+ 2028:[136] EqText(v1="no-such-file.loft"[104], v2=".."[120]) -> false[104]
+ 2029:[105] GotoFalseWord(jump=2044, if_false=false[104])
+ 2044:[104] FreeText(var[80])
+ 2047:[104] FreeStack(value=0, discard=24)
+ 2051:[80] ConstInt(val=0) -> 0[80]
+ 2056:[84] VarInt(var[72]=depth) -> 2[84]
+ 2059:[88] LeInt(v1=0[80], v2=2[84]) -> true[80]
+ 2060:[81] Return(ret=2150[68], value=1, discard=29) -> true[52]
+ 2150:[53] GotoFalseWord(jump=2164, if_false=true[52])
+ 2153:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0,current:0,next:0}[52]
+ 2156:[64] GetFile(file=ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0,current:0,next:0}[52]) -> false[52]
+ 2157:[53] FreeStack(value=0, discard=1)
+ 2161:[52] GotoWord(jump=2172)
+ 2172:[52] VarRef(var[36]=result) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0,format:NotExists}[52]
+ 2175:[64] Return(ret=2876[48], value=12, discard=44) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0,format:NotExists}[20]
+   44:[32] VarRef(var[20]=f) -> ref(1,1,8)={path:"tests/scripts/no-such-file.loft",size:0,format:NotExists}[32]
+   47:[44] GetEnum(v1=ref(1,1,8)[32], fld=32) -> null(5)[32]
+   50:[33] ConvIntFromEnum(v1=5[32]) -> 5[32]
+   51:[36] ConstEnum(val=5) -> NotExists(5)[36]
+   53:[37] ConvIntFromEnum(v1=5[36]) -> 5[36]
+   54:[40] NeInt(v1=5[32], v2=5[36]) -> false[32]
+   55:[33] Not(v1=false[32]) -> true[32]
+   56:[33] ConstText(_value="expected exists to be false") -> "expected exists to be false"[33]
+   85:[49] ConstText(_value="file_exists_false") -> "file_exists_false"[49]
+  104:[65] ConstInt(val=3) -> 3[65]
+  109:[69] StaticCall(n_assert)
+  112:[32] VarRef(var[8]=__ref_1) -> ref(1,0,8)=null[32]
+  115:[44] FreeRef(v1=ref(1,0,8)[32]) ; store-free max=1
+  116:[32] Return(ret=4294967295[4], value=0, discard=28)
+Finished

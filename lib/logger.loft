@@ -1,0 +1,34 @@
+enum Level {
+    Warning,
+    Error,
+    Fatal
+}
+
+struct Log {
+    messages: vector<text>,
+    level: Level default(Warning),
+    errors: i32 default(0)
+}
+
+fn error(self: Log, message: text) {
+    self.messages += "Error: {message}";
+    println(message);
+    self.errors += 1;
+    if self.level < Error {
+        self.level = Error;
+    }
+    if self.errors > 10 {
+        self.level = Fatal;
+    }
+}
+
+fn fatal(self: Log, message: text) {
+    self.messages += "Fatal: {message}";
+    if self.level < Fatal {
+        self.level = Fatal;
+    }
+}
+
+fn warning(self: Log, message: text) {
+    self.messages += "Warning: {message}";
+}

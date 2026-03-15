@@ -1,0 +1,103 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Logging
+// @TITLE: Recording events with the logging system
+
+// Printing everything to the console is fine during development, but in a
+// real application you usually want more control: write to a file, filter
+// by severity, and keep the output even after the terminal session ends.
+// Loft's logging functions give you that without changing your source code.
+
+// ## The four severity levels
+//
+// Choose the level that matches how serious the event is:
+//
+// * 'log_info'  — routine progress; fine to see during development but often
+//   silenced in production to keep log files small.
+//   Example: "processing file X", "connected to database".
+//
+// * 'log_warn'  — something unexpected happened but the program recovered.
+//   Example: "config key missing, using default", "retrying after timeout".
+//
+// * 'log_error' — something went wrong and you need to investigate, but the
+//   program can continue (perhaps degraded).
+//   Example: "failed to save record", "unexpected null value".
+//
+// * 'log_fatal' — a condition so serious that normal operation is impossible.
+//   Example: "cannot open database", "required config file not found".
+
+// ## Configuring the log destination
+//
+// By default, log calls are silent no-ops — no file is written, no console
+// output is produced. To switch logging on, place a 'log.conf' file in the
+// same directory as your '.loft' file, or pass '--log-conf path/to/log.conf'
+// on the command line.
+//
+// Generate a documented template with all defaults by running:
+//   loft --generate-log-config
+//
+// A minimal 'log.conf' looks like this:
+//
+//   [log]
+//   file  = log.txt    # write messages here (relative to the .loft file)
+//   level = info       # minimum level to record; choices: info warn error fatal
+//
+//   [rotation]
+//   max_size_mb = 500  # rotate after this many megabytes
+//   daily       = true # also rotate at midnight UTC
+//   max_files   = 10   # keep at most this many log files
+//
+//   [rate_limit]
+//   per_site = 5       # suppress messages from the same source line after 5/minute
+//
+//   [levels]
+//   # Override the global level for a specific file:
+//   # "debug_tool.loft" = info
+//   # "src/"            = error
+
+// ## Production mode
+//
+// When 'production = true' is set in log.conf:
+// * 'panic()' becomes a fatal log entry instead of aborting the process.
+// * A failing 'assert()' becomes an error log entry instead of aborting.
+// The program keeps running and the problem is captured in the log — useful
+// for long-running services where a single error should not bring everything down.
+
+// ## Using format strings in log messages
+//
+// Log messages are plain text, but you can embed any expression using the
+// same '{...}' format syntax as everywhere else in Loft. The interpolation
+// happens only when the message is actually going to be written; if the
+// configured level is higher than the call, the string is never evaluated
+// (no performance cost for suppressed messages).
+
+fn main() {
+    // Without a log.conf these are all silent no-ops — the tests below pass
+    // even though no output is produced.
+    log_info("starting up");
+    log_warn("this is a warning");
+    log_error("something went wrong");
+    log_fatal("critical failure");
+
+    // A true assert never logs anything — it is only the false case that logs.
+    assert(true, "this should never fail");
+
+    // ## Typical usage pattern
+    //
+    // In a real program you would write something like:
+    //
+    //   fn process(item: Item) {
+    //       log_info("processing item {item.id}");
+    //       result = do_work(item);
+    //       if !result {
+    //           log_error("work failed for item {item.id}");
+    //           return;
+    //       }
+    //       log_info("finished item {item.id} successfully");
+    //   }
+    //
+    // The log messages give you a record of exactly what the program did and
+    // where it went wrong, without cluttering the terminal during normal runs.
+
+    println("logging test passed");
+}

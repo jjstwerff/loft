@@ -1,0 +1,21 @@
+{
+  "todo": [
+    { "days":  6, "description": "Clean & tidy up the worst spot in the house." },
+    { "days": 18, "description": "Buy something that enhances your life like clothing or a tool." },
+    { "days":  6, "description": "Throw something away that is broken or out of use." },
+    { "days": 14, "description": "Repair or replace something that needs it." },
+    { "days": 20, "description": "Make an appointment with an old friend." },
+    { "days":  3, "description": "Do a short set of exercises." },
+    { "days": 12, "description": "Visit a place you have not been before." },
+    { "days": 20, "description": "Try to help someone without wanting something in return." },
+    { "days": 12, "description": "Evaluate the priorities of your running projects." },
+    { "days": 16, "description": "Eliminate an unneeded expense." },
+    { "days":  5, "description": "Do something that will relax you completely." },
+    { "days": 18, "description": "Go somewhere to meet new people." },
+    { "days":  8, "description": "Do something for an hour that will make you proud." },
+    { "days": 19, "description": "Try something that scares you but might benefit you." },
+    { "days": 25, "description": "Consciously limit a bad habit for a day." },
+    { "days": 10, "description": "Investigate something new that interests you and keep notes on it." },
+    { "days":  8, "description": "Try to finish a task that keeps popping up in your mind." }
+  ]
+}

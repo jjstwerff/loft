@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - vs Python</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="report.html">Report a problem</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <span class="cur">vs Python</span> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>vs Python</h1>
+<article>
+<p>Loft and Python share a similar surface syntax — assignment without type annotations, brace-free expressions, and names that just work. But loft is statically typed and compiled to bytecode, while Python is dynamically typed and interpreted. This page documents the most important differences so that Python programmers know exactly what they gain and what they give up.</p>
+
+<h2 id="variables">1. Variables — static types inferred at first assignment</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code>x = <span class="nm">42</span>           <span class="cm">// integer — fixed at first assignment</span>
+x += <span class="nm">1</span>
+name = <span class="st">"Bob"</span>     <span class="cm">// text — a different variable, not a rebind</span>
+x = <span class="st">"oops"</span>      <span class="cm">// compile error: cannot assign text to integer</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>x = 42           # int inferred; can be rebound to any type
+x += 1
+name = "Bob"
+x = "oops"       # fine — x is now a str</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Type errors are caught before the program runs. Renaming or reshaping data structures surfaces mismatches immediately. There is no equivalent of Python's runtime <code>TypeError</code>, <code>AttributeError</code>, or "NoneType has no attribute X" crash — those classes of bug are detected at compile time.</p>
+<p class="down"><strong>Downside</strong> Types are fixed at first assignment and cannot change. Python's dynamic typing genuinely speeds up prototyping: a function that accepts anything, a list that holds mixed types, or a variable that starts as an integer and becomes a float later are all natural in Python and impossible in loft. Adding a type annotation layer (mypy, pyright) gives Python static safety without giving up its flexibility.</p>
+</div>
+
+<h2 id="null">2. Null — structured absence, not a universal wildcard</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="kw">struct</span> <span class="en">User</span> {
+    email: <span class="ty"><a href="stdlib-types.html">text</a></span>,             <span class="cm">// nullable by default</span>
+    age:   <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">not null</span>,  <span class="cm">// can never be null</span>
+}
+u = <span class="en">User</span> { age: <span class="nm">30</span> };
+<span class="kw">if</span> u.email == <span class="kw">null</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"no email"</span>); }
+u.age = <span class="kw">null</span>;  <span class="cm">// compile error: age is not null</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class User:
+    age: int
+    email: Optional[str] = None  # explicit Optional
+
+u = User(age=30)
+if u.email is None:
+    print("no email")
+u.age = None  # allowed at runtime; mypy catches this</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Nullability is part of the struct definition — readable at a glance. <code>not null</code> fields are enforced by the compiler and additionally locked at runtime in debug builds, catching accidental null writes early in development. No <code>Optional[T]</code> wrapping needed; the comparison <code>v == null</code> is natural.</p>
+<p class="down"><strong>Downside</strong> The default is nullable, not non-nullable — the safe default is backwards from what static analysis advocates recommend. Python with mypy and <code>Optional[T]</code> annotation gives static guarantees that loft's runtime checks do not. Python's <code>None</code> also participates in truthiness testing (<code>if not email:</code>), pattern matching, and <code>or</code> chaining in ways that loft's null does not support.</p>
+</div>
+
+<h2 id="structs">3. Structs vs classes and dicts</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="kw">struct</span> <span class="en">Point</span> { x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span> }
+p = <span class="en">Point</span> { x: <span class="nm">1.0</span>, y: <span class="nm">2.0</span> };
+p.x += <span class="nm">0.5</span>;
+p.z;          <span class="cm">// compile error: no field z on Point</span>
+p.x = <span class="st">"hi"</span>; <span class="cm">// compile error: cannot assign text to float</span>
+
+<span class="kw">fn</span> <span class="fn-call">distance</span>(self: <span class="kw">const</span> <span class="en">Point</span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
+    <span class="fn-call">sqrt</span>(self.x * self.x + self.y * self.y)
+}</code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>from dataclasses import dataclass
+import math
+
+@dataclass
+class Point:
+    x: float
+    y: float
+
+    def distance(self) -> float:
+        return math.sqrt(self.x**2 + self.y**2)
+
+p = Point(x=1.0, y=2.0)
+p.z        # AttributeError at runtime (or dict: KeyError)
+p.x = "hi" # allowed at runtime; mypy catches this</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Field access is checked at compile time — typos in field names are caught before any code runs. Struct memory layout is fixed and unboxed; integer and float fields live directly in memory with no heap allocation overhead. Methods are ordinary named functions — they can be added from any file, at any time, without modifying the struct definition.</p>
+<p class="down"><strong>Downside</strong> No inheritance, no <code>__repr__</code>, no operator overloading (<code>__add__</code>, <code>__eq__</code>, etc.), no properties or descriptors. Python's <code>@dataclass</code> generates <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code> automatically. Loft structs are data holders; all display and comparison logic must be written by hand. Python also supports plain dicts as lightweight records, which is often more convenient for ad-hoc data.</p>
+</div>
+
+<h2 id="loops">4. No <code>while</code> loop</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="cm">// Condition-driven poll loop — use a large upper bound:</span>
+<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..2147483647</span> {
+    <span class="kw">if</span> <span class="fn-call">ready</span>() { <span class="kw">break</span>; }
+    <span class="fn-call">step</span>();
+}
+
+<span class="cm">// Draining a collection while it has elements:</span>
+<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..2147483647</span> {
+    <span class="kw">if</span> <span class="fn-call">length</span>(queue) == <span class="nm">0</span> { <span class="kw">break</span>; }
+    <span class="fn-call">process</span>(queue[<span class="nm">0</span>]);
+    queue#remove;
+}</code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>while not ready():
+    step()
+
+while queue:
+    process(queue.pop(0))</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Every loop has an iteration variable, making it easy to add a cycle limit or index tracking without restructuring. The <code>break</code> fires long before the range limit in practice. Filtered loops (<code>for x in v if pred(x)</code>) and loop attributes (<code>x#first</code>, <code>x#count</code>) are only available on <code>for</code>, so a single loop construct covers all cases.</p>
+<p class="down"><strong>Downside</strong> <code>while condition:</code> is instantly understood by every programmer and reads exactly as its semantics. Its absence is surprising and the workaround is verbose. Python also has <code>while ... else</code> (executes when the condition first becomes false without a <code>break</code>), a pattern with no clean equivalent in loft.</p>
+</div>
+
+<h2 id="enum-dispatch">5. Polymorphic enum dispatch vs <code>isinstance</code></h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="kw">enum</span> <span class="en">Shape</span> {
+    <span class="en">Circle</span> { r: <span class="ty"><a href="stdlib-types.html">float</a></span> },
+    <span class="en">Rect</span>   { w: <span class="ty"><a href="stdlib-types.html">float</a></span>, h: <span class="ty"><a href="stdlib-types.html">float</a></span> }
+}
+<span class="kw">fn</span> <span class="fn-call">area</span>(self: <span class="en">Circle</span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> { <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call">pow</span>(self.r, <span class="nm">2.0</span>) }
+<span class="kw">fn</span> <span class="fn-call">area</span>(self: <span class="en">Rect</span>)   -> <span class="ty"><a href="stdlib-types.html">float</a></span> { self.w * self.h }
+
+s.<span class="fn-call">area</span>()   <span class="cm">// dispatches on the runtime variant</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>import math
+from dataclasses import dataclass
+
+@dataclass
+class Circle: r: float
+@dataclass
+class Rect:   w: float; h: float
+
+def area(s):
+    if isinstance(s, Circle): return math.pi * s.r ** 2
+    if isinstance(s, Rect):   return s.w * s.h
+
+# Python 3.10+ structural pattern matching:
+match s:
+    case Circle(r=r): return math.pi * r ** 2
+    case Rect(w=w, h=h): return w * h</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Each variant's behaviour lives in its own small, named function — easy to read, easy to navigate in an editor. Adding a new shape only requires a new <code>fn area(self: NewShape)</code> with no changes to existing code or a central dispatch function. The compiler warns when a variant has no implementation for a called method.</p>
+<p class="down"><strong>Downside</strong> Unlike Rust's <code>match</code>, loft does not enforce exhaustiveness — a missing variant implementation produces only a warning, not a compile error. Python 3.10+ structural pattern matching (<code>match</code>/<code>case</code>) fully destructs the matched value and is exhaustive when <code>case _:</code> is present. Python also supports inheritance-based polymorphism (<code>class Circle(Shape)</code>) and abstract base classes, giving far richer dispatch options.</p>
+</div>
+
+<h2 id="formatting">6. String formatting — embedded expressions</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code>msg  = <span class="st">"Hi {name}, score: {score:+8.2}"</span>
+hex  = <span class="st">"{n:#x}"</span>
+list = <span class="st">"{for x in 1..4 {x*2}}"</span>   <span class="cm">// "2,4,6"</span>
+pad  = <span class="st">"{value:08}"</span>               <span class="cm">// zero-padded</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>msg  = f"Hi {name}, score: {score:+8.2f}"
+hex  = f"{n:#x}"
+# no loop in f-string; use a join:
+lst  = ",".join(str(x*2) for x in range(1, 4))  # "2,4,6"
+pad  = f"{value:08}"</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> All loft strings are implicitly format strings — no <code>f</code> prefix needed. Inline <code>for</code> loops inside <code>{}</code> produce comma-separated output without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (<code>#x</code>, <code>#o</code>, <code>b</code>) all work.</p>
+<p class="down"><strong>Downside</strong> Python f-strings accept arbitrary expressions: method calls (<code>{obj.method():.2f}</code>), ternary expressions (<code>{"yes" if ok else "no"}</code>), and <code>join</code> operations inline. Loft restricts what can appear inside <code>{}</code>. Python also supports conversion flags (<code>!r</code> for repr, <code>!s</code> for str, <code>!a</code> for ASCII) and the <code>=</code> debug specifier (<code>{x=}</code> prints <code>x=42</code>); loft has none of these.</p>
+</div>
+
+<h2 id="collections">7. Collections — typed and built-in</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code>nums:   <span class="ty"><a href="07-vector.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+lookup: <span class="ty"><a href="12-hash.html">hash</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;    = {};
+lookup[<span class="st">"key"</span>] = <span class="st">"value"</span>;
+scores: <span class="ty"><a href="10-sorted.html">sorted</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = {};
+scores[user] = <span class="nm">95</span>;  <span class="cm">// O(log n) keyed insert</span>
+
+<span class="cm">// Element type is enforced at compile time:</span>
+nums += [<span class="st">"x"</span>];  <span class="cm">// compile error: expected integer</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>nums   = [1, 2, 3]          # list — any element type
+lookup = {}                 # dict — any key/value type
+lookup["key"] = "value"
+
+# sorted dict requires an external package:
+from sortedcontainers import SortedDict
+scores = SortedDict()
+scores[user] = 95
+
+nums.append("x")            # allowed at runtime</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> All collection types — vector, hash, and sorted map — are built in; no extra import or install needed. Element types are checked at compile time. The same <code>[]</code> indexing syntax works on all three. <code>for x in v if pred(x) { v#remove; }</code> safely removes the current element while iterating — something Python requires careful index management for.</p>
+<p class="down"><strong>Downside</strong> Python's built-in <code>dict</code> and <code>list</code> are among the most heavily optimised data structures in any scripting runtime. Python also has <code>set</code> and <code>frozenset</code> (no loft equivalent), ordered insertion semantics on <code>dict</code> (Python 3.7+), and an enormously expressive comprehension syntax (<code>[x*2 for x in v if x &gt; 0]</code>). Loft's <code>map()</code> / <code>filter()</code> / <code>reduce()</code> higher-order functions allocate a new vector at each stage, while Python's generators are lazy and allocation-free until consumed.</p>
+</div>
+
+<h2 id="closures">8. No closures or lambdas — but compile-checked function references</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="kw">fn</span> <span class="fn-call">double</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> }
+<span class="kw">fn</span> <span class="fn-call">is_even</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">boolean</a></span> { x % <span class="nm">2</span> == <span class="nm">0</span> }
+<span class="kw">fn</span> <span class="fn-call">add</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { a + b }
+
+f = <span class="kw">fn</span> double;          <span class="cm">// compile-checked fn reference</span>
+<span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f(<span class="nm">5</span>) == <span class="nm">10</span>);
+
+nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span> double);
+evens   = <span class="fn-call">filter</span>(nums, <span class="kw">fn</span> is_even);
+total   = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, <span class="kw">fn</span> add);</code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>double  = lambda x: x * 2
+is_even = lambda x: x % 2 == 0
+
+f = double
+assert f(5) == 10
+
+nums = [1, 2, 3, 4, 5]
+doubled = list(map(lambda x: x * 2, nums))
+evens   = list(filter(lambda x: x % 2 == 0, nums))
+total   = sum(nums)
+
+# capture context freely:
+offset = 10
+shifted = [x + offset for x in nums]</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Simpler mental model — no capture modes, no scope surprises. The <code>fn&nbsp;&lt;name&gt;</code> expression gives a compile-checked reference to any named function; the compiler verifies the name exists and has a matching signature before emitting code. Higher-order functions (<code>map</code>, <code>filter</code>, <code>reduce</code>) accept fn-refs directly.</p>
+<p class="down"><strong>Downside</strong> No closures means context cannot be captured — any extra data must be embedded in the element struct or passed as an explicit parameter. Python's <code>lambda</code> and nested <code>def</code> close over surrounding variables naturally, making short callbacks, key functions, and event handlers concise. List comprehensions (<code>[f(x) for x in v]</code>) are shorter and more Pythonic than <code>map(v, fn f)</code>. Indirect calls are supported, but fn-refs cannot be compared or inspected at runtime.</p>
+</div>
+
+<h2 id="exceptions">9. No exception handling</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="cm">// Preconditions are assertions; failures abort the program:</span>
+<span class="kw">fn</span> <span class="fn-call">divide</span>(a: <span class="ty"><a href="stdlib-types.html">float</a></span>, b: <span class="ty"><a href="stdlib-types.html">float</a></span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b != <span class="nm">0.0</span>, <span class="st">"division by zero"</span>);
+    a / b
+}
+
+<span class="cm">// I/O errors surface as null:</span>
+f = <span class="fn-call">open</span>(<span class="st">"data.txt"</span>);
+<span class="kw">if</span> f == <span class="kw">null</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"file not found"</span>); }</code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>def divide(a: float, b: float) -> float:
+    if b == 0:
+        raise ValueError("division by zero")
+    return a / b
+
+try:
+    result = divide(x, y)
+except ValueError as e:
+    print(f"error: {e}")
+
+try:
+    with open("data.txt") as f:
+        data = f.read()
+except FileNotFoundError:
+    print("file not found")</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> No exception hierarchy to learn, no accidental exception swallowing, no overhead from unwinding the stack. File and I/O operations signal failure by returning null, which is explicit and cheap to check. The control flow of a loft function is always straightforward — there are no hidden exit paths.</p>
+<p class="down"><strong>Downside</strong> There is no structured way to recover from errors in user code. An assertion failure aborts the entire program. Python's <code>try</code>/<code>except</code>/<code>finally</code>/<code>else</code> and user-defined exception hierarchies allow fine-grained error handling, retry logic, cleanup on failure, and graceful degradation — patterns that are impossible to express in loft today.</p>
+</div>
+
+<h2 id="parallel">10. Built-in parallel for-loops — <code>par(...)</code></h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="kw">fn</span> <span class="fn-call">score</span>(item: <span class="kw">const</span> <span class="en">Record</span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { item.value * <span class="nm">2</span> }
+
+total = <span class="nm">0</span>;
+<span class="kw">for</span> item <span class="kw">in</span> records <span class="kw">par</span>(s=<span class="fn-call">score</span>(item), <span class="nm">4</span>) {
+    total += s;   <span class="cm">// results arrive in original order</span>
+}                 <span class="cm">// 4 worker threads, no GIL</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>from concurrent.futures import ProcessPoolExecutor
+
+def score(item): return item.value * 2
+
+# ProcessPoolExecutor: bypasses GIL via separate processes
+with ProcessPoolExecutor(max_workers=4) as ex:
+    results = list(ex.map(score, records))
+total = sum(results)
+
+# ThreadPoolExecutor: simpler but GIL limits CPU-bound work</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Built into the language — no import, no boilerplate. The GIL does not apply; worker threads run on separate OS threads inside the same process. Results arrive in the original vector order. The compiler validates the worker function signature at the call site. The thread count is set per call, making it easy to tune for the hardware.</p>
+<p class="down"><strong>Downside</strong> Workers must return a primitive (<code>integer</code>, <code>long</code>, <code>float</code>, or <code>boolean</code>) — returning <code>text</code> or a struct reference is not yet supported. Context must be embedded as fields in the element struct; workers cannot capture local variables. Python's <code>ProcessPoolExecutor</code> works with any picklable object and gives full control over timeouts, cancellation, and error propagation.</p>
+</div>
+
+<h2 id="generics">11. No generic functions</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="cm">// Must write a version per type — no type parameters:</span>
+<span class="kw">fn</span> <span class="fn-call">max_int</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+    <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
+}
+<span class="kw">fn</span> <span class="fn-call">max_float</span>(a: <span class="ty"><a href="stdlib-types.html">float</a></span>, b: <span class="ty"><a href="stdlib-types.html">float</a></span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
+    <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
+}</code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code># Duck typing: works for any T that supports >
+def max_val(a, b):
+    return a if a > b else b
+
+# With type hints (Python 3.12+):
+from typing import TypeVar
+T = TypeVar("T")
+def max_val(a: T, b: T) -> T:
+    return a if a > b else b</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Nothing to learn about type parameters, bounds, variance, or protocols. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.</p>
+<p class="down"><strong>Downside</strong> Code cannot be written once and reused across types. Every generic algorithm must be duplicated per type or moved into the standard library. Python's duck typing means a function that calls <code>len(x)</code> automatically works on any type that implements <code>__len__</code> — no explicit annotation required. Python 3.12 TypeVar syntax and structural subtyping (<code>Protocol</code>) give this generality with optional static checking.</p>
+</div>
+
+<h2 id="signatures">12. Function signatures — no defaults, keyword args, or *args</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="cm">// All arguments are positional and required:</span>
+<span class="kw">fn</span> <span class="fn-call">connect</span>(host: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span>, timeout: <span class="ty"><a href="stdlib-types.html">integer</a></span>) { ... }
+
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>, <span class="nm">8080</span>, <span class="nm">30</span>);  <span class="cm">// OK</span>
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>, <span class="nm">8080</span>);      <span class="cm">// compile error: wrong argument count</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>def connect(host: str, port: int = 80, timeout: int = 30):
+    ...
+
+connect("localhost")            # uses defaults
+connect("localhost", 8080)      # overrides port only
+connect("localhost", timeout=5) # keyword arg — skips port
+
+def log(*args, **kwargs): ...   # variadic</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Every call site is explicit — there are no hidden default values to look up. The number and order of arguments is always visible at the call site, making code easier to follow without jumping to the function definition.</p>
+<p class="down"><strong>Downside</strong> No default parameter values means wrapper overloads must be written by hand. No keyword arguments means callers of functions with many parameters must remember the correct order. No <code>*args</code> or <code>**kwargs</code> means variadic dispatch must be handled with a <code>vector</code> parameter. Python's flexible argument syntax is one of its most ergonomic features, enabling clean APIs, decorator patterns, and configuration-driven code that is awkward to express in loft.</p>
+</div>
+
+<h2 id="ecosystem">13. Ecosystem — minimal standard library</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code><span class="cm">// import "mylib" loads a .loft file relative to the script.</span>
+<span class="cm">// The full standard library ships inside the interpreter binary;</span>
+<span class="cm">// there is no package manager or external dependency system.</span>
+
+<span class="cm">// Built-in: text, math, file I/O, collections,</span>
+<span class="cm">//           logging, threading, image, lexer/parser</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>import numpy as np          # numerical arrays / SIMD
+import pandas as pd         # dataframes
+import requests             # HTTP
+import flask                # web framework
+import sqlalchemy           # database ORM
+import scikit_learn         # machine learning
+# 500 000+ packages on PyPI, installable with:
+#   pip install &lt;package&gt;</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> Zero external dependencies — the interpreter is a single self-contained binary. Deployment is copying one file. There is no <code>requirements.txt</code>, no virtual environment, no version conflict, and no supply-chain risk. The built-in library covers text manipulation, math, file I/O, typed collections, parallel execution, image handling, and a full lexer/parser framework.</p>
+<p class="down"><strong>Downside</strong> Python's ecosystem is its defining advantage. NumPy, pandas, scikit-learn, TensorFlow, requests, Flask, SQLAlchemy, pytest, and hundreds of thousands of other packages are not available to loft programs. Any data science, web development, database integration, or protocol implementation task will require reimplementing from scratch what Python solves with a single <code>pip install</code>. For these domains, loft is the wrong tool today.</p>
+</div>
+
+<h2 id="exponentiation">14. Exponentiation uses <code>pow()</code>; <code>^</code> is XOR</h2>
+<div class="compare">
+<div>
+  <p class="lang-label loft-label">Loft</p>
+  <pre><code>area  = <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call">pow</span>(r, <span class="nm">2.0</span>)  <span class="cm">// exponentiation via pow()</span>
+bits  = a | b              <span class="cm">// bitwise OR</span>
+xor   = a ^ b              <span class="cm">// bitwise XOR — not exponentiation</span>
+cube  = <span class="fn-call">pow</span>(x, <span class="nm">3.0</span>)       <span class="cm">// cube root: pow(x, 1.0/3.0)</span></code></pre>
+</div>
+<div>
+  <p class="lang-label python-label">Python</p>
+  <pre class="python-pre"><code>import math
+area  = math.pi * r ** 2   # ** is exponentiation
+bits  = a | b              # bitwise OR
+xor   = a ^ b              # bitwise XOR
+cube  = x ** 3             # integer cube — exact
+cube  = x ** (1/3)         # cube root as float</code></pre>
+</div>
+</div>
+<div class="verdict">
+<p class="up"><strong>Upside</strong> <code>^</code> behaves as bitwise XOR in both loft and Python — no mismatch. Bitwise operator precedence matches: <code>|</code> (loose) → <code>^</code> → <code>&amp;</code> → shifts → arithmetic (tight). The <code>pow()</code> function is explicit, avoiding any ambiguity about whether <code>^</code> means XOR or exponentiation.</p>
+<p class="down"><strong>Downside</strong> Python's <code>**</code> operator works on integers, floats, and complex numbers and produces the exact type the operands imply. Loft's <code>pow()</code> operates on <code>float</code> and <code>single</code> only — integer exponentiation has no built-in; compute it with a loop or cast to float first. Python's <code>pow(base, exp, mod)</code> three-argument form computes modular exponentiation efficiently; loft offers no equivalent.</p>
+</div>
+
+</article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+    terrain = [
+        { name = "grass", color = 0x00FF00, slope = 4 },
+        { name = "hill", color = 0x996600, slope = 16 },
+        { name = "mountain", color = 0xcccccc, slope = 32 },
+        { name = "sea", color = 0x0000ff, slope = -1 },
+        { name = "sand", color = 0xffff00, slope = 8 },
+        { name = "forest", color = 0x006600, slope = 20 },
+    ]
+}

@@ -1,0 +1,199 @@
+# Changelog
+
+All notable changes to the loft language and interpreter are documented here.
+
+This project follows [Semantic Versioning](https://semver.org/).
+The stability guarantee is described in `doc/claude/RELEASE.md`.
+
+---
+
+## [Unreleased — working toward 1.0]
+
+### Bug fixes (post-0.1.0)
+
+- **T0-1** — `null` literal in scalar field assignment emitted no bytecode, causing
+  `OpSetInt` to misread the stack (`store_nr=60` crash). Fixed in `parse_assign_op`:
+  `convert()` now resolves `Type::Null` to the typed-null constant before `towards_set`.
+  Five regression tests in `tests/issues.rs`. (2026-03-15)
+
+- **T0-2** — `OpFreeRef` was emitted in forward variable-declaration order; `database::free()`
+  enforces LIFO. Functions with 2+ owned references panicked "Stores must be freed in LIFO
+  order". Fixed by adding `var_order: Vec<u16>` to `Scopes`; `variables()` now iterates in
+  reverse. (2026-03-15)
+
+- **T0-3** — T0-1 fix regression: `convert()` ran unconditionally for all null assignments,
+  rewriting `Value::Null` before `towards_set_hash_remove` could intercept it as a
+  collection-remove. Fixed by guarding `convert()` to non-reference, non-collection types
+  only. Restores `sorted[key] = null`, `hash[key] = null`, and `index[k1,k2] = null` removal.
+  (2026-03-15)
+
+- **T0-4** — `v += other_vec` (PROBLEMS #39): `vector_add()` appended element bytes via raw
+  `copy_block` without calling `copy_claims()`. Text-field slot indices were shared between
+  source and destination; end-of-scope free of one vector corrupted the other ("Unknown
+  record N"). Fixed by adding a `copy_claims()` loop over each appended element after the
+  block copy, mirroring `copy_claims_seq_vector()`. (2026-03-15)
+
+- **T0-5** — `index<T>` as struct field (PROBLEMS #40): `copy_claims()` and `remove_claims()`
+  in `allocation.rs` both reached `panic!("Not implemented")` for `Parts::Index`. Any
+  `OpCopyRecord` or struct reassignment on a struct containing an `index<T>` field panicked.
+  Fixed by adding `collect_index_nodes` (in-order RB-tree traversal) and
+  `copy_claims_index_body` helpers, and inline Index arms in both match statements. Also
+  added `#[cfg(debug_assertions)]` bounds checks to `Store::copy_block` and
+  `Store::copy_block_between`. Three regression tests in `tests/issues.rs`. (2026-03-15)
+
+- **T0-7** — `16-parser.loft` failed with a codegen assertion: `generate_call` reported a
+  mutable Reference argument size mismatch (PROBLEMS #42). Root cause: `Code.define()` in
+  `lib/code.loft` stored `res: i32` directly into `hash<Definition[name]>` via
+  `self.def_names[name] = res` — a 4-byte integer where a 12-byte Reference was expected.
+  Three further bugs uncovered when the compile error was fixed: (1) `get_type()` read
+  `def_names[name].typedef` (always 0) instead of `definitions[nr].typedef`; (2) `structure()`
+  in `lib/parser.loft` called `type_def()` which internally reset `cur_def` to null, making
+  the following `argument()` call a no-op so struct fields were not registered; (3) `object()`
+  had an inverted loop-break condition (`!test("}}") { break }`) causing struct literals
+  with more than one field to abort after the first. Additionally the original `!= null`
+  reference comparison generated `ConvRefFromNull()` (a store-allocating opcode) with no
+  matching `FreeRef`, leaking one store per `define()` call and eventually causing a LIFO
+  store-free panic. Fixes: store a full `Definition` in `def_names`; look up typedef through
+  `definitions[nr]`; use integer null-check (`nr != null`) to avoid store allocation; restore
+  `self.code.cur_def` in `structure()` after `type_def()`; correct `object()` loop condition.
+  `16-parser.loft` removed from `SUITE_SKIP`; `wrap::last` re-enabled. (2026-03-16)
+
+- **T0-6** — Inline ref-returning method calls leaked database stores → LIFO panic
+  (PROBLEMS #41). `p.shifted(1.0, 0.0).x` synthesised an anonymous work-ref variable
+  (`__ref_1`) via `parse_part()`, but its `OpNullRefSentinel` null-init was inserted after
+  the first user statement — often BEFORE body variables like `p` in the block. `scan_set`
+  then placed the work-ref before `p` in `var_order`, so reversed `var_order` freed `p`
+  (store 2) before the work-ref (store 3+), violating LIFO. Fixed by inserting each
+  work-ref's null-init immediately before the statement that first assigns it (found by
+  recursively searching the block for `Set(r, _)` nodes). This guarantees the work-ref
+  appears after `p` in `var_order` and is freed before `p` in the reversed order.
+  Supporting changes: `OpNullRefSentinel` opcode; sentinel guards in `Stores::free/valid`;
+  `Function::copy/append` preserve `inline_ref_vars`. `tests/docs/17-libraries.loft`
+  removed from `SUITE_SKIP`. (2026-03-15)
+
+- **T1-5 correctness** — `validate_slots` emitted false-positive "slot conflict" panics for
+  same-name variables reused across sequential blocks. Fixed: `find_conflict` now exempts
+  same-name/same-slot pairs; P1 pre-init added for ref-typed variables. (2026-03-13)
+
+- **PROBLEMS #33/34/35** — Sorted filtered loop-remove gave wrong result; index key-null
+  removal left 1 record; index loop-remove panicked "Unknown record". All fixed. (2026-03-14)
+
+- **Various** — Null-coalescing `??`; non-zero exit on parse/runtime error; for-loop mutation
+  guard extended to field access; reverse iteration on `sorted<T>`; CLI args in `fn main`;
+  zero-pad format sign order; XOR-null bug for `^`/`|`/`&`; missing polymorphic method
+  compiler panic; `for c in enum_vector` infinite loop. (2026-03-13/14)
+
+### Features (post-0.1.0)
+
+- **T2-6** — `now()` and `ticks()` time functions. `now()` returns milliseconds since
+  the Unix epoch (wall clock); `ticks()` returns microseconds elapsed since program start
+  (monotonic). `Stores` gains a `start_time: Instant` field initialised at `new()` and
+  cloned into parallel worker stores. Declared in `default/02_images.loft`; four tests
+  in `tests/time.rs`. (2026-03-16)
+
+- **T1-11** — Compile-time warning for division or modulo by constant zero. `n / 0` and
+  `n % 0` return null in loft rather than panicking, so a constant-zero divisor is a
+  completely silent bug. The parser now emits a warning when the right-hand operand of
+  `/` or `%` is a literal `0` (integer or long). Two regression tests in
+  `tests/expressions.rs`. (2026-03-16)
+
+- **T1-1** — Callable fn-ref variables: `f(args)` where `f` holds a `fn` reference, and
+  `fn`-typed function parameters. (2026-03-15)
+
+- **T1-3** — `map`, `filter`, `reduce` in the standard library. Compiler special-cases in
+  `parse_call`; cannot be expressed in plain loft (no generic type parameters). (2026-03-15)
+
+- **T3-4 pre-gate** — `spacial<T>` now emits a compile-time error instead of panicking at
+  runtime. (2026-03-15)
+
+- **const unification** — compile-time local constants; `file#exists` separated from
+  `file#format`; worker bytecode cloned once per `parallel_for` instead of per element;
+  `store.claim()` O(n) scan replaced by LLRB tree. (2026-03-14)
+
+### Infrastructure (post-0.1.0)
+
+- Package renamed `dryopea` → `loft` in `Cargo.toml`, all source files, and generated tests.
+- All game-engine branding strings removed from `src/data.rs`, `src/gendoc.rs`, HTML docs.
+- README.md rewritten (language overview, install options, hello-world). CHANGELOG.md created.
+- GitHub Actions CI (`ci.yml`: test on ubuntu/macOS/windows + clippy + fmt) and release
+  pipeline (`release.yml`: 4-platform binaries, gh-pages HTML docs, crates.io publish).
+- Clippy pedantic: all `#[allow(clippy::...)]` annotations justified or replaced; zero warnings.
+- Source file splits: `parser.rs` (7687 lines) → `src/parser/` (6 modules);
+  `database.rs` (3792) → `src/database/` (7 modules); `state.rs` (3525) → `src/state/` (5 modules).
+
+### Planned for 1.0
+
+- Wildcard imports: `use mylib::*` and `use mylib::Name` (T1-2)
+
+---
+
+## [0.1.0] — 2026-03-15
+
+First tagged release. All language features listed below are stable within the 0.1.x line.
+
+### Language
+
+- **Static type system** with inference — types are checked at compile time; mismatches are errors
+- **Null safety** — every value is nullable unless declared `not null`; null propagates through arithmetic; `?? default` coalescing operator
+- **Primitive types** — `boolean`, `integer`, `long`, `float`, `single`, `character`, `text`
+- **Integer ranges** — `integer limit(0, 255)` (aliases `u8`, `u16`, `i8`, `i16`, `i32`)
+- **Structs** — named field records with constructor syntax `T { field: value }`
+- **Plain enums** — closed set of named values; comparison operators work across variants of the same enum
+- **Struct-enums** — variants with different field sets; per-variant method dispatch (polymorphism)
+- **Variables** — implicitly declared on first assignment; type inferred; `const` enforced at compile time
+- **Control flow** — `if / else`, `while`, `loop`, `for in`, `break`, `continue`, `return`
+- **For-loop filters** — `for x in v if condition { }` with `#first`, `#count`, `#index`, `#remove` attributes
+- **Vector comprehensions** — `[for x in v { expr }]` and `[for x in v if cond { expr }]`
+- **Ranges** — `1..10` (exclusive end), `rev(range)` for reverse iteration
+- **String formatting** — `"{expr}"` interpolation; format specifiers `{x:06.2}`, `{x:>10}`, etc.
+- **Operators** — arithmetic, comparison, logical, bitwise, `as` cast, `sizeof`, null-coalescing `??`
+- **Functions** — top-level functions, methods (first `self` parameter), callable function references (`fn name`)
+- **Const parameters** — `fn f(v: const T)` prevents mutation of the argument
+- **`map` / `filter` / `reduce`** — stdlib higher-order functions accepting function references
+- **`par(...)` for-loop clause** — `for a in items par(b=worker(a), threads) { ... }` distributes work across CPU cores using multiple threads
+- **Type aliases** — `type Alias = ExistingType;`
+- **Use declarations** — `use mylib;` loads a loft library; names are accessed as `mylib::Name`
+- **Shebang** — `#!/usr/bin/env loft` supported on the first line
+
+### Collections
+
+- **`vector<T>`** — dynamic array; `+=` append, `[i]` index (null on out-of-bounds), slice `[a..b]`, `[elem; n]` repeat
+- **`sorted<T[key]>`** — B-tree ordered by key field; `[key] = null` removes an element; forward and reverse iteration
+- **`index<T[k1, k2]>`** — multi-key B-tree; compound key lookup; `[k1, k2] = null` removes
+- **`hash<T[key]>`** — hash table; O(1) lookup by key field; `[key] = null` removes
+- All collection types use `+=` to add elements and `for x in col` to iterate
+
+### Standard library (default/)
+
+- Math: `abs`, `sqrt`, `pow`, `floor`, `ceil`, `round`, `PI`
+- Text: `len`, `trim`, `upper`, `lower`, `starts_with`, `ends_with`, `contains`, `replace`, `split`, `join`
+- Collections: `len`, `clear`, `reverse`, `sort`, `map`, `filter`, `reduce`
+- File I/O: open, read, write, seek, `file#exists`, `file#size`, directory listing
+- Images: PNG read/write (`Image`, `Pixel`, `Format`)
+- Logging: `log_info`, `log_warn`, `log_error`, `log_fatal` with source location and rate limiting
+- Parallel: `par(...)` for-loop clause (compiler rewrites to internal `parallel_for`)
+- Random: seeded PRNG (`random_int`, `random_float`)
+
+### Compiler / interpreter
+
+- Two-pass recursive-descent parser producing IR (`Value` enum)
+- Bytecode compiler (`interpreter.rs`) and stack-based executor (`state.rs`)
+- Slot assignment with liveness analysis (`compute_intervals`, `validate_slots`)
+- Scope analysis emits `OpFreeText` / `OpFreeRef` at end-of-scope
+- Diagnostic system — all parse and type errors emit a message with file:line:col; non-zero exit on error
+- `--path` flag to override the project root (where `default/` is found)
+- HTML documentation generator (`gendoc` binary)
+
+### Known limitations
+
+- **No `match` expressions** — enum dispatch uses per-variant method overloading; `match` planned for 1.1
+- **No lambda expressions** — anonymous functions planned for 1.1; `fn name` references work with `map`, `filter`, `reduce`, and the `par(...)` for-loop clause
+- **No REPL** — interactive mode planned for 1.1
+- **Library prefix required** — `use mylib;` requires `mylib::` on all references; `use mylib::*` planned for 1.0
+- **`sizeof(u8)` returns 4** — stack alignment means `sizeof` returns the stack slot size, not the byte-packed size; documented in `doc/claude/INCONSISTENCIES.md #23`
+- **Plain enums cannot have methods** — only struct-enum variants support method dispatch; workaround: use a free function with an `if`/`else` chain; resolved by T1-4 (match)
+
+---
+
+[Unreleased]: https://github.com/jjstwerff/loft/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jjstwerff/loft/releases/tag/v0.1.0

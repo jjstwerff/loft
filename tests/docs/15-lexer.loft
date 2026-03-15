@@ -1,0 +1,101 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Lexer
+// @TITLE: Lexer library.
+// The lexer library breaks a text into tokens so your program can understand
+// its structure. Tokens are the smallest meaningful pieces: numbers,
+// identifiers, operators, and string literals. You tell the lexer which
+// multi-character sequences count as single tokens and which words are
+// reserved, and it handles the rest.
+
+// ## Setting Up the Lexer
+
+// Create a `lexer::Lexer` and register your language's rules before you parse
+// anything. `set_tokens` ensures operators like `+=` or `>>` are scanned as
+// one token instead of two separate characters. `set_keywords` prevents
+// reserved words from being returned as plain identifiers — the lexer will
+// report them exactly as written so your parser can treat them specially.
+
+use lexer;
+
+fn main() {
+    l = lexer::Lexer {};
+    l.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
+    l.set_keywords(["for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or"]);
+
+    // ## Reading Tokens
+
+    // `parse_string(name, source)` feeds source text into the lexer. The name
+    // is used in error messages and position reports. After that, call the
+    // typed reader functions one by one to consume tokens in order.
+    //
+    // `int()` consumes and returns the next integer token, or null if the
+    // current token is not an integer. `long_int()` does the same for integers
+    // suffixed with `l`. `matches(s)` consumes the next token only when it
+    // equals s and returns true; otherwise it leaves the token in place and
+    // returns false. `peek()` returns the next token as text without consuming
+    // it. `position()` returns the current location as `file:line:col`.
+    l.parse_string("Tokens", "12 += -2 * 3l >> 4");
+    assert(l.int() == 12, "Integer");
+    assert(!l.matches("+"), "Incorrect plus");
+    assert(l.peek() != "+", "Incorrect plus");
+    assert(l.matches("+="), "Incorrect plus_is");
+    assert(l.int() == -2, "Second integer");
+    assert(l.matches("*"), "Incorrect multiply");
+    assert(l.int() != 3, "Third number");
+    assert(l.long_int() == 3, "Incorrect long");
+    assert(l.position() == "Tokens:1:15", "Incorrect position {l.position()}");
+    assert(!l.matches(">"), "Incorrect higher");
+    assert(l.matches(">>"), "Incorrect logical shift");
+    assert(l.position() == "Tokens:1:18", "Incorrect position {l.position()}");
+
+    // ## String Literals and Comments
+
+    // `constant_text()` reads a double-quoted string literal and unescapes any
+    // escape sequences inside it. `constant_character()` reads a
+    // single-quoted character literal and returns it as text.
+    l.parse_string("Texts", "\"123\" + '4'");
+    assert(l.constant_text() == "123", "Incorrect text literal");
+    assert(l.matches("+"), "Incorrect add");
+    assert(l.constant_character() == "123", "Incorrect text literal");
+
+    // The lexer collects `//` comments automatically as it scans. You do not
+    // need to handle them yourself. `last_comment()` returns the accumulated
+    // comment text since the last consumed token. When multiple comment lines
+    // appear in a row they are joined with newlines into a single string.
+    // `comment_behind()` is true when the comment appeared on the same line as
+    // the preceding token rather than on its own line above. `is_finished()`
+    // returns true once every token has been consumed.
+    l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
+    assert(!l.comment_behind(), "Initial comment not behind");
+    assert(l.last_comment() == "starting comments", "Initial comment");
+    assert(l.int() == 123, "Content integer");
+    assert(l.comment_behind(), "Second comment is behind");
+    assert(l.last_comment() == "same line comment\nextra comment", "Second comment");
+    assert(!l.is_finished(), "Not Ready");
+    assert(l.int() == 4, "Second integer");
+    assert(l.last_comment() == "", "No remaining comment");
+    assert(l.is_finished(), "Ready");
+
+    // ## Embedded Format Expressions
+
+    // Loft string literals can embed expressions with `{expr}`. The lexer
+    // exposes a protocol that lets you parse these yourself. When
+    // `constant_text()` reaches a `{`, it returns the literal text before it
+    // and sets `is_formatting()` to true. At that point call
+    // `set_formatting(false)` and parse the embedded expression normally using
+    // the usual token readers. When the expression is done, call
+    // `set_formatting(true)` and consume the closing `}}`. Then
+    // `constant_text()` continues with the next segment of the string.
+    l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
+    assert(l.constant_text() == "abc", "Before formatting");
+    assert(l.is_formatting(), "Formatting");
+    l.set_formatting(false);
+    assert(l.int() == 12, "First integer");
+    assert(l.matches("+"), "Incorrect plus");
+    assert(l.int() == 34, "Second integer");
+    l.set_formatting(true);
+    assert(l.matches("}}"), "Incorrect closing brace");
+    assert(l.constant_text() == "def", "After formatting");
+    assert(!l.is_formatting(), "Formatting");
+}

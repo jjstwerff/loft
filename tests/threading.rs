@@ -1,0 +1,461 @@
+// Copyright (c) 2025 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! Integration tests for parallel execution (`parallel_for_int`).
+//!
+//! Each test compiles a loft program, builds a vector in Rust, and calls
+//! `parallel::run_parallel_int` to verify that workers execute correctly and
+//! return results in the right order.
+
+extern crate loft;
+
+mod testing;
+
+use loft::compile::byte_code;
+use loft::database::Stores;
+use loft::keys::DbRef;
+use loft::parallel::{WorkerProgram, run_parallel_int};
+use loft::parser::Parser;
+use loft::scopes;
+use loft::state::State;
+
+/// Parse default library + given loft code; compile to bytecode; return State + Data.
+fn compile(code: &str) -> (State, loft::data::Data) {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse_str(code, "threading_test", false);
+    assert!(
+        p.diagnostics.lines().is_empty(),
+        "Parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    (state, p.data)
+}
+
+/// Build an integer vector in a fresh store inside `stores` and return the
+/// `DbRef` pointing to the vector "header" field (as `parallel_for_int` expects).
+///
+/// Element size is 4 bytes (a single `integer` per element).
+fn build_int_vector(stores: &mut Stores, values: &[i32]) -> DbRef {
+    let db = stores.null(); // allocate an empty store
+    let n = values.len() as u32;
+    // Vector data record: fld=4 count, fld=8+ elements.
+    let vec_words = (n * 4 + 15) / 8;
+    let vec_words = vec_words.max(1);
+    let vec_cr = stores.claim(&db, vec_words);
+    let vec_rec = vec_cr.rec;
+    // Header record holds the vector pointer at fld=4.
+    let header_cr = stores.claim(&db, 1);
+    let header_rec = header_cr.rec;
+
+    {
+        let store = stores.store_mut(&db);
+        store.set_int(vec_rec, 4, n as i32);
+        for (i, &v) in values.iter().enumerate() {
+            store.set_int(vec_rec, 8 + i as u32 * 4, v);
+        }
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+
+    DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
+}
+
+/// Build a `WorkerProgram` snapshot from a fully compiled `State`.
+fn worker_program(state: &State) -> WorkerProgram {
+    state.worker_program()
+}
+
+/// A simple worker that reads back an integer stored directly as the element.
+/// The vector is built with `build_int_vector` where each element IS an i32.
+/// The worker function reads field 0 from the passed reference (= the element value).
+#[test]
+fn parallel_returns_correct_values_single_thread() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = vec![10, 20, 30, 40, 50];
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_worker_id");
+    assert_ne!(d_nr, u32::MAX, "worker function not found");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 1);
+
+    assert_eq!(results, values, "single-thread results mismatch");
+}
+
+#[test]
+fn parallel_returns_correct_values_multi_thread() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = (0..20).map(|i| i * 3).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    // Use 4 threads for 20 elements.
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 4);
+
+    assert_eq!(results, values, "multi-thread results mismatch");
+}
+
+#[test]
+fn parallel_empty_vector_returns_empty() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let input = build_int_vector(&mut state.database, &[]);
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 2);
+
+    assert!(results.is_empty(), "empty input should give empty output");
+}
+
+#[test]
+fn parallel_worker_computes_expression() {
+    let code = r#"
+struct Pair { a: integer, b: integer }
+fn worker_sum(r: const Pair) -> integer { r.a + r.b }
+"#;
+    let (mut state, data) = compile(code);
+
+    // Element size for Pair: 2 integers = 8 bytes.
+    // We'll manually build the vector with Pair elements (a, b) at offsets 0, 4.
+    let db = state.database.null();
+    let n: u32 = 4;
+    // vec_words: 4(count) + 4*8(elements) = 36 bytes → ceil(36/8) = 5 words
+    let vec_words = (n * 8 + 15) / 8;
+    let vec_cr = state.database.claim(&db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = state.database.claim(&db, 1);
+    let header_rec = header_cr.rec;
+
+    {
+        let store = state.database.store_mut(&db);
+        store.set_int(vec_rec, 4, n as i32);
+        // Pairs: (1,2), (3,4), (5,6), (7,8)
+        let pairs = [(1i32, 2i32), (3, 4), (5, 6), (7, 8)];
+        for (i, (a, b)) in pairs.iter().enumerate() {
+            store.set_int(vec_rec, 8 + i as u32 * 8, *a); // field a at offset 0
+            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *b); // field b at offset 4
+        }
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+
+    let input = DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    };
+
+    let d_nr = data.def_nr("n_worker_sum");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 2);
+
+    assert_eq!(results, vec![3, 7, 11, 15], "expression results mismatch");
+}
+
+#[test]
+fn parallel_store_is_read_only_in_workers() {
+    // Verify that input stores are locked for workers (clone_for_worker).
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, _) = compile(code);
+    let values = vec![1i32, 2, 3];
+    let input = build_int_vector(&mut state.database, &values);
+
+    // After clone_for_worker, all stores in the clone should be locked.
+    let worker_stores = state.database.clone_for_worker();
+    for alloc in &worker_stores.allocations {
+        assert!(alloc.is_locked(), "worker store should be locked read-only");
+    }
+
+    // The main stores should NOT be locked.
+    for alloc in &state.database.allocations {
+        assert!(
+            !alloc.is_locked(),
+            "main stores should remain unlocked after clone"
+        );
+    }
+    let _ = input; // ensure input is not dropped before this check
+}
+
+// ---------------------------------------------------------------------------
+// Multi-field struct workers — context via the element struct itself.
+// Each worker receives the full struct; "context" fields accompany the
+// primary data field without any extra argument mechanism.
+// ---------------------------------------------------------------------------
+
+/// Three-field struct: worker reads all three fields as independent context.
+/// `Triple { a, b, c }` → worker returns `a + b + c`.
+#[test]
+fn parallel_three_field_struct_sum() {
+    let code = r#"
+struct Triple { a: integer, b: integer, c: integer }
+fn sum3(r: const Triple) -> integer { r.a + r.b + r.c }
+"#;
+    let (mut state, data) = compile(code);
+
+    // Element size: 3 × 4 bytes = 12 bytes.
+    let db = state.database.null();
+    let n: u32 = 4;
+    let vec_words = (n * 12 + 15) / 8;
+    let vec_cr = state.database.claim(&db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = state.database.claim(&db, 1);
+    let header_rec = header_cr.rec;
+
+    {
+        let store = state.database.store_mut(&db);
+        store.set_int(vec_rec, 4, n as i32);
+        // Triples: (1,2,3), (4,5,6), (7,8,9), (10,11,12)
+        let triples = [(1i32, 2, 3), (4, 5, 6), (7, 8, 9), (10, 11, 12)];
+        for (i, (a, b, c)) in triples.iter().enumerate() {
+            let off = 8 + i as u32 * 12;
+            store.set_int(vec_rec, off, *a);
+            store.set_int(vec_rec, off + 4, *b);
+            store.set_int(vec_rec, off + 8, *c);
+        }
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+
+    let input = DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    };
+    let d_nr = data.def_nr("n_sum3");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 12, 2);
+    assert_eq!(results, vec![6, 15, 24, 33], "three-field sum");
+}
+
+/// Worker uses a context field as a multiplier and a data field as the value.
+/// `struct Scaled { value: integer, factor: integer }` → `value * factor`.
+#[test]
+fn parallel_struct_with_context_factor() {
+    let code = r#"
+struct Scaled { value: integer, factor: integer }
+fn apply_factor(r: const Scaled) -> integer { r.value * r.factor }
+"#;
+    let (mut state, data) = compile(code);
+
+    // Element size: 2 × 4 = 8 bytes.
+    let db = state.database.null();
+    let n: u32 = 5;
+    let vec_words = (n * 8 + 15) / 8;
+    let vec_cr = state.database.claim(&db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = state.database.claim(&db, 1);
+    let header_rec = header_cr.rec;
+
+    {
+        let store = state.database.store_mut(&db);
+        store.set_int(vec_rec, 4, n as i32);
+        // (value, factor) pairs; factor is context shared per-element
+        let pairs: [(i32, i32); 5] = [(3, 2), (5, 3), (7, 4), (2, 10), (1, 0)];
+        for (i, (v, f)) in pairs.iter().enumerate() {
+            store.set_int(vec_rec, 8 + i as u32 * 8, *v);
+            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *f);
+        }
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+
+    let input = DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    };
+    let d_nr = data.def_nr("n_apply_factor");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 3);
+    assert_eq!(results, vec![6, 15, 28, 20, 0], "value * factor");
+}
+
+/// Worker uses a threshold field for conditional logic.
+/// Returns `value` if `value >= threshold`, else 0.
+#[test]
+fn parallel_conditional_context_threshold() {
+    let code = r#"
+struct Thresh { value: integer, threshold: integer }
+fn clamp_lo(r: const Thresh) -> integer {
+    if r.value >= r.threshold { r.value } else { 0 }
+}
+"#;
+    let (mut state, data) = compile(code);
+
+    let db = state.database.null();
+    let n: u32 = 6;
+    let vec_words = (n * 8 + 15) / 8;
+    let vec_cr = state.database.claim(&db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = state.database.claim(&db, 1);
+    let header_rec = header_cr.rec;
+
+    {
+        let store = state.database.store_mut(&db);
+        store.set_int(vec_rec, 4, n as i32);
+        // (value, threshold)
+        let rows: [(i32, i32); 6] = [(10, 5), (3, 5), (5, 5), (0, 1), (100, 50), (49, 50)];
+        for (i, (v, t)) in rows.iter().enumerate() {
+            store.set_int(vec_rec, 8 + i as u32 * 8, *v);
+            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *t);
+        }
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+
+    let input = DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    };
+    let d_nr = data.def_nr("n_clamp_lo");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 2);
+    assert_eq!(results, vec![10, 0, 5, 0, 100, 0], "threshold clamp");
+}
+
+// ---------------------------------------------------------------------------
+// Different worker return types.
+// ---------------------------------------------------------------------------
+
+use loft::parallel::run_parallel_raw;
+
+/// Worker returns `long` (8-byte return); result collected via run_parallel_raw.
+#[test]
+fn parallel_long_return_type() {
+    let code = r#"
+struct Num { v: integer }
+fn to_long(r: const Num) -> long { r.v as long * 1000000000l }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values = vec![1i32, 2, 3];
+    let input = build_int_vector(&mut state.database, &values);
+    let d_nr = data.def_nr("n_to_long");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 8, 2);
+    let longs: Vec<i64> = raw.iter().map(|&r| r as i64).collect();
+    assert_eq!(
+        longs,
+        vec![1_000_000_000i64, 2_000_000_000, 3_000_000_000],
+        "long results"
+    );
+}
+
+/// Worker returns `boolean` (1-byte return); result collected via run_parallel_raw.
+#[test]
+fn parallel_boolean_return_type() {
+    let code = r#"
+struct Num { v: integer }
+fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values = vec![0i32, 1, 2, 3, 4];
+    let input = build_int_vector(&mut state.database, &values);
+    let d_nr = data.def_nr("n_is_even");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 1, 1);
+    let bools: Vec<bool> = raw.iter().map(|&r| r != 0).collect();
+    assert_eq!(
+        bools,
+        vec![true, false, true, false, true],
+        "even/odd booleans"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Desired future behaviour: worker function with extra context parameters.
+//
+// Currently the runtime only passes the per-element DbRef to the worker.
+// Extra arguments are validated at compile time (arg count must match the
+// worker's parameter list) but are NOT forwarded to the worker at runtime.
+// These tests are #[ignore]-d until the feature is implemented.
+// See PLANNING.md T3-2.
+// ---------------------------------------------------------------------------
+
+/// Desired: `parallel_for(fn scale, items, threads, multiplier)` where
+/// `scale(r: const Item, m: integer)` reads `m` from the extra context arg.
+/// Currently the parser accepts this (arg count matches) but the runtime
+/// ignores `m`, producing wrong results.
+#[test]
+#[ignore = "T3-2: extra context args not yet forwarded to workers at runtime"]
+fn parallel_extra_integer_context_arg() {
+    let code = r#"
+struct Item { value: integer }
+fn scale(r: const Item, m: integer) -> integer { r.value * m }
+fn test() {
+    items = [Item{value:1}, Item{value:2}, Item{value:3}];
+    mult = 5;
+    sum = 0;
+    for a in items par(b=scale(a, mult), 2) {
+        sum += b;
+    }
+    assert(sum == 30, "scaled sum: {sum}");
+}
+"#;
+    code!(code);
+}
+
+/// Desired: worker accesses two context scalars alongside per-element data.
+/// `fn fused(r: const Item, offset: integer, scale: integer) -> integer`
+/// Should compute `r.value * scale + offset` for each element.
+#[test]
+#[ignore = "T3-2: extra context args not yet forwarded to workers at runtime"]
+fn parallel_two_context_args() {
+    let code = r#"
+struct Item { value: integer }
+fn fused(r: const Item, offset: integer, factor: integer) -> integer {
+    r.value * factor + offset
+}
+fn test() {
+    items = [Item{value:1}, Item{value:2}, Item{value:4}];
+    sum = 0;
+    for a in items par(b=fused(a, 10, 3), 2) {
+        sum += b;
+    }
+    // expected: (1*3+10) + (2*3+10) + (4*3+10) = 13 + 16 + 22 = 51
+    assert(sum == 51, "fused sum: {sum}");
+}
+"#;
+    code!(code);
+}

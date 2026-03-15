@@ -1,0 +1,352 @@
+
+fn parse(s: text) -> integer {
+    for t in 0..300 {
+        l = s[t];
+        if !l.is_alphanumeric() and l != '_' {
+            return t;
+        }
+    }
+    return 0;
+}
+
+pub fn test() {
+    test_value = {parse("if_cond ")};
+    assert(
+        test_value == 7,
+        "Test failed {test_value} != 7"
+    );
+}
+fn n_parse(s:text) -> integer {#block(1):integer
+  [3] {#For block(2):void
+    t#index(2):integer = OpConvIntFromNull();
+    loop {#For loop_3
+      t(3):integer = {#Iter range(4):integer
+        t#index(2):integer = if OpNot(OpConvBoolFromInt(t#index(2))) 0i32 else OpAddInt(t#index(2), 1i32);
+        if OpLeInt(300i32, t#index(2)) break(0) else null;
+        t#index(2);
+      }#Iter range(4):integer;
+      {#block(5):void
+        [4] l(5):character = OpTextCharacter(s(0), t(3));
+        [5] if if OpNot(t_9character_is_alphanumeric(l(5))) OpNeInt(OpConvIntFromCharacter(l(5)), OpConvIntFromCharacter(95i32)) else false {#block(6):void
+          [6] return t(3);
+        }#block(6):void else null;
+      }#block(5):void;
+    }#For loop_3;
+  }#For block(2):void;
+  [9] return 0i32;
+}#block(1):integer
+
+byte-code for string_parse:n_parse(s: text[0]) -> integer
+   0[16]: return-address  @abs=2832
+   0[20]: [3] ConvIntFromNull() -> integer var=t#index[20]:integer
+   1[24]: VarInt(var[20]) -> integer var=t#index[20]:integer
+   4[28]: ConvBoolFromInt(v1: integer) -> boolean
+   5[25]: Not(v1: boolean) -> boolean
+   6[25]: GotoFalseWord(jump=17, if_false: boolean)
+   9[24]: ConstInt(val=0) -> integer
+  14[28]: GotoWord(jump=26)
+  17[24]: VarInt(var[20]) -> integer var=t#index[20]:integer
+  20[28]: ConstInt(val=1) -> integer
+  25[32]: AddInt(v1: integer, v2: integer) -> integer
+  26[28]: PutInt(var[20], value: integer)
+  29[24]: ConstInt(val=300) -> integer
+  34[28]: VarInt(var[20]) -> integer var=t#index[20]:integer
+  37[32]: LeInt(v1: integer, v2: integer) -> boolean
+  38[25]: GotoFalseWord(jump=44, if_false: boolean)
+  41[24]: GotoWord(jump=106)
+  44[24]: VarInt(var[20]) -> integer var=t#index[20]:integer
+  47[28]: [4] ArgText(var[0]) -> text var=s[0]:text
+  50[44]: VarInt(var[24]) -> integer var=t[24]:integer
+  53[48]: TextCharacter(v1: text, v2: integer) -> character
+  54[32]: [5] VarCharacter(var[28]) -> character var=l[28]:character
+  57[36]: StaticCall(t_9character_is_alphanumeric)
+  60[33]: Not(v1: boolean) -> boolean
+  61[33]: GotoFalseWord(jump=78, if_false: boolean)
+  64[32]: VarCharacter(var[28]) -> character var=l[28]:character
+  67[36]: ConvIntFromCharacter(v1: character) -> integer
+  68[36]: ConstInt(val=95) -> integer
+  73[40]: ConvIntFromCharacter(v1: character) -> integer
+  74[40]: NeInt(v1: integer, v2: integer) -> boolean
+  75[33]: GotoWord(jump=79)
+  78[32]: ConstFalse() -> boolean
+  79[33]: GotoFalseWord(jump=95, if_false: boolean)
+  82[32]: [6] VarInt(var[24]) -> integer var=t[24]:integer
+  85[36]: Return(ret=16, value=4, discard=36)
+  91[36]: FreeStack(value=0, discard=4)
+  95[32]: FreeStack(value=0, discard=4)
+  99[28]: FreeStack(value=0, discard=4)
+ 103[24]: GotoWord(jump=1)
+ 106[24]: FreeStack(value=0, discard=4)
+ 110[20]: [9] ConstInt(val=0) -> integer
+ 115[24]: Return(ret=16, value=4, discard=24)
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [13] test_value(1):integer = {#block(2):integer
+    n_parse("if_cond ");
+  }#block(2):integer;
+  [14] n_assert(OpEqInt(test_value(1), 7i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 7");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "string_parse", 15i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for string_parse:n_test()
+   0[0]: return-address  @abs=2953
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [13] ConstText(_value="if_cond ") -> text var=test_value[28]:integer
+  11[44]: Call(size=0, fn=n_parse)
+  18[32]: [14] VarInt(var[28]) -> integer var=test_value[28]:integer
+  21[36]: ConstInt(val=7) -> integer
+  26[40]: EqInt(v1: integer, v2: integer) -> boolean
+  27[33]: ClearText(var[4]) var=__work_1[4]:text
+  30[33]: ConstText(_value="Test failed ") -> text
+  44[49]: AppendText(var[4], v1: text)
+  47[33]: VarInt(var[28]) -> integer var=test_value[28]:integer
+  50[37]: ConvLongFromInt(v1: integer) -> long
+  51[41]: ConstInt(val=0) -> integer
+  56[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  63[33]: ConstText(_value=" != 7") -> text
+  70[49]: AppendText(var[4], v1: text)
+  73[33]: VarText(var[4]) -> text var=__work_1[4]:text
+  76[49]: ConstText(_value="string_parse") -> text
+  90[65]: ConstInt(val=15) -> integer
+  95[69]: StaticCall(n_assert)
+  98[32]: FreeText(var[4])
+ 101[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [13] Text()
+    1:[32] ConstText(_value="if_cond ") -> "if_cond "[32]
+   11:[48] Call(size=0, fn=n_parse)
+ 2832:[52] ConvIntFromNull() -> -2147483648[52]
+ 2833:[56] VarInt(var[52]=t#index) -> -2147483648[56]
+ 2836:[60] ConvBoolFromInt(v1=-2147483648[56]) -> false[56]
+ 2837:[57] Not(v1=false[56]) -> true[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=true[56])
+ 2841:[56] ConstInt(val=0) -> 0[56]
+ 2846:[60] GotoWord(jump=2858)
+ 2858:[60] PutInt(var[52], value=0[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 0[60]
+ 2869:[64] LeInt(v1=300[56], v2=0[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 0[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 0[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=0[76]) -> 'i'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> 'i'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=true[64]) -> false[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=false[64])
+ 2910:[64] ConstFalse() -> false[64]
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 0[56]
+ 2836:[60] ConvBoolFromInt(v1=0[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 0[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=0[56], v2=1[60]) -> 1[56]
+ 2858:[60] PutInt(var[52], value=1[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 1[60]
+ 2869:[64] LeInt(v1=300[56], v2=1[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 1[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 1[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=1[76]) -> 'f'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> 'f'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=true[64]) -> false[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=false[64])
+ 2910:[64] ConstFalse() -> false[64]
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 1[56]
+ 2836:[60] ConvBoolFromInt(v1=1[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 1[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=1[56], v2=1[60]) -> 2[56]
+ 2858:[60] PutInt(var[52], value=2[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 2[60]
+ 2869:[64] LeInt(v1=300[56], v2=2[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 2[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 2[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=2[76]) -> '_'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> '_'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=false[64]) -> true[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=true[64])
+ 2896:[64] VarCharacter(var[60]=l) -> '_'[64]
+ 2899:[68] ConvIntFromCharacter(v1='_'[64]) -> 95[64]
+ 2900:[68] ConstInt(val=95) -> 95[68]
+ 2905:[72] ConvIntFromCharacter(v1='_'[68]) -> 95[68]
+ 2906:[72] NeInt(v1=95[64], v2=95[68]) -> false[64]
+ 2907:[65] GotoWord(jump=2911)
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 2[56]
+ 2836:[60] ConvBoolFromInt(v1=2[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 2[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=2[56], v2=1[60]) -> 3[56]
+ 2858:[60] PutInt(var[52], value=3[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 3[60]
+ 2869:[64] LeInt(v1=300[56], v2=3[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 3[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 3[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=3[76]) -> 'c'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> 'c'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=true[64]) -> false[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=false[64])
+ 2910:[64] ConstFalse() -> false[64]
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 3[56]
+ 2836:[60] ConvBoolFromInt(v1=3[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 3[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=3[56], v2=1[60]) -> 4[56]
+ 2858:[60] PutInt(var[52], value=4[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 4[60]
+ 2869:[64] LeInt(v1=300[56], v2=4[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 4[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 4[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=4[76]) -> 'o'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> 'o'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=true[64]) -> false[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=false[64])
+ 2910:[64] ConstFalse() -> false[64]
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 4[56]
+ 2836:[60] ConvBoolFromInt(v1=4[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 4[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=4[56], v2=1[60]) -> 5[56]
+ 2858:[60] PutInt(var[52], value=5[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 5[60]
+ 2869:[64] LeInt(v1=300[56], v2=5[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 5[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 5[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=5[76]) -> 'n'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> 'n'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=true[64]) -> false[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=false[64])
+ 2910:[64] ConstFalse() -> false[64]
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 5[56]
+ 2836:[60] ConvBoolFromInt(v1=5[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 5[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=5[56], v2=1[60]) -> 6[56]
+ 2858:[60] PutInt(var[52], value=6[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 6[60]
+ 2869:[64] LeInt(v1=300[56], v2=6[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 6[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 6[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=6[76]) -> 'd'[60]
+ 2886:[64] VarCharacter(var[60]=l) -> 'd'[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=true[64]) -> false[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=false[64])
+ 2910:[64] ConstFalse() -> false[64]
+ 2911:[65] GotoFalseWord(jump=2927, if_false=false[64])
+ 2927:[64] FreeStack(value=0, discard=4)
+ 2931:[60] FreeStack(value=0, discard=4)
+ 2935:[56] GotoWord(jump=2833)
+ 2833:[56] VarInt(var[52]=t#index) -> 6[56]
+ 2836:[60] ConvBoolFromInt(v1=6[56]) -> true[56]
+ 2837:[57] Not(v1=true[56]) -> false[56]
+ 2838:[57] GotoFalseWord(jump=2849, if_false=false[56])
+ 2849:[56] VarInt(var[52]=t#index) -> 6[56]
+ 2852:[60] ConstInt(val=1) -> 1[60]
+ 2857:[64] AddInt(v1=6[56], v2=1[60]) -> 7[56]
+ 2858:[60] PutInt(var[52], value=7[56])
+ 2861:[56] ConstInt(val=300) -> 300[56]
+ 2866:[60] VarInt(var[52]=t#index) -> 7[60]
+ 2869:[64] LeInt(v1=300[56], v2=7[60]) -> false[56]
+ 2870:[57] GotoFalseWord(jump=2876, if_false=false[56])
+ 2876:[56] VarInt(var[52]=t#index) -> 7[56]
+ 2879:[60] ArgText(var[32]=s) -> "if_cond "[60]
+ 2882:[76] VarInt(var[56]=t) -> 7[76]
+ 2885:[80] [5] TextCharacter(v1="if_cond "[60], v2=7[76]) -> ' '[60]
+ 2886:[64] VarCharacter(var[60]=l) -> ' '[64]
+ 2889:[68] StaticCall(t_9character_is_alphanumeric)
+ 2892:[65] Not(v1=false[64]) -> true[64]
+ 2893:[65] GotoFalseWord(jump=2910, if_false=true[64])
+ 2896:[64] VarCharacter(var[60]=l) -> ' '[64]
+ 2899:[68] ConvIntFromCharacter(v1=' '[64]) -> 32[64]
+ 2900:[68] ConstInt(val=95) -> 95[68]
+ 2905:[72] ConvIntFromCharacter(v1='_'[68]) -> 95[68]
+ 2906:[72] NeInt(v1=32[64], v2=95[68]) -> true[64]
+ 2907:[65] GotoWord(jump=2911)
+ 2911:[65] GotoFalseWord(jump=2927, if_false=true[64])
+ 2914:[64] VarInt(var[56]=t) -> 7[64]
+ 2917:[68] Return(ret=2971[48], value=4, discard=36)
+   18:[36] VarInt(var[32]=test_value) -> 7[36]
+   21:[40] ConstInt(val=7) -> 7[40]
+   26:[44] EqInt(v1=7[36], v2=7[40]) -> true[36]
+   27:[37] ClearText(var[8]=__work_1)
+   30:[37] ConstText(_value="Test failed ") -> "Test failed "[37]
+   44:[53] AppendText(var[8], v1="Test failed "[37])
+   47:[37] VarInt(var[32]=test_value) -> 7[37]
+   50:[41] ConvLongFromInt(v1=7[37]) -> 7[37]
+   51:[45] ConstInt(val=0) -> 0[45]
+   56:[49] FormatLong(var[8], val=7[37], radix=10, width=0[45], token=32, plus=false, note=false)
+   63:[37] ConstText(_value=" != 7") -> " != 7"[37]
+   70:[53] AppendText(var[8], v1=" != 7"[37])
+   73:[37] VarText(var[8]=__work_1) -> "Test failed 7 != 7"[37]
+   76:[53] ConstText(_value="string_parse") -> "string_parse"[53]
+   90:[69] ConstInt(val=15) -> 15[69]
+   95:[73] StaticCall(n_assert)
+   98:[36] FreeText(var[8])
+  101:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished

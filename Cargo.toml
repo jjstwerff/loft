@@ -1,0 +1,33 @@
+[package]
+name = "loft"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jurjen Stellingwerff"]
+license = "LGPL-3.0-or-later"
+description = "The loft scripting language interpreter"
+homepage = "https://github.com/jjstwerff/loft"
+repository = "https://github.com/jjstwerff/loft"
+keywords = ["language", "interpreter", "scripting"]
+categories = ["command-line-utilities", "compilers"]
+
+[lib]
+name = "loft"
+path = "src/lib.rs"
+
+[[bin]]
+name = "loft"
+path = "src/main.rs"
+
+[[bin]]
+name = "gendoc"
+path = "src/gendoc.rs"
+
+[dependencies]
+rand_core = "0.9"
+rand_pcg = "0.9"
+png = "0.17"
+mmap-storage = "0.10"
+dirs = "5"
+
+[dev-dependencies]
+stdext = "0.3"

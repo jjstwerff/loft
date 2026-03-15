@@ -1,0 +1,409 @@
+struct Elm { key: integer, val: integer }
+struct Db { s: sorted<Elm[key]> }
+fn test() {
+    db = Db { s: [Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}] };
+    // Forward: 1,2,3 → digits 1,2,3
+    fwd = 0;
+    for e in db.s { fwd = fwd * 10 + e.key }
+    assert(fwd == 123, "forward got {fwd}");
+    // Reverse: 3,2,1 → digits 3,2,1
+    rev_sum = 0;
+    for e in rev(db.s) { rev_sum = rev_sum * 10 + e.key }
+    assert(rev_sum == 321, "reverse got {rev_sum}")
+}
+Type 18:Elm[8/4]: parents [Db 19]
+    key:integer[0]
+    val:integer[4]
+
+Type 19:Db[4/4]:
+    s:sorted<Elm[key]>[0]
+
+Type 20:sorted<Elm[key]>[4/4]:Sorted(18, [(0, true)]) keys [tp:1 desc:false field:0, ]
+
+Type 21:vector<Elm>[4/4]:Vector(18)
+
+fn n_test() {#block(1):void
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [4] db(1):ref(Db) = null;
+  OpDatabase(db(1), 19i32);
+  OpSetInt(db(1), 0i32, 0i32);
+  _elm_1(1):ref(Elm)["db"] = OpNewRecord(db(1), 19i32, 0i32);
+  OpSetInt(_elm_1(1), 0i32, 1i32);
+  OpSetInt(_elm_1(1), 4i32, 10i32);
+  OpFinishRecord(db(1), _elm_1(1), 19i32, 0i32);
+  _elm_1(1):ref(Elm)["db"] = OpNewRecord(db(1), 19i32, 0i32);
+  OpSetInt(_elm_1(1), 0i32, 2i32);
+  OpSetInt(_elm_1(1), 4i32, 20i32);
+  OpFinishRecord(db(1), _elm_1(1), 19i32, 0i32);
+  _elm_1(1):ref(Elm)["db"] = OpNewRecord(db(1), 19i32, 0i32);
+  OpSetInt(_elm_1(1), 0i32, 3i32);
+  OpSetInt(_elm_1(1), 4i32, 30i32);
+  OpFinishRecord(db(1), _elm_1(1), 19i32, 0i32);
+  [6] fwd(1):integer = 0i32;
+  [7] {#For block(2):void
+    e#index(2):integer = OpIterate(OpGetField(db(1), 0i32, 20i32), 130i32, 8i32, &[Key { type_nr: 1, position: 0 }], 0i32, 0i32);
+    loop {#For loop_3
+      e(3):ref(Elm)["db"] = OpStep(e#index(2), OpGetField(db(1), 0i32, 20i32), 130i32, 8i32);
+      if OpNot(OpConvBoolFromRef(e(3))) {#break(4):void
+        break(0);
+      }#break(4):void else null;
+      {#block(5):void
+        fwd(1):integer = OpAddInt(OpMulInt(fwd(1), 10i32), OpGetInt(e(3), 0i32));
+      }#block(5):void;
+    }#For loop_3;
+  }#For block(2):void;
+  [8] n_assert(OpEqInt(fwd(1), 123i32), {#Formatted string(6):text["__work_1"]
+    __work_1(1):text = "forward got ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(fwd(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(6):text["__work_1"], "sorted_reverse_iterator", 8i32);
+  [10] rev_sum(1):integer = 0i32;
+  [11] {#For block(7):void
+    e#index(7):integer = OpIterate(OpGetField(db(1), 0i32, 20i32), 194i32, 8i32, &[Key { type_nr: 1, position: 0 }], 0i32, 0i32);
+    loop {#For loop_8
+      e(8):ref(Elm)["db"] = OpStep(e#index(7), OpGetField(db(1), 0i32, 20i32), 194i32, 8i32);
+      if OpNot(OpConvBoolFromRef(e(8))) {#break(9):void
+        break(0);
+      }#break(9):void else null;
+      {#block(10):void
+        rev_sum(1):integer = OpAddInt(OpMulInt(rev_sum(1), 10i32), OpGetInt(e(8), 0i32));
+      }#block(10):void;
+    }#For loop_8;
+  }#For block(7):void;
+  [12] n_assert(OpEqInt(rev_sum(1), 321i32), {#Formatted string(11):text["__work_2"]
+    __work_2(1):text = "reverse got ";
+    OpFormatLong(__work_2(1), OpConvLongFromInt(rev_sum(1)), 10i32, 0i32, 32i32, false, false);
+    __work_2(1);
+  }#Formatted string(11):text["__work_2"], "sorted_reverse_iterator", 12i32);
+  OpFreeRef(db(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+}#block(1):void
+
+byte-code for sorted_reverse_iterator:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_2[4]:text
+   1[28]: Text() var=__work_1[28]:text
+   2[52]: [4] ConvRefFromNull() -> ref(reference) var=db[52]:ref(Db) ; [store-alloc]
+   3[64]: Database(var[52], db_tp=19) type=Db 19
+   8[64]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+  11[76]: ConstInt(val=0) -> integer
+  16[80]: SetInt(v1: ref(reference), fld=0, val: integer)
+  19[64]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+  22[76]: NewRecord(data: ref(reference), parent_tp=19, fld=0) -> ref(reference)
+  27[76]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+  30[88]: ConstInt(val=1) -> integer
+  35[92]: SetInt(v1: ref(reference), fld=0, val: integer)
+  38[76]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+  41[88]: ConstInt(val=10) -> integer
+  46[92]: SetInt(v1: ref(reference), fld=4, val: integer)
+  49[76]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+  52[88]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+  55[100]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=19, fld=0)
+  60[76]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+  63[88]: NewRecord(data: ref(reference), parent_tp=19, fld=0) -> ref(reference)
+  68[88]: PutRef(var[64], value: ref(reference))
+  71[76]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+  74[88]: ConstInt(val=2) -> integer
+  79[92]: SetInt(v1: ref(reference), fld=0, val: integer)
+  82[76]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+  85[88]: ConstInt(val=20) -> integer
+  90[92]: SetInt(v1: ref(reference), fld=4, val: integer)
+  93[76]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+  96[88]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+  99[100]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=19, fld=0)
+ 104[76]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 107[88]: NewRecord(data: ref(reference), parent_tp=19, fld=0) -> ref(reference)
+ 112[88]: PutRef(var[64], value: ref(reference))
+ 115[76]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+ 118[88]: ConstInt(val=3) -> integer
+ 123[92]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 126[76]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+ 129[88]: ConstInt(val=30) -> integer
+ 134[92]: SetInt(v1: ref(reference), fld=4, val: integer)
+ 137[76]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 140[88]: VarRef(var[64]) -> ref(reference) type=Elm 18 var=_elm_1[64]:ref(Elm)["db"]
+ 143[100]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=19, fld=0)
+ 148[76]: [6] ConstInt(val=0) -> integer var=fwd[76]:integer
+ 153[80]: [7] VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 156[92]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<Elm[key]> 20
+ 159[92]: Iterate(data: ref(reference), on=130, arg=8, keys=[Key { type_nr: 1, position: 0 }], from_key=0, till_key=0) -> long
+ 169[88]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 172[100]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<Elm[key]> 20
+ 175[100]: Step(state_var=20, data: ref(reference), on=130, arg=8) -> ref(reference)
+ 181[100]: VarRef(var[88]) -> ref(reference) type=Elm 18 var=e[88]:ref(Elm)["db"]
+ 184[112]: ConvBoolFromRef(val: ref(reference)) -> boolean
+ 185[101]: Not(v1: boolean) -> boolean
+ 186[101]: GotoFalseWord(jump=196, if_false: boolean)
+ 189[100]: FreeStack(value=0, discard=12)
+ 193[88]: GotoWord(jump=222)
+ 196[100]: VarInt(var[76]) -> integer var=fwd[76]:integer
+ 199[104]: ConstInt(val=10) -> integer
+ 204[108]: MulInt(v1: integer, v2: integer) -> integer
+ 205[104]: VarRef(var[88]) -> ref(reference) type=Elm 18 var=e[88]:ref(Elm)["db"]
+ 208[116]: GetInt(v1: ref(reference), fld=0) -> integer
+ 211[108]: AddInt(v1: integer, v2: integer) -> integer
+ 212[104]: PutInt(var[76], value: integer)
+ 215[100]: FreeStack(value=0, discard=12)
+ 219[88]: GotoWord(jump=169)
+ 222[88]: FreeStack(value=0, discard=8)
+ 226[80]: [8] VarInt(var[76]) -> integer var=fwd[76]:integer
+ 229[84]: ConstInt(val=123) -> integer
+ 234[88]: EqInt(v1: integer, v2: integer) -> boolean
+ 235[81]: ClearText(var[28]) var=__work_1[28]:text
+ 238[81]: ConstText(_value="forward got ") -> text
+ 252[97]: AppendText(var[28], v1: text)
+ 255[81]: VarInt(var[76]) -> integer var=fwd[76]:integer
+ 258[85]: ConvLongFromInt(v1: integer) -> long
+ 259[89]: ConstInt(val=0) -> integer
+ 264[93]: FormatLong(var[28], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 271[81]: VarText(var[28]) -> text var=__work_1[28]:text
+ 274[97]: ConstText(_value="sorted_reverse_iterator") -> text
+ 299[113]: ConstInt(val=8) -> integer
+ 304[117]: StaticCall(n_assert)
+ 307[80]: [10] ConstInt(val=0) -> integer var=rev_sum[80]:integer
+ 312[84]: [11] VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 315[96]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<Elm[key]> 20
+ 318[96]: Iterate(data: ref(reference), on=194, arg=8, keys=[Key { type_nr: 1, position: 0 }], from_key=0, till_key=0) -> long
+ 328[92]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 331[104]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<Elm[key]> 20
+ 334[104]: Step(state_var=20, data: ref(reference), on=194, arg=8) -> ref(reference)
+ 340[104]: VarRef(var[92]) -> ref(reference) type=Elm 18 var=e[92]:ref(Elm)["db"]
+ 343[116]: ConvBoolFromRef(val: ref(reference)) -> boolean
+ 344[105]: Not(v1: boolean) -> boolean
+ 345[105]: GotoFalseWord(jump=355, if_false: boolean)
+ 348[104]: FreeStack(value=0, discard=12)
+ 352[92]: GotoWord(jump=381)
+ 355[104]: VarInt(var[80]) -> integer var=rev_sum[80]:integer
+ 358[108]: ConstInt(val=10) -> integer
+ 363[112]: MulInt(v1: integer, v2: integer) -> integer
+ 364[108]: VarRef(var[92]) -> ref(reference) type=Elm 18 var=e[92]:ref(Elm)["db"]
+ 367[120]: GetInt(v1: ref(reference), fld=0) -> integer
+ 370[112]: AddInt(v1: integer, v2: integer) -> integer
+ 371[108]: PutInt(var[80], value: integer)
+ 374[104]: FreeStack(value=0, discard=12)
+ 378[92]: GotoWord(jump=328)
+ 381[92]: FreeStack(value=0, discard=8)
+ 385[84]: [12] VarInt(var[80]) -> integer var=rev_sum[80]:integer
+ 388[88]: ConstInt(val=321) -> integer
+ 393[92]: EqInt(v1: integer, v2: integer) -> boolean
+ 394[85]: ClearText(var[4]) var=__work_2[4]:text
+ 397[85]: ConstText(_value="reverse got ") -> text
+ 411[101]: AppendText(var[4], v1: text)
+ 414[85]: VarInt(var[80]) -> integer var=rev_sum[80]:integer
+ 417[89]: ConvLongFromInt(v1: integer) -> long
+ 418[93]: ConstInt(val=0) -> integer
+ 423[97]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 430[85]: VarText(var[4]) -> text var=__work_2[4]:text
+ 433[101]: ConstText(_value="sorted_reverse_iterator") -> text
+ 458[117]: ConstInt(val=12) -> integer
+ 463[121]: StaticCall(n_assert)
+ 466[84]: VarRef(var[52]) -> ref(reference) type=Db 19 var=db[52]:ref(Db)
+ 469[96]: FreeRef(v1: ref(reference)) ; [store-free]
+ 470[84]: FreeText(var[28])
+ 473[84]: FreeText(var[4])
+ 476[84]: Return(ret=0, value=0, discard=84)
+
+Execute test:
+    0:[8] Text()
+    1:[32] [4] Text()
+    2:[56] ConvRefFromNull() -> ref(1,0,8)[56]
+  ; store-alloc nr=1 max=2
+    3:[68] Database(var[56], db_tp=19)
+    8:[68] VarRef(var[56]=db) -> ref(1,1,8)={s:[]}[68]
+   11:[80] ConstInt(val=0) -> 0[80]
+   16:[84] SetInt(v1=ref(1,1,8)[68], fld=0, val=0[80])
+   19:[68] VarRef(var[56]=db) -> ref(1,1,8)={s:[]}[68]
+   22:[80] NewRecord(data=ref(1,1,8)[68], parent_tp=19, fld=0) -> ref(1,5,8)[68]
+   27:[80] VarRef(var[68]=_elm_1) -> ref(1,5,8)={}[80]
+   30:[92] ConstInt(val=1) -> 1[92]
+   35:[96] SetInt(v1=ref(1,5,8)[80], fld=0, val=1[92])
+   38:[80] VarRef(var[68]=_elm_1) -> ref(1,5,8)={key:1}[80]
+   41:[92] ConstInt(val=10) -> 10[92]
+   46:[96] SetInt(v1=ref(1,5,8)[80], fld=4, val=10[92])
+   49:[80] VarRef(var[56]=db) -> ref(1,1,8)={s:[]}[80]
+   52:[92] VarRef(var[68]=_elm_1) -> ref(1,5,8)={key:1,val:10}[92]
+   55:[104] FinishRecord(data=ref(1,1,8)[80], rec=ref(1,5,8)[92], parent_tp=19, fld=0)
+   60:[80] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10}]}[80]
+   63:[92] NewRecord(data=ref(1,1,8)[80], parent_tp=19, fld=0) -> ref(1,5,24)[80]
+   68:[92] PutRef(var[68], value=ref(1,5,24)[80])
+   71:[80] VarRef(var[68]=_elm_1) -> ref(1,5,24)={}[80]
+   74:[92] ConstInt(val=2) -> 2[92]
+   79:[96] SetInt(v1=ref(1,5,24)[80], fld=0, val=2[92])
+   82:[80] VarRef(var[68]=_elm_1) -> ref(1,5,24)={key:2}[80]
+   85:[92] ConstInt(val=20) -> 20[92]
+   90:[96] SetInt(v1=ref(1,5,24)[80], fld=4, val=20[92])
+   93:[80] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10}]}[80]
+   96:[92] VarRef(var[68]=_elm_1) -> ref(1,5,24)={key:2,val:20}[92]
+   99:[104] FinishRecord(data=ref(1,1,8)[80], rec=ref(1,5,24)[92], parent_tp=19, fld=0)
+  104:[80] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20}]}[80]
+  107:[92] NewRecord(data=ref(1,1,8)[80], parent_tp=19, fld=0) -> ref(1,5,32)[80]
+  112:[92] PutRef(var[68], value=ref(1,5,32)[80])
+  115:[80] VarRef(var[68]=_elm_1) -> ref(1,5,32)={}[80]
+  118:[92] ConstInt(val=3) -> 3[92]
+  123:[96] SetInt(v1=ref(1,5,32)[80], fld=0, val=3[92])
+  126:[80] VarRef(var[68]=_elm_1) -> ref(1,5,32)={key:3}[80]
+  129:[92] ConstInt(val=30) -> 30[92]
+  134:[96] SetInt(v1=ref(1,5,32)[80], fld=4, val=30[92])
+  137:[80] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20}]}[80]
+  140:[92] VarRef(var[68]=_elm_1) -> ref(1,5,32)={key:3,val:30}[92]
+  143:[104] FinishRecord(data=ref(1,1,8)[80], rec=ref(1,5,32)[92], parent_tp=19, fld=0)
+  148:[80] ConstInt(val=0) -> 0[80]
+  153:[84] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[84]
+  156:[96] GetField(v1=ref(1,1,8)[84], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][84]
+  159:[96] Iterate(data=ref(1,1,8), on=130, arg=8, keys=[Key { type_nr: 1, position: 0 }], from=[], till=[]) -> 17179869183[84]
+  169:[92] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[92]
+  172:[104] GetField(v1=ref(1,1,8)[92], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][92]
+  175:[104] Step(state_var=20, data=ref(1,1,8)[92], on=130, arg=8) -> ref(1,5,8)[92]
+  181:[104] VarRef(var[92]=e) -> ref(1,5,8)={key:1,val:10}[104]
+  184:[116] ConvBoolFromRef(val=ref(1,5,8)[104]) -> true[104]
+  185:[105] Not(v1=true[104]) -> false[104]
+  186:[105] GotoFalseWord(jump=196, if_false=false[104])
+  196:[104] VarInt(var[80]=fwd) -> 0[104]
+  199:[108] ConstInt(val=10) -> 10[108]
+  204:[112] MulInt(v1=0[104], v2=10[108]) -> 0[104]
+  205:[108] VarRef(var[92]=e) -> ref(1,5,8)={key:1,val:10}[108]
+  208:[120] GetInt(v1=ref(1,5,8)[108], fld=0) -> 1[108]
+  211:[112] AddInt(v1=0[104], v2=1[108]) -> 1[104]
+  212:[108] PutInt(var[80], value=1[104])
+  215:[104] FreeStack(value=0, discard=12)
+  219:[92] GotoWord(jump=169)
+  169:[92] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[92]
+  172:[104] GetField(v1=ref(1,1,8)[92], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][92]
+  175:[104] Step(state_var=20, data=ref(1,1,8)[92], on=130, arg=8) -> ref(1,5,16)[92]
+  181:[104] VarRef(var[92]=e) -> ref(1,5,16)={key:2,val:20}[104]
+  184:[116] ConvBoolFromRef(val=ref(1,5,16)[104]) -> true[104]
+  185:[105] Not(v1=true[104]) -> false[104]
+  186:[105] GotoFalseWord(jump=196, if_false=false[104])
+  196:[104] VarInt(var[80]=fwd) -> 1[104]
+  199:[108] ConstInt(val=10) -> 10[108]
+  204:[112] MulInt(v1=1[104], v2=10[108]) -> 10[104]
+  205:[108] VarRef(var[92]=e) -> ref(1,5,16)={key:2,val:20}[108]
+  208:[120] GetInt(v1=ref(1,5,16)[108], fld=0) -> 2[108]
+  211:[112] AddInt(v1=10[104], v2=2[108]) -> 12[104]
+  212:[108] PutInt(var[80], value=12[104])
+  215:[104] FreeStack(value=0, discard=12)
+  219:[92] GotoWord(jump=169)
+  169:[92] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[92]
+  172:[104] GetField(v1=ref(1,1,8)[92], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][92]
+  175:[104] Step(state_var=20, data=ref(1,1,8)[92], on=130, arg=8) -> ref(1,5,24)[92]
+  181:[104] VarRef(var[92]=e) -> ref(1,5,24)={key:3,val:30}[104]
+  184:[116] ConvBoolFromRef(val=ref(1,5,24)[104]) -> true[104]
+  185:[105] Not(v1=true[104]) -> false[104]
+  186:[105] GotoFalseWord(jump=196, if_false=false[104])
+  196:[104] VarInt(var[80]=fwd) -> 12[104]
+  199:[108] ConstInt(val=10) -> 10[108]
+  204:[112] MulInt(v1=12[104], v2=10[108]) -> 120[104]
+  205:[108] VarRef(var[92]=e) -> ref(1,5,24)={key:3,val:30}[108]
+  208:[120] GetInt(v1=ref(1,5,24)[108], fld=0) -> 3[108]
+  211:[112] AddInt(v1=120[104], v2=3[108]) -> 123[104]
+  212:[108] PutInt(var[80], value=123[104])
+  215:[104] FreeStack(value=0, discard=12)
+  219:[92] GotoWord(jump=169)
+  169:[92] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[92]
+  172:[104] GetField(v1=ref(1,1,8)[92], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][92]
+  175:[104] Step(state_var=20, data=ref(1,1,8)[92], on=130, arg=8) -> ref(1,0,2147483647)[92]
+  181:[104] VarRef(var[92]=e) -> ref(1,0,2147483647)=null[104]
+  184:[116] ConvBoolFromRef(val=ref(1,0,2147483647)[104]) -> false[104]
+  185:[105] Not(v1=false[104]) -> true[104]
+  186:[105] GotoFalseWord(jump=196, if_false=true[104])
+  189:[104] FreeStack(value=0, discard=12)
+  193:[92] GotoWord(jump=222)
+  222:[92] FreeStack(value=0, discard=8)
+  226:[84] VarInt(var[80]=fwd) -> 123[84]
+  229:[88] ConstInt(val=123) -> 123[88]
+  234:[92] EqInt(v1=123[84], v2=123[88]) -> true[84]
+  235:[85] ClearText(var[32]=__work_1)
+  238:[85] ConstText(_value="forward got ") -> "forward got "[85]
+  252:[101] AppendText(var[32], v1="forward got "[85])
+  255:[85] VarInt(var[80]=fwd) -> 123[85]
+  258:[89] ConvLongFromInt(v1=123[85]) -> 123[85]
+  259:[93] ConstInt(val=0) -> 0[93]
+  264:[97] FormatLong(var[32], val=123[85], radix=10, width=0[93], token=32, plus=false, note=false)
+  271:[85] VarText(var[32]=__work_1) -> "forward got 123"[85]
+  274:[101] ConstText(_value="sorted_reverse_iterator") -> "sorted_reverse_iterator"[101]
+  299:[117] ConstInt(val=8) -> 8[117]
+  304:[121] StaticCall(n_assert)
+  307:[84] ConstInt(val=0) -> 0[84]
+  312:[88] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[88]
+  315:[100] GetField(v1=ref(1,1,8)[88], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][88]
+  318:[100] Iterate(data=ref(1,1,8), on=194, arg=8, keys=[Key { type_nr: 1, position: 0 }], from=[], till=[]) -> 17179869188[88]
+  328:[96] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[96]
+  331:[108] GetField(v1=ref(1,1,8)[96], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][96]
+  334:[108] Step(state_var=20, data=ref(1,1,8)[96], on=194, arg=8) -> ref(1,5,24)[96]
+  340:[108] VarRef(var[96]=e) -> ref(1,5,24)={key:3,val:30}[108]
+  343:[120] ConvBoolFromRef(val=ref(1,5,24)[108]) -> true[108]
+  344:[109] Not(v1=true[108]) -> false[108]
+  345:[109] GotoFalseWord(jump=355, if_false=false[108])
+  355:[108] VarInt(var[84]=rev_sum) -> 0[108]
+  358:[112] ConstInt(val=10) -> 10[112]
+  363:[116] MulInt(v1=0[108], v2=10[112]) -> 0[108]
+  364:[112] VarRef(var[96]=e) -> ref(1,5,24)={key:3,val:30}[112]
+  367:[124] GetInt(v1=ref(1,5,24)[112], fld=0) -> 3[112]
+  370:[116] AddInt(v1=0[108], v2=3[112]) -> 3[108]
+  371:[112] PutInt(var[84], value=3[108])
+  374:[108] FreeStack(value=0, discard=12)
+  378:[96] GotoWord(jump=328)
+  328:[96] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[96]
+  331:[108] GetField(v1=ref(1,1,8)[96], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][96]
+  334:[108] Step(state_var=20, data=ref(1,1,8)[96], on=194, arg=8) -> ref(1,5,16)[96]
+  340:[108] VarRef(var[96]=e) -> ref(1,5,16)={key:2,val:20}[108]
+  343:[120] ConvBoolFromRef(val=ref(1,5,16)[108]) -> true[108]
+  344:[109] Not(v1=true[108]) -> false[108]
+  345:[109] GotoFalseWord(jump=355, if_false=false[108])
+  355:[108] VarInt(var[84]=rev_sum) -> 3[108]
+  358:[112] ConstInt(val=10) -> 10[112]
+  363:[116] MulInt(v1=3[108], v2=10[112]) -> 30[108]
+  364:[112] VarRef(var[96]=e) -> ref(1,5,16)={key:2,val:20}[112]
+  367:[124] GetInt(v1=ref(1,5,16)[112], fld=0) -> 2[112]
+  370:[116] AddInt(v1=30[108], v2=2[112]) -> 32[108]
+  371:[112] PutInt(var[84], value=32[108])
+  374:[108] FreeStack(value=0, discard=12)
+  378:[96] GotoWord(jump=328)
+  328:[96] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[96]
+  331:[108] GetField(v1=ref(1,1,8)[96], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][96]
+  334:[108] Step(state_var=20, data=ref(1,1,8)[96], on=194, arg=8) -> ref(1,5,8)[96]
+  340:[108] VarRef(var[96]=e) -> ref(1,5,8)={key:1,val:10}[108]
+  343:[120] ConvBoolFromRef(val=ref(1,5,8)[108]) -> true[108]
+  344:[109] Not(v1=true[108]) -> false[108]
+  345:[109] GotoFalseWord(jump=355, if_false=false[108])
+  355:[108] VarInt(var[84]=rev_sum) -> 32[108]
+  358:[112] ConstInt(val=10) -> 10[112]
+  363:[116] MulInt(v1=32[108], v2=10[112]) -> 320[108]
+  364:[112] VarRef(var[96]=e) -> ref(1,5,8)={key:1,val:10}[112]
+  367:[124] GetInt(v1=ref(1,5,8)[112], fld=0) -> 1[112]
+  370:[116] AddInt(v1=320[108], v2=1[112]) -> 321[108]
+  371:[112] PutInt(var[84], value=321[108])
+  374:[108] FreeStack(value=0, discard=12)
+  378:[96] GotoWord(jump=328)
+  328:[96] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[96]
+  331:[108] GetField(v1=ref(1,1,8)[96], fld=0) -> ref(1,1,8)=[{key:1,val:10},{key:2,val:20},{key:3,val:30}][96]
+  334:[108] Step(state_var=20, data=ref(1,1,8)[96], on=194, arg=8) -> ref(1,0,2147483647)[96]
+  340:[108] VarRef(var[96]=e) -> ref(1,0,2147483647)=null[108]
+  343:[120] ConvBoolFromRef(val=ref(1,0,2147483647)[108]) -> false[108]
+  344:[109] Not(v1=false[108]) -> true[108]
+  345:[109] GotoFalseWord(jump=355, if_false=true[108])
+  348:[108] FreeStack(value=0, discard=12)
+  352:[96] GotoWord(jump=381)
+  381:[96] FreeStack(value=0, discard=8)
+  385:[88] VarInt(var[84]=rev_sum) -> 321[88]
+  388:[92] ConstInt(val=321) -> 321[92]
+  393:[96] EqInt(v1=321[88], v2=321[92]) -> true[88]
+  394:[89] ClearText(var[8]=__work_2)
+  397:[89] ConstText(_value="reverse got ") -> "reverse got "[89]
+  411:[105] AppendText(var[8], v1="reverse got "[89])
+  414:[89] VarInt(var[84]=rev_sum) -> 321[89]
+  417:[93] ConvLongFromInt(v1=321[89]) -> 321[89]
+  418:[97] ConstInt(val=0) -> 0[97]
+  423:[101] FormatLong(var[8], val=321[89], radix=10, width=0[97], token=32, plus=false, note=false)
+  430:[89] VarText(var[8]=__work_2) -> "reverse got 321"[89]
+  433:[105] ConstText(_value="sorted_reverse_iterator") -> "sorted_reverse_iterator"[105]
+  458:[121] ConstInt(val=12) -> 12[121]
+  463:[125] StaticCall(n_assert)
+  466:[88] VarRef(var[56]=db) -> ref(1,1,8)={s:[{key:1,val:10},{key:2,val:20},{key:3,val:30}]}[88]
+  469:[100] FreeRef(v1=ref(1,1,8)[88]) ; store-free max=1
+  470:[88] FreeText(var[32])
+  473:[88] FreeText(var[8])
+  476:[88] Return(ret=4294967295[4], value=0, discard=84)
+Finished

@@ -1,0 +1,102 @@
+struct S { cur: integer }
+fn clear(self: S) { self.cur = null }
+fn test() {
+    s = S { cur: 10 };
+    s.clear();
+    assert(s.cur == null, "should be null after clear");
+    s.cur = 42;
+    assert(s.cur == 42, "should be 42 after reassign");
+}
+Type 18:S[4/4]:
+    cur:integer[0]
+
+fn t_1S_clear(self:S) {#block(1):void
+  [2] OpSetInt(self(0), 0i32, OpConvIntFromNull());
+}#block(1):void
+
+byte-code for null_then_reassign_integer_field:t_1S_clear(self: ref(S)[0])
+   0[12]: return-address  @abs=2832
+   0[16]: [2] VarRef(var[0]) -> ref(reference) type=S 18 var=self[0]:ref(S)
+   3[28]: ConvIntFromNull() -> integer
+   4[32]: SetInt(v1: ref(reference), fld=0, val: integer)
+   7[16]: Return(ret=12, value=0, discard=16)
+
+fn n_test() {#block(1):void
+  [4] s(1):ref(S) = null;
+  OpDatabase(s(1), 18i32);
+  OpSetInt(s(1), 0i32, 10i32);
+  [5] t_1S_clear(s(1));
+  [6] n_assert(OpEqInt(OpGetInt(s(1), 0i32), OpConvIntFromNull()), "should be null after clear", "null_then_reassign_integer_field", 6i32);
+  [7] OpSetInt(s(1), 0i32, 42i32);
+  [8] n_assert(OpEqInt(OpGetInt(s(1), 0i32), 42i32), "should be 42 after reassign", "null_then_reassign_integer_field", 8i32);
+  OpFreeRef(s(1));
+}#block(1):void
+
+byte-code for null_then_reassign_integer_field:n_test()
+   0[0]: return-address  @abs=2845
+   0[4]: [4] ConvRefFromNull() -> ref(reference) var=s[4]:ref(S) ; [store-alloc]
+   1[16]: Database(var[4], db_tp=18) type=S 18
+   6[16]: VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+   9[28]: ConstInt(val=10) -> integer
+  14[32]: SetInt(v1: ref(reference), fld=0, val: integer)
+  17[16]: [5] VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+  20[28]: Call(size=0, fn=t_1S_clear)
+  27[16]: [6] VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+  30[28]: GetInt(v1: ref(reference), fld=0) -> integer
+  33[20]: ConvIntFromNull() -> integer
+  34[24]: EqInt(v1: integer, v2: integer) -> boolean
+  35[17]: ConstText(_value="should be null after clear") -> text
+  63[33]: ConstText(_value="null_then_reassign_integer_field") -> text
+  97[49]: ConstInt(val=6) -> integer
+ 102[53]: StaticCall(n_assert)
+ 105[16]: [7] VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+ 108[28]: ConstInt(val=42) -> integer
+ 113[32]: SetInt(v1: ref(reference), fld=0, val: integer)
+ 116[16]: [8] VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+ 119[28]: GetInt(v1: ref(reference), fld=0) -> integer
+ 122[20]: ConstInt(val=42) -> integer
+ 127[24]: EqInt(v1: integer, v2: integer) -> boolean
+ 128[17]: ConstText(_value="should be 42 after reassign") -> text
+ 157[33]: ConstText(_value="null_then_reassign_integer_field") -> text
+ 191[49]: ConstInt(val=8) -> integer
+ 196[53]: StaticCall(n_assert)
+ 199[16]: VarRef(var[4]) -> ref(reference) type=S 18 var=s[4]:ref(S)
+ 202[28]: FreeRef(v1: ref(reference)) ; [store-free]
+ 203[16]: Return(ret=0, value=0, discard=16)
+
+Execute test:
+    0:[8] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] Database(var[8], db_tp=18)
+    6:[20] VarRef(var[8]=s) -> ref(1,1,8)={}[20]
+    9:[32] ConstInt(val=10) -> 10[32]
+   14:[36] SetInt(v1=ref(1,1,8)[20], fld=0, val=10[32])
+   17:[20] VarRef(var[8]=s) -> ref(1,1,8)={cur:10}[20]
+   20:[32] Call(size=0, fn=t_1S_clear)
+ 2832:[36] VarRef(var[20]=self) -> ref(1,1,8)={cur:10}[36]
+ 2835:[48] ConvIntFromNull() -> -2147483648[48]
+ 2836:[52] SetInt(v1=ref(1,1,8)[36], fld=0, val=-2147483648[48])
+ 2839:[36] Return(ret=2872[32], value=0, discard=16)
+   27:[20] VarRef(var[8]=s) -> ref(1,1,8)={}[20]
+   30:[32] GetInt(v1=ref(1,1,8)[20], fld=0) -> -2147483648[20]
+   33:[24] ConvIntFromNull() -> -2147483648[24]
+   34:[28] EqInt(v1=-2147483648[20], v2=-2147483648[24]) -> true[20]
+   35:[21] ConstText(_value="should be null after clear") -> "should be null after clear"[21]
+   63:[37] ConstText(_value="null_then_reassign_integer_field") -> "null_then_reassign_integer_field"[37]
+   97:[53] ConstInt(val=6) -> 6[53]
+  102:[57] StaticCall(n_assert)
+  105:[20] VarRef(var[8]=s) -> ref(1,1,8)={}[20]
+  108:[32] ConstInt(val=42) -> 42[32]
+  113:[36] SetInt(v1=ref(1,1,8)[20], fld=0, val=42[32])
+  116:[20] VarRef(var[8]=s) -> ref(1,1,8)={cur:42}[20]
+  119:[32] GetInt(v1=ref(1,1,8)[20], fld=0) -> 42[20]
+  122:[24] ConstInt(val=42) -> 42[24]
+  127:[28] EqInt(v1=42[20], v2=42[24]) -> true[20]
+  128:[21] ConstText(_value="should be 42 after reassign") -> "should be 42 after reassign"[21]
+  157:[37] ConstText(_value="null_then_reassign_integer_field") -> "null_then_reassign_integer_field"[37]
+  191:[53] ConstInt(val=8) -> 8[53]
+  196:[57] StaticCall(n_assert)
+  199:[20] VarRef(var[8]=s) -> ref(1,1,8)={cur:42}[20]
+  202:[32] FreeRef(v1=ref(1,1,8)[20]) ; store-free max=1
+  203:[20] Return(ret=4294967295[4], value=0, discard=16)
+Finished

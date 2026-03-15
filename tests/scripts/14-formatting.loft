@@ -1,0 +1,122 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Format specifiers: integers, floats, booleans, text, long, single, vectors.
+
+fn main() {
+    // --- Brace escaping ---
+    // "ab{cd}e" would treat {cd} as a format expression in loft.
+    // Use {{/}} escapes on both sides, or build the expected value via a variable:
+    cd_word = "cd";
+    assert("ab{{cd}}e" == "ab{{{cd_word}}}e", "escaped braces");
+
+    // --- Integer formats ---
+    assert("{42}" == "42", "int default");
+    assert("{42:#x}" == "0x2a", "int hex");
+    assert("{35:#x}" == "0x23", "int hex 35");
+    assert("{12:o}" == "14", "int octal");
+    assert("{42:b}" == "101010", "int binary");
+    assert("{12:+4}" == " +12", "int signed width");
+    assert("{1:03}" == "001", "int zero-padded");
+
+    // --- Long formats ---
+    assert("{2l:+4}" == "  +2", "long signed width");
+    assert("{12l as integer}" == "12", "long cast to int");
+
+    // --- Float formats ---
+    assert("{1.2:4.2}" == "1.20", "float width.precision");
+    assert("{334.1:.2}" == "334.10", "float precision only");
+    assert("{1.4:5}" == "  1.4", "float width only");
+    assert("{1.34}" == "1.34", "float default");
+
+    // --- Single (f32) ---
+    assert("{0.1f + 2 * 1.0f}" == "2.1", "single default format");
+
+    // --- Boolean ---
+    assert("{true:^7}" == " true  ", "bool centered 7");
+    assert("{false}" == "false", "bool default");
+
+    // --- Text formats ---
+    vr = "abc";
+    assert("{vr:<5}" == "abc  ", "text left-aligned 5");
+    assert("{vr:6}" == "abc   ", "text width 6");
+    assert("{vr:>7}" == "    abc", "text right-aligned 7");
+    assert("{vr:4}" == "abc ", "text width 4");
+
+    // --- Inline expression ---
+    assert("{1 + 2 * 3:#x}" == "0x7", "inline expr hex: 7");
+    assert("a{12}b" == "a12b", "int interpolation");
+
+    // --- Vector format ---
+    assert("{for n in 1..7 {n*2}:02}" == "[02,04,06,08,10,12]", "vector formatted");
+
+    // --- Sub-string in format ---
+    txt = "12😊🙃45";
+    assert("{txt[2..-1]}" == "😊🙃4", "substring in format");
+
+    // --- Character iteration with #index ---
+    // Nested \" inside format expressions is not supported in .loft files;
+    // build the result incrementally instead.
+    citer = "";
+    for c in txt[2..-1] {
+        if citer != "" { citer += ","; }
+        citer += "{c#index}:{c}";
+    }
+    assert(citer == "0:😊,4:🙃,8:4", "char iter indices built as string");
+
+    // --- Null integer formatting ---
+    zero_div = 0;
+    null_int = 1 / zero_div;
+    assert("{null_int}" == "null", "null integer formats as 'null'");
+
+    // --- Negative integer formats ---
+    assert("{-42}" == "-42", "negative int default");
+    assert("{-1:03}" == "-01", "negative zero-padded: sign before zeros");
+    assert("{-42:+6}" == "   -42", "negative with sign and width");
+
+    // --- Float edge cases in format ---
+    assert("{0.0:.2}" == "0.00", "zero float precision");
+    assert("{-1.5:.1}" == "-1.5", "negative float precision");
+
+    // --- Long formatting ---
+    assert("{0l}" == "0", "long zero format");
+    assert("{-5l}" == "-5", "negative long format");
+    assert("{1000000l}" == "1000000", "large long format");
+
+    // --- Width smaller than content ---
+    assert("{12345:3}" == "12345", "width smaller than int: no truncation");
+    // Note: {\"hello\":3} triggers the nested-quote parse bug (issue 9); use a variable.
+    hw = "hello";
+    assert("{hw:3}" == "hello", "width smaller than text: no truncation");
+
+    // --- :d explicit decimal specifier (alias for default integer format) ---
+    nd = 42;
+    assert("{nd:d}" == "42", ":d is decimal same as default");
+    assert("{nd:5d}" == "   42", ":5d has width");
+
+    // --- :f float specifier (alias for default float format) ---
+    ff = 3.14;
+    assert("{ff:5f}" == " 3.14", ":f with width pads left");
+
+    // --- Bare precision .N without explicit width ---
+    pi_v = 3.14159;
+    assert("{pi_v:.2}" == "3.14", "bare precision .2 rounds to 2 decimal places");
+    assert("{pi_v:.4}" == "3.1416", "bare precision .4");
+    assert("{0.0:.2}" == "0.00", "bare precision .2 on zero");
+
+    // --- String literal inside format expression {} ---
+    assert("{\"hello\"}" == "hello", "string literal in format no specifier");
+    assert("{\"hi\":5}" == "hi   ", "string literal in format with width");
+
+    // --- Loop #count inside format string ---
+    cnt_r = "";
+    vcnt = [10, 20, 30];
+    for e in vcnt {
+        if !e#first { cnt_r += ","; }
+        cnt_r += "{e#count}:{e}";
+    }
+    assert(cnt_r == "0:10,1:20,2:30", "loop #count in format string: {cnt_r}");
+
+    // --- Variable use after assignment in format (not before) ---
+    late = 5;
+    assert("{late}" == "5", "variable used after assignment in format");
+}

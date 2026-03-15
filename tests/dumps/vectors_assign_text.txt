@@ -1,0 +1,212 @@
+struct T { n: text, v: u16 }
+    struct N { d: vector<T>, h: hash<T[v]> }
+
+pub fn test() {
+    test_value = {
+s = N { d:[T {n: "a", v:12} ] };
+s.d[0].n = "bb";
+"{s.d[0]} v={s.d[0].v}"};
+    assert(
+        test_value == "{{n:\"bb\",v:12}} v=12",
+        "Test failed {test_value} != \"{{n:\"bb\",v:12}} v=12\""
+    );
+}
+Type 18:T[6/4]: parents [N 20]
+    n:text[0]
+    v:short<0,true>[4]
+
+Type 19:short<0,true>[2/2]:Short(0, true)
+
+Type 20:N[8/4]:
+    d:array<T>[0] other [1]
+    h:hash<T[v]>[4] other [65535]
+
+Type 21:array<T>[4/4]:Array(18)
+
+Type 22:hash<T[v]>[4/4]:Hash(18, [1]) keys [tp:7 desc:false field:4, ]
+
+fn n_test() {#block(1):void
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [5] test_value(1):text["__work_1"] = {#block(2):text["__work_1"]
+    [6] s(2):ref(N) = null;
+    OpDatabase(s(2), 20i32);
+    OpSetInt(s(2), 0i32, 0i32);
+    _elm_1(2):ref(T)["s"] = OpNewRecord(s(2), 20i32, 0i32);
+    OpSetText(_elm_1(2), 0i32, "a");
+    OpSetShort(_elm_1(2), 4i32, 0i32, 12i32);
+    OpFinishRecord(s(2), _elm_1(2), 20i32, 0i32);
+    OpSetInt(s(2), 4i32, 0i32);
+    [7] OpSetText(OpGetRef(OpGetVector(OpGetField(s(2), 0i32, 21i32), 6i32, 0i32), 0i32), 0i32, "bb");
+    [8] {#Formatted string(3):text["__work_1"]
+      __work_1(1):text = "";
+      OpFormatDatabase(__work_1(1), OpGetRef(OpGetVector(OpGetField(s(2), 0i32, 21i32), 6i32, 0i32), 0i32), 18i32, 0i32);
+      OpAppendText(__work_1(1), " v=");
+      OpFormatLong(__work_1(1), OpConvLongFromInt(OpGetShort(OpGetRef(OpGetVector(OpGetField(s(2), 0i32, 21i32), 6i32, 0i32), 0i32), 4i32, 0i32)), 10i32, 0i32, 32i32, false, false);
+      OpFreeRef(s(2));
+      __work_1(1);
+    }#Formatted string(3):text["__work_1"];
+  }#block(2):text["__work_1"];
+  [9] n_assert(OpEqText(test_value(1), "{n:"bb",v:12} v=12"), {#Formatted string(4):text["__work_2"]
+    __work_2(1):text = "Test failed ";
+    OpFormatText(__work_2(1), test_value(1), 0i32, -1i32, 32i32);
+    OpAppendText(__work_2(1), " != "{n:"bb",v:12} v=12"");
+    __work_2(1);
+  }#Formatted string(4):text["__work_2"], "assign_text", 10i32);
+  OpFreeText(test_value(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+}#block(1):void
+
+byte-code for assign_text:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_2[4]:text
+   1[28]: Text() var=__work_1[28]:text
+   2[52]: [5] Text() var=test_value[52]:text["__work_1"]
+   3[76]: [6] ConvRefFromNull() -> ref(reference) var=s[76]:ref(N) ; [store-alloc]
+   4[88]: Database(var[76], db_tp=20) type=N 20
+   9[88]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+  12[100]: ConstInt(val=0) -> integer
+  17[104]: SetInt(v1: ref(reference), fld=0, val: integer)
+  20[88]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+  23[100]: NewRecord(data: ref(reference), parent_tp=20, fld=0) -> ref(reference)
+  28[100]: VarRef(var[88]) -> ref(reference) type=T 18 var=_elm_1[88]:ref(T)["s"]
+  31[112]: ConstText(_value="a") -> text
+  34[128]: SetText(v1: ref(reference), fld=0, val: text)
+  37[100]: VarRef(var[88]) -> ref(reference) type=T 18 var=_elm_1[88]:ref(T)["s"]
+  40[112]: ConstInt(val=12) -> integer
+  45[116]: SetShort(v1: ref(reference), fld=4, min=0, val: integer)
+  50[100]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+  53[112]: VarRef(var[88]) -> ref(reference) type=T 18 var=_elm_1[88]:ref(T)["s"]
+  56[124]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=0)
+  61[100]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+  64[112]: ConstInt(val=0) -> integer
+  69[116]: SetInt(v1: ref(reference), fld=4, val: integer)
+  72[100]: [7] VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+  75[112]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=array<T> 21
+  78[112]: ConstInt(val=0) -> integer
+  83[116]: GetVector(r: vector, size=6, index: integer) -> ref(reference)
+  86[112]: GetRef(v1: ref(reference), fld=0) -> ref(reference)
+  89[112]: ConstText(_value="bb") -> text
+  93[128]: SetText(v1: ref(reference), fld=0, val: text)
+  96[100]: [8] ClearText(var[28]) var=__work_1[28]:text
+  99[100]: ConstText(_value="") -> text
+ 101[116]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+ 104[128]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=array<T> 21
+ 107[128]: ConstInt(val=0) -> integer
+ 112[132]: GetVector(r: vector, size=6, index: integer) -> ref(reference)
+ 115[128]: GetRef(v1: ref(reference), fld=0) -> ref(reference)
+ 118[128]: FormatDatabase(var[28], val: ref(reference), db_tp=18, db_format=0)
+ 124[116]: ConstText(_value=" v=") -> text
+ 129[132]: AppendText(var[28], v1: text)
+ 132[116]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+ 135[128]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=array<T> 21
+ 138[128]: ConstInt(val=0) -> integer
+ 143[132]: GetVector(r: vector, size=6, index: integer) -> ref(reference)
+ 146[128]: GetRef(v1: ref(reference), fld=0) -> ref(reference)
+ 149[128]: GetShort(v1: ref(reference), fld=4, min=0) -> integer
+ 154[120]: ConvLongFromInt(v1: integer) -> long
+ 155[124]: ConstInt(val=0) -> integer
+ 160[128]: FormatLong(var[28], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 167[116]: VarRef(var[76]) -> ref(reference) type=N 20 var=s[76]:ref(N)
+ 170[128]: FreeRef(v1: ref(reference)) ; [store-free]
+ 171[116]: VarText(var[28]) -> text var=__work_1[28]:text
+ 174[132]: FreeStack(value=16, discard=32)
+ 178[116]: FreeStack(value=16, discard=40)
+ 182[92]: AppendText(var[52], v1: text)
+ 185[76]: [9] VarText(var[52]) -> text var=test_value[52]:text["__work_1"]
+ 188[92]: ConstText(_value="{n:"bb",v:12} v=12") -> text
+ 208[108]: EqText(v1: text, v2: text) -> boolean
+ 209[77]: ClearText(var[4]) var=__work_2[4]:text
+ 212[77]: ConstText(_value="Test failed ") -> text
+ 226[93]: AppendText(var[4], v1: text)
+ 229[77]: VarText(var[52]) -> text var=test_value[52]:text["__work_1"]
+ 232[93]: ConstInt(val=0) -> integer
+ 237[97]: FormatText(var[4], val: text, width: integer, dir=-1, token=32)
+ 242[77]: ConstText(_value=" != "{n:"bb",v:12} v=12"") -> text
+ 268[93]: AppendText(var[4], v1: text)
+ 271[77]: VarText(var[4]) -> text var=__work_2[4]:text
+ 274[93]: ConstText(_value="assign_text") -> text
+ 287[109]: ConstInt(val=10) -> integer
+ 292[113]: StaticCall(n_assert)
+ 295[76]: FreeText(var[52])
+ 298[76]: FreeText(var[28])
+ 301[76]: FreeText(var[4])
+ 304[76]: Return(ret=0, value=0, discard=76)
+
+Execute test:
+    0:[8] Text()
+    1:[32] [5] Text()
+    2:[56] [6] Text()
+    3:[80] ConvRefFromNull() -> ref(1,0,8)[80]
+  ; store-alloc nr=1 max=2
+    4:[92] Database(var[80], db_tp=20)
+    9:[92] VarRef(var[80]=s) -> ref(1,1,8)={d:[]}[92]
+   12:[104] ConstInt(val=0) -> 0[104]
+   17:[108] SetInt(v1=ref(1,1,8)[92], fld=0, val=0[104])
+   20:[92] VarRef(var[80]=s) -> ref(1,1,8)={d:[]}[92]
+   23:[104] NewRecord(data=ref(1,1,8)[92], parent_tp=20, fld=0) -> ref(1,9,8)[92]
+   28:[104] VarRef(var[92]=_elm_1) -> ref(1,9,8)={v:-2147483648}[104]
+   31:[116] ConstText(_value="a") -> "a"[116]
+   34:[132] SetText(v1=ref(1,9,8)[104], fld=0, val="a"[116])
+   37:[104] VarRef(var[92]=_elm_1) -> ref(1,9,8)={n:"a",v:-2147483648}[104]
+   40:[116] ConstInt(val=12) -> 12[116]
+   45:[120] SetShort(v1=ref(1,9,8)[104], fld=4, min=0, val=12[116])
+   50:[104] VarRef(var[80]=s) -> ref(1,1,8)={d:[]}[104]
+   53:[116] VarRef(var[92]=_elm_1) -> ref(1,9,8)={n:"a",v:12}[116]
+   56:[128] FinishRecord(data=ref(1,1,8)[104], rec=ref(1,9,8)[116], parent_tp=20, fld=0)
+   61:[104] VarRef(var[80]=s) -> ref(1,1,8)={d:[{n:"a",v:12}]}[104]
+   64:[116] ConstInt(val=0) -> 0[116]
+   69:[120] SetInt(v1=ref(1,1,8)[104], fld=4, val=0[116])
+   72:[104] VarRef(var[80]=s) -> ref(1,1,8)={d:[{n:"a",v:12}]}[104]
+   75:[116] GetField(v1=ref(1,1,8)[104], fld=0) -> ref(1,1,8)=[{n:"a",v:12}][104]
+   78:[116] ConstInt(val=0) -> 0[116]
+   83:[120] GetVector(r=ref(1,1,8)[104], size=6, index=0[116]) -> ref(1,13,8)[104]
+   86:[116] GetRef(v1=ref(1,13,8)[104], fld=0) -> ref(1,9,8)[104]
+   89:[116] ConstText(_value="bb") -> "bb"[116]
+   93:[132] SetText(v1=ref(1,9,8)[104], fld=0, val="bb"[116])
+   96:[104] ClearText(var[32]=__work_1)
+   99:[104] ConstText(_value="") -> ""[104]
+  101:[120] VarRef(var[80]=s) -> ref(1,1,8)={d:[{n:"bb",v:12}]}[120]
+  104:[132] GetField(v1=ref(1,1,8)[120], fld=0) -> ref(1,1,8)=[{n:"bb",v:12}][120]
+  107:[132] ConstInt(val=0) -> 0[132]
+  112:[136] GetVector(r=ref(1,1,8)[120], size=6, index=0[132]) -> ref(1,13,8)[120]
+  115:[132] GetRef(v1=ref(1,13,8)[120], fld=0) -> ref(1,9,8)[120]
+  118:[132] FormatDatabase(var[32], val=ref(1,9,8)[120], db_tp=18, db_format=0)
+  124:[120] ConstText(_value=" v=") -> " v="[120]
+  129:[136] AppendText(var[32], v1=" v="[120])
+  132:[120] VarRef(var[80]=s) -> ref(1,1,8)={d:[{n:"bb",v:12}]}[120]
+  135:[132] GetField(v1=ref(1,1,8)[120], fld=0) -> ref(1,1,8)=[{n:"bb",v:12}][120]
+  138:[132] ConstInt(val=0) -> 0[132]
+  143:[136] GetVector(r=ref(1,1,8)[120], size=6, index=0[132]) -> ref(1,13,8)[120]
+  146:[132] GetRef(v1=ref(1,13,8)[120], fld=0) -> ref(1,9,8)[120]
+  149:[132] GetShort(v1=ref(1,9,8)[120], fld=4, min=0) -> 12[120]
+  154:[124] ConvLongFromInt(v1=12[120]) -> 12[120]
+  155:[128] ConstInt(val=0) -> 0[128]
+  160:[132] FormatLong(var[32], val=12[120], radix=10, width=0[128], token=32, plus=false, note=false)
+  167:[120] VarRef(var[80]=s) -> ref(1,1,8)={d:[{n:"bb",v:12}]}[120]
+  170:[132] FreeRef(v1=ref(1,1,8)[120]) ; store-free max=1
+  171:[120] VarText(var[32]=__work_1) -> "{n:\"bb\",v:12} v=12"[120]
+  174:[136] FreeStack(value=16, discard=32)
+  178:[120] FreeStack(value=16, discard=40)
+  182:[96] AppendText(var[56], v1="{n:\"bb\",v:12} v=12"[80])
+  185:[80] VarText(var[56]=test_value) -> "{n:\"bb\",v:12} v=12"[80]
+  188:[96] ConstText(_value="{n:"bb",v:12} v=12") -> "{n:\"bb\",v:12} v=12"[96]
+  208:[112] EqText(v1="{n:\"bb\",v:12} v=12"[80], v2="{n:\"bb\",v:12} v=12"[96]) -> true[80]
+  209:[81] ClearText(var[8]=__work_2)
+  212:[81] ConstText(_value="Test failed ") -> "Test failed "[81]
+  226:[97] AppendText(var[8], v1="Test failed "[81])
+  229:[81] VarText(var[56]=test_value) -> "{n:\"bb\",v:12} v=12"[81]
+  232:[97] ConstInt(val=0) -> 0[97]
+  237:[101] FormatText(var[8], val="{n:\"bb\",v:12} v=12"[81], width=0[97], dir=-1, token=32)
+  242:[81] ConstText(_value=" != "{n:"bb",v:12} v=12"") -> " != \"{n:\"bb\",v:12} v=12\""[81]
+  268:[97] AppendText(var[8], v1=" != \"{n:\"bb\",v:12} v=12\""[81])
+  271:[81] VarText(var[8]=__work_2) -> "Test failed {n:\"bb\",v:12} v=12 != \"{n:\"bb\",v:12} v=12\""[81]
+  274:[97] ConstText(_value="assign_text") -> "assign_text"[97]
+  287:[113] ConstInt(val=10) -> 10[113]
+  292:[117] StaticCall(n_assert)
+  295:[80] FreeText(var[56])
+  298:[80] FreeText(var[32])
+  301:[80] FreeText(var[8])
+  304:[80] Return(ret=4294967295[4], value=0, discard=76)
+Finished

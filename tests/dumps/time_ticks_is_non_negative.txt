@@ -1,0 +1,56 @@
+fn test() {
+    t = ticks();
+    assert(t >= 0, "ticks() negative: {t}");
+}
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [2] t(1):long = n_ticks();
+  [3] n_assert(OpLeLong(OpConvLongFromInt(0i32), t(1)), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "ticks() negative: ";
+    OpFormatLong(__work_1(1), t(1), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "ticks_is_non_negative", 3i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for ticks_is_non_negative:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [2] StaticCall(n_ticks) var=t[28]:long
+   4[36]: [3] ConstInt(val=0) -> integer
+   9[40]: ConvLongFromInt(v1: integer) -> long
+  10[44]: VarLong(var[28]) -> long var=t[28]:long
+  13[52]: LeLong(v1: long, v2: long) -> boolean
+  14[37]: ClearText(var[4]) var=__work_1[4]:text
+  17[37]: ConstText(_value="ticks() negative: ") -> text
+  37[53]: AppendText(var[4], v1: text)
+  40[37]: VarLong(var[28]) -> long var=t[28]:long
+  43[45]: ConstInt(val=0) -> integer
+  48[49]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  55[37]: VarText(var[4]) -> text var=__work_1[4]:text
+  58[53]: ConstText(_value="ticks_is_non_negative") -> text
+  81[69]: ConstInt(val=3) -> integer
+  86[73]: StaticCall(n_assert)
+  89[36]: FreeText(var[4])
+  92[36]: Return(ret=0, value=0, discard=36)
+
+Execute test:
+    0:[8] [2] Text()
+    1:[32] StaticCall(n_ticks)
+    4:[40] ConstInt(val=0) -> 0[40]
+    9:[44] ConvLongFromInt(v1=0[40]) -> 0[40]
+   10:[48] VarLong(var[32]=t) -> 107996[48]
+   13:[56] LeLong(v1=0[40], v2=107996[48]) -> true[40]
+   14:[41] ClearText(var[8]=__work_1)
+   17:[41] ConstText(_value="ticks() negative: ") -> "ticks() negative: "[41]
+   37:[57] AppendText(var[8], v1="ticks() negative: "[41])
+   40:[41] VarLong(var[32]=t) -> 107996[41]
+   43:[49] ConstInt(val=0) -> 0[49]
+   48:[53] FormatLong(var[8], val=107996[41], radix=10, width=0[49], token=32, plus=false, note=false)
+   55:[41] VarText(var[8]=__work_1) -> "ticks() negative: 107996"[41]
+   58:[57] ConstText(_value="ticks_is_non_negative") -> "ticks_is_non_negative"[57]
+   81:[73] ConstInt(val=3) -> 3[73]
+   86:[77] StaticCall(n_assert)
+   89:[40] FreeText(var[8])
+   92:[40] Return(ret=4294967295[4], value=0, discard=36)
+Finished

@@ -1,0 +1,86 @@
+fn test() {
+    rand_seed(7);
+    v = rand_indices(10);
+    assert(len(v) == 10, "size {len(v)}");
+}
+Type 18:main_vector<integer>[4/4]:
+    vector:vector<integer>[0]
+
+Type 19:vector<integer>[4/4]:Vector(0)
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [2] n_rand_seed(OpConvLongFromInt(7i32));
+  [3] v(1):vector<integer> = n_rand_indices(10i32);
+  [4] n_assert(OpEqInt(t_6vector_len(v(1)), 10i32), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "size ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(t_6vector_len(v(1))), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "rand_indices_length", 4i32);
+  OpFreeRef(v(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for rand_indices_length:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [2] ConstInt(val=7) -> integer
+   6[32]: ConvLongFromInt(v1: integer) -> long
+   7[36]: StaticCall(n_rand_seed)
+  10[28]: [3] ConstInt(val=10) -> integer var=v[28]:vector<integer>
+  15[32]: StaticCall(n_rand_indices)
+  18[40]: [4] VarVector(var[28]) -> vector type=vector<integer> 19 var=v[28]:vector<integer>
+  21[52]: Call(size=0, fn=t_6vector_len)
+  28[44]: ConstInt(val=10) -> integer
+  33[48]: EqInt(v1: integer, v2: integer) -> boolean
+  34[41]: ClearText(var[4]) var=__work_1[4]:text
+  37[41]: ConstText(_value="size ") -> text
+  44[57]: AppendText(var[4], v1: text)
+  47[41]: VarVector(var[28]) -> vector type=vector<integer> 19 var=v[28]:vector<integer>
+  50[53]: Call(size=0, fn=t_6vector_len)
+  57[45]: ConvLongFromInt(v1: integer) -> long
+  58[49]: ConstInt(val=0) -> integer
+  63[53]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  70[41]: VarText(var[4]) -> text var=__work_1[4]:text
+  73[57]: ConstText(_value="rand_indices_length") -> text
+  94[73]: ConstInt(val=4) -> integer
+  99[77]: StaticCall(n_assert)
+ 102[40]: VarVector(var[28]) -> vector type=vector<integer> 19 var=v[28]:vector<integer>
+ 105[52]: FreeRef(v1: ref(reference)) ; [store-free]
+ 106[40]: FreeText(var[4])
+ 109[40]: Return(ret=0, value=0, discard=40)
+
+Execute test:
+    0:[8] [2] Text()
+    1:[32] ConstInt(val=7) -> 7[32]
+    6:[36] ConvLongFromInt(v1=7[32]) -> 7[32]
+    7:[40] StaticCall(n_rand_seed)
+   10:[32] ConstInt(val=10) -> 10[32]
+   15:[36] StaticCall(n_rand_indices)
+   18:[44] VarVector(var[32]=v) -> ref(1,7,4)=[7,8,9,3,1,2,6,4,0,5][44]
+   21:[56] Call(size=0, fn=t_6vector_len)
+ 1088:[60] VarVector(var[44]=both) -> ref(1,7,4)[60]
+ 1091:[72] LengthVector(r=ref(1,7,4)[60]) -> 10[60]
+ 1092:[64] Return(ret=2860[56], value=4, discard=20) -> 10[44]
+   28:[48] ConstInt(val=10) -> 10[48]
+   33:[52] EqInt(v1=10[44], v2=10[48]) -> true[44]
+   34:[45] ClearText(var[8]=__work_1)
+   37:[45] ConstText(_value="size ") -> "size "[45]
+   44:[61] AppendText(var[8], v1="size "[45])
+   47:[45] VarVector(var[32]=v) -> ref(1,7,4)=[7,8,9,3,1,2,6,4,0,5][45]
+   50:[57] Call(size=0, fn=t_6vector_len)
+ 1088:[61] VarVector(var[45]=both) -> ref(1,7,4)[61]
+ 1091:[73] LengthVector(r=ref(1,7,4)[61]) -> 10[61]
+ 1092:[65] Return(ret=2889[57], value=4, discard=20) -> 10[45]
+   57:[49] ConvLongFromInt(v1=10[45]) -> 10[45]
+   58:[53] ConstInt(val=0) -> 0[53]
+   63:[57] FormatLong(var[8], val=10[45], radix=10, width=0[53], token=32, plus=false, note=false)
+   70:[45] VarText(var[8]=__work_1) -> "size 10"[45]
+   73:[61] ConstText(_value="rand_indices_length") -> "rand_indices_length"[61]
+   94:[77] ConstInt(val=4) -> 4[77]
+   99:[81] StaticCall(n_assert)
+  102:[44] VarVector(var[32]=v) -> ref(1,7,4)=[7,8,9,3,1,2,6,4,0,5][44]
+  105:[56] FreeRef(v1=ref(1,7,4)[44]) ; store-free max=1
+  106:[44] FreeText(var[8])
+  109:[44] Return(ret=4294967295[4], value=0, discard=40)
+Finished

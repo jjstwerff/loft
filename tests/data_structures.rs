@@ -1,0 +1,462 @@
+// Copyright (c) 2021-2025 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+extern crate loft;
+
+use loft::database::Stores;
+use loft::keys::{Content, DbRef, Str};
+use loft::{hash, keys};
+use loft::{tree, vector};
+use rand_core::{RngCore, SeedableRng};
+use rand_pcg::Pcg64Mcg;
+
+#[test]
+pub fn record() {
+    let mut stores = Stores::new();
+    let e = stores.enumerate("Category");
+    stores.value(e, "Daily", u16::MAX);
+    stores.value(e, "Hourly", u16::MAX);
+    stores.value(e, "Weekly", u16::MAX);
+    let s = stores.structure("Data", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "category", stores.name("Category"));
+    stores.field(s, "size", stores.name("integer"));
+    stores.field(s, "amount", stores.name("float"));
+    stores.field(s, "percentage", stores.name("single"));
+    stores.field(s, "calc", stores.name("long"));
+    stores.finish();
+    assert_eq!(stores.size(stores.name("Data")), 29);
+    assert_eq!(stores.enum_val(e, 2), "Hourly");
+    assert_eq!(stores.position(s, "amount"), 0);
+    assert_eq!(stores.position(s, "category"), 28);
+    assert_eq!(stores.position(s, "size"), 20);
+    assert_eq!(stores.position(s, "percentage"), 24);
+    assert_eq!(stores.position(s, "calc"), 8);
+    //stores.dump_types();
+    let result = stores.database(1234);
+    let test_string = "{ name: \"Hello World!\", category: Hourly, size: 12345, percentage: 0.15 }";
+    stores.parse(test_string, s, &result);
+    let mut check = String::new();
+    stores.show(&mut check, &result, s, true);
+    assert_eq!(test_string, check);
+    let pf = Stores::get_field(&result, stores.position(s, "percentage") as u32);
+    assert_eq!(stores.store(&pf).get_single(pf.rec, pf.pos), 0.15);
+    stores.store_mut(&pf).set_single(pf.rec, pf.pos, 0.125);
+    check.clear();
+    stores.show(&mut check, &result, s, true);
+    assert_ne!(test_string, check);
+    assert_eq!(
+        stores.parse_message("{blame:\"nothing\"}", s),
+        "line 1:7 path:blame"
+    );
+    assert_eq!("/", stores.path(&result, s));
+    assert_eq!(
+        stores.parse_message("{name:\"a\",category: Daily}", s),
+        "{name:\"a\",category:Daily}"
+    );
+}
+
+#[test]
+pub fn vector() {
+    let mut stores = Stores::new();
+    let vec = stores.vector(stores.name("integer"));
+    let v = stores.structure("Vector", 0);
+    stores.field(v, "numbers", vec);
+    stores.finish();
+    //stores.dump_types();
+    let db = stores.database(2);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 8,
+    };
+    stores.set_default_value(vec, &into);
+    let test_string = "{ numbers: [ 1, 2, 55, 11, 22 ]\n}";
+    stores.parse(test_string, v, &db);
+    let mut check = String::new();
+    stores.show(&mut check, &db, v, true);
+    assert_eq!(test_string, check);
+}
+
+#[test]
+pub fn vector_record() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "n", stores.name("text"));
+    stores.field(s, "c", stores.name("integer"));
+    let v = stores.vector(s);
+    stores.finish();
+    // stores.dump_types();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let test_string = "[ { n: \"hi\", c: 10 },\n  { n: \"world\", c: 2 } ]";
+    stores.parse(test_string, v, &into);
+    let mut check = String::new();
+    stores.show(&mut check, &into, v, true);
+    assert_eq!(test_string, check);
+}
+
+#[test]
+pub fn sorted_vector() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "cat", stores.name("integer"));
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "value", stores.name("float"));
+    let v = stores.sorted(s, &[("cat".to_string(), false), ("name".to_string(), true)]);
+    stores.finish();
+    let size = stores.size(s);
+    //stores.dump_types();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {cat:1, name:\"first\",value:1.23},
+        {cat:1, name:\"second\",value:1.34},
+        {cat:1, name:\"third\",value:1.45},
+        {cat:2, name:\"first\",value:1.56},
+        {cat:2, name:\"second\",value:1.67},
+        {cat:2, name:\"third\",value:1.78},
+        {cat:3, name:\"first\",value:1.89}
+    ]";
+    stores.parse(data, v, &into);
+    let mut check = String::new();
+    stores.show(&mut check, &into, v, true);
+    assert_eq!(
+        "[ { cat: 3, name: \"first\", value: 1.89 },
+  { cat: 2, name: \"first\", value: 1.56 },
+  { cat: 2, name: \"second\", value: 1.67 },
+  { cat: 2, name: \"third\", value: 1.78 },
+  { cat: 1, name: \"first\", value: 1.23 },
+  { cat: 1, name: \"second\", value: 1.34 },
+  { cat: 1, name: \"third\", value: 1.45 } ]",
+        check
+    );
+    let a = &stores.allocations;
+    assert_eq!(
+        vector::sorted_find(&into, true, size, a, stores.keys(v), &[]),
+        (0, true),
+        "First element"
+    );
+    assert_eq!(
+        vector::sorted_find(&into, false, size, a, stores.keys(v), &[]),
+        (7, true),
+        "Last element"
+    );
+    assert_eq!(
+        vector::sorted_find(&into, false, size, a, stores.keys(v), &[Content::Long(2)]),
+        (4, true),
+        "Last 2"
+    );
+    assert_eq!(
+        vector::sorted_find(&into, true, size, a, stores.keys(v), &[Content::Long(2)]),
+        (1, true),
+        "First 2"
+    );
+    assert_eq!(
+        vector::sorted_find(&into, false, size, a, stores.keys(v), &[Content::Long(4)]),
+        (0, false),
+        "Last 4"
+    );
+    assert_eq!(
+        vector::sorted_find(&into, true, size, a, stores.keys(v), &[Content::Long(0)]),
+        (7, false),
+        "First 0"
+    );
+}
+
+#[test]
+pub fn hash() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "cat", stores.name("integer"));
+    stores.field(s, "value", stores.name("float"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string(), "cat".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {cat:1, name:\"first\",value:1.23},
+        {cat:1, name:\"second\",value:1.34},
+        {cat:1, name:\"third\",value:1.45},
+        {cat:2, name:\"first\",value:1.56},
+        {cat:2, name:\"second\",value:1.67},
+        {cat:2, name:\"third\",value:1.78},
+        {cat:3, name:\"first\",value:1.89}
+    ]";
+    stores.parse(data, v, &into);
+    let key = [Content::Str(Str::new("second")), Content::Long(2)];
+    let mut check = String::new();
+    stores.show(
+        &mut check,
+        &hash::find(&into, &stores.allocations, stores.keys(v), &key),
+        s,
+        false,
+    );
+    assert_eq!(check, "{name:\"second\",cat:2,value:1.67}");
+    let key = [Content::Str(Str::new("third")), Content::Long(2)];
+    let rec = hash::find(&into, &stores.allocations, stores.keys(v), &key);
+    assert_eq!("/data[third,2]", stores.path(&rec, s));
+    // Unknown key
+    let key = [Content::Str(Str::new("first")), Content::Long(4)];
+    let rec = hash::find(&into, &stores.allocations, stores.keys(v), &key);
+    assert_eq!(rec.rec, 0, "Null result");
+}
+
+#[test]
+pub fn array_record() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "n", stores.name("text"));
+    stores.field(s, "c", stores.name("integer"));
+    let v = stores.vector(s);
+    let h = stores.hash(s, &["n".to_string()]);
+    let m = stores.structure("Main", 0);
+    stores.field(m, "list", v);
+    stores.field(m, "search", h);
+    stores.finish();
+    assert_eq!(
+        stores.dump_type("Elm"),
+        "Elm[8/4]: parents [Main 10]{n:text[0], c:integer[4]}"
+    );
+    assert_eq!(
+        stores.dump_type("Main"),
+        "Main[8/4]:{list:array<Elm>[0] other [1], search:hash<Elm[n]>[4] other [65535]}"
+    );
+    let mut into = stores.database(2);
+    stores.set_default_value(m, &into);
+    let test_string = "{list:[{n:\"hello\",c:10},{n:\"world\",c:2}]}";
+    stores.parse(test_string, m, &into);
+    let mut check = String::new();
+    stores.show(&mut check, &into, m, false);
+    assert_eq!(test_string, check);
+    let mut check = String::new();
+    into.pos = 12; // record base=8, hash_field=4
+    let keys = stores.keys(h).to_vec();
+    hash::validate(&into, &stores.allocations, &keys);
+    let key = [Content::Str(Str::new("hello"))];
+    let rec = hash::find(&into, &stores.allocations, &keys, &key);
+    stores.show(&mut check, &rec, s, false);
+    assert_eq!(check, "{n:\"hello\",c:10}");
+}
+
+#[test]
+pub fn ordered_record() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "n", stores.name("text"));
+    stores.field(s, "c", stores.name("integer"));
+    let v = stores.sorted(s, &[("n".to_string(), true)]);
+    let h = stores.hash(s, &["n".to_string()]);
+    let m = stores.structure("Main", 0);
+    stores.field(m, "list", v);
+    stores.field(m, "search", h);
+    stores.finish();
+    assert_eq!(
+        stores.dump_type("Elm"),
+        "Elm[8/4]: parents [Main 10]{n:text[0], c:integer[4]}"
+    );
+    assert_eq!(
+        stores.dump_type("Main"),
+        "Main[8/4]:{list:ordered<Elm[n]>[0] other [1], search:hash<Elm[n]>[4] other [65535]}"
+    );
+    let db = stores.database(2);
+    let mut into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 8,
+    };
+    stores.set_default_value(m, &into);
+    let test_string = "{list:[{n:\"hello\",c:10},{n:\"world\",c:2}]}";
+    stores.parse(test_string, m, &into);
+    let mut check = String::new();
+    stores.show(&mut check, &into, m, false);
+    assert_eq!(test_string, check);
+    let mut check = String::new();
+    let key = [Content::Str(Str::new("world"))];
+    into.pos = 12; // base 8 + hash field 4
+    stores.show(
+        &mut check,
+        &hash::find(&into, &stores.allocations, stores.keys(h), &key),
+        s,
+        false,
+    );
+    assert_eq!(check, "{n:\"world\",c:2}");
+}
+
+#[test]
+pub fn index() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "n", stores.name("text"));
+    stores.field(s, "c", stores.name("integer"));
+    let v = stores.index(s, &[("n".to_string(), true)]);
+    let m = stores.structure("Main", 0);
+    stores.field(m, "index", v);
+    stores.finish();
+    assert_eq!(
+        stores.dump_type("Elm"),
+        "Elm[17/4]: parents [Main 9]{n:text[0], c:integer[4], #left_1:integer[8], #right_1:integer[12], #color_1:boolean[16]}"
+    );
+    assert_eq!(
+        stores.dump_type("Main"),
+        "Main[4/4]:{index:index<Elm[n]>[0]}"
+    );
+    let db = stores.database(2);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 8,
+    };
+    stores.set_default_value(m, &into);
+    let test_string = "{index:[{n:\"one\",c:1},{n:\"two\",c:2},{n:\"three\",c:3},
+{n:\"four\",c:4},{n:\"five\",c:5},{n:\"six\",c:6},{n:\"seven\",c:7},{n:\"eight\",c:8},
+{n:\"nine\",c:9},{n:\"ten\",c:10}]}";
+    let ordered = "{index:[{n:\"eight\",c:8},{n:\"five\",c:5},{n:\"four\",c:4},\
+{n:\"nine\",c:9},{n:\"one\",c:1},{n:\"seven\",c:7},{n:\"six\",c:6},{n:\"ten\",c:10},\
+{n:\"three\",c:3},{n:\"two\",c:2}]}";
+    stores.parse(test_string, m, &into);
+    let mut check = String::new();
+    stores.show(&mut check, &into, m, false);
+    assert_eq!(ordered, check);
+    let mut check = String::new();
+    let key = [Content::Str(Str::new("four"))];
+    let rec = DbRef {
+        store_nr: into.store_nr,
+        rec: tree::find(
+            &into,
+            true,
+            stores.fields(v),
+            &stores.allocations,
+            stores.keys(v),
+            &key,
+        ),
+        pos: 8,
+    };
+    stores.show(&mut check, &rec, s, false);
+    assert_eq!(check, "{n:\"five\",c:5}");
+}
+
+#[test]
+pub fn index_deletions() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "k", stores.name("integer"));
+    stores.field(s, "c", stores.name("integer"));
+    let v = stores.index(s, &[("k".to_string(), true)]);
+    let m = stores.structure("Main", 0);
+    stores.field(m, "index", v);
+    stores.finish();
+    assert_eq!(
+        stores.dump_type("Elm"),
+        "Elm[17/4]: parents [Main 9]{k:integer[0], c:integer[4], #left_1:integer[8], #right_1:integer[12], #color_1:boolean[16]}"
+    );
+    let db = stores.database(2);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 8,
+    };
+    stores.set_default_value(m, &into);
+    let mut recs = vec![];
+    let mut rng = Pcg64Mcg::seed_from_u64(42);
+    let keys = stores.keys(v).to_vec();
+    let elms = 100;
+    for i in 0..elms {
+        let rec = stores.claim(&db, 3);
+        assert!(rec.rec < i * 4 + 8, "Claimed record {} too high", rec.rec);
+        let s = keys::mut_store(&rec, &mut stores.allocations);
+        let key = rng.next_u32();
+        s.set_int(rec.rec, 4, key as i32);
+        s.set_int(rec.rec, 8, i as i32);
+        tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
+        tree::validate(&into, 12, &stores.allocations, &keys);
+        recs.push(rec);
+    }
+    for d in 0..500 {
+        let i = rng.next_u64() % recs.len() as u64;
+        let rec = recs[i as usize];
+        tree::remove(&into, &rec, 12, &mut stores.allocations, &keys);
+        tree::validate(&into, 12, &stores.allocations, &keys);
+        let s = keys::mut_store(&rec, &mut stores.allocations);
+        let key = rng.next_u32();
+        s.set_int(rec.rec, 4, key as i32);
+        s.set_int(rec.rec, 8, 100 + d);
+        tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
+        tree::validate(&into, 12, &stores.allocations, &keys);
+    }
+}
+
+#[test]
+pub fn index_find() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "cat", stores.name("integer"));
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "value", stores.name("float"));
+    let v = stores.index(s, &[("cat".to_string(), true), ("name".to_string(), true)]);
+    stores.finish();
+    assert_eq!(
+        stores.dump_type("Elm"),
+        "Elm[25/8]:{cat:integer[8], name:text[12], value:float[0], #left_1:integer[16], #right_1:integer[20], #color_1:boolean[24]}"
+    );
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: db.pos,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[ { cat: 1, name: \"first\", value: 1.23 },
+  { cat: 1, name: \"second\", value: 1.34 },
+  { cat: 1, name: \"third\", value: 1.45 },
+  { cat: 2, name: \"first\", value: 1.56 },
+  { cat: 2, name: \"second\", value: 1.67 },
+  { cat: 2, name: \"third\", value: 1.78 },
+  { cat: 3, name: \"first\", value: 1.89 } ]";
+    stores.parse(data, v, &into);
+    let mut out = String::new();
+    stores.show(&mut out, &into, v, true);
+    assert_eq!(data, out);
+    assert_eq!(
+        find_rec(2, true, s, v, &into, &stores),
+        "{cat:1,name:\"third\",value:1.45}"
+    );
+    assert_eq!(
+        find_rec(2, false, s, v, &into, &stores),
+        "{cat:3,name:\"first\",value:1.89}"
+    );
+}
+
+fn find_rec(key: u8, before: bool, s: u16, v: u16, data: &DbRef, stores: &Stores) -> String {
+    let rec = DbRef {
+        store_nr: data.store_nr,
+        rec: tree::find(
+            data,
+            before,
+            8 + 16,
+            &stores.allocations,
+            stores.keys(v),
+            &[Content::Long(key as i64)],
+        ),
+        pos: 8,
+    };
+    stores.rec(&rec, s)
+}

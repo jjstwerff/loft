@@ -1,0 +1,446 @@
+struct Vertex {
+    x: single,
+    y: single,
+    z: single,
+    nx: single,
+    ny: single,
+    nz: single
+}
+
+struct Texture {
+    index: integer,
+    texCoord: integer,
+    scale: single,
+    strength: single,
+}
+
+struct PbrMetallicRoughness {
+    baseColorTexture: Texture,
+    baseColorFactor: vector<single>,
+    metallicRoughnessTexture: Texture,
+    metallicFactor: single,
+    roughnessFactor: single
+}
+
+struct Material {
+    name: text,
+    pbrMetallicRoughness: PbrMetallicRoughness,
+    normalTexture: Texture,
+    occlusionTexture: Texture,
+    emissiveTexture: Texture,
+    emissiveFactor: vector<single>,
+    alphaMode: text, // OPAQUE / MASK / BLEND
+    alphaCutoff: single,
+    doubleSided: boolean
+}
+
+struct Scene {
+    name: text,
+    nodes: [integer] // index into nodes
+}
+
+struct Asset {
+    version: text
+}
+
+struct Node {
+    camera: integer,
+    mesh: integer,
+    children: vector<integer>, // nodes
+    matrix: vector<single>,
+    translation: vector<single>,
+    rotation: vector<single>,
+    scale: vector<single>,
+}
+
+struct Attributes {
+    POSITION: integer,
+    NORMAL: integer,
+    TANGENT: integer,
+    TEXCOORD_0: integer,
+    TEXCOORD_1: integer,
+    INDICES: integer,
+    MATERIAL: integer,
+    MODE: integer
+}
+
+struct Primitive {
+    attributes: Attributes,
+    material: integer,
+    mode: integer default(4),
+    // POINTS=0, LINES=1, LINE_LOOP=2, LINE_STRIP=3, TRIANGLES=4, TRIANGLE_STRIP=5, TRIANGLE_FAN=6
+    targets: vector<integer>,
+    indices: integer // accessor nr
+}
+
+struct Mesh {
+    primitives: vector<Primitive>,
+    vertexes: vector<Vertex>, // Each vertex should be unique, including the internal normal.
+    indices: vector<u16>, // Three vertexes for each triangle.
+    points: index<Vertex[x,y,z,nx,ny,nz]>, // Search corresponding vertexes.
+    min: Point,
+    max: Point,
+}
+
+struct Buffer {
+    byteLength: integer
+}
+
+struct BufferView {
+    buffer: integer,
+    byteOffset: integer,
+    byteLength: integer,
+    byteStride: integer,
+    target: integer
+}
+
+struct SparseValue {
+    bufferView: integer,
+    byteOffset: integer
+}
+
+struct SparseIndex {
+    bufferView: integer,
+    componentType: integer,
+    byteOffset: integer
+}
+
+struct Sparse {
+    count: integer,
+    indices: vector<SparseIndex>,
+    values: vector<SparseValue>
+}
+
+struct Accessor {
+    bufferView: integer,
+    byteOffset: integer,
+    type: text, // SCALAR / VEC2 / VEC3 / MAT4
+    componentType: integer, // 5120=i8 5121=u8 5122=i16 5123=u16 5126=single
+    count: integer,
+    min: vector<single>,
+    max: vector<single>,
+    sparse: Sparse
+}
+
+struct Texture {
+    name: text,
+    sampler: integer,
+    source: integer
+}
+
+struct Sampler {
+    magFilter: integer, // 9728=NEAREST 9729=LINEAR
+    minFilter: integer, // 9984=NEAREST_MIPMAP_NEAREST 9985=LINEAR_MIPMAP_NEAREST 9986=NEAREST_MIPMAP_LINEAR 9987=LINEAR_MIPMAP_LINEAR
+    wrapS: integer, // 10497=REPEAT 10496=CLAMP_TO_EDGE 10498=MIRRORED_REPEAT
+    wrapT: integer
+}
+
+struct Image {
+    uri: text
+}
+
+struct Perspective {
+    aspectRatio: single,
+    yfov: single, // field of view in radians
+    zfar: single, // far clipping plane, can be null
+    znear: single
+}
+
+struct Orthographic {
+    xmag: single, // horizontal magnification
+    ymag: single, // vertical magnification
+    zfar: single, // far clipping plane
+    znear: single
+}
+
+struct Camera {
+    type: text, // perspective, orthographic
+    perspective: Perspective,
+    orthographic: Orthographic
+}
+
+struct Content {
+    asset: Asset,
+    scene: integer, // default
+    scenes: vector<Scene>,
+    nodes: vector<Node>,
+    meshes: vector<Mesh>,
+    materials: vector<Material>,
+    textures: vector<Texture>,
+    samplers: vector<Sampler>,
+    images: vector<Image>,
+    accessors: vector<Accessor>,
+    bufferViews: vector<BufferView>,
+    buffers: vector<Buffer>,
+    cameras: vector<Camera>
+}
+
+struct Chunk {
+    length: integer,
+    type: integer // 0x4E4F534A = 'JSON' | 0x004E4942 = 'BIN'
+}
+
+struct Glb {
+    magic: integer default(0x46546C67),
+    version: integer default(2),
+    length: integer
+}
+
+// Move the scene out of the render.
+// Render the highest local layer and remember bottom points.
+fn render(self: Drawing, scene: Scene, l: Map) {
+    for (p, l) in &ls.maps {
+        self.clear_loc();
+        for lay_pt in l.maps.keys().rev() {
+            let lay = *lay_pt;
+            fill_drawing(ls, lay, *p, d);
+            for x in 0..32 {
+                for y in 0..32 {
+                    // Write triangles
+                    let pp = Position::data(x, y).add(&l.position);
+                    let center = height_p(ls, lay, pp);
+                    let mat = material(ls, lay, pp);
+                    if mat > 0 {
+                        let gl_mat = scene.mat(&mut ground_mats, mat, &w.grounds);
+                        for base_dir in 0..6 {
+                            let pd = Direction::new(base_dir * 4);
+                            let wall_mat = wall(ls, lay, pp, pd.plus(2).d);
+                            let pos = PointPos::new(&pp, pd);
+                            let corner = pos.corner();
+                            let mut cur_oth = f64::NAN;
+                            let cur_p = if let Some(p) = d.points.get(&corner) {
+                                cur_oth = p.other(ls, lay, pp, pd.d);
+                                p.height_p(ls, lay, pp, pd.d)
+                            } else {
+                                points_height(
+                                    [
+                                        height_p(ls, lay, step(pp, pd.plus(22).d, 1, false)),
+                                        height_p(ls, lay, step(pp, pd.plus(2).d, 1, false)),
+                                        center,
+                                    ],
+                                    pos.point(),
+                                )
+                            };
+                            let nd = pd.plus(4);
+                            let pos = PointPos::new(&pp, nd);
+                            let next_corner = pos.corner();
+                            let mut next_oth = f64::NAN;
+                            let next_p = if let Some(p) = d.points.get(&next_corner) {
+                                next_oth = p.other(ls, lay, pp, nd.d);
+                                p.height_p(ls, lay, pp, nd.d)
+                            } else {
+                                points_height(
+                                    [
+                                        height_p(ls, lay, step(pp, pd.plus(2).d, 1, false)),
+                                        height_p(ls, lay, step(pp, pd.plus(6).d, 1, false)),
+                                        center,
+                                    ],
+                                    pos.point(),
+                                )
+                            };
+                            if cur_p.z.is_nan() || next_p.z.is_nan() {
+                                continue;
+                            }
+                            if wall_mat > 0 {
+                                let gl_wal = scene.mat(&mut wall_mats, wall_mat as u64, &w.walls);
+                                // Wall towards the own layer
+                                if !next_oth.is_nan() && !cur_oth.is_nan() && next_oth < next_p.z {
+                                    let cur_lp = Point::new(cur_p.x, cur_p.y, cur_oth);
+                                    let next_lp = Point::new(next_p.x, next_p.y, next_oth);
+                                    scene.triangle(gl_wal, cur_p, cur_lp, next_p);
+                                    scene.triangle(gl_wal, next_p, cur_lp, next_lp);
+                                }
+                                if next_oth.is_nan() || cur_oth.is_nan() || next_oth < next_p.z {
+                                    // Wall towards the next layer
+                                    if let (Some(cur_high), Some(next_high)) =
+                                        (d.height(corner, cur_p.z), d.height(next_corner, next_p.z))
+                                    {
+                                        let lay_cur = Point::new(cur_p.x, cur_p.y, cur_high);
+                                        let lay_next = Point::new(next_p.x, next_p.y, next_high);
+                                        if next_oth < next_p.z {
+                                            scene.triangle(gl_wal, next_p, cur_p, lay_cur);
+                                            scene.triangle(gl_wal, lay_next, next_p, lay_cur);
+                                        } else {
+                                            scene.triangle(gl_wal, cur_p, next_p, lay_cur);
+                                            scene.triangle(gl_wal, next_p, lay_next, lay_cur);
+                                        }
+                                    }
+                                }
+                            }
+                            scene.triangle(gl_mat, cur_p, next_p, center);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn json(&self, json: &mut Value, mat: u32) {
+    let mut buf = json
+        .index("buffers")
+        .index(0)
+        .index("byteLength")
+        .as_u64()
+        .unwrap() as usize;
+    let mut acc = json.index_mut("accessors").as_array().unwrap().len();
+    let ms = json.index_mut("meshes");
+    let mesh = ms.as_array().unwrap().len();
+    let arr = ms.as_array_mut().unwrap();
+    arr.push(json!({ "primitives": [{
+        "attributes": {},
+        "indices": acc, // accessor nr
+        "mode": 4, // the geometry holds points GL_TRIANGLES=4 (3 index positions needed)
+        "material": mat
+    }]}));
+    acc += 1; // skip the indices accessor
+    let m = arr.last_mut().unwrap();
+    *m.index_mut("primitives")
+        .index_mut(0)
+        .index_mut("attributes")
+        .index_mut("POSITION") = Value::from(acc);
+    acc += 1;
+    if self.normals {
+        *m.index_mut("primitives")
+            .index_mut("attributes")
+            .index_mut("NORMAL") = Value::from(acc);
+    }
+    let views = json.index_mut("bufferViews").as_array_mut().unwrap();
+    let index_view = views.len();
+    let count = self.vertexes.len();
+    let byte_length = self.indices.len() * 2;
+    views.push(json!({ // Indices
+        "buffer": 0, // The only buffer we have
+        "byteOffset": buf, // Needs to be aligned with the size of the corresponding accessor type
+        "byteLength": byte_length, // Needs to be a multiple of size of the accessor type
+        "target": 0x8893, // GL_ELEMENT_ARRAY_BUFFER
+    }));
+    buf += byte_length;
+    let vertex_view = views.len();
+    let byte_length = count * self.stride();
+    views.push(json!({ // Vertexes
+        "buffer": 0, // The only buffer we have
+        "byteOffset": buf, // Needs to be aligned with the size of the corresponding accessor type
+        "byteLength": byte_length, // Needs to be a multiple of size of the accessor type
+        "byteStride": self.stride(),
+        "target": 0x8892, // GL_ARRAY_BUFFER
+    }));
+    buf += byte_length;
+    let acc = json.index_mut("accessors").as_array_mut().unwrap();
+    // Add indices buffer
+    acc.push(json!({
+        "bufferView": index_view,
+        "componentType": 5123, // 5120=i8 5121=u8 5122=i16 5123=u16 5126=f32
+        "count": self.indices.len(),
+        "byteOffset": 0,
+        "type": "SCALAR" // SCALAR / VEC2(x,y) / VEC3(x,y,z) / MAT4
+    }));
+    // Add positions buffer
+    acc.push(json!({
+        "bufferView": vertex_view,
+        "componentType": 5126, // 5120=i8 5121=u8 5122=i16 5123=u16 5126=f32
+        "count": count,
+        "byteOffset": 0,
+        "type": "VEC3", // SCALAR / VEC2(x,y) / VEC3(x,y,z) / MAT4
+        "min": [self.min.x, self.min.z, self.min.y],
+        "max": [self.max.x, self.max.z, self.max.y]
+    }));
+    if self.normals {
+        acc.push(json!({
+            "bufferView": vertex_view,
+            "componentType": 5126, // 5120=i8 5121=u8 5122=i16 5123=u16 5126=f32
+            "count": count,
+            "byteOffset": 12,
+            "type": "SCALAR" // SCALAR / VEC2(x,y) / VEC3(x,y,z) / MAT4
+        }));
+    }
+    let node = json.index("nodes").as_array().unwrap().len();
+    json.index_mut("nodes").as_array_mut().unwrap().push(json!({
+        "mesh": mesh,
+    }));
+    json.index_mut("scenes")
+        .index_mut(0)
+        .index_mut("nodes")
+        .as_array_mut()
+        .unwrap()
+        .push(json!(node));
+    *json
+        .index_mut("buffers")
+        .index_mut(0)
+        .index_mut("byteLength") = Value::from(buf);
+}
+
+fn data_len(self: Scene) -> integer {
+    len = 0;
+    for ms in self.meshes {
+        for mesh in ms.values() {
+            len += mesh.length();
+        }
+    }
+    len
+}
+
+fn json(self: Scene, name: text) -> text {
+    outline = Glb {
+        asset: { version: "2.0" },
+        scenes: [{name: name, nodes: [0]}],
+        scene: 0,
+        "nodes": [{
+            "camera":0
+        }],
+        "meshes": [],
+        "materials": [],
+        "accessors": [],
+        "bufferViews": [],
+        "buffers": [{
+            "byteLength": 0,
+        }],
+        "cameras": [{
+            "type": "perspective",
+            "perspective": {
+                "aspectRatio": 1.0,
+                "yfov": 0.7,
+                "zfar": 1000.0,
+                "znear": 0.1,
+            }
+        }]
+    });
+    let mats = json.index_mut("materials").as_array_mut().unwrap();
+    for mat in &self.materials {
+        let (r, g, b) = mat.rgb;
+        mats.push(json!({
+            "pbrMetallicRoughness": {
+                // The color of this material
+                "baseColorFactor": [ r as f32/255.0, g as f32/255.0, b as f32 / 255.0, 1.0 ],
+                "metallicFactor": mat.metallic,
+                "roughnessFactor": mat.roughness,
+            }
+        }));
+    }
+    for ms in &self.meshes {
+        for (mat, mesh) in ms {
+            mesh.json(&mut json, *mat);
+        }
+    }
+    if json.len() & 3 != 0 {
+        for extra in 0 .. 4 - json.len() & 3 {
+            json += " ";
+        }
+    }
+    json
+}
+
+pub fn glb(to_file: text, scene: Scene) {
+    dt = scene.json();
+    f = file(to_file);
+    length = 20 + dt.len() + 8 + scene.data_len();
+    write(&mut f, 0x46546C67)?; // magic number "glTF"
+    write(&mut f, 2)?; // version 2
+    write(&mut f, length)?;
+    write(&mut f, dt.len() as u32)?;
+    write(&mut f, 0x4E4F534A)?; // magic number "JSON"
+    f.write_all(dt.as_bytes())?;
+    write(&mut f, scene.length())?;
+    write(&mut f, 0x004E4942)?; // magic number "BIN"
+    scene.write(&mut f)
+}

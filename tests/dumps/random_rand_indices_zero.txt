@@ -1,0 +1,49 @@
+fn test() {
+    v = rand_indices(0);
+    assert(len(v) == 0, "expected empty vector");
+}
+Type 18:main_vector<integer>[4/4]:
+    vector:vector<integer>[0]
+
+Type 19:vector<integer>[4/4]:Vector(0)
+
+fn n_test() {#block(1):void
+  [2] v(1):vector<integer> = n_rand_indices(0i32);
+  [3] n_assert(OpEqInt(t_6vector_len(v(1)), 0i32), "expected empty vector", "rand_indices_zero", 3i32);
+  OpFreeRef(v(1));
+}#block(1):void
+
+byte-code for rand_indices_zero:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: [2] ConstInt(val=0) -> integer var=v[4]:vector<integer>
+   5[8]: StaticCall(n_rand_indices)
+   8[16]: [3] VarVector(var[4]) -> vector type=vector<integer> 19 var=v[4]:vector<integer>
+  11[28]: Call(size=0, fn=t_6vector_len)
+  18[20]: ConstInt(val=0) -> integer
+  23[24]: EqInt(v1: integer, v2: integer) -> boolean
+  24[17]: ConstText(_value="expected empty vector") -> text
+  47[33]: ConstText(_value="rand_indices_zero") -> text
+  66[49]: ConstInt(val=3) -> integer
+  71[53]: StaticCall(n_assert)
+  74[16]: VarVector(var[4]) -> vector type=vector<integer> 19 var=v[4]:vector<integer>
+  77[28]: FreeRef(v1: ref(reference)) ; [store-free]
+  78[16]: Return(ret=0, value=0, discard=16)
+
+Execute test:
+    0:[8] ConstInt(val=0) -> 0[8]
+    5:[12] StaticCall(n_rand_indices)
+    8:[20] VarVector(var[8]=v) -> ref(1,2,4)=[][20]
+   11:[32] Call(size=0, fn=t_6vector_len)
+ 1088:[36] VarVector(var[20]=both) -> ref(1,2,4)[36]
+ 1091:[48] LengthVector(r=ref(1,2,4)[36]) -> 0[36]
+ 1092:[40] Return(ret=2850[32], value=4, discard=20) -> 0[20]
+   18:[24] ConstInt(val=0) -> 0[24]
+   23:[28] EqInt(v1=0[20], v2=0[24]) -> true[20]
+   24:[21] ConstText(_value="expected empty vector") -> "expected empty vector"[21]
+   47:[37] ConstText(_value="rand_indices_zero") -> "rand_indices_zero"[37]
+   66:[53] ConstInt(val=3) -> 3[53]
+   71:[57] StaticCall(n_assert)
+   74:[20] VarVector(var[8]=v) -> ref(1,2,4)=[][20]
+   77:[32] FreeRef(v1=ref(1,2,4)[20]) ; store-free max=1
+   78:[20] Return(ret=4294967295[4], value=0, discard=16)
+Finished

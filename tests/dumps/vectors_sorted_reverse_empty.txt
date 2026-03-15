@@ -1,0 +1,132 @@
+struct Elm { key: integer }
+struct Db { s: sorted<Elm[key]> }
+fn test() {
+    db = Db { s: [] };
+    sum = 0;
+    for e in rev(db.s) { sum += e.key }
+    assert(sum == 0, "empty rev got {sum}")
+}
+Type 18:Elm[4/4]: parents [Db 19]
+    key:integer[0]
+
+Type 19:Db[4/4]:
+    s:sorted<Elm[key]>[0]
+
+Type 20:sorted<Elm[key]>[4/4]:Sorted(18, [(0, true)]) keys [tp:1 desc:false field:0, ]
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [4] db(1):ref(Db) = null;
+  OpDatabase(db(1), 19i32);
+  OpSetInt(db(1), 0i32, 0i32);
+  [5] sum(1):integer = 0i32;
+  [6] {#For block(2):void
+    e#index(2):integer = OpIterate(OpGetField(db(1), 0i32, 20i32), 194i32, 4i32, &[Key { type_nr: 1, position: 0 }], 0i32, 0i32);
+    loop {#For loop_3
+      e(3):ref(Elm)["db"] = OpStep(e#index(2), OpGetField(db(1), 0i32, 20i32), 194i32, 4i32);
+      if OpNot(OpConvBoolFromRef(e(3))) {#break(4):void
+        break(0);
+      }#break(4):void else null;
+      {#block(5):void
+        sum(1):integer = OpAddInt(sum(1), OpGetInt(e(3), 0i32));
+      }#block(5):void;
+    }#For loop_3;
+  }#For block(2):void;
+  [7] n_assert(OpEqInt(sum(1), 0i32), {#Formatted string(6):text["__work_1"]
+    __work_1(1):text = "empty rev got ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(sum(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(6):text["__work_1"], "sorted_reverse_empty", 7i32);
+  OpFreeRef(db(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for sorted_reverse_empty:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [4] ConvRefFromNull() -> ref(reference) var=db[28]:ref(Db) ; [store-alloc]
+   2[40]: Database(var[28], db_tp=19) type=Db 19
+   7[40]: VarRef(var[28]) -> ref(reference) type=Db 19 var=db[28]:ref(Db)
+  10[52]: ConstInt(val=0) -> integer
+  15[56]: SetInt(v1: ref(reference), fld=0, val: integer)
+  18[40]: [5] ConstInt(val=0) -> integer var=sum[40]:integer
+  23[44]: [6] VarRef(var[28]) -> ref(reference) type=Db 19 var=db[28]:ref(Db)
+  26[56]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<Elm[key]> 20
+  29[56]: Iterate(data: ref(reference), on=194, arg=4, keys=[Key { type_nr: 1, position: 0 }], from_key=0, till_key=0) -> long
+  39[52]: VarRef(var[28]) -> ref(reference) type=Db 19 var=db[28]:ref(Db)
+  42[64]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=sorted<Elm[key]> 20
+  45[64]: Step(state_var=20, data: ref(reference), on=194, arg=4) -> ref(reference)
+  51[64]: VarRef(var[52]) -> ref(reference) type=Elm 18 var=e[52]:ref(Elm)["db"]
+  54[76]: ConvBoolFromRef(val: ref(reference)) -> boolean
+  55[65]: Not(v1: boolean) -> boolean
+  56[65]: GotoFalseWord(jump=66, if_false: boolean)
+  59[64]: FreeStack(value=0, discard=12)
+  63[52]: GotoWord(jump=86)
+  66[64]: VarInt(var[40]) -> integer var=sum[40]:integer
+  69[68]: VarRef(var[52]) -> ref(reference) type=Elm 18 var=e[52]:ref(Elm)["db"]
+  72[80]: GetInt(v1: ref(reference), fld=0) -> integer
+  75[72]: AddInt(v1: integer, v2: integer) -> integer
+  76[68]: PutInt(var[40], value: integer)
+  79[64]: FreeStack(value=0, discard=12)
+  83[52]: GotoWord(jump=39)
+  86[52]: FreeStack(value=0, discard=8)
+  90[44]: [7] VarInt(var[40]) -> integer var=sum[40]:integer
+  93[48]: ConstInt(val=0) -> integer
+  98[52]: EqInt(v1: integer, v2: integer) -> boolean
+  99[45]: ClearText(var[4]) var=__work_1[4]:text
+ 102[45]: ConstText(_value="empty rev got ") -> text
+ 118[61]: AppendText(var[4], v1: text)
+ 121[45]: VarInt(var[40]) -> integer var=sum[40]:integer
+ 124[49]: ConvLongFromInt(v1: integer) -> long
+ 125[53]: ConstInt(val=0) -> integer
+ 130[57]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 137[45]: VarText(var[4]) -> text var=__work_1[4]:text
+ 140[61]: ConstText(_value="sorted_reverse_empty") -> text
+ 162[77]: ConstInt(val=7) -> integer
+ 167[81]: StaticCall(n_assert)
+ 170[44]: VarRef(var[28]) -> ref(reference) type=Db 19 var=db[28]:ref(Db)
+ 173[56]: FreeRef(v1: ref(reference)) ; [store-free]
+ 174[44]: FreeText(var[4])
+ 177[44]: Return(ret=0, value=0, discard=44)
+
+Execute test:
+    0:[8] [4] Text()
+    1:[32] ConvRefFromNull() -> ref(1,0,8)[32]
+  ; store-alloc nr=1 max=2
+    2:[44] Database(var[32], db_tp=19)
+    7:[44] VarRef(var[32]=db) -> ref(1,1,8)={s:[]}[44]
+   10:[56] ConstInt(val=0) -> 0[56]
+   15:[60] SetInt(v1=ref(1,1,8)[44], fld=0, val=0[56])
+   18:[44] ConstInt(val=0) -> 0[44]
+   23:[48] VarRef(var[32]=db) -> ref(1,1,8)={s:[]}[48]
+   26:[60] GetField(v1=ref(1,1,8)[48], fld=0) -> ref(1,1,8)=[][48]
+   29:[60] Iterate(data=ref(1,1,8), on=194, arg=4, keys=[Key { type_nr: 1, position: 0 }], from=[], till=[]) -> 4294967297[48]
+   39:[56] VarRef(var[32]=db) -> ref(1,1,8)={s:[]}[56]
+   42:[68] GetField(v1=ref(1,1,8)[56], fld=0) -> ref(1,1,8)=[][56]
+   45:[68] Step(state_var=20, data=ref(1,1,8)[56], on=194, arg=4) -> ref(1,0,2147483647)[56]
+   51:[68] VarRef(var[56]=e) -> ref(1,0,2147483647)=null[68]
+   54:[80] ConvBoolFromRef(val=ref(1,0,2147483647)[68]) -> false[68]
+   55:[69] Not(v1=false[68]) -> true[68]
+   56:[69] GotoFalseWord(jump=66, if_false=true[68])
+   59:[68] FreeStack(value=0, discard=12)
+   63:[56] GotoWord(jump=86)
+   86:[56] FreeStack(value=0, discard=8)
+   90:[48] VarInt(var[44]=sum) -> 0[48]
+   93:[52] ConstInt(val=0) -> 0[52]
+   98:[56] EqInt(v1=0[48], v2=0[52]) -> true[48]
+   99:[49] ClearText(var[8]=__work_1)
+  102:[49] ConstText(_value="empty rev got ") -> "empty rev got "[49]
+  118:[65] AppendText(var[8], v1="empty rev got "[49])
+  121:[49] VarInt(var[44]=sum) -> 0[49]
+  124:[53] ConvLongFromInt(v1=0[49]) -> 0[49]
+  125:[57] ConstInt(val=0) -> 0[57]
+  130:[61] FormatLong(var[8], val=0[49], radix=10, width=0[57], token=32, plus=false, note=false)
+  137:[49] VarText(var[8]=__work_1) -> "empty rev got 0"[49]
+  140:[65] ConstText(_value="sorted_reverse_empty") -> "sorted_reverse_empty"[65]
+  162:[81] ConstInt(val=7) -> 7[81]
+  167:[85] StaticCall(n_assert)
+  170:[48] VarRef(var[32]=db) -> ref(1,1,8)={s:[]}[48]
+  173:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+  174:[48] FreeText(var[8])
+  177:[48] Return(ret=4294967295[4], value=0, discard=44)
+Finished

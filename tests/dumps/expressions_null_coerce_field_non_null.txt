@@ -1,0 +1,95 @@
+struct Row { val: integer }
+fn test() {
+    r = Row { val: 7 };
+    result = r.val ?? 0;
+    assert(result == 7, "result: {result}");
+}
+Type 18:Row[4/4]:
+    val:integer[0]
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [3] r(1):ref(Row) = null;
+  OpDatabase(r(1), 18i32);
+  OpSetInt(r(1), 0i32, 7i32);
+  [4] result(1):integer = if OpNeInt(OpGetInt(r(1), 0i32), OpConvIntFromNull()) OpGetInt(r(1), 0i32) else 0i32;
+  [5] n_assert(OpEqInt(result(1), 7i32), {#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "result: ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(result(1)), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"], "null_coerce_field_non_null", 5i32);
+  OpFreeRef(r(1));
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for null_coerce_field_non_null:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [3] ConvRefFromNull() -> ref(reference) var=r[28]:ref(Row) ; [store-alloc]
+   2[40]: Database(var[28], db_tp=18) type=Row 18
+   7[40]: VarRef(var[28]) -> ref(reference) type=Row 18 var=r[28]:ref(Row)
+  10[52]: ConstInt(val=7) -> integer
+  15[56]: SetInt(v1: ref(reference), fld=0, val: integer)
+  18[40]: [4] VarRef(var[28]) -> ref(reference) type=Row 18 var=r[28]:ref(Row)
+  21[52]: GetInt(v1: ref(reference), fld=0) -> integer
+  24[44]: ConvIntFromNull() -> integer
+  25[48]: NeInt(v1: integer, v2: integer) -> boolean
+  26[41]: GotoFalseWord(jump=38, if_false: boolean)
+  29[40]: VarRef(var[28]) -> ref(reference) type=Row 18 var=r[28]:ref(Row)
+  32[52]: GetInt(v1: ref(reference), fld=0) -> integer
+  35[44]: GotoWord(jump=43)
+  38[40]: ConstInt(val=0) -> integer
+  43[44]: [5] VarInt(var[40]) -> integer var=result[40]:integer
+  46[48]: ConstInt(val=7) -> integer
+  51[52]: EqInt(v1: integer, v2: integer) -> boolean
+  52[45]: ClearText(var[4]) var=__work_1[4]:text
+  55[45]: ConstText(_value="result: ") -> text
+  65[61]: AppendText(var[4], v1: text)
+  68[45]: VarInt(var[40]) -> integer var=result[40]:integer
+  71[49]: ConvLongFromInt(v1: integer) -> long
+  72[53]: ConstInt(val=0) -> integer
+  77[57]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  84[45]: VarText(var[4]) -> text var=__work_1[4]:text
+  87[61]: ConstText(_value="null_coerce_field_non_null") -> text
+ 115[77]: ConstInt(val=5) -> integer
+ 120[81]: StaticCall(n_assert)
+ 123[44]: VarRef(var[28]) -> ref(reference) type=Row 18 var=r[28]:ref(Row)
+ 126[56]: FreeRef(v1: ref(reference)) ; [store-free]
+ 127[44]: FreeText(var[4])
+ 130[44]: Return(ret=0, value=0, discard=44)
+
+Execute test:
+    0:[8] [3] Text()
+    1:[32] ConvRefFromNull() -> ref(1,0,8)[32]
+  ; store-alloc nr=1 max=2
+    2:[44] Database(var[32], db_tp=18)
+    7:[44] VarRef(var[32]=r) -> ref(1,1,8)={}[44]
+   10:[56] ConstInt(val=7) -> 7[56]
+   15:[60] SetInt(v1=ref(1,1,8)[44], fld=0, val=7[56])
+   18:[44] VarRef(var[32]=r) -> ref(1,1,8)={val:7}[44]
+   21:[56] GetInt(v1=ref(1,1,8)[44], fld=0) -> 7[44]
+   24:[48] ConvIntFromNull() -> -2147483648[48]
+   25:[52] NeInt(v1=7[44], v2=-2147483648[48]) -> true[44]
+   26:[45] GotoFalseWord(jump=38, if_false=true[44])
+   29:[44] VarRef(var[32]=r) -> ref(1,1,8)={val:7}[44]
+   32:[56] GetInt(v1=ref(1,1,8)[44], fld=0) -> 7[44]
+   35:[48] GotoWord(jump=43)
+   43:[48] VarInt(var[44]=result) -> 7[48]
+   46:[52] ConstInt(val=7) -> 7[52]
+   51:[56] EqInt(v1=7[48], v2=7[52]) -> true[48]
+   52:[49] ClearText(var[8]=__work_1)
+   55:[49] ConstText(_value="result: ") -> "result: "[49]
+   65:[65] AppendText(var[8], v1="result: "[49])
+   68:[49] VarInt(var[44]=result) -> 7[49]
+   71:[53] ConvLongFromInt(v1=7[49]) -> 7[49]
+   72:[57] ConstInt(val=0) -> 0[57]
+   77:[61] FormatLong(var[8], val=7[49], radix=10, width=0[57], token=32, plus=false, note=false)
+   84:[49] VarText(var[8]=__work_1) -> "result: 7"[49]
+   87:[65] ConstText(_value="null_coerce_field_non_null") -> "null_coerce_field_non_null"[65]
+  115:[81] ConstInt(val=5) -> 5[81]
+  120:[85] StaticCall(n_assert)
+  123:[48] VarRef(var[32]=r) -> ref(1,1,8)={val:7}[48]
+  126:[60] FreeRef(v1=ref(1,1,8)[48]) ; store-free max=1
+  127:[48] FreeText(var[8])
+  130:[48] Return(ret=4294967295[4], value=0, discard=44)
+Finished

@@ -1,0 +1,89 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Integers
+// @TITLE: Whole numbers and arithmetic
+
+// Numbers are at the heart of almost every program. This page covers the
+// integer types Loft provides, the arithmetic and bitwise operations you can
+// perform on them, how to convert between numbers and text, and what Loft
+// does when something goes wrong — such as dividing by zero.
+//
+// The default number type is 'integer': a 32-bit signed whole number, the
+// same as i32 in Rust. It can hold values from about −2 billion to +2 billion.
+// For larger values Loft also has 'long' (64-bit), shown at the end of this page.
+// For decimal (fractional) numbers, see the Float page.
+
+fn main() {
+    // ## Converting between numbers and text
+    // Wrapping a value in '{...}' inside a string formats it as text.
+    // Going the other way, 'as integer' parses a text value into a number.
+    // If the text cannot be parsed, the result is null — not a crash.
+    v = 4;
+    assert("{v}" == "4", "Format integer as text");
+    assert("123" as integer == 123, "Parse text to integer");
+    assert(!("abc" as integer), "Unparseable text gives null");
+
+    // ## Arithmetic and operator precedence
+    // Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'.
+    // Bitwise operators (<<, &, ^) have their own precedence — when mixing them with
+    // arithmetic, parentheses make your intent clear and avoid surprises.
+    // Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
+    assert(1 + 2 * 4 == 9, "Multiplication before addition");
+    assert(1 + 2 << 2 == 12, "Shift: (1+2) << 2 = 12");
+    assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
+    assert(42 ^ 0b111111 == 21, "Bitwise XOR");
+    assert(105 % 100 == 5, "Modulus (remainder)");
+    assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+
+    // 'abs()' returns the absolute value — the distance from zero, always positive.
+    assert(1 + abs(-2) == 3, "abs(-2) == 2");
+
+    // ## Division by zero produces null, not a crash
+    // Most languages crash or throw an exception on division by zero.
+    // Loft produces null instead, which behaves like false in conditions.
+    // This lets you handle missing or bad data gracefully with a simple '!'.
+    a = 2 * 2;
+    a -= 4;              // a is now 0
+    assert(!(12 / a), "Division by zero gives null");
+
+    // ## Embedding integers in text
+    assert("a{12}b" == "a12b", "Integer in format string");
+
+    // A full expression can appear inside '{...}', not just a variable name.
+    assert("a{1 + 2 * 3}b" == "a7b", "Expression in format string");
+
+    // ## Number format specifiers
+    // After a ':' inside '{...}' you can control how a number is displayed:
+    //   #x  — hexadecimal with '0x' prefix
+    //   o   — octal
+    //   b   — binary
+    //   +   — always show a sign (+ or -)
+    //   N   — minimum field width (space-padded on the left)
+    //   0N  — minimum field width (zero-padded on the left)
+    assert("a{1+2+32:#x}b" == "a0x23b", "Hex format with 0x prefix");
+    assert("{12:o}" == "14", "Octal");
+    assert("{12:+4}" == " +12", "Sign and width");
+    assert("{1:03}" == "001", "Zero-padded width");
+    assert("{42:b}" == "101010", "Binary");
+
+    // Hexadecimal literals in source code accept both lower and upper case digits.
+    assert(0xff == 255, "Lowercase hex literal");
+    assert(0xFF == 255, "Uppercase hex literal");
+    assert(0x2A == 42,  "Uppercase hex digit");
+
+    // ## The 'long' type for large numbers
+    // 'long' is a 64-bit signed integer — use it when values might exceed 2 billion.
+    // Write a long literal by appending 'l': '1l', '100000000000l'.
+    // Long values support the same arithmetic and format specifiers as integer.
+    // Convert a long back to an integer with 'as integer'.
+    big = 1000000000l * 5l;
+    assert(big == 5000000000l, "Long arithmetic");
+    assert("{1l + 1:+4}" == "  +2", "Long in format string");
+    assert(12l as integer == 12, "Long to integer conversion");
+
+    // ## Common pitfall: integer overflow
+    // If a 32-bit integer calculation overflows the max value (~2 billion),
+    // the result wraps around silently. Use 'long' when you expect large values.
+    // For example, a score that multiplies two large numbers can silently wrap.
+    // Switching to 'long' avoids this: 'score = big_a as long * big_b as long'.
+}

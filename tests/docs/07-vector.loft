@@ -1,0 +1,121 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Vector
+// @TITLE: Vector creation and use
+
+// A vector is an ordered list of values that can grow and shrink while your program runs.
+// Every element must have the same type — you cannot mix integers and text in one vector.
+// Write a vector literal with square brackets: '[1, 2, 3]'.
+// Under the hood Loft allocates exactly as much memory as needed, so vectors are efficient
+// even when you do not know the size up front.
+
+// ## Higher-order functions: map, filter, reduce
+// 'map', 'filter', and 'reduce' let you transform or summarise a vector by
+// passing a function reference — written 'fn <name>' — as the first argument.
+//   map(v, fn f)          — apply f to every element; returns a new vector
+//   filter(v, fn pred)    — keep only elements for which pred returns true
+//   reduce(v, fn f, init) — fold all elements into a single value
+fn triple(x: integer) -> integer { x * 3 }
+fn is_even_n(x: integer) -> boolean { x % 2 == 0 }
+fn sum_acc(acc: integer, x: integer) -> integer { acc + x }
+fn mul_acc(acc: integer, x: integer) -> integer { acc * x }
+
+fn main() {
+    // Create a vector with a literal and loop over it with 'for'.
+    // Two special loop annotations help when you need to know where you are:
+    //   'v#first'  is true only on the very first iteration — useful for skipping separators.
+    //   'v#index'  holds the zero-based position of the current element.
+    x = [1, 3, 6, 9];
+    b = "";
+    for v in x {
+        if !v#first {
+            b += " ";
+        }
+        b += "{v#index}:{v}"
+    }
+    assert(b == "0:1 1:3 2:6 3:9", "result {b}");
+
+    // '+=' appends another vector to the end of an existing one.
+    // You can filter and delete elements in a single pass:
+    //   Add 'if condition' after 'in vector' to visit only matching elements.
+    //   Write 'v#remove' inside the loop body to delete the current element.
+    // Here we keep only multiples of 3 by removing everything else.
+    // Note: you cannot append to a vector (v += [...]) while iterating over it —
+    // that is a compile error because the loop would then visit the new elements too,
+    // which could loop forever.
+    x += [12, 14, 15];
+    for v in x if v % 3 != 0 {
+        v#remove;
+    }
+    assert("{x}" == "[3,6,9,12,15]", "result {x}");
+
+    // ## Slicing
+    // A slice gives you a window into part of a vector without copying it.
+    // 'v[a..b]' contains elements at positions a, a+1, ..., b-1 (b is excluded).
+    // 'v[a..]'  goes from position a to the very last element.
+    // 'v[..b]'  goes from the beginning up to (but not including) position b.
+    pows = [1, 2, 4, 8, 16];
+    assert("{pows[1..3]}" == "[2,4]", "Sub-vector");
+    assert("{pows[3..]}" == "[8,16]", "Open-ended sub-vector");
+    assert("{pows[..3]}" == "[1,2,4]", "Open-start sub-vector");
+
+    // Accessing an index that does not exist is safe: Loft returns null instead of crashing.
+    // You can check for null with '!' (logical not) because null is falsy.
+    assert(!pows[10], "Out-of-bounds access returns null");
+
+    // ## Comprehensions
+    // A comprehension is a concise way to build a new vector from a formula.
+    // Syntax: '[for variable in range { expression }]'
+    // Add 'if condition' to include only elements that satisfy the condition.
+    // This is much shorter than creating an empty vector and appending in a loop.
+    evens = [for n in 1..10 if n % 2 == 0 { n }];
+    assert("{evens}" == "[2,4,6,8]", "Filtered comprehension");
+    doubled = [for n in 1..6 { n * 2 }];
+    assert("{doubled}" == "[2,4,6,8,10]", "Doubled comprehension");
+
+    // Embedding a for loop directly inside a format string '{...}' produces a formatted list.
+    // The format specifier after ':' is applied to every element in the result.
+    // ':02' means "at least 2 digits wide, padded with zeros on the left".
+    assert("{for n in 1..7 {n*2}:02}" == "[02,04,06,08,10,12]", "Formatted vector loop");
+
+    // ## Reverse Iteration
+    // Wrap a range in 'rev()' to step through elements from the last index to the first.
+    // 'rev(0..=3)' covers indices 0, 1, 2, 3 — the '=' makes the upper end inclusive.
+    // Here we visit pows[3]=8, pows[2]=4, pows[1]=2, pows[0]=1, building 8421 digit by digit.
+    c = 0;
+    for e in pows[rev(0..=3)] {
+        c = c * 10 + e;
+    }
+    assert(c == 8421, "Reverse sub-vector iteration");
+
+    // You can fill a vector with many copies of the same value using '; count' syntax:
+    //   [SomeStruct { field: value }; 16]
+    // This creates 16 identical copies in one expression. See 08-struct.loft for examples.
+
+    // To append to a vector inside a function and have the caller see the change,
+    // mark the parameter with '&': fn append_one(v: &vector<integer>, x: integer) { v += [x]; }
+    // Without '&', appending is local to the function and the caller's vector stays the same.
+    // Mutations to existing elements (e.g. v[0] = 99) are always visible to the caller
+    // even without '&', because the vector's storage is shared.
+
+    // ## Higher-order functions
+    // 'map' applies a function to every element and returns a new vector.
+    nums = [1, 2, 3, 4, 5];
+    tripled = map(nums, fn triple);
+    assert("{tripled}" == "[3,6,9,12,15]", "map triple: {tripled}");
+
+    // 'filter' keeps only elements for which the predicate returns true.
+    evens2 = filter(nums, fn is_even_n);
+    assert("{evens2}" == "[2,4]", "filter evens: {evens2}");
+
+    // 'reduce' folds all elements into a single value, starting from an initial accumulator.
+    // Argument order: reduce(vector, initial_value, fn combiner).
+    total = reduce(nums, 0, fn sum_acc);
+    assert(total == 15, "reduce sum: {total}");
+    product = reduce(nums, 1, fn mul_acc);
+    assert(product == 120, "reduce product: {product}");
+
+    // You can chain these calls: filter first, then map, then reduce.
+    result = reduce(map(filter(nums, fn is_even_n), fn triple), 0, fn sum_acc);
+    assert(result == 18, "filter+map+reduce: {result}");
+}

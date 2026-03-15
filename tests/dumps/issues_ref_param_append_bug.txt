@@ -1,0 +1,255 @@
+struct Item { name: text, value: integer }
+fn fill(v: &vector<Item>, extra: vector<Item>) { v += extra; }
+fn test() {
+    buf = [Item { name: "a", value: 1 }];
+    fill(buf, [Item { name: "b", value: 2 }]);
+    assert(len(buf) == 2, "len after fill: {len(buf)}");
+    assert(buf[1].value == 2, "buf[1].value: {buf[1].value}");
+}
+Type 18:Item[8/4]: parents [main_vector<Item> 19]
+    name:text[0]
+    value:integer[4]
+
+Type 19:main_vector<Item>[4/4]:
+    vector:vector<Item>[0]
+
+Type 20:vector<Item>[4/4]:Vector(18)
+
+fn n_fill(v:&vector<ref(Item)>, extra:vector<ref(Item)>) {#block(1):void
+  [2] OpAppendVector(v(0), extra(0), 18i32);
+}#block(1):void
+
+byte-code for ref_param_append_bug:n_fill(v: &vector<ref(Item)>[0], extra: vector<ref(Item)>[12])
+   0[24]: return-address  @abs=2832
+   0[28]: [2] VarRef(var[0]) -> ref(reference) var=v[0]:&vector<ref(Item)>
+   3[40]: GetStackRef(r: ref(reference), fld=0) -> ref(reference)
+   6[40]: VarVector(var[12]) -> vector type=vector<Item> 20 var=extra[12]:vector<ref(Item)>
+   9[52]: AppendVector(r: vector, other: vector, tp=18)
+  12[28]: Return(ret=24, value=0, discard=28)
+
+fn n_test() {#block(1):void
+  __ref_2(1):ref(main_vector<Item>) = null;
+  __ref_1(1):ref(main_vector<Item>) = null;
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [4] OpDatabase(__ref_1(1), 19i32);
+  buf(1):vector<ref(Item)>["__ref_1"] = OpGetField(__ref_1(1), 0i32, 20i32);
+  OpSetInt(__ref_1(1), 0i32, 0i32);
+  _elm_1(1):ref(Item)["buf"] = OpNewRecord(buf(1), 20i32, 65535i32);
+  OpSetText(_elm_1(1), 0i32, "a");
+  OpSetInt(_elm_1(1), 4i32, 1i32);
+  OpFinishRecord(buf(1), _elm_1(1), 20i32, 65535i32);
+  [5] n_fill(OpCreateStack(buf(1)), {#Vector(2):vector<ref(Item)>["__ref_2"]
+    OpDatabase(__ref_2(1), 19i32);
+    _vec_2(2):vector<ref(Item)>["__ref_2"] = OpGetField(__ref_2(1), 0i32, 20i32);
+    OpSetInt(__ref_2(1), 0i32, 0i32);
+    _elm_3(2):ref(boolean)["_vec_2"] = OpNewRecord(_vec_2(2), 20i32, 65535i32);
+    OpSetText(_elm_3(2), 0i32, "b");
+    OpSetInt(_elm_3(2), 4i32, 2i32);
+    OpFinishRecord(_vec_2(2), _elm_3(2), 20i32, 65535i32);
+    _vec_2(2);
+  }#Vector(2):vector<ref(Item)>["__ref_2"]);
+  [6] n_assert(OpEqInt(t_6vector_len(buf(1)), 2i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "len after fill: ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(t_6vector_len(buf(1))), 10i32, 0i32, 32i32, false, false);
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "ref_param_append_bug", 6i32);
+  [7] n_assert(OpEqInt(OpGetInt(OpGetVector(buf(1), 8i32, 1i32), 4i32), 2i32), {#Formatted string(4):text["__work_2"]
+    __work_2(1):text = "buf[1].value: ";
+    OpFormatLong(__work_2(1), OpConvLongFromInt(OpGetInt(OpGetVector(buf(1), 8i32, 1i32), 4i32)), 10i32, 0i32, 32i32, false, false);
+    __work_2(1);
+  }#Formatted string(4):text["__work_2"], "ref_param_append_bug", 7i32);
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+  OpFreeRef(__ref_1(1));
+  OpFreeRef(__ref_2(1));
+}#block(1):void
+
+byte-code for ref_param_append_bug:n_test()
+   0[0]: return-address  @abs=2850
+   0[4]: ConvRefFromNull() -> ref(reference) var=__ref_2[4]:ref(main_vector<Item>) ; [store-alloc]
+   1[16]: ConvRefFromNull() -> ref(reference) var=__ref_1[16]:ref(main_vector<Item>) ; [store-alloc]
+   2[28]: Text() var=__work_2[28]:text
+   3[52]: Text() var=__work_1[52]:text
+   4[76]: [4] Database(var[16], db_tp=19) type=main_vector<Item> 19
+   9[76]: VarRef(var[16]) -> ref(reference) type=main_vector<Item> 19 var=__ref_1[16]:ref(main_vector<Item>)
+  12[88]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=vector<Item> 20
+  15[88]: VarRef(var[16]) -> ref(reference) type=main_vector<Item> 19 var=__ref_1[16]:ref(main_vector<Item>)
+  18[100]: ConstInt(val=0) -> integer
+  23[104]: SetInt(v1: ref(reference), fld=0, val: integer)
+  26[88]: VarVector(var[76]) -> vector type=vector<Item> 20 var=buf[76]:vector<ref(Item)>["__ref_1"]
+  29[100]: NewRecord(data: ref(reference), parent_tp=20, fld=65535) -> ref(reference)
+  34[100]: VarRef(var[88]) -> ref(reference) type=Item 18 var=_elm_1[88]:ref(Item)["buf"]
+  37[112]: ConstText(_value="a") -> text
+  40[128]: SetText(v1: ref(reference), fld=0, val: text)
+  43[100]: VarRef(var[88]) -> ref(reference) type=Item 18 var=_elm_1[88]:ref(Item)["buf"]
+  46[112]: ConstInt(val=1) -> integer
+  51[116]: SetInt(v1: ref(reference), fld=4, val: integer)
+  54[100]: VarVector(var[76]) -> vector type=vector<Item> 20 var=buf[76]:vector<ref(Item)>["__ref_1"]
+  57[112]: VarRef(var[88]) -> ref(reference) type=Item 18 var=_elm_1[88]:ref(Item)["buf"]
+  60[124]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=65535)
+  65[100]: [5] CreateStack(var[76]) -> ref(reference)
+  68[112]: Database(var[4], db_tp=19) type=main_vector<Item> 19
+  73[112]: VarRef(var[4]) -> ref(reference) type=main_vector<Item> 19 var=__ref_2[4]:ref(main_vector<Item>)
+  76[124]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=vector<Item> 20
+  79[124]: VarRef(var[4]) -> ref(reference) type=main_vector<Item> 19 var=__ref_2[4]:ref(main_vector<Item>)
+  82[136]: ConstInt(val=0) -> integer
+  87[140]: SetInt(v1: ref(reference), fld=0, val: integer)
+  90[124]: VarVector(var[112]) -> vector type=vector<Item> 20 var=_vec_2[112]:vector<ref(Item)>["__ref_2"]
+  93[136]: NewRecord(data: ref(reference), parent_tp=20, fld=65535) -> ref(reference)
+  98[136]: VarRef(var[124]) -> ref(reference) type=boolean 4 var=_elm_3[124]:ref(boolean)["_vec_2"]
+ 101[148]: ConstText(_value="b") -> text
+ 104[164]: SetText(v1: ref(reference), fld=0, val: text)
+ 107[136]: VarRef(var[124]) -> ref(reference) type=boolean 4 var=_elm_3[124]:ref(boolean)["_vec_2"]
+ 110[148]: ConstInt(val=2) -> integer
+ 115[152]: SetInt(v1: ref(reference), fld=4, val: integer)
+ 118[136]: VarVector(var[112]) -> vector type=vector<Item> 20 var=_vec_2[112]:vector<ref(Item)>["__ref_2"]
+ 121[148]: VarRef(var[124]) -> ref(reference) type=boolean 4 var=_elm_3[124]:ref(boolean)["_vec_2"]
+ 124[160]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=20, fld=65535)
+ 129[136]: VarVector(var[112]) -> vector type=vector<Item> 20 var=_vec_2[112]:vector<ref(Item)>["__ref_2"]
+ 132[148]: FreeStack(value=12, discard=36)
+ 136[124]: Call(size=0, fn=n_fill)
+ 143[100]: [6] VarVector(var[76]) -> vector type=vector<Item> 20 var=buf[76]:vector<ref(Item)>["__ref_1"]
+ 146[112]: Call(size=0, fn=t_6vector_len)
+ 153[104]: ConstInt(val=2) -> integer
+ 158[108]: EqInt(v1: integer, v2: integer) -> boolean
+ 159[101]: ClearText(var[52]) var=__work_1[52]:text
+ 162[101]: ConstText(_value="len after fill: ") -> text
+ 180[117]: AppendText(var[52], v1: text)
+ 183[101]: VarVector(var[76]) -> vector type=vector<Item> 20 var=buf[76]:vector<ref(Item)>["__ref_1"]
+ 186[113]: Call(size=0, fn=t_6vector_len)
+ 193[105]: ConvLongFromInt(v1: integer) -> long
+ 194[109]: ConstInt(val=0) -> integer
+ 199[113]: FormatLong(var[52], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 206[101]: VarText(var[52]) -> text var=__work_1[52]:text
+ 209[117]: ConstText(_value="ref_param_append_bug") -> text
+ 231[133]: ConstInt(val=6) -> integer
+ 236[137]: StaticCall(n_assert)
+ 239[100]: [7] VarVector(var[76]) -> vector type=vector<Item> 20 var=buf[76]:vector<ref(Item)>["__ref_1"]
+ 242[112]: ConstInt(val=1) -> integer
+ 247[116]: GetVector(r: vector, size=8, index: integer) -> ref(reference) type=Item 18
+ 250[112]: GetInt(v1: ref(reference), fld=4) -> integer
+ 253[104]: ConstInt(val=2) -> integer
+ 258[108]: EqInt(v1: integer, v2: integer) -> boolean
+ 259[101]: ClearText(var[28]) var=__work_2[28]:text
+ 262[101]: ConstText(_value="buf[1].value: ") -> text
+ 278[117]: AppendText(var[28], v1: text)
+ 281[101]: VarVector(var[76]) -> vector type=vector<Item> 20 var=buf[76]:vector<ref(Item)>["__ref_1"]
+ 284[113]: ConstInt(val=1) -> integer
+ 289[117]: GetVector(r: vector, size=8, index: integer) -> ref(reference) type=Item 18
+ 292[113]: GetInt(v1: ref(reference), fld=4) -> integer
+ 295[105]: ConvLongFromInt(v1: integer) -> long
+ 296[109]: ConstInt(val=0) -> integer
+ 301[113]: FormatLong(var[28], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+ 308[101]: VarText(var[28]) -> text var=__work_2[28]:text
+ 311[117]: ConstText(_value="ref_param_append_bug") -> text
+ 333[133]: ConstInt(val=7) -> integer
+ 338[137]: StaticCall(n_assert)
+ 341[100]: FreeText(var[52])
+ 344[100]: FreeText(var[28])
+ 347[100]: VarRef(var[16]) -> ref(reference) type=main_vector<Item> 19 var=__ref_1[16]:ref(main_vector<Item>)
+ 350[112]: FreeRef(v1: ref(reference)) ; [store-free]
+ 351[100]: VarRef(var[4]) -> ref(reference) type=main_vector<Item> 19 var=__ref_2[4]:ref(main_vector<Item>)
+ 354[112]: FreeRef(v1: ref(reference)) ; [store-free]
+ 355[100]: Return(ret=0, value=0, discard=100)
+
+Execute test:
+    0:[8] ConvRefFromNull() -> ref(1,0,8)[8]
+  ; store-alloc nr=1 max=2
+    1:[20] ConvRefFromNull() -> ref(2,0,8)[20]
+  ; store-alloc nr=2 max=3
+    2:[32] Text()
+    3:[56] [4] Text()
+    4:[80] Database(var[20], db_tp=19)
+    9:[80] VarRef(var[20]=__ref_1) -> ref(2,1,8)={}[80]
+   12:[92] GetField(v1=ref(2,1,8)[80], fld=0) -> ref(2,1,8)=[][80]
+   15:[92] VarRef(var[20]=__ref_1) -> ref(2,1,8)={}[92]
+   18:[104] ConstInt(val=0) -> 0[104]
+   23:[108] SetInt(v1=ref(2,1,8)[92], fld=0, val=0[104])
+   26:[92] VarVector(var[80]=buf) -> ref(2,1,8)=[][92]
+   29:[104] NewRecord(data=ref(2,1,8)[92], parent_tp=20, fld=65535) -> ref(2,5,8)[92]
+   34:[104] VarRef(var[92]=_elm_1) -> ref(2,5,8)={}[104]
+   37:[116] ConstText(_value="a") -> "a"[116]
+   40:[132] SetText(v1=ref(2,5,8)[104], fld=0, val="a"[116])
+   43:[104] VarRef(var[92]=_elm_1) -> ref(2,5,8)={name:"a"}[104]
+   46:[116] ConstInt(val=1) -> 1[116]
+   51:[120] SetInt(v1=ref(2,5,8)[104], fld=4, val=1[116])
+   54:[104] VarVector(var[80]=buf) -> ref(2,1,8)=[][104]
+   57:[116] VarRef(var[92]=_elm_1) -> ref(2,5,8)={name:"a",value:1}[116]
+   60:[128] FinishRecord(data=ref(2,1,8)[104], rec=ref(2,5,8)[116], parent_tp=20, fld=65535)
+   65:[104] CreateStack(var[80]) -> ref(0,1,88)[104]
+   68:[116] Database(var[8], db_tp=19)
+   73:[116] VarRef(var[8]=__ref_2) -> ref(1,1,8)={}[116]
+   76:[128] GetField(v1=ref(1,1,8)[116], fld=0) -> ref(1,1,8)=[][116]
+   79:[128] VarRef(var[8]=__ref_2) -> ref(1,1,8)={}[128]
+   82:[140] ConstInt(val=0) -> 0[140]
+   87:[144] SetInt(v1=ref(1,1,8)[128], fld=0, val=0[140])
+   90:[128] VarVector(var[116]=_vec_2) -> ref(1,1,8)=[][128]
+   93:[140] NewRecord(data=ref(1,1,8)[128], parent_tp=20, fld=65535) -> ref(1,5,8)[128]
+   98:[140] VarRef(var[128]=_elm_3) -> ref(1,5,8)=false[140]
+  101:[152] ConstText(_value="b") -> "b"[152]
+  104:[168] SetText(v1=ref(1,5,8)[140], fld=0, val="b"[152])
+  107:[140] VarRef(var[128]=_elm_3) -> ref(1,5,8)=true[140]
+  110:[152] ConstInt(val=2) -> 2[152]
+  115:[156] SetInt(v1=ref(1,5,8)[140], fld=4, val=2[152])
+  118:[140] VarVector(var[116]=_vec_2) -> ref(1,1,8)=[][140]
+  121:[152] VarRef(var[128]=_elm_3) -> ref(1,5,8)=true[152]
+  124:[164] FinishRecord(data=ref(1,1,8)[140], rec=ref(1,5,8)[152], parent_tp=20, fld=65535)
+  129:[140] VarVector(var[116]=_vec_2) -> ref(1,1,8)=[{name:"b",value:2}][140]
+  132:[152] FreeStack(value=12, discard=36)
+  136:[128] Call(size=0, fn=n_fill)
+ 2832:[132] VarRef(var[104]=v) -> ref(0,1,88)[132]
+ 2835:[144] GetStackRef(r=ref(0,1,88)[132], fld=0) -> ref(2,1,8)[132]
+ 2838:[144] VarVector(var[116]=extra) -> ref(1,1,8)=[{name:"b",value:2}][144]
+ 2841:[156] AppendVector(r=ref(2,1,8)[132], other=ref(1,1,8)[144], tp=18)
+ 2844:[132] Return(ret=2993[128], value=0, discard=28)
+  143:[104] VarVector(var[80]=buf) -> ref(2,1,8)=[{name:"a",value:1},{name:"b",value:2}][104]
+  146:[116] Call(size=0, fn=t_6vector_len)
+ 1088:[120] VarVector(var[104]=both) -> ref(2,1,8)[120]
+ 1091:[132] LengthVector(r=ref(2,1,8)[120]) -> 2[120]
+ 1092:[124] Return(ret=3003[116], value=4, discard=20) -> 2[104]
+  153:[108] ConstInt(val=2) -> 2[108]
+  158:[112] EqInt(v1=2[104], v2=2[108]) -> true[104]
+  159:[105] ClearText(var[56]=__work_1)
+  162:[105] ConstText(_value="len after fill: ") -> "len after fill: "[105]
+  180:[121] AppendText(var[56], v1="len after fill: "[105])
+  183:[105] VarVector(var[80]=buf) -> ref(2,1,8)=[{name:"a",value:1},{name:"b",value:2}][105]
+  186:[117] Call(size=0, fn=t_6vector_len)
+ 1088:[121] VarVector(var[105]=both) -> ref(2,1,8)[121]
+ 1091:[133] LengthVector(r=ref(2,1,8)[121]) -> 2[121]
+ 1092:[125] Return(ret=3043[117], value=4, discard=20) -> 2[105]
+  193:[109] ConvLongFromInt(v1=2[105]) -> 2[105]
+  194:[113] ConstInt(val=0) -> 0[113]
+  199:[117] FormatLong(var[56], val=2[105], radix=10, width=0[113], token=32, plus=false, note=false)
+  206:[105] VarText(var[56]=__work_1) -> "len after fill: 2"[105]
+  209:[121] ConstText(_value="ref_param_append_bug") -> "ref_param_append_bug"[121]
+  231:[137] ConstInt(val=6) -> 6[137]
+  236:[141] StaticCall(n_assert)
+  239:[104] VarVector(var[80]=buf) -> ref(2,1,8)=[{name:"a",value:1},{name:"b",value:2}][104]
+  242:[116] ConstInt(val=1) -> 1[116]
+  247:[120] GetVector(r=ref(2,1,8)[104], size=8, index=1[116]) -> ref(2,5,16)={name:"b",value:2}[104]
+  250:[116] GetInt(v1=ref(2,5,16)[104], fld=4) -> 2[104]
+  253:[108] ConstInt(val=2) -> 2[108]
+  258:[112] EqInt(v1=2[104], v2=2[108]) -> true[104]
+  259:[105] ClearText(var[32]=__work_2)
+  262:[105] ConstText(_value="buf[1].value: ") -> "buf[1].value: "[105]
+  278:[121] AppendText(var[32], v1="buf[1].value: "[105])
+  281:[105] VarVector(var[80]=buf) -> ref(2,1,8)=[{name:"a",value:1},{name:"b",value:2}][105]
+  284:[117] ConstInt(val=1) -> 1[117]
+  289:[121] GetVector(r=ref(2,1,8)[105], size=8, index=1[117]) -> ref(2,5,16)={name:"b",value:2}[105]
+  292:[117] GetInt(v1=ref(2,5,16)[105], fld=4) -> 2[105]
+  295:[109] ConvLongFromInt(v1=2[105]) -> 2[105]
+  296:[113] ConstInt(val=0) -> 0[113]
+  301:[117] FormatLong(var[32], val=2[105], radix=10, width=0[113], token=32, plus=false, note=false)
+  308:[105] VarText(var[32]=__work_2) -> "buf[1].value: 2"[105]
+  311:[121] ConstText(_value="ref_param_append_bug") -> "ref_param_append_bug"[121]
+  333:[137] ConstInt(val=7) -> 7[137]
+  338:[141] StaticCall(n_assert)
+  341:[104] FreeText(var[56])
+  344:[104] FreeText(var[32])
+  347:[104] VarRef(var[20]=__ref_1) -> ref(2,1,8)={vector:[{name:"a",value:1},{name:"b",value:2}]}[104]
+  350:[116] FreeRef(v1=ref(2,1,8)[104]) ; store-free max=2
+  351:[104] VarRef(var[8]=__ref_2) -> ref(1,1,8)={vector:[{name:"b",value:2}]}[104]
+  354:[116] FreeRef(v1=ref(1,1,8)[104]) ; store-free max=1
+  355:[104] Return(ret=4294967295[4], value=0, discard=100)
+Finished

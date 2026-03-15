@@ -1,0 +1,81 @@
+enum En {V1, V2, V3}
+
+pub fn test() {
+    test_value = {sizeof(En) + 10 * sizeof(V1)};
+    assert(
+        test_value == 11,
+        "Test failed {test_value} != 11"
+    );
+}
+Type 18:En[1/1]:
+    V1
+    V2
+    V3
+
+fn n_test() {#block(1):void
+  __work_1(1):text = "";
+  [4] test_value(1):integer = {#block(2):integer
+    OpAddInt(1i32, OpMulInt(10i32, 1i32));
+  }#block(2):integer;
+  [5] n_assert(OpEqInt(test_value(1), 11i32), {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "Test failed ";
+    OpFormatLong(__work_1(1), OpConvLongFromInt(test_value(1)), 10i32, 0i32, 32i32, false, false);
+    OpAppendText(__work_1(1), " != 11");
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"], "expr_enum", 6i32);
+  OpFreeText(__work_1(1));
+}#block(1):void
+
+byte-code for expr_enum:n_test()
+   0[0]: return-address  @abs=2832
+   0[4]: Text() var=__work_1[4]:text
+   1[28]: [4] ConstInt(val=1) -> integer var=test_value[28]:integer
+   6[32]: ConstInt(val=10) -> integer
+  11[36]: ConstInt(val=1) -> integer
+  16[40]: MulInt(v1: integer, v2: integer) -> integer
+  17[36]: AddInt(v1: integer, v2: integer) -> integer
+  18[32]: [5] VarInt(var[28]) -> integer var=test_value[28]:integer
+  21[36]: ConstInt(val=11) -> integer
+  26[40]: EqInt(v1: integer, v2: integer) -> boolean
+  27[33]: ClearText(var[4]) var=__work_1[4]:text
+  30[33]: ConstText(_value="Test failed ") -> text
+  44[49]: AppendText(var[4], v1: text)
+  47[33]: VarInt(var[28]) -> integer var=test_value[28]:integer
+  50[37]: ConvLongFromInt(v1: integer) -> long
+  51[41]: ConstInt(val=0) -> integer
+  56[45]: FormatLong(var[4], val: long, radix=10, width: integer, token=32, plus=false, note=false)
+  63[33]: ConstText(_value=" != 11") -> text
+  71[49]: AppendText(var[4], v1: text)
+  74[33]: VarText(var[4]) -> text var=__work_1[4]:text
+  77[49]: ConstText(_value="expr_enum") -> text
+  88[65]: ConstInt(val=6) -> integer
+  93[69]: StaticCall(n_assert)
+  96[32]: FreeText(var[4])
+  99[32]: Return(ret=0, value=0, discard=32)
+
+Execute test:
+    0:[8] [4] Text()
+    1:[32] ConstInt(val=1) -> 1[32]
+    6:[36] ConstInt(val=10) -> 10[36]
+   11:[40] ConstInt(val=1) -> 1[40]
+   16:[44] MulInt(v1=10[36], v2=1[40]) -> 10[36]
+   17:[40] [5] AddInt(v1=1[32], v2=10[36]) -> 11[32]
+   18:[36] VarInt(var[32]=test_value) -> 11[36]
+   21:[40] ConstInt(val=11) -> 11[40]
+   26:[44] EqInt(v1=11[36], v2=11[40]) -> true[36]
+   27:[37] ClearText(var[8]=__work_1)
+   30:[37] ConstText(_value="Test failed ") -> "Test failed "[37]
+   44:[53] AppendText(var[8], v1="Test failed "[37])
+   47:[37] VarInt(var[32]=test_value) -> 11[37]
+   50:[41] ConvLongFromInt(v1=11[37]) -> 11[37]
+   51:[45] ConstInt(val=0) -> 0[45]
+   56:[49] FormatLong(var[8], val=11[37], radix=10, width=0[45], token=32, plus=false, note=false)
+   63:[37] ConstText(_value=" != 11") -> " != 11"[37]
+   71:[53] AppendText(var[8], v1=" != 11"[37])
+   74:[37] VarText(var[8]=__work_1) -> "Test failed 11 != 11"[37]
+   77:[53] ConstText(_value="expr_enum") -> "expr_enum"[53]
+   88:[69] ConstInt(val=6) -> 6[69]
+   93:[73] StaticCall(n_assert)
+   96:[36] FreeText(var[8])
+   99:[36] Return(ret=4294967295[4], value=0, discard=32)
+Finished
