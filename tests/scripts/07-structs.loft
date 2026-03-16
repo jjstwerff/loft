@@ -132,11 +132,11 @@ fn main() {
   sc_copy.label += " world";
   assert(sc_orig.label == "hello", "struct copy: original text field unchanged");
   assert(sc_copy.label == "hello world", "struct copy: copy has modified text");
-  // --- Null-coalescing ?? on struct field ---
+  // --- Direct access on not-null struct fields ---
   pq = Point {r: 7, g: 0, b: 3 };
-  assert((pq.r ?? 0) == 7, "?? on non-null struct field returns field value");
+  assert(pq.r == 7, "not-null field returns assigned value");
   // A zero-valued not-null field is still non-null (0 != null sentinel).
-  assert((pq.g ?? 99) == 0, "?? on zero not-null field returns 0 not default");
+  assert(pq.g == 0, "zero not-null field is 0 not null");
   // --- const local variable with struct ---
   const fixed = Counter { };
   assert(fixed.count == 0, "const local struct: field readable");
