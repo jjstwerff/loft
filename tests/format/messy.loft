@@ -1,0 +1,3 @@
+fn   add( a:integer,b:integer)->integer{return a+b;}
+struct  Point{x:float,y:float}
+fn dist(p:Point)->float{ let d=p.x*p.x+p.y*p.y; d.sqrt() }

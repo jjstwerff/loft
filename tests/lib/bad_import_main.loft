@@ -1,6 +1,5 @@
 // T1-2: selective import of a nonexistent name should produce an error.
 use importlib::nope;
-
 fn test() {
-    assert(false, "unreachable")
+  assert(false, "unreachable")
 }

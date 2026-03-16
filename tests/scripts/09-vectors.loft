@@ -1,158 +1,148 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Vectors: creation, append, slicing, iteration, removal, #index/#first/#count.
+struct Item {
+  name: text,
+  value: integer
+}
 
-struct Item { name: text, value: integer }
-
-fn set_val(v: &vector<Item>, idx: integer, val: integer) {
-    v[idx].value = val;
+fn set_val(v:  & vector < Item >, idx: integer, val: integer) {
+  v[idx].value = val;
 }
 
 fn main() {
-    // --- Literal and append ---
-    x = [1, 3, 6, 9];
-    assert(len(x) == 4, "vector len");
-    x += [12, 14, 15];
-    assert(len(x) == 7, "vector len after append");
-
-    // --- Index access ---
-    assert(x[0] == 1, "vector [0]");
-    assert(x[6] == 15, "vector [6]");
-    assert(!x[99], "vector out-of-bounds is null");
-
-    // --- Slice ---
-    pows = [1, 2, 4, 8, 16];
-    assert("{pows[1..3]}" == "[2,4]", "slice 1..3");
-    assert("{pows[3..]}" == "[8,16]", "slice 3..");
-    assert("{pows[..3]}" == "[1,2,4]", "open-start slice ..3");
-
-    // --- Iteration: #first, #index ---
-    iter_src = [1, 3, 6, 9];
-    b = "";
-    for v in iter_src {
-        if !v#first { b += " "; }
-        b += "{v#index}:{v}";
+  // --- Literal and append ---
+  x =[1, 3, 6, 9];
+  assert(len(x) == 4, "vector len");
+  x +=[12, 14, 15];
+  assert(len(x) == 7, "vector len after append");
+  // --- Index access ---
+  assert(x[0] == 1, "vector [0]");
+  assert(x[6] == 15, "vector [6]");
+  assert(!x[99], "vector out-of-bounds is null");
+  // --- Slice ---
+  pows =[1, 2, 4, 8, 16];
+  assert("{pows[1..3]}" == "[2,4]", "slice 1..3");
+  assert("{pows[3..]}" == "[8,16]", "slice 3..");
+  assert("{pows[..3]}" == "[1,2,4]", "open-start slice ..3");
+  // --- Iteration: #first, #index ---
+  iter_src =[1, 3, 6, 9];
+  b = "";
+  for v in iter_src {
+    if !v#first {
+      b += " ";
     }
-    assert(b == "0:1 1:3 2:6 3:9", "iteration with #index");
-
-    // --- Removal with filter ---
-    nums = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-    for v in nums if v % 2 == 0 {
-        v#remove;
-    }
-    assert("{nums}" == "[1,3,5,7,9]", "remove even elements");
-
-    // --- Remove inside condition ---
-    vv = [1, 3, 6, 9, 12, 14, 15];
-    for v in vv if v % 3 != 0 {
-        v#remove;
-    }
-    assert("{vv}" == "[3,6,9,12,15]", "remove non-multiples of 3");
-
-    // --- Reverse iteration ---
-    c = 0;
-    for e in pows[rev(0..=3)] {
-        c = c * 10 + e;
-    }
-    assert(c == 8421, "reverse sub-vector iteration");
-
-    // --- Format in string ---
-    assert("{for n in 1..7 {n*2}:02}" == "[02,04,06,08,10,12]", "vector in format");
-
-    // --- #count in filter loop ---
-    cnt_src = [10, 11, 12, 13, 14, 15];
-    cnt = 0;
-    for v in cnt_src if v % 2 == 0 {
-        cnt = v#count;
-    }
-    assert(cnt == 2, "#count in filter loop");
-
-    // --- Vector of structs ---
-    items = [Item { name: "a", value: 1 }, Item { name: "b", value: 2 }];
-    assert(items[0].name == "a", "struct vector [0].name");
-    assert(items[1].value == 2, "struct vector [1].value");
-
-    // --- Ref param field mutation ---
-    // v += items inside a ref-param (&vector) function modifies the caller's vector.
-    // Field mutation via ref-param also works:
-    set_val(items, 0, 42);
-    assert(items[0].value == 42, "ref param field mutation");
-
-    // --- Empty vector (created by removing all elements) ---
-    temp = [99];
-    for v in temp { v#remove; }
-    assert(len(temp) == 0, "empty vector len after remove-all");
-    assert(!temp[0], "empty vector index is null");
-    assert("{temp}" == "[]", "empty vector format");
-
-    // --- Single-element vector ---
-    one = [42];
-    assert(len(one) == 1, "single element len");
-    assert(one[0] == 42, "single element [0]");
-    assert(!one[1], "single element [1] is null");
-
-    // --- Slice edge cases ---
-    fives = [1, 2, 3, 4, 5];
-    assert("{fives[0..0]}" == "[]", "slice [0..0] is empty");
-    assert("{fives[5..]}" == "[]", "slice from end is empty");
-    assert("{fives[2..3]}" == "[3]", "single-element slice");
-
-    // --- Append to existing vector ---
-    grow = [1, 2];
-    grow += [3];
-    grow += [4, 5];
-    assert(len(grow) == 5, "grow by appending scalars and vectors");
-    assert(grow[4] == 5, "grow last element");
-
-    // --- Vector-to-vector append (v += other_vec) ---
-    a = [1, 2];
-    more = [3, 4, 5];
-    a += more;
-    assert(len(a) == 5, "int vec += other_vec: len={len(a)}");
-    assert(a[2] == 3, "int vec += other_vec: a[2]={a[2]}");
-    assert(a[4] == 5, "int vec += other_vec: a[4]={a[4]}");
-
-    // --- Struct vector variable append ---
-    items1 = [Item { name: "a", value: 1 }];
-    p = Item { name: "b", value: 2 };
-    items1 += [p];
-    assert(len(items1) == 2, "struct [var] append: len={len(items1)}");
-    assert(items1[1].value == 2, "struct [var] append value={items1[1].value}");
-    items2 = [Item { name: "c", value: 3 }, Item { name: "d", value: 4 }];
-    items1 += items2;
-    assert(len(items1) == 4, "struct vec += vec: len={len(items1)}");
-    assert(items1[3].value == 4, "struct vec += vec last value={items1[3].value}");
-
-    // --- Vector comprehension as variable ---
-    comp1 = [for n in 1..7 { n * 2 }];
-    assert("{comp1}" == "[2,4,6,8,10,12]", "comprehension as variable: {comp1}");
-
-    // --- Filtered comprehension as variable ---
-    comp2 = [for n in 1..10 if n % 2 == 0 { n }];
-    assert("{comp2}" == "[2,4,6,8]", "filtered comprehension as variable: {comp2}");
-
-    // --- Comprehension with more complex filter and body ---
-    comp3 = [for cx in 1..8 if cx % 2 != 0 { cx * cx }];
-    assert("{comp3}" == "[1,9,25,49]", "odd-squares comprehension: {comp3}");
-
-    // --- Parse vector<float> from text ---
-    fv = "[ 1.0, 2.0, 3.0 ]" as vector<float>;
-    assert(len(fv) == 3, "parse float vector len");
-    assert(fv[0] == 1.0, "parse float vector [0]");
-    assert(fv[2] == 3.0, "parse float vector [2]");
-
-    // --- Parse vector<struct> from text ---
-    // {{ }} escapes literal braces inside a loft string literal.
-    parsed = "[ {{name: \"alpha\", value: 1}}, {{name: \"beta\", value: 2}} ]" as vector<Item>;
-    assert(len(parsed) == 2, "parse struct vector len");
-    assert(parsed[0].name == "alpha", "parse struct vector [0].name");
-    assert(parsed[1].value == 2, "parse struct vector [1].value");
-
-    // --- Vector concatenation as an expression ---
-    vc1 = [1, 2, 3];
-    vc2 = [4, 5];
-    vc3 = vc1 + vc2;
-    assert(len(vc3) == 5, "vector concat len: {len(vc3)}");
-    assert(vc3[2] == 3, "vector concat [2]={vc3[2]}");
-    assert(vc3[4] == 5, "vector concat [4]={vc3[4]}");
+    b += "{v#index}:{v}";
+  }
+  assert(b == "0:1 1:3 2:6 3:9", "iteration with #index");
+  // --- Removal with filter ---
+  nums =[1, 2, 3, 4, 5, 6, 7, 8, 9];
+  for v in nums if v % 2 == 0 {
+    v#remove;
+  }
+  assert("{nums}" == "[1,3,5,7,9]", "remove even elements");
+  // --- Remove inside condition ---
+  vv =[1, 3, 6, 9, 12, 14, 15];
+  for v in vv if v % 3 != 0 {
+    v#remove;
+  }
+  assert("{vv}" == "[3,6,9,12,15]", "remove non-multiples of 3");
+  // --- Reverse iteration ---
+  c = 0;
+  for e in pows[rev(0..=3)] {
+    c = c * 10 + e;
+  }
+  assert(c == 8421, "reverse sub-vector iteration");
+  // --- Format in string ---
+  assert("{for n in 1..7 {n*2}:02}" == "[02,04,06,08,10,12]", "vector in format");
+  // --- #count in filter loop ---
+  cnt_src =[10, 11, 12, 13, 14, 15];
+  cnt = 0;
+  for v in cnt_src if v % 2 == 0 {
+    cnt = v#count;
+  }
+  assert(cnt == 2, "#count in filter loop");
+  // --- Vector of structs ---
+  items =[Item {name: "a", value: 1 }, Item {name: "b", value: 2 }];
+  assert(items[0].name == "a", "struct vector [0].name");
+  assert(items[1].value == 2, "struct vector [1].value");
+  // --- Ref param field mutation ---
+  // v += items inside a ref-param (&vector) function modifies the caller's vector.
+  // Field mutation via ref-param also works:
+  set_val(items, 0, 42);
+  assert(items[0].value == 42, "ref param field mutation");
+  // --- Empty vector (created by removing all elements) ---
+  temp =[99];
+  for v in temp {
+    v#remove;
+  }
+  assert(len(temp) == 0, "empty vector len after remove-all");
+  assert(!temp[0], "empty vector index is null");
+  assert("{temp}" == "[]", "empty vector format");
+  // --- Single-element vector ---
+  one =[42];
+  assert(len(one) == 1, "single element len");
+  assert(one[0] == 42, "single element [0]");
+  assert(!one[1], "single element [1] is null");
+  // --- Slice edge cases ---
+  fives =[1, 2, 3, 4, 5];
+  assert("{fives[0..0]}" == "[]", "slice [0..0] is empty");
+  assert("{fives[5..]}" == "[]", "slice from end is empty");
+  assert("{fives[2..3]}" == "[3]", "single-element slice");
+  // --- Append to existing vector ---
+  grow =[1, 2];
+  grow +=[3];
+  grow +=[4, 5];
+  assert(len(grow) == 5, "grow by appending scalars and vectors");
+  assert(grow[4] == 5, "grow last element");
+  // --- Vector-to-vector append (v += other_vec) ---
+  a =[1, 2];
+  more =[3, 4, 5];
+  a += more;
+  assert(len(a) == 5, "int vec += other_vec: len={len(a)}");
+  assert(a[2] == 3, "int vec += other_vec: a[2]={a[2]}");
+  assert(a[4] == 5, "int vec += other_vec: a[4]={a[4]}");
+  // --- Struct vector variable append ---
+  items1 =[Item {name: "a", value: 1 }];
+  p = Item {name: "b", value: 2 };
+  items1 +=[p];
+  assert(len(items1) == 2, "struct [var] append: len={len(items1)}");
+  assert(items1[1].value == 2, "struct [var] append value={items1[1].value}");
+  items2 =[Item {name: "c", value: 3 }, Item {name: "d", value: 4 }];
+  items1 += items2;
+  assert(len(items1) == 4, "struct vec += vec: len={len(items1)}");
+  assert(items1[3].value == 4, "struct vec += vec last value={items1[3].value}");
+  // --- Vector comprehension as variable ---
+  comp1 =[for n in 1..7 {
+    n * 2
+  }];
+  assert("{comp1}" == "[2,4,6,8,10,12]", "comprehension as variable: {comp1}");
+  // --- Filtered comprehension as variable ---
+  comp2 =[for n in 1..10 if n % 2 == 0 {
+    n
+  }];
+  assert("{comp2}" == "[2,4,6,8]", "filtered comprehension as variable: {comp2}");
+  // --- Comprehension with more complex filter and body ---
+  comp3 =[for cx in 1..8 if cx % 2 != 0 {
+    cx * cx
+  }];
+  assert("{comp3}" == "[1,9,25,49]", "odd-squares comprehension: {comp3}");
+  // --- Parse vector<float> from text ---
+  fv = "[ 1.0, 2.0, 3.0 ]" as vector < float >;
+  assert(len(fv) == 3, "parse float vector len");
+  assert(fv[0] == 1.0, "parse float vector [0]");
+  assert(fv[2] == 3.0, "parse float vector [2]");
+  // --- Parse vector<struct> from text ---
+  // {{ }} escapes literal braces inside a loft string literal.
+  parsed = "[ {{name: \"alpha\", value: 1}}, {{name: \"beta\", value: 2}} ]" as vector < Item >;
+  assert(len(parsed) == 2, "parse struct vector len");
+  assert(parsed[0].name == "alpha", "parse struct vector [0].name");
+  assert(parsed[1].value == 2, "parse struct vector [1].value");
+  // --- Vector concatenation as an expression ---
+  vc1 =[1, 2, 3];
+  vc2 =[4, 5];
+  vc3 = vc1 + vc2;
+  assert(len(vc3) == 5, "vector concat len: {len(vc3)}");
+  assert(vc3[2] == 3, "vector concat [2]={vc3[2]}");
+  assert(vc3[4] == 5, "vector concat [4]={vc3[4]}");
 }

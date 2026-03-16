@@ -1,0 +1,14 @@
+fn test() {
+  if x > 0 {
+    a = 1;
+  }
+  for i in 1..5 {
+    t += i;
+  }
+  while x > 0 {
+    x -= 1;
+  }
+  if a > 10 and a & 7 == 4 {
+    a += 1;
+  }
+}

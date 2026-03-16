@@ -1,141 +1,152 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Control flow: if/else, for loops, ranges, break, nested loops, loop metadata.
-
 fn main() {
-    // --- If / else if / else ---
-    a = 12;
-    if a > 10 and a & 7 == 4 {
-        a += 1;
-    } else {
-        a -= 1;
+  // --- If / else if / else ---
+  a = 12;
+  if a > 10 and a & 7 == 4 {
+    a += 1;
+  } else {
+    a -= 1;
+  }
+  assert(a == 13, "if-else: a should be 13");
+  r = if a == 13 {
+    "correct"
+  } else if a == 12 {
+    "almost"
+  } else {
+    "wrong"
+  };
+  assert(r == "correct", "if-else-if expression");
+  // --- For range (exclusive) ---
+  t = 0;
+  for i in 1..6 {
+    t += i;
+  }
+  assert(t == 15, "for 1..6 sum");
+  // --- For range (inclusive) ---
+  t = 0;
+  for i in 1..=5 {
+    t += i;
+  }
+  assert(t == 15, "for 1..=5 sum");
+  // --- Reverse range ---
+  t = 0;
+  for i in rev(1..=5) {
+    t = t * 10 + i;
+  }
+  assert(t == 54321, "rev range");
+  // --- Break (inner loop) ---
+  b = "";
+  for x in 1..5 {
+    for y in 1..5 {
+      if y > x {
+        break;
+      }
+      if len(b) > 0 {
+        b += " ";
+      }
+      b += "{x}:{y}";
     }
-    assert(a == 13, "if-else: a should be 13");
-
-    r = if a == 13 { "correct" } else if a == 12 { "almost" } else { "wrong" };
-    assert(r == "correct", "if-else-if expression");
-
-    // --- For range (exclusive) ---
-    t = 0;
-    for i in 1..6 {
-        t += i;
+  }
+  assert(b == "1:1 2:1 2:2 3:1 3:2 3:3 4:1 4:2 4:3 4:4", "nested break inner");
+  // --- Named break (outer loop) ---
+  b = "";
+  for x in 1..5 {
+    for y in 1..5 {
+      if x * y >= 16 {
+        x# break;
+      }
+      if len(b) > 0 {
+        b += "; ";
+      }
+      b += "{x}:{y}";
     }
-    assert(t == 15, "for 1..6 sum");
-
-    // --- For range (inclusive) ---
-    t = 0;
-    for i in 1..=5 {
-        t += i;
+  }
+  assert(b == "1:1; 1:2; 1:3; 1:4; 2:1; 2:2; 2:3; 2:4; 3:1; 3:2; 3:3; 3:4; 4:1; 4:2; 4:3", "named break outer");
+  // --- Loop filter (if guard) ---
+  b = "";
+  for x in 1..=9 if x % 3 != 1 {
+    if !x#first {
+      b += ", ";
     }
-    assert(t == 15, "for 1..=5 sum");
-
-    // --- Reverse range ---
-    t = 0;
-    for i in rev(1..=5) {
-        t = t * 10 + i;
+    b += "{x#count}:{x}";
+  }
+  assert(b == "0:2, 1:3, 2:5, 3:6, 4:8, 5:9", "for with filter");
+  // --- #first and #count in range loop ---
+  first_seen = false;
+  count_sum = 0;
+  for v in 1..=3 {
+    if v#first {
+      first_seen = true;
     }
-    assert(t == 54321, "rev range");
-
-    // --- Break (inner loop) ---
-    b = "";
-    for x in 1..5 {
-        for y in 1..5 {
-            if y > x {
-                break;
-            }
-            if len(b) > 0 { b += " "; }
-            b += "{x}:{y}";
+    count_sum += v#count;
+  }
+  assert(first_seen, "#first in range loop");
+  assert(count_sum == 3, "#count sum 0+1+2 = 3");
+  // --- Block as expression ---
+  val = {x = 2;
+  x * 3 };
+  assert(val == 6, "block expression");
+  // --- Continue ---
+  sum_c = 0;
+  for i in 1..=5 {
+    if i == 3 {
+      continue;
+    }
+    sum_c += i;
+  }
+  assert(sum_c == 12, "continue skips i=3: 1+2+4+5 = 12");
+  // --- Continue inside nested loop ---
+  outer_sum = 0;
+  for i in 1..=3 {
+    for j in 1..=3 {
+      if j == 2 {
+        continue;
+      }
+      outer_sum += j;
+    }
+  }
+  assert(outer_sum == 12, "continue in inner loop: (1+3)*3 = 12");
+  // --- Empty ranges ---
+  count_e = 0;
+  for i in 5..5 {
+    count_e += 1;
+  }
+  assert(count_e == 0, "empty range 5..5 executes zero times");
+  count_e = 0;
+  for i in 5..1 {
+    count_e += 1;
+  }
+  assert(count_e == 0, "backwards range 5..1 executes zero times");
+  count_e = 0;
+  for i in 1..=0 {
+    count_e += 1;
+  }
+  assert(count_e == 0, "backwards inclusive 1..=0 executes zero times");
+  // --- Single-element range ---
+  count_e = 0;
+  for i in 5..=5 {
+    count_e += 1;
+  }
+  assert(count_e == 1, "inclusive 5..=5 executes exactly once");
+  // --- #index in range loop (same as the loop variable) ---
+  idx_last = -1;
+  for i in 10..14 {
+    idx_last = i#index;
+  }
+  assert(idx_last == 13, "#index in integer range equals the loop variable");
+  // --- Three-level nested break ---
+  found = 0;
+  for i in 1..5 {
+    for j in 1..5 {
+      for k in 1..5 {
+        if i + j + k == 9 {
+          found = i * 100 + j * 10 + k;
+          i# break;
         }
+      }
     }
-    assert(b == "1:1 2:1 2:2 3:1 3:2 3:3 4:1 4:2 4:3 4:4", "nested break inner");
-
-    // --- Named break (outer loop) ---
-    b = "";
-    for x in 1..5 {
-        for y in 1..5 {
-            if x * y >= 16 {
-                x#break;
-            }
-            if len(b) > 0 { b += "; "; }
-            b += "{x}:{y}";
-        }
-    }
-    assert(b == "1:1; 1:2; 1:3; 1:4; 2:1; 2:2; 2:3; 2:4; 3:1; 3:2; 3:3; 3:4; 4:1; 4:2; 4:3", "named break outer");
-
-    // --- Loop filter (if guard) ---
-    b = "";
-    for x in 1..=9 if x % 3 != 1 {
-        if !x#first { b += ", "; }
-        b += "{x#count}:{x}";
-    }
-    assert(b == "0:2, 1:3, 2:5, 3:6, 4:8, 5:9", "for with filter");
-
-    // --- #first and #count in range loop ---
-    first_seen = false;
-    count_sum = 0;
-    for v in 1..=3 {
-        if v#first { first_seen = true; }
-        count_sum += v#count;
-    }
-    assert(first_seen, "#first in range loop");
-    assert(count_sum == 3, "#count sum 0+1+2 = 3");
-
-    // --- Block as expression ---
-    val = { x = 2; x * 3 };
-    assert(val == 6, "block expression");
-
-    // --- Continue ---
-    sum_c = 0;
-    for i in 1..=5 {
-        if i == 3 { continue; }
-        sum_c += i;
-    }
-    assert(sum_c == 12, "continue skips i=3: 1+2+4+5 = 12");
-
-    // --- Continue inside nested loop ---
-    outer_sum = 0;
-    for i in 1..=3 {
-        for j in 1..=3 {
-            if j == 2 { continue; }
-            outer_sum += j;
-        }
-    }
-    assert(outer_sum == 12, "continue in inner loop: (1+3)*3 = 12");
-
-    // --- Empty ranges ---
-    count_e = 0;
-    for i in 5..5 { count_e += 1; }
-    assert(count_e == 0, "empty range 5..5 executes zero times");
-
-    count_e = 0;
-    for i in 5..1 { count_e += 1; }
-    assert(count_e == 0, "backwards range 5..1 executes zero times");
-
-    count_e = 0;
-    for i in 1..=0 { count_e += 1; }
-    assert(count_e == 0, "backwards inclusive 1..=0 executes zero times");
-
-    // --- Single-element range ---
-    count_e = 0;
-    for i in 5..=5 { count_e += 1; }
-    assert(count_e == 1, "inclusive 5..=5 executes exactly once");
-
-    // --- #index in range loop (same as the loop variable) ---
-    idx_last = -1;
-    for i in 10..14 { idx_last = i#index; }
-    assert(idx_last == 13, "#index in integer range equals the loop variable");
-
-    // --- Three-level nested break ---
-    found = 0;
-    for i in 1..5 {
-        for j in 1..5 {
-            for k in 1..5 {
-                if i + j + k == 9 {
-                    found = i * 100 + j * 10 + k;
-                    i#break;
-                }
-            }
-        }
-    }
-    assert(found == 144, "three-level named break: first i+j+k=9 is i=1,j=4,k=4");
+  }
+  assert(found == 144, "three-level named break: first i+j+k=9 is i=1,j=4,k=4");
 }

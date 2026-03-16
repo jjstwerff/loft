@@ -37,3 +37,4 @@ pub mod manifest;
 mod stack;
 
 pub mod documentation;
+pub mod formatter;

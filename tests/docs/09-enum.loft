@@ -2,96 +2,97 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Enums
 // @TITLE: Named choices with optional data
-
 // An enum defines a fixed set of named choices. Instead of using raw numbers
 // like 0 = north, 1 = east — which nobody can read six months later — you give
 // each option a name. The compiler then checks every comparison and conversion,
 // so a typo becomes a compile error instead of a silent wrong answer.
-
 // Plain enums are just names that can be compared, ordered, and converted
 // to and from text. Their order matches their declaration order.
-enum Direction { North, East, South, West }
-
+enum Direction {
+  North,
+  East,
+  South,
+  West
+}
 // ## Enums that carry data
 // Sometimes different choices have different shapes of data.
 // A 'Circle' needs one number (radius); a 'Rect' needs two (width and height).
 // Struct enums let each variant carry its own fields, keeping all the shape
 // kinds in one type while still letting you work with each variant naturally.
-enum Shape {
-    Circle { radius: float },
-    Rect { width: float, height: float }
-}
 
+enum Shape {
+  Circle {radius: float },
+  Rect {width: float, height: float }
+}
 // ## Polymorphic methods
 // Write the same function name for each variant, each taking 'self' of that
 // variant's type. Loft picks the right version at runtime based on the actual
 // variant — this is called polymorphic dispatch.
 // It lets you call shape.area() without knowing which kind of shape it is.
+
 fn area(self: Circle) -> float {
-    PI * pow(self.radius, 2)
+  PI * pow(self.radius, 2)
 }
 
 fn area(self: Rect) -> float {
-    self.width * self.height
+  self.width * self.height
 }
-
 // Polymorphic methods can return text just as well as numbers.
 // Each variant can produce its own human-readable description.
+
 fn describe(self: Circle) -> text {
-    "circle with radius {self.radius}"
+  "circle with radius {self.radius}"
 }
 
 fn describe(self: Rect) -> text {
-    "rect {self.width} by {self.height}"
+  "rect {self.width} by {self.height}"
 }
-
 // ## Enum methods
 // Plain enum variants can also have methods. The 'self' parameter carries the
 // current direction value, and the method can return any type.
 // Here 'opposite()' flips North↔South and East↔West.
+
 fn opposite(self: Direction) -> Direction {
-    if self == North { South }
-    else if self == South { North }
-    else if self == East { West }
-    else { East }
+  if self == North {
+    South
+  } else if self == South {
+    North
+  } else if self == East {
+    West
+  } else {
+    East
+  }
 }
 
 fn main() {
-    // Plain enum values are ordered by declaration position.
-    // North comes first (smallest), West comes last (greatest).
-    d = East;
-    assert(d == East, "Enum equality");
-    assert(d != North, "Enum inequality");
-    assert(d > North, "East declared after North, so it is greater");
-    assert(West > South, "West declared last, so it is greatest");
-
-    // Convert between text and enum in both directions.
-    assert("{d}" == "East", "Format plain enum as text");
-    assert("West" as Direction == West, "Parse text to enum");
-
-    // Use a plain enum method like any other method.
-    assert(d.opposite() == West, "opposite of East is West");
-    assert(North.opposite() == South, "opposite of North is South");
-
-    // Struct enum variants are constructed exactly like regular structs.
-    c = Circle { radius: 1.0 };
-    assert(c.radius == 1.0, "Circle radius field");
-
-    r = Rect { width: 4.0, height: 5.0 };
-    assert(r.width * r.height == 20.0, "Rect manual area");
-
-    // Calling area() on a Circle runs the Circle version;
-    // on a Rect it runs the Rect version — chosen automatically at runtime.
-    assert(round(c.area() * 1000) == round(PI * 1000), "Circle area = PI*r^2");
-    assert(r.area() == 20.0, "Rect area = width*height");
-
-    // describe() uses format strings with field access inside each variant's method.
-    assert(c.describe() == "circle with radius 1", "describe circle: {c.describe()}");
-    assert(r.describe() == "rect 4 by 5", "describe rect: {r.describe()}");
-
-    // ## Stubs for missing implementations
-    // If a variant intentionally has no implementation of a method, the compiler
-    // emits a warning. Provide an empty-body stub to silence it:
-    //   fn area(self: SomeVariant) -> float { }
-    // A stub returns null at runtime and suppresses the warning.
+  // Plain enum values are ordered by declaration position.
+  // North comes first (smallest), West comes last (greatest).
+  d = East;
+  assert(d == East, "Enum equality");
+  assert(d != North, "Enum inequality");
+  assert(d > North, "East declared after North, so it is greater");
+  assert(West > South, "West declared last, so it is greatest");
+  // Convert between text and enum in both directions.
+  assert("{d}" == "East", "Format plain enum as text");
+  assert("West" as Direction == West, "Parse text to enum");
+  // Use a plain enum method like any other method.
+  assert(d.opposite() == West, "opposite of East is West");
+  assert(North.opposite() == South, "opposite of North is South");
+  // Struct enum variants are constructed exactly like regular structs.
+  c = Circle {radius: 1.0 };
+  assert(c.radius == 1.0, "Circle radius field");
+  r = Rect {width: 4.0, height: 5.0 };
+  assert(r.width * r.height == 20.0, "Rect manual area");
+  // Calling area() on a Circle runs the Circle version;
+  // on a Rect it runs the Rect version — chosen automatically at runtime.
+  assert(round(c.area() * 1000) == round(PI * 1000), "Circle area = PI*r^2");
+  assert(r.area() == 20.0, "Rect area = width*height");
+  // describe() uses format strings with field access inside each variant's method.
+  assert(c.describe() == "circle with radius 1", "describe circle: {c.describe()}");
+  assert(r.describe() == "rect 4 by 5", "describe rect: {r.describe()}");
+  // ## Stubs for missing implementations
+  // If a variant intentionally has no implementation of a method, the compiler
+  // emits a warning. Provide an empty-body stub to silence it:
+  //   fn area(self: SomeVariant) -> float { }
+  // A stub returns null at runtime and suppresses the warning.
 }

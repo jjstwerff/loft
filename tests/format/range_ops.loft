@@ -1,0 +1,9 @@
+fn test() {
+  for i in 1..6 {
+    t += i;
+  }
+  for i in 1..=5 {
+    t += i;
+  }
+  r = 0..=10;
+}

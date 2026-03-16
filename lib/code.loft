@@ -1,254 +1,263 @@
 struct Field {
-    name: text,
-    typedef: u16,
-    position: u16
+  name: text,
+  typedef: u16,
+  position: u16
 }
 
 struct Type {
-    nr: u16,
-    parent: u16,
-    content: u16,
-    definition: i32,
-    fields: vector<Field>,
-    size: u16
+  nr: u16,
+  parent: u16,
+  content: u16,
+  definition: i32,
+  fields: vector < Field >,
+  size: u16
 }
 
 pub enum Structure {
-    Function, // The corresponding typedef holds the parameters.
-    Enum, // The typedef holds the alternatives. An alternative can be a Struct.
-    EnumStruct, // A structured value of an Enum.
-    Struct, // The typedef holds the fields.
-    TypeDef, // The typedef holds the actual type beside the name.
-    Constant // The code defines the value.
+  Function,
+  // The corresponding typedef holds the parameters.
+  Enum,
+  // The typedef holds the alternatives. An alternative can be a Struct.
+  EnumStruct,
+  // A structured value of an Enum.
+  Struct,
+  // The typedef holds the fields.
+  TypeDef,
+  // The typedef holds the actual type beside the name.
+  Constant  // The code defines the value.
 }
 
 struct Variable {
-    name: text,
-    nr: u16,
-    typedef: u16,
-    scope: u16,
-    position: u16,
-    uses: u16,
-    default: vector<Value>
+  name: text,
+  nr: u16,
+  typedef: u16,
+  scope: u16,
+  position: u16,
+  uses: u16,
+  default: vector < Value >
 }
 
 enum Value {
-    Integer { v: integer },
-    EnumValue { v: integer, typedef: u16 },
-    Long { v: long },
-    Float { v: float },
-    Single { v: single },
-    Text { v: text },
-    Boolean { v: boolean },
-    Null,
-
-    CallFn { to: text, parameters: u8 }, // to be replaces with Call.
-    Id { name: text }, // both variable, field or constant name.
-
-    Block { length: u16, into: u16, id: text }, // writes to stack
-    If { yes: u16, no: u16, into: u16 }, // reads and writes stack
-    Loop { length: u16, id: text },
-
-    Get { var: u16 }, // write to stack
-    Set { var: u16 }, // reads from stack
-    Call { to: integer },
-    Drop { typedef: u16 } // drops from stack
+  Integer {v: integer },
+  EnumValue {v: integer, typedef: u16 },
+  Long {v: long },
+  Float {v: float },
+  Single {v: single },
+  Text {v: text },
+  Boolean {v: boolean },
+  Null,
+  CallFn {to: text, parameters: u8 },
+  // to be replaces with Call.
+  Id {name: text },
+  // both variable, field or constant name.
+  Block {length: u16, into: u16, id: text },
+  // writes to stack
+  If {yes: u16, no: u16, into: u16 },
+  // reads and writes stack
+  Loop {length: u16, id: text },
+  Get {var: u16 },
+  // write to stack
+  Set {var: u16 },
+  // reads from stack
+  Call {to: integer },
+  Drop {typedef: u16 }  // drops from stack
 }
 
 struct Definition {
-    public: boolean,
-    name: text,
-    nr: i32,
-    file: u16,
-    line: i32,
-    structure: Structure,
-    typedef: u16,
-    arguments: u8,
-    variables: vector<Variable>,
-    code_pos: integer
+  public: boolean,
+  name: text,
+  nr: i32,
+  file: u16,
+  line: i32,
+  structure: Structure,
+  typedef: u16,
+  arguments: u8,
+  variables: vector < Variable >,
+  code_pos: integer
 }
 
 pub struct Code {
-    definitions: vector<Definition>,
-    def_names: hash<Definition[name]>,
-    types: vector<Type>,
-    blocks: vector<integer>, // Start positions of blocks, if and loop statements.
-    code: vector<Value>,
-    cur_def: i32,
-    cur_arg: u8
+  definitions: vector < Definition >,
+  def_names: hash < Definition[name] >,
+  types: vector < Type >,
+  blocks: vector < integer >,
+  // Start positions of blocks, if and loop statements.
+  code: vector < Value >,
+  cur_def: i32,
+  cur_arg: u8
 }
 
 pub fn get_type(self: Code, name: text) -> u16 {
-    nr = self.def_names[name].nr;
-    if nr == null {
-        return 0;
-    }
-    self.definitions[nr].typedef
+  nr = self.def_names[name].nr;
+  if nr == null {
+    return 0;
+  }
+  self.definitions[nr].typedef
 }
 
 pub fn define(self: Code, public: boolean, name: text, tp: Structure, file: u16, line: i32) -> i32 {
-    res = 0;
-    nr = self.def_names[name].nr;
-    if nr != null {
-        res = nr;
-    } else {
-        res = self.definitions.len();
-        self.def_names += [Definition { name: name, nr: res }];
-        self.definitions += [
-            Definition { public: public, name: name, nr: res, structure: tp, file: file, line: line }
-        ];
-        if tp != Function && tp != Constant {
-            self.definitions[res].typedef = self.types.len();
-            self.types += [ Type { nr: self.types.len(), definition: res } ];
-        }
+  res = 0;
+  nr = self.def_names[name].nr;
+  if nr != null {
+    res = nr;
+  } else {
+    res = self.definitions.len();
+    self.def_names +=[Definition {name: name, nr: res }];
+    self.definitions +=[
+    Definition {public: public, name: name, nr: res, structure: tp, file: file, line: line }
+    ];
+    if tp != Function && tp != Constant {
+      self.definitions[res].typedef = self.types.len();
+      self.types +=[Type {nr: self.types.len(), definition: res }];
     }
-    self.cur_def = res;
-    self.cur_arg = 255;
-    self.definitions[res].code_pos = self.code.len();
-    res
+  }
+  self.cur_def = res;
+  self.cur_arg = 255;
+  self.definitions[res].code_pos = self.code.len();
+  res
 }
 
 pub fn set_type(self: Code, tp: u16) {
-    self.definitions[self.cur_def].typedef = tp;
+  self.definitions[self.cur_def].typedef = tp;
 }
 
 pub fn finish_define(self: Code) {
-    self.cur_def = null;
-    self.cur_arg = 255;
+  self.cur_def = null;
+  self.cur_arg = 255;
 }
 
 pub fn field(self: Code, name: text, tp: u16) {
-    in_type = self.definitions[self.cur_def].typedef;
-    self.types[in_type].fields += [ Field { name: name, typedef: tp } ];
+  in_type = self.definitions[self.cur_def].typedef;
+  self.types[in_type].fields +=[Field {name: name, typedef: tp }];
 }
 
 pub fn argument(self: Code, name: text, tp: u16) {
-    self.cur_arg = self.definitions[self.cur_def].variables.len();
-    self.definitions[self.cur_def].variables += [ Variable { name: name, nr: self.cur_arg, typedef: tp } ];
+  self.cur_arg = self.definitions[self.cur_def].variables.len();
+  self.definitions[self.cur_def].variables +=[Variable {name: name, nr: self.cur_arg, typedef: tp }];
 }
 
 pub fn int_value(self: Code, v: integer) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Integer { v: v } ];
-    } else {
-        self.code += [ Integer { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Integer {v: v }];
+  } else {
+    self.code +=[Integer {v: v }];
+  }
 }
 
 pub fn enum_value(self: Code, tp: u16, v: u8) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ EnumValue { v: v, typedef: tp } ];
-    } else {
-        self.code += [ EnumValue { v: v, typedef: tp } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[EnumValue {v: v, typedef: tp }];
+  } else {
+    self.code +=[EnumValue {v: v, typedef: tp }];
+  }
 }
 
 pub fn long_value(self: Code, v: long) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Long { v: v } ];
-    } else {
-        self.code += [ Long { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Long {v: v }];
+  } else {
+    self.code +=[Long {v: v }];
+  }
 }
 
 pub fn float_value(self: Code, v: float) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Float { v: v } ];
-    } else {
-        self.code += [ Float { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Float {v: v }];
+  } else {
+    self.code +=[Float {v: v }];
+  }
 }
 
 pub fn single_value(self: Code, v: single) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Single { v: v } ];
-    } else {
-        self.code += [ Single { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Single {v: v }];
+  } else {
+    self.code +=[Single {v: v }];
+  }
 }
 
 pub fn text_value(self: Code, v: text) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Text { v: v } ];
-    } else {
-        self.code += [ Text { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Text {v: v }];
+  } else {
+    self.code +=[Text {v: v }];
+  }
 }
 
 pub fn boolean_value(self: Code, v: boolean) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Boolean { v: v } ];
-    } else {
-        self.code += [ Boolean { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Boolean {v: v }];
+  } else {
+    self.code +=[Boolean {v: v }];
+  }
 }
 
 pub fn null_value(self: Code, v: boolean) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Boolean { v: v } ];
-    } else {
-        self.code += [ Boolean { v: v } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Boolean {v: v }];
+  } else {
+    self.code +=[Boolean {v: v }];
+  }
 }
 
 pub fn call_fn(self: Code, to: text, parameters: u8) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ CallFn { to: to, parameters: parameters } ];
-    }
-    self.code += [ CallFn { to: to, parameters: parameters } ];
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[CallFn {to: to, parameters: parameters }];
+  }
+  self.code +=[CallFn {to: to, parameters: parameters }];
 }
 
 pub fn id(self: Code, name: text) {
-    if self.cur_arg < 255 {
-        self.definitions[self.cur_def].variables[self.cur_arg].default += [ Id { name: name } ];
-    } else {
-        self.code += [ Id { name: name } ];
-    }
+  if self.cur_arg < 255 {
+    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Id {name: name }];
+  } else {
+    self.code +=[Id {name: name }];
+  }
 }
 
 pub fn add_block(self: Code, id: text) {
-    self.code += [ Block { length: 0, id: id } ];
+  self.code +=[Block {length: 0, id: id }];
 }
 
 pub fn end_block(self: Code, tp: u16) {
-    b = self.blocks[self.blocks.len()-1];
-    bl = self.code[b] as Block;
-    bl.length = self.code.len() - b;
-    bl.into = tp;
-    self.blocks.remove(-1);
+  b = self.blocks[self.blocks.len() - 1];
+  bl = self.code[b] as Block;
+  bl.length = self.code.len() - b;
+  bl.into = tp;
+  self.blocks.remove(-1);
 }
 
 pub fn else_if(self: Code) {
-    b = self.blocks[self.blocks.len()-1];
-    i = self.code[b] as If;
-    i.yes = self.code.len() - b;
+  b = self.blocks[self.blocks.len() - 1];
+  i = self.code[b] as If;
+  i.yes = self.code.len() - b;
 }
 
 pub fn end_if(self: Code, tp: u16) {
-    b = self.blocks[self.blocks.len()-1];
-    i = self.code[b] as If;
-    y = i.yes;
-    i.no = self.code.len() - y;
-    i.into = tp;
-    self.blocks.remove(-1);
+  b = self.blocks[self.blocks.len() - 1];
+  i = self.code[b] as If;
+  y = i.yes;
+  i.no = self.code.len() - y;
+  i.into = tp;
+  self.blocks.remove(-1);
 }
 
 pub fn add_loop(self: Code, id: text) {
-    self.code += [ Loop { length: 0, id: id } ];
+  self.code +=[Loop {length: 0, id: id }];
 }
 
 pub fn end_loop(self: Code) {
-    b = self.blocks[self.blocks.len()-1];
-    l = self.code[b] as Loop;
-    l.length = self.code.len() - b;
-    self.blocks.remove(-1);
+  b = self.blocks[self.blocks.len() - 1];
+  l = self.code[b] as Loop;
+  l.length = self.code.len() - b;
+  self.blocks.remove(-1);
 }
 
 pub fn type_name(self: Code, tp: u16) -> text {
-    d = self.types[tp].definition;
-    self.definitions[d].name
+  d = self.types[tp].definition;
+  self.definitions[d].name
 }
 
 pub fn def_type(self: Code, def: i32) -> u16 {
-    self.definitions[def].typedef
+  self.definitions[def].typedef
 }

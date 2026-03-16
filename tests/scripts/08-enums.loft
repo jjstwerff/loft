@@ -1,140 +1,160 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Enums: plain, struct variants, polymorphic dispatch, ordering.
-
-enum Direction { North, East, South, West }
+enum Direction {
+  North,
+  East,
+  South,
+  West
+}
 
 enum Shape {
-    Circle { radius: float },
-    Rect { width: float, height: float },
-    Square { side: float }
+  Circle {radius: float },
+  Rect {width: float, height: float },
+  Square {side: float }
 }
 
-fn area(self: Circle) -> float { PI * pow(self.radius, 2.0) }
-fn area(self: Rect) -> float { self.width * self.height }
-fn area(self: Square) -> float { self.side * self.side }
+fn area(self: Circle) -> float {
+  PI * pow(self.radius, 2.0)
+}
 
-fn describe(self: Circle) -> text { "circle r={self.radius}" }
-fn describe(self: Rect) -> text { "rect {self.width}x{self.height}" }
-fn describe(self: Square) -> text { "square {self.side}" }
+fn area(self: Rect) -> float {
+  self.width * self.height
+}
 
+fn area(self: Square) -> float {
+  self.side * self.side
+}
+
+fn describe(self: Circle) -> text {
+  "circle r={self.radius}"
+}
+
+fn describe(self: Rect) -> text {
+  "rect {self.width}x{self.height}"
+}
+
+fn describe(self: Square) -> text {
+  "square {self.side}"
+}
 // --- Stub test: empty body silences the missing-variant warning ---
+
 enum Blob {
-    Full { v: float },
-    Hollow { dummy: integer }
+  Full {v: float },
+  Hollow {dummy: integer }
 }
-fn blob_val(self: Full) -> float { self.v }
-fn blob_val(self: Hollow) -> float { }  // explicit stub: no warning, returns null at runtime
 
+fn blob_val(self: Full) -> float {
+  self.v
+}
+
+fn blob_val(self: Hollow) -> float {
+}  // explicit stub: no warning, returns null at runtime
 // --- Common base field: both variants share the field name "name" ---
+
 enum Tagged {
-    Label { name: text, priority: integer },
-    Item  { name: text, count: integer }
+  Label {name: text, priority: integer },
+  Item {name: text, count: integer }
 }
 
-fn tag_name(t: Tagged) -> text { t.name }
+fn tag_name(t: Tagged) -> text {
+  t.name
+}
 
 fn main() {
-    // --- Plain enum: equality and ordering ---
-    d = East;
-    assert(d == East, "enum equality");
-    assert(d != North, "enum inequality");
-    assert(d > North, "East > North by declaration order");
-    assert(West > South, "West last so greatest");
-    assert(North < East, "North first so smallest");
-
-    // --- Text conversion ---
-    assert("West" as Direction == West, "text to enum");
-    assert("{East}" == "East", "enum to text");
-    assert("{North}" == "North", "enum North to text");
-
-    // --- Struct enum: construction and field access ---
-    c = Circle { radius: 1.0 };
-    assert(c.radius == 1.0, "circle radius field");
-
-    r = Rect { width: 4.0, height: 5.0 };
-    assert(r.width == 4.0, "rect width");
-    assert(r.height == 5.0, "rect height");
-
-    sq = Square { side: 3.0 };
-    assert(sq.side == 3.0, "square side");
-
-    // --- Polymorphic dispatch ---
-    assert(round(c.area() * 1000.0) == round(PI * 1000.0), "circle area = PI*r^2");
-    assert(r.area() == 20.0, "rect area = width*height");
-    assert(sq.area() == 9.0, "square area = side^2");
-
-    // --- Polymorphic text-returning methods ---
-    assert(c.describe() == "circle r=1", "describe circle");
-    assert(r.describe() == "rect 4x5", "describe rect");
-    assert(sq.describe() == "square 3", "describe square");
-
-    // --- Invalid text to enum formats as "null" (sentinel value 0) ---
-    bad_dir = "Purple" as Direction;
-    assert("{bad_dir}" == "null", "invalid text to enum formats as null");
-    bad_dir2 = "" as Direction;
-    assert("{bad_dir2}" == "null", "empty string to enum formats as null");
-
-    // --- Enum stored in a vector ---
-    dirs = [North, East, South, West];
-    assert(dirs[0] == North, "enum vector [0]");
-    assert(dirs[3] == West, "enum vector [3]");
-    assert("{dirs[10]}" == "null", "enum vector out-of-bounds formats as null");
-
-    assert(len(dirs) == 4, "enum vector has 4 elements");
-
-    // --- Iterating a vector<PlainEnum> must terminate (was: infinite loop) ---
-    // get_enum returned 0 (not 255) for an out-of-bounds DbRef, so conv_bool_from_enum
-    // never saw the null sentinel and the for-loop would never break.
-    count = 0;
-    for d in dirs {
-        count += 1;
+  // --- Plain enum: equality and ordering ---
+  d = East;
+  assert(d == East, "enum equality");
+  assert(d != North, "enum inequality");
+  assert(d > North, "East > North by declaration order");
+  assert(West > South, "West last so greatest");
+  assert(North < East, "North first so smallest");
+  // --- Text conversion ---
+  assert("West" as Direction == West, "text to enum");
+  assert("{East}" == "East", "enum to text");
+  assert("{North}" == "North", "enum North to text");
+  // --- Struct enum: construction and field access ---
+  c = Circle {radius: 1.0 };
+  assert(c.radius == 1.0, "circle radius field");
+  r = Rect {width: 4.0, height: 5.0 };
+  assert(r.width == 4.0, "rect width");
+  assert(r.height == 5.0, "rect height");
+  sq = Square {side: 3.0 };
+  assert(sq.side == 3.0, "square side");
+  // --- Polymorphic dispatch ---
+  assert(round(c.area() * 1000.0) == round(PI * 1000.0), "circle area = PI*r^2");
+  assert(r.area() == 20.0, "rect area = width*height");
+  assert(sq.area() == 9.0, "square area = side^2");
+  // --- Polymorphic text-returning methods ---
+  assert(c.describe() == "circle r=1", "describe circle");
+  assert(r.describe() == "rect 4x5", "describe rect");
+  assert(sq.describe() == "square 3", "describe square");
+  // --- Invalid text to enum formats as "null" (sentinel value 0) ---
+  bad_dir = "Purple" as Direction;
+  assert("{bad_dir}" == "null", "invalid text to enum formats as null");
+  bad_dir2 = "" as Direction;
+  assert("{bad_dir2}" == "null", "empty string to enum formats as null");
+  // --- Enum stored in a vector ---
+  dirs =[North, East, South, West];
+  assert(dirs[0] == North, "enum vector [0]");
+  assert(dirs[3] == West, "enum vector [3]");
+  assert("{dirs[10]}" == "null", "enum vector out-of-bounds formats as null");
+  assert(len(dirs) == 4, "enum vector has 4 elements");
+  // --- Iterating a vector<PlainEnum> must terminate (was: infinite loop) ---
+  // get_enum returned 0 (not 255) for an out-of-bounds DbRef, so conv_bool_from_enum
+  // never saw the null sentinel and the for-loop would never break.
+  count = 0;
+  for d in dirs {
+    count += 1;
+  }
+  assert(count == 4, "for loop over enum vector terminates with correct count");
+  // Collect the values to verify ordering is preserved.
+  first_dir = North;
+  last_dir = North;
+  n = 0;
+  for d in dirs {
+    if n == 0 {
+      first_dir = d;
     }
-    assert(count == 4, "for loop over enum vector terminates with correct count");
-
-    // Collect the values to verify ordering is preserved.
-    first_dir = North;
-    last_dir = North;
-    n = 0;
-    for d in dirs {
-        if n == 0 { first_dir = d; }
-        last_dir = d;
-        n += 1;
-    }
-    assert(first_dir == North, "first element from enum vector iteration");
-    assert(last_dir == West, "last element from enum vector iteration");
-
-    // --- Enum in if-expression ---
-    current = South;
-    label = if current == North { "N" } else if current == South { "S" } else { "?" };
-    assert(label == "S", "enum in if-expression branches");
-
-    // --- Enum ordering covers all four values ---
-    assert(North < East, "N < E");
-    assert(East < South, "E < S");
-    assert(South < West, "S < W");
-    assert(West > North, "W > N");
-
-    // --- Stub: non-stub variant dispatches correctly; stub variant does not panic ---
-    f = Full { v: 7.0 };
-    assert(f.blob_val() == 7.0, "stub: non-stub variant returns correct value");
-    h = Hollow { dummy: 0 };
-    h.blob_val();  // stub — result is null/undefined, just verify no panic
-
-    // --- Common base field: access field shared by all variants via enum type ---
-    // A function defined for the parent enum type can access fields common to all variants.
-    lb = Label { name: "important", priority: 1 };
-    it = Item { name: "widget", count: 5 };
-    assert(tag_name(lb) == "important", "base field via Label");
-    assert(tag_name(it) == "widget", "base field via Item");
-    // Direct field access via the shared field name also works.
-    assert(lb.name == "important", "direct base field access on Label");
-    assert(it.name == "widget", "direct base field access on Item");
-
-    // --- Variant cast (as EnumVariant): retrieve a typed element from a vector ---
-    mixed = [Circle { radius: 1.5 }, Rect { width: 4.0, height: 5.0 }];
-    first_c = mixed[0] as Circle;
-    assert(first_c.radius == 1.5, "variant cast as Circle: radius={first_c.radius}");
-    second_r = mixed[1] as Rect;
-    assert(second_r.width == 4.0, "variant cast as Rect: width={second_r.width}");
+    last_dir = d;
+    n += 1;
+  }
+  assert(first_dir == North, "first element from enum vector iteration");
+  assert(last_dir == West, "last element from enum vector iteration");
+  // --- Enum in if-expression ---
+  current = South;
+  label = if current == North {
+    "N"
+  } else if current == South {
+    "S"
+  } else {
+    "?"
+  };
+  assert(label == "S", "enum in if-expression branches");
+  // --- Enum ordering covers all four values ---
+  assert(North < East, "N < E");
+  assert(East < South, "E < S");
+  assert(South < West, "S < W");
+  assert(West > North, "W > N");
+  // --- Stub: non-stub variant dispatches correctly; stub variant does not panic ---
+  f = Full {v: 7.0 };
+  assert(f.blob_val() == 7.0, "stub: non-stub variant returns correct value");
+  h = Hollow {dummy: 0 };
+  h.blob_val();
+  // stub — result is null/undefined, just verify no panic
+  // --- Common base field: access field shared by all variants via enum type ---
+  // A function defined for the parent enum type can access fields common to all variants.
+  lb = Label {name: "important", priority: 1 };
+  it = Item {name: "widget", count: 5 };
+  assert(tag_name(lb) == "important", "base field via Label");
+  assert(tag_name(it) == "widget", "base field via Item");
+  // Direct field access via the shared field name also works.
+  assert(lb.name == "important", "direct base field access on Label");
+  assert(it.name == "widget", "direct base field access on Item");
+  // --- Variant cast (as EnumVariant): retrieve a typed element from a vector ---
+  mixed =[Circle {radius: 1.5 }, Rect {width: 4.0, height: 5.0 }];
+  first_c = mixed[0] as Circle;
+  assert(first_c.radius == 1.5, "variant cast as Circle: radius={first_c.radius}");
+  second_r = mixed[1] as Rect;
+  assert(second_r.width == 4.0, "variant cast as Rect: width={second_r.width}");
 }

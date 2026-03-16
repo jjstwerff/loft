@@ -6,149 +6,119 @@
 // `lib/` directory, import it with `use name;` at the top of your file, and
 // then refer to its types and functions using the `name::` prefix. Everything
 // in the library is always accessible — there is no private/public barrier.
-
 // `use` statements must come before any `fn` or `struct` definition in your
 // file. Putting a `use` after a definition is a syntax error.
-
 use testlib;
-
 // ## Constants and Enums
-
 // Library constants and enum variants are accessed with the `libname::`
 // prefix. You can compare, order, and convert enum values exactly as you
 // would with enums defined in the same file.
-
 // ## Struct Construction and Field Access
-
 // Construct a library struct with its full namespace prefix. Omitting the
 // prefix is a parse error. Once you have a value, field access uses the plain
 // dot notation with no prefix needed.
-
 // ## Calling Library Methods
-
 // Methods defined in the library are called on the value directly — no prefix
 // on the call site. Free functions (not methods) do need the `libname::` prefix.
-
 // ## Extending a Library Type
-
 // You can add new methods to a library type from your own file. Write the
 // `self` parameter type with the `::` separator and the compiler treats the
 // function as a method on that type.
 fn shifted(self: testlib::Point, dx: float, dy: float) -> testlib::Point {
-    testlib::Point { x: self.x + dx, y: self.y + dy }
+  testlib::Point {x: self.x + dx, y: self.y + dy }
 }
 
 fn main() {
-    // Constants from a library require the library prefix.
-    assert(testlib::MAX_SIZE == 100, "library constant MAX_SIZE");
-    assert(testlib::MIN_SIZE == 1, "library constant MIN_SIZE");
-
-    // Library enum variants: comparison and ordering work as normal.
-    s = testlib::Ok;
-    assert(s == testlib::Ok, "enum equality");
-    assert(s < testlib::Error, "enum ordering");
-    assert("{s}" == "Ok", "enum to text: {s}");
-    assert("Warning" as testlib::Status == testlib::Warning, "text to enum");
-
-    // Library enum values can be passed to library free functions.
-    assert(testlib::status_text(testlib::Error) == "err", "free fn with enum arg");
-
-    // Structs are constructed with namespace prefix and accessed by field.
-    p = testlib::Point { x: 3.0, y: 4.0 };
-    assert(p.x == 3.0, "field access: x={p.x}");
-    assert(p.y == 4.0, "field access: y={p.y}");
-
-    // Methods defined in the library are called without a prefix.
-    dist = p.distance();
-    assert(round(dist) == 5.0, "method call: distance={dist}");
-
-    // User-defined method on a library type (self: testlib::Point) works.
-    assert(p.shifted(1.0, 2.0).x == 4.0, "shifted x");
-    assert(p.shifted(0.0, 2.0).y == 6.0, "shifted y");
-
-    // Scalar fields can be mutated directly.
-    b = testlib::Bag { label: "test", count: 0 };
-    b.label = "updated";
-    assert(b.label == "updated", "direct scalar field mutation");
-
-    // Methods that mutate scalar fields work.
-    b.bump();
-    assert(b.count == 1, "method scalar mutation: count={b.count}");
-    b.bump();
-    assert(b.count == 2, "method scalar mutation: count={b.count}");
-
-    // Free functions: called with the library prefix.
-    assert(testlib::add(3, 4) == 7, "free function add");
-    assert(testlib::add(0, -5) == -5, "free function negative");
-
-    // Library types work as function parameter types when written with their
-    // full namespace prefix in the function signature.
-
-    // A struct with a vector field can be initialised via a struct literal,
-    // including elements that are themselves library structs.
-    bag2 = testlib::Bag { label: "full", count: 3, items: [
-        testlib::Point { x: 1.0, y: 0.0 },
-        testlib::Point { x: 0.0, y: 1.0 }
-    ]};
-    assert(len(bag2.items) == 2, "initialized vector field: {len(bag2.items)}");
-    assert(bag2.items[0].x == 1.0, "vector field element access");
-
-    // Appending a struct variable with `+= [var]` and a whole vector with `+= vec` both work.
-    extra = testlib::Point { x: 7.0, y: 8.0 };
-    bag2.items += [extra];
-    assert(len(bag2.items) == 3, "append via var: len={len(bag2.items)}");
-    assert(bag2.items[2].x == 7.0, "append via var: x={bag2.items[2].x}");
-
-    more_pts = [testlib::Point { x: 9.0, y: 10.0 }, testlib::Point { x: 11.0, y: 12.0 }];
-    bag2.items += more_pts;
-    assert(len(bag2.items) == 5, "append vector: len={len(bag2.items)}");
-    assert(bag2.items[3].x == 9.0, "append vector[3].x={bag2.items[3].x}");
-
-    // Importing the same library twice is silently ignored. A library can
-    // itself import other libraries using `use`, so dependency chains work.
-
-    // ## Package Layout and loft.toml
-    //
-    // A library can be distributed as a directory package instead of a single
-    // flat file. The packaged directory layout is:
-    //
-    //   mylib/
-    //     loft.toml           optional manifest
-    //     src/
-    //       mylib.loft        library source (default entry)
-    //
-    // When the interpreter searches a lib directory and finds `<dir>/mylib/`
-    // it looks for `<dir>/mylib/src/mylib.loft` automatically.
-    //
-    // The optional `loft.toml` manifest supports two settings:
-    //
-    //   [package]
-    //   loft = ">=1.0"        minimum interpreter version required
-    //
-    //   [library]
-    //   entry = "src/mylib.loft"   override the default entry path
-    //
-    // If the interpreter version is below the stated minimum, loading the
-    // library produces a fatal compile error describing the version mismatch.
-    // If no manifest is present, the default entry `src/<name>.loft` is used.
-
-    // ## Limitations
-
-    // These are the current rough edges to keep in mind.
-
-    // `use` must appear before all definitions. If you write a function first
-    // and then a `use`, the compiler reports a syntax error:
-    //   fn foo() {}
-    //   use testlib;   // ERROR: Syntax error
-
-    // All names from a library must be written with the `name::` prefix.
-    // Writing `Point {}`, `MAX_SIZE`, or `add(1, 2)` without the prefix
-    // causes a parse error or an unknown-name error.
-
-    // `pub` on struct fields is not supported and causes a parse error.
-    // Writing `pub` on a top-level `struct` or `fn` is accepted but has no
-    // effect — all library definitions are always visible to importers.
-
-    // No remaining limitations for vector field append — `+= [elem]`, `+= var`,
-    // and `+= other_vector` all work, including on default-initialised structs.
+  // Constants from a library require the library prefix.
+  assert(testlib::MAX_SIZE == 100, "library constant MAX_SIZE");
+  assert(testlib::MIN_SIZE == 1, "library constant MIN_SIZE");
+  // Library enum variants: comparison and ordering work as normal.
+  s = testlib::Ok;
+  assert(s == testlib::Ok, "enum equality");
+  assert(s < testlib::Error, "enum ordering");
+  assert("{s}" == "Ok", "enum to text: {s}");
+  assert("Warning" as testlib::Status == testlib::Warning, "text to enum");
+  // Library enum values can be passed to library free functions.
+  assert(testlib::status_text(testlib::Error) == "err", "free fn with enum arg");
+  // Structs are constructed with namespace prefix and accessed by field.
+  p = testlib::Point {x: 3.0, y: 4.0 };
+  assert(p.x == 3.0, "field access: x={p.x}");
+  assert(p.y == 4.0, "field access: y={p.y}");
+  // Methods defined in the library are called without a prefix.
+  dist = p.distance();
+  assert(round(dist) == 5.0, "method call: distance={dist}");
+  // User-defined method on a library type (self: testlib::Point) works.
+  assert(p.shifted(1.0, 2.0).x == 4.0, "shifted x");
+  assert(p.shifted(0.0, 2.0).y == 6.0, "shifted y");
+  // Scalar fields can be mutated directly.
+  b = testlib::Bag {label: "test", count: 0 };
+  b.label = "updated";
+  assert(b.label == "updated", "direct scalar field mutation");
+  // Methods that mutate scalar fields work.
+  b.bump();
+  assert(b.count == 1, "method scalar mutation: count={b.count}");
+  b.bump();
+  assert(b.count == 2, "method scalar mutation: count={b.count}");
+  // Free functions: called with the library prefix.
+  assert(testlib::add(3, 4) == 7, "free function add");
+  assert(testlib::add(0, -5) == -5, "free function negative");
+  // Library types work as function parameter types when written with their
+  // full namespace prefix in the function signature.
+  // A struct with a vector field can be initialised via a struct literal,
+  // including elements that are themselves library structs.
+  bag2 = testlib::Bag {label: "full", count: 3, items: [
+  testlib::Point {x: 1.0, y: 0.0 },
+  testlib::Point {x: 0.0, y: 1.0 }
+  ] };
+  assert(len(bag2.items) == 2, "initialized vector field: {len(bag2.items)}");
+  assert(bag2.items[0].x == 1.0, "vector field element access");
+  // Appending a struct variable with `+= [var]` and a whole vector with `+= vec` both work.
+  extra = testlib::Point {x: 7.0, y: 8.0 };
+  bag2.items +=[extra];
+  assert(len(bag2.items) == 3, "append via var: len={len(bag2.items)}");
+  assert(bag2.items[2].x == 7.0, "append via var: x={bag2.items[2].x}");
+  more_pts =[testlib::Point {x: 9.0, y: 10.0 }, testlib::Point {x: 11.0, y: 12.0 }];
+  bag2.items += more_pts;
+  assert(len(bag2.items) == 5, "append vector: len={len(bag2.items)}");
+  assert(bag2.items[3].x == 9.0, "append vector[3].x={bag2.items[3].x}");
+  // Importing the same library twice is silently ignored. A library can
+  // itself import other libraries using `use`, so dependency chains work.
+  // ## Package Layout and loft.toml
+  //
+  // A library can be distributed as a directory package instead of a single
+  // flat file. The packaged directory layout is:
+  //
+  //   mylib/
+  //     loft.toml           optional manifest
+  //     src/
+  //       mylib.loft        library source (default entry)
+  //
+  // When the interpreter searches a lib directory and finds `<dir>/mylib/`
+  // it looks for `<dir>/mylib/src/mylib.loft` automatically.
+  //
+  // The optional `loft.toml` manifest supports two settings:
+  //
+  //   [package]
+  //   loft = ">=1.0"        minimum interpreter version required
+  //
+  //   [library]
+  //   entry = "src/mylib.loft"   override the default entry path
+  //
+  // If the interpreter version is below the stated minimum, loading the
+  // library produces a fatal compile error describing the version mismatch.
+  // If no manifest is present, the default entry `src/<name>.loft` is used.
+  // ## Limitations
+  // These are the current rough edges to keep in mind.
+  // `use` must appear before all definitions. If you write a function first
+  // and then a `use`, the compiler reports a syntax error:
+  //   fn foo() {}
+  //   use testlib;   // ERROR: Syntax error
+  // All names from a library must be written with the `name::` prefix.
+  // Writing `Point {}`, `MAX_SIZE`, or `add(1, 2)` without the prefix
+  // causes a parse error or an unknown-name error.
+  // `pub` on struct fields is not supported and causes a parse error.
+  // Writing `pub` on a top-level `struct` or `fn` is accepted but has no
+  // effect — all library definitions are always visible to importers.
+  // No remaining limitations for vector field append — `+= [elem]`, `+= var`,
+  // and `+= other_vector` all work, including on default-initialised structs.
 }

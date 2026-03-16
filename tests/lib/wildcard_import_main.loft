@@ -1,9 +1,8 @@
 // T1-2: wildcard import — use importlib::* makes all names directly accessible.
 use importlib::*;
-
 fn test() {
-    r = add(1, 2);
-    p = Point { x: 3, y: 4 };
-    assert(r == 3, "add via wildcard import should return 3");
-    assert(p.x == 3, "Point.x via wildcard import should be 3")
+  r = add(1, 2);
+  p = Point {x: 3, y: 4 };
+  assert(r == 3, "add via wildcard import should return 3");
+  assert(p.x == 3, "Point.x via wildcard import should be 3")
 }

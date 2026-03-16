@@ -2,73 +2,79 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Index
 // @TITLE: Fast lookup and range queries over records
-
 // An 'index' lets you find records instantly by key and iterate over ranges of keys in order.
 // It supports multi-part keys: you can sort by a primary key and break ties with a secondary key.
 // Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
 // Note: each record can only belong to one index at a time.
-struct Elm { nr: integer, key: text, value: integer }
-struct Db { map: index<Elm[nr, -key]> }
+struct Elm {
+  nr: integer,
+  key: text,
+  value: integer
+}
+
+struct Db {
+  map: index < Elm[nr, -key] >
+}
 
 fn main() {
-    // ## Adding and Looking Up Records
-    // Fill the index just like a vector. Elements are automatically kept in key order.
-    // This index is sorted first by 'nr' (ascending), then by 'key' (descending) for ties.
-    db = Db { map: [
-        Elm { nr: 101, key: "One",   value: 1 },
-        Elm { nr: 92,  key: "Two",   value: 2 },
-        Elm { nr: 83,  key: "Three", value: 3 },
-        Elm { nr: 83,  key: "Four",  value: 4 },
-        Elm { nr: 83,  key: "Five",  value: 5 },
-        Elm { nr: 63,  key: "Six",   value: 6 },
-    ]};
-
-    // Provide all key fields together inside brackets to find a record.
-    // Supply fewer fields to match all records that share a prefix.
-    assert(db.map[101, "One"].value == 1, "Key lookup");
-    assert(!db.map[12, ""], "Missing key returns null");
-    assert(!db.map[83, "One"], "Wrong secondary key returns null");
-
-    // ## Iterating in Order
-    // A 'for' loop visits all elements in key order.
-    total = 0;
-    for r in db.map {
-        total += r.value;
+  // ## Adding and Looking Up Records
+  // Fill the index just like a vector. Elements are automatically kept in key order.
+  // This index is sorted first by 'nr' (ascending), then by 'key' (descending) for ties.
+  db = Db {map: [
+  Elm {nr: 101, key: "One", value: 1 },
+  Elm {nr: 92, key: "Two", value: 2 },
+  Elm {nr: 83, key: "Three", value: 3 },
+  Elm {nr: 83, key: "Four", value: 4 },
+  Elm {nr: 83, key: "Five", value: 5 },
+  Elm {nr: 63, key: "Six", value: 6 }
+  ] };
+  // Provide all key fields together inside brackets to find a record.
+  // Supply fewer fields to match all records that share a prefix.
+  assert(db.map[101, "One"].value == 1, "Key lookup");
+  assert(!db.map[12, ""], "Missing key returns null");
+  assert(!db.map[83, "One"], "Wrong secondary key returns null");
+  // ## Iterating in Order
+  // A 'for' loop visits all elements in key order.
+  total = 0;
+  for r in db.map {
+    total += r.value;
+  }
+  assert(total == 21, "Sum of all values: {total}");
+  // ## Range Queries
+  // Provide a range in the first key position to visit only the matching slice.
+  // '[83..92, "Two"]' means: nr from 83 up to (not including) 92, and key from "Two" down
+  // (since the key is sorted descending, "Two" is the start of that descending segment).
+  sum = 0;
+  for v in db.map[83..92, "Two"] {
+    sum = sum * 10 + v.value;
+  }
+  // Elements matched: (83, Three, 3), (83, Four, 4), (83, Five, 5)
+  assert(sum == 345, "Range iteration result: {sum}");
+  // ## Loop Helpers: #first and #count
+  // 'r#first' is true for the very first element visited.
+  // 'r#count' is a running counter starting at 0.
+  // Note: #index is not meaningful on index collections — use #count instead.
+  first_nr = 0;
+  count_total = 0;
+  for r in db.map {
+    if r#first {
+      first_nr = r.nr
     }
-    assert(total == 21, "Sum of all values: {total}");
-
-    // ## Range Queries
-    // Provide a range in the first key position to visit only the matching slice.
-    // '[83..92, "Two"]' means: nr from 83 up to (not including) 92, and key from "Two" down
-    // (since the key is sorted descending, "Two" is the start of that descending segment).
-    sum = 0;
-    for v in db.map[83..92, "Two"] {
-        sum = sum * 10 + v.value;
-    }
-    // Elements matched: (83, Three, 3), (83, Four, 4), (83, Five, 5)
-    assert(sum == 345, "Range iteration result: {sum}");
-
-    // ## Loop Helpers: #first and #count
-    // 'r#first' is true for the very first element visited.
-    // 'r#count' is a running counter starting at 0.
-    // Note: #index is not meaningful on index collections — use #count instead.
-    first_nr = 0;
-    count_total = 0;
-    for r in db.map {
-        if r#first { first_nr = r.nr }
-        count_total = r#count
-    }
-    assert(first_nr == 63, "First element by key: {first_nr}");
-    assert(count_total == 5, "Total elements: {count_total}");
-
-    // ## Removing by Key
-    // Assigning null to an index subscript removes the element with that exact key combination.
-    // Removing a key that is not present is a safe no-op.
-    db.map[92, "Two"] = null;
-    assert(!db.map[92, "Two"],       "element (92, Two) was removed");
-    assert(db.map[101, "One"].value == 1, "element (101, One) still present");
-    db.map[999, "Z"] = null;   // no-op; does not panic
-    total2 = 0;
-    for r in db.map { total2 += r.value }
-    assert(total2 == 19, "Sum after key removal: {total2}");
+    count_total = r#count
+  }
+  assert(first_nr == 63, "First element by key: {first_nr}");
+  assert(count_total == 5, "Total elements: {count_total}");
+  // ## Removing by Key
+  // Assigning null to an index subscript removes the element with that exact key combination.
+  // Removing a key that is not present is a safe no-op.
+  db.map[92, "Two"] = null;
+  assert(!db.map[92, "Two"], "element (92, Two) was removed");
+  assert(db.map[101, "One"].value == 1, "element (101, One) still present");
+  db.map[999, "Z"] = null;
+  // no-op; does not panic
+  total2 = 0;
+  for r in db.map {
+    total2 += r.value
+  }
+  assert(total2 == 19, "Sum after key removal: {total2}");
 }

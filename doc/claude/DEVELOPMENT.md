@@ -204,6 +204,9 @@ Verify: `cargo test` unchanged; `cargo clippy -- -D warnings` clean.
 
 ### Step 5 — Documentation
 
+Documentation changes **must be in their own commit**, separate from code,
+tests, and refactors.  Never mix doc edits with any of Steps 1–4.
+
 Review **every file in `doc/claude/`** for references to the feature or affected
 behaviour and update them as needed.  Common files to check:
 

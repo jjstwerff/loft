@@ -1,56 +1,55 @@
 // Copyright (c) 2024 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-
 enum Format {
-    Text,
-    Number,
-    FileName,
-    Directory,
-    OutputFile
+  Text,
+  Number,
+  FileName,
+  Directory,
+  OutputFile
 }
 
 struct Argument {
-    short: text,
-    long: text,
-    argument: text,
-    format: Format,
-    mandatory: boolean,
-    description: text
+  short: text,
+  long: text,
+  argument: text,
+  format: Format,
+  mandatory: boolean,
+  description: text
 }
 
 struct Program {
-    name: text,
-    version: text,
-    description: text,
-    arguments: vector<Argument>
+  name: text,
+  version: text,
+  description: text,
+  arguments: vector < Argument >
 }
 
-pub fn arguments(args: vector<text>, configuration: text) -> vector<text> {
-    data = configuration as Program;
-    result = [];
-    for _ in data.arguments {
-        result += null
-    }
-    for arg in args {
-        if arg[0..2] == "--" {
-            for a in data.arguments if a.long {
-                if arg[2..2 + a.long.len()] == a.long {
-                    if arg[2 + a.long.len()] == "=" {
-                        result[a#index] = arg[3 + a.long.len()..]
-                    } else {
-                        result[a#index] = "T"
-                    }
-                }
-            }
-        } else if arg[0] == "-" {
-            for p in arg[1..] {
-                for a in data.arguments if a.long {
-                    if p == a.short {
-                        result[a#index] = "T"
-                    }
-                }
-            }
+pub fn arguments(args: vector < text >, configuration: text) -> vector < text > {
+  data = configuration as Program;
+  result =[];
+  for _ in data.arguments {
+    result += null
+  }
+  for arg in args {
+    if arg[0..2] == "--" {
+      for a in data.arguments if a.long {
+        if arg[2..2 + a.long.len()] == a.long {
+          if arg[2 + a.long.len()] == "=" {
+            result[a#index] = arg[3 + a.long.len()..]
+          } else {
+            result[a#index] = "T"
+          }
         }
+      }
+    } else if arg[0] == "-" {
+      for p in arg[1..] {
+        for a in data.arguments if a.long {
+          if p == a.short {
+            result[a#index] = "T"
+          }
+        }
+      }
     }
-    result
+  }
+  result
 }
