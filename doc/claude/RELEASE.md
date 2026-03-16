@@ -166,7 +166,29 @@ For each feature and bug-fix entry in CHANGELOG.md under `[Unreleased]`:
 - Read the first sentence of each page and verify the sequencing makes sense for a reader progressing top-to-bottom (introductory concepts before advanced ones).
 - If a topic added in this release landed at the end of the sequence but logically belongs earlier, renumber and update all cross-links.
 
-### 8 — Generate HTML and PDF
+### 8 — Validate coding standards and clean up clippy suppressions
+
+```bash
+cargo clippy -- -D warnings
+```
+
+All warnings must be errors-free.  Additionally, review every `#[allow(clippy::...)]`
+annotation in the codebase and attempt to remove it by fixing the underlying code:
+
+```bash
+grep -rn "#\[allow(clippy::" src/
+```
+
+For each suppression found:
+- If the function has been refactored or shortened since the annotation was added, remove
+  the `#[allow]` and verify clippy still passes.
+- If the suppression covers a genuine structural constraint (e.g. a dispatch function that
+  cannot be split without losing clarity), keep it and add a brief comment explaining why.
+
+The goal is to keep suppressions intentional and minimal, not to accumulate them as a
+release-over-release debt.
+
+### 9 — Generate HTML and PDF
 
 ```sh
 # Regenerate HTML reference
