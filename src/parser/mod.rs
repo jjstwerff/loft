@@ -255,6 +255,7 @@ impl Parser {
             f
         };
         let to = format!("tests/dumps/{file}.txt");
+        let _ = std::fs::create_dir_all("tests/dumps");
         if let Ok(mut w) = File::create(to.clone()) {
             let to = self.database.types.len();
             for tp in types..to {
