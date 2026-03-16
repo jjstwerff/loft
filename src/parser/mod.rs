@@ -1028,7 +1028,10 @@ impl Parser {
         }
         // Clone the file path so it is owned; slices of it won't borrow `self`,
         // allowing &mut self calls (lib_path_manifest) later in this method.
-        let cur_script = self.lexer.pos().file.clone();
+        // Normalise to forward slashes so that all string operations below work
+        // identically on Windows (which may supply backslash-separated paths)
+        // and on Unix.  Windows accepts forward slashes in all file API calls.
+        let cur_script = self.lexer.pos().file.replace('\\', "/");
         let cur_dir = if let Some(p) = cur_script.rfind('/') {
             &cur_script[0..p]
         } else {
@@ -1075,11 +1078,10 @@ impl Parser {
         if !std::path::Path::new(&f).exists()
             && let Some(v) = env::var_os("LOFT_LIB")
         {
-            let libs = v.to_str().unwrap().to_string();
-            for l in libs.split(':') {
-                let candidate = format!("{l}/{id}.loft");
-                if std::path::Path::new(&candidate).exists() {
-                    f = candidate;
+            for l in env::split_paths(&v) {
+                let candidate = l.join(format!("{id}.loft"));
+                if candidate.exists() {
+                    f = candidate.to_string_lossy().replace('\\', "/");
                     break;
                 }
             }
@@ -1088,9 +1090,9 @@ impl Parser {
         if !std::path::Path::new(&f).exists()
             && let Some(v) = env::var_os("LOFT_LIB")
         {
-            let libs = v.to_str().unwrap().to_string();
-            for l in libs.split(':') {
-                if let Some(entry) = self.lib_path_manifest(l, id) {
+            for l in env::split_paths(&v) {
+                let l = l.to_string_lossy().replace('\\', "/");
+                if let Some(entry) = self.lib_path_manifest(&l, id) {
                     f = entry;
                     break;
                 }
