@@ -107,16 +107,24 @@ pub fn content(self: File) -> text {
 }
 
 // Reads the file and splits it into lines.
-// Use when processing line-by-line (logs, CSV, etc.).
+// Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce
+// identical results. Use when processing line-by-line (logs, CSV, etc.).
 pub fn lines(self: File) -> vector<text> {
     result = [];
     c = self.content();
     p = 0;
+    prev_cr = false;
     for ch in c {
         if ch == '\n' {
-            result += [ c[p..ch#index] ];
+            e = ch#index;
+            if prev_cr {
+                result += [ c[p..e-1] ];
+            } else {
+                result += [ c[p..e] ];
+            }
             p = ch#next;
         }
+        prev_cr = ch == '\r';
     }
     if p > 0 {
         result += [ c[p..c.len()] ];
@@ -150,12 +158,12 @@ pub fn split(self: text, separator: character) -> vector<text> {
 pub fn path_sep() -> character;
 
 // Returns true if path stays within the project directory (no net upward traversal).
+// Accepts both '/' and '\' as separators so loft programs can use either style.
 fn valid_path(path: text) -> boolean {
-    sep = path_sep();
     depth = 0;
     start = 0;
     for c in path {
-        if c == sep {
+        if c == '/' || c == '\\' {
             part = path[start..c#index];
             start = c#next;
             if part == ".." {
