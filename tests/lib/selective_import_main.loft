@@ -1,0 +1,7 @@
+// T1-2: selective import — use importlib::add makes only 'add' directly accessible.
+use importlib::add;
+
+fn test() {
+    r = add(10, 5);
+    assert(r == 15, "add via selective import should return 15")
+}
