@@ -446,6 +446,7 @@ impl Parser {
         if self.context == u32::MAX {
             return false;
         }
+        let mut returned_not_null = false;
         let result = if self.lexer.has_token("->") {
             // Will be the correct def_nr on the second pass
             if let Some(type_name) = self.lexer.has_identifier() {
@@ -453,6 +454,10 @@ impl Parser {
                     // Message
                     return false;
                 };
+                if self.lexer.has_keyword("not") {
+                    self.lexer.token("null");
+                    returned_not_null = true;
+                }
                 tp
             } else {
                 // message
@@ -463,12 +468,9 @@ impl Parser {
         };
         self.vars
             .append(&mut self.data.definitions[self.context as usize].variables);
-        /*
-        if !self.default {
-            self.vars.logging = true;
-        }*/
         if self.first_pass {
             self.data.set_returned(self.context, result);
+            self.data.definitions[self.context as usize].returned_not_null = returned_not_null;
         }
         if !self.lexer.has_token(";") {
             for (a_nr, a) in arguments.iter().enumerate() {

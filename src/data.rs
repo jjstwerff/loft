@@ -535,6 +535,8 @@ pub struct Definition {
     pub code: Value,
     /// Related type for fields, and the return type for functions
     pub returned: Type,
+    /// Whether the return type was declared `not null` (only meaningful for functions)
+    pub returned_not_null: bool,
     /// Rust code
     pub rust: String,
     /// Interpreter operator code
@@ -810,6 +812,7 @@ impl Data {
             attr_names: HashMap::default(),
             code: Value::Null,
             returned: Type::Unknown(rec),
+            returned_not_null: false,
             rust: String::new(),
             op_code: u16::MAX,
             known_type: u16::MAX,

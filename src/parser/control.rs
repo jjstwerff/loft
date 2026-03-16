@@ -11,6 +11,30 @@ use super::{
     v_block, v_if, v_loop, v_set,
 };
 
+/// Returns true if the given AST value definitely returns on all code paths.
+/// A block definitely-returns if its last statement is a `return`, or if it is
+/// an `if` with an `else` where both branches definitely-return (recursive).
+pub(crate) fn definitely_returns(val: &Value) -> bool {
+    match val {
+        Value::Return(_) => true,
+        Value::Block(bl) => {
+            // A block definitely-returns if its last non-Line statement does.
+            bl.operators
+                .iter()
+                .rev()
+                .find(|v| !matches!(v, Value::Line(_)))
+                .is_some_and(definitely_returns)
+        }
+        Value::If(_, t_branch, f_branch) => {
+            // Both branches must definitely-return, and the else must not be null.
+            !matches!(**f_branch, Value::Null)
+                && definitely_returns(t_branch)
+                && definitely_returns(f_branch)
+        }
+        _ => false,
+    }
+}
+
 impl Parser {
     // <block> ::= '}' | <expression> {';' <expression} '}'
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
@@ -128,9 +152,25 @@ impl Parser {
         let mut tp = t.clone();
         if *result != Type::Void && !matches!(*result, Type::Unknown(_)) {
             let last = l.len() - 1;
-            let ignore = *t == Type::Void && matches!(l[last], Value::Return(_));
+            let ignore = *t == Type::Void
+                && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last]));
             if !self.convert(&mut l[last], t, result) && !ignore {
-                self.validate_convert(context, t, result);
+                // T1-22: for function bodies with `not null` return, downgrade to a warning.
+                if context == "return from block"
+                    && self.context != u32::MAX
+                    && self.data.definitions[self.context as usize].returned_not_null
+                {
+                    if !self.first_pass {
+                        let fn_name = self.data.definitions[self.context as usize].original_name();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Warning,
+                            "Not all code paths return a value — function '{fn_name}' may return null",
+                        );
+                    }
+                } else {
+                    self.validate_convert(context, t, result);
+                }
             }
             tp = result.clone();
         }
