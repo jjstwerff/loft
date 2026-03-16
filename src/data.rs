@@ -1241,6 +1241,45 @@ impl Data {
         &self.definitions[*nr as usize]
     }
 
+    /// Import all names from `lib_source` into `into_source`.
+    /// Names already present in `into_source` (local definitions) are kept unchanged.
+    pub fn import_all(&mut self, lib_source: u16, into_source: u16) {
+        let names: Vec<(String, u32)> = self
+            .def_names
+            .iter()
+            .filter(|((_, src), _)| *src == lib_source)
+            .map(|((name, _), &def_nr)| (name.clone(), def_nr))
+            .collect();
+        for (name, def_nr) in names {
+            self.def_names.entry((name, into_source)).or_insert(def_nr);
+        }
+    }
+
+    /// Import a single name from `lib_source` into `into_source`.
+    /// Returns `false` if neither the plain name nor its `n_`-prefixed function
+    /// form exists in `lib_source`, so the caller can emit an appropriate error.
+    /// Names already present in `into_source` are kept unchanged (local wins).
+    pub fn import_name(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
+        // Functions are stored under the `n_` prefix; try both forms.
+        let fn_key = format!("n_{name}");
+        let found_plain = self.def_names.get(&(name.to_string(), lib_source)).copied();
+        let found_fn = self.def_names.get(&(fn_key.clone(), lib_source)).copied();
+        if found_plain.is_none() && found_fn.is_none() {
+            return false;
+        }
+        if let Some(def_nr) = found_plain {
+            self.def_names
+                .entry((name.to_string(), into_source))
+                .or_insert(def_nr);
+        }
+        if let Some(def_nr) = found_fn {
+            self.def_names
+                .entry((fn_key, into_source))
+                .or_insert(def_nr);
+        }
+        true
+    }
+
     /** Get a definition.
     # Panics
     When no definition on that number is found

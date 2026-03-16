@@ -34,6 +34,20 @@ function.
 // The parser holds several independent boolean mode flags (in_loop, default, first_pass,
 // reverse_iterator) that each track a distinct parse phase or context.  Combining them into
 // an enum or state machine would add complexity without benefit.
+/// Whether a `use lib::...` statement imports all names or a specific subset.
+enum ImportSpec {
+    Wildcard,
+    Names(Vec<String>),
+}
+
+/// A pending import queued when `use lib::spec` is parsed.
+/// Applied after all definitions in `for_source` are fully parsed.
+struct PendingImport {
+    for_source: u16,
+    lib_source: u16,
+    spec: ImportSpec,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -69,6 +83,8 @@ pub struct Parser {
     vars: Function,
     /// Last seen line inside the source code, an increase inserts it in the internal code.
     line: u32,
+    /// Wildcard and selective imports waiting to be applied once the target source is fully parsed.
+    pending_imports: Vec<PendingImport>,
 }
 
 // Operators ordered on their precedence
@@ -185,6 +201,7 @@ impl Parser {
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),
+            pending_imports: Vec::new(),
         }
     }
 
@@ -198,6 +215,7 @@ impl Parser {
         self.vars.logging = false;
         self.lexer.switch(filename);
         self.first_pass = true;
+        self.pending_imports.clear();
         self.data.reset();
         self.parse_file();
         let lvl = self.lexer.diagnostics().level();
@@ -960,7 +978,43 @@ impl Parser {
         let start_def = self.data.definitions();
         while self.lexer.has_token("use") {
             if let Some(id) = self.lexer.has_identifier() {
+                // Parse optional import spec: `::*` for wildcard or `::name1, name2` for selective.
+                let spec = if self.lexer.has_token("::") {
+                    if self.lexer.has_token("*") {
+                        Some(ImportSpec::Wildcard)
+                    } else {
+                        let mut names = Vec::new();
+                        if let Some(name) = self.lexer.has_identifier() {
+                            names.push(name);
+                            while self.lexer.has_token(",") {
+                                if let Some(name) = self.lexer.has_identifier() {
+                                    names.push(name);
+                                }
+                            }
+                        }
+                        if names.is_empty() {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Expected name or '*' after '::'"
+                            );
+                            None
+                        } else {
+                            Some(ImportSpec::Names(names))
+                        }
+                    }
+                } else {
+                    None
+                };
                 if self.data.use_exists(&id) {
+                    if let Some(s) = spec {
+                        let lib_source = self.data.get_source(&id);
+                        self.pending_imports.push(PendingImport {
+                            for_source: self.data.source,
+                            lib_source,
+                            spec: s,
+                        });
+                    }
                     self.lexer.token(";");
                     continue;
                 }
@@ -969,12 +1023,19 @@ impl Parser {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&id);
+                    // spec is consumed (tokens already read); the import will be recorded
+                    // when this `use` statement is seen again via todo_files with use_exists=true.
+                    drop(spec);
                     self.lexer.switch(&f);
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Included file {id} not found");
                 }
             }
         }
+        // Apply wildcard/selective imports queued for this source now that the while-use loop
+        // has resolved all libraries.  Must run before the definitions loop so that imported
+        // names are visible when function bodies and type annotations are parsed.
+        self.apply_pending_imports();
         self.file += 1;
         self.line = 0;
         loop {
@@ -1019,6 +1080,40 @@ impl Parser {
             self.lexer.switch(&t);
             self.data.source = s;
             self.parse_file();
+        }
+    }
+
+    /// Apply all pending imports whose target source matches the currently active source.
+    fn apply_pending_imports(&mut self) {
+        let cur = self.data.source;
+        // Partition: imports targeting `cur` are applied now; others wait for their source.
+        let mut to_apply = Vec::new();
+        let mut remaining = Vec::new();
+        for pi in self.pending_imports.drain(..) {
+            if pi.for_source == cur {
+                to_apply.push(pi);
+            } else {
+                remaining.push(pi);
+            }
+        }
+        self.pending_imports = remaining;
+        for pi in to_apply {
+            match pi.spec {
+                ImportSpec::Wildcard => {
+                    self.data.import_all(pi.lib_source, cur);
+                }
+                ImportSpec::Names(names) => {
+                    for name in &names {
+                        if !self.data.import_name(pi.lib_source, cur, name) {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Name '{name}' not found in library"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

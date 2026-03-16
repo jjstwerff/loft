@@ -85,6 +85,11 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-2** — Wildcard and selective imports. `use mylib::*` imports all names from `mylib`
+  into the current scope; `use mylib::Point, add` imports only the named items. Local
+  definitions shadow imported names (local wins). Importing a name that does not exist
+  produces a compile-time error. Three tests in `tests/imports.rs`. (2026-03-16)
+
 - **T2-6** — `now()` and `ticks()` time functions. `now()` returns milliseconds since
   the Unix epoch (wall clock); `ticks()` returns microseconds elapsed since program start
   (monotonic). `Stores` gains a `start_time: Instant` field initialised at `new()` and

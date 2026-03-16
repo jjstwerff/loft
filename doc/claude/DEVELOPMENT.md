@@ -204,9 +204,21 @@ Verify: `cargo test` unchanged; `cargo clippy -- -D warnings` clean.
 
 ### Step 5 — Documentation
 
-Stage all documentation files: `CHANGELOG.md`, `doc/claude/PLANNING.md`,
-`doc/claude/RELEASE.md`, `doc/claude/PROBLEMS.md` (if a bug was fixed), and any
-other `doc/claude/*.md` files that reference the feature.
+Review **every file in `doc/claude/`** for references to the feature or affected
+behaviour and update them as needed.  Common files to check:
+
+| File | Update when |
+|---|---|
+| `CHANGELOG.md` | Always — add a feature or bug-fix entry under Unreleased |
+| `PLANNING.md` | Always — remove the item section and Quick Reference row |
+| `RELEASE.md` | Gate criteria or release checklist changed |
+| `PROBLEMS.md` | A known bug was fixed or a new one was discovered |
+| `STDLIB.md` | A standard-library function was added or changed |
+| `EXTERNAL_LIBS.md` | Library resolution or manifest handling changed |
+| `INCONSISTENCIES.md` | A documented language inconsistency was resolved |
+| Any other `doc/claude/*.md` | File explicitly describes the feature area |
+
+Stage all files that required a change:
 
 ```
 docs: T2-6 now()/ticks() — update CHANGELOG, PLANNING, STDLIB
