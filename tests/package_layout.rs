@@ -14,7 +14,6 @@ use loft::scopes;
 /// Confirm that lib_path() locates a library stored in the packaged directory
 /// layout: `tests/lib/testpkg/src/testpkg.loft` via `lib_dirs`.
 #[test]
-#[ignore = "T2-11: not yet implemented"]
 fn package_layout_use_finds_src_subdir() {
     let mut p = Parser::new();
     p.parse_dir("default", true, true).unwrap();
@@ -31,7 +30,6 @@ fn package_layout_use_finds_src_subdir() {
 /// Confirm that a version requirement in `loft.toml` that exceeds the
 /// current interpreter version produces a fatal diagnostic.
 #[test]
-#[ignore = "T2-11: not yet implemented"]
 fn package_layout_version_mismatch_is_fatal() {
     let mut p = Parser::new();
     p.parse_dir("default", true, true).unwrap();

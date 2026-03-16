@@ -84,7 +84,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2-11: not yet implemented"]
     fn parses_loft_version_requirement() {
         let p = write_temp("ver", "[package]\nloft = \">=1.0\"\n");
         let m = read_manifest(p.to_str().unwrap()).unwrap();
@@ -92,7 +91,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2-11: not yet implemented"]
     fn parses_custom_entry() {
         let p = write_temp("entry", "[library]\nentry = \"src/mylib.loft\"\n");
         let m = read_manifest(p.to_str().unwrap()).unwrap();
@@ -100,7 +98,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2-11: not yet implemented"]
     fn version_current_passes() {
         assert!(check_version(">=0.1", "0.1.0"));
         assert!(check_version(">=1.0", "1.2.3"));
@@ -109,7 +106,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2-11: not yet implemented"]
     fn version_too_high_fails() {
         assert!(!check_version(">=2.0", "1.9.9"));
         assert!(!check_version(">=1.1", "1.0.0"));
