@@ -14,7 +14,6 @@ use loft::scopes;
 
 /// `use importlib::*` makes all names (add, mul, Point) directly accessible.
 #[test]
-#[ignore = "T1-2: not yet implemented"]
 fn wildcard_import_makes_names_accessible() {
     let s = sep_str();
     let mut p = Parser::new();
@@ -31,7 +30,6 @@ fn wildcard_import_makes_names_accessible() {
 
 /// `use importlib::add` makes only `add` directly accessible; mul and Point are not imported.
 #[test]
-#[ignore = "T1-2: not yet implemented"]
 fn selective_import_makes_named_item_accessible() {
     let s = sep_str();
     let mut p = Parser::new();
@@ -48,7 +46,6 @@ fn selective_import_makes_named_item_accessible() {
 
 /// `use importlib::nope` where `nope` does not exist in importlib produces an error.
 #[test]
-#[ignore = "T1-2: not yet implemented"]
 fn selective_import_of_unknown_name_is_error() {
     let s = sep_str();
     let mut p = Parser::new();
