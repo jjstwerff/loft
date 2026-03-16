@@ -85,6 +85,13 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-12** — Redundant null check on `not null` field. Comparing a `not null` struct
+  field to `null` with `==` or `!=` now warns ("comparison is always false/true").
+  Using `??` (null-coalescing) on a `not null` field warns ("default is never used").
+  The check is purely type-driven — `get_field` tracks the field's non-nullable status
+  and `handle_operator` emits the warning before processing the operator. Five tests
+  in `tests/expressions.rs`. (2026-03-16)
+
 - **T1-13** — Unreachable code warning. Statements after an unconditional `return`,
   `break`, or `continue` at block scope now warn "Unreachable code after return".
   Only top-level terminators trigger the warning — a `return` inside an `if` branch

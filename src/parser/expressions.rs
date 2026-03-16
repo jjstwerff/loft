@@ -903,6 +903,15 @@ use a separate collection or add after the loop"
             // otherwise to `default`.  Compiles as: if (x != null_sentinel) { x } else { default }.
             // Note: `x` is evaluated twice for non-trivial expressions (known V1 limitation).
             // Returns None so the outer loop in parse_operators continues, allowing chaining.
+            if self.expr_not_null && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "Redundant null coalescing — '{}' is 'not null', default is never used",
+                    self.expr_not_null_name,
+                );
+            }
+            self.expr_not_null = false;
             let lhs_type = ctp.clone();
             let mut rhs = Value::Null;
             let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
@@ -927,6 +936,7 @@ use a separate collection or add after the loop"
                 *ctp = lhs_type;
             }
         } else if operator == "as" {
+            self.expr_not_null = false;
             if let Some(tps) = self.lexer.has_identifier() {
                 let Some(tp) = self.parse_type(u32::MAX, &tps, false) else {
                     diagnostic!(self.lexer, Level::Error, "Expect type");
@@ -948,9 +958,11 @@ use a separate collection or add after the loop"
             }
             diagnostic!(self.lexer, Level::Error, "Expect type after as");
         } else if operator == "or" || operator == "||" {
+            self.expr_not_null = false;
             self.boolean_operator(code, ctp, precedence, true);
             *ctp = Type::Boolean;
         } else if operator == "and" || operator == "&&" {
+            self.expr_not_null = false;
             self.boolean_operator(code, ctp, precedence, false);
             *ctp = Type::Boolean;
         } else if operator == "=="
@@ -960,12 +972,34 @@ use a separate collection or add after the loop"
             || operator == ">"
             || operator == ">="
         {
+            let lhs_not_null = self.expr_not_null;
+            let lhs_not_null_name = self.expr_not_null_name.clone();
+            self.expr_not_null = false;
             let mut second_code = Value::Null;
             let tp = parent_tp.clone();
             *parent_tp = ctp.clone();
             let second_type =
                 self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
             self.known_var_or_type(&second_code);
+            if !self.first_pass && (operator == "==" || operator == "!=") {
+                if second_type == Type::Null && lhs_not_null {
+                    let always = if operator == "==" { "false" } else { "true" };
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "Redundant null check — '{lhs_not_null_name}' is 'not null', comparison is always {always}",
+                    );
+                } else if *ctp == Type::Null && self.expr_not_null {
+                    let always = if operator == "==" { "false" } else { "true" };
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "Redundant null check — '{}' is 'not null', comparison is always {always}",
+                        self.expr_not_null_name,
+                    );
+                }
+            }
+            self.expr_not_null = false;
             if operator == ">" {
                 *ctp = self.call_op(
                     code,
@@ -990,6 +1024,7 @@ use a separate collection or add after the loop"
             }
             *parent_tp = tp;
         } else {
+            self.expr_not_null = false;
             let mut second_code = Value::Null;
             let second_type =
                 self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);

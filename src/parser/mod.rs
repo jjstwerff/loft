@@ -85,6 +85,11 @@ pub struct Parser {
     line: u32,
     /// Wildcard and selective imports waiting to be applied once the target source is fully parsed.
     pending_imports: Vec<PendingImport>,
+    /// Whether the most recently parsed expression is from a `not null` field access.
+    /// Set by `get_field`; consumed by `handle_operator` to warn on redundant null checks.
+    expr_not_null: bool,
+    /// The field name for the most recently parsed `not null` field access (for diagnostics).
+    expr_not_null_name: String,
 }
 
 // Operators ordered on their precedence
@@ -202,6 +207,8 @@ impl Parser {
             line: 0,
             lib_dirs: Vec::new(),
             pending_imports: Vec::new(),
+            expr_not_null: false,
+            expr_not_null_name: String::new(),
         }
     }
 
@@ -582,18 +589,20 @@ impl Parser {
 
     fn get_field(&mut self, d_nr: u32, f_nr: usize, code: Value) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
+        let nullable = self.data.attr_nullable(d_nr, f_nr);
+        self.expr_not_null = !nullable;
+        if !nullable && f_nr != usize::MAX {
+            self.expr_not_null_name = self.data.attr_name(d_nr, f_nr);
+        } else {
+            self.expr_not_null_name.clear();
+        }
         let pos = if f_nr == usize::MAX {
             0
         } else {
             let nm = self.data.attr_name(d_nr, f_nr);
             self.database.position(self.data.def(d_nr).known_type, &nm)
         };
-        self.get_val(
-            &tp,
-            self.data.attr_nullable(d_nr, f_nr),
-            u32::from(pos),
-            code,
-        )
+        self.get_val(&tp, nullable, u32::from(pos), code)
     }
 
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value) -> Value {

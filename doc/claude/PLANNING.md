@@ -152,27 +152,6 @@ Extend subject-type dispatch to `Type::Reference(d_nr)` with `DefType::Struct`; 
 
 ---
 
-### T1-12  Redundant null check on `not null` type
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Low–Medium — comparing a `not null` value to `null` is always false or always
-true; using `//` (null-coalescing) on a `not null` value makes the default branch unreachable;
-both indicate a misunderstood type annotation
-**Description:** When the type of an expression is statically known to be non-nullable, flag
-null-check patterns whose result is constant:
-```loft
-fn f(x: integer not null) {
-    if x == null { ... }     // Warning: 'x' is 'not null' — comparison is always false
-    y = x // default_value   // Warning: 'x' is 'not null' — null-coalescing is redundant
-}
-```
-**Fix path:**
-1. In the equality expression parser: when one operand is the `null` literal and the other
-   has a non-nullable type, emit the warning.
-2. In the `//` operator handler: when the left-hand operand has a non-nullable type, emit
-   the warning and still emit the code (preserve semantics; let optimiser remove the branch).
-**Effort:** Small (parser/expressions.rs — type-driven checks, no flow analysis required)
-**Target:** 1.1
-
 ---
 
 ### T1-22  Missing return path for functions with a non-null return type
@@ -862,7 +841,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
 | T1-18 | Plain struct destructuring in `match`                    | 1    | Small     | 1.1     |             | MATCH.md T1-18             |
-| T1-12 | Redundant null check on `not null` type                  | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-22 | Missing return path for non-null functions               | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
