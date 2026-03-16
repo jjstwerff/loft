@@ -13,7 +13,7 @@ mod testing;
 
 /// All four variants covered, no wildcard — exhaustiveness satisfied.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
+
 fn plain_all_arms() {
     code!(
         "enum Direction { North, East, South, West }"
@@ -32,7 +32,6 @@ match d {
 
 /// Partial coverage with a wildcard `_` arm.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn plain_wildcard() {
     code!(
         "enum Direction { North, East, South, West }"
@@ -49,7 +48,6 @@ match d {
 
 /// Wildcard arm catches the first variant too.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn plain_wildcard_first() {
     code!(
         "enum Direction { North, East, South, West }"
@@ -66,7 +64,6 @@ match d {
 
 /// Missing variant without wildcard — compile-time error.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn plain_missing_arm() {
     code!(
         "enum Direction { North, East, South, West }
@@ -80,12 +77,11 @@ fn test() {
     }
 }"
     )
-    .error("match on Direction is not exhaustive — missing: West");
+    .error("match on Direction is not exhaustive — missing: West at plain_missing_arm:10:2");
 }
 
 /// match used as a void statement (result is dropped).
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn plain_as_statement() {
     code!(
         "enum Direction { North, East, South, West }
@@ -107,7 +103,6 @@ pub fn label(d: Direction) -> text {
 
 /// match produces an integer value used in arithmetic.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn plain_as_integer_value() {
     code!(
         "enum Priority { Low, Medium, High }"
@@ -126,7 +121,6 @@ v * 2",
 
 /// match used inside a function return position.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn plain_in_function() {
     code!(
         "enum Direction { North, East, South, West }
@@ -148,7 +142,6 @@ pub fn label(d: Direction) -> text {
 
 /// Struct enum dispatch without field binding.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn struct_no_binding() {
     code!(
         "enum Shape {
@@ -168,7 +161,6 @@ match s {
 
 /// Struct enum — single field binding.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn struct_single_field() {
     code!(
         "enum Shape {
@@ -190,7 +182,6 @@ match s {
 
 /// Struct enum — two-field binding on the matching arm.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn struct_multi_field() {
     code!(
         "enum Shape {
@@ -212,7 +203,6 @@ match s {
 
 /// All three Shape variants covered, no wildcard — exhaustiveness satisfied.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn struct_all_variants() {
     code!(
         "enum Shape {
@@ -240,7 +230,6 @@ s = area(Square { side: 5.0 });
 
 /// Struct enum missing variant without wildcard — compile-time error.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn struct_missing_arm() {
     code!(
         "enum Shape {
@@ -257,14 +246,13 @@ fn test() {
     }
 }"
     )
-    .error("match on Shape is not exhaustive — missing: Square");
+    .error("match on Shape is not exhaustive — missing: Square at struct_missing_arm:13:2");
 }
 
 // ── Nesting and composition ───────────────────────────────────────────────────
 
 /// match expression nested inside another match arm.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn match_nested() {
     code!(
         "enum X { A, B }
@@ -285,7 +273,6 @@ match x {
 
 /// match result fed directly into a function call.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn match_in_call() {
     code!(
         "enum Flag { On, Off }"
@@ -304,7 +291,6 @@ len(match f {
 
 /// match on a non-enum type is a compile-time error.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn match_non_enum() {
     code!(
         "fn test() {
@@ -314,12 +300,11 @@ fn match_non_enum() {
     }
 }"
     )
-    .error("match requires an enum type");
+    .error("match requires an enum type at match_non_enum:3:14");
 }
 
 /// Arms returning incompatible types — compile-time error.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn match_type_mismatch() {
     code!(
         "enum Direction { North, East, South, West }
@@ -332,12 +317,11 @@ fn test() {
     }
 }"
     )
-    .error("cannot unify");
+    .error("cannot unify: text and integer at match_type_mismatch:8:6");
 }
 
 /// Duplicate arm for the same variant — compile-time warning.
 #[test]
-#[ignore = "T1-4: not yet implemented"]
 fn match_duplicate_arm() {
     code!(
         "enum Direction { North, East, South, West }
@@ -351,5 +335,5 @@ fn test() {
     }
 }"
     )
-    .warning("unreachable arm: North already matched");
+    .warning("unreachable arm: North already matched at match_duplicate_arm:7:17");
 }
