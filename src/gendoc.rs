@@ -398,7 +398,7 @@ fn generate_stdlib_toc(
         ));
     }
     body.push_str("</div>\n");
-    let html = page_html("Standard Library", &nav, "Lav Standard Library", &body);
+    let html = page_html("Standard Library", &nav, "Loft Standard Library", &body);
     fs::write("doc/stdlib.html", &html)?;
     println!("Generated doc/stdlib.html");
     Ok(())

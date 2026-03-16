@@ -1258,10 +1258,10 @@ fn conv_ref_from_null(s: &mut State) {
     s.put_stack(new_value);
 }
 
-/// Push a null-sentinel DbRef (store_nr=u16::MAX) WITHOUT allocating a database store.
+/// Push a null-sentinel `DbRef` (`store_nr=u16::MAX`) WITHOUT allocating a database store.
 /// Used for inline-ref temporary variables whose null-init must not claim a store —
-/// the actual store is assigned later via OpPutRef when the called method returns.
-/// OpFreeRef is a no-op for sentinels (see Stores::free).
+/// the actual store is assigned later via `OpPutRef` when the called method returns.
+/// `OpFreeRef` is a no-op for sentinels (see `Stores::free`).
 fn null_ref_sentinel(s: &mut State) {
     s.put_stack(DbRef {
         store_nr: u16::MAX,

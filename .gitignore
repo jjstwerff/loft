@@ -1,3 +1,5 @@
 target/
 Cargo.lock
 result.txt
+tests/dumps
+tests/generated

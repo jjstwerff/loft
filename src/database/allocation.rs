@@ -456,6 +456,7 @@ impl Stores {
     # Panics
     When a field points to an index or spacial structure.
     */
+    #[allow(clippy::too_many_lines)]
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
         // TODO prevent removing records twice via secondary structures
         match &self.types[tp as usize].parts {

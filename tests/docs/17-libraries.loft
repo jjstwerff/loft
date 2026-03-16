@@ -107,6 +107,31 @@ fn main() {
     // Importing the same library twice is silently ignored. A library can
     // itself import other libraries using `use`, so dependency chains work.
 
+    // ## Package Layout and loft.toml
+    //
+    // A library can be distributed as a directory package instead of a single
+    // flat file. The packaged directory layout is:
+    //
+    //   mylib/
+    //     loft.toml           optional manifest
+    //     src/
+    //       mylib.loft        library source (default entry)
+    //
+    // When the interpreter searches a lib directory and finds `<dir>/mylib/`
+    // it looks for `<dir>/mylib/src/mylib.loft` automatically.
+    //
+    // The optional `loft.toml` manifest supports two settings:
+    //
+    //   [package]
+    //   loft = ">=1.0"        minimum interpreter version required
+    //
+    //   [library]
+    //   entry = "src/mylib.loft"   override the default entry path
+    //
+    // If the interpreter version is below the stated minimum, loading the
+    // library produces a fatal compile error describing the version mismatch.
+    // If no manifest is present, the default entry `src/<name>.loft` is used.
+
     // ## Limitations
 
     // These are the current rough edges to keep in mind.

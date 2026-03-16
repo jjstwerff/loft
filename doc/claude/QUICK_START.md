@@ -115,6 +115,7 @@ default/03_text.loft    — text utilities
 | [INCONSISTENCIES.md](INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [OPTIMISATIONS.md](OPTIMISATIONS.md) | Planned and implemented runtime/compiler optimisations |
 | [PLANNING.md](PLANNING.md) | Priority-ordered enhancement backlog |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Contribution workflow — branch → WIP → rebase → 4-commit clean history |
 | [RELEASE.md](RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](WEB_IDE.md) | Web IDE integration design notes |
 | [../PROMPTS.md](../PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |

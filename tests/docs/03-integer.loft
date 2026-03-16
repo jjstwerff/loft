@@ -46,6 +46,15 @@ fn main() {
     a -= 4;              // a is now 0
     assert(!(12 / a), "Division by zero gives null");
 
+    // ## Compile-time warning for constant zero divisor
+    // When the divisor is a literal 0 in source code, loft emits a compile-time
+    // warning because a constant-zero divisor is almost certainly a bug:
+    //   n / 0   // warning: Division by constant zero
+    //   n % 0   // warning: Modulo by constant zero
+    // The expression still compiles and returns null at runtime — the warning
+    // is informational, not an error. Use a variable (like 'a' above) when you
+    // intentionally want null-on-zero division without a warning.
+
     // ## Embedding integers in text
     assert("a{12}b" == "a12b", "Integer in format string");
 

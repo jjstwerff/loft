@@ -82,6 +82,7 @@ impl LogPhase {
 ///
 /// Build from a preset or from the `LOFT_LOG` environment variable with
 /// [`LogConfig::from_env`].
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct LogConfig {
     /// Phase filter: which compilation/execution phases to log.

@@ -694,9 +694,9 @@ impl Function {
         v
     }
 
-    /// Mark `v` as an inline-ref temporary (created by parse_part for chained
+    /// Mark `v` as an inline-ref temporary (created by `parse_part` for chained
     /// ref-returning calls).  These get their null-init inserted AFTER the first
-    /// user statement in parse_code so they appear in var_order after user-scope
+    /// user statement in `parse_code` so they appear in `var_order` after user-scope
     /// reference variables, giving the correct LIFO-reversed free order.
     pub fn mark_inline_ref(&mut self, v: u16) {
         self.inline_ref_vars.insert(v);

@@ -91,6 +91,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   cloned into parallel worker stores. Declared in `default/02_images.loft`; four tests
   in `tests/time.rs`. (2026-03-16)
 
+- **T2-11** — External library package layout (`loft.toml`). `use mylib;` now
+  resolves the packaged directory layout `<dir>/<id>/src/<id>.loft` in addition to
+  the existing flat `<dir>/<id>.loft` layout. A minimal `loft.toml` manifest reader
+  (`src/manifest.rs`) validates the `loft = ">=X.Y"` interpreter version requirement
+  and reads the optional `[library] entry` override. Discovered via `lib_dirs` (steps 7c)
+  and `LOFT_LIB` (step 7d) in `lib_path()`. Six tests in `src/manifest.rs` and
+  `tests/package_layout.rs`. (2026-03-16)
+
 - **T1-11** — Compile-time warning for division or modulo by constant zero. `n / 0` and
   `n % 0` return null in loft rather than panicking, so a constant-zero divisor is a
   completely silent bug. The parser now emits a warning when the right-hand operand of

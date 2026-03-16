@@ -13,8 +13,9 @@ use crate::data::{
 use crate::database::{Parts, Stores};
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
 use crate::lexer::{LexItem, LexResult, Lexer, Link, Mode, Position};
+use crate::platform::{other_sep, sep, sep_str};
 use crate::variables::{Function, size as var_size};
-use crate::{scopes, typedef};
+use crate::{manifest, scopes, typedef};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs::{File, metadata, read_dir};
@@ -249,12 +250,10 @@ impl Parser {
     }
 
     fn output(&mut self, f: &str, types: usize, from: u32) -> std::io::Result<()> {
-        let file = if let Some(p) = f.rfind('/') {
-            &f[p + 1..]
-        } else {
-            f
-        };
+        let f_norm = f.replace(other_sep(), sep_str());
+        let file = f_norm.rsplit(sep()).next().unwrap_or(f);
         let to = format!("tests/dumps/{file}.txt");
+        let _ = std::fs::create_dir_all("tests/dumps");
         if let Ok(mut w) = File::create(to.clone()) {
             let to = self.database.types.len();
             for tp in types..to {
@@ -1029,14 +1028,19 @@ impl Parser {
         if !std::path::Path::new(&f).exists() {
             f = format!("{id}.loft");
         }
-        let cur_script = &self.lexer.pos().file;
-        let cur_dir = if let Some(p) = cur_script.rfind('/') {
+        // Clone the file path so it is owned; slices of it won't borrow `self`,
+        // allowing &mut self calls (lib_path_manifest) later in this method.
+        // Normalise to the platform separator (sep()) so that rfind / contains
+        // use a single token rather than probing for both '/' and '\\'.
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = if let Some(p) = cur_script.rfind(sep()) {
             &cur_script[0..p]
         } else {
             ""
         };
-        let base_dir = if cur_dir.contains("/tests/") {
-            &cur_dir[..cur_dir.find("/tests/").unwrap()]
+        let tests_infix = format!("{0}tests{0}", sep());
+        let base_dir = if cur_dir.contains(tests_infix.as_str()) {
+            &cur_dir[..cur_dir.find(tests_infix.as_str()).unwrap()]
         } else {
             ""
         };
@@ -1052,7 +1056,7 @@ impl Parser {
         if !std::path::Path::new(&f).exists() {
             f = format!("{}/{id}.loft", &cur_script[0..cur_script.len() - 5]);
         }
-        // - extra library directories from --lib / --project command-line flags
+        // - extra library directories from --lib / --project command-line flags (single-file)
         if !std::path::Path::new(&f).exists() {
             for l in &self.lib_dirs {
                 let candidate = format!("{l}/{id}.loft");
@@ -1062,14 +1066,36 @@ impl Parser {
                 }
             }
         }
-        // - a user-defined lib directory (externally downloaded)
+        // step 7c: packaged layout (<dir>/<id>/src/<id>.loft) in lib_dirs
+        if !std::path::Path::new(&f).exists() {
+            let lib_dirs = self.lib_dirs.clone();
+            for l in &lib_dirs {
+                if let Some(entry) = self.lib_path_manifest(l, id) {
+                    f = entry;
+                    break;
+                }
+            }
+        }
+        // - a user-defined lib directory (externally downloaded), single-file
         if !std::path::Path::new(&f).exists()
             && let Some(v) = env::var_os("LOFT_LIB")
         {
-            let libs = v.to_str().unwrap();
-            for l in libs.split(':') {
-                f = format!("{l}/{id}.loft");
-                if std::path::Path::new(&f).exists() {
+            for l in env::split_paths(&v) {
+                let candidate = l.join(format!("{id}.loft"));
+                if candidate.exists() {
+                    f = candidate.to_string_lossy().replace(other_sep(), sep_str());
+                    break;
+                }
+            }
+        }
+        // step 7d: packaged layout in LOFT_LIB
+        if !std::path::Path::new(&f).exists()
+            && let Some(v) = env::var_os("LOFT_LIB")
+        {
+            for l in env::split_paths(&v) {
+                let l = l.to_string_lossy().replace(other_sep(), sep_str());
+                if let Some(entry) = self.lib_path_manifest(&l, id) {
+                    f = entry;
                     break;
                 }
             }
@@ -1083,6 +1109,44 @@ impl Parser {
             f = format!("{base_dir}/{id}.loft");
         }
         f
+    }
+
+    /// Check whether `<dir>/<id>` contains a valid loft package layout.
+    /// Reads `loft.toml` when present and validates the interpreter version
+    /// requirement.  Emits a fatal diagnostic on version mismatch.
+    /// Returns `Some(entry_path)` when the layout exists and the version passes,
+    /// `None` otherwise.
+    fn lib_path_manifest(&mut self, dir: &str, id: &str) -> Option<String> {
+        let pkg_dir = format!("{dir}/{id}");
+        if !std::path::Path::new(&pkg_dir).is_dir() {
+            return None;
+        }
+        let manifest_path = format!("{pkg_dir}/loft.toml");
+        let entry = if std::path::Path::new(&manifest_path).exists() {
+            let m = manifest::read_manifest(&manifest_path)?;
+            if let Some(ref req) = m.loft_version {
+                let current = env!("CARGO_PKG_VERSION");
+                if !manifest::check_version(req, current) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Fatal,
+                        "Package '{id}' requires loft {req} but interpreter is {current}"
+                    );
+                    return None;
+                }
+            }
+            m.entry.map_or_else(
+                || format!("{pkg_dir}/src/{id}.loft"),
+                |e| format!("{pkg_dir}/{e}"),
+            )
+        } else {
+            format!("{pkg_dir}/src/{id}.loft")
+        };
+        if std::path::Path::new(&entry).exists() {
+            Some(entry)
+        } else {
+            None
+        }
     }
 
     // Determine if there need to be special enum functions that call enum_value variants.

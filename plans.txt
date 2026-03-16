@@ -34,16 +34,3 @@ evaluate a debug mode where the stack is predefined with a specific complex patt
 Keep the "Format" class usable in user code. Even think about "File".
 - Part of library name spacing?
 
-
-Development:
-- create a branch per planning step
-- do all the development to fix the issue on a single commit, unit tests and changes combined
-  . validate this new code against the CODE.md standards, but do not solve number of lines or code complexity issues due to their disruptive nature of the other code
-- when the tests eventually all succeed rebase the current commit
-  . first commit the tests with failing tests on ignore
-  . the commit the actual changes to the code, split it in multiple commits when multiple parts of the project are involved
-  . then undo the ignores on the tests in a commit
-  . now commit the structure changes due to size or complexity of the code
-  . now commit the documentation changes
-- validate this branch via the CI infrastructure
-

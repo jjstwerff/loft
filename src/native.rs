@@ -20,6 +20,7 @@ use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 use crate::ops;
 use crate::parallel::{WorkerProgram, run_parallel_int, run_parallel_raw};
+use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
 use std::sync::Arc;
@@ -75,6 +76,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_rand_indices", n_rand_indices),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
+    ("n_path_sep", n_path_sep),
 ];
 
 pub fn init(state: &mut State) {
@@ -784,4 +786,10 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let micros = stores.start_time.elapsed().as_micros() as i64;
     stores.put(stack, micros);
+}
+
+/// Return the platform path separator as a loft `character`.
+/// `'\\'` on Windows filesystems, `'/'` everywhere else.
+fn n_path_sep(stores: &mut Stores, stack: &mut DbRef) {
+    stores.put(stack, sep());
 }

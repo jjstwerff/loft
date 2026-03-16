@@ -74,7 +74,7 @@ impl Store {
     /// Total capacity of this store in bytes.
     #[must_use]
     pub fn byte_capacity(&self) -> u64 {
-        self.size as u64 * 8
+        u64::from(self.size) * 8
     }
 
     pub fn new(size: u32) -> Store {

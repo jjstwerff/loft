@@ -317,7 +317,7 @@ default namespace-safe behaviour.
 **Symptom:** Trying to iterate a sorted collection in reverse order panicked.
 
 **Fix:** Three-part change:
-1. `src/parser.rs` — `parse_in_range()` recognises `rev(sorted_var)` (no `..`):
+1. `src/parser/collections.rs` — `parse_in_range()` recognises `rev(sorted_var)` (no `..`):
    consumes the closing `)`, sets `self.reverse_iterator = true`.  The flag is also
    cleared in the first-pass early return of `iterator()` to prevent it from leaking
    across passes.  `fill_iter()` reads the flag on both its calls (OpIterate + OpStep)
@@ -328,7 +328,7 @@ default namespace-safe behaviour.
    "not started" sentinel for reverse) initialises to `length - 1`.  Also fixed a
    pre-existing overflow in `sorted_find()` when the sorted collection is empty
    (`sorted_rec == 0` or `length == 0` now return `(0, false)` early).
-3. `src/state.rs` — `step()` for `on & 63 == 2` (sorted): calls `vector_step_rev`
+3. `src/fill.rs` — `step()` for `on & 63 == 2` (sorted): calls `vector_step_rev`
    when `reverse` is set; stops when `pos == i32::MAX` (returned by `vector_step_rev`
    when the beginning has been passed).
 
@@ -481,11 +481,11 @@ a phantom element accessible via the stale root pointer.
 ### ~~35. `index` loop-remove panics "Unknown record" for large N~~ **FIXED 2026-03-14**
 
 **Root cause (two-part):**
-1. In `fill_iter()` (`src/parser.rs`), for Index collections (`on=1`), `loop_db_tp` was
+1. In `fill_iter()` (`src/parser/collections.rs`), for Index collections (`on=1`), `loop_db_tp` was
    set to `arg = database.fields(known)` (the byte offset of the RB-tree metadata field)
    instead of `known` (the Index type index).  The OpRemove bytecode therefore received a
    field-offset value as its `tp` argument.
-2. In `state::remove()` (`src/state.rs`) for `on==1`, `tp` was used in
+2. In `state::remove()` (`src/fill.rs`) for `on==1`, `tp` was used in
    `self.database.size(tp)` (treating the offset as a type index) to create the `DbRef`
    for `tree::next/previous`.  The wrong `.pos` value caused `tree::next` to read the
    right-child pointer from the wrong offset, returning a garbage record number.  The next
@@ -507,13 +507,13 @@ a phantom element accessible via the stale root pointer.
 ### ~~36. Enum debug display panics with index out of bounds~~ **FIXED 2026-03-15**
 
 **Symptom:** Running any loft program that uses an enum field in debug mode (`file_debug`
-or `LOFT_LOG=full`) panicked at `src/database.rs`:
+or `LOFT_LOG=full`) panicked at `src/database/format.rs`:
 
 ```
 index out of bounds: the len is 5 but the index is 7
 ```
 
-**Root cause:** In `database.rs`, the debug display for `Parts::Enum` variants computed
+**Root cause:** In `database/format.rs`, the debug display for `Parts::Enum` variants computed
 `v as usize - 1` unconditionally before checking that `v > 0`, causing unsigned subtraction
 overflow when `v == 0`. When `v > 0` but out of the enum's range (e.g. a garbage byte read
 from an uninitialized region), the unchecked index caused a panic.

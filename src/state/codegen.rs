@@ -446,6 +446,7 @@ impl State {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_call(
         &mut self,
         stack: &mut Stack,

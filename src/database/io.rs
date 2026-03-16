@@ -269,7 +269,9 @@ impl Stores {
             let mut res = BTreeMap::new();
             for entry in iter.flatten() {
                 if let Some(name) = entry.path().to_str() {
-                    res.insert(name.to_string(), entry);
+                    // Normalise to forward slashes so loft paths are consistent on
+                    // all platforms (Windows returns backslash-separated paths).
+                    res.insert(name.replace('\\', "/"), entry);
                 } else {
                     return false;
                 }

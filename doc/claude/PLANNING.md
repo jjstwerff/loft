@@ -48,7 +48,7 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 R1 — see Quick Reference for full details
 
 **1.0 target items** (include if time allows; 1.1 if not):
-T1-2, T1-4, T2-0, T2-11 — see Quick Reference for full details
+T1-2, T1-4, T2-0 — see Quick Reference for full details
 
 **Explicitly 1.1+**:
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T2-13, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
@@ -420,27 +420,6 @@ for x in items {    // Warning: loop variable 'x' shadows outer variable 'x'
 
 ---
 
-### T2-11  External library package layout
-**Sources:** [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 1
-**Severity:** Medium — reusable multi-file libraries cannot be shipped as a self-contained
-directory today; users must manually configure `--lib` or `LOFT_LIB` with no standard layout
-**Description:** Support a packaged directory layout for pure-loft libraries:
-```
-mylib/
-  loft.toml     # [package] name, version, loft = ">=1.0"; [library] entry = "src/mylib.loft"
-  src/
-    mylib.loft  # public API
-```
-`use mylib;` finds `<dir>/mylib/src/mylib.loft` (in addition to the existing `<dir>/mylib.loft`
-fallback).  A minimal `loft.toml` reader checks the `loft = ">=X.Y"` version requirement and
-fails fast with a clear diagnostic on mismatch.
-**Fix path:**
-1. `src/parser/mod.rs` — extend `lib_path()` with steps 7c/7d for `<dir>/<id>/src/<id>.loft`.
-2. `src/manifest.rs` (new) — minimal line-scanner for `loft.toml`; version requirement check.
-**Effort:** Small (2 files, no runtime changes)
-**Target:** 1.0 target
-
----
 
 ### T2-13  Empty `[]` literal unusable as a direct mutable vector argument
 **Sources:** PROBLEMS #44
@@ -592,7 +571,7 @@ Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl
 **Fix path:** See [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2 (7 files; new `libloading`
 optional dependency; new `plugin-api` workspace member).
 **Effort:** High (parser, compiler, extensions loader, plugin API crate)
-**Depends on:** T2-11
+**Depends on:** —
 **Target:** 1.1+
 
 ---
@@ -759,7 +738,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T2-8 | Expose `reverse`, `clear`, `insert` on vectors         | 2    | Low–Med   | 1.1     |            | Stdlib audit 2026-03-15    |
 | T2-9 | Missing return path for non-null return type            | 2    | Medium    | 1.1     |            | Warnings audit 2026-03-15  |
 | T2-10 | Variable shadowing                                    | 2    | Small     | 1.1+    |            | Warnings audit 2026-03-15  |
-| T2-11 | External library package layout (`loft.toml`)         | 2    | Small     | 1.0 tgt |            | EXTERNAL_LIBS.md Ph1       |
 | T2-12 | Bytecode cache (`.loftc`, skip recompile on rerun)    | 2    | Medium    | 1.1     |            | BYTECODE_CACHE.md          |
 | T2-13 | Empty `[]` literal unusable as direct mutable vector arg | 2  | Medium    | 1.1     |            | PROBLEMS #44               |
 | T3-1 | Parallel workers: extra args + text/ref returns         | 3    | High      | 1.1+    |            | THREADING deferred         |
@@ -769,7 +747,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-5 | Closure capture for lambdas                             | 3    | Very High | 2.0     | T2-1       | Depends on T2-1            |
 | T3-6 | Redundant `const` parameter annotation                  | 3    | Small–Med | 1.1+    |            | Warnings audit 2026-03-15  |
 | T3-7 | Stack slot `assign_slots` pre-pass (arch cleanup)       | 3    | High      | 1.1+    |            | ASSIGNMENT.md Steps 3+4    |
-| T3-8 | Native extension libraries (`cdylib` + `#native`)       | 3    | High      | 1.1+    | T2-11      | EXTERNAL_LIBS.md Ph2       |
+| T3-8 | Native extension libraries (`cdylib` + `#native`)       | 3    | High      | 1.1+    | —          | EXTERNAL_LIBS.md Ph2       |
 | R1   | Create standalone `loft` GitHub repository          | R    | Trivial   | **1.0** |            | Extraction plan            |
 | R6   | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1–R5      | Extraction plan            |
 | W1   | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6        | WEB_IDE.md M1              |
@@ -791,7 +769,7 @@ _Note: W2 and W4 can be developed in parallel once W1 is complete; W3 and W5 can
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs and workarounds
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design asymmetries and surprises
 - [ASSIGNMENT.md](ASSIGNMENT.md) — Stack slot assignment status (T3-7 detail)
-- [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — External library packaging design (T2-11, T3-8)
+- [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — External library packaging design (T3-8 Phase 2)
 - [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — Bytecode cache design (T2-12)
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process, quality gates, scope rules, and backwards compatibility
 - [THREADING.md](THREADING.md) — Parallel for-loop design (T3-1 detail)
