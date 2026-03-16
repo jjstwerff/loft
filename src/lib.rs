@@ -32,6 +32,7 @@ pub mod state;
 pub mod compile;
 pub mod log_config;
 pub mod logger;
+pub mod manifest;
 mod stack;
 
 pub mod documentation;

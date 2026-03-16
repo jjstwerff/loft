@@ -14,6 +14,7 @@ mod keys;
 mod lexer;
 mod log_config;
 mod logger;
+mod manifest;
 mod native;
 mod ops;
 mod parallel;

@@ -1,0 +1,7 @@
+[package]
+name    = "testpkg"
+version = "0.1.0"
+loft    = ">=0.1"
+
+[library]
+entry = "src/testpkg.loft"

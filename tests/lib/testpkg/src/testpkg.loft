@@ -1,0 +1,4 @@
+// Test package for T2-11 package layout discovery.
+pub fn testpkg_answer() -> integer {
+    42
+}

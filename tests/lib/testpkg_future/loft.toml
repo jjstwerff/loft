@@ -1,0 +1,4 @@
+[package]
+name    = "testpkg_future"
+version = "99.0.0"
+loft    = ">=99.0"

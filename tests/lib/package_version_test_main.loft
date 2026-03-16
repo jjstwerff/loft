@@ -1,0 +1,4 @@
+// Integration test for T2-11: version mismatch should be a fatal error.
+use testpkg_future;
+
+fn main() {}
