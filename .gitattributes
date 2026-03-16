@@ -1,0 +1,11 @@
+# Enforce LF line endings for all text files so that include_str! returns \n
+# on every platform and loft --format-check is stable across OSes.
+* text=auto eol=lf
+*.loft text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
