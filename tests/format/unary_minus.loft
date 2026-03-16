@@ -1,0 +1,7 @@
+fn test() {
+  a = -5;
+  b = -x + 3;
+  c = -x - -y;
+  assert(abs(-7) == 7, "abs negative");
+  assert(-5 + 5 == 0, "unary minus in expression");
+}

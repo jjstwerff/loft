@@ -1,0 +1,5 @@
+// top-level comment
+fn add(a: integer, b: integer) -> integer {
+  // body comment
+  return a + b;
+}

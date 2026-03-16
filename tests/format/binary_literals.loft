@@ -1,0 +1,7 @@
+fn test() {
+  assert(0b1010 & 0b1100 == 0b1000, "bitwise and");
+  assert(0b1010 | 0b1100 == 0b1110, "bitwise or");
+  assert(0b1010 ^ 0b1100 == 0b0110, "bitwise xor");
+  assert(0x2a == 42, "hex literal");
+  assert(0xDEAD == 57005, "hex upper");
+}
