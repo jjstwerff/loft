@@ -410,7 +410,7 @@ fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
 // Extra arguments are validated at compile time (arg count must match the
 // worker's parameter list) but are NOT forwarded to the worker at runtime.
 // These tests are #[ignore]-d until the feature is implemented.
-// See PLANNING.md T3-2.
+// See PLANNING.md T3-1.
 // ---------------------------------------------------------------------------
 
 /// Desired: `parallel_for(fn scale, items, threads, multiplier)` where
@@ -418,7 +418,7 @@ fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
 /// Currently the parser accepts this (arg count matches) but the runtime
 /// ignores `m`, producing wrong results.
 #[test]
-#[ignore = "T3-2: extra context args not yet forwarded to workers at runtime"]
+#[ignore = "T3-1: extra context args not yet forwarded to workers at runtime"]
 fn parallel_extra_integer_context_arg() {
     let code = r#"
 struct Item { value: integer }
@@ -440,7 +440,7 @@ fn test() {
 /// `fn fused(r: const Item, offset: integer, scale: integer) -> integer`
 /// Should compute `r.value * scale + offset` for each element.
 #[test]
-#[ignore = "T3-2: extra context args not yet forwarded to workers at runtime"]
+#[ignore = "T3-1: extra context args not yet forwarded to workers at runtime"]
 fn parallel_two_context_args() {
     let code = r#"
 struct Item { value: integer }
