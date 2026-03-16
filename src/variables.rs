@@ -44,6 +44,8 @@ pub struct Variable {
     scope: u16,
     stack_pos: u16,
     uses: u16,
+    uses_at_write: u16,
+    write_source: (u32, u32),
     argument: bool,
     defined: bool,
     const_param: bool,
@@ -437,6 +439,57 @@ impl Function {
         self.variables[var_nr as usize].defined = true;
     }
 
+    /// Check for dead assignment (overwritten before read) and update write tracking.
+    /// Call this on every `=` assignment to a user variable during the second pass.
+    pub fn track_write(&mut self, var_nr: u16, lexer: &mut Lexer) {
+        let var = &self.variables[var_nr as usize];
+        if var.name.starts_with('_') || var.name.contains('#') || var.const_param {
+            return;
+        }
+        if var.write_source != (0, 0) && var.uses == var.uses_at_write {
+            // Variable was written before but not read since — dead assignment
+            let name = var.name.clone();
+            let prev_source = var.write_source;
+            lexer.to(prev_source);
+            diagnostic!(
+                lexer,
+                Level::Warning,
+                "Dead assignment — '{}' is overwritten before being read",
+                name,
+            );
+        }
+        let var = &mut self.variables[var_nr as usize];
+        var.uses_at_write = var.uses;
+        var.write_source = lexer.at();
+    }
+
+    /// Save write-tracking state for all variables, then clear pending writes.
+    /// Call before entering a branch — the branch should not see pre-branch writes
+    /// as "unread" because the branch might not execute.
+    pub fn save_and_clear_write_state(&self) -> Vec<(u16, (u32, u32))> {
+        self.variables
+            .iter()
+            .map(|v| (v.uses_at_write, v.write_source))
+            .collect()
+    }
+
+    /// Restore write-tracking state for all variables (call after leaving a branch).
+    pub fn restore_write_state(&mut self, state: &[(u16, (u32, u32))]) {
+        for (i, (uses_at_write, write_source)) in state.iter().enumerate() {
+            if i < self.variables.len() {
+                self.variables[i].uses_at_write = *uses_at_write;
+                self.variables[i].write_source = *write_source;
+            }
+        }
+    }
+
+    /// Clear all pending write tracking (no variable has an "unread write").
+    pub fn clear_write_state(&mut self) {
+        for v in &mut self.variables {
+            v.write_source = (0, 0);
+        }
+    }
+
     pub fn exists(&self, var_nr: u16) -> bool {
         var_nr < self.variables.len() as u16
     }
@@ -499,6 +552,8 @@ impl Function {
             scope: u16::MAX,
             stack_pos: u16::MAX,
             uses: 1,
+            uses_at_write: 0,
+            write_source: (0, 0),
             argument: false,
             defined: self.variables[var as usize].defined,
             const_param: self.variables[var as usize].const_param,
@@ -520,6 +575,8 @@ impl Function {
             scope: u16::MAX,
             stack_pos: u16::MAX,
             uses: 1,
+            uses_at_write: 0,
+            write_source: (0, 0),
             argument: false,
             defined: false,
             const_param: false,
@@ -538,6 +595,8 @@ impl Function {
             scope,
             stack_pos: u16::MAX,
             uses: 1,
+            uses_at_write: 0,
+            write_source: (0, 0),
             argument: false,
             defined: true,
             const_param: false,

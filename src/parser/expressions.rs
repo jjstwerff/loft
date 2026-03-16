@@ -285,6 +285,7 @@ use a separate collection or add after the loop"
     /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)] // +5 lines from dead-assignment check (T1-9)
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,
@@ -300,6 +301,11 @@ use a separate collection or add after the loop"
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         if let Type::Rewritten(tp) = s_type {
             s_type = *tp;
+        }
+        // Dead assignment check: after the RHS is parsed (so RHS reads of the
+        // variable are already counted), check if the previous write was never read.
+        if op == "=" && var_nr != u16::MAX && !self.first_pass && self.vars.exists(var_nr) {
+            self.vars.track_write(var_nr, &mut self.lexer);
         }
         // An untyped null literal (`null` keyword) produces Type::Null with Value::Null.
         // For scalar field assignments (e.g. `self.cur_def = null`), convert it to the

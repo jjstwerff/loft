@@ -85,6 +85,13 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-9** — Dead assignment warning. `x = 1; x = 2` now warns "Dead assignment —
+  'x' is overwritten before being read" when a variable is assigned and then
+  reassigned without any intervening read. Underscore-prefixed (`_x`) and `const`
+  variables are exempt. Write tracking is saved/restored across `if`/`else`, `match`,
+  and `for` boundaries to avoid false positives in branches and loops. Nine tests
+  in `tests/expressions.rs`. (2026-03-16)
+
 - **T1-10** — Unused loop variable warning. `for i in 0..10 { total += 1 }` now
   warns "Variable i is never read" when the loop variable is not referenced in
   the body. Prefix with `_` (e.g. `for _i in`) to suppress. Also fixed:
