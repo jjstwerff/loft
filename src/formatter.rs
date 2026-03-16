@@ -728,16 +728,37 @@ impl Fmt {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Format loft source code and return the formatted string.
+///
+/// Always outputs LF (`\n`) line endings regardless of the input line ending
+/// style.  CRLF inputs are normalised before scanning.
 #[must_use]
 pub fn format_source(source: &str) -> String {
-    let tokens = scan(source);
+    // Normalise CRLF → LF so the formatter output is always \n-only.
+    let owned;
+    let src: &str = if source.contains('\r') {
+        owned = source.replace('\r', "");
+        &owned
+    } else {
+        source
+    };
+    let tokens = scan(src);
     let mut fmt = Fmt::new();
     fmt.process(&tokens);
     fmt.out
 }
 
 /// Return `true` if the source is already in canonical format.
+///
+/// CRLF line endings are normalised before the comparison so that a file
+/// checked out with Windows line endings is treated the same as one with LF.
 #[must_use]
 pub fn check_source(source: &str) -> bool {
-    format_source(source) == source
+    let owned;
+    let src: &str = if source.contains('\r') {
+        owned = source.replace('\r', "");
+        &owned
+    } else {
+        source
+    };
+    format_source(src) == src
 }
