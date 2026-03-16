@@ -20,7 +20,34 @@ use std::env;
 use std::fs::{File, metadata, read_dir};
 use std::io::Write;
 use std::string::ToString;
+use std::sync::OnceLock;
 use typedef::complete_definition;
+
+/// Platform path separator, detected once at startup via [`std::path::MAIN_SEPARATOR`].
+/// `'\\'` on Windows filesystems, `'/'` everywhere else.
+/// Use this single token throughout instead of probing for both `'/'` and `'\\'`.
+static SEP: OnceLock<bool> = OnceLock::new();
+
+/// Returns `true` when the runtime filesystem uses `'\\'` (Windows).
+fn is_windows_fs() -> bool {
+    *SEP.get_or_init(|| std::path::MAIN_SEPARATOR == '\\')
+}
+
+/// Platform path separator as a `char`: `'\\'` on Windows, `'/'` elsewhere.
+fn sep() -> char {
+    if is_windows_fs() { '\\' } else { '/' }
+}
+
+/// The separator that is *not* native to this platform, as a `&str`.
+/// Used to normalise incoming paths that may carry the foreign separator.
+fn other_sep() -> &'static str {
+    if is_windows_fs() { "/" } else { "\\" }
+}
+
+/// Platform separator as a `&str`, for use as the replacement in `str::replace`.
+fn sep_str() -> &'static str {
+    if is_windows_fs() { "\\" } else { "/" }
+}
 
 /**
 The number of defined reserved text worker variables. A worker variable is needed when
@@ -249,7 +276,8 @@ impl Parser {
     }
 
     fn output(&mut self, f: &str, types: usize, from: u32) -> std::io::Result<()> {
-        let file = f.rsplit(['/', '\\']).next().unwrap_or(f);
+        let f_norm = f.replace(other_sep(), sep_str());
+        let file = f_norm.rsplit(sep()).next().unwrap_or(f);
         let to = format!("tests/dumps/{file}.txt");
         let _ = std::fs::create_dir_all("tests/dumps");
         if let Ok(mut w) = File::create(to.clone()) {
@@ -1028,17 +1056,17 @@ impl Parser {
         }
         // Clone the file path so it is owned; slices of it won't borrow `self`,
         // allowing &mut self calls (lib_path_manifest) later in this method.
-        // Normalise to forward slashes so that all string operations below work
-        // identically on Windows (which may supply backslash-separated paths)
-        // and on Unix.  Windows accepts forward slashes in all file API calls.
-        let cur_script = self.lexer.pos().file.replace('\\', "/");
-        let cur_dir = if let Some(p) = cur_script.rfind('/') {
+        // Normalise to the platform separator (sep()) so that rfind / contains
+        // use a single token rather than probing for both '/' and '\\'.
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = if let Some(p) = cur_script.rfind(sep()) {
             &cur_script[0..p]
         } else {
             ""
         };
-        let base_dir = if cur_dir.contains("/tests/") {
-            &cur_dir[..cur_dir.find("/tests/").unwrap()]
+        let tests_infix = format!("{0}tests{0}", sep());
+        let base_dir = if cur_dir.contains(tests_infix.as_str()) {
+            &cur_dir[..cur_dir.find(tests_infix.as_str()).unwrap()]
         } else {
             ""
         };
@@ -1081,7 +1109,7 @@ impl Parser {
             for l in env::split_paths(&v) {
                 let candidate = l.join(format!("{id}.loft"));
                 if candidate.exists() {
-                    f = candidate.to_string_lossy().replace('\\', "/");
+                    f = candidate.to_string_lossy().replace(other_sep(), sep_str());
                     break;
                 }
             }
@@ -1091,7 +1119,7 @@ impl Parser {
             && let Some(v) = env::var_os("LOFT_LIB")
         {
             for l in env::split_paths(&v) {
-                let l = l.to_string_lossy().replace('\\', "/");
+                let l = l.to_string_lossy().replace(other_sep(), sep_str());
                 if let Some(entry) = self.lib_path_manifest(&l, id) {
                     f = entry;
                     break;
