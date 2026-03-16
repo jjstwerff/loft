@@ -197,6 +197,141 @@ fn null_coerce_chain_first_non_null() {
     );
 }
 
+/// Dead assignment: variable overwritten before first read.
+#[test]
+fn dead_assignment_basic() {
+    code!(
+        "fn test() {
+    x = 1;
+    x = 2;
+    assert(x == 2, \"x\");
+}"
+    )
+    .warning(
+        "Dead assignment — 'x' is overwritten before being read at dead_assignment_basic:2:11",
+    );
+}
+
+/// No dead assignment when variable is read between writes.
+#[test]
+fn dead_assignment_read_between() {
+    code!(
+        "fn test() {
+    x = 1;
+    assert(x == 1, \"x\");
+    x = 2;
+    assert(x == 2, \"x\");
+}"
+    );
+}
+
+/// Dead assignment: underscore-prefixed variable is exempt.
+#[test]
+fn dead_assignment_underscore_exempt() {
+    code!(
+        "fn test() {
+    _x = 1;
+    _x = 2;
+    assert(_x == 2, \"x\");
+}"
+    );
+}
+
+/// Dead assignment: += is not a dead write (it reads the variable).
+#[test]
+fn dead_assignment_augmented_not_dead() {
+    code!(
+        "fn test() {
+    x = 1;
+    x += 2;
+    assert(x == 3, \"x\");
+}"
+    );
+}
+
+/// Dead assignment: conditional update after initialization is not dead.
+#[test]
+fn dead_assignment_branch_not_dead() {
+    code!(
+        "fn test() {
+    result = 0;
+    if true {
+        result = 42;
+    };
+    assert(result == 42, \"result\");
+}"
+    );
+}
+
+/// Dead assignment: writes in sibling branches do not warn each other.
+#[test]
+fn dead_assignment_sibling_branches() {
+    code!(
+        "fn test() {
+    x = 0;
+    if true {
+        x = 1;
+    } else {
+        x = 2;
+    };
+    assert(x > 0, \"x\");
+}"
+    );
+}
+
+/// Dead assignment: parameter reassignment in branches does not warn.
+#[test]
+fn dead_assignment_param_branch() {
+    code!(
+        "enum State { Start, Ongoing, Halt }
+fn step(s: State) -> State {
+    if s == Start {
+        s = Ongoing;
+    } else {
+        s = Halt;
+    };
+    s
+}
+fn test() {
+    assert(step(Start) == Ongoing, \"step\");
+}"
+    );
+}
+
+/// Dead assignment: initialization before loop is not dead.
+#[test]
+fn dead_assignment_loop_init() {
+    code!(
+        "fn test() {
+    sum = 0;
+    for i in 1..4 {
+        sum = sum + i;
+    };
+    assert(sum == 6, \"sum\");
+}"
+    );
+}
+
+/// Dead assignment: match arm writes do not trigger across arms.
+#[test]
+fn dead_assignment_match_arms() {
+    code!(
+        "enum Color { Red, Green, Blue }
+fn label(c: Color) -> integer {
+    result = 0;
+    match c {
+        Red => result = 1
+        Green => result = 2
+        Blue => result = 3
+    };
+    result
+}
+fn test() {
+    assert(label(Red) == 1, \"red\");
+}"
+    );
+}
+
 /// Chaining: first two are null, third is non-null.
 #[test]
 fn null_coerce_chain_last_non_null() {
