@@ -1,629 +1,674 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-
 use lexer;
 use logger;
 use code;
-
 struct SourceFile {
-    path: text,
-    done: boolean
+  path: text,
+  done: boolean
 }
 
 struct Operator {
-    op: text,
-    prio: u16
+  op: text,
+  prio: u16
 }
 
 struct Parser {
-    file: vector<SourceFile>,
-    lexer: lexer::Lexer,
-    log: logger::Log,
-    code: code::Code,
-    cur_file: integer default(0),
-    operators: hash<Operator[op]>
+  file: vector < SourceFile >,
+  lexer: lexer::Lexer,
+  log: logger::Log,
+  code: code::Code,
+  cur_file: integer default(0),
+  operators: hash < Operator[op] >
 }
 
 struct FormatSpec {
-    token: text default("0"),
-    special_layout: boolean,
-    dir: i16 default(2),
-    plus: boolean,
-    is_float: boolean,
-    radix: u8 default(10),
-    size: i8 default(-1),
-    decimals: i8 default(-1)
+  token: text default("0"),
+  special_layout: boolean,
+  dir: i16 default(2),
+  plus: boolean,
+  is_float: boolean,
+  radix: u8 default(10),
+  size: i8 default(-1),
+  decimals: i8 default(-1)
 }
 
 pub fn parse(name: text, s: text) {
-    p = Parser {};
-    p.operators = [
-        { op: "*", prio: 1 }, { op: "/", prio: 1 }, { op: "%", prio: 1 },
-        { op: "+", prio: 2 }, { op: "-", prio: 2 },
-        { op: "<<", prio: 3 }, { op: ">>", prio: 3 }, { op: ">>>", prio: 3 },
-        { op: "&", prio: 4 },
-        { op: "^", prio: 5 },
-        { op: "|", prio: 6 },
-        { op: "==", prio: 7 }, { op: "!=", prio: 7 },
-        { op: "<", prio: 7 }, { op: "<=", prio: 7 }, { op: ">", prio: 7 }, { op: ">=", prio: 7 },
-        { op: "&&", prio: 8 }, { op: "and", prio: 8 },
-        { op: "||", prio: 9 }, { op: "or", prio: 9 },
-        { op: "..", prio: 10 }, { op: "..=", prio: 10 },
-        { op: "=", prio: 11 }, { op: "+=", prio: 11 }, { op: "-=", prio: 11 },
-        { op: "*=", prio: 11 }, { op: "/=", prio: 11 }, { op: "%=", prio: 11 },
-    ];
-    p.lexer.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
-    p.lexer.set_keywords([
-        "for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or", "true", "false", "null"
-    ]);
-    p.lexer.parse_file("default/01_code.lav");
-    p.cur_file += 1;
-    parse_file(p);
-    p.lexer.parse_string(name, s);
-    p.cur_file += 1;
-    parse_file(p);
+  p = Parser { };
+  p.operators =[
+ {op: "*", prio: 1 }, {op: "/", prio: 1 }, {op: "%", prio: 1 },
+ {op: "+", prio: 2 }, {op: "-", prio: 2 },
+ {op: "<<", prio: 3 }, {op: ">>", prio: 3 }, {op: ">>>", prio: 3 },
+ {op: "&", prio: 4 },
+ {op: "^", prio: 5 },
+ {op: "|", prio: 6 },
+ {op: "==", prio: 7 }, {op: "!=", prio: 7 },
+ {op: "<", prio: 7 }, {op: "<=", prio: 7 }, {op: ">", prio: 7 }, {op: ">=", prio: 7 },
+ {op: "&&", prio: 8 }, {op: "and", prio: 8 },
+ {op: "||", prio: 9 }, {op: "or", prio: 9 },
+ {op: "..", prio: 10 }, {op: "..=", prio: 10 },
+ {op: "=", prio: 11 }, {op: "+=", prio: 11 }, {op: "-=", prio: 11 },
+ {op: "*=", prio: 11 }, {op: "/=", prio: 11 }, {op: "%=", prio: 11 }
+  ];
+  p.lexer.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
+  p.lexer.set_keywords([
+  "for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or", "true", "false", "null"
+  ]);
+  p.lexer.parse_file("default/01_code.lav");
+  p.cur_file += 1;
+  parse_file(p);
+  p.lexer.parse_string(name, s);
+  p.cur_file += 1;
+  parse_file(p);
 }
-
 // <file> ::= { 'use' <identifier> ';' } { 'pub' ( <structure> | <def_enumerate> | <def_type> | <function> | <constant> ) }
-fn parse_file(self: Parser) {
-    for u in 0..100 {
-        if self.lexer.matches("use") {
-            self.lexer.identifier();
-            self.expect(";");
-        }
-    }
-    for x in 0..1000 {
-        if self.log.level == Fatal {
-            x#break;
-        }
-        public = self.lexer.matches("pub");
-        if self.structure(public) { x#continue; }
-        if self.def_enumerate(public) { x#continue; }
-        if self.def_type(public) { x#continue; }
-        if self.function(public) { x#continue; }
-        if self.constant(public) { x#continue; }
-    }
-}
 
-// <structure> :: 'struct' <identifier> '{' { <identifier> ':' <type> [ '=' <value> ] [ ',' ] } '}'
-fn structure(self: Parser, public: boolean) -> boolean {
-    if !self.lexer.matches("struct") {
-        return false;
+fn parse_file(self: Parser) {
+  for u in 0..100 {
+    if self.lexer.matches("use") {
+      self.lexer.identifier();
+      self.expect(";");
     }
-    id = self.lexer.identifier();
-    struct_nr = self.code.define(public, id, code::Struct, self.cur_file, self.lexer.get_line());
-    self.expect("{{");
-    for parameter in 0..256 {
-        if self.lexer.test("}}") {
-            parameter#break;
-        }
-        arg = self.lexer.identifier();
+  }
+  for x in 0..1000 {
+    if self.log.level == Fatal {
+      x# break;
+    }
+    public = self.lexer.matches("pub");
+    if self.structure(public) {
+      x# continue;
+    }
+    if self.def_enumerate(public) {
+      x# continue;
+    }
+    if self.def_type(public) {
+      x# continue;
+    }
+    if self.function(public) {
+      x# continue;
+    }
+    if self.constant(public) {
+      x# continue;
+    }
+  }
+}
+// <structure> :: 'struct' <identifier> '{' { <identifier> ':' <type> [ '=' <value> ] [ ',' ] } '}'
+
+fn structure(self: Parser, public: boolean) -> boolean {
+  if !self.lexer.matches("struct") {
+    return false;
+  }
+  id = self.lexer.identifier();
+  struct_nr = self.code.define(public, id, code::Struct, self.cur_file, self.lexer.get_line());
+  self.expect("{{");
+  for parameter in 0..256 {
+    if self.lexer.test("}}") {
+      parameter# break;
+    }
+    arg = self.lexer.identifier();
+    self.expect(":");
+    self.type_def(true);
+    self.code.cur_def = struct_nr;
+    self.code.argument(arg, 0);
+    if self.lexer.matches("=") {
+      self.value();
+    }
+    self.lexer.matches(",");
+  }
+  self.expect("}}");
+  true
+}
+// <def_enumerate> :: 'enum' <identifier> '{' { <identifier> [ '{' { <identifier> ':' <type> [ '=' <value ] } '}' ] [ ',' ] } '}'
+
+fn def_enumerate(self: Parser, _public: boolean) -> boolean {
+  if !self.lexer.matches("enum") {
+    return false;
+  }
+  self.lexer.identifier();
+  self.expect("{{");
+  for parameter in 0..256 {
+    self.lexer.identifier();
+    if self.lexer.matches("{{") {
+      for field in 0..256 {
+        self.lexer.identifier();
         self.expect(":");
         self.type_def(true);
-        self.code.cur_def = struct_nr;
-        self.code.argument(arg, 0);
         if self.lexer.matches("=") {
-            self.value();
+          self.value();
         }
-        self.lexer.matches(",");
-    }
-    self.expect("}}");
-    true
-}
-
-// <def_enumerate> :: 'enum' <identifier> '{' { <identifier> [ '{' { <identifier> ':' <type> [ '=' <value ] } '}' ] [ ',' ] } '}'
-fn def_enumerate(self: Parser, _public: boolean) -> boolean {
-    if !self.lexer.matches("enum") {
-        return false;
-    }
-    self.lexer.identifier();
-    self.expect("{{");
-    for parameter in 0..256 {
-        self.lexer.identifier();
-        if self.lexer.matches("{{") {
-            for field in 0..256 {
-                self.lexer.identifier();
-                self.expect(":");
-                self.type_def(true);
-                if self.lexer.matches("=") { self.value(); }
-                if self.lexer.matches(";") { field#continue; }
-                if self.lexer.test("}}") { field#break; }
-            }
-            self.expect("}}");
+        if self.lexer.matches(";") {
+          field# continue;
         }
-        if !self.lexer.matches(",") { parameter#break; }
-        if self.lexer.test("}}") { parameter#break; }
+        if self.lexer.test("}}") {
+          field# break;
+        }
+      }
+      self.expect("}}");
     }
-    self.expect("}}");
-    true
+    if !self.lexer.matches(",") {
+      parameter# break;
+    }
+    if self.lexer.test("}}") {
+      parameter# break;
+    }
+  }
+  self.expect("}}");
+  true
 }
-
 // <def_type> :: 'type' <identifier> '=' <type_def> [ 'size' '(' <integer> ')' ]
+
 fn def_type(self: Parser, _public: boolean) -> boolean {
-    if !self.lexer.matches("type") {
-        return false;
-    }
-    self.lexer.identifier();
-    if self.lexer.matches("=") {
-        self.type_def(false);
-    }
-    if self.lexer.matches("size") {
-        self.expect("(");
-        self.lexer.int();
-        self.expect(")");
-    }
-    self.expect(";");
-    true
-}
-
-// <function> ::= 'fn' <identifier> '(' { <parameter> [ ',' ] } ')' [ '->' <type_def> ] <block>
-fn function(self: Parser, _public: boolean) -> boolean {
-    if !self.lexer.matches("fn") {
-        return false;
-    }
-    self.lexer.identifier();
-    self.expect("(");
-    for parameter in 0..256 {
-        if self.lexer.test(")") {
-            parameter#break;
-        }
-        self.parameter();
-        if !self.lexer.matches(",") {
-            parameter#break;
-        }
-    }
-    self.expect(")");
-    if self.lexer.matches("->") {
-        self.type_def(false);
-    }
-    if self.lexer.matches(";") {
-        if self.lexer.matches("#") && self.lexer.matches("rust") {
-            self.lexer.constant_text();
-        }
-    } else {
-        self.block();
-    }
-    true
-}
-
-// <block> ::= '{' { ( <for_statement> | <return_statement> | <expression> ) [ ';' ] } '}'
-fn block(self: Parser) -> boolean {
-    if !self.lexer.matches("{{") {
-        return false;
-    }
-    for statement in 0..10000 {
-        if self.log.level == Fatal {
-            statement#break;
-        }
-        if !self.for_statement() and !self.return_statement() {
-            self.expression();
-        }
-        if !self.lexer.matches(";") {
-            statement#break;
-        }
-        if self.lexer.test("}}") {
-            statement#break;
-        }
-    }
-    self.expect("}}");
-    true
-}
-
-// <for_statement> :: = 'for' <identifier> 'in' <expression> <block>
-fn for_statement(self: Parser) -> boolean {
-    if !self.lexer.matches("for") {
-        return false;
-    }
-    self.lexer.identifier();
-    self.lexer.matches("in");
-    self.expression();
-    self.block();
-    true
-}
-
-// <return_statement> :: 'return' [ <expression> ]
-fn return_statement(self: Parser) -> boolean {
-    if !self.lexer.matches("return") {
-        return false;
-    }
-    self.expression();
-    true
-}
-
-// <expression> ::= <list> | <if_statement> | <object> | <block> | <do_operators>
-fn expression(self: Parser) -> boolean {
-    t = self.list();
-    if t {
-        return true;
-    }
-    t = self.if_statement();
-    if t {
-        return true;
-    }
-    t = self.object();
-    if t {
-        return true;
-    }
-    t = self.block();
-    if t {
-        return true;
-    }
-    self.do_operators()
-}
-
-// <list> ::= '[' ( <for_list> | { <expression> [ ',' ] } [ ';' <expression> ] ) ']'
-fn list(self: Parser) -> boolean {
-    if !self.lexer.matches("[") {
-        return false;
-    }
-    l = self.for_list();
-    if l {
-        self.expect("]");
-        return true;
-    }
-    for element in 0..10000 {
-        if self.lexer.test("]") || self.lexer.test(";") {
-            element#break;
-        }
-        l = self.expression();
-        if self.lexer.matches(",") {
-            element#continue;
-        }
-    }
-    if self.lexer.matches(";") {
-        self.expression();
-    }
-    self.expect("]");
-    true
-}
-
-// <for_list> ::= 'for' <identifier> 'in' <expression> <block>
-fn for_list(self: Parser) -> boolean {
-    if !self.lexer.matches("for") {
-        return false;
-    }
-    self.lexer.identifier();
-    self.lexer.matches("in");
-    self.expression();
-    self.block();
-    true
-}
-
-// <if_statement> ::= 'if' <expression> <block> [ 'else' <block> ]
-fn if_statement(self: Parser) -> boolean {
-    if !self.lexer.matches("if") {
-        return false;
-    }
-    self.expression();
-    self.block();
-    if self.lexer.matches("else") {
-        self.block();
-    }
-    true
-}
-
-// <object> ::= '{' { <identifier> ':' <expression> [ ';' ] } '}'
-fn object(self: Parser) -> boolean {
-    before = self.lexer.anchor();
-    if !self.lexer.matches("{{") {
-        return false;
-    }
-    for field in 0..255 {
-        i = self.lexer.identifier();
-        if !i or !self.lexer.matches(":") {
-            self.lexer.revert(before);
-            return false;
-        }
-        self.expression();
-        if !self.lexer.matches(",") {
-            field#break;
-        }
-        if self.lexer.test("}}") {
-            field#break;
-        }
-    }
-    self.expect("}}");
-    true
-}
-
-// <do_operators> ::= <single_part> [ 'as' <type> ] { <operator> <single_part> [ 'as' <type> ] }
-fn do_operators(self: Parser) -> boolean {
-    if !self.single_part() {
-        return false;
-    }
-    if self.lexer.matches("as") {
-        self.type_def(false);
-    }
-    for do in 0..255 {
-        o = self.operators[self.lexer.peek()];
-        if !o {
-            do#break;
-        }
-        self.single_part();
-        if self.lexer.matches("as") {
-            self.type_def(false);
-        }
-    }
-    true
-}
-
-// <single_part> ::= [ '-' | '!' ] ('(' <expression> ')' | <id> { <fn_call> | <field> | <index> } | <value>)
-fn single_part(self: Parser) -> boolean {
-    if self.lexer.matches("-") {
-    } else if self.lexer.matches("!") {
-    }
-    if self.lexer.matches("(") {
-        self.expression();
-        self.expect(")");
-    } else {
-        t = self.id();
-        if t {
-            for part in 0..255 {
-                t = self.fn_call();
-                if t { part#continue; }
-                t = self.field();
-                if t { part#continue; }
-                t = self.index_def();
-                if t { part#continue; }
-            }
-        } else {
-            self.value();
-        }
-    }
-    true
-}
-
-// <id> ::= <identifier> [ '#' ( 'break' | 'continue' | 'count' | 'index' ) | <object> ]
-fn id(self: Parser) -> boolean {
-    name = self.lexer.identifier();
-    if !name {
-        return false;
-    }
-    if self.lexer.matches("#") {
-        if self.lexer.matches("break") {
-            return true;
-        }
-        if self.lexer.matches("continue") {
-            return true;
-        }
-        if self.lexer.matches("count") {
-            return true;
-        }
-        if self.lexer.matches("index") {
-            return true;
-        }
-    } else {
-        self.object();
-    }
-    true
-}
-
-// <fn_call> ::= '(' { <expression> [ ',' ] } ')'
-fn fn_call(self: Parser) -> boolean {
-    if !self.lexer.matches("(") {
-        return false;
-    }
-    for argument in 0..255 {
-        if self.lexer.test(")") {
-            argument#break;
-        }
-        self.expression();
-        if !self.lexer.matches(",") {
-            argument#break;
-        }
-    }
-    self.expect(")");
-    true
-}
-
-// <field> ::= '.' <identifier>
-fn field(self: Parser) -> boolean {
-    if !self.lexer.matches(".") {
-        return false;
-    }
-    self.lexer.identifier();
-    true
-}
-
-// <index> ::= '[' { <expression> [ ',' ] } ']'
-fn index_def(self: Parser) -> boolean {
-    if !self.lexer.matches("[") {
-        return false;
-    }
-    for key in 0..255 {
-        self.expression();
-        if !self.lexer.matches(",") {
-            key#break;
-        }
-        if self.lexer.test("}}") {
-            key#break;
-        }
-    }
-    self.expect("}}");
-    true
-}
-
-// <constant> :: <identifier> '=' <expression> ';'
-fn constant(self: Parser, _public: boolean) -> boolean {
-    n = self.lexer.identifier();
-    if !n {
-        return false;
-    }
-    self.expect("=");
-    self.expression();
-    self.expect(";");
-    true
-}
-
-// <parameter> ::= <identifier> ':' [ 'const' | '&' ] <type> [ '=' <value> ]
-fn parameter(self: Parser) {
-    p = self.lexer.identifier();
-    self.expect(":");
-    if self.lexer.matches("const") {
-    }
-    self.lexer.matches("&");
+  if !self.lexer.matches("type") {
+    return false;
+  }
+  self.lexer.identifier();
+  if self.lexer.matches("=") {
     self.type_def(false);
-    if self.lexer.matches("=") {
-        self.value();
-    }
+  }
+  if self.lexer.matches("size") {
+    self.expect("(");
+    self.lexer.int();
+    self.expect(")");
+  }
+  self.expect(";");
+  true
 }
+// <function> ::= 'fn' <identifier> '(' { <parameter> [ ',' ] } ')' [ '->' <type_def> ] <block>
 
+fn function(self: Parser, _public: boolean) -> boolean {
+  if !self.lexer.matches("fn") {
+    return false;
+  }
+  self.lexer.identifier();
+  self.expect("(");
+  for parameter in 0..256 {
+    if self.lexer.test(")") {
+      parameter# break;
+    }
+    self.parameter();
+    if !self.lexer.matches(",") {
+      parameter# break;
+    }
+  }
+  self.expect(")");
+  if self.lexer.matches("->") {
+    self.type_def(false);
+  }
+  if self.lexer.matches(";") {
+    if self.lexer.matches("#") && self.lexer.matches("rust") {
+      self.lexer.constant_text();
+    }
+  } else {
+    self.block();
+  }
+  true
+}
+// <block> ::= '{' { ( <for_statement> | <return_statement> | <expression> ) [ ';' ] } '}'
+
+fn block(self: Parser) -> boolean {
+  if !self.lexer.matches("{{") {
+    return false;
+  }
+  for statement in 0..10000 {
+    if self.log.level == Fatal {
+      statement# break;
+    }
+    if !self.for_statement() and !self.return_statement() {
+      self.expression();
+    }
+    if !self.lexer.matches(";") {
+      statement# break;
+    }
+    if self.lexer.test("}}") {
+      statement# break;
+    }
+  }
+  self.expect("}}");
+  true
+}
+// <for_statement> :: = 'for' <identifier> 'in' <expression> <block>
+
+fn for_statement(self: Parser) -> boolean {
+  if !self.lexer.matches("for") {
+    return false;
+  }
+  self.lexer.identifier();
+  self.lexer.matches("in");
+  self.expression();
+  self.block();
+  true
+}
+// <return_statement> :: 'return' [ <expression> ]
+
+fn return_statement(self: Parser) -> boolean {
+  if !self.lexer.matches("return") {
+    return false;
+  }
+  self.expression();
+  true
+}
+// <expression> ::= <list> | <if_statement> | <object> | <block> | <do_operators>
+
+fn expression(self: Parser) -> boolean {
+  t = self.list();
+  if t {
+    return true;
+  }
+  t = self.if_statement();
+  if t {
+    return true;
+  }
+  t = self.object();
+  if t {
+    return true;
+  }
+  t = self.block();
+  if t {
+    return true;
+  }
+  self.do_operators()
+}
+// <list> ::= '[' ( <for_list> | { <expression> [ ',' ] } [ ';' <expression> ] ) ']'
+
+fn list(self: Parser) -> boolean {
+  if !self.lexer.matches("[") {
+    return false;
+  }
+  l = self.for_list();
+  if l {
+    self.expect("]");
+    return true;
+  }
+  for element in 0..10000 {
+    if self.lexer.test("]") || self.lexer.test(";") {
+      element# break;
+    }
+    l = self.expression();
+    if self.lexer.matches(",") {
+      element# continue;
+    }
+  }
+  if self.lexer.matches(";") {
+    self.expression();
+  }
+  self.expect("]");
+  true
+}
+// <for_list> ::= 'for' <identifier> 'in' <expression> <block>
+
+fn for_list(self: Parser) -> boolean {
+  if !self.lexer.matches("for") {
+    return false;
+  }
+  self.lexer.identifier();
+  self.lexer.matches("in");
+  self.expression();
+  self.block();
+  true
+}
+// <if_statement> ::= 'if' <expression> <block> [ 'else' <block> ]
+
+fn if_statement(self: Parser) -> boolean {
+  if !self.lexer.matches("if") {
+    return false;
+  }
+  self.expression();
+  self.block();
+  if self.lexer.matches("else") {
+    self.block();
+  }
+  true
+}
+// <object> ::= '{' { <identifier> ':' <expression> [ ';' ] } '}'
+
+fn object(self: Parser) -> boolean {
+  before = self.lexer.anchor();
+  if !self.lexer.matches("{{") {
+    return false;
+  }
+  for field in 0..255 {
+    i = self.lexer.identifier();
+    if !i or !self.lexer.matches(":") {
+      self.lexer.revert(before);
+      return false;
+    }
+    self.expression();
+    if !self.lexer.matches(",") {
+      field# break;
+    }
+    if self.lexer.test("}}") {
+      field# break;
+    }
+  }
+  self.expect("}}");
+  true
+}
+// <do_operators> ::= <single_part> [ 'as' <type> ] { <operator> <single_part> [ 'as' <type> ] }
+
+fn do_operators(self: Parser) -> boolean {
+  if !self.single_part() {
+    return false;
+  }
+  if self.lexer.matches("as") {
+    self.type_def(false);
+  }
+  for do in 0..255 {
+    o = self.operators[self.lexer.peek()];
+    if !o {
+      do# break;
+    }
+    self.single_part();
+    if self.lexer.matches("as") {
+      self.type_def(false);
+    }
+  }
+  true
+}
+// <single_part> ::= [ '-' | '!' ] ('(' <expression> ')' | <id> { <fn_call> | <field> | <index> } | <value>)
+
+fn single_part(self: Parser) -> boolean {
+  if self.lexer.matches("-") {
+  } else if self.lexer.matches("!") {
+  }
+  if self.lexer.matches("(") {
+    self.expression();
+    self.expect(")");
+  } else {
+    t = self.id();
+    if t {
+      for part in 0..255 {
+        t = self.fn_call();
+        if t {
+          part# continue;
+        }
+        t = self.field();
+        if t {
+          part# continue;
+        }
+        t = self.index_def();
+        if t {
+          part# continue;
+        }
+      }
+    } else {
+      self.value();
+    }
+  }
+  true
+}
+// <id> ::= <identifier> [ '#' ( 'break' | 'continue' | 'count' | 'index' ) | <object> ]
+
+fn id(self: Parser) -> boolean {
+  name = self.lexer.identifier();
+  if !name {
+    return false;
+  }
+  if self.lexer.matches("#") {
+    if self.lexer.matches("break") {
+      return true;
+    }
+    if self.lexer.matches("continue") {
+      return true;
+    }
+    if self.lexer.matches("count") {
+      return true;
+    }
+    if self.lexer.matches("index") {
+      return true;
+    }
+  } else {
+    self.object();
+  }
+  true
+}
+// <fn_call> ::= '(' { <expression> [ ',' ] } ')'
+
+fn fn_call(self: Parser) -> boolean {
+  if !self.lexer.matches("(") {
+    return false;
+  }
+  for argument in 0..255 {
+    if self.lexer.test(")") {
+      argument# break;
+    }
+    self.expression();
+    if !self.lexer.matches(",") {
+      argument# break;
+    }
+  }
+  self.expect(")");
+  true
+}
+// <field> ::= '.' <identifier>
+
+fn field(self: Parser) -> boolean {
+  if !self.lexer.matches(".") {
+    return false;
+  }
+  self.lexer.identifier();
+  true
+}
+// <index> ::= '[' { <expression> [ ',' ] } ']'
+
+fn index_def(self: Parser) -> boolean {
+  if !self.lexer.matches("[") {
+    return false;
+  }
+  for key in 0..255 {
+    self.expression();
+    if !self.lexer.matches(",") {
+      key# break;
+    }
+    if self.lexer.test("}}") {
+      key# break;
+    }
+  }
+  self.expect("}}");
+  true
+}
+// <constant> :: <identifier> '=' <expression> ';'
+
+fn constant(self: Parser, _public: boolean) -> boolean {
+  n = self.lexer.identifier();
+  if !n {
+    return false;
+  }
+  self.expect("=");
+  self.expression();
+  self.expect(";");
+  true
+}
+// <parameter> ::= <identifier> ':' [ 'const' | '&' ] <type> [ '=' <value> ]
+
+fn parameter(self: Parser) {
+  p = self.lexer.identifier();
+  self.expect(":");
+  if self.lexer.matches("const") {
+  }
+  self.lexer.matches("&");
+  self.type_def(false);
+  if self.lexer.matches("=") {
+    self.value();
+  }
+}
 // <type_def> ::= <identifier> [ '<' { <type_def> [ '[' { [ '-' ] <identifier> [ ',' ] } ']'] [ ',' ] } '>' ] [ 'limit' '(' { <integer> [ ',' ] } ')' ]
+
 fn type_def(self: Parser, define: boolean) -> u16 {
-    id = self.lexer.identifier();
-    parameters = [];
-    fields = [];
-    if self.lexer.matches("<") {
-        id += "<";
-        for parameter in 0..256 {
-            p = self.type_def(false);
-            parameters += [p];
-            id += self.code.type_name(p);
-            if self.lexer.matches("[") {
-                id += "[";
-                for field in 0..256 {
-                    desc = self.lexer.matches("-");
-                    f = "";
-                    if desc {
-                        f = "-";
-                    }
-                    f += self.lexer.identifier();
-                    id += f;
-                    fields += [f];
-                    if !self.lexer.matches(",") {
-                        field#break;
-                    }
-                    id += ",";
-                }
-                self.expect("]");
-                id += "]";
-            }
-            if !self.lexer.matches(",") {
-                parameter#break;
-            }
-            id += ",";
-            if self.lexer.test(">") {
-                parameter#break;
-            }
+  id = self.lexer.identifier();
+  parameters =[];
+  fields =[];
+  if self.lexer.matches("<") {
+    id += "<";
+    for parameter in 0..256 {
+      p = self.type_def(false);
+      parameters +=[p];
+      id += self.code.type_name(p);
+      if self.lexer.matches("[") {
+        id += "[";
+        for field in 0..256 {
+          desc = self.lexer.matches("-");
+          f = "";
+          if desc {
+            f = "-";
+          }
+          f += self.lexer.identifier();
+          id += f;
+          fields +=[f];
+          if !self.lexer.matches(",") {
+            field# break;
+          }
+          id += ",";
         }
-        self.expect(">");
-        id += ">";
+        self.expect("]");
+        id += "]";
+      }
+      if !self.lexer.matches(",") {
+        parameter# break;
+      }
+      id += ",";
+      if self.lexer.test(">") {
+        parameter# break;
+      }
     }
-    if self.lexer.matches("limit") {
-        self.expect("(");
-        from = self.lexer.int();
-        self.expect(",");
-        till = self.lexer.int();
-        self.expect(")");
-        id += "{from}..{till}";
+    self.expect(">");
+    id += ">";
+  }
+  if self.lexer.matches("limit") {
+    self.expect("(");
+    from = self.lexer.int();
+    self.expect(",");
+    till = self.lexer.int();
+    self.expect(")");
+    id += "{from}..{till}";
+  }
+  t = self.code.get_type(id);
+  if !t && define {
+    self.code.define(false, id, code::TypeDef, self.cur_file, self.lexer.get_line());
+    for p in parameters {
+      self.code.field(null, p);
     }
-    t = self.code.get_type(id);
-    if !t && define {
-        self.code.define(false, id, code::TypeDef, self.cur_file, self.lexer.get_line());
-        for p in parameters {
-            self.code.field(null, p);
-        }
-        for f in fields {
-            self.code.field(f, 65535);
-        }
-        self.code.finish_define();
-        return self.code.get_type(id);
+    for f in fields {
+      self.code.field(f, 65535);
     }
-    return t;
+    self.code.finish_define();
+    return self.code.get_type(id);
+  }
+  return t;
 }
-
 // <value> ::= 'true' | 'false' | 'null' | <integer> | <long> | <float> | <single> | <constant_text> [ <formatting> ] | <character>
-fn value(self: Parser) -> boolean {
-    v = self.lexer.peek();
-    if v == "true" {
-        return true;
-    }
-    if v == "false" {
-        return true;
-    }
-    if v == "null" {
-        return true;
-    }
-    if self.lexer.int() {
-        return true;
-    }
-    if self.lexer.long_int() {
-        return true;
-    }
-    if self.lexer.get_float() {
-        return true;
-    }
-    if self.lexer.get_single() {
-        return true;
-    }
-    if self.lexer.constant_text() {
-        self.formatting();
-        return true;
-    }
-    if self.lexer.constant_character() {
-        return true;
-    }
-    false
-}
 
+fn value(self: Parser) -> boolean {
+  v = self.lexer.peek();
+  if v == "true" {
+    return true;
+  }
+  if v == "false" {
+    return true;
+  }
+  if v == "null" {
+    return true;
+  }
+  if self.lexer.int() {
+    return true;
+  }
+  if self.lexer.long_int() {
+    return true;
+  }
+  if self.lexer.get_float() {
+    return true;
+  }
+  if self.lexer.get_single() {
+    return true;
+  }
+  if self.lexer.constant_text() {
+    self.formatting();
+    return true;
+  }
+  if self.lexer.constant_character() {
+    return true;
+  }
+  false
+}
 // <formatting> :: { [ 'for' <id> 'in' <expression> [ 'if' <expression> ] | <expression> ] [ <flags> ] <constant_text> }
+
 fn formatting(self: Parser) {
-    for part in 0..256 {
-        if !self.lexer.is_formatting() {
-            return;
-        }
-        self.lexer.set_formatting(false);
-        if self.lexer.matches("for") {
-            self.lexer.identifier();
-            self.lexer.matches("in");
-            self.expression();
-            if self.lexer.matches("if") {
-                self.expression();
-            }
-            self.block();
-        } else {
-            self.expression();
-        }
-        self.flags();
-        self.lexer.set_formatting(true);
-        // force scanning of the next constant text
-        self.expect("}}");
-        c = self.lexer.constant_text();
-        if !c {
-            return;
-        }
+  for part in 0..256 {
+    if !self.lexer.is_formatting() {
+      return;
     }
+    self.lexer.set_formatting(false);
+    if self.lexer.matches("for") {
+      self.lexer.identifier();
+      self.lexer.matches("in");
+      self.expression();
+      if self.lexer.matches("if") {
+        self.expression();
+      }
+      self.block();
+    } else {
+      self.expression();
+    }
+    self.flags();
+    self.lexer.set_formatting(true);
+    // force scanning of the next constant text
+    self.expect("}}");
+    c = self.lexer.constant_text();
+    if !c {
+      return;
+    }
+  }
 }
 
 fn flags(self: Parser) {
-    format = FormatSpec {};
-    if !self.lexer.matches(":") {
-        return;
-    }
-    n = self.lexer.peek();
-    if n == "0" or n == "-" or n == "_" or n == "^" {
-        format.token = n;
-    }
-    if self.lexer.matches("<") { format.dir = -1; }
-    else if self.lexer.matches(">") { format.dir = 1; }
-    else if self.lexer.matches("^") { format.dir = 0; }
-    if self.lexer.matches("+") { format.plus = true; }
-    if self.lexer.matches("#") { format.special_layout = true; }
-    s = self.lexer.int();
-    if s { format.size = s; }
-    if self.lexer.matches(".") { format.is_float = true; }
-    d = self.lexer.int();
-    if d { format.decimals = d; }
-    if self.lexer.matches("x") || self.lexer.matches("X") { format.radix = 16; }
-    if self.lexer.matches("b") { format.radix = 2; }
-    if self.lexer.matches("o") { format.radix = 8; }
-    if self.lexer.matches("e") { format.radix = 1; }
+  format = FormatSpec { };
+  if !self.lexer.matches(":") {
+    return;
+  }
+  n = self.lexer.peek();
+  if n == "0" or n == "-" or n == "_" or n == "^" {
+    format.token = n;
+  }
+  if self.lexer.matches("<") {
+    format.dir = -1;
+  } else if self.lexer.matches(">") {
+    format.dir = 1;
+  } else if self.lexer.matches("^") {
+    format.dir = 0;
+  }
+  if self.lexer.matches("+") {
+    format.plus = true;
+  }
+  if self.lexer.matches("#") {
+    format.special_layout = true;
+  }
+  s = self.lexer.int();
+  if s {
+    format.size = s;
+  }
+  if self.lexer.matches(".") {
+    format.is_float = true;
+  }
+  d = self.lexer.int();
+  if d {
+    format.decimals = d;
+  }
+  if self.lexer.matches("x") || self.lexer.matches("X") {
+    format.radix = 16;
+  }
+  if self.lexer.matches("b") {
+    format.radix = 2;
+  }
+  if self.lexer.matches("o") {
+    format.radix = 8;
+  }
+  if self.lexer.matches("e") {
+    format.radix = 1;
+  }
 }
-
 // TODO <text_value> ::= <text_part>  { ( <for_list> | <expression> ) <text_part> }
 
 fn expect(self: Parser, value: text) {
-    if !self.lexer.matches(value) {
-        self.log.error("Expected {value}{self.lexer.at()}");
-    }
+  if !self.lexer.matches(value) {
+    self.log.error("Expected {value}{self.lexer.at()}");
+  }
 }

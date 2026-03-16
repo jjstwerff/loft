@@ -2,20 +2,17 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Structs
 // @TITLE: Grouping related data with structs
-
 // A struct groups related values under one name. Instead of keeping a
 // product's name, price, and stock count in three separate variables that
 // can drift out of sync, you bundle them together into a Product struct.
 // Each piece of data inside the struct is called a field. You read and write
 // fields using dot notation: 'product.price'.
-
 // Here is a simple product record. All four fields are plain integers or text.
 struct Product {
-    name: text,
-    price: integer,
-    stock: integer
+  name: text,
+  price: integer,
+  stock: integer
 }
-
 // ## Field Constraints
 // You can restrict what values a field may hold.
 // 'limit(min, max)' rejects any value outside that range at runtime.
@@ -23,89 +20,84 @@ struct Product {
 // is treated as "no value" (null), which can cause surprising behaviour.
 // Fields you omit in a constructor receive zero (null for nullable fields) by default.
 // Here all three colour channels can be zero (black is a valid colour).
-struct Colour {
-    r: integer limit(0, 255) not null,
-    g: integer limit(0, 255) not null,
-    b: integer limit(0, 255) not null
-}
 
+struct Colour {
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
+}
 // ## Methods
 // A method is a function whose first parameter is named 'self'.
 // Loft uses the type of 'self' to decide which struct the method belongs to.
 // Call it with dot notation: 'c.to_hex()'.
 // A method can read fields via 'self.field' and return any type.
-fn to_hex(self: Colour) -> integer {
-    self.r * 0x10000 + self.g * 0x100 + self.b
-}
 
+fn to_hex(self: Colour) -> integer {
+  self.r * 0x10000 + self.g * 0x100 + self.b
+}
 // A method can also return a completely new struct value.
 // Write '-> StructName' as the return type and construct the value in the body.
 // The original struct is not modified — the caller gets a brand-new copy.
-fn dimmed(self: Colour) -> Colour {
-    Colour { r: self.r / 2, g: self.g / 2, b: self.b / 2 }
-}
 
+fn dimmed(self: Colour) -> Colour {
+  Colour {r: self.r / 2, g: self.g / 2, b: self.b / 2 }
+}
 // ## Computed Fields
 // A field can calculate its value from other fields in the same struct.
 // Write '= expression' after the type to set a default evaluated at construction time.
 // Inside that expression, '$' refers to the struct being built.
 // The 'name_length' field is filled automatically whenever you create an Item.
-struct Item {
-    name: text,
-    name_length: integer = len($.name)
-}
 
+struct Item {
+  name: text,
+  name_length: integer = len($.name)
+}
 // ## Storing many structs in a vector
 // 'Area' uses compact unsigned integer types (u16, u8) to keep each record small.
 // This matters when you need millions of tiles in a game map.
+
 struct Area {
-    height: u16,
-    terrain: u8,
-    water: u8,
-    direction: u8
+  height: u16,
+  terrain: u8,
+  water: u8,
+  direction: u8
 }
 
 fn main() {
-    // Constructing a struct: name the fields you want to set.
-    // Fields you leave out default to zero (or null for nullable fields).
-    apple = Product { name: "Apple", price: 120, stock: 50 };
-    assert(apple.price == 120, "price field: {apple.price}");
-    assert(apple.name == "Apple", "name field: {apple.name}");
-
-    // You can read and write individual fields after construction.
-    apple.stock -= 1;
-    assert(apple.stock == 49, "stock after one sale: {apple.stock}");
-
-    // A field omitted from the constructor gets zero as its default.
-    col = Colour { r: 128, b: 128 };
-    assert(col.g == 0, "omitted green channel defaults to zero");
-    // Formatting a struct shows all fields compactly.
-    assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
-    // ':j' produces JSON output.
-    assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
-
-    // Call a method on a variable using dot notation.
-    purple = Colour { r: 128, b: 128 };
-    assert("{purple.to_hex():x}" == "800080", "hex method result");
-
-    // You can call a method directly on a constructor expression.
-    assert(Colour { r: 255, g: 0, b: 0 }.to_hex() == 0xff0000, "method on constructor");
-
-    // 'dimmed' returns a new Colour with each channel halved.
-    // The original variable is unchanged.
-    dark = purple.dimmed();
-    assert(dark.r == 64, "dimmed r: {dark.r}");
-    assert(dark.b == 64, "dimmed b: {dark.b}");
-    assert(dark.g == 0, "dimmed g: {dark.g}");
-
-    // Computed fields are filled automatically at construction time.
-    it = Item { name: "hello" };
-    assert(it.name_length == 5, "computed name_length: {it.name_length}");
-
-    // Fill a vector with copies of the same struct using '; count' syntax.
-    // This creates 16 Area records, all with the same initial values.
-    map = [Area { height: 0, terrain: 1, water: 1, direction: 1 }; 16];
-    assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
-    map[3].height = 200;
-    assert(map[3].height == 200, "individual tile update");
+  // Constructing a struct: name the fields you want to set.
+  // Fields you leave out default to zero (or null for nullable fields).
+  apple = Product {name: "Apple", price: 120, stock: 50 };
+  assert(apple.price == 120, "price field: {apple.price}");
+  assert(apple.name == "Apple", "name field: {apple.name}");
+  // You can read and write individual fields after construction.
+  apple.stock -= 1;
+  assert(apple.stock == 49, "stock after one sale: {apple.stock}");
+  // A field omitted from the constructor gets zero as its default.
+  col = Colour {r: 128, b: 128 };
+  assert(col.g == 0, "omitted green channel defaults to zero");
+  // Formatting a struct shows all fields compactly.
+  assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
+  // ':j' produces JSON output.
+  assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
+  // Call a method on a variable using dot notation.
+  purple = Colour {r: 128, b: 128 };
+  assert("{purple.to_hex():x}" == "800080", "hex method result");
+  // You can call a method directly on a constructor expression.
+  assert(Colour {r: 255, g: 0, b: 0 }.to_hex() == 0xff0000, "method on constructor");
+  // 'dimmed' returns a new Colour with each channel halved.
+  // The original variable is unchanged.
+  dark = purple.dimmed();
+  assert(dark.r == 64, "dimmed r: {dark.r}");
+  assert(dark.b == 64, "dimmed b: {dark.b}");
+  assert(dark.g == 0, "dimmed g: {dark.g}");
+  // Computed fields are filled automatically at construction time.
+  it = Item {name: "hello" };
+  assert(it.name_length == 5, "computed name_length: {it.name_length}");
+  // Fill a vector with copies of the same struct using '; count' syntax.
+  // This creates 16 Area records, all with the same initial values.
+  map =[Area {height: 0, terrain: 1, water: 1, direction: 1 };
+  16];
+  assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
+  map[3].height = 200;
+  assert(map[3].height == 200, "individual tile update");
 }

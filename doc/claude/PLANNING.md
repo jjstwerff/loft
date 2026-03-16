@@ -48,14 +48,14 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 R1 — see Quick Reference for full details
 
 **1.0 target items** (include if time allows; 1.1 if not):
-T1-4, T2-0 — see Quick Reference for full details
+T1-4 — see Quick Reference for full details
 
 **Explicitly 1.1+**:
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T2-13, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible: T1-4, T2-0, T2-1, T2-2.
+New language features that are strictly backward-compatible: T1-4, T2-1, T2-2.
 Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of interpreter versions.
 
 ### Version 2.0 — Breaking changes only
@@ -196,20 +196,6 @@ fn f() -> integer {
 ---
 
 ## Tier 2 — Prototype-Friendly Features
-
-### T2-0  Code formatter (`loft --format`)
-**Sources:** [FORMATTER.md](FORMATTER.md)
-**Severity:** Low — no correctness impact; quality-of-life
-**Description:** Token-stream formatter imposing one canonical loft style (no configuration).
-Key rules: 2-space indent, opening brace on same line, every block body multi-line, spaces
-around operators, fields on separate lines in struct/enum definitions, param/call/array lists
-wrapped at 80 cols, consecutive `use` lines sorted alphabetically, trailing commas stripped.
-Invoked as `loft --format file.loft` (in-place) or `--format-check` (CI exit 1 if differs).
-Works via a new `Mode::Raw` lexer pass that preserves `LineComment` tokens; ~400 lines in
-`src/formatter.rs`.
-**Effort:** Small–Medium (new `src/formatter.rs`; minor additions to `src/lexer.rs`, `src/main.rs`)
-
----
 
 ### T2-1  Lambda / anonymous function expressions
 **Sources:** Prototype-friendly goal; T1-1 (callable fn refs) already complete
@@ -710,7 +696,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-10 | Unused loop variable                                  | 1    | Trivial   | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-12 | Redundant null check on `not null` type               | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-13 | Unreachable code after return/break/continue          | 1    | Medium    | 1.1     |            | Warnings audit 2026-03-15  |
-| T2-0 | Code formatter (`loft --format`)                    | 2    | Small–Med | 1.0 tgt |            | FORMATTER.md               |
 | T2-1 | Lambda / anonymous function expressions                 | 2    | Med–High  | 1.1     | T1-1       | Prototype goal             |
 | T2-2 | REPL / interactive mode                                 | 2    | High      | 1.1     |            | Prototype goal             |
 | T2-4 | Vector aggregates (sum, min_of, any, all, count_if)     | 2    | Low–Med   | 1.1     | T2-1       | Stdlib audit 2026-03-15    |

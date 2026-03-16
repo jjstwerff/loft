@@ -1,126 +1,111 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Integer arithmetic, bitwise ops, null, and conversions.
-
 fn main() {
-    // --- Arithmetic ---
-    assert(1 + 2 == 3, "int add");
-    assert(10 - 3 == 7, "int sub");
-    assert(3 * 4 == 12, "int mul");
-    assert(10 / 4 == 2, "int div truncates");
-    assert(10 % 3 == 1, "int mod");
-    assert(1 + 2 * 4 == 9, "int priority: mul before add");
-    assert((1 + 2) * 4 == 12, "int parens override priority");
-
-    // --- Null from division by zero ---
-    z = 0;
-    assert(!(1 / z), "div by zero is null");
-    assert(!(12 % z), "mod by zero is null");
-
-    // --- Unary and abs ---
-    assert(-5 + 5 == 0, "int unary minus");
-    assert(abs(-7) == 7, "abs negative");
-    assert(abs(7) == 7, "abs positive");
-
-    // --- Comparisons ---
-    assert(1 < 2, "int lt");
-    assert(2 <= 2, "int le");
-    assert(3 > 2, "int gt");
-    assert(3 >= 3, "int ge");
-    assert(3 == 3, "int eq");
-    assert(3 != 4, "int ne");
-
-    // --- Bitwise ---
-    assert(0b1010 & 0b1100 == 0b1000, "int bitwise and");
-    assert(0b1010 | 0b1100 == 0b1110, "int bitwise or");
-    assert(0b1010 ^ 0b1100 == 0b0110, "int bitwise xor");
-    assert(1 << 3 == 8, "int shift left");
-    assert(16 >> 2 == 4, "int shift right");
-    assert(0x0a8 & 15 == 8, "int hex and mask");
-
-    // --- Literals ---
-    assert(0b101010 == 42, "binary literal");
-    assert(0x2a == 42, "hex literal");
-
-    // --- Long (i64) ---
-    a = -2l;
-    assert(abs(a) == 2l, "long abs");
-    assert(3l != abs(a), "long ne");
-    assert(0x0102030405060708l == 72623859790382856l, "long hex literal");
-
-    // --- Conversions ---
-    assert("123" as integer == 123, "text to int");
-    assert("{42}" == "42", "int to text via format");
-    assert(3 as float == 3.0, "int to float");
-    assert(3 as long == 3l, "int to long");
-    assert(255 as u8 == 255 as integer, "int as u8 roundtrip");
-    assert(0x203 as u16 == 515, "int as u16");
-
-    // --- Negative remainder (sign follows dividend) ---
-    assert(-10 % 3 == -1, "neg dividend: -10 % 3 == -1");
-    assert(10 % -3 == 1, "neg divisor: 10 % -3 == 1");
-    assert(-7 % -2 == -1, "both negative: -7 % -2 == -1");
-
-    // --- Null propagation through arithmetic ---
-    z2 = 0;
-    n = 1 / z2;
-    assert(!(n + 1), "null + int is null");
-    assert(!(n - 1), "null - int is null");
-    assert(!(n * 5), "null * int is null");
-    assert(!(3 + n), "int + null is null");
-    assert(!(n + n), "null + null is null");
-
-    // --- Null sentinel is i32::MIN, not zero ---
-    // Arithmetic operators propagate null; comparison operators see the raw value.
-    assert(n != 0, "null sentinel != 0");
-    assert(!(n == 0), "null sentinel is not 0");
-    assert(n < 0, "null sentinel i32::MIN is a large negative");
-    assert(!(n > 0), "null sentinel i32::MIN is not positive");
-
-    // --- Bitwise ops with zero operand ---
-    // AND/OR/XOR with 0 must NOT produce null (unlike division or shift by 0).
-    assert(0b1010 & 0 == 0, "int bitwise and with 0 is 0, not null");
-    assert(0b1010 | 0 == 0b1010, "int bitwise or with 0 is identity, not null");
-    assert(0b1010 ^ 0 == 0b1010, "int xor with 0 is identity, not null");
-    assert(0 ^ 0b1010 == 0b1010, "int xor 0^x is x, not null");
-    // Long variants:
-    la = 0b1010l;
-    assert(la & 0l == 0l, "long bitwise and with 0 is 0, not null");
-    assert(la | 0l == 0b1010l, "long bitwise or with 0 is identity, not null");
-    assert(la ^ 0l == 0b1010l, "long xor with 0 is identity, not null");
-
-    // --- Shift of zero ---
-    // Note: shifting by 0 produces null in loft (null-guarded shift operators).
-    // Shifting the value zero by any positive amount stays zero:
-    assert(0 << 1 == 0, "zero shifted left stays zero");
-    assert(0 >> 1 == 0, "zero shifted right stays zero");
-
-    // --- Mutating operators ---
-    m = 12;
-    m -= 6;
-    m *= 3;
-    m /= 2;
-    m += 1;
-    assert(m == 10, "mutating operators: 12 -=6 *=3 /=2 +=1 == 10");
-
-    // --- Null-coalescing operator ?? ---
-    // Non-null LHS: returns LHS value unchanged.
-    x_ok = 42;
-    assert((x_ok ?? 0) == 42, "?? non-null returns LHS");
-    // Null LHS: returns RHS default.
-    z_zero = 0;
-    x_null = 1 / z_zero;
-    assert((x_null ?? 99) == 99, "?? null returns RHS");
-    // Chaining: first non-null wins.
-    na = 1 / z_zero;
-    nb = 1 / z_zero;
-    nc = 3;
-    assert((na ?? nb ?? nc) == 3, "?? chain all-null falls through");
-    nd = 7;
-    assert((nd ?? nb ?? nc) == 7, "?? chain first non-null wins");
-    // Long type.
-    xl = 5l;
-    zl = 0l;
-    xl_null = xl / zl;
-    assert((xl_null ?? 10l) == 10l, "?? long null returns default");
+  // --- Arithmetic ---
+  assert(1 + 2 == 3, "int add");
+  assert(10 - 3 == 7, "int sub");
+  assert(3 * 4 == 12, "int mul");
+  assert(10 / 4 == 2, "int div truncates");
+  assert(10 % 3 == 1, "int mod");
+  assert(1 + 2 * 4 == 9, "int priority: mul before add");
+  assert((1 + 2) * 4 == 12, "int parens override priority");
+  // --- Null from division by zero ---
+  z = 0;
+  assert(!(1 / z), "div by zero is null");
+  assert(!(12 % z), "mod by zero is null");
+  // --- Unary and abs ---
+  assert(-5 + 5 == 0, "int unary minus");
+  assert(abs(-7) == 7, "abs negative");
+  assert(abs(7) == 7, "abs positive");
+  // --- Comparisons ---
+  assert(1 < 2, "int lt");
+  assert(2 <= 2, "int le");
+  assert(3 > 2, "int gt");
+  assert(3 >= 3, "int ge");
+  assert(3 == 3, "int eq");
+  assert(3 != 4, "int ne");
+  // --- Bitwise ---
+  assert(0b1010 & 0b1100 == 0b1000, "int bitwise and");
+  assert(0b1010 | 0b1100 == 0b1110, "int bitwise or");
+  assert(0b1010 ^ 0b1100 == 0b0110, "int bitwise xor");
+  assert(1 << 3 == 8, "int shift left");
+  assert(16 >> 2 == 4, "int shift right");
+  assert(0x0a8 & 15 == 8, "int hex and mask");
+  // --- Literals ---
+  assert(0b101010 == 42, "binary literal");
+  assert(0x2a == 42, "hex literal");
+  // --- Long (i64) ---
+  a = -2l;
+  assert(abs(a) == 2l, "long abs");
+  assert(3l != abs(a), "long ne");
+  assert(0x0102030405060708l == 72623859790382856l, "long hex literal");
+  // --- Conversions ---
+  assert("123" as integer == 123, "text to int");
+  assert("{42}" == "42", "int to text via format");
+  assert(3 as float == 3.0, "int to float");
+  assert(3 as long == 3l, "int to long");
+  assert(255 as u8 == 255 as integer, "int as u8 roundtrip");
+  assert(0x203 as u16 == 515, "int as u16");
+  // --- Negative remainder (sign follows dividend) ---
+  assert(-10 % 3 == -1, "neg dividend: -10 % 3 == -1");
+  assert(10 % -3 == 1, "neg divisor: 10 % -3 == 1");
+  assert(-7 % -2 == -1, "both negative: -7 % -2 == -1");
+  // --- Null propagation through arithmetic ---
+  z2 = 0;
+  n = 1 / z2;
+  assert(!(n + 1), "null + int is null");
+  assert(!(n - 1), "null - int is null");
+  assert(!(n * 5), "null * int is null");
+  assert(!(3 + n), "int + null is null");
+  assert(!(n + n), "null + null is null");
+  // --- Null sentinel is i32::MIN, not zero ---
+  // Arithmetic operators propagate null; comparison operators see the raw value.
+  assert(n != 0, "null sentinel != 0");
+  assert(!(n == 0), "null sentinel is not 0");
+  assert(n < 0, "null sentinel i32::MIN is a large negative");
+  assert(!(n > 0), "null sentinel i32::MIN is not positive");
+  // --- Bitwise ops with zero operand ---
+  // AND/OR/XOR with 0 must NOT produce null (unlike division or shift by 0).
+  assert(0b1010 & 0 == 0, "int bitwise and with 0 is 0, not null");
+  assert(0b1010 | 0 == 0b1010, "int bitwise or with 0 is identity, not null");
+  assert(0b1010 ^ 0 == 0b1010, "int xor with 0 is identity, not null");
+  assert(0 ^ 0b1010 == 0b1010, "int xor 0^x is x, not null");
+  // Long variants:
+  la = 0b1010l;
+  assert(la & 0l == 0l, "long bitwise and with 0 is 0, not null");
+  assert(la | 0l == 0b1010l, "long bitwise or with 0 is identity, not null");
+  assert(la ^ 0l == 0b1010l, "long xor with 0 is identity, not null");
+  // --- Shift of zero ---
+  // Note: shifting by 0 produces null in loft (null-guarded shift operators).
+  // Shifting the value zero by any positive amount stays zero:
+  assert(0 << 1 == 0, "zero shifted left stays zero");
+  assert(0 >> 1 == 0, "zero shifted right stays zero");
+  // --- Mutating operators ---
+  m = 12;
+  m -= 6;
+  m *= 3;
+  m /= 2;
+  m += 1;
+  assert(m == 10, "mutating operators: 12 -=6 *=3 /=2 +=1 == 10");
+  // --- Null-coalescing operator ?? ---
+  // Non-null LHS: returns LHS value unchanged.
+  x_ok = 42;
+  assert((x_ok ?? 0) == 42, "?? non-null returns LHS");
+  // Null LHS: returns RHS default.
+  z_zero = 0;
+  x_null = 1 / z_zero;
+  assert((x_null ?? 99) == 99, "?? null returns RHS");
+  // Chaining: first non-null wins.
+  na = 1 / z_zero;
+  nb = 1 / z_zero;
+  nc = 3;
+  assert((na ?? nb ?? nc) == 3, "?? chain all-null falls through");
+  nd = 7;
+  assert((nd ?? nb ?? nc) == 7, "?? chain first non-null wins");
+  // Long type.
+  xl = 5l;
+  zl = 0l;
+  xl_null = xl / zl;
+  assert((xl_null ?? 10l) == 10l, "?? long null returns default");
 }

@@ -1,0 +1,3 @@
+pub type boolean size(1);
+pub type integer size(4);
+pub type u8 = integerlimit(0, 255) size(1);

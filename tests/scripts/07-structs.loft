@@ -1,152 +1,143 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Structs: field types, constructors, methods, virtual fields, null defaults.
+struct Pos {
+  x: integer,
+  y: integer
+}
 
-struct Pos { x: integer, y: integer }
-struct Segment { label: text, start: Pos, end: Pos }
+struct Segment {
+  label: text,
+  start: Pos,
+  end: Pos
+}
 
 struct Area {
-    height: u16,
-    terrain: u8,
-    water: u8,
-    direction: u8
+  height: u16,
+  terrain: u8,
+  water: u8,
+  direction: u8
 }
 
 struct Point {
-    r: integer limit(0, 255) not null,
-    g: integer limit(0, 255) not null,
-    b: integer limit(0, 255) not null
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
 }
 
 fn value(self: Point) -> integer {
-    self.r * 0x10000 + self.g * 0x100 + self.b
+  self.r * 0x10000 + self.g * 0x100 + self.b
 }
 
 fn dimmed(self: Point) -> Point {
-    Point { r: self.r / 2, g: self.g / 2, b: self.b / 2 }
+  Point {r: self.r / 2, g: self.g / 2, b: self.b / 2 }
 }
 
 struct Object {
-    name_length: integer = len($.name),
-    name: text
+  name_length: integer = len($.name),
+  name: text
 }
 
 struct Counter {
-    count: integer not null
+  count: integer not null
 }
 
 fn inc(self: Counter) {
-    self.count += 1;
+  self.count += 1;
 }
 
 fn main() {
-    // --- Basic constructor and field access ---
-    p = Point { r: 128, b: 64 };
-    assert(p.r == 128, "field r");
-    assert(p.g == 0, "omitted field g defaults to 0 (not null)");
-    assert(p.b == 64, "field b");
-
-    // --- Method call ---
-    assert(p.value() == 0x800040, "method value");
-
-    // --- Method returning a new struct record ---
-    dark = p.dimmed();
-    assert(dark.r == 64, "dimmed r: {dark.r}");
-    assert(dark.g == 0, "dimmed g: {dark.g}");
-    assert(dark.b == 32, "dimmed b: {dark.b}");
-
-    // --- Virtual / computed field ---
-    o = Object { name: "hello" };
-    assert(o.name_length == 5, "virtual field name_length");
-    o2 = Object { name: "hi" };
-    assert(o2.name_length == 2, "virtual field shorter name");
-
-    // --- not null field with zero ---
-    c = Counter {};
-    assert(c.count == 0, "not null int defaults to 0");
-    c.inc();
-    assert(c.count == 1, "after inc count == 1");
-    c.inc();
-    assert(c.count == 2, "after two incs count == 2");
-
-    // --- Compact format ---
-    // Use escaped braces so the RHS is a literal string, not a format expression.
-    assert("{p}" == "{{r:128,g:0,b:64}}", "compact struct format");
-
-    // --- JSON format ---
-    // Use escaped braces on the RHS; \" is a literal quote inside the string.
-    assert("{o:j}" == "{{\"name_length\":5,\"name\":\"hello\"}}", "json format");
-
-    // --- Vector of structs with repetition ---
-    map = [Area { height: 0, terrain: 1, water: 1, direction: 1 }; 4];
-    assert("{map[0]}" == "{{height:0,terrain:1,water:1,direction:1}}", "vector of structs [0]");
-    assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "vector of structs [3]");
-    assert(!map[10], "out-of-bounds is null");
-
-    // --- Field mutation ---
-    pt = Point { r: 10, g: 20, b: 30 };
-    pt.r = 99;
-    assert(pt.r == 99, "field mutation");
-
-    // --- Nested struct: field access and mutation ---
-    seg = Segment {
-        label: "AB",
-        start: Pos { x: 1, y: 2 },
-        end: Pos { x: 5, y: 6 }
-    };
-    assert(seg.start.x == 1, "nested field start.x");
-    assert(seg.end.y == 6, "nested field end.y");
-    assert(seg.label == "AB", "outer field label");
-
-    // --- Nested struct field mutation ---
-    seg.start.x = 99;
-    seg.end.y = 77;
-    assert(seg.start.x == 99, "nested field mutation start.x");
-    assert(seg.end.y == 77, "nested field mutation end.y");
-    assert(seg.start.y == 2, "unchanged field start.y stays 2");
-
-    // --- Struct with all-default constructor ---
-    p_def = Pos {};
-    assert(p_def.x == 0, "default integer field is 0");
-    assert(p_def.y == 0, "default integer field y is 0");
-
-    // --- sizeof ---
-    // Primitive types
-    assert(sizeof(integer) == 4, "sizeof integer is 4");
-    assert(sizeof(long) == 8, "sizeof long is 8");
-    assert(sizeof(float) == 8, "sizeof float is 8");
-    assert(sizeof(boolean) == 1, "sizeof boolean is 1");
-    // Note: sizeof(u8) and sizeof(u16) return 4 (integer stack size); byte-packing
-    // only applies inside struct fields.
-    // Struct sizes
-    assert(sizeof(Pos) == 8, "sizeof Pos (2x integer) is 8");
-    // Point has 3 fields of integer limit(0,255) — packed to 1 byte each in DB storage
-    assert(sizeof(Point) == 3, "sizeof Point (3x limited-integer) is 3");
-
-    // --- Pretty-print format (:#) ---
-    // Compact {o} vs pretty {o:#} with spaces and newline-indented nested structs.
-    pp = Point { r: 10, g: 20, b: 30 };
-    assert("{pp}" == "{{r:10,g:20,b:30}}", "compact struct format");
-    assert("{pp:#}" == "{{ r: 10, g: 20, b: 30 }}", "pretty struct format");
-
-    // --- Method called directly on a constructor expression ---
-    assert(Point { r: 10, g: 20, b: 30 }.value() == 0x0a141e, "method on constructor");
-
-    // --- Struct copy semantics: text fields are independent ---
-    // Assigning a struct copies it; mutating the copy must not affect the original.
-    sc_orig = Segment { label: "hello", start: Pos { x: 1, y: 2 }, end: Pos { x: 3, y: 4 } };
-    sc_copy = sc_orig;
-    sc_copy.label += " world";
-    assert(sc_orig.label == "hello", "struct copy: original text field unchanged");
-    assert(sc_copy.label == "hello world", "struct copy: copy has modified text");
-
-    // --- Null-coalescing ?? on struct field ---
-    pq = Point { r: 7, g: 0, b: 3 };
-    assert((pq.r ?? 0) == 7, "?? on non-null struct field returns field value");
-    // A zero-valued not-null field is still non-null (0 != null sentinel).
-    assert((pq.g ?? 99) == 0, "?? on zero not-null field returns 0 not default");
-
-    // --- const local variable with struct ---
-    const fixed = Counter {};
-    assert(fixed.count == 0, "const local struct: field readable");
+  // --- Basic constructor and field access ---
+  p = Point {r: 128, b: 64 };
+  assert(p.r == 128, "field r");
+  assert(p.g == 0, "omitted field g defaults to 0 (not null)");
+  assert(p.b == 64, "field b");
+  // --- Method call ---
+  assert(p.value() == 0x800040, "method value");
+  // --- Method returning a new struct record ---
+  dark = p.dimmed();
+  assert(dark.r == 64, "dimmed r: {dark.r}");
+  assert(dark.g == 0, "dimmed g: {dark.g}");
+  assert(dark.b == 32, "dimmed b: {dark.b}");
+  // --- Virtual / computed field ---
+  o = Object {name: "hello" };
+  assert(o.name_length == 5, "virtual field name_length");
+  o2 = Object {name: "hi" };
+  assert(o2.name_length == 2, "virtual field shorter name");
+  // --- not null field with zero ---
+  c = Counter { };
+  assert(c.count == 0, "not null int defaults to 0");
+  c.inc();
+  assert(c.count == 1, "after inc count == 1");
+  c.inc();
+  assert(c.count == 2, "after two incs count == 2");
+  // --- Compact format ---
+  // Use escaped braces so the RHS is a literal string, not a format expression.
+  assert("{p}" == "{{r:128,g:0,b:64}}", "compact struct format");
+  // --- JSON format ---
+  // Use escaped braces on the RHS; \" is a literal quote inside the string.
+  assert("{o:j}" == "{{\"name_length\":5,\"name\":\"hello\"}}", "json format");
+  // --- Vector of structs with repetition ---
+  map =[Area {height: 0, terrain: 1, water: 1, direction: 1 };
+  4];
+  assert("{map[0]}" == "{{height:0,terrain:1,water:1,direction:1}}", "vector of structs [0]");
+  assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "vector of structs [3]");
+  assert(!map[10], "out-of-bounds is null");
+  // --- Field mutation ---
+  pt = Point {r: 10, g: 20, b: 30 };
+  pt.r = 99;
+  assert(pt.r == 99, "field mutation");
+  // --- Nested struct: field access and mutation ---
+  seg = Segment {
+  label: "AB",
+  start: Pos {x: 1, y: 2 },
+  end: Pos {x: 5, y: 6 }
+ };
+  assert(seg.start.x == 1, "nested field start.x");
+  assert(seg.end.y == 6, "nested field end.y");
+  assert(seg.label == "AB", "outer field label");
+  // --- Nested struct field mutation ---
+  seg.start.x = 99;
+  seg.end.y = 77;
+  assert(seg.start.x == 99, "nested field mutation start.x");
+  assert(seg.end.y == 77, "nested field mutation end.y");
+  assert(seg.start.y == 2, "unchanged field start.y stays 2");
+  // --- Struct with all-default constructor ---
+  p_def = Pos { };
+  assert(p_def.x == 0, "default integer field is 0");
+  assert(p_def.y == 0, "default integer field y is 0");
+  // --- sizeof ---
+  // Primitive types
+  assert(sizeof(integer) == 4, "sizeof integer is 4");
+  assert(sizeof(long) == 8, "sizeof long is 8");
+  assert(sizeof(float) == 8, "sizeof float is 8");
+  assert(sizeof(boolean) == 1, "sizeof boolean is 1");
+  // Note: sizeof(u8) and sizeof(u16) return 4 (integer stack size); byte-packing
+  // only applies inside struct fields.
+  // Struct sizes
+  assert(sizeof(Pos) == 8, "sizeof Pos (2x integer) is 8");
+  // Point has 3 fields of integer limit(0,255) — packed to 1 byte each in DB storage
+  assert(sizeof(Point) == 3, "sizeof Point (3x limited-integer) is 3");
+  // --- Pretty-print format (:#) ---
+  // Compact {o} vs pretty {o:#} with spaces and newline-indented nested structs.
+  pp = Point {r: 10, g: 20, b: 30 };
+  assert("{pp}" == "{{r:10,g:20,b:30}}", "compact struct format");
+  assert("{pp:#}" == "{{ r: 10, g: 20, b: 30 }}", "pretty struct format");
+  // --- Method called directly on a constructor expression ---
+  assert(Point {r: 10, g: 20, b: 30 }.value() == 0x0a141e, "method on constructor");
+  // --- Struct copy semantics: text fields are independent ---
+  // Assigning a struct copies it; mutating the copy must not affect the original.
+  sc_orig = Segment {label: "hello", start: Pos {x: 1, y: 2 }, end: Pos {x: 3, y: 4 } };
+  sc_copy = sc_orig;
+  sc_copy.label += " world";
+  assert(sc_orig.label == "hello", "struct copy: original text field unchanged");
+  assert(sc_copy.label == "hello world", "struct copy: copy has modified text");
+  // --- Null-coalescing ?? on struct field ---
+  pq = Point {r: 7, g: 0, b: 3 };
+  assert((pq.r ?? 0) == 7, "?? on non-null struct field returns field value");
+  // A zero-valued not-null field is still non-null (0 != null sentinel).
+  assert((pq.g ?? 99) == 0, "?? on zero not-null field returns 0 not default");
+  // --- const local variable with struct ---
+  const fixed = Counter { };
+  assert(fixed.count == 0, "const local struct: field readable");
 }

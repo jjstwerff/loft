@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Parser
 // @TITLE: Parsing Loft source code programmatically
-
 // The 'parser' library lets a Loft program read and validate other Loft source
 // code at runtime. This is useful when you want to:
 // * validate configuration files written in the Loft syntax
@@ -15,7 +14,6 @@
 //
 // If the source is invalid, parse() emits a diagnostic error and the call
 // returns without producing a value.
-
 // ## What the parser understands
 //
 // The parser handles the complete Loft grammar:
@@ -28,38 +26,32 @@
 //   index expressions, if/else, for loops, blocks, and formatted string literals
 // * Type expressions: plain names, generic types like 'vector<T>', keyed
 //   collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
-
 use parser;
-
 fn main() {
-    // ## Parsing a minimal function
-    // The double braces '{{' and '}}' produce literal '{' and '}' inside a
-    // Loft format string — needed here because the source code itself contains braces.
-    parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}");
-
-    // ## Parsing a struct and function together
-    // The parser validates the entire source snippet as one unit.
-    // Both the struct definition and the function body are checked.
-    parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}");
-
-    // ## Parsing an enum
-    // Both a plain variant and a struct variant (with fields) are recognised.
-    parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}");
-
-    // ## Parsing a for loop and arithmetic
-    // This exercises the expression parser and range syntax.
-    parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}");
-
-    // ## Practical use: validating user-supplied code
-    //
-    // If your application lets users write Loft snippets (for scripting or
-    // configuration), you can parse them before executing:
-    //
-    //   snippet = read_user_input();
-    //   parser::parse("user_code", snippet);
-    //   // If parse() emits errors, the snippet was invalid — show them to the user.
-    //
-    // Combine this with the lexer (see the Lexer page) when you need to extract
-    // individual tokens from the source rather than validate the whole grammar.
-    println("parser test passed");
+  // ## Parsing a minimal function
+  // The double braces '{{' and '}}' produce literal '{' and '}' inside a
+  // Loft format string — needed here because the source code itself contains braces.
+  parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}");
+  // ## Parsing a struct and function together
+  // The parser validates the entire source snippet as one unit.
+  // Both the struct definition and the function body are checked.
+  parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}");
+  // ## Parsing an enum
+  // Both a plain variant and a struct variant (with fields) are recognised.
+  parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}");
+  // ## Parsing a for loop and arithmetic
+  // This exercises the expression parser and range syntax.
+  parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}");
+  // ## Practical use: validating user-supplied code
+  //
+  // If your application lets users write Loft snippets (for scripting or
+  // configuration), you can parse them before executing:
+  //
+  //   snippet = read_user_input();
+  //   parser::parse("user_code", snippet);
+  //   // If parse() emits errors, the snippet was invalid — show them to the user.
+  //
+  // Combine this with the lexer (see the Lexer page) when you need to extract
+  // individual tokens from the source rather than validate the whole grammar.
+  println("parser test passed");
 }

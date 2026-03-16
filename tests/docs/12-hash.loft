@@ -2,71 +2,75 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Hash
 // @TITLE: Instant key lookup with a hash table
-
 // A 'hash' lets you find a record by its key in constant time, regardless of how many records you have.
 // Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups.
 // List the key fields in brackets: 'hash<Type[field]>'.
 // Combine a hash with a vector when you want both fast lookup and a stable iteration order.
-struct Keyword { name: text }
-struct Data { h: hash<Keyword[name]> }
+struct Keyword {
+  name: text
+}
 
+struct Data {
+  h: hash < Keyword[name] >
+}
 // ## Combining Hash and Vector
 // Pairing a hash with a vector on the same record type gives you the best of both worlds:
 // the hash for instant lookup by key, and the vector for iterating in insertion order.
-struct Count { t: text, v: integer }
+
+struct Count {
+  t: text,
+  v: integer
+}
+
 struct Counting {
-    entries: vector<Count>,
-    lookup:  hash<Count[t]>
+  entries: vector < Count >,
+  lookup: hash < Count[t] >
 }
 
 fn fill(c: Counting) {
-    c.entries = [
-        { t: "One",   v: 1 },
-        { t: "Two",   v: 2 },
-        { t: "Three", v: 3 },
-        { t: "Four",  v: 4 }
-    ]
+  c.entries =[
+ {t: "One", v: 1 },
+ {t: "Two", v: 2 },
+ {t: "Three", v: 3 },
+ {t: "Four", v: 4 }
+  ]
 }
 
 fn main() {
-    // ## Basic Lookup
-    // Fill a hash the same way you fill a vector. Look up by key with square brackets.
-    // A found record is truthy; a missing key returns null.
-    d = Data {};
-    d.h = [{ name: "one" }, { name: "two" }];
-    d.h += [{ name: "three" }, { name: "four" }];
-
-    assert(d.h["three"], "Key exists");
-    assert(!d.h["None"], "Missing key returns null");
-
-    // ## Hash + Vector Together
-    // Here 'entries' is the vector (keeps insertion order) and 'lookup' is the hash (fast access).
-    // Both fields point to the same records — adding to one automatically updates the other.
-    c = Counting {};
-    fill(c);
-    assert(c.lookup["Three"].v == 3, "Hash lookup: Three");
-    assert(c.lookup["One"].v == 1, "Hash lookup: One");
-    assert(!c.lookup["Five"], "Missing key returns null");
-
-    // Iterate in insertion order via the vector; look up by name via the hash.
-    // The vector also supports #first, #count, and #remove inside the loop.
-    add = 0;
-    for item in c.entries {
-        add += item.v;
-    }
-    assert(add == 10, "Sum via vector iteration: {add}");
-
-    // ## Removing a Key
-    // Assigning null to a hash subscript removes that element.
-    // Removing a key that is not present is a safe no-op.
-    d.h["three"] = null;
-    assert(!d.h["three"], "three was removed");
-    assert(d.h["one"],    "one still present");
-    d.h["missing"] = null;   // no-op; does not panic
-
-    // ## Why you cannot iterate a hash directly
-    // A hash has no stable element order — hash bucket positions depend on key hashes
-    // and the internal load factor, so there is no meaningful #index or sequential position.
-    // 'for item in c.lookup' is therefore a compile error.
-    // Always pair a hash with a vector when you need both fast lookup and ordered iteration.
+  // ## Basic Lookup
+  // Fill a hash the same way you fill a vector. Look up by key with square brackets.
+  // A found record is truthy; a missing key returns null.
+  d = Data { };
+  d.h =[ {name: "one" }, {name: "two" }];
+  d.h +=[ {name: "three" }, {name: "four" }];
+  assert(d.h["three"], "Key exists");
+  assert(!d.h["None"], "Missing key returns null");
+  // ## Hash + Vector Together
+  // Here 'entries' is the vector (keeps insertion order) and 'lookup' is the hash (fast access).
+  // Both fields point to the same records — adding to one automatically updates the other.
+  c = Counting { };
+  fill(c);
+  assert(c.lookup["Three"].v == 3, "Hash lookup: Three");
+  assert(c.lookup["One"].v == 1, "Hash lookup: One");
+  assert(!c.lookup["Five"], "Missing key returns null");
+  // Iterate in insertion order via the vector; look up by name via the hash.
+  // The vector also supports #first, #count, and #remove inside the loop.
+  add = 0;
+  for item in c.entries {
+    add += item.v;
+  }
+  assert(add == 10, "Sum via vector iteration: {add}");
+  // ## Removing a Key
+  // Assigning null to a hash subscript removes that element.
+  // Removing a key that is not present is a safe no-op.
+  d.h["three"] = null;
+  assert(!d.h["three"], "three was removed");
+  assert(d.h["one"], "one still present");
+  d.h["missing"] = null;
+  // no-op; does not panic
+  // ## Why you cannot iterate a hash directly
+  // A hash has no stable element order — hash bucket positions depend on key hashes
+  // and the internal load factor, so there is no meaningful #index or sequential position.
+  // 'for item in c.lookup' is therefore a compile error.
+  // Always pair a hash with a vector when you need both fast lookup and ordered iteration.
 }

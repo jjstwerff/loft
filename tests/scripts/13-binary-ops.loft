@@ -1,140 +1,123 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Binary file operations: seek+overwrite, set_size (truncate/extend), incomplete read, size field.
-
 fn cleanup() {
-    delete("test_loft_a.bin");
-    delete("test_loft_b.bin");
+  delete("test_loft_a.bin");
+  delete("test_loft_b.bin");
 }
 
 fn main() {
-    cleanup();
-
-    // === Seek then overwrite ===
-
-    { f = file("test_loft_a.bin");
-      f#format = LittleEndian;
-      f += 0x11223344;
-      f += 0x55667788;
-      // Seek back to start and overwrite first int.
-      // Use a value that fits in i32 (0xaabbccdd overflows i32).
-      f#next = 0l;
-      f += 0x11111111;
-    }
-    { f = file("test_loft_a.bin");
-      f#format = LittleEndian;
-      assert(f#read(4) as i32 == 0x11111111, "seek+overwrite first int");
-      assert(f#read(4) as i32 == 0x55667788, "second int unchanged");
-    }
-    assert(delete("test_loft_a.bin"), "delete after seek overwrite test");
-
-    // === #size set (truncate / extend) ===
-
-    // Truncate text file to fewer bytes discards tail
-    { f = file("test_loft_a.bin");
-      f += "Hello World";
-      f#size = 5l;
-    }
-    { f = file("test_loft_a.bin");
-      assert(f#read(100) as text == "Hello", "set_size truncates text");
-    }
-    assert(delete("test_loft_a.bin"), "delete after truncate text test");
-
-    // Truncate binary file: write two ints, resize to 4 — only first remains
-    { f = file("test_loft_a.bin");
-      f#format = LittleEndian;
-      f += 0x11223344;
-      f += 0x55667788;
-      f#size = 4l;
-    }
-    { f = file("test_loft_a.bin");
-      f#format = LittleEndian;
-      assert(f#read(4) as i32 == 0x11223344, "set_size truncates binary: first int survives");
-    }
-    assert(delete("test_loft_a.bin"), "delete after truncate binary test");
-
-    // After truncation reported size matches new length
-    { f = file("test_loft_a.bin");
-      f += "Hello World";
-      f#size = 5l;
-    }
-    { f = file("test_loft_a.bin");
-      assert(f#size == 5l, "set_size: reported size matches truncated length");
-    }
-    assert(delete("test_loft_a.bin"), "delete after size report test");
-
-    // Extend file: pads with null bytes, size grows
-    { f = file("test_loft_a.bin");
-      f += "Hi";
-      f#size = 10l;
-    }
-    { f = file("test_loft_a.bin");
-      assert(f#size == 10l, "set_size extends: size grows to requested length");
-    }
-    assert(delete("test_loft_a.bin"), "delete after extend test");
-
-    // Set size to zero empties the file
-    { f = file("test_loft_a.bin");
-      f += "Hello";
-      f#size = 0l;
-    }
-    { f = file("test_loft_a.bin");
-      assert(f#size == 0l, "set_size zero: file is empty");
-    }
-    assert(delete("test_loft_a.bin"), "delete after zero-size test");
-
-    // Negative size is rejected; set_file_size returns false and file unchanged
-    { f = file("test_loft_a.bin");
-      f += "Hello";
-      ok = f.set_file_size(-1l);
-      assert(!ok, "set_file_size negative returns false");
-    }
-    { f = file("test_loft_a.bin");
-      assert(f#size == 5l, "set_file_size negative: file unchanged");
-    }
-    assert(delete("test_loft_a.bin"), "delete after negative-size test");
-
-    // set_file_size on a directory returns false
-    assert(!file("example").set_file_size(0l), "set_file_size on directory returns false");
-
-    // set_file_size on a nonexistent file returns false
-    assert(!file("nonexistent_xyz_set_size.txt").set_file_size(0l), "set_file_size nonexistent returns false");
-
-    // After truncation via #size = 0, a new write reopens and starts from start
-    { f = file("test_loft_a.bin");
-      f += "Hello World";
-      f#size = 0l;
-    }
-    { f = file("test_loft_a.bin");
-      f += "Hi";
-    }
-    { f = file("test_loft_a.bin");
-      assert(f#read(100) as text == "Hi", "set_size zero then write: file contains new data");
-    }
-    assert(delete("test_loft_a.bin"), "delete after zero-then-write test");
-
-    // === Incomplete read (fewer bytes than type requires) → #next unchanged ===
-
-    { f = file("test_loft_a.bin");
-      f#format = LittleEndian;
-      f += 42;
-    }
-    { f = file("test_loft_a.bin");
-      f#format = LittleEndian;
-      f#read(4) as i32;
-      // Consume the 4 bytes, then try to read 8 bytes as long (0 remain)
-      f#next = 0l;
-      f#read(8) as long;
-      assert(f#next == 0l, "incomplete typed read: #next unchanged");
-    }
-    assert(delete("test_loft_a.bin"), "delete after incomplete read test");
-
-    // === file().size field reflects written size (via new file() call) ===
-
-    { f = file("test_loft_b.bin");
-      f#format = LittleEndian;
-      f += 42;
-    }
-    assert(file("test_loft_b.bin").size == 4l, "file().size reflects 4-byte write");
-    assert(delete("test_loft_b.bin"), "delete after size-field test");
+  cleanup();
+  // === Seek then overwrite ===
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  f += 0x11223344;
+  f += 0x55667788;
+  // Seek back to start and overwrite first int.
+  // Use a value that fits in i32 (0xaabbccdd overflows i32).
+  f#next = 0l;
+  f += 0x11111111;
+ }
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  assert(f#read(4) as i32 == 0x11111111, "seek+overwrite first int");
+  assert(f#read(4) as i32 == 0x55667788, "second int unchanged");
+ }
+  assert(delete("test_loft_a.bin"), "delete after seek overwrite test");
+  // === #size set (truncate / extend) ===
+  // Truncate text file to fewer bytes discards tail
+ {f = file("test_loft_a.bin");
+  f += "Hello World";
+  f#size = 5l;
+ }
+ {f = file("test_loft_a.bin");
+  assert(f#read(100) as text == "Hello", "set_size truncates text");
+ }
+  assert(delete("test_loft_a.bin"), "delete after truncate text test");
+  // Truncate binary file: write two ints, resize to 4 — only first remains
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  f += 0x11223344;
+  f += 0x55667788;
+  f#size = 4l;
+ }
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  assert(f#read(4) as i32 == 0x11223344, "set_size truncates binary: first int survives");
+ }
+  assert(delete("test_loft_a.bin"), "delete after truncate binary test");
+  // After truncation reported size matches new length
+ {f = file("test_loft_a.bin");
+  f += "Hello World";
+  f#size = 5l;
+ }
+ {f = file("test_loft_a.bin");
+  assert(f#size == 5l, "set_size: reported size matches truncated length");
+ }
+  assert(delete("test_loft_a.bin"), "delete after size report test");
+  // Extend file: pads with null bytes, size grows
+ {f = file("test_loft_a.bin");
+  f += "Hi";
+  f#size = 10l;
+ }
+ {f = file("test_loft_a.bin");
+  assert(f#size == 10l, "set_size extends: size grows to requested length");
+ }
+  assert(delete("test_loft_a.bin"), "delete after extend test");
+  // Set size to zero empties the file
+ {f = file("test_loft_a.bin");
+  f += "Hello";
+  f#size = 0l;
+ }
+ {f = file("test_loft_a.bin");
+  assert(f#size == 0l, "set_size zero: file is empty");
+ }
+  assert(delete("test_loft_a.bin"), "delete after zero-size test");
+  // Negative size is rejected; set_file_size returns false and file unchanged
+ {f = file("test_loft_a.bin");
+  f += "Hello";
+  ok = f.set_file_size(-1l);
+  assert(!ok, "set_file_size negative returns false");
+ }
+ {f = file("test_loft_a.bin");
+  assert(f#size == 5l, "set_file_size negative: file unchanged");
+ }
+  assert(delete("test_loft_a.bin"), "delete after negative-size test");
+  // set_file_size on a directory returns false
+  assert(!file("example").set_file_size(0l), "set_file_size on directory returns false");
+  // set_file_size on a nonexistent file returns false
+  assert(!file("nonexistent_xyz_set_size.txt").set_file_size(0l), "set_file_size nonexistent returns false");
+  // After truncation via #size = 0, a new write reopens and starts from start
+ {f = file("test_loft_a.bin");
+  f += "Hello World";
+  f#size = 0l;
+ }
+ {f = file("test_loft_a.bin");
+  f += "Hi";
+ }
+ {f = file("test_loft_a.bin");
+  assert(f#read(100) as text == "Hi", "set_size zero then write: file contains new data");
+ }
+  assert(delete("test_loft_a.bin"), "delete after zero-then-write test");
+  // === Incomplete read (fewer bytes than type requires) → #next unchanged ===
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  f += 42;
+ }
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  f#read(4) as i32;
+  // Consume the 4 bytes, then try to read 8 bytes as long (0 remain)
+  f#next = 0l;
+  f#read(8) as long;
+  assert(f#next == 0l, "incomplete typed read: #next unchanged");
+ }
+  assert(delete("test_loft_a.bin"), "delete after incomplete read test");
+  // === file().size field reflects written size (via new file() call) ===
+ {f = file("test_loft_b.bin");
+  f#format = LittleEndian;
+  f += 42;
+ }
+  assert(file("test_loft_b.bin").size == 4l, "file().size reflects 4-byte write");
+  assert(delete("test_loft_b.bin"), "delete after size-field test");
 }

@@ -1,74 +1,66 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // min, max, clamp for integer, long, single, and float.
-
 fn main() {
-    // --- integer min ---
-    assert(min(3, 5) == 3, "int min(3,5)");
-    assert(min(5, 3) == 3, "int min(5,3)");
-    assert(min(4, 4) == 4, "int min equal");
-    assert(min(-2, 1) == -2, "int min negative");
-    assert(min(0, 0) == 0, "int min both zero");
-
-    // --- integer max ---
-    assert(max(3, 5) == 5, "int max(3,5)");
-    assert(max(5, 3) == 5, "int max(5,3)");
-    assert(max(4, 4) == 4, "int max equal");
-    assert(max(-2, 1) == 1, "int max negative");
-    assert(max(0, 0) == 0, "int max both zero");
-
-    // --- integer clamp ---
-    assert(clamp(5, 1, 10) == 5, "int clamp inside range");
-    assert(clamp(0, 1, 10) == 1, "int clamp below lo");
-    assert(clamp(15, 1, 10) == 10, "int clamp above hi");
-    assert(clamp(1, 1, 10) == 1, "int clamp at lo");
-    assert(clamp(10, 1, 10) == 10, "int clamp at hi");
-    assert(clamp(-5, -10, -1) == -5, "int clamp all negative");
-
-    // --- integer null propagation ---
-    z = 0;
-    n = 1 / z;
-    assert(!min(n, 5), "int min null left is null");
-    assert(!min(5, n), "int min null right is null");
-    assert(!max(n, 5), "int max null left is null");
-    assert(!max(5, n), "int max null right is null");
-    assert(!clamp(n, 1, 10), "int clamp null v is null");
-    assert(!clamp(5, n, 10), "int clamp null lo is null");
-    assert(!clamp(5, 1, n), "int clamp null hi is null");
-
-    // --- long min/max/clamp ---
-    assert(min(3l, 5l) == 3l, "long min");
-    assert(max(3l, 5l) == 5l, "long max");
-    assert(clamp(12l, 1l, 10l) == 10l, "long clamp above hi");
-    assert(clamp(5l, 1l, 10l) == 5l, "long clamp inside");
-    zl = 0l;
-    nl = 1l / zl;
-    assert(!min(nl, 5l), "long min null propagation");
-    assert(!max(nl, 5l), "long max null propagation");
-    assert(!clamp(nl, 1l, 10l), "long clamp null propagation");
-
-    // --- single min/max/clamp ---
-    assert(min(1.0f, 2.0f) == 1.0f, "single min");
-    assert(max(1.0f, 2.0f) == 2.0f, "single max");
-    assert(clamp(0.5f, 1.0f, 3.0f) == 1.0f, "single clamp below lo");
-    assert(clamp(2.0f, 1.0f, 3.0f) == 2.0f, "single clamp inside");
-    assert(clamp(4.0f, 1.0f, 3.0f) == 3.0f, "single clamp above hi");
-    assert(!min(0.0f / 0.0f, 2.0f), "single min null propagation");
-    assert(!max(0.0f / 0.0f, 2.0f), "single max null propagation");
-
-    // --- float min/max/clamp ---
-    assert(min(1.0, 2.0) == 1.0, "float min");
-    assert(max(1.0, 2.0) == 2.0, "float max");
-    assert(clamp(0.5, 1.0, 3.0) == 1.0, "float clamp below lo");
-    assert(clamp(2.0, 1.0, 3.0) == 2.0, "float clamp inside");
-    assert(clamp(4.0, 1.0, 3.0) == 3.0, "float clamp above hi");
-    assert(!min(0.0 / 0.0, 2.0), "float min null propagation");
-    assert(!max(0.0 / 0.0, 2.0), "float max null propagation");
-    assert(!clamp(0.0 / 0.0, 1.0, 3.0), "float clamp null propagation");
-
-    // --- min/max with negative values across types ---
-    assert(min(-100, 100) == -100, "int min extremes");
-    assert(max(-100, 100) == 100, "int max extremes");
-    assert(clamp(-5, -3, 3) == -3, "int clamp negative lo");
-    assert(clamp(5, -3, 3) == 3, "int clamp negative hi");
+  // --- integer min ---
+  assert(min(3, 5) == 3, "int min(3,5)");
+  assert(min(5, 3) == 3, "int min(5,3)");
+  assert(min(4, 4) == 4, "int min equal");
+  assert(min(-2, 1) == -2, "int min negative");
+  assert(min(0, 0) == 0, "int min both zero");
+  // --- integer max ---
+  assert(max(3, 5) == 5, "int max(3,5)");
+  assert(max(5, 3) == 5, "int max(5,3)");
+  assert(max(4, 4) == 4, "int max equal");
+  assert(max(-2, 1) == 1, "int max negative");
+  assert(max(0, 0) == 0, "int max both zero");
+  // --- integer clamp ---
+  assert(clamp(5, 1, 10) == 5, "int clamp inside range");
+  assert(clamp(0, 1, 10) == 1, "int clamp below lo");
+  assert(clamp(15, 1, 10) == 10, "int clamp above hi");
+  assert(clamp(1, 1, 10) == 1, "int clamp at lo");
+  assert(clamp(10, 1, 10) == 10, "int clamp at hi");
+  assert(clamp(-5, -10, -1) == -5, "int clamp all negative");
+  // --- integer null propagation ---
+  z = 0;
+  n = 1 / z;
+  assert(!min(n, 5), "int min null left is null");
+  assert(!min(5, n), "int min null right is null");
+  assert(!max(n, 5), "int max null left is null");
+  assert(!max(5, n), "int max null right is null");
+  assert(!clamp(n, 1, 10), "int clamp null v is null");
+  assert(!clamp(5, n, 10), "int clamp null lo is null");
+  assert(!clamp(5, 1, n), "int clamp null hi is null");
+  // --- long min/max/clamp ---
+  assert(min(3l, 5l) == 3l, "long min");
+  assert(max(3l, 5l) == 5l, "long max");
+  assert(clamp(12l, 1l, 10l) == 10l, "long clamp above hi");
+  assert(clamp(5l, 1l, 10l) == 5l, "long clamp inside");
+  zl = 0l;
+  nl = 1l / zl;
+  assert(!min(nl, 5l), "long min null propagation");
+  assert(!max(nl, 5l), "long max null propagation");
+  assert(!clamp(nl, 1l, 10l), "long clamp null propagation");
+  // --- single min/max/clamp ---
+  assert(min(1.0f, 2.0f) == 1.0f, "single min");
+  assert(max(1.0f, 2.0f) == 2.0f, "single max");
+  assert(clamp(0.5f, 1.0f, 3.0f) == 1.0f, "single clamp below lo");
+  assert(clamp(2.0f, 1.0f, 3.0f) == 2.0f, "single clamp inside");
+  assert(clamp(4.0f, 1.0f, 3.0f) == 3.0f, "single clamp above hi");
+  assert(!min(0.0f / 0.0f, 2.0f), "single min null propagation");
+  assert(!max(0.0f / 0.0f, 2.0f), "single max null propagation");
+  // --- float min/max/clamp ---
+  assert(min(1.0, 2.0) == 1.0, "float min");
+  assert(max(1.0, 2.0) == 2.0, "float max");
+  assert(clamp(0.5, 1.0, 3.0) == 1.0, "float clamp below lo");
+  assert(clamp(2.0, 1.0, 3.0) == 2.0, "float clamp inside");
+  assert(clamp(4.0, 1.0, 3.0) == 3.0, "float clamp above hi");
+  assert(!min(0.0 / 0.0, 2.0), "float min null propagation");
+  assert(!max(0.0 / 0.0, 2.0), "float max null propagation");
+  assert(!clamp(0.0 / 0.0, 1.0, 3.0), "float clamp null propagation");
+  // --- min/max with negative values across types ---
+  assert(min(-100, 100) == -100, "int min extremes");
+  assert(max(-100, 100) == 100, "int max extremes");
+  assert(clamp(-5, -3, 3) == -3, "int clamp negative lo");
+  assert(clamp(5, -3, 3) == 3, "int clamp negative hi");
 }

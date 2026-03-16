@@ -9,6 +9,7 @@ mod compile;
 mod data;
 mod database;
 mod fill;
+mod formatter;
 mod hash;
 mod keys;
 mod lexer;
@@ -60,6 +61,10 @@ fn print_help() {
     println!(
         "  --generate-log-config [path]  write a documented config file with defaults and exit"
     );
+    println!(
+        "  --format <file>               format file in-place (use - to read stdin/write stdout)"
+    );
+    println!("  --format-check <file>         exit 1 if file is not in canonical format");
 }
 
 fn handle_generate_log_config(path_opt: Option<&str>) {
@@ -78,6 +83,7 @@ fn handle_generate_log_config(path_opt: Option<&str>) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let mut args = env::args_os();
     args.next();
@@ -88,6 +94,7 @@ fn main() {
     let mut log_conf: Option<String> = None;
     let mut production = false;
     let mut generate_log_config: Option<Option<String>> = None;
+    let mut format_mode: Option<(&'static str, String)> = None;
     let mut user_args: Vec<String> = Vec::new();
     while let Some(arg) = args.next() {
         let a = arg.to_str().unwrap();
@@ -115,6 +122,18 @@ fn main() {
                 }
             });
             generate_log_config = Some(path);
+        } else if a == "--format" {
+            let path = args
+                .next()
+                .map(|s| s.to_str().unwrap().to_string())
+                .unwrap_or_default();
+            format_mode = Some(("format", path));
+        } else if a == "--format-check" {
+            let path = args
+                .next()
+                .map(|s| s.to_str().unwrap().to_string())
+                .unwrap_or_default();
+            format_mode = Some(("check", path));
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
@@ -128,6 +147,40 @@ fn main() {
         } else {
             user_args.push(a.to_string());
         }
+    }
+
+    // Handle --format / --format-check before requiring an input file
+    if let Some((mode, path)) = format_mode {
+        if path == "-" {
+            // stdin → stdout
+            use std::io::Read;
+            let mut src = String::new();
+            std::io::stdin().read_to_string(&mut src).unwrap_or(0);
+            print!("{}", formatter::format_source(&src));
+        } else if path.is_empty() {
+            println!("loft: --{mode} requires a file argument");
+            std::process::exit(1);
+        } else {
+            let src = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    println!("loft: cannot read '{path}': {e}");
+                    std::process::exit(1);
+                }
+            };
+            if mode == "check" {
+                if !formatter::check_source(&src) {
+                    std::process::exit(1);
+                }
+            } else {
+                let formatted = formatter::format_source(&src);
+                if let Err(e) = std::fs::write(&path, &formatted) {
+                    println!("loft: cannot write '{path}': {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        return;
     }
 
     // Handle --generate-log-config before requiring an input file

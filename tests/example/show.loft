@@ -1,12 +1,14 @@
-#!/usr/bin/env loft
+#! / usr / bin / env loft
 fn main() {
   print("program {program_directory()}\n");
   print("user {user_directory()}\n");
   print("current {directory()}\n\n");
-
   print("Environment variables\n");
-  for v in env_variables() { print("{v.name} = {v.value}\n"); }
-  
+  for v in env_variables() {
+    print("{v.name} = {v.value}\n");
+  }
   print("\nArguments\n");
-  for a in arguments() { print("{a#count}: {a}\n"); }
+  for a in arguments() {
+    print("{a#count}: {a}\n");
+  }
 }

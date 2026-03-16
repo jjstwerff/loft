@@ -1,39 +1,48 @@
 // Copyright (c) 2024-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // A minimal library used by the library test suite (tests/suite/17-libraries.loft).
-
 // --- Constants ---
 MAX_SIZE = 100;
 MIN_SIZE = 1;
-
 // --- Enums ---
-enum Status { Ok, Warning, Error }
-
+enum Status {
+  Ok,
+  Warning,
+  Error
+}
 // --- Plain structs ---
-struct Point { x: float, y: float }
 
-struct Bag {
-    label: text,
-    count: i32,
-    items: vector<Point>
+struct Point {
+  x: float,
+  y: float
 }
 
+struct Bag {
+  label: text,
+  count: i32,
+  items: vector < Point >
+}
 // --- Free functions ---
+
 fn add(a: i32, b: i32) -> i32 {
-    a + b
+  a + b
 }
 
 fn status_text(s: Status) -> text {
-    if s == Ok { "ok" }
-    else if s == Warning { "warn" }
-    else { "err" }
+  if s == Ok {
+    "ok"
+  } else if s == Warning {
+    "warn"
+  } else {
+    "err"
+  }
 }
-
 // --- Methods ---
+
 fn distance(self: Point) -> float {
-    sqrt(self.x * self.x + self.y * self.y)
+  sqrt(self.x * self.x + self.y * self.y)
 }
 
 fn bump(self: Bag) {
-    self.count += 1;
+  self.count += 1;
 }
