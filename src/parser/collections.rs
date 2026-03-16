@@ -648,9 +648,6 @@ use #count instead"
         };
         let for_var = self.create_var(id, &var_tp);
         self.vars.defined(for_var);
-        if matches!(var_tp, Type::Integer(_, _)) {
-            self.vars.in_use(for_var, true);
-        }
         let if_step = if self.lexer.has_token("if") {
             let mut if_expr = Value::Null;
             self.expression(&mut if_expr);

@@ -5,7 +5,6 @@ extern crate loft;
 
 mod testing;
 
-
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
@@ -261,6 +260,7 @@ fn add_to_iterated_vector() {
     // `v += elem` where v is currently being iterated is unsound: get_vector re-reads
     // the length each step, so new elements are visited — risking an infinite loop.
     code!("fn test() { v = [1, 2, 3]; for e in v { v += [4]; } }")
+        .warning("Variable e is never read at add_to_iterated_vector:1:40")
         .error("Cannot add elements to 'v' while it is being iterated — use a separate collection or add after the loop at add_to_iterated_vector:1:47");
 }
 
@@ -277,6 +277,7 @@ fn add_to_outer_loop_iterated() {
     code!(
         "fn test() { v = [1, 2, 3]; for e in v { for n in 1..3 { v += [n]; } } }"
     )
+    .warning("Variable e is never read at add_to_outer_loop_iterated:1:40")
     .error("Cannot add elements to 'v' while it is being iterated — use a separate collection or add after the loop at add_to_outer_loop_iterated:1:63");
 }
 
