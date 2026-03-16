@@ -96,7 +96,8 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   Rules: 2-space indent, opening brace on same line as header, every block body multi-line,
   spaces around binary/assignment operators and `->`, fields on separate lines in struct/enum
   bodies, trailing commas stripped. Implemented in `src/formatter.rs` as a standalone
-  tokenizer + state machine (no lexer changes). Five tests in `tests/format.rs`. (2026-03-16)
+  tokenizer + state machine (no lexer changes). CRLF-safe on all platforms. 11 tests in
+  `tests/format.rs`; cross-platform LF enforcement via `.gitattributes`. (2026-03-16)
 
 - **T2-6** — `now()` and `ticks()` time functions. `now()` returns milliseconds since
   the Unix epoch (wall clock); `ticks()` returns microseconds elapsed since program start

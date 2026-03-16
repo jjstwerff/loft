@@ -32,41 +32,53 @@ Or as a pipe:
 loft --format -             # read stdin, write stdout
 ```
 
-A `LOFT_FORMAT=1` env var can redirect formatted output to stdout without overwriting
-(useful for editor integrations following the existing `LOFT_IR`/`LOFT_DUMP` convention).
-
 ---
 
-## Implementation Approach: Token-Stream Formatter
+## Implementation
 
-The formatter works on the **raw token stream** (not the IR), so it can preserve comments
-and handle files that do not yet fully parse.  It is a single-pass state machine.
+### `src/formatter.rs` — standalone tokenizer + state machine
 
-### New file: `src/formatter.rs`
+The formatter uses its **own scanner** (`fn scan`) that tokenizes loft source into a `Tok`
+enum — completely independent of the parser's `lexer.rs`.  This keeps formatting self-contained
+and allows formatting files that do not yet fully parse.
 
+Public API:
+```rust
+pub fn format_source(source: &str) -> String
+pub fn check_source(source: &str) -> bool
 ```
-pub struct Formatter {
-    depth: usize,           // current brace depth
-    prev: Token,            // previous non-comment token kind
-    context: Vec<Ctx>,      // stack: Block | StructLit | ArgList | ArrayLit
-    out: String,            // accumulated output
-    pending_blank: bool,    // emit a blank line before next top-level item
+
+Both functions normalize CRLF line endings at entry so they behave identically on Windows
+and Unix.
+
+Internal types:
+```rust
+enum Tok { Word(String), Int(String), Flt(String), Str(String), Chr(String),
+           Sym(String), Comment(String), Newline, Blank }
+
+enum Ctx { Block, StructDef, ArgList, ArrayLit, StructLit }
+
+struct Fmt {
+    depth: usize,
+    prev: String,           // last emitted token text (or sentinel like "unary")
+    ctx: Vec<Ctx>,
+    next_brace_is_block: bool,
+    out: String,
 }
 ```
 
-### Changes to `src/lexer.rs`
+`next_brace_is_block` is set by all block-opening keywords (`fn`, `if`, `else`, `for`,
+`while`, `loop`, `match`) and by `->`, so that `{` always opens a `Block` context when
+following a keyword, regardless of what the immediately preceding token was.
 
-Add **`Mode::Raw`**: like `Mode::Code` but:
-- yields `LexItem::LineComment(String)` for `// ...` lines
-- yields `LexItem::Whitespace` tokens carrying the original newline count between tokens
-  (only the *count* matters, not exact spacing — the formatter discards original spacing)
+### `src/main.rs`
 
-This is additive — the parser continues to use `Mode::Code`.
+`--format` / `--format-check` / `--format -` flags are parsed before the normal execution
+path and handled without loading the standard library.
 
-### Changes to `src/main.rs`
+### `src/lib.rs`
 
-Parse `--format` / `--format-check` / `--format -` flags before the normal execution path.
-Call `formatter::format_file(path)` or `formatter::format_stdin()`.
+`pub mod formatter;` exposes the formatter for integration tests.
 
 ---
 
@@ -262,24 +274,22 @@ fn dist(p: Point) -> float {
 ## File Layout in `src/formatter.rs`
 
 ```
-pub fn format_file(path: &str) -> Result<String, String>
-  // read file, call format_source, return formatted string
+fn scan(src: &str) -> Vec<Tok>          // standalone scanner
 
-pub fn format_source(source: &str, filename: &str) -> Result<String, String>
-  // create Formatter, drive it with raw-mode lexer tokens
-
-impl Formatter {
-    fn next_token(&mut self, item: &LexItem)
+impl Fmt {
+    fn process(&mut self, tokens: &[Tok])
+    fn handle_sym(&mut self, s: &str, tokens: &[Tok], i: &mut usize)
+    fn close_brace(&mut self, tokens: &[Tok], i: &mut usize)
+    fn need_space(&self, tok: &str) -> bool
     fn push_ctx(&mut self, ctx: Ctx)
-    fn pop_ctx(&mut self) -> Ctx
-    fn emit(&mut self, text: &str)
-    fn emit_newline(&mut self)
-    fn emit_space(&mut self)
-    fn indent_str(&self) -> String
+    fn pop_ctx(&mut self)
+    fn emit(&mut self, s: &str)
+    fn newline(&mut self)
 }
-```
 
-Total estimated size: ~400 lines of Rust.
+pub fn format_source(source: &str) -> String
+pub fn check_source(source: &str) -> bool
+```
 
 ---
 
@@ -306,10 +316,21 @@ Total estimated size: ~400 lines of Rust.
 
 ## Testing
 
-Add `tests/format.rs`:
-- `roundtrip_*` tests: format a known-good file, assert output == input (idempotent)
-- `normalize_*` tests: format a deliberately messy input, assert it matches a golden file
-- `comment_*` tests: verify comments survive at correct indentation
-- `format_check_*` tests: verify exit code 0 for already-formatted, 1 for unformatted
+`tests/format.rs` — 11 tests using `include_str!` wrapped in `lf()` for CRLF safety:
 
-Golden files go in `tests/format/` as `*.loft` (input) and `*.loft.fmt` (expected output).
+| Test | Type | File(s) |
+|---|---|---|
+| `roundtrip_comments` | roundtrip | `comments.loft` |
+| `roundtrip_struct_def` | roundtrip | `struct_def.loft` |
+| `normalize_messy` | normalize | `messy.loft` → `messy.loft.fmt` |
+| `format_check_already_formatted` | check_source | `comments.loft` |
+| `format_check_needs_formatting` | check_source | `messy.loft` |
+| `roundtrip_unary_minus` | roundtrip | `unary_minus.loft` |
+| `roundtrip_range_ops` | roundtrip | `range_ops.loft` |
+| `roundtrip_binary_literals` | roundtrip | `binary_literals.loft` |
+| `roundtrip_if_for_blocks` | roundtrip | `if_for_blocks.loft` |
+| `roundtrip_adjacent_words` | roundtrip | `adjacent_words.loft` |
+| `normalize_else_same_line` | normalize | `else_same_line.loft` → `else_same_line.loft.fmt` |
+
+Golden files live in `tests/format/`. `.gitattributes` enforces `eol=lf` on checkout so
+`include_str!` yields `\n`-only strings on every platform.
