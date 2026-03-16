@@ -120,6 +120,66 @@ ide/                        (web IDE — added at W1)
 
 ---
 
+## Pre-Release Documentation Review
+
+Run these steps before tagging a release.  They are manual; treat each as a gate item.
+
+### 1 — Audit doc/claude/ for stale problem documentation
+
+- Open PROBLEMS.md: every bug entry there should either be open or clearly crossed out / labelled FIXED with the fix date.  Remove entries that are fixed and already recorded in CHANGELOG.md.
+- Open PLANNING.md: every item should be open.  Done items must have been removed (not marked done in-place) before this release.
+- Open project_status.md in memory/: verify it reflects current state.
+
+### 2 — Verify code links in doc/claude/
+
+Walk every file in `doc/claude/` looking for references of the form `src/foo.rs`, `src/foo/bar.rs`, function names, struct names, or opcode names.  For each:
+- Confirm the file/symbol still exists at that path/name.
+- Update any that have moved or been renamed.
+
+Helpful command: `grep -rn 'src/' doc/claude/` and cross-check against `ls src/`.
+
+### 3 — Verify doc/claude/ discoverability
+
+- Every file in `doc/claude/` must be reachable from at least one other file or from the MEMORY.md index.
+- Files that are only referenced from MEMORY.md should still link to at least one sibling document.
+- Orphaned files (nothing links to them) must be added to an existing doc or removed.
+
+### 4 — Compact verbose sections
+
+Read through any doc/claude/ file that has grown since the previous release and identify passages that are longer than necessary (e.g. multi-paragraph context that can be reduced to a bullet list, repeated caveats, implementation notes already captured in CHANGELOG.md).  Shorten these in place.
+
+### 5 — Validate user documentation against this release
+
+For each feature and bug-fix entry in CHANGELOG.md under `[Unreleased]`:
+- Find the corresponding section in the HTML reference (a file in `tests/docs/*.loft` or `doc/`).
+- Confirm the user-visible behaviour is correctly described.
+- If the feature has no user documentation, add it (either a new `.loft` example or an update to an existing one).
+
+### 6 — Validate DEVELOPERS.md caveats and language-comparison pages
+
+- **`doc/DEVELOPERS.md`**: re-read the compiler pipeline description and all "caveat" or "known limitation" callouts.  Update any that are stale relative to source changes in this release.
+- **`doc/00-vs-rust.html`** and **`doc/00-vs-python.html`**: verify that the claims in each comparison table remain accurate for the current language surface (null safety, type inference, collection API, etc.).  Update any cell that no longer holds.
+
+### 7 — Validate user documentation topic flow
+
+- Open `doc/` and list all `NN-*.html` files in order.
+- Read the first sentence of each page and verify the sequencing makes sense for a reader progressing top-to-bottom (introductory concepts before advanced ones).
+- If a topic added in this release landed at the end of the sequence but logically belongs earlier, renumber and update all cross-links.
+
+### 8 — Generate HTML and PDF
+
+```sh
+# Regenerate HTML reference
+cargo run --bin gendoc
+
+# Compile PDF
+typst compile doc/loft-reference.typ
+```
+
+Verify that `gendoc` completes without warnings and that the generated HTML files look correct in a browser.  Attach `loft-reference.pdf` to the GitHub release.
+
+---
+
 ## Release Artifacts Checklist
 
 | Artifact | Required | How |
