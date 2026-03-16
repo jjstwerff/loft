@@ -48,14 +48,14 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 R1 — see Quick Reference for full details
 
 **1.0 target items** (include if time allows; 1.1 if not):
-T1-2, T1-4, T2-0 — see Quick Reference for full details
+T1-4, T2-0 — see Quick Reference for full details
 
 **Explicitly 1.1+**:
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T2-13, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible: T1-2, T1-4, T2-0, T2-1, T2-2.
+New language features that are strictly backward-compatible: T1-4, T2-0, T2-1, T2-2.
 Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of interpreter versions.
 
 ### Version 2.0 — Breaking changes only
@@ -69,24 +69,6 @@ Not expected in the near term.
 
 
 ## Tier 1 — Language Quality & Consistency
-
----
-
-### T1-2  Wildcard and selective imports
-**Sources:** INCONSISTENCIES #13; PROBLEMS #13
-**Severity:** Medium — heavy prototyping use of a library requires `libname::` on every name
-**Description:** The only import form is `use mylib;`, which requires prefixing every
-reference with `mylib::`.  Two shorter forms would eliminate that friction:
-```loft
-use mylib::*;           // import all public names into current scope
-use mylib::Point, add;  // import specific names
-```
-**Fix path:**
-1. Parser: extend `parse_use` to handle `::*` and `::name { , name }`.
-2. Typedef/first pass: when `::*` is seen, copy all definitions from the library's namespace
-   into the current file's namespace with a shadowing check.
-3. Error on collision if a wildcard-imported name conflicts with a local definition.
-**Effort:** Medium (parser.rs, typedef.rs)
 
 ---
 
@@ -723,7 +705,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                   | Tier | Effort    | Target  | Depends on | Source                     |
 |------|---------------------------------------------------------|------|-----------|---------|------------|----------------------------|
-| T1-2 | Wildcard and selective imports                          | 1    | Medium    | 1.0 tgt |            | INCON #13, PROBLEMS #13    |
 | T1-4 | match expression with exhaustiveness                    | 1    | High      | 1.0 tgt |            | Prototype goal, INCON #6   |
 | T1-9 | Dead assignment (overwritten before first read)         | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-10 | Unused loop variable                                  | 1    | Trivial   | 1.1     |            | Warnings audit 2026-03-15  |
