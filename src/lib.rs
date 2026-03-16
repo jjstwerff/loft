@@ -27,6 +27,7 @@ mod typedef;
 pub mod create;
 pub mod fill;
 pub mod parallel;
+pub mod platform;
 pub mod state;
 
 pub mod compile;

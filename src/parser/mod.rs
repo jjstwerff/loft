@@ -13,6 +13,7 @@ use crate::data::{
 use crate::database::{Parts, Stores};
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
 use crate::lexer::{LexItem, LexResult, Lexer, Link, Mode, Position};
+use crate::platform::{other_sep, sep, sep_str};
 use crate::variables::{Function, size as var_size};
 use crate::{manifest, scopes, typedef};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -20,34 +21,7 @@ use std::env;
 use std::fs::{File, metadata, read_dir};
 use std::io::Write;
 use std::string::ToString;
-use std::sync::OnceLock;
 use typedef::complete_definition;
-
-/// Platform path separator, detected once at startup via [`std::path::MAIN_SEPARATOR`].
-/// `'\\'` on Windows filesystems, `'/'` everywhere else.
-/// Use this single token throughout instead of probing for both `'/'` and `'\\'`.
-static SEP: OnceLock<bool> = OnceLock::new();
-
-/// Returns `true` when the runtime filesystem uses `'\\'` (Windows).
-fn is_windows_fs() -> bool {
-    *SEP.get_or_init(|| std::path::MAIN_SEPARATOR == '\\')
-}
-
-/// Platform path separator as a `char`: `'\\'` on Windows, `'/'` elsewhere.
-fn sep() -> char {
-    if is_windows_fs() { '\\' } else { '/' }
-}
-
-/// The separator that is *not* native to this platform, as a `&str`.
-/// Used to normalise incoming paths that may carry the foreign separator.
-fn other_sep() -> &'static str {
-    if is_windows_fs() { "/" } else { "\\" }
-}
-
-/// Platform separator as a `&str`, for use as the replacement in `str::replace`.
-fn sep_str() -> &'static str {
-    if is_windows_fs() { "\\" } else { "/" }
-}
 
 /**
 The number of defined reserved text worker variables. A worker variable is needed when

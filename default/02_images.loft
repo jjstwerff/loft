@@ -145,12 +145,17 @@ pub fn split(self: text, separator: character) -> vector<text> {
 
 // --- File System ---
 
+// Returns the platform path separator character: '\' on Windows, '/' elsewhere.
+// Detected once at startup from the runtime filesystem.
+pub fn path_sep() -> character;
+
 // Returns true if path stays within the project directory (no net upward traversal).
 fn valid_path(path: text) -> boolean {
+    sep = path_sep();
     depth = 0;
     start = 0;
     for c in path {
-        if c == '/' || c == '\\' {
+        if c == sep {
             part = path[start..c#index];
             start = c#next;
             if part == ".." {

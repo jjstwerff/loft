@@ -19,6 +19,7 @@ mod native;
 mod ops;
 mod parallel;
 mod parser;
+mod platform;
 mod png_store;
 mod scopes;
 mod stack;

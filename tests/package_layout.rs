@@ -9,16 +9,18 @@ extern crate loft;
 
 use loft::diagnostics::Level;
 use loft::parser::Parser;
+use loft::platform::sep_str;
 use loft::scopes;
 
 /// Confirm that lib_path() locates a library stored in the packaged directory
 /// layout: `tests/lib/testpkg/src/testpkg.loft` via `lib_dirs`.
 #[test]
 fn package_layout_use_finds_src_subdir() {
+    let s = sep_str();
     let mut p = Parser::new();
     p.parse_dir("default", true, true).unwrap();
-    p.lib_dirs = vec!["tests/lib".to_string()];
-    p.parse("tests/lib/package_test_main.loft", false);
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}package_test_main.loft"), false);
     scopes::check(&mut p.data);
     assert!(
         p.diagnostics.level() < Level::Error,
@@ -31,11 +33,15 @@ fn package_layout_use_finds_src_subdir() {
 /// current interpreter version produces a fatal diagnostic.
 #[test]
 fn package_layout_version_mismatch_is_fatal() {
+    let s = sep_str();
     let mut p = Parser::new();
     p.parse_dir("default", true, true).unwrap();
-    p.lib_dirs = vec!["tests/lib".to_string()];
+    p.lib_dirs = vec![format!("tests{s}lib")];
     // testpkg_future requires loft >= 99.0, which should always fail.
-    p.parse("tests/lib/package_version_test_main.loft", false);
+    p.parse(
+        &format!("tests{s}lib{s}package_version_test_main.loft"),
+        false,
+    );
     assert!(
         p.diagnostics.level() >= Level::Error,
         "Expected a version-mismatch error"
