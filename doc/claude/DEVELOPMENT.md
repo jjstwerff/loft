@@ -73,6 +73,7 @@ cargo test                       # all tests must pass (ignoring any that were
 cargo clippy -- -D warnings      # must be clean — same flags CI uses; the
                                  # Makefile's clippy target uses -W (warn only)
                                  # and will not catch errors that fail CI
+cargo fmt -- --check             # must produce no diff; run `cargo fmt` to fix
 ```
 
 ---
@@ -245,8 +246,8 @@ Do not merge until all three jobs are green on all platforms.  If a job fails:
   `-D warnings`.  The Makefile's `make test` uses `-W` (warn only) so it will
   not catch these.  Run `cargo clippy -- -D warnings` locally, fix all errors,
   and push again.
-- **Format failure** — run `cargo fmt` locally, amend the relevant commit, and
-  force-push the branch.
+- **Format failure** — run `cargo fmt` locally, verify with `cargo fmt -- --check`,
+  amend the relevant commit, and push again.
 
 ---
 
