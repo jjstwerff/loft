@@ -859,20 +859,20 @@ use a separate collection or add after the loop"
                     && let Type::Reference(d_nr, dep) = &t
                     && dep.is_empty()
                 {
-                        let d_nr = *d_nr;
-                        let w = self.vars.work_refs(&t.clone(), &mut self.lexer);
-                        // Mark as inline-ref temp so parse_code inserts its
-                        // null-init after the first user statement, ensuring
-                        // it appears after user-scope vars in var_order and is
-                        // therefore freed before them (LIFO).
-                        self.vars.mark_inline_ref(w);
-                        let orig = code.clone();
-                        *code = v_block(
-                            vec![v_set(w, orig), Value::Var(w)],
-                            Type::Reference(d_nr, vec![w]),
-                            "inline ref",
-                        );
-                        t = Type::Reference(d_nr, vec![w]);
+                    let d_nr = *d_nr;
+                    let w = self.vars.work_refs(&t.clone(), &mut self.lexer);
+                    // Mark as inline-ref temp so parse_code inserts its
+                    // null-init after the first user statement, ensuring
+                    // it appears after user-scope vars in var_order and is
+                    // therefore freed before them (LIFO).
+                    self.vars.mark_inline_ref(w);
+                    let orig = code.clone();
+                    *code = v_block(
+                        vec![v_set(w, orig), Value::Var(w)],
+                        Type::Reference(d_nr, vec![w]),
+                        "inline ref",
+                    );
+                    t = Type::Reference(d_nr, vec![w]);
                 }
             } else if self.lexer.has_token("[") {
                 t = self.parse_index(code, &t);
@@ -996,7 +996,11 @@ use a separate collection or add after the loop"
                     self.lexer,
                     Level::Warning,
                     "{} by constant zero — result is always null",
-                    if operator == "/" { "Division" } else { "Modulo" }
+                    if operator == "/" {
+                        "Division"
+                    } else {
+                        "Modulo"
+                    }
                 );
             }
             *ctp = self.call_op(
