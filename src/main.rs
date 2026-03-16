@@ -206,7 +206,14 @@ fn main() {
             std::process::exit(1);
         }
         // Also expose the project's lib/ sub-directory for 'use' imports.
-        lib_dirs.insert(0, format!("{proj}/lib"));
+        lib_dirs.insert(
+            0,
+            std::path::Path::new(proj)
+                .join("lib")
+                .to_str()
+                .unwrap()
+                .to_string(),
+        );
     }
     let mut p = parser::Parser::new();
     p.lib_dirs = lib_dirs;
@@ -244,22 +251,37 @@ fn main() {
     }
 }
 
+fn with_trailing_sep(p: &std::path::Path) -> String {
+    let mut s = p.to_str().unwrap_or("").to_string();
+    if !s.ends_with('/') && !s.ends_with('\\') {
+        s.push(std::path::MAIN_SEPARATOR);
+    }
+    s
+}
+
 fn project_dir() -> String {
-    let direct = if let Ok(prog) = env::current_exe() {
-        prog.to_str().unwrap().to_string()
-    } else {
-        String::new()
+    let Ok(prog) = env::current_exe() else {
+        return String::new();
     };
-    let mut dir = if direct.ends_with("loft") {
-        &direct[0..direct.len() - 8]
-    } else {
-        &direct
+    let Some(dir) = prog.parent() else {
+        return String::new();
     };
-    if dir.ends_with("target/release/") {
-        dir = &dir[..dir.len() - 15];
+    // Strip target/release or target/debug to get the project root.
+    if (dir.ends_with("target/release") || dir.ends_with("target\\release"))
+        && let Some(root) = dir.parent().and_then(|p| p.parent())
+    {
+        return with_trailing_sep(root);
     }
-    if dir.ends_with("target/debug/") {
-        dir = &dir[..dir.len() - 13];
+    if (dir.ends_with("target/debug") || dir.ends_with("target\\debug"))
+        && let Some(root) = dir.parent().and_then(|p| p.parent())
+    {
+        return with_trailing_sep(root);
     }
-    dir.to_string()
+    // Installed binary: strip bin/ to get the prefix.
+    if dir.ends_with("bin")
+        && let Some(prefix) = dir.parent()
+    {
+        return with_trailing_sep(prefix);
+    }
+    with_trailing_sep(dir)
 }
