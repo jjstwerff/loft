@@ -53,7 +53,8 @@ pub fn show_code(
         if is_op && !config.show_all_functions {
             continue;
         }
-        let from_default = data.def(d_nr).position.file.starts_with("default/");
+        let from_default = data.def(d_nr).position.file.starts_with("default/")
+            || data.def(d_nr).position.file.starts_with("default\\");
         if from_default && !config.show_all_functions {
             continue;
         }

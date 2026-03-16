@@ -9,9 +9,6 @@ extern crate loft;
 
 mod testing;
 
-// Year 2000 in milliseconds — any real system should return a value well above this.
-const EPOCH_YEAR_2000_MS: i64 = 946_684_800_000;
-
 /// now() returns a positive long well above the year-2000 epoch.
 #[test]
 fn now_is_positive() {
