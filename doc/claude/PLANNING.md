@@ -600,6 +600,171 @@ optional dependency; new `plugin-api` workspace member).
 
 ---
 
+### T3-9  Scoped scratch reset for native text functions
+**Sources:** String architecture review 2026-03-16
+**Severity:** Low — `Stores.scratch: Vec<String>` (`database/mod.rs:118`) accumulates every
+owned `String` produced by `replace()`, `to_lowercase()`, `to_uppercase()` for the entire
+`execute()` run; a loop calling `text.replace()` 1M times leaks 1M `String` objects
+**Description:** The scratch buffer exists because these three native functions create new owned
+`String` values that must outlive the function call (the caller receives a `Str` raw-pointer
+into the `String`).  Currently `scratch` is only cleared at the start of each `execute()` call
+(`database/mod.rs:360`).  The fix: clear scratch at statement boundaries, when no `Str` can
+still point into it.
+
+**Current flow (for `text.replace`):**
+```
+native.rs:280  new_value = v_self.str().replace(...)   // create owned String
+native.rs:281  stores.scratch.push(new_value)          // park in scratch
+native.rs:282  Str { ptr → scratch.last(), len }       // return borrowed Str
+               ↓
+codegen.rs:956 OpAppendText(work_var, Str)             // consume: append into __work_N
+               — Str is now dead, scratch entry is waste —
+```
+
+The `Str` returned from a scratch-backed native is always consumed within the same
+expression — appended into a mutable `String` (work-text variable or assignment target)
+or stored into a struct field via `set_str()` (which copies bytes into the store).  By the
+time the next statement begins, no live `Str` points into `scratch`.
+
+**Fix path:**
+1. **Verify the invariant** — audit every call site that receives a `Str` from a
+   scratch-backed native (`t_4text_replace`, `t_4text_to_lowercase`,
+   `t_4text_to_uppercase` in `native.rs:276-321`).  Confirm that the returned `Str` is
+   consumed (appended/copied) before the next `OpLine` / statement boundary.
+   - `codegen.rs:956` — `OpAppendText` / `OpAppendStackText` immediately copies the
+     `Str` content into the destination `String`.
+   - `fill.rs:1578` — `set_text` calls `store.set_str(&s_val)` which copies bytes into
+     the store record.
+   - Both paths copy the data; neither holds the `Str` across a statement boundary.
+2. **Add `OpClearScratch`** — a new zero-operand opcode that calls
+   `self.database.scratch.clear()`.
+   - `fill.rs`: add handler: `fn clear_scratch(s: &mut State) { s.database.scratch.clear(); }`
+   - `data.rs`: register opcode name in the `OpConv` / `OPERATORS` table.
+3. **Emit `OpClearScratch` after each statement** — in `codegen.rs`, at the point where
+   `OpLine` is emitted (marks a new source line / statement boundary), also emit
+   `OpClearScratch`.  This is the simplest insertion point; it adds one byte per statement
+   to the bytecode stream (negligible).
+4. **Remove the `scratch.clear()` call at `execute()` start** — no longer needed since
+   scratch is cleared per-statement.
+5. **Test** — write a test that calls `text.replace()` in a loop 100k times and asserts
+   memory does not grow (measure `scratch.capacity()` before/after, or simply check that
+   `scratch.len() <= 1` at a statement boundary).
+
+**Alternative (simpler but less precise):** instead of a new opcode, call
+`self.database.scratch.clear()` at the top of the interpreter main loop (before each
+opcode dispatch in `fill.rs`).  This is correct because `Str` values on the stack are
+consumed by the very next opcode in the expression.  More clearing calls than necessary,
+but `Vec::clear()` on a non-empty vec is O(n) drops and on an empty vec is free.
+
+**Effort:** Trivial (1 new opcode or 1-line change in the interpreter loop; ~20 lines total)
+**Target:** 1.1
+
+---
+
+### T3-10  Destination-passing for text-returning native functions
+**Sources:** String architecture review 2026-03-16
+**Severity:** Low — eliminates the scratch buffer entirely; also removes one intermediate
+`String` allocation per format-string expression by letting natives write directly into the
+caller's mutable `String`
+**Description:** Currently, text-returning natives (`replace`, `to_lowercase`, `to_uppercase`)
+create an owned `String`, push it to `scratch`, and return a `Str` pointing into it.  The
+caller then copies the `Str` content into a mutable `String` via `OpAppendText`.  This is
+two copies: native → scratch → destination.
+
+With destination-passing, the native receives a mutable reference to the caller's `String`
+and writes directly into it.  One copy: native → destination.
+
+**Current calling convention:**
+```
+Stack before call:  [ self:Str, arg1:Str, ... ]
+Native executes:    new_value = self.replace(arg1, arg2)
+                    scratch.push(new_value)
+                    push Str → stack
+Stack after call:   [ result:Str ]
+Caller:             OpAppendText(dest_var, result)   // copies again
+```
+
+**Proposed calling convention:**
+```
+Stack before call:  [ self:Str, arg1:Str, ..., dest:DbRef ]
+Native executes:    let dest: &mut String = stores.get_string_mut(stack)
+                    dest.push_str(&self.replace(arg1, arg2))
+Stack after call:   [ ]   // result already written to dest
+```
+
+**Fix path:**
+
+**Phase 1 — Compiler changes (`state/codegen.rs`, `parser/expressions.rs`):**
+1. Add a `TextDest` calling convention flag to text-returning native function definitions
+   in `data.rs`.  When the compiler sees a call to a `TextDest` native, it emits an
+   `OpCreateStack` pointing to the destination `String` variable as an extra trailing
+   argument.
+2. Identify the destination variable:
+   - If the call is inside `parse_append_text` (format string building), the destination
+     is the `__work_N` variable (already known at `expressions.rs:1079`).
+   - If the call is in a `v = text.replace(...)` assignment, the destination is `v`
+     (if `v` is a mutable `String`).
+   - If the call is in a struct field assignment (`obj.name = text.to_uppercase()`), the
+     result must go through a work-text and then `set_str()` — no change from current
+     behaviour for this case (Phase 2 optimises it).
+3. Stop emitting `OpAppendText` after the call — the native already wrote the result.
+
+**Phase 2 — Native function changes (`native.rs`):**
+4. Change the signature of `t_4text_replace`, `t_4text_to_lowercase`,
+   `t_4text_to_uppercase` to pop the trailing `DbRef` destination argument, resolve it
+   to `&mut String`, and `push_str()` into it.
+5. Remove `stores.scratch.push(...)` and the `Str` return.  These functions now return
+   nothing (void on the stack).
+6. If T3-9 was implemented first, remove `OpClearScratch` emission since scratch is no
+   longer used.
+
+**Phase 3 — Extend to format expressions (`parser/expressions.rs`):**
+7. In `parse_append_text` (`expressions.rs:1070-1119`), the `__work_N` variable is
+   currently:
+   ```
+   OpClearText(work)        // allocate empty String
+   OpAppendText(work, lhs)  // copy left fragment
+   OpAppendText(work, rhs)  // copy right fragment
+   Value::Var(work)         // read as Str
+   ```
+   With destination-passing, when a text-returning native appears as a fragment, skip
+   the intermediate `Str` → `OpAppendText` hop: pass `work` directly as the destination
+   to the native call.  This saves one copy per native-call fragment in format strings.
+8. When the *entire* expression is a single native call assigned to a text variable
+   (`result = text.replace(...)`) and `result` is a mutable `String`, pass `result`
+   directly as the destination — eliminating the `__work_N` temporary entirely.
+
+**Phase 4 — Remove scratch buffer:**
+9. Once all three natives use destination-passing, remove `Stores.scratch` field
+   (`database/mod.rs:118`) and the `scratch.clear()` call (`database/mod.rs:360`).
+10. Remove T3-9's `OpClearScratch` if it was added.
+
+**Files changed:**
+| File | Change |
+|---|---|
+| `src/data.rs` | Add `TextDest` flag to function metadata |
+| `src/state/codegen.rs` | Emit destination `DbRef` as trailing argument for `TextDest` calls |
+| `src/parser/expressions.rs` | Pass destination through `parse_append_text`; skip `OpAppendText` for `TextDest` calls |
+| `src/native.rs` | Rewrite 3 functions to pop destination and write directly |
+| `src/database/mod.rs` | Remove `scratch` field |
+| `src/fill.rs` | Remove `clear_scratch` handler (if T3-9 was done first) |
+
+**Edge cases:**
+- **Chained calls** (`text.replace("a","b").replace("c","d")`): the first `replace` writes
+  into a work-text; the second reads from it as `Str` self-argument and writes into
+  another work-text (or the same one after clear).  Ensure the compiler doesn't pass the
+  same `String` as both source and destination — the intermediate work-text is still needed.
+- **Parallel workers**: `clone_for_worker()` currently clones `scratch`; with
+  destination-passing, no clone needed (workers have their own stack `String` variables).
+- **Future text-returning natives** (e.g. `trim`, `repeat`, `join`): any new native
+  returning text should use `TextDest` from the start.
+
+**Effort:** Medium–High (compiler calling-convention change + 3 native rewrites + codegen)
+**Depends on:** T3-9 (recommended to implement the trivial fix first; T3-10 supersedes it)
+**Target:** 1.1+
+
+---
+
 ## Tier R — Repository Extraction
 
 The interpreter lives inside the Dryopea game-engine repository, which gives it the wrong
@@ -775,6 +940,8 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-4  | Spatial index operations (full implementation)           | 3    | High      | 1.1+    |             | PROBLEMS #22               |
 | T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
 | T3-6  | Redundant `const` parameter annotation                   | 3    | Small–Med | 1.1+    |             | Warnings audit 2026-03-15  |
+| T3-9  | Scoped scratch reset for native text functions            | 3    | Trivial   | 1.1     |             | String arch review         |
+| T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
 | R1    | Create standalone `loft` GitHub repository              | R    | Trivial   | **1.0** |             | Extraction plan            |

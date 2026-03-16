@@ -25,8 +25,6 @@ evaluate ways to get rid of the scratch buffer for strings for efficiency
 
 Evaluate the ways untrusted loft code could compromise a system.
 
-Evaluate how loft could strill trigger a runtime exception
-
 Evaluate how the project can be made easier to develop against
 
 evaluate a debug mode where the stack is predefined with a specific complex pattern where all functions and variables take more space than normal to investigate if they are writing to the correct spots, leaving a scope will restore the specific pattern, writing new variables expect that specific pattern or fail.
@@ -34,3 +32,55 @@ evaluate a debug mode where the stack is predefined with a specific complex patt
 Keep the "Format" class usable in user code. Even think about "File".
 - Part of library name spacing?
 
+
+Infinite loop silently hangs (timeout mechanic)
+Explore Stack underflow/Record boundary/Claimed block too smal/Copy block OOB
+Codegen Panics / undefined comparison types / unimplemented iterator types
+Read/write files with unexpected formats
+
+
+
+
+  5. Thread bomb
+  parallel_for accepts a user-specified thread count. Requesting thousands of threads could exhaust OS limits.
+
+  6. File descriptor exhaustion
+  Repeated File { name: "...", format: Write } opens handles with no limit. Can exhaust the process FD table.
+
+  7. Worker thread panic → process crash
+  If a parallel_for worker panics (e.g. from a store lifecycle bug), thread.join().expect() in parallel.rs:126 crashes the entire interpreter. A crafted program could trigger this via specific allocation
+  patterns.
+
+  8. Malformed PNG crash
+  Reading a crafted PNG file could trigger a panic in the png crate decoder, crashing the process.
+
+  ---
+  Low Severity / Informational
+
+  9. System information leakage
+  directory(), user_directory(), program_directory(), arguments() reveal host system layout.
+
+  10. Library path injection via LOFT_LIB
+  use statements search paths from the LOFT_LIB environment variable. If an attacker controls env vars, they can inject malicious .loft libraries.
+
+  11. from_utf8_unchecked on deserialized data
+  state/text.rs and database/io.rs use String::from_utf8_unchecked() on data read from files. Malformed files could produce invalid UTF-8 strings, causing undefined behavior in Rust string operations.
+
+The --project flag only changes cwd; absolute paths and ../ traversal bypass it completely.
+
+env_variable("AWS_SECRET_ACCESS_KEY") reads any env var. env_variables() dumps all of them. This leaks credentials, tokens, and secrets from the host process environment.
+
+
+Create unit tests for conclusions about loft in vs-rust and vs-python
+
+
+If loft ever needs to run untrusted code (playground, online judge, etc.):
+
+  1. Sandbox the process — use seccomp-bpf, Landlock, or a container with no filesystem mounts
+  2. Drop file I/O natives — compile without n_env_*, file operations, directory() etc.
+  3. Promote the operation limit — change debug_assert!(step < 10_000_000) to a regular assert! or return an error
+  4. Add memory limits — enforce a max allocation budget in store.rs
+  5. Cap thread count — hard-limit parallel_for thread count (e.g. 4)
+  6. Validate UTF-8 — replace from_utf8_unchecked with from_utf8 in deserialization paths
+
+  Bottom line: Loft is safe to run your own code. It is not safe to run untrusted code without OS-level sandboxing, primarily due to unrestricted file I/O and resource exhaustion.
