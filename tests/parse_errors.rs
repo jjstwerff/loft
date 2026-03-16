@@ -5,6 +5,7 @@ extern crate loft;
 
 mod testing;
 
+
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
@@ -277,6 +278,57 @@ fn add_to_outer_loop_iterated() {
         "fn test() { v = [1, 2, 3]; for e in v { for n in 1..3 { v += [n]; } } }"
     )
     .error("Cannot add elements to 'v' while it is being iterated — use a separate collection or add after the loop at add_to_outer_loop_iterated:1:63");
+}
+
+// T1-10: unused loop variable warning
+#[test]
+#[ignore = "T1-10: not yet implemented"]
+fn unused_loop_var_range() {
+    // Loop variable never read in body — should warn.
+    code!("fn test() { total = 0; for i in 0..3 { total += 1; } assert(total == 3, \"t\"); }")
+        .warning("Variable i is never read at unused_loop_var_range:1:33");
+}
+
+#[test]
+#[ignore = "T1-10: not yet implemented"]
+fn unused_loop_var_int_vector() {
+    // Integer-element vector loop — should warn when element never read.
+    code!(
+        "fn test() {
+  items = [1, 2, 3];
+  total = 0;
+  for item in items { total += 1; }
+  assert(total == 3, \"t\");
+}"
+    )
+    .warning("Variable item is never read at unused_loop_var_int_vector:4:7");
+}
+
+#[test]
+#[ignore = "T1-10: not yet implemented"]
+fn unused_loop_var_suppressed_by_underscore() {
+    // _ prefix suppresses the warning — consistent with other unused-variable rules.
+    code!(
+        "fn test() {
+  items = [1, 2, 3];
+  total = 0;
+  for _item in items { total += 1; }
+  assert(total == 3, \"t\");
+}"
+    );
+}
+
+#[test]
+fn unused_loop_var_used_is_silent() {
+    // No warning when the loop variable is actually read.
+    code!(
+        "fn test() {
+  items = [1, 2, 3];
+  total = 0;
+  for item in items { total += item; }
+  assert(total == 6, \"t\");
+}"
+    );
 }
 
 #[test]
