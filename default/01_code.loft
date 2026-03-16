@@ -1,9 +1,7 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-
 // --- Types ---
 // Primitive types built into lav.
-
 // True or false value.
 pub type boolean size(1);
 // 32-bit signed integer.
@@ -18,805 +16,814 @@ pub type float size(8);
 pub type text size(4);
 // A single Unicode code point.
 pub type character size(4);
-
 // Integer subtypes for compact storage in struct fields. Behave as integer in expressions.
 // 0 – 255, 1 byte.
-pub type u8=integer limit(0, 255) size(1);
+pub type u8 = integer limit(0, 255) size(1);
 // -128 – 127, 1 byte.
-pub type i8=integer limit(-128, 127) size(1);
+pub type i8 = integer limit(-128, 127) size(1);
 // 0 – 65535, 2 bytes.
-pub type u16=integer limit(0, 65535) size(2);
+pub type u16 = integer limit(0, 65535) size(2);
 // -32768 – 32767, 2 bytes.
-pub type i16=integer limit(-32768, 32767) size(2);
+pub type i16 = integer limit(-32768, 32767) size(2);
 // Full 32-bit integer range, 4 bytes.
-pub type i32=integer size(4);
-
+pub type i32 = integer size(4);
 // General operations
 fn OpGoto(step: const i8);
-#rust "s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
-
+#rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
 fn OpGotoWord(step: const i16);
-#rust "s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
-
+#rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
 fn OpGotoFalse(step: const i8, if_false: boolean);
-#rust "if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
-
+#rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpGotoFalseWord(step: const i16, if_false: boolean);
-#rust "if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
-
+#rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpCall(size: const u16, to: const i32);
-#rust "s.fn_call(@size, @to);"
-
+#rust"s.fn_call(@size, @to);"
 fn OpReturn(ret: const u16, value: const u8, discard: const u16);
-#rust "s.fn_return(@ret, @value, @discard);"
-
+#rust"s.fn_return(@ret, @value, @discard);"
 fn OpFreeStack(value: const u8, discard: const u16);
-#rust "s.free_stack(@value, @discard);"
-
+#rust"s.free_stack(@value, @discard);"
 // Boolean operations
 fn OpConstTrue() -> boolean;
-#rust "true"
-
+#rust"true"
 fn OpConstFalse() -> boolean;
-#rust "false"
-
+#rust"false"
 fn OpCastTextFromBool(v1: boolean) -> text;
-#rust "if @v1 {{\"true\"}} else {{\"false\"}}"
-
+#rust"if @v1 {{\"true\"}} else {{\"false\"}}"
 fn OpVarBool(pos: const u16) -> boolean;
-#rust "*s.get_var::<bool>(@pos)"
-
+#rust"*s.get_var::<bool>(@pos)"
 fn OpPutBool(var: const u16, value: boolean);
-#rust "s.put_var(@var, @value);"
-
+#rust"s.put_var(@var, @value);"
 fn OpNot(v1: boolean) -> boolean;
-#rust "!@v1"
-
+#rust"!@v1"
 // --- Math ---
 // Functions for numeric computation.
 // All trigonometric functions work in radians.
 // Both single and float variants exist for every function —
 // choose single for speed, float for precision.
-
 // Integer operations
 fn OpConstInt(val: const integer) -> integer;
-#rust "@val"
-
+#rust"@val"
 fn OpConstShort(val: const i16) -> integer;
-#rust "i32::from(@val)"
-
+#rust"i32::from(@val)"
 fn OpConstTiny(val: const i8) -> integer;
-#rust "i32::from(@val)"
-
+#rust"i32::from(@val)"
 fn OpVarInt(pos: const u16) -> integer;
-#rust "*s.get_var::<i32>(@pos)"
-
+#rust"*s.get_var::<i32>(@pos)"
 fn OpVarCharacter(pos: const u16) -> character;
-#rust "*s.get_var::<char>(@pos)"
-
+#rust"*s.get_var::<char>(@pos)"
 fn OpPutInt(pos: const u16, value: integer);
-#rust "s.put_var(@pos, @value);"
-
+#rust"s.put_var(@pos, @value);"
 fn OpPutCharacter(pos: const u16, value: character);
-#rust "s.put_var(@pos, @value);"
-
+#rust"s.put_var(@pos, @value);"
 fn OpConvIntFromNull() -> integer;
-#rust "i32::MIN"
-
+#rust"i32::MIN"
 fn OpConvCharacterFromNull() -> character;
-#rust "char::from(0)"
-
+#rust"char::from(0)"
 fn OpConstLongText(start: const i32, size: const i32) -> text;
-#rust "s.string_from_texts(@start, @size);"
-
+#rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
-#rust "@v1.parse().unwrap_or(i32::MIN)"
-
+#rust"@v1.parse().unwrap_or(i32::MIN)"
 fn OpCastLongFromText(v1: text) -> long;
-#rust "@v1.parse().unwrap_or(i64::MIN)"
-
+#rust"@v1.parse().unwrap_or(i64::MIN)"
 fn OpCastSingleFromText(v1: text) -> single;
-#rust "@v1.parse().unwrap_or(f32::NAN)"
-
+#rust"@v1.parse().unwrap_or(f32::NAN)"
 fn OpCastFloatFromText(v1: text) -> float;
-#rust "@v1.parse().unwrap_or(f64::NAN)"
-
+#rust"@v1.parse().unwrap_or(f64::NAN)"
 fn OpAbsInt(v1: integer) -> integer;
-#rust "external::op_abs_int(@v1)"
+#rust"external::op_abs_int(@v1)"
 // Absolute value. Removes the sign from a negative integer.
-pub fn abs(both: integer) -> integer { OpAbsInt(both) }
+pub fn abs(both: integer) -> integer {
+  OpAbsInt(both)
+}
 
 fn OpMinSingleInt(v1: integer) -> integer;
-#rust "external::op_min_single_int(@v1)"
-
+#rust"external::op_min_single_int(@v1)"
 fn OpConvLongFromInt(v1: integer) -> long;
-#rust "external::op_conv_long_from_int(@v1)"
-
+#rust"external::op_conv_long_from_int(@v1)"
 fn OpConvFloatFromInt(v1: integer) -> float;
-#rust "external::op_conv_float_from_int(@v1)"
-
+#rust"external::op_conv_float_from_int(@v1)"
 fn OpConvSingleFromInt(v1: integer) -> single;
-#rust "external::op_conv_single_from_int(@v1)"
-
+#rust"external::op_conv_single_from_int(@v1)"
 fn OpConvBoolFromInt(v1: integer) -> boolean;
-#rust "external::op_conv_bool_from_int(@v1)"
-
+#rust"external::op_conv_bool_from_int(@v1)"
 fn OpAddInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_add_int(@v1, @v2)"
-
+#rust"external::op_add_int(@v1, @v2)"
 fn OpMinInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_min_int(@v1, @v2)"
-
+#rust"external::op_min_int(@v1, @v2)"
 fn OpMulInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_mul_int(@v1, @v2)"
-
+#rust"external::op_mul_int(@v1, @v2)"
 fn OpDivInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_div_int(@v1, @v2)"
-
+#rust"external::op_div_int(@v1, @v2)"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_rem_int(@v1, @v2)"
-
+#rust"external::op_rem_int(@v1, @v2)"
 fn OpLandInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_logical_and_int(@v1, @v2)"
-
+#rust"external::op_logical_and_int(@v1, @v2)"
 fn OpLorInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_logical_or_int(@v1, @v2)"
-
+#rust"external::op_logical_or_int(@v1, @v2)"
 fn OpEorInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_exclusive_or_int(@v1, @v2)"
-
+#rust"external::op_exclusive_or_int(@v1, @v2)"
 fn OpSLeftInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_shift_left_int(@v1, @v2)"
-
+#rust"external::op_shift_left_int(@v1, @v2)"
 fn OpSRightInt(v1: integer, v2: integer) -> integer;
-#rust "external::op_shift_right_int(@v1, @v2)"
-
+#rust"external::op_shift_right_int(@v1, @v2)"
 fn OpEqInt(v1: integer, v2: integer) -> boolean;
-#rust "@v1 == @v2"
-
+#rust"@v1 == @v2"
 fn OpNeInt(v1: integer, v2: integer) -> boolean;
-#rust "@v1 != @v2"
-
+#rust"@v1 != @v2"
 fn OpLtInt(v1: integer, v2: integer) -> boolean;
-#rust "@v1 < @v2"
-
+#rust"@v1 < @v2"
 fn OpLeInt(v1: integer, v2: integer) -> boolean;
-#rust "@v1 <= @v2"
-
+#rust"@v1 <= @v2"
 // Long operations
 fn OpConstLong(val: const long) -> long;
-#rust "@val"
-
+#rust"@val"
 fn OpVarLong(pos: const u16) -> long;
-#rust "*s.get_var::<i64>(@pos)"
-
+#rust"*s.get_var::<i64>(@pos)"
 fn OpPutLong(pos: const u16, value: long);
-#rust "s.put_var(@pos, @value);"
-
+#rust"s.put_var(@pos, @value);"
 fn OpConvLongFromNull() -> long;
-#rust "i64::MIN"
-
+#rust"i64::MIN"
 fn OpAbsLong(v1: long) -> long;
-#rust "external::op_abs_long(@v1)"
+#rust"external::op_abs_long(@v1)"
 // Absolute value for long integers.
-pub fn abs(both: long) -> long { OpAbsLong(both) }
+pub fn abs(both: long) -> long {
+  OpAbsLong(both)
+}
 
 fn OpMinSingleLong(v1: long) -> long;
-#rust "external::op_min_single_long(@v1)"
-
+#rust"external::op_min_single_long(@v1)"
 fn OpCastIntFromLong(v1: long) -> integer;
-#rust "external::op_cast_int_from_long(@v1)"
-
+#rust"external::op_cast_int_from_long(@v1)"
 fn OpConvFloatFromLong(v1: long) -> float;
-#rust "external::op_conv_float_from_long(@v1)"
-
+#rust"external::op_conv_float_from_long(@v1)"
 fn OpConvBoolFromLong(v1: long) -> boolean;
-#rust "external::op_conv_bool_from_long(@v1)"
-
+#rust"external::op_conv_bool_from_long(@v1)"
 fn OpAddLong(v1: long, v2: long) -> long;
-#rust "external::op_add_long(@v1, @v2)"
-
+#rust"external::op_add_long(@v1, @v2)"
 fn OpMinLong(v1: long, v2: long) -> long;
-#rust "external::op_min_long(@v1, @v2)"
-
+#rust"external::op_min_long(@v1, @v2)"
 fn OpMulLong(v1: long, v2: long) -> long;
-#rust "external::op_mul_long(@v1, @v2)"
-
+#rust"external::op_mul_long(@v1, @v2)"
 fn OpDivLong(v1: long, v2: long) -> long;
-#rust "external::op_div_long(@v1, @v2)"
-
+#rust"external::op_div_long(@v1, @v2)"
 fn OpRemLong(v1: long, v2: long) -> long;
-#rust "external::op_rem_long(@v1, @v2)"
-
+#rust"external::op_rem_long(@v1, @v2)"
 fn OpLandLong(v1: long, v2: long) -> long;
-#rust "external::op_logical_and_long(@v1, @v2)"
-
+#rust"external::op_logical_and_long(@v1, @v2)"
 fn OpLorLong(v1: long, v2: long) -> long;
-#rust "external::op_logical_or_long(@v1, @v2)"
-
+#rust"external::op_logical_or_long(@v1, @v2)"
 fn OpEorLong(v1: long, v2: long) -> long;
-#rust "external::op_exclusive_or_long(@v1, @v2)"
-
+#rust"external::op_exclusive_or_long(@v1, @v2)"
 fn OpSLeftLong(v1: long, v2: long) -> long;
-#rust "external::op_shift_left_long(@v1, @v2)"
-
+#rust"external::op_shift_left_long(@v1, @v2)"
 fn OpSRightLong(v1: long, v2: long) -> long;
-#rust "external::op_shift_right_long(@v1, @v2)"
-
+#rust"external::op_shift_right_long(@v1, @v2)"
 fn OpEqLong(v1: long, v2: long) -> boolean;
-#rust "@v1 == @v2"
-
+#rust"@v1 == @v2"
 fn OpNeLong(v1: long, v2: long) -> boolean;
-#rust "@v1 != @v2"
-
+#rust"@v1 != @v2"
 fn OpLtLong(v1: long, v2: long) -> boolean;
-#rust "@v1 < @v2"
-
+#rust"@v1 < @v2"
 fn OpLeLong(v1: long, v2: long) -> boolean;
-#rust "@v1 <= @v2"
-
+#rust"@v1 <= @v2"
 fn OpFormatLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean);
 fn OpFormatStackLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean);
-
 // Single-precision (32-bit) floating-point math.
 // Choose single for performance-sensitive work such as graphics.
-
 fn OpConstSingle(val: const single) -> single;
-#rust "@val"
-
+#rust"@val"
 fn OpVarSingle(pos: const u16) -> single;
-#rust "*s.get_var::<f32>(@pos)"
-
+#rust"*s.get_var::<f32>(@pos)"
 fn OpPutSingle(pos: const u16, value: single);
-#rust "s.put_var(@pos, @value);"
-
+#rust"s.put_var(@pos, @value);"
 fn OpConvSingleFromNull() -> single;
-#rust "f32::NAN"
-
+#rust"f32::NAN"
 fn OpAbsSingle(v1: single) -> single;
-#rust "@v1.abs()"
+#rust"@v1.abs()"
 // Absolute value for single-precision floats.
-pub fn abs(both: single) -> single { OpAbsSingle(both) }
+pub fn abs(both: single) -> single {
+  OpAbsSingle(both)
+}
 
 fn OpMinSingleSingle(v1: single) -> single;
-#rust "-@v1"
-
+#rust"-@v1"
 fn OpCastIntFromSingle(v1: single) -> integer;
-#rust "external::op_cast_int_from_single(@v1)"
-
+#rust"external::op_cast_int_from_single(@v1)"
 fn OpCastLongFromSingle(v1: single) -> long;
-#rust "external::op_cast_long_from_single(@v1)"
-
+#rust"external::op_cast_long_from_single(@v1)"
 fn OpConvFloatFromSingle(v1: single) -> float;
-#rust "f64::from(@v1)"
-
+#rust"f64::from(@v1)"
 fn OpConvBoolFromSingle(v1: single) -> boolean;
-#rust "!@v1.is_nan()"
-
+#rust"!@v1.is_nan()"
 fn OpAddSingle(v1: single, v2: single) -> single;
-#rust "@v1 + @v2"
-
+#rust"@v1 + @v2"
 fn OpMinSingle(v1: single, v2: single) -> single;
-#rust "@v1 - @v2"
-
+#rust"@v1 - @v2"
 fn OpMulSingle(v1: single, v2: single) -> single;
-#rust "@v1 * @v2"
-
+#rust"@v1 * @v2"
 fn OpDivSingle(v1: single, v2: single) -> single;
-#rust "@v1 / @v2"
-
+#rust"@v1 / @v2"
 fn OpRemSingle(v1: single, v2: single) -> single;
-#rust "@v1 % @v2"
-
+#rust"@v1 % @v2"
 fn OpMathFuncSingle(fn_id: const i8, v1: single) -> single;
 // Cosine. Use for circular motion: x = r * cos(angle).
-pub fn cos(both: single) -> single { OpMathFuncSingle(0, both) }
+pub fn cos(both: single) -> single {
+  OpMathFuncSingle(0, both)
+}
 // Sine. Use for circular motion: y = r * sin(angle).
-pub fn sin(both: single) -> single { OpMathFuncSingle(1, both) }
+
+pub fn sin(both: single) -> single {
+  OpMathFuncSingle(1, both)
+}
 // Tangent. Use for slopes and perspective projection.
-pub fn tan(both: single) -> single { OpMathFuncSingle(2, both) }
+
+pub fn tan(both: single) -> single {
+  OpMathFuncSingle(2, both)
+}
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
-pub fn acos(both: single) -> single { OpMathFuncSingle(3, both) }
+
+pub fn acos(both: single) -> single {
+  OpMathFuncSingle(3, both)
+}
 // Arc sine. Returns the angle whose sine is v.
-pub fn asin(both: single) -> single { OpMathFuncSingle(4, both) }
+
+pub fn asin(both: single) -> single {
+  OpMathFuncSingle(4, both)
+}
 // Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
-pub fn atan(both: single) -> single { OpMathFuncSingle(5, both) }
+
+pub fn atan(both: single) -> single {
+  OpMathFuncSingle(5, both)
+}
 // Round up to the nearest integer value.
 // Use to compute required buffer sizes from fractional counts.
-pub fn ceil(both: single) -> single { OpMathFuncSingle(6, both) }
+
+pub fn ceil(both: single) -> single {
+  OpMathFuncSingle(6, both)
+}
 // Round down to the nearest integer value.
 // Use to convert a float position to a tile index.
-pub fn floor(both: single) -> single { OpMathFuncSingle(7, both) }
+
+pub fn floor(both: single) -> single {
+  OpMathFuncSingle(7, both)
+}
 // Round to the nearest integer value (half rounds away from zero).
-pub fn round(both: single) -> single { OpMathFuncSingle(8, both) }
+
+pub fn round(both: single) -> single {
+  OpMathFuncSingle(8, both)
+}
 // Square root. Use for distances and normalization.
-pub fn sqrt(both: single) -> single { OpMathFuncSingle(9, both) }
+
+pub fn sqrt(both: single) -> single {
+  OpMathFuncSingle(9, both)
+}
 
 fn OpMathFunc2Single(fn_id: const i8, v1: single, v2: single) -> single;
 // Arc tangent of y/x, preserving the correct quadrant.
 // Use instead of atan when you have separate x/y components.
-pub fn atan2(both: single, v2: single) -> single { OpMathFunc2Single(0, both, v2) }
+pub fn atan2(both: single, v2: single) -> single {
+  OpMathFunc2Single(0, both, v2)
+}
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
-pub fn log(both: single, v2: single) -> single { OpMathFunc2Single(1, both, v2) }
+
+pub fn log(both: single, v2: single) -> single {
+  OpMathFunc2Single(1, both, v2)
+}
 
 fn OpPowSingle(v1: single, v2: single) -> single;
-#rust "@v1.powf(@v2)"
+#rust"@v1.powf(@v2)"
 // Raises base to the power exp.
 // Use for exponential growth curves and scaling.
-pub fn pow(both: single, v2: single) -> single { OpPowSingle(both, v2) }
+pub fn pow(both: single, v2: single) -> single {
+  OpPowSingle(both, v2)
+}
 
 fn OpEqSingle(v1: single, v2: single) -> boolean;
-#rust "(@v1 - @v2).abs() < 0.000_001f32"
-
+#rust"(@v1 - @v2).abs() < 0.000_001f32"
 fn OpNeSingle(v1: single, v2: single) -> boolean;
-#rust "(@v1 - @v2).abs() > 0.000_001f32"
-
+#rust"(@v1 - @v2).abs() > 0.000_001f32"
 fn OpLtSingle(v1: single, v2: single) -> boolean;
-#rust "@v1 < @v2"
-
+#rust"@v1 < @v2"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
-#rust "@v1 <= @v2"
-
+#rust"@v1 <= @v2"
 fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer);
 fn OpFormatStackSingle(pos: const u16, val: single, width: integer, precision: integer);
-
 // Double-precision (64-bit) floating-point math.
 // Choose float over single when precision matters.
-
 fn OpConstFloat(val: const float) -> float;
-#rust "@val"
-
+#rust"@val"
 fn OpVarFloat(pos: const u16) -> float;
-#rust "*s.get_var::<f64>(@pos)"
-
+#rust"*s.get_var::<f64>(@pos)"
 fn OpPutFloat(pos: const u16, value: float);
-#rust "s.put_var(@pos, @value);"
-
+#rust"s.put_var(@pos, @value);"
 fn OpConvFloatFromNull() -> float;
-#rust "f64::NAN"
-
+#rust"f64::NAN"
 fn OpAbsFloat(v1: float) -> float;
-#rust "@v1.abs()"
+#rust"@v1.abs()"
 // Absolute value for double-precision floats.
-pub fn abs(both: float) -> float { OpAbsFloat(both) }
+pub fn abs(both: float) -> float {
+  OpAbsFloat(both)
+}
 
 fn OpMathPiFloat() -> float;
-#rust "std::f64::consts::PI"
+#rust"std::f64::consts::PI"
 // The ratio of a circle's circumference to its diameter (3.14159...).
 pub PI = OpMathPiFloat();
-
 fn OpMathEFloat() -> float;
-#rust "std::f64::consts::E"
+#rust"std::f64::consts::E"
 // Euler's number, the base of natural logarithms (2.71828...).
 pub E = OpMathEFloat();
-
 fn OpMathFuncFloat(fn_id: const i8, v1: float) -> float;
 // Cosine. Use for circular motion: x = r * cos(angle).
-pub fn cos(both: float) -> float { OpMathFuncFloat(0, both) }
+pub fn cos(both: float) -> float {
+  OpMathFuncFloat(0, both)
+}
 // Sine. Use for circular motion: y = r * sin(angle).
-pub fn sin(both: float) -> float { OpMathFuncFloat(1, both) }
+
+pub fn sin(both: float) -> float {
+  OpMathFuncFloat(1, both)
+}
 // Tangent. Use for slopes and perspective projection.
-pub fn tan(both: float) -> float { OpMathFuncFloat(2, both) }
+
+pub fn tan(both: float) -> float {
+  OpMathFuncFloat(2, both)
+}
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
-pub fn acos(both: float) -> float { OpMathFuncFloat(3, both) }
+
+pub fn acos(both: float) -> float {
+  OpMathFuncFloat(3, both)
+}
 // Arc sine. Returns the angle whose sine is v.
-pub fn asin(both: float) -> float { OpMathFuncFloat(4, both) }
+
+pub fn asin(both: float) -> float {
+  OpMathFuncFloat(4, both)
+}
 // Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
-pub fn atan(both: float) -> float { OpMathFuncFloat(5, both) }
+
+pub fn atan(both: float) -> float {
+  OpMathFuncFloat(5, both)
+}
 // Round up to the nearest integer value.
 // Use to compute required buffer sizes from fractional counts.
-pub fn ceil(both: float) -> float { OpMathFuncFloat(6, both) }
+
+pub fn ceil(both: float) -> float {
+  OpMathFuncFloat(6, both)
+}
 // Round down to the nearest integer value.
 // Use to convert a float position to a tile index.
-pub fn floor(both: float) -> float { OpMathFuncFloat(7, both) }
+
+pub fn floor(both: float) -> float {
+  OpMathFuncFloat(7, both)
+}
 // Round to the nearest integer value (half rounds away from zero).
-pub fn round(both: float) -> float { OpMathFuncFloat(8, both) }
+
+pub fn round(both: float) -> float {
+  OpMathFuncFloat(8, both)
+}
 // Square root. Use for distances and normalization.
-pub fn sqrt(both: float) -> float { OpMathFuncFloat(9, both) }
+
+pub fn sqrt(both: float) -> float {
+  OpMathFuncFloat(9, both)
+}
 
 fn OpMathFunc2Float(fn_id: const i8, v1: float, v2: float) -> float;
 // Arc tangent of y/x, preserving the correct quadrant.
 // Use instead of atan when you have separate x/y components.
-pub fn atan2(both: float, v2: float) -> float { OpMathFunc2Float(0, both, v2) }
+pub fn atan2(both: float, v2: float) -> float {
+  OpMathFunc2Float(0, both, v2)
+}
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
-pub fn log(both: float, v2: float) -> float { OpMathFunc2Float(1, both, v2) }
+
+pub fn log(both: float, v2: float) -> float {
+  OpMathFunc2Float(1, both, v2)
+}
 
 fn OpPowFloat(v1: float, v2: float) -> float;
-#rust "@v1.powf(@v2)"
+#rust"@v1.powf(@v2)"
 // Raises base to the power exp.
 // Use for exponential growth curves and scaling.
-pub fn pow(both: float, v2: float) -> float { OpPowFloat(both, v2) }
-
+pub fn pow(both: float, v2: float) -> float {
+  OpPowFloat(both, v2)
+}
 // --- exp / ln / log2 / log10 ---
 // Raises E (2.71828…) to the power v. Use for exponential growth models.
-pub fn exp(both: single) -> single { pow(E as single, both) }
-pub fn exp(both: float)  -> float  { pow(E, both) }
+
+pub fn exp(both: single) -> single {
+  pow(E as single, both)
+}
+
+pub fn exp(both: float) -> float {
+  pow(E, both)
+}
 // Natural logarithm (base E). Use for growth rates and information entropy.
-pub fn ln(both: single) -> single { log(both, E as single) }
-pub fn ln(both: float)  -> float  { log(both, E) }
+
+pub fn ln(both: single) -> single {
+  log(both, E as single)
+}
+
+pub fn ln(both: float) -> float {
+  log(both, E)
+}
 // Base-2 logarithm. Use for bit-count calculations and information theory.
-pub fn log2(both: single) -> single { log(both, 2.0f) }
-pub fn log2(both: float)  -> float  { log(both, 2.0) }
+
+pub fn log2(both: single) -> single {
+  log(both, 2.0f)
+}
+
+pub fn log2(both: float) -> float {
+  log(both, 2.0)
+}
 // Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
-pub fn log10(both: single) -> single { log(both, 10.0f) }
-pub fn log10(both: float)  -> float  { log(both, 10.0) }
+
+pub fn log10(both: single) -> single {
+  log(both, 10.0f)
+}
+
+pub fn log10(both: float) -> float {
+  log(both, 10.0)
+}
 
 fn OpMinSingleFloat(v1: float) -> float;
-#rust "-@v1"
-
+#rust"-@v1"
 fn OpCastSingleFromFloat(v1: float) -> single;
-#rust "@v1 as f32"
-
+#rust"@v1 as f32"
 fn OpCastIntFromFloat(v1: float) -> integer;
-#rust "external::op_cast_int_from_float(@v1)"
-
+#rust"external::op_cast_int_from_float(@v1)"
 fn OpCastLongFromFloat(v1: float) -> long;
-#rust "external::op_cast_long_from_float(@v1)"
-
+#rust"external::op_cast_long_from_float(@v1)"
 fn OpConvBoolFromFloat(v1: float) -> boolean;
-#rust "!@v1.is_nan()"
-
+#rust"!@v1.is_nan()"
 fn OpAddFloat(v1: float, v2: float) -> float;
-#rust "@v1 + @v2"
-
+#rust"@v1 + @v2"
 fn OpMinFloat(v1: float, v2: float) -> float;
-#rust "@v1 - @v2"
-
+#rust"@v1 - @v2"
 fn OpMulFloat(v1: float, v2: float) -> float;
-#rust "@v1 * @v2"
-
+#rust"@v1 * @v2"
 fn OpDivFloat(v1: float, v2: float) -> float;
-#rust "@v1 / @v2"
-
+#rust"@v1 / @v2"
 fn OpRemFloat(v1: float, v2: float) -> float;
-#rust "@v1 % @v2"
-
+#rust"@v1 % @v2"
 fn OpEqFloat(v1: float, v2: float) -> boolean;
-#rust "(@v1 - @v2).abs() < 0.000_000_001f64"
-
+#rust"(@v1 - @v2).abs() < 0.000_000_001f64"
 fn OpNeFloat(v1: float, v2: float) -> boolean;
-#rust "(@v1 - @v2).abs() > 0.000_000_001f64"
-
+#rust"(@v1 - @v2).abs() > 0.000_000_001f64"
 fn OpLtFloat(v1: float, v2: float) -> boolean;
-#rust "@v1 < @v2"
-
+#rust"@v1 < @v2"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
-#rust "@v1 <= @v2"
-
+#rust"@v1 <= @v2"
 fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer);
 fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer);
-
 // --- min / max / clamp ---
 // Returns null if either argument is null (consistent with all binary arithmetic operations).
-
 // Smallest of two integer values.
 pub fn min(both: integer, b: integer) -> integer {
-    if !both || !b { return null; }
-    if both <= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
 }
 // Largest of two integer values.
+
 pub fn max(both: integer, b: integer) -> integer {
-    if !both || !b { return null; }
-    if both >= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
 }
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-pub fn clamp(both: integer, lo: integer, hi: integer) -> integer { min(max(both, lo), hi) }
 
+pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
+  min(max(both, lo), hi)
+}
 // Smallest of two long values.
+
 pub fn min(both: long, b: long) -> long {
-    if !both || !b { return null; }
-    if both <= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
 }
 // Largest of two long values.
+
 pub fn max(both: long, b: long) -> long {
-    if !both || !b { return null; }
-    if both >= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
 }
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-pub fn clamp(both: long, lo: long, hi: long) -> long { min(max(both, lo), hi) }
 
+pub fn clamp(both: long, lo: long, hi: long) -> long {
+  min(max(both, lo), hi)
+}
 // Smallest of two single-precision float values.
+
 pub fn min(both: single, b: single) -> single {
-    if !both || !b { return null; }
-    if both <= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
 }
 // Largest of two single-precision float values.
+
 pub fn max(both: single, b: single) -> single {
-    if !both || !b { return null; }
-    if both >= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
 }
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-pub fn clamp(both: single, lo: single, hi: single) -> single { min(max(both, lo), hi) }
 
+pub fn clamp(both: single, lo: single, hi: single) -> single {
+  min(max(both, lo), hi)
+}
 // Smallest of two double-precision float values.
+
 pub fn min(both: float, b: float) -> float {
-    if !both || !b { return null; }
-    if both <= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
 }
 // Largest of two double-precision float values.
+
 pub fn max(both: float, b: float) -> float {
-    if !both || !b { return null; }
-    if both >= b { both } else { b }
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
 }
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-pub fn clamp(both: float, lo: float, hi: float) -> float { min(max(both, lo), hi) }
 
+pub fn clamp(both: float, lo: float, hi: float) -> float {
+  min(max(both, lo), hi)
+}
 // --- Text ---
 // Functions for working with text (UTF-8 strings) and character values.
-
 // Read the value of a variable and put a reference to it on the stack
+
 fn OpVarText(pos: const u16) -> text;
 // Put a reference copy of an argument on stack
 fn OpArgText(pos: const u16) -> text;
 fn OpConstText(_value: const text) -> text;
-#rust "s.string_from_code();"
+#rust"s.string_from_code();"
 fn OpConvTextFromNull() -> text;
 fn OpLengthText(v1: text) -> integer;
-#rust "@v1.len() as i32"
+#rust"@v1.len() as i32"
 // Number of bytes in the text. Use for bounds checks and iteration limits.
-pub fn len(both: text) -> integer { OpLengthText(both) }
+pub fn len(both: text) -> integer {
+  OpLengthText(both)
+}
+
 fn OpLengthCharacter(v1: character) -> integer;
 // Byte length of the character's UTF-8 encoding (1–4).
-pub fn len(both: character) -> integer { OpLengthCharacter(both) }
+pub fn len(both: character) -> integer {
+  OpLengthCharacter(both)
+}
+
 fn OpConvBoolFromText(v1: text) -> boolean;
-#rust "@v1 != crate::state::STRING_NULL"
+#rust"@v1 != crate::state::STRING_NULL"
 fn OpText();
 fn OpAppendText(pos: const u16, v1: text);
 fn OpGetTextSub(v1: text, from: integer, till: integer) -> text[v1];
 fn OpTextCharacter(v1: text, v2: integer) -> character;
-#rust "external::text_character(@v1, @v2)"
+#rust"external::text_character(@v1, @v2)"
 fn OpConvBoolFromCharacter(v1: character) -> boolean;
-#rust "external::op_conv_bool_from_character(@v1)"
+#rust"external::op_conv_bool_from_character(@v1)"
 fn OpClearText(pos: const u16);
 fn OpFreeText(pos: const u16);
 fn OpEqText(v1: text, v2: text) -> boolean;
-#rust "@v1 == @v2"
+#rust"@v1 == @v2"
 fn OpNeText(v1: text, v2: text) -> boolean;
-#rust "@v1 != @v2"
+#rust"@v1 != @v2"
 fn OpLtText(v1: text, v2: text) -> boolean;
-#rust "@v1 < @v2"
+#rust"@v1 < @v2"
 fn OpLeText(v1: text, v2: text) -> boolean;
-#rust "@v1 <= @v2"
+#rust"@v1 <= @v2"
 fn OpFormatText(pos: const u16, val: text, width: integer, dir: const i8, token: const u8);
 fn OpFormatStackText(pos: const u16, val: text, width: integer, dir: const i8, token: const u8);
-
 fn OpAppendCharacter(pos: const u16, v1: character);
 fn OpTextCompare(v1: text, v2: character) -> i32;
 fn OpCastCharacterFromInt(v1: i32) -> character;
-#rust "char::from_u32(@v1 as u32).unwrap_or(char::from(0))"
+#rust"char::from_u32(@v1 as u32).unwrap_or(char::from(0))"
 fn OpConvIntFromCharacter(v1: character) -> i32;
-#rust "if @v1 == char::from(0) {{ i32::MIN }} else {{ @v1 as i32 }}"
-
+#rust"if @v1 == char::from(0) {{ i32::MIN }} else {{ @v1 as i32 }}"
 type enumerate size(1);
 fn OpVarEnum(pos: const u16) -> enumerate;
-#rust "*s.get_var::<u8>(@pos)"
+#rust"*s.get_var::<u8>(@pos)"
 fn OpConstEnum(val: const enumerate) -> enumerate;
-#rust "@val"
+#rust"@val"
 fn OpPutEnum(pos: const u16, value: enumerate);
-#rust "s.put_var(@pos, @value);"
+#rust"s.put_var(@pos, @value);"
 fn OpConvBoolFromEnum(v1: enumerate) -> boolean;
-#rust "@v1 != 255"
+#rust"@v1 != 255"
 fn OpCastTextFromEnum(v1: enumerate, enum_tp: const u16) -> text;
-#rust "Str::new(s.database.enum_val(@enum_tp, @v1))"
+#rust"Str::new(s.database.enum_val(@enum_tp, @v1))"
 fn OpCastEnumFromText(v1: text, enum_tp: const u16) -> enumerate;
-#rust "s.database.to_enum(@enum_tp, @v1)"
+#rust"s.database.to_enum(@enum_tp, @v1)"
 fn OpConvIntFromEnum(v1: enumerate) -> integer;
-#rust "if @v1 == 255 {{ i32::MIN }} else {{ i32::from(@v1) }}"
+#rust"if @v1 == 255 {{ i32::MIN }} else {{ i32::from(@v1) }}"
 fn OpCastEnumFromInt(v1: integer) -> enumerate;
-#rust "if @v1 == i32::MIN {{ 255 }} else {{ @v1 as u8 }}"
+#rust"if @v1 == i32::MIN {{ 255 }} else {{ @v1 as u8 }}"
 fn OpConvEnumFromNull() -> enumerate;
-#rust "255u8"
-
+#rust"255u8"
 // A reference to a record, this can 'live' inside an array
 // Might this be a reference to a record field? As It might be a reference to a single value inside an array.
 // This allows a vector to be a reference to a field.
 type reference size(12);
-
 fn OpDatabase(pos: const u16, db_tp: const u16);
 // db_format: bit0 = pretty, bit1 = json
 fn OpFormatDatabase(pos: const u16, val: reference, db_tp: const u16, db_format: const u8);
 fn OpFormatStackDatabase(pos: const u16, val: reference, db_tp: const u16, db_format: const u8);
 fn OpConvBoolFromRef(val: reference) -> boolean;
-#rust "@val.rec != 0"
+#rust"@val.rec != 0"
 fn OpConvRefFromNull() -> reference;
-#rust "stores.null()"
+#rust"stores.null()"
 fn OpNullRefSentinel() -> reference;
-#rust "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
+#rust"DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
 fn OpFreeRef(v1: reference);
 fn OpSizeofRef(val: reference) -> integer;
-
 fn OpVarRef(pos: const u16) -> reference;
-#rust "{{let r = *s.get_var::<DbRef>(@pos); stores.valid(&r); r}}"
+#rust"{{let r = *s.get_var::<DbRef>(@pos); stores.valid(&r); r}}"
 fn OpPutRef(pos: const u16, value: reference);
-#rust "s.put_var(@pos, @value);"
+#rust"s.put_var(@pos, @value);"
 fn OpEqRef(v1: reference, v2: reference) -> boolean;
-#rust "@v1 == @v2"
+#rust"@v1 == @v2"
 fn OpNeRef(v1: reference, v2: reference) -> boolean;
-#rust "@v1 != @v2"
-
+#rust"@v1 != @v2"
 // Can be used to get another record within the same database
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
-#rust "stores.get_ref(&@v1, u32::from(@fld))"
-
+#rust"stores.get_ref(&@v1, u32::from(@fld))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
-#rust "{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val.rec as i32);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val.rec as i32);}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
-#rust "DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + u32::from(@fld)}}"
-
+#rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + u32::from(@fld)}}"
 // Simple type value write and read, vector elements always have fld=0.
 // All these types are passed by value instead of by reference.
 fn OpGetInt(v1: reference, fld: const u16) -> integer;
-#rust "{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
-
+#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
 fn OpGetCharacter(v1: reference, fld: const u16) -> character;
-#rust "{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld)) as u32).unwrap_or(char::from(0)) }} }}"
-
+#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld)) as u32).unwrap_or(char::from(0)) }} }}"
 fn OpGetLong(v1: reference, fld: const u16) -> long;
-#rust "{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
-
+#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetSingle(v1: reference, fld: const u16) -> single;
-#rust "{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + u32::from(@fld))}}"
-
+#rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
-#rust "{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
-
+#rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust "{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
-
+#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
-#rust "{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0) as u8}}"
+#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0) as u8}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
-#rust "{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust "{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
-
+#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust "{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
-
+#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
-#rust "{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
-#rust "{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val as i32);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val as i32);}}"
 fn OpSetLong(v1: reference, fld: const u16, val: long);
-#rust "{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
-#rust "{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetFloat(v1: reference, fld: const u16, val: float);
-#rust "{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust "{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust "{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
-
+#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
-#rust "{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + u32::from(@fld), s_pos as i32);}}"
-
+#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + u32::from(@fld), s_pos as i32);}}"
 // --- Collections ---
 // Operations on vector<T> — the primary ordered collection type.
 // Vectors are grown by appending with += and elements are accessed by index.
-
 // All structures are passed by reference instead of by value
 type vector size(4);
 type sorted size(4);
-
 // All vectors are referenced by the field that points towards them.
 fn OpVarVector(pos: const u16) -> vector;
-#rust "*s.get_var::<DbRef>(@pos)"
-
+#rust"*s.get_var::<DbRef>(@pos)"
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
-#rust "vector::length_vector(&@r, &s.database.allocations) as i32"
+#rust"vector::length_vector(&@r, &s.database.allocations) as i32"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
-pub fn len(both: vector) -> integer { OpLengthVector(both) }
+pub fn len(both: vector) -> integer {
+  OpLengthVector(both)
+}
 
 fn OpClearVector(r: vector);
-#rust "vector::clear_vector(&@r, &mut s.database.allocations);"
-
+#rust"vector::clear_vector(&@r, &mut s.database.allocations);"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
-#rust "vector::get_vector(&@r, u32::from(@size), @index, &s.database.allocations)"
-
+#rust"vector::get_vector(&@r, u32::from(@size), @index, &s.database.allocations)"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
-#rust "stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
-
+#rust"stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
 fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
-#rust "s.db_from_text(@val, @db_tp)"
-
+#rust"s.db_from_text(@val, @db_tp)"
 fn OpRemoveVector(r: vector, size: const u16, index: integer) -> boolean;
-#rust "vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
-
+#rust"vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
 // Insert space into a vector, no data written
 fn OpInsertVector(r: vector, size: const u16, index: integer, db_tp: const u16) -> reference[r];
-
 // Claim space for a new record for the given structure
 fn OpNewRecord(data: reference, parent_tp: const u16, fld: const u16) -> reference[data];
-
 // Write the new record into the given structure (when not already done)
 fn OpFinishRecord(data: reference, rec: reference, parent_tp: const u16, fld: const u16);
-
 // Add all elements of another vector with the same type
 fn OpAppendVector(r: vector, other: vector, tp: const u16);
-#rust "s.database.vector_add(&@r, &@other, @tp);"
-
+#rust"s.database.vector_add(&@r, &@other, @tp);"
 // Get a record from a structure. This operator also reads a dynamic key from stack (not shown here)
 fn OpGetRecord(data: reference, db_tp: const u16, no_keys: const u8) -> reference[data];
 fn OpValidate(data: reference, db_tp: const u16);
-
 // These types should eventually become unnecessary because of the unified internal database API
 type hash size(4);
-
 fn OpHashAdd(data: reference, rec: reference, tp: const u16);
 fn OpHashFind(data: reference, tp: const u16) -> reference[data];
 fn OpHashRemove(data: reference, rec: reference, tp: const u16);
 type index size(4);
 // type spacial;
-
 fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
-#rust "@v1 == @v2"
+#rust"@v1 == @v2"
 fn OpNeBool(v1: boolean, v2: boolean) -> boolean;
-#rust "@v1 != @v2"
-
+#rust"@v1 != @v2"
 // --- Output and Diagnostics ---
-
 fn OpPanic(message: text);
-#rust "panic!(\"{{}}\", @message);"
-
+#rust"panic!(\"{{}}\", @message);"
 // Panics with message if test is false. Use to verify invariants during development.
 // In production mode (--production), logs an error instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
 pub fn assert(test: boolean, message: text, file: text, line: integer);
-
 // Immediately terminates execution with message. Use for unrecoverable error states.
 // In production mode (--production), logs a fatal entry instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
 pub fn panic(message: text, file: text, line: integer);
-
 // Write a structured log record at the chosen severity.
 // The file and line are injected by the compiler; do not pass them manually.
 pub fn log_info(message: text, file: text, line: integer);
 pub fn log_warn(message: text, file: text, line: integer);
 pub fn log_error(message: text, file: text, line: integer);
 pub fn log_fatal(message: text, file: text, line: integer);
-
 fn OpPrint(v1: text);
-#rust "print!(\"{{}}\", @v1);"
+#rust"print!(\"{{}}\", @v1);"
 // Writes v to standard output without a newline.
 // Use for progress output and building up a line incrementally.
 pub fn print(v1: text) {
-    OpPrint(v1);
+  OpPrint(v1);
 }
 // Writes v followed by a newline. The standard choice for line-oriented output.
+
 pub fn println(v1: text) {
-    OpPrint("{v1}\n");
+  OpPrint("{v1}\n");
 }
 
 type keys_definition;
-
 fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> long;
 fn OpStep(state_var: const u16, data: reference, on: const u8, arg: const u16) -> reference[data];
 fn OpRemove(state_var: const u16, data: reference, on: const u8, tp: const u16);
 fn OpClear(data: reference, tp: const u16);
 fn OpAppendCopy(data: reference, count: integer, tp: const u16);
 fn OpCopyRecord(data: reference, to: reference, tp: const u16);
-
 type iterator;
-
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);
-
 // Create a DbRef that points INTO the current stack frame (not into a data store).
 //
 // `pos` is a compile-time u16 offset.  At runtime the produced DbRef is:
@@ -843,45 +850,33 @@ fn OpStaticCall(call: const u16);
 //     pointer into the dep variable's own slot.  Using the raw variable number
 //     instead of this offset (the old pre-fix bug) produces a garbage DbRef.
 fn OpCreateStack(pos: const u16) -> reference;
-
 // Read a text from a stack position.
 fn OpGetStackText(r: reference) -> text[r];
-
 // Read a reference from a stack position.
 fn OpGetStackRef(r: reference, fld: const u16) -> reference;
-
 // Write a reference from a stack position.
 fn OpSetStackRef(r: reference, v1: reference);
-
 // Append a text to a stack text variable.
 fn OpAppendStackText(pos: const u16, v1: text);
-
 // Append a character to a stack text variable.
 fn OpAppendStackCharacter(pos: const u16, v1: character);
-
 // Clear a stack text variable.
 fn OpClearStackText(pos: const u16);
-
 // Read the lock state of the store containing a reference.
 // Returns true when the store is locked against writes.
 fn get_store_lock(r: reference) -> boolean;
-
 // Lock the store containing a reference, preventing further writes.
 // Only `true` is accepted from loft code via d#lock = true.
 // A non-const variable may also use d#lock = false to unlock.
 fn set_store_lock(r: reference, locked: boolean);
-
 // --- Parallel ---
-
 // Internal: run a loft function over every element of a vector in parallel.
 // Not part of the public API — use the `par(b=worker(a), N)` for-loop clause instead.
 fn parallel_for_int(func: text, input: reference, element_size: integer, threads: integer) -> reference;
-
 // Internal: compiler-checked parallel map.
 // The compiler rewrites `par(...)` clauses into calls to this function.
 // Raw 5-arg internal signature; not callable from user code.
 fn parallel_for(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
-
 // Internal: read element idx from a parallel_for result reference.
 // Emitted by the compiler for the `par(...)` syntax; do not call directly.
 fn parallel_get_int(r: reference, idx: integer) -> integer;

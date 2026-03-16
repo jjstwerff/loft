@@ -1,6 +1,5 @@
 // Integration test for T2-11: verify packaged library layout is found.
 use testpkg;
-
 fn main() {
-    assert(testpkg::testpkg_answer() == 42, "testpkg_answer should return 42")
+  assert(testpkg::testpkg_answer() == 42, "testpkg_answer should return 42")
 }

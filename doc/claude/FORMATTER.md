@@ -3,6 +3,9 @@
 
 # Loft Code Formatter
 
+> **Status: shipped** — implemented in `src/formatter.rs` (T2-0, 2026-03-16).
+> `loft --format file.loft` formats in-place; `loft --format-check file.loft` exits 1 if not canonical.
+
 A canonical, opinionated formatter for `.loft` source files — similar in philosophy to `gofmt`.
 One right way to format code; no configuration.
 

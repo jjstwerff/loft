@@ -1,76 +1,78 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Boolean logic, comparisons, and truthiness.
-
 fn main() {
-    // --- Literals ---
-    assert(true, "true is truthy");
-    assert(!false, "false is falsy");
-
-    // --- Logical operators ---
-    assert(true && true, "and true true");
-    assert(!(true && false), "and true false");
-    assert(!(false && true), "and false true");
-    assert(!(false && false), "and false false");
-
-    assert(true || false, "or true false");
-    assert(false || true, "or false true");
-    assert(!(false || false), "or false false");
-
-    // --- 'and' / 'or' keywords ---
-    assert(true and true, "keyword and");
-    assert(false or true, "keyword or");
-
-    // --- Negation ---
-    assert(!false, "not false");
-    assert(!!true, "double not");
-
-    // --- Comparisons returning boolean ---
-    assert((3 > 2) == true, "comparison result true");
-    assert((2 > 3) == false, "comparison result false");
-
-    // --- Short-circuit: right side must not be evaluated when left determines result ---
-    x = 0;
-    if false && (1 / x > 0) {
-        assert(false, "short-circuit and: should not reach here");
-    }
-    if true || (1 / x > 0) {
-        assert(true, "short-circuit or: left side true");
-    }
-
-    // --- If as expression ---
-    b = if 2 + 2 > 3 { "yes" } else { "no" };
-    assert(b == "yes", "if-expr true branch");
-    b = if 1 > 5 { "yes" } else { "no" };
-    assert(b == "no", "if-expr false branch");
-
-    // --- Null is falsy ---
-    z = 0;
-    assert(!(1 / z), "null is falsy");
-
-    // --- Chained comparisons ---
-    v = 5;
-    assert(v > 3 && v < 10, "chained comparison");
-
-    // --- Operator precedence: && binds tighter than || ---
-    // (true && false) || true  =>  false || true  =>  true
-    assert(true && false || true, "and before or: (T&&F)||T == true");
-    // false || (true && false)  =>  false || false  =>  false
-    assert(!(false || true && false), "and before or: F||(T&&F) == false");
-    // ! has highest precedence: (!true) && true  =>  false && true  =>  false
-    assert(!((!true) && true), "not before and: (!T)&&T == false");
-
-    // --- Nested boolean expressions ---
-    a2 = 4;
-    b2 = 7;
-    assert(a2 > 0 && b2 > 0 && a2 < b2, "three-way and: all true");
-    assert(!(a2 > b2 || a2 == 0 || b2 < 0), "three-way or: all false");
-
-    // --- Boolean in if-expression chains ---
-    grade = if b2 >= 9 { "A" } else if b2 >= 7 { "B" } else if b2 >= 5 { "C" } else { "F" };
-    assert(grade == "B", "multi-branch if expression");
-
-    // --- 'and'/'or' keywords match &&/|| precedence ---
-    assert(true and false or true, "keyword: (T and F) or T == true");
-    assert(!(false or true and false), "keyword: F or (T and F) == false");
+  // --- Literals ---
+  assert(true, "true is truthy");
+  assert(!false, "false is falsy");
+  // --- Logical operators ---
+  assert(true && true, "and true true");
+  assert(!(true && false), "and true false");
+  assert(!(false && true), "and false true");
+  assert(!(false && false), "and false false");
+  assert(true || false, "or true false");
+  assert(false || true, "or false true");
+  assert(!(false || false), "or false false");
+  // --- 'and' / 'or' keywords ---
+  assert(true and true, "keyword and");
+  assert(false or true, "keyword or");
+  // --- Negation ---
+  assert(!false, "not false");
+  assert(!!true, "double not");
+  // --- Comparisons returning boolean ---
+  assert((3 > 2) == true, "comparison result true");
+  assert((2 > 3) == false, "comparison result false");
+  // --- Short-circuit: right side must not be evaluated when left determines result ---
+  x = 0;
+  if false &&(1 / x > 0) {
+    assert(false, "short-circuit and: should not reach here");
+  }
+  if true ||(1 / x > 0) {
+    assert(true, "short-circuit or: left side true");
+  }
+  // --- If as expression ---
+  b = if 2 + 2 > 3 {
+    "yes"
+  } else {
+    "no"
+  };
+  assert(b == "yes", "if-expr true branch");
+  b = if 1 > 5 {
+    "yes"
+  } else {
+    "no"
+  };
+  assert(b == "no", "if-expr false branch");
+  // --- Null is falsy ---
+  z = 0;
+  assert(!(1 / z), "null is falsy");
+  // --- Chained comparisons ---
+  v = 5;
+  assert(v > 3 && v < 10, "chained comparison");
+  // --- Operator precedence: && binds tighter than || ---
+  // (true && false) || true  =>  false || true  =>  true
+  assert(true && false || true, "and before or: (T&&F)||T == true");
+  // false || (true && false)  =>  false || false  =>  false
+  assert(!(false || true && false), "and before or: F||(T&&F) == false");
+  // ! has highest precedence: (!true) && true  =>  false && true  =>  false
+  assert(!((!true) && true), "not before and: (!T)&&T == false");
+  // --- Nested boolean expressions ---
+  a2 = 4;
+  b2 = 7;
+  assert(a2 > 0 && b2 > 0 && a2 < b2, "three-way and: all true");
+  assert(!(a2 > b2 || a2 == 0 || b2 < 0), "three-way or: all false");
+  // --- Boolean in if-expression chains ---
+  grade = if b2 >= 9 {
+    "A"
+  } else if b2 >= 7 {
+    "B"
+  } else if b2 >= 5 {
+    "C"
+  } else {
+    "F"
+  };
+  assert(grade == "B", "multi-branch if expression");
+  // --- 'and'/'or' keywords match &&/|| precedence ---
+  assert(true and false or true, "keyword: (T and F) or T == true");
+  assert(!(false or true and false), "keyword: F or (T and F) == false");
 }

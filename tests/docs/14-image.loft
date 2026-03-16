@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Image
 // @TITLE: Reading and examining PNG files
-
 // Loft has a built-in Image type for loading PNG files and inspecting their
 // pixels. Loading a PNG takes one function call; after that you can read
 // every pixel, check the dimensions, and iterate over the whole image with
 // a for loop.
-
 // ## Loading an Image
 //
 // Pass a File handle to the 'png()' function to load a PNG into memory.
@@ -18,7 +16,6 @@
 //
 // If the file does not exist or is not a valid PNG, 'img' will be null and
 // you can check for that with '!' before proceeding.
-
 // ## Checking Dimensions
 //
 // Once loaded, 'img#width' and 'img#height' give you the pixel dimensions.
@@ -27,7 +24,6 @@
 //   w = img#width
 //   h = img#height
 //   println("image is {w} x {h} pixels — {w * h} pixels total")
-
 // ## Accessing Individual Pixels
 //
 // Index the image with two integer coordinates [x, y] to get a pixel value.
@@ -41,7 +37,6 @@
 //   a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
 //
 // A pixel from outside the image bounds is null.
-
 // ## Iterating Over All Pixels
 //
 // A 'for' loop over an image visits every pixel from top-left to bottom-right,
@@ -54,7 +49,6 @@
 //       }
 //   }
 //   println("found {bright_red} bright-red pixels")
-
 // ## Practical example: average brightness
 //
 // Here is how you would compute the average brightness of an image.
@@ -71,10 +65,8 @@
 //       avg = total / (count * 3);
 //       println("average brightness: {avg} / 255")
 //   }
-
 // Note: PNG test files are not included in the standard test suite, so the
 // examples above are shown as comments rather than runnable assertions.
 // Paste them into your own project and point them at a real PNG file to try.
-
 fn main() {
 }

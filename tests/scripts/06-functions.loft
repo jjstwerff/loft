@@ -1,156 +1,166 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Functions: default args, reference params, early return, recursion.
-
 fn greet(name: text, greeting: text = "Hello") -> text {
-    greeting + ", " + name + "!"
+  greeting + ", " + name + "!"
 }
 
-fn add(a: &integer, b: integer, c: integer = 0) {
-    a += b + c;
+fn add(a:  & integer, b: integer, c: integer = 0) {
+  a += b + c;
 }
 
 fn classify(n: integer) -> text {
-    if n < 0 { return "negative"; }
-    if n == 0 { return "zero"; }
-    "positive"
+  if n < 0 {
+    return "negative";
+  }
+  if n == 0 {
+    return "zero";
+  }
+  "positive"
 }
 
 fn fib(n: integer) -> integer {
-    if n <= 1 { return n; }
-    fib(n - 1) + fib(n - 2)
+  if n <= 1 {
+    return n;
+  }
+  fib(n - 1) + fib(n - 2)
 }
 
 fn sum_to(n: integer) -> integer {
-    t = 0;
-    for i in 1..=n { t += i; }
-    t
+  t = 0;
+  for i in 1..=n {
+    t += i;
+  }
+  t
 }
 
-fn append_to(buf: &text, item: text) {
-    buf += item;
+fn append_to(buf:  & text, item: text) {
+  buf += item;
 }
 
 fn double_val(x: const integer) -> integer {
-    x * 2
+  x * 2
 }
 
 fn is_even(n: integer) -> boolean {
-    if n == 0 { return true; }
-    if n < 0 { return is_even(-n); }
-    is_odd(n - 1)
+  if n == 0 {
+    return true;
+  }
+  if n < 0 {
+    return is_even(-n);
+  }
+  is_odd(n - 1)
 }
 
 fn is_odd(n: integer) -> boolean {
-    if n == 0 { return false; }
-    if n < 0 { return is_odd(-n); }
-    is_even(n - 1)
+  if n == 0 {
+    return false;
+  }
+  if n < 0 {
+    return is_odd(-n);
+  }
+  is_even(n - 1)
 }
-
 // Returns null when a > 2, otherwise a+1.
+
 fn maybe_inc(a: integer) -> integer {
-    if a > 2 { return null; }
-    a + 1
+  if a > 2 {
+    return null;
+  }
+  a + 1
 }
-
 // Returns text or null depending on flag.
+
 fn maybe_str(a: integer) -> text {
-    if a > 2 { return null; }
-    "#{a}#"
+  if a > 2 {
+    return null;
+  }
+  "#{a}#"
 }
-
 // Mutable struct reference with explicit &.
-struct Accum { total: integer }
 
-fn accumulate(r: &Accum, val: integer) {
-    r.total += val;
+struct Accum {
+  total: integer
 }
 
+fn accumulate(r:  & Accum, val: integer) {
+  r.total += val;
+}
 // Mutable vector reference with empty-vector default.
-fn append_int(r: &vector<integer> = [], val: integer) {
-    r += [val];
+
+fn append_int(r:  & vector < integer > =[], val: integer) {
+  r +=[val];
 }
 
 fn main() {
-    // --- Default arguments ---
-    assert(greet("World", "Hi") == "Hi, World!", "explicit greeting");
-    assert(greet("World") == "Hello, World!", "default greeting");
-
-    // --- Reference parameters ---
-    v = 1;
-    add(v, 2);
-    assert(v == 3, "ref param: after add(v,2)");
-    add(v, 4, 1);
-    assert(v == 8, "ref param: after add(v,4,1)");
-
-    // --- Early return ---
-    assert(classify(-5) == "negative", "classify negative");
-    assert(classify(0) == "zero", "classify zero");
-    assert(classify(7) == "positive", "classify positive");
-
-    // --- Recursion ---
-    assert(fib(0) == 0, "fib(0)");
-    assert(fib(1) == 1, "fib(1)");
-    assert(fib(6) == 8, "fib(6)");
-    assert(fib(10) == 55, "fib(10)");
-
-    // --- Local helper ---
-    assert(sum_to(5) == 15, "sum_to(5)");
-    assert(sum_to(10) == 55, "sum_to(10)");
-
-    // --- Reference text parameter ---
-    s = "Hello";
-    append_to(s, " World");
-    assert(s == "Hello World", "ref text param append");
-
-    // --- Implicit return (last expression) ---
-    assert(greet("X", "Y") == "Y, X!", "implicit return");
-
-    // --- Const parameter (read-only value) ---
-    assert(double_val(6) == 12, "const param: double 6");
-    assert(double_val(0) == 0, "const param: double 0");
-    assert(double_val(-3) == -6, "const param: double -3");
-
-    // --- Mutual recursion ---
-    assert(is_even(0), "mutual: is_even(0)");
-    assert(!is_even(1), "mutual: is_even(1) false");
-    assert(is_even(6), "mutual: is_even(6)");
-    assert(is_odd(1), "mutual: is_odd(1)");
-    assert(!is_odd(4), "mutual: is_odd(4) false");
-    assert(is_odd(7), "mutual: is_odd(7)");
-
-    // --- Multiple defaults: call with minimum args ---
-    assert(greet("Bob") == "Hello, Bob!", "default with 1 arg");
-    assert(greet("Bob", "Hey") == "Hey, Bob!", "override default");
-
-    // --- Nullable return value ---
-    assert(maybe_inc(1) == 2, "maybe_inc(1) is non-null 2");
-    assert(!maybe_inc(5), "maybe_inc(5) returns null");
-    assert(maybe_str(1) == "#1#", "maybe_str(1) is non-null");
-    assert(!maybe_str(5), "maybe_str(5) returns null");
-
-    // --- if without else returns null ---
-    r_if = if 3 > 10 { "yes" };
-    assert(!r_if, "if-without-else: false condition returns null");
-    r_if2 = if 3 < 10 { "yes" };
-    assert(r_if2 == "yes", "if-without-else: true condition returns value");
-
-    // --- Mutable struct reference parameter ---
-    acc = Accum { total: 0 };
-    accumulate(acc, 5);
-    accumulate(acc, 3);
-    assert(acc.total == 8, "mutable struct ref param: {acc.total}");
-
-    // --- Mutable vector reference with default ---
-    vi = [1];
-    append_int(vi, 2);
-    append_int(vi, 3);
-    assert("{vi}" == "[1,2,3]", "mutable vec ref param: {vi}");
-
-    // --- const local variable ---
-    const base = 100;
-    assert(base == 100, "const local int is readable");
-    const greeting = "hi";
-    assert(greeting == "hi", "const local text is readable");
-
+  // --- Default arguments ---
+  assert(greet("World", "Hi") == "Hi, World!", "explicit greeting");
+  assert(greet("World") == "Hello, World!", "default greeting");
+  // --- Reference parameters ---
+  v = 1;
+  add(v, 2);
+  assert(v == 3, "ref param: after add(v,2)");
+  add(v, 4, 1);
+  assert(v == 8, "ref param: after add(v,4,1)");
+  // --- Early return ---
+  assert(classify(-5) == "negative", "classify negative");
+  assert(classify(0) == "zero", "classify zero");
+  assert(classify(7) == "positive", "classify positive");
+  // --- Recursion ---
+  assert(fib(0) == 0, "fib(0)");
+  assert(fib(1) == 1, "fib(1)");
+  assert(fib(6) == 8, "fib(6)");
+  assert(fib(10) == 55, "fib(10)");
+  // --- Local helper ---
+  assert(sum_to(5) == 15, "sum_to(5)");
+  assert(sum_to(10) == 55, "sum_to(10)");
+  // --- Reference text parameter ---
+  s = "Hello";
+  append_to(s, " World");
+  assert(s == "Hello World", "ref text param append");
+  // --- Implicit return (last expression) ---
+  assert(greet("X", "Y") == "Y, X!", "implicit return");
+  // --- Const parameter (read-only value) ---
+  assert(double_val(6) == 12, "const param: double 6");
+  assert(double_val(0) == 0, "const param: double 0");
+  assert(double_val(-3) == -6, "const param: double -3");
+  // --- Mutual recursion ---
+  assert(is_even(0), "mutual: is_even(0)");
+  assert(!is_even(1), "mutual: is_even(1) false");
+  assert(is_even(6), "mutual: is_even(6)");
+  assert(is_odd(1), "mutual: is_odd(1)");
+  assert(!is_odd(4), "mutual: is_odd(4) false");
+  assert(is_odd(7), "mutual: is_odd(7)");
+  // --- Multiple defaults: call with minimum args ---
+  assert(greet("Bob") == "Hello, Bob!", "default with 1 arg");
+  assert(greet("Bob", "Hey") == "Hey, Bob!", "override default");
+  // --- Nullable return value ---
+  assert(maybe_inc(1) == 2, "maybe_inc(1) is non-null 2");
+  assert(!maybe_inc(5), "maybe_inc(5) returns null");
+  assert(maybe_str(1) == "#1#", "maybe_str(1) is non-null");
+  assert(!maybe_str(5), "maybe_str(5) returns null");
+  // --- if without else returns null ---
+  r_if = if 3 > 10 {
+    "yes"
+  };
+  assert(!r_if, "if-without-else: false condition returns null");
+  r_if2 = if 3 < 10 {
+    "yes"
+  };
+  assert(r_if2 == "yes", "if-without-else: true condition returns value");
+  // --- Mutable struct reference parameter ---
+  acc = Accum {total: 0 };
+  accumulate(acc, 5);
+  accumulate(acc, 3);
+  assert(acc.total == 8, "mutable struct ref param: {acc.total}");
+  // --- Mutable vector reference with default ---
+  vi =[1];
+  append_int(vi, 2);
+  append_int(vi, 3);
+  assert("{vi}" == "[1,2,3]", "mutable vec ref param: {vi}");
+  // --- const local variable ---
+  const base = 100;
+  assert(base == 100, "const local int is readable");
+  const greeting = "hi";
+  assert(greeting == "hi", "const local text is readable");
 }

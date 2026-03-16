@@ -5,9 +5,7 @@
 // A file handle lets you read and write files without worrying about when the
 // OS opens or closes them. The file opens on the first read or write and
 // closes automatically when the handle goes out of scope.
-
 // ## Inspecting the File System
-
 // `file(path)` creates a File handle without opening anything yet.
 // `f#format` tells you what kind of path you are looking at: TextFile,
 // LittleEndian, BigEndian, Directory, or NotExists.
@@ -15,135 +13,119 @@
 // `exists(path)` is a convenience shorthand for checking that a path is not
 // NotExists. `delete(path)` removes a file and returns false if it was not
 // there.
-
 // Clean up any leftover files from a previous interrupted run.
 fn cleanup() {
-    delete("test.bin");
-    delete("test2.bin");
-    delete("buffer.bin");
+  delete("test.bin");
+  delete("test2.bin");
+  delete("buffer.bin");
 }
 
 struct Buffer {
-   size: i32,
-   data: vector<single>
+  size: i32,
+  data: vector < single >
 }
 
 fn main() {
-    cleanup();
-
-    // Asking for the format of a directory path returns Directory, not a file
-    // format. `lines()` reads the named text file and splits it on newlines.
-    ex = file("tests/example");
-    assert(ex#format == Directory, "example is a directory");
-    c = file("tests/example/config/terrain.txt").lines();
-    assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
-
-    // `exists` and `delete` are safe to call when the file is absent.
-    // `delete` returns false rather than crashing when nothing is there.
-    assert(!exists("test.bin"), "File should not exist before the test.");
-    assert(!delete("nonexistent_xyz.bin"), "delete on missing file returns false");
-
-    // ## Writing a Text or Binary File
-
-    // Wrapping the file handle in a block ensures the file closes the moment
-    // the block ends. Set `f#format` to LittleEndian or BigEndian before
-    // writing binary data. Use `f += value` to append the raw bytes of any
-    // scalar value (u8, u16, i32, long, single, float, or text).
-    { f = file("test.bin");
-      assert(f#format == NotExists, "File should not exist yet.");
-      f#format = BigEndian;
-      f += 0 as u8;
-      f += 1 as u8;
-      f += 0x203 as u16;
-      f += 0x4050607;
-      f += 0x8090a0b0c0d0e0fl;
-      // `f#size` returns the total number of bytes written so far.
-      assert(f#size == 16l, "Should have written 16 bytes.");
-      // Text is written as raw UTF-8 bytes with no length prefix.
-      f += "Hello world!";
-      assert(f#size == 28l, "Size should be 28 bytes (16 + 12).");
-    } // The file closes when the handle goes out of scope.
-
-    // `move(src, dst)` renames a file. It refuses if the destination already
-    // exists or if either path would leave the project directory.
-    assert(exists("test.bin"), "File should exist after writing.");
-    assert(!move("test.bin", "../test.bin"), "Should refuse to move outside the project.");
-    assert(move("test.bin", "test2.bin"), "Could not move the file.");
-
-    // ## Reading Back What You Wrote
-
-    // When you open an existing file the default format is TextFile. Set
-    // `f#format` to match the format used when writing before you read any
-    // bytes. `f#read(n) as T` reads exactly n bytes and interprets them as
-    // type T. `f#index` is the byte offset where the last read started.
-    // `f#next` is the current read position; assign to it to seek anywhere.
-    { f = file("test2.bin");
-      assert(f#format == TextFile, "The default format is TextFile.");
-      f#format = LittleEndian;
-
-      // The file was written as BigEndian, so reading the same 4 bytes as
-      // LittleEndian produces a byte-swapped value — that is intentional here
-      // and confirms that the bytes were stored in the order you chose.
-      v = f#read(4) as i32;
-      assert(v == 0x3020100, "BigEndian bytes 0..3 read as LittleEndian i32.");
-      assert(f#index == 0l, "Last read started at byte 0.");
-      assert(f#next == 4l, "Next read starts at byte 4.");
-
-      // Seek to byte 16 to skip past the integers and read the text directly.
-      f#next = 16l;
-      s = f#read(5) as text;
-      assert(s == "Hello", "Partial text read from offset 16.");
-      assert(f#index == 16l, "Last read started at byte 16.");
-      assert(f#next == 21l, "Next position after 5-byte text read.");
-
-      // Requesting more bytes than remain simply returns whatever is left.
-      rest = f#read(100) as text;
-      assert(rest == " world!", "Read continues to end of file.");
-      assert(f#next == f#size, "Position should be at end of file.");
-
-      // You can seek back to any position and re-read.
-      f#next = 0l;
-      assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
-    }
-    assert(delete("test2.bin"), "Could not remove the test file.");
-
-    // ## Working with Vectors and Struct Data
-
-    // `f += vector<T>` writes every element in sequence as raw bytes, which is
-    // the fastest way to dump a whole collection to disk. Setting `f#size = n`
-    // truncates or zero-extends the file to exactly n bytes — useful for
-    // discarding the tail after you have finished writing.
-    { f = file("buffer.bin");
-      f#format = LittleEndian;
-      ints = [1, 2, 3, 4];
-      f += ints;
-      assert(f#size == 16l, "Four i32 values = 16 bytes");
-      // Truncate to the first two integers.
-      f#size = 8l;
-      assert(f#size == 8l, "Truncated to 8 bytes");
-    }
-    assert(delete("buffer.bin"), "Could not remove buffer.bin after vector write test.");
-
-    // Write a count followed by individual float values. `sizeof(T)` returns
-    // the byte width of a type, so you can compute the correct read length
-    // without hard-coding magic numbers.
-    { buf = file("buffer.bin");
-      buf#format = LittleEndian;
-      buf += 4 as i32;
-      buf += 1.1f;
-      buf += 1.2f;
-      buf += 2.1f;
-      buf += 2.2f;
-    }
-
-    // Read the count, then use it to read exactly that many floats directly
-    // into a struct field. This pattern lets you serialise and deserialise
-    // structs with variable-length data cleanly.
-    { b = Buffer {};
-      f = file("buffer.bin");
-      f#format = LittleEndian;
-      n = f#read(4) as i32;
-      b.data = f#read(n * sizeof(single));
-    }
-    assert(delete("buffer.bin"), "Could not remove buffer.bin.");
+  cleanup();
+  // Asking for the format of a directory path returns Directory, not a file
+  // format. `lines()` reads the named text file and splits it on newlines.
+  ex = file("tests/example");
+  assert(ex#format == Directory, "example is a directory");
+  c = file("tests/example/config/terrain.txt").lines();
+  assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
+  // `exists` and `delete` are safe to call when the file is absent.
+  // `delete` returns false rather than crashing when nothing is there.
+  assert(!exists("test.bin"), "File should not exist before the test.");
+  assert(!delete("nonexistent_xyz.bin"), "delete on missing file returns false");
+  // ## Writing a Text or Binary File
+  // Wrapping the file handle in a block ensures the file closes the moment
+  // the block ends. Set `f#format` to LittleEndian or BigEndian before
+  // writing binary data. Use `f += value` to append the raw bytes of any
+  // scalar value (u8, u16, i32, long, single, float, or text).
+ {f = file("test.bin");
+  assert(f#format == NotExists, "File should not exist yet.");
+  f#format = BigEndian;
+  f += 0 as u8;
+  f += 1 as u8;
+  f += 0x203 as u16;
+  f += 0x4050607;
+  f += 0x8090a0b0c0d0e0fl;
+  // `f#size` returns the total number of bytes written so far.
+  assert(f#size == 16l, "Should have written 16 bytes.");
+  // Text is written as raw UTF-8 bytes with no length prefix.
+  f += "Hello world!";
+  assert(f#size == 28l, "Size should be 28 bytes (16 + 12).");
+ }  // The file closes when the handle goes out of scope.
+  // `move(src, dst)` renames a file. It refuses if the destination already
+  // exists or if either path would leave the project directory.
+  assert(exists("test.bin"), "File should exist after writing.");
+  assert(!move("test.bin", "../test.bin"), "Should refuse to move outside the project.");
+  assert(move("test.bin", "test2.bin"), "Could not move the file.");
+  // ## Reading Back What You Wrote
+  // When you open an existing file the default format is TextFile. Set
+  // `f#format` to match the format used when writing before you read any
+  // bytes. `f#read(n) as T` reads exactly n bytes and interprets them as
+  // type T. `f#index` is the byte offset where the last read started.
+  // `f#next` is the current read position; assign to it to seek anywhere.
+ {f = file("test2.bin");
+  assert(f#format == TextFile, "The default format is TextFile.");
+  f#format = LittleEndian;
+  // The file was written as BigEndian, so reading the same 4 bytes as
+  // LittleEndian produces a byte-swapped value — that is intentional here
+  // and confirms that the bytes were stored in the order you chose.
+  v = f#read(4) as i32;
+  assert(v == 0x3020100, "BigEndian bytes 0..3 read as LittleEndian i32.");
+  assert(f#index == 0l, "Last read started at byte 0.");
+  assert(f#next == 4l, "Next read starts at byte 4.");
+  // Seek to byte 16 to skip past the integers and read the text directly.
+  f#next = 16l;
+  s = f#read(5) as text;
+  assert(s == "Hello", "Partial text read from offset 16.");
+  assert(f#index == 16l, "Last read started at byte 16.");
+  assert(f#next == 21l, "Next position after 5-byte text read.");
+  // Requesting more bytes than remain simply returns whatever is left.
+  rest = f#read(100) as text;
+  assert(rest == " world!", "Read continues to end of file.");
+  assert(f#next == f#size, "Position should be at end of file.");
+  // You can seek back to any position and re-read.
+  f#next = 0l;
+  assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
+ }
+  assert(delete("test2.bin"), "Could not remove the test file.");
+  // ## Working with Vectors and Struct Data
+  // `f += vector<T>` writes every element in sequence as raw bytes, which is
+  // the fastest way to dump a whole collection to disk. Setting `f#size = n`
+  // truncates or zero-extends the file to exactly n bytes — useful for
+  // discarding the tail after you have finished writing.
+ {f = file("buffer.bin");
+  f#format = LittleEndian;
+  ints =[1, 2, 3, 4];
+  f += ints;
+  assert(f#size == 16l, "Four i32 values = 16 bytes");
+  // Truncate to the first two integers.
+  f#size = 8l;
+  assert(f#size == 8l, "Truncated to 8 bytes");
+ }
+  assert(delete("buffer.bin"), "Could not remove buffer.bin after vector write test.");
+  // Write a count followed by individual float values. `sizeof(T)` returns
+  // the byte width of a type, so you can compute the correct read length
+  // without hard-coding magic numbers.
+ {buf = file("buffer.bin");
+  buf#format = LittleEndian;
+  buf += 4 as i32;
+  buf += 1.1f;
+  buf += 1.2f;
+  buf += 2.1f;
+  buf += 2.2f;
+ }
+  // Read the count, then use it to read exactly that many floats directly
+  // into a struct field. This pattern lets you serialise and deserialise
+  // structs with variable-length data cleanly.
+ {b = Buffer { };
+  f = file("buffer.bin");
+  f#format = LittleEndian;
+  n = f#read(4) as i32;
+  b.data = f#read(n * sizeof(single));
+ }
+  assert(delete("buffer.bin"), "Could not remove buffer.bin.");
 }

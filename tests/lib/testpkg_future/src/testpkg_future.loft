@@ -1,4 +1,4 @@
 // This package intentionally requires a future loft version.
 pub fn future_fn() -> integer {
-    0
+  0
 }

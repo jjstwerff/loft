@@ -1,85 +1,109 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Threading: parallel_for via the par() for-loop clause.
+struct Score {
+  value: integer
+}
 
-struct Score { value: integer }
-struct ScoreList { items: vector<Score> }
-struct Range { lo: integer, hi: integer }
-struct RangeList { items: vector<Range> }
+struct ScoreList {
+  items: vector < Score >
+}
 
-fn double_score(r: const Score) -> integer { r.value * 2 }
-fn span(r: const Range) -> integer { r.hi - r.lo }
-fn score_as_float(r: const Score) -> float { r.value as float }
-fn score_positive(r: const Score) -> boolean { r.value > 0 }
-fn get_value(self: const Score) -> integer { self.value }
-fn is_positive(self: const Score) -> boolean { self.value > 0 }
+struct Range {
+  lo: integer,
+  hi: integer
+}
+
+struct RangeList {
+  items: vector < Range >
+}
+
+fn double_score(r: const Score) -> integer {
+  r.value * 2
+}
+
+fn span(r: const Range) -> integer {
+  r.hi - r.lo
+}
+
+fn score_as_float(r: const Score) -> float {
+  r.value as float
+}
+
+fn score_positive(r: const Score) -> boolean {
+  r.value > 0
+}
+
+fn get_value(self: const Score) -> integer {
+  self.value
+}
+
+fn is_positive(self: const Score) -> boolean {
+  self.value > 0
+}
 
 fn main() {
-    // --- Form 1: global function, integer return, 1 thread ---
-    q = ScoreList {};
-    q.items += [Score{value:10}, Score{value:20}, Score{value:30}];
-    sum = 0;
-    for a in q.items par(b=double_score(a), 1) {
-        sum += b;
+  // --- Form 1: global function, integer return, 1 thread ---
+  q = ScoreList { };
+  q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
+  sum = 0;
+  for a in q.items par(b = double_score(a), 1) {
+    sum += b;
+  }
+  assert(sum == 120, "form-1 integer 1 thread: {sum}");
+  // --- Form 1: 4 threads ---
+  sum2 = 0;
+  for a in q.items par(b = double_score(a), 4) {
+    sum2 += b;
+  }
+  assert(sum2 == 120, "form-1 integer 4 threads: {sum2}");
+  // --- Form 1: two-field struct ---
+  rl = RangeList { };
+  rl.items +=[Range {lo: 0, hi: 10 }, Range {lo: 5, hi: 12 }, Range {lo: -3, hi: 7 }];
+  span_sum = 0;
+  for a in rl.items par(b = span(a), 2) {
+    span_sum += b;
+  }
+  assert(span_sum == 27, "form-1 span sum: {span_sum}");
+  // --- Form 1: float return ---
+  fcount = 0;
+  for a in q.items par(b = score_as_float(a), 1) {
+    fcount += 1;
+  }
+  assert(fcount == 3, "form-1 float return: {fcount} elements");
+  // --- Form 1: boolean return ---
+  pos = 0;
+  for a in q.items par(b = score_positive(a), 1) {
+    if b {
+      pos += 1;
     }
-    assert(sum == 120, "form-1 integer 1 thread: {sum}");
-
-    // --- Form 1: 4 threads ---
-    sum2 = 0;
-    for a in q.items par(b=double_score(a), 4) {
-        sum2 += b;
+  }
+  assert(pos == 3, "form-1 boolean: {pos} positive");
+  // --- Empty vector: body executes 0 times ---
+  empty = ScoreList { };
+  empty_sum = 0;
+  for a in empty.items par(b = double_score(a), 1) {
+    empty_sum += b;
+  }
+  assert(empty_sum == 0, "empty vector: {empty_sum}");
+  // --- Form 2: method on element, integer return ---
+  sum3 = 0;
+  for a in q.items par(b = a.get_value(), 1) {
+    sum3 += b;
+  }
+  assert(sum3 == 60, "form-2 integer 1 thread: {sum3}");
+  // --- Form 2: 4 threads ---
+  sum4 = 0;
+  for a in q.items par(b = a.get_value(), 4) {
+    sum4 += b;
+  }
+  assert(sum4 == 60, "form-2 integer 4 threads: {sum4}");
+  // --- Form 2: boolean return ---
+  pos2 = 0;
+  for a in q.items par(b = a.is_positive(), 1) {
+    if b {
+      pos2 += 1;
     }
-    assert(sum2 == 120, "form-1 integer 4 threads: {sum2}");
-
-    // --- Form 1: two-field struct ---
-    rl = RangeList {};
-    rl.items += [Range{lo:0, hi:10}, Range{lo:5, hi:12}, Range{lo:-3, hi:7}];
-    span_sum = 0;
-    for a in rl.items par(b=span(a), 2) {
-        span_sum += b;
-    }
-    assert(span_sum == 27, "form-1 span sum: {span_sum}");
-
-    // --- Form 1: float return ---
-    fcount = 0;
-    for a in q.items par(b=score_as_float(a), 1) {
-        fcount += 1;
-    }
-    assert(fcount == 3, "form-1 float return: {fcount} elements");
-
-    // --- Form 1: boolean return ---
-    pos = 0;
-    for a in q.items par(b=score_positive(a), 1) {
-        if b { pos += 1; }
-    }
-    assert(pos == 3, "form-1 boolean: {pos} positive");
-
-    // --- Empty vector: body executes 0 times ---
-    empty = ScoreList {};
-    empty_sum = 0;
-    for a in empty.items par(b=double_score(a), 1) {
-        empty_sum += b;
-    }
-    assert(empty_sum == 0, "empty vector: {empty_sum}");
-
-    // --- Form 2: method on element, integer return ---
-    sum3 = 0;
-    for a in q.items par(b=a.get_value(), 1) {
-        sum3 += b;
-    }
-    assert(sum3 == 60, "form-2 integer 1 thread: {sum3}");
-
-    // --- Form 2: 4 threads ---
-    sum4 = 0;
-    for a in q.items par(b=a.get_value(), 4) {
-        sum4 += b;
-    }
-    assert(sum4 == 60, "form-2 integer 4 threads: {sum4}");
-
-    // --- Form 2: boolean return ---
-    pos2 = 0;
-    for a in q.items par(b=a.is_positive(), 1) {
-        if b { pos2 += 1; }
-    }
-    assert(pos2 == 3, "form-2 boolean: {pos2} positive");
+  }
+  assert(pos2 == 3, "form-2 boolean: {pos2} positive");
 }

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Parallel execution
 // @TITLE: Parallel processing with the par(...) for-loop clause
-
 // The `par(b=worker_call, threads)` clause on a `for` loop runs a function
 // on every element of a vector in parallel and gives you the results one by
 // one in the loop body. Use it when you have a large collection and a
@@ -21,121 +20,138 @@
 //
 // The worker function must take a `const` reference to the element type and
 // return a single primitive value (integer, float, or boolean).
-
 // ── Shared struct definitions ────────────────────────────────────────────────
+struct Score {
+  value: integer
+}
 
-struct Score { value: integer }
-struct ScoreList { items: vector<Score> }
+struct ScoreList {
+  items: vector < Score >
+}
 
-struct Range { lo: integer, hi: integer }
-struct RangeList { items: vector<Range> }
+struct Range {
+  lo: integer,
+  hi: integer
+}
 
+struct RangeList {
+  items: vector < Range >
+}
 // ── Worker functions ─────────────────────────────────────────────────────────
-
 // Global functions (Form 1)
-fn double_score(r: const Score) -> integer { r.value * 2 }
-fn span(r: const Range) -> integer { r.hi - r.lo }
-fn score_as_float(r: const Score) -> float { r.value as float }
-fn score_positive(r: const Score) -> boolean { r.value > 0 }
 
+fn double_score(r: const Score) -> integer {
+  r.value * 2
+}
+
+fn span(r: const Range) -> integer {
+  r.hi - r.lo
+}
+
+fn score_as_float(r: const Score) -> float {
+  r.value as float
+}
+
+fn score_positive(r: const Score) -> boolean {
+  r.value > 0
+}
 // Methods on Score (Form 2)
-fn get_value(self: const Score) -> integer { self.value }
-fn is_positive(self: const Score) -> boolean { self.value > 0 }
 
+fn get_value(self: const Score) -> integer {
+  self.value
+}
+
+fn is_positive(self: const Score) -> boolean {
+  self.value > 0
+}
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn make_scores() -> ScoreList {
-    q = ScoreList {};
-    q.items += [Score{value:10}, Score{value:20}, Score{value:30}];
-    q
+  q = ScoreList { };
+  q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
+  q
 }
 
 fn make_ranges() -> RangeList {
-    q = RangeList {};
-    q.items += [Range{lo:0, hi:10}, Range{lo:5, hi:12}, Range{lo:-3, hi:7}];
-    q
+  q = RangeList { };
+  q.items +=[Range {lo: 0, hi: 10 }, Range {lo: 5, hi: 12 }, Range {lo: -3, hi: 7 }];
+  q
 }
 
 fn main() {
-    // ## Running a Global Function in Parallel
-
-    // Each Score's value is doubled by `double_score`. With 1 thread the work
-    // is sequential; with 4 threads it runs concurrently. Both must produce the
-    // same total because results are delivered in the original order.
-    q = make_scores();
-    sum = 0;
-    for a in q.items par(b=double_score(a), 1) {
-        sum += b;
+  // ## Running a Global Function in Parallel
+  // Each Score's value is doubled by `double_score`. With 1 thread the work
+  // is sequential; with 4 threads it runs concurrently. Both must produce the
+  // same total because results are delivered in the original order.
+  q = make_scores();
+  sum = 0;
+  for a in q.items par(b = double_score(a), 1) {
+    sum += b;
+  }
+  assert(sum == 120, "form-1 integer (1 thread): sum == 120");
+  // integer return, 4 threads
+  q2 = make_scores();
+  sum2 = 0;
+  for a in q2.items par(b = double_score(a), 4) {
+    sum2 += b;
+  }
+  assert(sum2 == 120, "form-1 integer (4 threads): sum == 120");
+  // `span` works on a two-field struct. The element size is inferred from
+  // the struct layout so you do not need to specify it.
+  r = make_ranges();
+  span_sum = 0;
+  for a in r.items par(b = span(a), 2) {
+    span_sum += b;
+  }
+  assert(span_sum == 27, "form-1 Range span: sum == 27");
+  // Workers can return float. Here we just count iterations to confirm
+  // every element was processed.
+  q3 = make_scores();
+  fcount = 0;
+  for a in q3.items par(b = score_as_float(a), 1) {
+    fcount += 1;
+  }
+  assert(fcount == 3, "form-1 float return: 3 elements processed");
+  // Workers can return boolean. Use `if b` in the body to act on the result.
+  q4 = make_scores();
+  pos = 0;
+  for a in q4.items par(b = score_positive(a), 1) {
+    if b {
+      pos += 1;
     }
-    assert(sum == 120, "form-1 integer (1 thread): sum == 120");
-
-    // integer return, 4 threads
-    q2 = make_scores();
-    sum2 = 0;
-    for a in q2.items par(b=double_score(a), 4) {
-        sum2 += b;
+  }
+  assert(pos == 3, "form-1 boolean: all 3 positive");
+  // An empty vector is safe: the loop body simply never executes.
+  empty = ScoreList { };
+  empty_sum = 0;
+  for a in empty.items par(b = double_score(a), 1) {
+    empty_sum += b;
+  }
+  assert(empty_sum == 0, "form-1 empty: body executes 0 times");
+  // ## Running a Method in Parallel
+  // Form 2 calls the worker as a method on each element. The syntax
+  // `b=a.get_value()` tells the compiler to dispatch `get_value` on every
+  // element in parallel and bind each result to `b` in the loop body.
+  q5 = make_scores();
+  sum3 = 0;
+  for a in q5.items par(b = a.get_value(), 1) {
+    sum3 += b;
+  }
+  assert(sum3 == 60, "form-2 integer (1 thread): sum == 60");
+  // integer return, 4 threads
+  q6 = make_scores();
+  sum4 = 0;
+  for a in q6.items par(b = a.get_value(), 4) {
+    sum4 += b;
+  }
+  assert(sum4 == 60, "form-2 integer (4 threads): sum == 60");
+  // boolean return — count positives via method
+  q7 = make_scores();
+  pos2 = 0;
+  for a in q7.items par(b = a.is_positive(), 1) {
+    if b {
+      pos2 += 1;
     }
-    assert(sum2 == 120, "form-1 integer (4 threads): sum == 120");
-
-    // `span` works on a two-field struct. The element size is inferred from
-    // the struct layout so you do not need to specify it.
-    r = make_ranges();
-    span_sum = 0;
-    for a in r.items par(b=span(a), 2) {
-        span_sum += b;
-    }
-    assert(span_sum == 27, "form-1 Range span: sum == 27");
-
-    // Workers can return float. Here we just count iterations to confirm
-    // every element was processed.
-    q3 = make_scores();
-    fcount = 0;
-    for a in q3.items par(b=score_as_float(a), 1) {
-        fcount += 1;
-    }
-    assert(fcount == 3, "form-1 float return: 3 elements processed");
-
-    // Workers can return boolean. Use `if b` in the body to act on the result.
-    q4 = make_scores();
-    pos = 0;
-    for a in q4.items par(b=score_positive(a), 1) {
-        if b { pos += 1; }
-    }
-    assert(pos == 3, "form-1 boolean: all 3 positive");
-
-    // An empty vector is safe: the loop body simply never executes.
-    empty = ScoreList {};
-    empty_sum = 0;
-    for a in empty.items par(b=double_score(a), 1) {
-        empty_sum += b;
-    }
-    assert(empty_sum == 0, "form-1 empty: body executes 0 times");
-
-    // ## Running a Method in Parallel
-
-    // Form 2 calls the worker as a method on each element. The syntax
-    // `b=a.get_value()` tells the compiler to dispatch `get_value` on every
-    // element in parallel and bind each result to `b` in the loop body.
-    q5 = make_scores();
-    sum3 = 0;
-    for a in q5.items par(b=a.get_value(), 1) {
-        sum3 += b;
-    }
-    assert(sum3 == 60, "form-2 integer (1 thread): sum == 60");
-
-    // integer return, 4 threads
-    q6 = make_scores();
-    sum4 = 0;
-    for a in q6.items par(b=a.get_value(), 4) {
-        sum4 += b;
-    }
-    assert(sum4 == 60, "form-2 integer (4 threads): sum == 60");
-
-    // boolean return — count positives via method
-    q7 = make_scores();
-    pos2 = 0;
-    for a in q7.items par(b=a.is_positive(), 1) {
-        if b { pos2 += 1; }
-    }
-    assert(pos2 == 3, "form-2 boolean: all 3 positive");
+  }
+  assert(pos2 == 3, "form-2 boolean: all 3 positive");
 }

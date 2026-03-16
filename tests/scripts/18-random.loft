@@ -1,73 +1,77 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Random numbers: rand, rand_seed, rand_indices.
-
 fn main() {
-    // --- rand: values stay within [lo, hi] ---
-    rand_seed(42);
-    ok = true;
-    for i in 0..200 {
-        r = rand(10, 20);
-        if r < 10 || r > 20 { ok = false; }
+  // --- rand: values stay within [lo, hi] ---
+  rand_seed(42);
+  ok = true;
+  for i in 0..200 {
+    r = rand(10, 20);
+    if r < 10 || r > 20 {
+      ok = false;
     }
-    assert(ok, "rand stays in [10, 20]");
-
-    // --- rand: single-value range always returns that value ---
-    assert(rand(7, 7) == 7, "rand single value");
-
-    // --- rand: lo > hi returns null ---
-    assert(!rand(10, 5), "rand invalid range (lo>hi) is null");
-
-    // --- rand_seed: reproducible sequence ---
-    rand_seed(99);
-    a = rand(0, 1000);
-    b = rand(0, 1000);
-    rand_seed(99);
-    assert(rand(0, 1000) == a, "rand_seed reproducible: first value matches");
-    assert(rand(0, 1000) == b, "rand_seed reproducible: second value matches");
-
-    // --- rand_seed: different seeds produce different values ---
-    rand_seed(1);
-    s1 = rand(0, 1000000);
-    rand_seed(2);
-    s2 = rand(0, 1000000);
-    assert(s1 != s2, "different seeds give different values");
-
-    // --- rand_indices: length ---
-    rand_seed(7);
-    vi = rand_indices(10);
-    assert(len(vi) == 10, "rand_indices(10) has length 10");
-
-    // --- rand_indices: is a permutation of 0..n-1 ---
-    rand_seed(42);
-    n = 20;
-    perm = rand_indices(n);
-    assert(len(perm) == n, "rand_indices permutation length");
-    for expected in 0..n {
-        found = false;
-        for x in perm { if x == expected { found = true; } }
-        assert(found, "rand_indices missing value {expected}");
+  }
+  assert(ok, "rand stays in [10, 20]");
+  // --- rand: single-value range always returns that value ---
+  assert(rand(7, 7) == 7, "rand single value");
+  // --- rand: lo > hi returns null ---
+  assert(!rand(10, 5), "rand invalid range (lo>hi) is null");
+  // --- rand_seed: reproducible sequence ---
+  rand_seed(99);
+  a = rand(0, 1000);
+  b = rand(0, 1000);
+  rand_seed(99);
+  assert(rand(0, 1000) == a, "rand_seed reproducible: first value matches");
+  assert(rand(0, 1000) == b, "rand_seed reproducible: second value matches");
+  // --- rand_seed: different seeds produce different values ---
+  rand_seed(1);
+  s1 = rand(0, 1000000);
+  rand_seed(2);
+  s2 = rand(0, 1000000);
+  assert(s1 != s2, "different seeds give different values");
+  // --- rand_indices: length ---
+  rand_seed(7);
+  vi = rand_indices(10);
+  assert(len(vi) == 10, "rand_indices(10) has length 10");
+  // --- rand_indices: is a permutation of 0..n-1 ---
+  rand_seed(42);
+  n = 20;
+  perm = rand_indices(n);
+  assert(len(perm) == n, "rand_indices permutation length");
+  for expected in 0..n {
+    found = false;
+    for x in perm {
+      if x == expected {
+        found = true;
+      }
     }
-
-    // --- rand_indices: empty input ---
-    ev = rand_indices(0);
-    assert(len(ev) == 0, "rand_indices(0) is empty");
-
-    // --- rand_indices: different seeds give different orderings ---
-    rand_seed(1);
-    ra = rand_indices(10);
-    rand_seed(9999);
-    rb = rand_indices(10);
-    diff = false;
-    for i in 0..10 { if ra[i] != rb[i] { diff = true; } }
-    assert(diff, "rand_indices: different seeds give different orders");
-
-    // --- rand_indices: same seed gives same ordering ---
-    rand_seed(123);
-    rc = rand_indices(8);
-    rand_seed(123);
-    rd = rand_indices(8);
-    same = true;
-    for i in 0..8 { if rc[i] != rd[i] { same = false; } }
-    assert(same, "rand_indices: same seed gives same order");
+    assert(found, "rand_indices missing value {expected}");
+  }
+  // --- rand_indices: empty input ---
+  ev = rand_indices(0);
+  assert(len(ev) == 0, "rand_indices(0) is empty");
+  // --- rand_indices: different seeds give different orderings ---
+  rand_seed(1);
+  ra = rand_indices(10);
+  rand_seed(9999);
+  rb = rand_indices(10);
+  diff = false;
+  for i in 0..10 {
+    if ra[i] != rb[i] {
+      diff = true;
+    }
+  }
+  assert(diff, "rand_indices: different seeds give different orders");
+  // --- rand_indices: same seed gives same ordering ---
+  rand_seed(123);
+  rc = rand_indices(8);
+  rand_seed(123);
+  rd = rand_indices(8);
+  same = true;
+  for i in 0..8 {
+    if rc[i] != rd[i] {
+      same = false;
+    }
+  }
+  assert(same, "rand_indices: same seed gives same order");
 }

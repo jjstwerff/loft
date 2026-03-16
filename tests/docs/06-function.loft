@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Functions
 // @TITLE: User defined functions
-
 // Functions let you give a reusable piece of logic a name so you can call it
 // from multiple places without copying code.
 // This page covers: declaring functions, default argument values, reference parameters
 // (so a function can modify the caller's variable), early return, const parameters,
 // and type-based dispatch.
-
 // ## Declaring Functions
 // The keyword 'fn' starts a function definition.
 // List parameters as 'name: type' separated by commas.
@@ -16,9 +14,8 @@
 // The last expression in the body is returned automatically — no 'return' needed there.
 // Default values let callers skip optional arguments.
 fn greet(name: text, greeting: text = "Hello") -> text {
-    greeting + ", " + name + "!"
+  greeting + ", " + name + "!"
 }
-
 // ## Reference Parameters and Defaults
 // A function with no '-> type' is called for its side effects, not its result.
 // Adding '&' before a parameter type makes it a reference: the function receives a
@@ -26,36 +23,45 @@ fn greet(name: text, greeting: text = "Hello") -> text {
 // Without '&', Loft copies the value in, so changes inside the function stay local.
 // Default values (written '= value' after the type) are substituted when the caller
 // omits that argument.
-fn add(a: &integer, b: integer, c: integer = 0) {
-    a += b + c;
-}
 
+fn add(a:  & integer, b: integer, c: integer = 0) {
+  a += b + c;
+}
 // ## Early Return
 // Use 'return value;' to exit a function before reaching the end.
 // This is handy for guard clauses: handle the special cases first, then write the
 // normal path without extra nesting.
-fn classify(n: integer) -> text {
-    if n < 0 { return "negative"; }
-    if n == 0 { return "zero"; }
-    "positive"
-}
 
+fn classify(n: integer) -> text {
+  if n < 0 {
+    return "negative";
+  }
+  if n == 0 {
+    return "zero";
+  }
+  "positive"
+}
 // ## Const and Reference Parameters
 // 'const' on a parameter tells the compiler "this function must never change this value."
 // The compiler enforces it — any assignment to a const parameter is a compile error.
 // '&' is the opposite promise: "this function will modify this value."
 // Declaring '&' without actually writing to the parameter is also a compile error.
 // These rules make it easy to read a function signature and know what it does to its inputs.
-fn scale(a: const integer, factor: const integer) -> integer {
-    a * factor
-}
 
+fn scale(a: const integer, factor: const integer) -> integer {
+  a * factor
+}
 // ## Type-Based Dispatch
 // You can define two functions with the same name as long as their parameter types differ.
 // Loft picks the right one at compile time based on the type of the argument you pass.
-fn describe_int(v: integer) -> text { "integer:{v}" }
-fn describe_text(v: text) -> text { "text:{v}" }
 
+fn describe_int(v: integer) -> text {
+  "integer:{v}"
+}
+
+fn describe_text(v: text) -> text {
+  "text:{v}"
+}
 // ## Function References
 // 'fn <name>' produces a compile-checked reference to a named function.
 // The result has type 'fn(param_types) -> return_type' and can be:
@@ -64,44 +70,46 @@ fn describe_text(v: text) -> text { "text:{v}" }
 //   - passed as a parameter to another function.
 // The compiler resolves the name at the 'fn' expression and reports an error
 // if the function does not exist or the name is not a function.
-fn double_it(x: integer) -> integer { x * 2 }
-fn negate_it(x: integer) -> integer { -x }
-fn apply_fn(f: fn(integer) -> integer, x: integer) -> integer {
-    f(x)
+
+fn double_it(x: integer) -> integer {
+  x * 2
+}
+
+fn negate_it(x: integer) -> integer {
+  - x
+}
+
+fn apply_fn(f:  fn(integer) -> integer, x: integer) -> integer {
+  f(x)
 }
 
 fn main() {
-    // Passing both arguments explicitly overrides the default.
-    assert(greet("World", "Hi") == "Hi, World!", "Explicit argument");
-
-    // Leaving out the second argument causes Loft to use the default "Hello".
-    assert(greet("World") == "Hello, World!", "Default argument");
-
-    // 'add' takes 'a' by reference, so every call updates the original variable 'v'.
-    // Watch how v accumulates: 1 -> 3 -> 8.
-    v = 1;
-    add(v, 2);       // v = 1 + 2 = 3
-    add(v, 4, 1);    // v = 3 + 4 + 1 = 8
-    assert(v == 8, "Reference parameter: {v}");
-
-    // 'classify' uses early returns to handle each case separately.
-    assert(classify(-5) == "negative", "Classify negative");
-    assert(classify(0) == "zero", "Classify zero");
-    assert(classify(3) == "positive", "Classify positive");
-
-    // 'scale' marks both parameters 'const', so the compiler verifies they are not changed.
-    assert(scale(3, 7) == 21, "scale(3,7)");
-
-    // Loft selects the right function based on the type of the argument.
-    assert(describe_int(42) == "integer:42", "Integer describe");
-    assert(describe_text("hi") == "text:hi", "Text describe");
-
-    // A function reference is stored in a variable with type 'fn(...) -> ...'.
-    // Calling it looks exactly like a regular function call.
-    f = fn double_it;
-    assert(f(5) == 10, "fn-ref stored and called: {f(5)}");
-
-    // Pass function references as arguments to higher-order functions.
-    assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
-    assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
+  // Passing both arguments explicitly overrides the default.
+  assert(greet("World", "Hi") == "Hi, World!", "Explicit argument");
+  // Leaving out the second argument causes Loft to use the default "Hello".
+  assert(greet("World") == "Hello, World!", "Default argument");
+  // 'add' takes 'a' by reference, so every call updates the original variable 'v'.
+  // Watch how v accumulates: 1 -> 3 -> 8.
+  v = 1;
+  add(v, 2);
+  // v = 1 + 2 = 3
+  add(v, 4, 1);
+  // v = 3 + 4 + 1 = 8
+  assert(v == 8, "Reference parameter: {v}");
+  // 'classify' uses early returns to handle each case separately.
+  assert(classify(-5) == "negative", "Classify negative");
+  assert(classify(0) == "zero", "Classify zero");
+  assert(classify(3) == "positive", "Classify positive");
+  // 'scale' marks both parameters 'const', so the compiler verifies they are not changed.
+  assert(scale(3, 7) == 21, "scale(3,7)");
+  // Loft selects the right function based on the type of the argument.
+  assert(describe_int(42) == "integer:42", "Integer describe");
+  assert(describe_text("hi") == "text:hi", "Text describe");
+  // A function reference is stored in a variable with type 'fn(...) -> ...'.
+  // Calling it looks exactly like a regular function call.
+  f = fn double_it;
+  assert(f(5) == 10, "fn-ref stored and called: {f(5)}");
+  // Pass function references as arguments to higher-order functions.
+  assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
+  assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
 }
