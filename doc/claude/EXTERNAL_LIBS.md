@@ -140,38 +140,34 @@ entry — the same path used by `native::init()` today.
 
 ## Discovery and Loading
 
-### Current Search Chain
+### Search Chain (as shipped)
 
-`lib_path()` in `src/parser/mod.rs` currently tries (in order):
+`lib_path()` in `src/parser/mod.rs` tries the following candidates in order:
 1. `lib/<id>.loft` relative to CWD
 2. `<id>.loft` relative to CWD
 3. `<cur_dir>/lib/<id>.loft`
 4. `<base_dir>/lib/<id>.loft` (when inside `tests/`)
 5. `<cur_script_stem>/<id>.loft`
-6–7. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags)
-7b. Each directory in `LOFT_LIB` (colon-separated on Unix)
+6–7. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags), single-file
+7c. **[T2-11]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `lib_dirs` — packaged layout
+7b. Each directory in `LOFT_LIB` (env-var, cross-platform split), single-file
+7d. **[T2-11]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `LOFT_LIB`
 8–9. `<cur_dir>/<id>.loft` / `<base_dir>/<id>.loft`
 
-### Extended Search Chain
-
-Two new candidates are inserted after step 7b:
-
-- **7c:** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `lib_dirs` — the packaged layout.
-- **7d:** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `LOFT_LIB`.
-
-A new helper `lib_path_manifest(dir, id) -> Option<(String, Option<Manifest>)>` reads
-`loft.toml` from `<dir>/<id>/loft.toml`, checks the version requirement, resolves the
-`entry` field, and returns both the entry path and the parsed manifest.
+The helper `lib_path_manifest(dir, id) -> Option<String>` checks that `<dir>/<id>` is a
+directory, reads `<dir>/<id>/loft.toml` when present, validates the version requirement,
+and returns the resolved entry path (or `None` on mismatch or missing file).
 
 ### Load-Time Sequencing
 
 No change to `use` syntax. The existing `use <identifier>;` grammar is sufficient.
 
-What changes: `parse_file()` in `src/parser/mod.rs` processes `use` statements. When
-`lib_path_manifest()` returns a manifest with a `native = "..."` field, the interpreter
-resolves the platform-correct shared library path and appends it to a new field
-`pending_native_libs: Vec<String>` on `Parser`. The actual `dlopen` step happens in
-`main.rs` after `byte_code()`, not during parsing.
+What changes: `parse_file()` in `src/parser/mod.rs` processes `use` statements.
+Phase 2 will extend `lib_path_manifest()` to also return the parsed manifest when
+a `native = "..."` field is present; the interpreter will then resolve the
+platform-correct shared library path and append it to a new `pending_native_libs:
+Vec<String>` on `Parser`. The actual `dlopen` step happens in `main.rs` after
+`byte_code()`, not during parsing.
 
 Extended startup sequence in `main.rs`:
 
@@ -505,18 +501,20 @@ registry exists to make hash distribution meaningful.
 
 ## Phased Rollout
 
-### Phase 1 — Pure-Loft Package Layout (target: 1.0 or alongside)
+### Phase 1 — Pure-Loft Package Layout ✓ shipped (2026-03-16, T2-11)
 
 **Goal:** A developer can ship a multi-file loft library in a directory with `loft.toml`,
 place it in `LOFT_LIB`, and use it with `use mylib;`.
 
-**Changes required:**
+**Shipped changes:**
 
-1. `src/parser/mod.rs` — extend `lib_path()` with steps 7c/7d for the
-   `<dir>/<id>/src/<id>.loft` layout.
-2. `src/manifest.rs` (new) — minimal `loft.toml` reader (a simple line scanner; no
-   full TOML parser needed for Phase 1). Checks `loft = ">=X.Y"` version requirement.
-3. Update `PLANNING.md` and this document.
+1. `src/parser/mod.rs` — `lib_path()` extended with steps 7c/7d for the
+   `<dir>/<id>/src/<id>.loft` layout, in both `lib_dirs` and `LOFT_LIB`.
+2. `src/manifest.rs` (new) — minimal `loft.toml` line-scanner.  Checks the
+   `loft = ">=X.Y"` version requirement; emits a fatal diagnostic on mismatch.
+   Reads the optional `[library] entry` override.
+3. `tests/package_layout.rs` + `tests/lib/testpkg/` — two integration tests
+   (layout discovery and version-mismatch rejection).
 
 No changes to `State`, `Stores`, `native.rs`, or `compile.rs`.
 
