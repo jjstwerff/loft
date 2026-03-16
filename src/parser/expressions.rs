@@ -1188,6 +1188,8 @@ use a separate collection or add after the loop"
             self.parse_vector(var_tp, val, parent_tp)
         } else if self.lexer.has_token("if") {
             self.parse_if(val)
+        } else if self.lexer.has_token("match") {
+            self.parse_match(val)
         } else if self.lexer.has_token("fn") {
             self.parse_fn_ref(val)
         } else if let Some(name) = self.lexer.has_identifier() {

@@ -48,14 +48,14 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 R1 — see Quick Reference for full details
 
 **1.0 target items** (include if time allows; 1.1 if not):
-T1-4 — see Quick Reference for full details
+T2-0 — see Quick Reference for full details
 
 **Explicitly 1.1+**:
-T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T2-13, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
+T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible: T1-4, T2-1, T2-2.
+New language features that are strictly backward-compatible: T2-0, T2-1, T2-2.
 Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of interpreter versions.
 
 ### Version 2.0 — Breaking changes only
@@ -72,35 +72,14 @@ Not expected in the near term.
 
 ---
 
-### T1-4  `match` expression for enum dispatch (subsumes plain enum methods)
-**Sources:** Prototype-friendly goal; INCONSISTENCIES #6
-**Severity:** Medium — if/else chains on enum values are verbose; plain-enum methods
-are impossible without `match` or a free-function workaround
-**Description:** A `match` expression covers all variants with compiler-checked exhaustiveness:
-```loft
-result = match direction {
-    North => "north"
-    East  => "east"
-    South => "south"
-    West  => "west"
-}
-// Compiler error if a variant is missing and no wildcard `_ =>` is present.
-```
-For struct enums, each arm binds the variant's fields:
-```loft
-area = match shape {
-    Circle { radius }      => PI * radius * radius
-    Rect { width, height } => width * height
-}
-```
-This subsumes T1-5 (plain enum methods): once `match` exists, methods on plain enums can be
-written as a `match` body in a free function.  Implement T1-4 directly; skip T1-5.
-**Fix path:**
-1. Lexer/parser: parse `match expr { pattern => expr }` blocks.
-2. IR: lower each arm to a `Value::Match` node; add `OpMatch` bytecode instruction.
-3. Type checking: verify all variants are covered or a wildcard `_` arm is present.
-4. Code gen: emit a jump table or if-chain depending on the enum kind.
-**Effort:** High (lexer, parser, state.rs, fill.rs)
+### T1-14  Scalar patterns in `match` expressions
+**Sources:** [MATCH.md](MATCH.md) — T1-14
+**Severity:** Medium — `match` currently only handles enum subjects; scalar dispatch requires if/else chains
+**Description:** Allow `match` on `integer`, `long`, `float`, `single`, `text`, `boolean`, and `character` values.  Arm patterns are literals; boolean is exhaustive (two values); float arms warn about NaN equality.
+**Fix path:** See [MATCH.md#t1-14](MATCH.md#t1-14--scalar-patterns) for full design.
+Extend `parse_match` subject-type dispatch; add scalar literal parsing in the arm loop; reuse `OpEqInt` / `OpEqText` / `OpEqBool` etc.
+**Effort:** Medium (parser/control.rs — subject dispatch + literal pattern parsing)
+**Target:** 1.1
 
 ---
 
@@ -147,30 +126,6 @@ skips synthetic internal names; apply the same `uses == 0` check to loop iterati
 
 ---
 
-
-### T1-12  Redundant null check on `not null` type
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Low–Medium — comparing a `not null` value to `null` is always false or always
-true; using `//` (null-coalescing) on a `not null` value makes the default branch unreachable;
-both indicate a misunderstood type annotation
-**Description:** When the type of an expression is statically known to be non-nullable, flag
-null-check patterns whose result is constant:
-```loft
-fn f(x: integer not null) {
-    if x == null { ... }     // Warning: 'x' is 'not null' — comparison is always false
-    y = x // default_value   // Warning: 'x' is 'not null' — null-coalescing is redundant
-}
-```
-**Fix path:**
-1. In the equality expression parser: when one operand is the `null` literal and the other
-   has a non-nullable type, emit the warning.
-2. In the `//` operator handler: when the left-hand operand has a non-nullable type, emit
-   the warning and still emit the code (preserve semantics; let optimiser remove the branch).
-**Effort:** Small (parser/expressions.rs — type-driven checks, no flow analysis required)
-**Target:** 1.1
-
----
-
 ### T1-13  Unreachable code after unconditional terminator
 **Sources:** Compiler warnings audit 2026-03-15
 **Severity:** Medium — any statement after an unconditional `return`, `break`, or `continue`
@@ -195,7 +150,194 @@ fn f() -> integer {
 
 ---
 
+### T1-16  Guard clauses (`if`) in `match` arms
+**Sources:** [MATCH.md](MATCH.md) — T1-16
+**Severity:** Medium — without guards, per-arm conditions require a nested `if` inside the arm body and cannot affect exhaustiveness
+**Description:** `Circle { r } if r > 0.0 => ...` — optional boolean guard after a pattern.  Guard failure falls through to the next arm.  Guarded arms do not contribute to exhaustiveness coverage.
+**Fix path:** See [MATCH.md#t1-16](MATCH.md#t1-16--guard-clauses-if) for full design.
+Parse optional `if expr` after pattern; emit `If(pattern_cmp, If(guard, body, chain_rest), chain_rest)` with chain_rest cloned.
+**Effort:** Small–Medium (parser/control.rs — guard parsing + chain-building change)
+**Depends on:** T1-14
+**Target:** 1.1
+
+---
+
+### T1-15  Or-patterns (`|`) in `match` arms
+**Sources:** [MATCH.md](MATCH.md) — T1-15
+**Severity:** Low–Medium — disjunction over patterns requires duplicating arm bodies today
+**Description:** `North | South => "vertical"` — multiple patterns per arm, combined with `||`.  Works for enum variants, scalars, and ranges.
+**Fix path:** See [MATCH.md#t1-15](MATCH.md#t1-15--or-patterns-) for full design.
+Refactor `arms` storage from `(Option<i32>, ...)` to `(Option<Value>, ...)` (pre-built condition); add `|`-loop in pattern parser.
+**Effort:** Medium (parser/control.rs — structural refactor of arms vec + pattern loop)
+**Depends on:** T1-14
+**Target:** 1.1
+
+---
+
+### T1-17  Range patterns in `match` arms
+**Sources:** [MATCH.md](MATCH.md) — T1-17
+**Severity:** Low–Medium — range dispatch currently requires chained `if`/`else if` comparisons
+**Description:** `1..=10 =>` (inclusive) and `1..100 =>` (exclusive) patterns for integer, long, float, single, text, and character subjects.  Open-start `..=hi` supported; open-end `lo..` is an error in pattern position.
+**Fix path:** See [MATCH.md#t1-17](MATCH.md#t1-17--range-patterns) for full design.
+After parsing scalar literal, check for `..` + optional `=`; build `OpLeXxx(lo, subj) && OpLeXxx/OpLtXxx(subj, hi)`.
+**Effort:** Small (parser/control.rs — extends scalar pattern parser)
+**Depends on:** T1-14
+**Target:** 1.1
+
+---
+
+### T1-18  Plain struct destructuring in `match`
+**Sources:** [MATCH.md](MATCH.md) — T1-18
+**Severity:** Low–Medium — struct field extraction currently requires separate field-access statements
+**Description:** `match p { Point { x, y } => x + y }` — bind struct fields directly in a match arm.  No discriminant comparison (one shape); exhaustive once any unconditional arm appears.
+**Fix path:** See [MATCH.md#t1-18](MATCH.md#t1-18--plain-struct-destructuring) for full design.
+Extend subject-type dispatch to `Type::Reference(d_nr)` with `DefType::Struct`; reuse field-binding mechanism from T1-4 struct-enum.
+**Effort:** Small (parser/control.rs — subject dispatch + reuse existing field-bind code)
+**Target:** 1.1
+
+---
+
+### T1-12  Redundant null check on `not null` type
+**Sources:** Compiler warnings audit 2026-03-15
+**Severity:** Low–Medium — comparing a `not null` value to `null` is always false or always
+true; using `//` (null-coalescing) on a `not null` value makes the default branch unreachable;
+both indicate a misunderstood type annotation
+**Description:** When the type of an expression is statically known to be non-nullable, flag
+null-check patterns whose result is constant:
+```loft
+fn f(x: integer not null) {
+    if x == null { ... }     // Warning: 'x' is 'not null' — comparison is always false
+    y = x // default_value   // Warning: 'x' is 'not null' — null-coalescing is redundant
+}
+```
+**Fix path:**
+1. In the equality expression parser: when one operand is the `null` literal and the other
+   has a non-nullable type, emit the warning.
+2. In the `//` operator handler: when the left-hand operand has a non-nullable type, emit
+   the warning and still emit the code (preserve semantics; let optimiser remove the branch).
+**Effort:** Small (parser/expressions.rs — type-driven checks, no flow analysis required)
+**Target:** 1.1
+
+---
+
+### T1-22  Missing return path for functions with a non-null return type
+(Moved from Tier 2 — this is a language correctness item.)
+**Sources:** Compiler warnings audit 2026-03-15
+**Severity:** Medium — a function declared to return `integer not null` that falls off the
+end without a `return` silently returns null, violating the declared contract
+**Description:** After parsing a function body, check whether every exit path has an explicit
+`return`.  Warn only when the declared return type is non-nullable:
+```loft
+fn classify(n: integer) -> text not null {
+    if n > 0 { return "pos" }
+    // Warning: not all code paths return a value; function may return null
+}
+```
+A nullable return type (`-> text`, without `not null`) is exempt — falling off the end is
+then intentional.
+**Fix path:**
+1. Define a `definitely_returns(block) -> bool` predicate: a block definitely-returns if
+   its last statement is a `return`, or it is an `if` with an `else` where both branches
+   definitely-return (recursive).
+2. After parsing each function body, if the return type is `not null` and
+   `!definitely_returns(body)`, emit the warning at the closing `}`.
+**Effort:** Medium (parser/control.rs — return-path analysis after function body)
+**Target:** 1.1
+
+---
+
+### T1-23  Variable shadowing
+(Moved from Tier 2 — this is a language quality item.)
+**Sources:** Compiler warnings audit 2026-03-15
+**Severity:** Low — a variable in an inner scope silently shadows an outer-scope variable
+of the same name; the outer variable is unchanged, which is often surprising in loops
+**Description:** Before adding a new variable to a scope, check whether the same name exists
+in any enclosing scope.  If it does, emit a warning:
+```loft
+x = 10
+for x in items {    // Warning: loop variable 'x' shadows outer variable 'x'
+    ...
+}
+// outer x is still 10 — the loop variable was distinct
+```
+**Fix path:**
+1. In the variable creation path (`variables.rs:add_variable`), walk the enclosing scope
+   chain checking for a name collision before registering the new variable.
+2. Emit the warning at the inner declaration site, referencing both positions.
+3. `_`-prefixed names are exempt.
+**Effort:** Small (variables.rs + scopes.rs — scope-chain walk at variable creation)
+**Target:** 1.1+
+
+---
+
+### T1-19  Nested patterns in field positions
+**Sources:** [MATCH.md](MATCH.md) — T1-19
+**Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
+**Description:** `Order { status: Paid, amount } => charge(amount)` — a field may carry a sub-pattern (`:` separator) instead of (or in addition to) a binding variable.  Sub-patterns generate additional `&&` conditions on the arm.
+**Fix path:** See [MATCH.md#t1-19](MATCH.md#t1-19--nested-patterns-in-field-positions) for full design.
+Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
+**Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
+**Depends on:** T1-14, T1-18
+**Target:** 1.1+
+
+---
+
+### T1-20  Remaining patterns (null, binding `@`)
+**Sources:** [MATCH.md](MATCH.md) — T1-20
+**Severity:** Low
+**Description:** `null` pattern; wildcard-binding (`x => body`); explicit `name @ pattern` binding; character literal patterns.
+**Fix path:** See [MATCH.md#t1-20](MATCH.md#t1-20--remaining-patterns-null-binding) for full design.
+`null`: detect `has_token("null")`; emit null-equality condition.  Wildcard binding: unrecognised identifier in scalar arm creates a variable.  `@`: add `"@"` to TOKENS; parse `name @ pattern`.
+**Effort:** Small (parser/control.rs — a few new checks in arm parsing; one TOKENS addition)
+**Depends on:** T1-14
+**Target:** 1.1+
+
+---
+
+### T1-21  Slice and vector patterns
+**Sources:** [MATCH.md](MATCH.md) — T1-21
+**Severity:** Low — vector/text structural dispatch requires manual length checks and element access today
+**Description:** `[first, ..] =>`, `[.., last] =>`, `[a, b] =>` and similar patterns for `vector<T>` and `text` subjects.  Binds elements by position; `..` skips the rest.  Rest binding (`rest..`) deferred to a follow-up.
+**Fix path:** See [MATCH.md#t1-21](MATCH.md#t1-21--slice-and-vector-patterns) for full design.
+Detect `has_token("[")` in arm; parse slice elements; emit `OpLengthVector` length test + `OpGetVector` element bindings.
+**Effort:** Medium (parser/control.rs — new `parse_slice_pattern` helper)
+**Depends on:** T1-14, T1-15
+**Target:** 1.1+
+
+---
+
 ## Tier 2 — Prototype-Friendly Features
+
+### T2-0  Code formatter (`loft --format`)
+**Sources:** [FORMATTER.md](FORMATTER.md)
+**Severity:** Low — no correctness impact; quality-of-life
+**Description:** Token-stream formatter imposing one canonical loft style (no configuration).
+Key rules: 2-space indent, opening brace on same line, every block body multi-line, spaces
+around operators, fields on separate lines in struct/enum definitions, param/call/array lists
+wrapped at 80 cols, consecutive `use` lines sorted alphabetically, trailing commas stripped.
+Invoked as `loft --format file.loft` (in-place) or `--format-check` (CI exit 1 if differs).
+Works via a new `Mode::Raw` lexer pass that preserves `LineComment` tokens; ~400 lines in
+`src/formatter.rs`.
+**Effort:** Small–Medium (new `src/formatter.rs`; minor additions to `src/lexer.rs`, `src/main.rs`)
+
+---
+
+### T2-13  Empty `[]` literal unusable as a direct mutable vector argument
+**Sources:** PROBLEMS #44
+**Severity:** Low — passing `[]` directly to a function that takes `&vector<T>` fails with
+a codegen assertion; the workaround is trivial but surprising
+**Description:** Writing `join([], "-")` when `join` expects a mutable vector triggers a
+debug-build assertion in `generate_call` ("expected 12B on stack but generate(Insert([Null])) pushed 0B") because `parse_vector` returns `Value::Insert([Null])` — zero stack bytes — when `[]` appears in call context with an unknown element type.  In assignment context (`v = []`) the second pass knows the type and works correctly.
+**Fix path:** In the `else` branch of `parse_vector` (the early-return path for empty `[]`
+when `is_var = false`), synthesise an anonymous temporary variable, call `vector_db` to emit
+the initialisation ops, and return `Value::Var(tmp)` wrapped in a `v_block` — exactly as the
+non-empty path does when `block = true`.  The catch: `assign_tp` is `Type::Unknown(0)` at
+this point, so `vector_db` must tolerate `Unknown` on the first pass and be called again on
+the second pass once the callee's parameter type is known.
+**Effort:** Medium (parser/expressions.rs — deferred type resolution for empty vector in call context)
+**Target:** 1.1
+
+---
 
 ### T2-1  Lambda / anonymous function expressions
 **Sources:** Prototype-friendly goal; T1-1 (callable fn refs) already complete
@@ -243,35 +385,6 @@ ergonomic once available.
 3. Print expression results automatically (non-void expressions print their value).
 4. On parse error, discard the failed line and continue the session.
 **Effort:** High (main.rs, parser.rs, new repl.rs)
-
----
-
-### T2-4  Vector aggregates — `sum`, `min_of`, `max_of`, `any`, `all`, `count_if`
-**Sources:** Standard library audit 2026-03-15
-**Severity:** Low–Medium — common operations currently require manual `reduce`/loop boilerplate;
-the building blocks (`map`, `filter`, `reduce`) are already present
-**Description:** Typed overloads for each primitive element type:
-```loft
-// Sum (integer overload shown; long/float/single analogous)
-pub fn sum(v: vector<integer>) -> integer { reduce(v, 0, fn __add_int) }
-
-// Range min/max (avoids shadowing scalar min/max by using longer names)
-pub fn min_of(v: vector<integer>) -> integer { ... }
-pub fn max_of(v: vector<integer>) -> integer { ... }
-
-// Predicates — require compiler special-casing (like map/filter) because fn-ref
-// types are not generic; each overload hardcodes the element type
-pub fn any(v: vector<integer>, pred: fn(integer)->boolean) -> boolean { ... }
-pub fn all(v: vector<integer>, pred: fn(integer)->boolean) -> boolean { ... }
-pub fn count_if(v: vector<integer>, pred: fn(integer)->boolean) -> integer { ... }
-```
-`sum`/`min_of`/`max_of` are straightforward reduce wrappers; `any`/`all`/`count_if`
-are short-circuit loops that need a named helper or compiler special-casing.
-Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with T1-7.
-**Fix path:** Typed loft overloads using `reduce` for sum/min_of/max_of; compiler
-special-case in `parse_call` for `any`/`all`/`count_if` (same tier of effort as T1-3).
-**Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
-**Target:** 1.1 — batch all variants; defer until after T2-1 (lambdas) makes them ergonomic
 
 ---
 
@@ -340,69 +453,32 @@ pub fn reverse(v: &vector<integer>);                // reverse in-place; O(n)
 
 ---
 
-### T2-9  Missing return path for functions with a non-null return type
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Medium — a function declared to return `integer not null` that falls off the
-end without a `return` silently returns null, violating the declared contract
-**Description:** After parsing a function body, check whether every exit path has an explicit
-`return`.  Warn only when the declared return type is non-nullable:
+### T2-4  Vector aggregates — `sum`, `min_of`, `max_of`, `any`, `all`, `count_if`
+**Sources:** Standard library audit 2026-03-15
+**Severity:** Low–Medium — common operations currently require manual `reduce`/loop boilerplate;
+the building blocks (`map`, `filter`, `reduce`) are already present
+**Description:** Typed overloads for each primitive element type:
 ```loft
-fn classify(n: integer) -> text not null {
-    if n > 0 { return "pos" }
-    // Warning: not all code paths return a value; function may return null
-}
+// Sum (integer overload shown; long/float/single analogous)
+pub fn sum(v: vector<integer>) -> integer { reduce(v, 0, fn __add_int) }
+
+// Range min/max (avoids shadowing scalar min/max by using longer names)
+pub fn min_of(v: vector<integer>) -> integer { ... }
+pub fn max_of(v: vector<integer>) -> integer { ... }
+
+// Predicates — require compiler special-casing (like map/filter) because fn-ref
+// types are not generic; each overload hardcodes the element type
+pub fn any(v: vector<integer>, pred: fn(integer)->boolean) -> boolean { ... }
+pub fn all(v: vector<integer>, pred: fn(integer)->boolean) -> boolean { ... }
+pub fn count_if(v: vector<integer>, pred: fn(integer)->boolean) -> integer { ... }
 ```
-A nullable return type (`-> text`, without `not null`) is exempt — falling off the end is
-then intentional.
-**Fix path:**
-1. Define a `definitely_returns(block) -> bool` predicate: a block definitely-returns if
-   its last statement is a `return`, or it is an `if` with an `else` where both branches
-   definitely-return (recursive).
-2. After parsing each function body, if the return type is `not null` and
-   `!definitely_returns(body)`, emit the warning at the closing `}`.
-**Effort:** Medium (parser/control.rs — return-path analysis after function body)
-**Target:** 1.1
-
----
-
-### T2-10  Variable shadowing
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Low — a variable in an inner scope silently shadows an outer-scope variable
-of the same name; the outer variable is unchanged, which is often surprising in loops
-**Description:** Before adding a new variable to a scope, check whether the same name exists
-in any enclosing scope.  If it does, emit a warning:
-```loft
-x = 10
-for x in items {    // Warning: loop variable 'x' shadows outer variable 'x'
-    ...
-}
-// outer x is still 10 — the loop variable was distinct
-```
-**Fix path:**
-1. In the variable creation path (`variables.rs:add_variable`), walk the enclosing scope
-   chain checking for a name collision before registering the new variable.
-2. Emit the warning at the inner declaration site, referencing both positions.
-3. `_`-prefixed names are exempt.
-**Effort:** Small (variables.rs + scopes.rs — scope-chain walk at variable creation)
-**Target:** 1.1+
-
----
-
-
-### T2-13  Empty `[]` literal unusable as a direct mutable vector argument
-**Sources:** PROBLEMS #44
-**Severity:** Low — passing `[]` directly to a function that takes `&vector<T>` fails with
-a codegen assertion; the workaround is trivial but surprising
-**Description:** Writing `join([], "-")` when `join` expects a mutable vector triggers a
-debug-build assertion in `generate_call` ("expected 12B on stack but generate(Insert([Null])) pushed 0B") because `parse_vector` returns `Value::Insert([Null])` — zero stack bytes — when `[]` appears in call context with an unknown element type.  In assignment context (`v = []`) the second pass knows the type and works correctly.
-**Fix path:** In the `else` branch of `parse_vector` (the early-return path for empty `[]`
-when `is_var = false`), synthesise an anonymous temporary variable, call `vector_db` to emit
-the initialisation ops, and return `Value::Var(tmp)` wrapped in a `v_block` — exactly as the
-non-empty path does when `block = true`.  The catch: `assign_tp` is `Type::Unknown(0)` at
-this point, so `vector_db` must tolerate `Unknown` on the first pass and be called again on
-the second pass once the callee's parameter type is known.
-**Effort:** Medium (parser/expressions.rs — deferred type resolution for empty vector in call context)
-**Target:** 1.1
+`sum`/`min_of`/`max_of` are straightforward reduce wrappers; `any`/`all`/`count_if`
+are short-circuit loops that need a named helper or compiler special-casing.
+Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with T1-7.
+**Fix path:** Typed loft overloads using `reduce` for sum/min_of/max_of; compiler
+special-case in `parse_call` for `any`/`all`/`count_if` (same tier of effort as T1-3).
+**Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
+**Target:** 1.1 — batch all variants; defer until after T2-1 (lambdas) makes them ergonomic
 
 ---
 
@@ -689,39 +765,47 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 ## Quick Reference
 
-| ID   | Title                                                   | Tier | Effort    | Target  | Depends on | Source                     |
-|------|---------------------------------------------------------|------|-----------|---------|------------|----------------------------|
-| T1-4 | match expression with exhaustiveness                    | 1    | High      | 1.0 tgt |            | Prototype goal, INCON #6   |
-| T1-9 | Dead assignment (overwritten before first read)         | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
-| T1-10 | Unused loop variable                                  | 1    | Trivial   | 1.1     |            | Warnings audit 2026-03-15  |
-| T1-12 | Redundant null check on `not null` type               | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
-| T1-13 | Unreachable code after return/break/continue          | 1    | Medium    | 1.1     |            | Warnings audit 2026-03-15  |
-| T2-1 | Lambda / anonymous function expressions                 | 2    | Med–High  | 1.1     | T1-1       | Prototype goal             |
-| T2-2 | REPL / interactive mode                                 | 2    | High      | 1.1     |            | Prototype goal             |
-| T2-4 | Vector aggregates (sum, min_of, any, all, count_if)     | 2    | Low–Med   | 1.1     | T2-1       | Stdlib audit 2026-03-15    |
-| T2-5 | In-place sort for primitive vectors                     | 2    | Medium    | 1.1     |            | Stdlib audit 2026-03-15    |
-| T2-7 | File system: `mkdir`, `mkdir_all`                       | 2    | Small     | 1.1     |            | Stdlib audit 2026-03-15    |
-| T2-8 | Expose `reverse`, `clear`, `insert` on vectors         | 2    | Low–Med   | 1.1     |            | Stdlib audit 2026-03-15    |
-| T2-9 | Missing return path for non-null return type            | 2    | Medium    | 1.1     |            | Warnings audit 2026-03-15  |
-| T2-10 | Variable shadowing                                    | 2    | Small     | 1.1+    |            | Warnings audit 2026-03-15  |
-| T2-12 | Bytecode cache (`.loftc`, skip recompile on rerun)    | 2    | Medium    | 1.1     |            | BYTECODE_CACHE.md          |
-| T2-13 | Empty `[]` literal unusable as direct mutable vector arg | 2  | Medium    | 1.1     |            | PROBLEMS #44               |
-| T3-1 | Parallel workers: extra args + text/ref returns         | 3    | High      | 1.1+    |            | THREADING deferred         |
-| T3-2 | Logger: production mode, source injection               | 3    | Med–High  | 1.1+    |            | LOGGER.md                  |
-| T3-3 | Optional Cargo features                                 | 3    | Medium    | 1.1+    |            | OPTIONAL_FEATURES.md       |
-| T3-4 | Spatial index operations (full implementation)          | 3    | High      | 1.1+    |            | PROBLEMS #22              |
-| T3-5 | Closure capture for lambdas                             | 3    | Very High | 2.0     | T2-1       | Depends on T2-1            |
-| T3-6 | Redundant `const` parameter annotation                  | 3    | Small–Med | 1.1+    |            | Warnings audit 2026-03-15  |
-| T3-7 | Stack slot `assign_slots` pre-pass (arch cleanup)       | 3    | High      | 1.1+    |            | ASSIGNMENT.md Steps 3+4    |
-| T3-8 | Native extension libraries (`cdylib` + `#native`)       | 3    | High      | 1.1+    | —          | EXTERNAL_LIBS.md Ph2       |
-| R1   | Create standalone `loft` GitHub repository          | R    | Trivial   | **1.0** |            | Extraction plan            |
-| R6   | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1–R5      | Extraction plan            |
-| W1   | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6        | WEB_IDE.md M1              |
-| W2   | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1        | WEB_IDE.md M2              |
-| W3   | Symbol navigation (go-to-def, find-usages)              | W    | Medium    | post-1.0 | W1, W2    | WEB_IDE.md M3              |
-| W4   | Multi-file projects (IndexedDB)                         | W    | Medium    | post-1.0 | W2        | WEB_IDE.md M4              |
-| W5   | Docs & examples browser                                 | W    | Small–Med | post-1.0 | W2        | WEB_IDE.md M5              |
-| W6   | Export/import ZIP + PWA offline                         | W    | Small–Med | post-1.0 | W4        | WEB_IDE.md M6              |
+| ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
+|------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
+| T1-14 | Scalar patterns in `match` (int, text, bool, …)           | 1    | Medium    | 1.1     |             | MATCH.md T1-14             |
+| T1-9  | Dead assignment (overwritten before first read)            | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
+| T1-10 | Unused loop variable                                      | 1    | Trivial   | 1.1     |             | Warnings audit 2026-03-15  |
+| T1-13 | Unreachable code after return/break/continue              | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
+| T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
+| T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
+| T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
+| T1-18 | Plain struct destructuring in `match`                    | 1    | Small     | 1.1     |             | MATCH.md T1-18             |
+| T1-12 | Redundant null check on `not null` type                  | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
+| T1-22 | Missing return path for non-null functions               | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
+| T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
+| T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
+| T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
+| T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
+| T2-0  | Code formatter (`loft --format`)                        | 2    | Small–Med | 1.0 tgt |             | FORMATTER.md               |
+| T2-13 | Empty `[]` literal unusable as direct mutable vector arg | 2   | Medium    | 1.1     |             | PROBLEMS #44               |
+| T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
+| T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
+| T2-5  | In-place sort for primitive vectors                      | 2    | Medium    | 1.1     |             | Stdlib audit 2026-03-15    |
+| T2-7  | File system: `mkdir`, `mkdir_all`                        | 2    | Small     | 1.1     |             | Stdlib audit 2026-03-15    |
+| T2-8  | Expose `reverse`, `clear`, `insert` on vectors          | 2    | Low–Med   | 1.1     |             | Stdlib audit 2026-03-15    |
+| T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
+| T2-12 | Bytecode cache (`.loftc`, skip recompile on rerun)      | 2    | Medium    | 1.1     |             | BYTECODE_CACHE.md          |
+| T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 1.1+    |             | THREADING deferred         |
+| T3-2  | Logger: production mode, source injection               | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
+| T3-3  | Optional Cargo features                                  | 3    | Medium    | 1.1+    |             | OPTIONAL_FEATURES.md       |
+| T3-4  | Spatial index operations (full implementation)           | 3    | High      | 1.1+    |             | PROBLEMS #22               |
+| T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
+| T3-6  | Redundant `const` parameter annotation                   | 3    | Small–Med | 1.1+    |             | Warnings audit 2026-03-15  |
+| T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
+| T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
+| R1    | Create standalone `loft` GitHub repository              | R    | Trivial   | **1.0** |             | Extraction plan            |
+| R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1–R5       | Extraction plan            |
+| W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
+| W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
+| W3    | Symbol navigation (go-to-def, find-usages)              | W    | Medium    | post-1.0 | W1, W2     | WEB_IDE.md M3              |
+| W4    | Multi-file projects (IndexedDB)                         | W    | Medium    | post-1.0 | W2         | WEB_IDE.md M4              |
+| W5    | Docs & examples browser                                 | W    | Small–Med | post-1.0 | W2         | WEB_IDE.md M5              |
+| W6    | Export/import ZIP + PWA offline                         | W    | Small–Med | post-1.0 | W4         | WEB_IDE.md M6              |
 
 **Target key:** **1.0** = hard gate · **1.0 tgt** = target, not blocking · **1.1** = first post-1.0 minor · **1.1+** = later minor · **post-1.0** = independent track · **pre-W1** = must precede W1
 

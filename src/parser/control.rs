@@ -4,6 +4,8 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
+use std::collections::HashSet;
+
 use super::{
     DefType, I32, Level, Parser, Position, Type, Value, diagnostic_format, merge_dependencies,
     v_block, v_if, v_loop, v_set,
@@ -164,6 +166,312 @@ impl Parser {
         }
         *code = v_if(test, true_code, false_code);
         merge_dependencies(&true_type, &false_type)
+    }
+
+    // <match> ::= 'match' <expression> '{' { <pattern> '=>' <expression> } '}'
+    // <pattern> ::= '_' | <variant> [ '{' <field> { ',' <field> } '}' ]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
+        // 1. Parse the subject expression.
+        let mut subject = Value::Null;
+        let subject_type = self.expression(&mut subject);
+
+        // Resolve enum type info from the subject.
+        // A struct-enum variable is typed as Type::Reference(variant_d_nr) whose parent is
+        // the Enum definition, so we also handle that case.
+        let (e_nr, is_struct, valid_enum) = match &subject_type {
+            Type::Enum(nr, s, _) => (*nr, *s, true),
+            Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::EnumValue => {
+                let parent = self.data.def(*d_nr).parent;
+                (parent, true, true)
+            }
+            _ => {
+                if !self.first_pass {
+                    diagnostic!(self.lexer, Level::Error, "match requires an enum type");
+                }
+                (u32::MAX, false, false)
+            }
+        };
+
+        // For plain enums (stack bytes), use a temp var to avoid re-evaluating the subject.
+        // For struct enums (database references / DbRef), do NOT create a temp var — the
+        // allocation system requires DbRefs to be freed in strict LIFO order and copying them
+        // to a new variable breaks that invariant.  Instead, use the subject Value directly.
+        let (subject_val, preamble): (Value, Option<(u16, Value)>) = if is_struct || !valid_enum {
+            (subject, None)
+        } else {
+            let v = self.create_unique("match_subj", &subject_type);
+            self.vars.defined(v);
+            (Value::Var(v), Some((v, subject)))
+        };
+
+        // Build discriminant expression: integer representation of the active variant.
+        let disc_expr = if is_struct {
+            let get_enum = self.cl("OpGetEnum", &[subject_val.clone(), Value::Int(0)]);
+            self.cl("OpConvIntFromEnum", &[get_enum])
+        } else {
+            self.cl("OpConvIntFromEnum", std::slice::from_ref(&subject_val))
+        };
+
+        self.lexer.token("{");
+
+        // arms: (discriminant or None for wildcard, arm code, arm type)
+        let mut arms: Vec<(Option<i32>, Value, Type)> = Vec::new();
+        let mut covered: HashSet<u32> = HashSet::new();
+        let mut has_wildcard = false;
+        let mut result_type = Type::Void;
+
+        loop {
+            if self.lexer.peek_token("}") {
+                break;
+            }
+            let Some(pattern_name) = self.lexer.has_identifier() else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "expect variant name or '_' in match arm"
+                    );
+                }
+                break;
+            };
+
+            if pattern_name == "_" {
+                // Wildcard arm — must be last.
+                has_wildcard = true;
+                self.lexer.token("=>");
+                let mut arm_code = Value::Null;
+                let arm_type = self.expression(&mut arm_code);
+                if result_type == Type::Void {
+                    result_type = arm_type.clone();
+                } else if !self.first_pass
+                    && arm_type != Type::Void
+                    && !result_type.is_same(&arm_type)
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot unify: {} and {}",
+                        result_type.name(&self.data),
+                        arm_type.name(&self.data)
+                    );
+                }
+                arms.push((None, arm_code, arm_type));
+                break;
+            }
+
+            // Look up the variant definition.
+            let variant_def_nr = self.data.def_nr(&pattern_name);
+            let bad_variant = e_nr == u32::MAX
+                || variant_def_nr == u32::MAX
+                || self.data.def_type(variant_def_nr) != DefType::EnumValue
+                || self.data.def(variant_def_nr).parent != e_nr;
+            if bad_variant {
+                if !self.first_pass && valid_enum && variant_def_nr != u32::MAX {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not a variant of {}",
+                        pattern_name,
+                        self.data.def(e_nr).name
+                    );
+                }
+                // Skip this arm gracefully.
+                if self.lexer.peek_token("{") {
+                    self.lexer.token("{");
+                    while !self.lexer.peek_token("}") && !self.lexer.peek_token(";") {
+                        self.lexer.has_identifier();
+                        self.lexer.has_token(",");
+                    }
+                    self.lexer.token("}");
+                }
+                self.lexer.token("=>");
+                let mut arm_code = Value::Null;
+                self.expression(&mut arm_code);
+                continue;
+            }
+
+            // Duplicate arm detection.
+            if covered.contains(&variant_def_nr) {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "unreachable arm: {} already matched",
+                        pattern_name
+                    );
+                }
+            } else {
+                covered.insert(variant_def_nr);
+            }
+
+            // Get the discriminant integer for this variant.
+            let disc: i32 = if is_struct {
+                // Struct enum: discriminant is attributes[0].value of the EnumValue def.
+                if let Value::Enum(nr, _) = self.data.def(variant_def_nr).attributes[0].value {
+                    i32::from(nr)
+                } else {
+                    0
+                }
+            } else {
+                // Plain enum: discriminant is stored in the parent enum's attributes.
+                if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&pattern_name) {
+                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                        i32::from(nr)
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            };
+
+            // Parse optional field bindings for struct-enum arms: `{ field1, field2, ... }`.
+            let mut arm_stmts: Vec<Value> = Vec::new();
+            if is_struct && self.lexer.peek_token("{") {
+                self.lexer.token("{");
+                let mut seen_fields: HashSet<String> = HashSet::new();
+                loop {
+                    let Some(field_name) = self.lexer.has_identifier() else {
+                        break;
+                    };
+                    if !self.first_pass && seen_fields.contains(&field_name) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "duplicate field binding '{}' in match arm",
+                            field_name
+                        );
+                    }
+                    seen_fields.insert(field_name.clone());
+
+                    // Find the field in the variant's attributes (skip attr 0 = "enum" disc).
+                    let attr_idx_and_type = {
+                        let variant_def = self.data.def(variant_def_nr);
+                        variant_def.attributes[1..]
+                            .iter()
+                            .enumerate()
+                            .find(|(_, a)| a.name == field_name)
+                            .map(|(i, a)| (i + 1, a.typedef.clone()))
+                    };
+
+                    match attr_idx_and_type {
+                        Some((attr_idx, field_type)) => {
+                            let v_nr = self.create_var(&field_name, &field_type);
+                            if v_nr != u16::MAX {
+                                self.vars.defined(v_nr);
+                                let field_read =
+                                    self.get_field(variant_def_nr, attr_idx, subject_val.clone());
+                                arm_stmts.push(v_set(v_nr, field_read));
+                            }
+                        }
+                        None => {
+                            if !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "variant {} has no field '{}'",
+                                    pattern_name,
+                                    field_name
+                                );
+                            }
+                        }
+                    }
+
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.token("}");
+            }
+
+            self.lexer.token("=>");
+
+            // Parse the arm body expression.
+            let mut arm_body = Value::Null;
+            let arm_type = self.expression(&mut arm_body);
+
+            // Type unification across arms.
+            if result_type == Type::Void {
+                result_type = arm_type.clone();
+            } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type)
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot unify: {} and {}",
+                    result_type.name(&self.data),
+                    arm_type.name(&self.data)
+                );
+            }
+
+            // Wrap field-reads + body into a block if there are field reads.
+            let arm_code = if arm_stmts.is_empty() {
+                arm_body
+            } else {
+                arm_stmts.push(arm_body);
+                v_block(arm_stmts, arm_type.clone(), "match_arm")
+            };
+
+            arms.push((Some(disc), arm_code, arm_type));
+        }
+
+        self.lexer.token("}");
+
+        // Exhaustiveness check (second pass only, when no wildcard, when subject is a known enum).
+        if !self.first_pass && !has_wildcard && valid_enum {
+            let missing: Vec<String> = self
+                .data
+                .definitions
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.def_type == DefType::EnumValue && d.parent == e_nr)
+                .filter(|(v_nr, _)| !covered.contains(&(*v_nr as u32)))
+                .map(|(_, d)| d.name.clone())
+                .collect();
+            if !missing.is_empty() {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "match on {} is not exhaustive — missing: {}",
+                    self.data.def(e_nr).name,
+                    missing.join(", ")
+                );
+            }
+        }
+
+        // Build the if-chain from the collected arms (last to first).
+        // Value::Null is the base case — reached only when no arm matches
+        // (only possible if exhaustiveness fails, which is a compile error).
+        let mut chain = Value::Null;
+        for (disc_opt, arm_code, _) in arms.iter().rev() {
+            match disc_opt {
+                None => {
+                    // Wildcard — always taken; becomes the else branch of the chain.
+                    chain = arm_code.clone();
+                }
+                Some(disc_nr) => {
+                    let cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(*disc_nr)]);
+                    chain = v_if(cmp, arm_code.clone(), chain);
+                }
+            }
+        }
+
+        // When not a valid enum, just emit Null (errors were already reported).
+        if !valid_enum {
+            *code = Value::Null;
+            return Type::Void;
+        }
+
+        // Emit the match:
+        // - Plain enum: { match_subj = subject; chain }  (temp var to eval subject once)
+        // - Struct enum: chain only  (subject_val is already the original expression/var)
+        *code = if let Some((v, init)) = preamble {
+            v_block(vec![v_set(v, init), chain], result_type.clone(), "match")
+        } else {
+            chain
+        };
+        result_type
     }
 
     // <for> ::= <identifier> 'in' <expression> [ 'par' '(' <id> '=' <worker> ',' <threads> ')' ] '{' <block>
