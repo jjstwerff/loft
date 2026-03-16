@@ -387,3 +387,67 @@ fn spacial_not_implemented() {
     code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point, x, y> }\nfn test() {}")
         .error("spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
 }
+
+/// T1-22: function with `not null` return type that may fall through warns.
+#[test]
+#[ignore = "T1-22: not yet implemented"]
+fn missing_return_not_null() {
+    code!(
+        "fn classify(n: integer) -> text not null {
+    if n > 0 { return \"pos\" };
+}
+fn test() { classify(1); }"
+    )
+    .warning(
+        "Not all code paths return a value — function 'classify' may return null at missing_return_not_null:3:1",
+    );
+}
+
+/// T1-22: if/else where both branches return — no error, no warning.
+/// (This currently produces a false-positive "void should be integer" error.)
+#[test]
+#[ignore = "T1-22: not yet implemented"]
+fn all_paths_return_if_else() {
+    code!(
+        "fn classify(n: integer) -> integer {
+    if n > 0 { return 1 } else { return -1 }
+}
+fn test() { assert(classify(5) == 1, \"ok\"); }"
+    );
+}
+
+/// T1-22: if/else both return with `not null` — no warning.
+#[test]
+#[ignore = "T1-22: not yet implemented"]
+fn all_paths_return_not_null() {
+    code!(
+        "fn classify(n: integer) -> integer not null {
+    if n > 0 { return 1 } else { return -1 }
+}
+fn test() { assert(classify(5) == 1, \"ok\"); }"
+    );
+}
+
+/// T1-22: function with `not null` return ending in a direct return — no warning.
+#[test]
+#[ignore = "T1-22: not yet implemented"]
+fn direct_return_not_null() {
+    code!(
+        "fn always() -> integer not null {
+    return 42
+}
+fn test() { assert(always() == 42, \"ok\"); }"
+    );
+}
+
+/// T1-22: last expression in block is non-void — counts as definitely-returns, no warning.
+#[test]
+#[ignore = "T1-22: not yet implemented"]
+fn implicit_return_not_null() {
+    code!(
+        "fn double(n: integer) -> integer not null {
+    n * 2
+}
+fn test() { assert(double(3) == 6, \"ok\"); }"
+    );
+}
