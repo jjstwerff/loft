@@ -105,31 +105,6 @@ fn compute(a: integer, b: integer) -> integer {
 **Target:** 1.1
 
 ---
-
-### T1-13  Unreachable code after unconditional terminator
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Medium — any statement after an unconditional `return`, `break`, or `continue`
-will never execute; this usually indicates dead leftover code or a missing conditional
-**Description:** Track a "flow terminated" flag through the statement list in each block.
-Set it on `return`, `break`, or `continue` at the top level of a block (not inside a nested
-`if`); emit a warning for every subsequent statement in the same block:
-```loft
-fn f() -> integer {
-    return 1
-    x = compute()    // Warning: unreachable code
-}
-```
-**Fix path:**
-1. Add a `terminated: bool` flag to the parser's statement-loop state.
-2. Set `terminated = true` after parsing `return` / `break` / `continue` at block scope.
-3. At the start of each statement iteration, if `terminated`, emit the warning, continue
-   parsing (to avoid cascading errors) but discard the generated IR.
-4. Clear `terminated` at if/else merge points.
-**Effort:** Medium (parser/control.rs — new flag threaded through the statement loop)
-**Target:** 1.1
-
----
-
 ### T1-16  Guard clauses (`if`) in `match` arms
 **Sources:** [MATCH.md](MATCH.md) — T1-16
 **Severity:** Medium — without guards, per-arm conditions require a nested `if` inside the arm body and cannot affect exhaustiveness
@@ -883,7 +858,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T1-14 | Scalar patterns in `match` (int, text, bool, …)           | 1    | Medium    | 1.1     |             | MATCH.md T1-14             |
 | T1-9  | Dead assignment (overwritten before first read)            | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
-| T1-13 | Unreachable code after return/break/continue              | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |

@@ -329,6 +329,58 @@ fn unused_loop_var_used_is_silent() {
     );
 }
 
+/// Unreachable code after return.
+#[test]
+fn unreachable_after_return() {
+    code!(
+        "fn compute() -> integer { return 1; x = 2; x }
+fn test() { assert(compute() == 1, \"ok\"); }"
+    )
+    .warning("Unreachable code after return at unreachable_after_return:1:38");
+}
+
+/// Unreachable code after break.
+#[test]
+fn unreachable_after_break() {
+    code!(
+        "fn test() {
+    for i in 1..5 {
+        break;
+        assert(false, \"unreachable\");
+    };
+}"
+    )
+    .warning("Variable i is never read at unreachable_after_break:2:20")
+    .warning("Unreachable code after break at unreachable_after_break:4:15");
+}
+
+/// Unreachable code after continue.
+#[test]
+fn unreachable_after_continue() {
+    code!(
+        "fn test() {
+    for i in 1..5 {
+        continue;
+        assert(false, \"unreachable\");
+    };
+}"
+    )
+    .warning("Variable i is never read at unreachable_after_continue:2:20")
+    .warning("Unreachable code after continue at unreachable_after_continue:4:15");
+}
+
+/// No warning: return inside an if branch does not terminate the block.
+#[test]
+fn no_unreachable_after_branch_return() {
+    code!(
+        "fn compute(x: integer) -> integer {
+    if x > 0 { return x };
+    0
+}
+fn test() { assert(compute(5) == 5, \"ok\"); }"
+    );
+}
+
 #[test]
 fn spacial_not_implemented() {
     // spacial<T> is a reserved keyword; all uses must produce a compile error.

@@ -29,6 +29,7 @@ impl Parser {
         }
         let mut t = Type::Void;
         let mut l = Vec::new();
+        let mut terminated: Option<&str> = None;
         loop {
             let line = self.lexer.pos().line;
             if line > self.line {
@@ -44,8 +45,24 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
+            // Warn about unreachable code after an unconditional terminator.
+            if let Some(kind) = terminated {
+                if !self.first_pass {
+                    diagnostic!(self.lexer, Level::Warning, "Unreachable code after {kind}");
+                }
+                // Only warn once per terminator
+                terminated = None;
+            }
             let mut n = Value::Null;
             t = self.expression(&mut n);
+            // Track unconditional terminators at block scope.
+            // if/else/loop/match contain terminators inside branches — not unconditional.
+            match &n {
+                Value::Return(_) => terminated = Some("return"),
+                Value::Break(_) => terminated = Some("break"),
+                Value::Continue(_) => terminated = Some("continue"),
+                _ => {}
+            }
             if let Value::Insert(ls) = n {
                 Self::move_insert_elements(&mut l, ls);
                 t = Type::Void;

@@ -8,7 +8,7 @@ Optimize the doc/claude documentation files for discoverability and efficiency. 
 
 
 ** Session **
-Continue with one issue for the 1.0 release, state what you chose and why, validate the resulting changes against CODE.md and update all documentation with the resulting changes.
+Continue with one issue for the 1.0 release, state what you chose and why, check against DEVELOPMENT.md.
 Evaluate if better temporary logging, an optional internal analysis tool or boundary checking would help by investigating this issue.
 Evaluate if better temporary logging, an optional internal analysis tool or boundary checking would have helped by investigating the last issue.
 
