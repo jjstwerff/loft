@@ -154,30 +154,6 @@ Extend subject-type dispatch to `Type::Reference(d_nr)` with `DefType::Struct`; 
 
 ---
 
-### T1-22  Missing return path for functions with a non-null return type
-(Moved from Tier 2 — this is a language correctness item.)
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Medium — a function declared to return `integer not null` that falls off the
-end without a `return` silently returns null, violating the declared contract
-**Description:** After parsing a function body, check whether every exit path has an explicit
-`return`.  Warn only when the declared return type is non-nullable:
-```loft
-fn classify(n: integer) -> text not null {
-    if n > 0 { return "pos" }
-    // Warning: not all code paths return a value; function may return null
-}
-```
-A nullable return type (`-> text`, without `not null`) is exempt — falling off the end is
-then intentional.
-**Fix path:**
-1. Define a `definitely_returns(block) -> bool` predicate: a block definitely-returns if
-   its last statement is a `return`, or it is an `if` with an `else` where both branches
-   definitely-return (recursive).
-2. After parsing each function body, if the return type is `not null` and
-   `!definitely_returns(body)`, emit the warning at the closing `}`.
-**Effort:** Medium (parser/control.rs — return-path analysis after function body)
-**Target:** 1.1
-
 ---
 
 ### T1-23  Variable shadowing
@@ -841,7 +817,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
 | T1-18 | Plain struct destructuring in `match`                    | 1    | Small     | 1.1     |             | MATCH.md T1-18             |
-| T1-22 | Missing return path for non-null functions               | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
