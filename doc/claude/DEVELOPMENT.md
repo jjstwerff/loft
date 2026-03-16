@@ -70,6 +70,9 @@ Verify locally at any point:
 cargo build --all-targets        # must succeed
 cargo test                       # all tests must pass (ignoring any that were
                                  # already ignored on main)
+cargo clippy -- -D warnings      # must be clean — same flags CI uses; the
+                                 # Makefile's clippy target uses -W (warn only)
+                                 # and will not catch errors that fail CI
 ```
 
 ---
@@ -238,8 +241,10 @@ Do not merge until all three jobs are green on all platforms.  If a job fails:
 
 - **Test failure on one platform only** — usually a path-separator or timing
   issue; reproduce with `cargo test` locally in a container or VM.
-- **Clippy failure** — a warning present locally was suppressed by a workspace
-  `allow`; remove the suppression or fix the code.
+- **Clippy failure** — a lint that is a warning locally becomes an error under
+  `-D warnings`.  The Makefile's `make test` uses `-W` (warn only) so it will
+  not catch these.  Run `cargo clippy -- -D warnings` locally, fix all errors,
+  and push again.
 - **Format failure** — run `cargo fmt` locally, amend the relevant commit, and
   force-push the branch.
 
