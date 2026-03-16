@@ -141,10 +141,14 @@ impl Parser {
         let tp = self.expression(&mut test);
         self.convert(&mut test, &tp, &Type::Boolean);
         let mut true_code = Value::Null;
+        let write_state = self.vars.save_and_clear_write_state();
+        self.vars.clear_write_state();
         let mut true_type = self.parse_block("if", &mut true_code, &Type::Unknown(0));
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
         if self.lexer.has_token("else") {
+            self.vars.restore_write_state(&write_state);
+            self.vars.clear_write_state();
             if self.lexer.has_token("if") {
                 self.parse_if(&mut false_code);
             } else {
@@ -161,9 +165,13 @@ impl Parser {
                     true_type = false_type.clone();
                 }
             }
-        } else if true_type != Type::Void {
-            false_code = v_block(vec![self.null(&true_type)], true_type.clone(), "else");
+        } else {
+            self.vars.restore_write_state(&write_state);
+            if true_type != Type::Void {
+                false_code = v_block(vec![self.null(&true_type)], true_type.clone(), "else");
+            }
         }
+        self.vars.restore_write_state(&write_state);
         *code = v_if(test, true_code, false_code);
         merge_dependencies(&true_type, &false_type)
     }
@@ -388,8 +396,13 @@ impl Parser {
             self.lexer.token("=>");
 
             // Parse the arm body expression.
+            // Save/restore write tracking so writes in one arm don't cause
+            // false dead-assignment warnings in sibling arms.
+            let arm_write_state = self.vars.save_and_clear_write_state();
+            self.vars.clear_write_state();
             let mut arm_body = Value::Null;
             let arm_type = self.expression(&mut arm_body);
+            self.vars.restore_write_state(&arm_write_state);
 
             // Type unification across arms.
             if result_type == Type::Void {

@@ -719,7 +719,10 @@ use #count instead"
             let in_loop = self.in_loop;
             self.in_loop = true;
             let mut block = Value::Null;
+            let loop_write_state = self.vars.save_and_clear_write_state();
+            self.vars.clear_write_state();
             self.parse_block("for", &mut block, &Type::Void);
+            self.vars.restore_write_state(&loop_write_state);
             let count = self.vars.loop_counter();
             self.in_loop = in_loop;
             self.vars.finish_loop(loop_nr);
