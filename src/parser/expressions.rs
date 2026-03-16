@@ -856,10 +856,9 @@ use a separate collection or add after the loop"
                 if !self.first_pass
                     && !matches!(code, Value::Var(_))
                     && (self.lexer.peek_token(".") || self.lexer.peek_token("["))
+                    && let Type::Reference(d_nr, dep) = &t
+                    && dep.is_empty()
                 {
-                    if let Type::Reference(d_nr, dep) = &t
-                        && dep.is_empty()
-                    {
                         let d_nr = *d_nr;
                         let w = self.vars.work_refs(&t.clone(), &mut self.lexer);
                         // Mark as inline-ref temp so parse_code inserts its
@@ -874,7 +873,6 @@ use a separate collection or add after the loop"
                             "inline ref",
                         );
                         t = Type::Reference(d_nr, vec![w]);
-                    }
                 }
             } else if self.lexer.has_token("[") {
                 t = self.parse_index(code, &t);
@@ -884,6 +882,7 @@ use a separate collection or add after the loop"
         t
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn handle_operator(
         &mut self,
         var_tp: &Type,
@@ -989,19 +988,16 @@ use a separate collection or add after the loop"
             let second_type =
                 self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
             self.known_var_or_type(&second_code);
-            if !self.first_pass && (operator == "/" || operator == "%") {
-                if matches!(second_code, Value::Int(0)) || matches!(second_code, Value::Long(0)) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Warning,
-                        "{} by constant zero — result is always null",
-                        if operator == "/" {
-                            "Division"
-                        } else {
-                            "Modulo"
-                        }
-                    );
-                }
+            if !self.first_pass
+                && (operator == "/" || operator == "%")
+                && (matches!(second_code, Value::Int(0)) || matches!(second_code, Value::Long(0)))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "{} by constant zero — result is always null",
+                    if operator == "/" { "Division" } else { "Modulo" }
+                );
             }
             *ctp = self.call_op(
                 code,
