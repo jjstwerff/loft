@@ -85,6 +85,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-4** — `match` expression for enum dispatch with compiler-checked exhaustiveness.
+  Plain enums dispatch on variant equality; struct-enum arms optionally bind fields
+  (`Circle { radius } => ...`). All arms must return compatible types; missing variants
+  without a wildcard `_ =>` are a compile-time error; duplicate variant arms produce a
+  warning. Lowers to a `Value::If` chain — no new IR nodes or opcodes. Resolves
+  INCONSISTENCIES #6 (plain enums can now have free-function dispatch via `match`).
+  17 tests in `tests/match.rs`. (2026-03-16)
+
 - **T1-2** — Wildcard and selective imports. `use mylib::*` imports all names from `mylib`
   into the current scope; `use mylib::Point, add` imports only the named items. Local
   definitions shadow imported names (local wins). Importing a name that does not exist

@@ -48,14 +48,14 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 R1 — see Quick Reference for full details
 
 **1.0 target items** (include if time allows; 1.1 if not):
-T1-4, T2-0 — see Quick Reference for full details
+T2-0 — see Quick Reference for full details
 
 **Explicitly 1.1+**:
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T2-13, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible: T1-4, T2-0, T2-1, T2-2.
+New language features that are strictly backward-compatible: T2-0, T2-1, T2-2.
 Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of interpreter versions.
 
 ### Version 2.0 — Breaking changes only
@@ -69,40 +69,6 @@ Not expected in the near term.
 
 
 ## Tier 1 — Language Quality & Consistency
-
----
-
-### T1-4  `match` expression for enum dispatch (subsumes plain enum methods)
-**Sources:** Prototype-friendly goal; INCONSISTENCIES #6
-**Severity:** Medium — if/else chains on enum values are verbose; plain-enum methods
-are impossible without `match` or a free-function workaround
-**Description:** A `match` expression covers all variants with compiler-checked exhaustiveness:
-```loft
-result = match direction {
-    North => "north"
-    East  => "east"
-    South => "south"
-    West  => "west"
-}
-// Compiler error if a variant is missing and no wildcard `_ =>` is present.
-```
-For struct enums, each arm binds the variant's fields:
-```loft
-area = match shape {
-    Circle { radius }      => PI * radius * radius
-    Rect { width, height } => width * height
-}
-```
-This subsumes T1-5 (plain enum methods): once `match` exists, methods on plain enums can be
-written as a `match` body in a free function.  Implement T1-4 directly; skip T1-5.
-**Fix path:** See [MATCH.md](MATCH.md) for the full phased design.
-1. Lexer: reserve `match` keyword (done).
-2. Parser: `parse_match` in `src/parser/control.rs` — lower to `Value::If` chain
-   (no new IR nodes or opcodes; `state.rs` and `fill.rs` unchanged).
-3. Exhaustiveness: `missing_variants` helper in `src/parser/definitions.rs`.
-4. Type unification: reuse `merge_dependencies` + `compatible` for arm types.
-5. Hook `parse_match` into `expression()` in `src/parser/expressions.rs`.
-**Effort:** Medium (parser only — lexer, state.rs, fill.rs unchanged)
 
 ---
 
@@ -707,7 +673,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                   | Tier | Effort    | Target  | Depends on | Source                     |
 |------|---------------------------------------------------------|------|-----------|---------|------------|----------------------------|
-| T1-4 | match expression with exhaustiveness                    | 1    | Medium    | 1.0 tgt |            | Prototype goal, INCON #6   |
 | T1-9 | Dead assignment (overwritten before first read)         | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-10 | Unused loop variable                                  | 1    | Trivial   | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-12 | Redundant null check on `not null` type               | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |

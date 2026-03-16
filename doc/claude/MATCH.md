@@ -3,8 +3,8 @@
 
 # Match Expression Design (T1-4)
 
-> **Status: planned** — not yet implemented.
-> Tracking item: T1-4 in [PLANNING.md](PLANNING.md).
+> **Status: implemented** — 17/17 tests pass; shipped 2026-03-16.
+> Tracking item: T1-4 (removed from PLANNING.md on completion).
 
 A pattern-matching expression for dispatching on enum values with
 compiler-checked exhaustiveness.
