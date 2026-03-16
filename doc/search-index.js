@@ -10,6 +10,7 @@ const SEARCH_INDEX=[
 {name:"File System",kind:"section",url:"stdlib-file-system.html"},
 {name:"Environment",kind:"section",url:"stdlib-environment.html"},
 {name:"Random",kind:"section",url:"stdlib-random.html"},
+{name:"Time",kind:"section",url:"stdlib-time.html"},
 {name:"boolean",kind:"type",url:"stdlib-types.html"},
 {name:"integer",kind:"type",url:"stdlib-types.html"},
 {name:"long",kind:"type",url:"stdlib-types.html"},
@@ -134,5 +135,7 @@ const SEARCH_INDEX=[
 {name:"program_directory",kind:"fn",url:"stdlib-environment.html"},
 {name:"rand",kind:"fn",url:"stdlib-random.html"},
 {name:"rand_seed",kind:"fn",url:"stdlib-random.html"},
-{name:"rand_indices",kind:"fn",url:"stdlib-random.html"}
+{name:"rand_indices",kind:"fn",url:"stdlib-random.html"},
+{name:"now",kind:"fn",url:"stdlib-time.html"},
+{name:"ticks",kind:"fn",url:"stdlib-time.html"}
 ];

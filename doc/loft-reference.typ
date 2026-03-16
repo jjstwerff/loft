@@ -1200,6 +1200,10 @@ Most languages crash or throw an exception on division by zero. Loft produces nu
     assert(!(12 / a), "Division by zero gives null");
 ```
 
+=== Compile-time warning for constant zero divisor
+
+When the divisor is a literal 0 in source code, loft emits a compile-time warning because a constant-zero divisor is almost certainly a bug: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still compiles and returns null at runtime — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
+
 === Embedding integers in text
 
 ```rust
@@ -2795,6 +2799,22 @@ Appending a struct variable with `+= \[var\]` and a whole vector with `+= vec` b
 
 Importing the same library twice is silently ignored. A library can itself import other libraries using `use`, so dependency chains work.
 
+=== Package Layout and loft.toml
+
+A library can be distributed as a directory package instead of a single flat file. The packaged directory layout is:
+
+mylib/ loft.toml           optional manifest src/ mylib.loft        library source (default entry)
+
+When the interpreter searches a lib directory and finds `\<dir\>/mylib/` it looks for `\<dir\>/mylib/src/mylib.loft` automatically.
+
+The optional `loft.toml` manifest supports two settings:
+
+\[package\] loft = "\>=1.0"        minimum interpreter version required
+
+\[library\] entry = "src/mylib.loft"   override the default entry path
+
+If the interpreter version is below the stated minimum, loading the library produces a fatal compile error describing the version mismatch. If no manifest is present, the default entry `src/\<name\>.loft` is used.
+
 === Limitations
 
 These are the current rough edges to keep in mind.
@@ -3242,6 +3262,81 @@ Take the first 3 items in random order.
 
 ```rust
     assert(len(picked) > 0, "should have picked some items: {picked}");
+}
+```
+
+
+= Time
+
+Loft provides two time functions:
+
+now()     — milliseconds since the Unix epoch (wall-clock time). ticks()   — microseconds elapsed since program start (monotonic clock).
+
+Both return a 'long'.
+
+Use 'now()' for timestamps, log entries, and date calculations. Use 'ticks()' for benchmarks and frame timing — it is unaffected by system clock changes or NTP adjustments.
+
+```rust
+fn main() {
+```
+
+=== Wall-clock time: now()
+
+'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.
+
+```rust
+    t = now();
+    assert(t > 0l, "now() must be positive");
+```
+
+Two successive calls return non-decreasing values.
+
+```rust
+    t2 = now();
+    assert(t2 >= t, "now() must be non-decreasing");
+```
+
+=== Elapsed time: ticks()
+
+'ticks()' measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.
+
+```rust
+    start = ticks();
+    assert(start >= 0l, "ticks() must be non-negative");
+```
+
+```rust
+    end = ticks();
+    assert(end >= start, "ticks() must be monotonically non-decreasing");
+```
+
+=== Measuring elapsed time
+
+Subtract two 'ticks()' values to get the duration in microseconds. Divide by 1000 to convert to milliseconds.
+
+elapsed_us  = end_ticks - start_ticks elapsed_ms  = elapsed_us / 1000l
+
+Example: measure how long a loop takes.
+
+```rust
+    t_before = ticks();
+    sum = 0;
+    for i in 0..1000 { sum += i }
+    t_after = ticks();
+    elapsed = t_after - t_before;
+    assert(elapsed >= 0l, "elapsed time must be non-negative: {elapsed}");
+    assert(sum == 499500, "loop produced wrong sum: {sum}");
+```
+
+=== Common patterns
+
+Timestamp a log entry (seconds since epoch): seconds = now() / 1000l
+
+Seed the random number generator with the current time: rand_seed(now() as integer)
+
+Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000l} ms")
+
+```rust
 }
 ```
 
@@ -4046,6 +4141,20 @@ pub fn rand_indices(n: integer) -> vector<integer>
 ```
 
 Returns a vector of n integers \[0, 1, ..., n-1\] in a random order. Useful for random iteration, shuffling, or sampling without replacement. Returns an empty vector when n is 0 or null.
+
+== Time
+
+```rust
+pub fn now() -> long
+```
+
+Returns the current wall-clock time as milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC). Use for timestamps and logging.
+
+```rust
+pub fn ticks() -> long
+```
+
+Returns microseconds elapsed since program start (monotonic clock). Unaffected by system clock adjustments. Use for benchmarks and frame timing.
 
 = Roadmap
 
