@@ -348,7 +348,6 @@ fn null_coerce_chain_last_non_null() {
 
 /// T1-12: comparing a `not null` field to null with `==` warns (always false).
 #[test]
-#[ignore = "T1-12: not yet implemented"]
 fn redundant_null_eq_not_null_field() {
     code!(
         "struct Counter { count: integer not null }
@@ -358,13 +357,12 @@ fn test() {
 }"
     )
     .warning(
-        "Redundant null check — 'count' is 'not null', comparison is always false at redundant_null_eq_not_null_field:4:21",
+        "Redundant null check — 'count' is 'not null', comparison is always false at redundant_null_eq_not_null_field:4:25",
     );
 }
 
 /// T1-12: comparing a `not null` field to null with `!=` warns (always true).
 #[test]
-#[ignore = "T1-12: not yet implemented"]
 fn redundant_null_ne_not_null_field() {
     code!(
         "struct Counter { count: integer not null }
@@ -374,13 +372,12 @@ fn test() {
 }"
     )
     .warning(
-        "Redundant null check — 'count' is 'not null', comparison is always true at redundant_null_ne_not_null_field:4:22",
+        "Redundant null check — 'count' is 'not null', comparison is always true at redundant_null_ne_not_null_field:4:28",
     );
 }
 
 /// T1-12: null-coalescing on a `not null` field warns (redundant).
 #[test]
-#[ignore = "T1-12: not yet implemented"]
 fn redundant_null_coalesce_not_null_field() {
     code!(
         "struct Counter { count: integer not null }
@@ -391,13 +388,12 @@ fn test() {
 }"
     )
     .warning(
-        "Redundant null coalescing — 'count' is 'not null', default is never used at redundant_null_coalesce_not_null_field:4:21",
+        "Redundant null coalescing — 'count' is 'not null', default is never used at redundant_null_coalesce_not_null_field:4:22",
     );
 }
 
 /// T1-12: no warning when nullable field is compared to null (normal usage).
 #[test]
-#[ignore = "T1-12: not yet implemented"]
 fn no_warning_nullable_field_null_check() {
     code!(
         "struct Item { value: integer }
@@ -412,7 +408,6 @@ fn test() {
 
 /// T1-12: no warning when nullable field uses null-coalescing (normal usage).
 #[test]
-#[ignore = "T1-12: not yet implemented"]
 fn no_warning_nullable_field_coalesce() {
     code!(
         "struct Item { value: integer }
