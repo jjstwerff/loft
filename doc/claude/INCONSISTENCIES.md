@@ -19,7 +19,7 @@ Low = cosmetic or minor. Where a path to resolution is obvious it is included.
 - [10. Null Sentinel Values Vary Invisibly by Type](#10-null-sentinel-values-vary-invisibly-by-type)
 - [11. Reverse Iteration Works on Ranges and Vectors but Panics on Sorted/Index](#11-reverse-iteration-works-on-ranges-and-vectors-but-panics-on-sortedindex)
 - [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
-- [13. Library Definitions Always Require `libname::` Prefix](#13-library-definitions-always-require-libname-prefix)
+- [~~13. Library Definitions Always Require `libname::` Prefix~~ **FIXED**](#13-library-definitions-always-require-libname-prefix--fixed-2026-03-16)
 - [14. Format Strings: Nested Literals Fail (Zero-Pad Fixed)](#14-format-strings-nested-literals-fail-zero-pad-fixed)
 - [~~15. `fn <name>` Function References Only Work in `par(...)` Context~~ **FIXED**](#15-fn-name-function-references-only-work-in-par-context--fixed-2026-03-15)
 - [~~16. `Format` Enum Mixes File Mode With Absence~~ **FIXED**](#16-format-enum-mixes-file-mode-with-absence--fixed-2026-03-14)
@@ -268,21 +268,14 @@ without constantly checking the index declaration.
 
 ---
 
-## 13. Library Definitions Always Require `libname::` Prefix
+## 13. ~~Library Definitions Always Require `libname::` Prefix~~ **FIXED 2026-03-16**
 
-**Severity: Low** (also [PROBLEMS.md](PROBLEMS.md) #13)
+**Severity: Low** (was; [PROBLEMS.md](PROBLEMS.md) #13 — now FIXED by T1-2)
 
-```loft
-use mylib;
-
-p = mylib::Point { x: 1.0, y: 2.0 }   // prefix required every time
-mylib::add(p, q)                        // no shorthand form
-```
-
-There is no wildcard import (`use mylib::*`) and no selective import (`use mylib::Point`).
-Every reference to a library definition requires the full prefix. Consistent namespacing
-prevents collisions, but the lack of any shorthand is unusual and becomes verbose for
-heavily-used libraries.
+`use mylib::*` now imports all names from `mylib` into the current scope, and
+`use mylib::Point, add` imports specific names. Local definitions shadow imported
+names silently (local wins). Importing a name that does not exist in the library
+produces a compile-time error. Three tests in `tests/imports.rs`.
 
 ---
 
@@ -506,7 +499,7 @@ to consult the type's declared limit range rather than the underlying storage cl
 |---|---|
 | 8 | Method vs. free function assignment is arbitrary in the standard library |
 | 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
-| 13 | No wildcard import; `libname::` prefix always required |
+| ~~13~~ | ~~No wildcard import; `libname::` prefix always required~~ **FIXED** |
 | 16 | `Format` enum includes `NotExists` (absence mixed with file mode) |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |

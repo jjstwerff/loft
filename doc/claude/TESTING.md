@@ -380,7 +380,7 @@ Named test entrypoints in `tests/wrap.rs`:
 | `dir` | All `tests/docs/*.loft` files + HTML doc regeneration | Skips files listed in `SUITE_SKIP` |
 | `loft_suite` | All `tests/scripts/*.loft` files | — |
 | `integers` … `stress` | One `tests/scripts/` file each (16 tests) | See `script_test!` table below |
-| `last` | `tests/docs/16-parser.loft` | `#[ignore]` — run with `cargo test -- last --ignored` |
+| `last` | `tests/docs/16-parser.loft` | — |
 | `threading` | `tests/docs/19-threading.loft` | — |
 | `logging` | `tests/docs/20-logging.loft` | — |
 | `file_debug` | `tests/docs/13-file.loft` with execution trace | — |
@@ -436,20 +436,13 @@ and prints a note explaining why:
 
 ```rust
 const SUITE_SKIP: &[&str] = &[
-    "16-parser.loft", // PROBLEMS #37 (T0-2): LIFO store-free panic — OpFreeRef emitted in forward
-                      // declaration order; set_int crash (PROBLEMS #27) fixed 2026-03-15
+    // (all previously skipped files have been fixed — see CHANGELOG.md)
 ];
 ```
 
-Both `last` and `parser_debug` also target `16-parser.loft` but are marked `#[ignore]` so
-they do not run by default. To add a new entry: append the filename and a comment with the
-issue number. Remove it once the underlying issue is fixed.
-
-**Note on `16-parser.loft`:** The `store_nr=60` crash (`set_int` reading from wrong stack
-bytes — PROBLEMS #27) was fixed on 2026-03-15; five regression tests added to `tests/issues.rs`.
-The file still fails due to PROBLEMS #37 (T0-2): `OpFreeRef` is emitted in forward declaration
-order but `database::free()` enforces LIFO. Fix: `res.reverse()` in `scopes.rs::variables()`.
-Remove `16-parser.loft` from `SUITE_SKIP` once T0-2 is resolved.
+`last` runs `16-parser.loft` without a trace; `parser_debug` runs it with a full execution
+trace and is marked `#[ignore]` because the trace takes ~100 s. To add a new entry: append
+the filename and a comment with the issue number. Remove it once the underlying issue is fixed.
 
 ### LOFT_DUMP — controlling debug output in docs/scripts tests
 

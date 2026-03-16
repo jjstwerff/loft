@@ -22,7 +22,6 @@ recommended fix path are described.
 
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
-| 13 | Library names require `libname::` prefix (no wildcard import) | Low | Always use prefix |
 | 20 | `f#next = pos` seek before first open is a no-op | Low | Read/write first, then seek |
 | 22 | Spatial index (spacial<T>) operations not implemented | Low | N/A |
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
@@ -277,18 +276,11 @@ correct (descending sort key ordering).  Test `field_name_overlap_range_query` p
 
 ---
 
-### 13. Unqualified access to library definitions is not supported
+### ~~13. Unqualified access to library definitions is not supported~~ **FIXED 2026-03-16**
 
-**Symptom:** After `use logger;`, writing `Log {}`, `Warning`, or `error(msg)` without
-the `logger::` prefix gives "Expect token ;", "Unknown variable", or "Unknown function".
-
-**Workaround:** Always use the `libname::` prefix for library types, enum values,
-constants, and free functions.
-
-**Best way forward:** Optionally fall back to searching all imported sources when a
-name cannot be resolved in source 0. A `use logger unqualified;` or
-`use logger::*;` wildcard import syntax could enable this without changing the
-default namespace-safe behaviour.
+`use mylib::*` imports all names from `mylib` into the current scope;
+`use mylib::Point, add` imports specific names. Local definitions shadow imported
+names (no error). Implemented in T1-2; three tests in `tests/imports.rs`.
 
 ---
 
