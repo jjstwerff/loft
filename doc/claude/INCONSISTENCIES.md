@@ -143,6 +143,10 @@ values are named integers and cannot be method receivers. There is no way to att
 behaviour directly to a plain enum variant — you must write a free function that switches
 on the value. This surprises users who expect uniform OOP-like dispatch across all enums.
 
+**Resolution path:** T1-4 (`match` expression) resolves this. Once `match` exists, a free
+function on a plain enum is simply a `match` body — no per-variant method syntax needed.
+T1-5 (plain enum methods) is superseded by T1-4 and will be skipped.
+
 ---
 
 ## ~~7. Polymorphic Text Methods on Struct-Enum Crash at Runtime~~ **FIXED 2026-03-13**

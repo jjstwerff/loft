@@ -95,12 +95,14 @@ area = match shape {
 ```
 This subsumes T1-5 (plain enum methods): once `match` exists, methods on plain enums can be
 written as a `match` body in a free function.  Implement T1-4 directly; skip T1-5.
-**Fix path:**
-1. Lexer/parser: parse `match expr { pattern => expr }` blocks.
-2. IR: lower each arm to a `Value::Match` node; add `OpMatch` bytecode instruction.
-3. Type checking: verify all variants are covered or a wildcard `_` arm is present.
-4. Code gen: emit a jump table or if-chain depending on the enum kind.
-**Effort:** High (lexer, parser, state.rs, fill.rs)
+**Fix path:** See [MATCH.md](MATCH.md) for the full phased design.
+1. Lexer: reserve `match` keyword (done).
+2. Parser: `parse_match` in `src/parser/control.rs` — lower to `Value::If` chain
+   (no new IR nodes or opcodes; `state.rs` and `fill.rs` unchanged).
+3. Exhaustiveness: `missing_variants` helper in `src/parser/definitions.rs`.
+4. Type unification: reuse `merge_dependencies` + `compatible` for arm types.
+5. Hook `parse_match` into `expression()` in `src/parser/expressions.rs`.
+**Effort:** Medium (parser only — lexer, state.rs, fill.rs unchanged)
 
 ---
 
@@ -705,7 +707,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                   | Tier | Effort    | Target  | Depends on | Source                     |
 |------|---------------------------------------------------------|------|-----------|---------|------------|----------------------------|
-| T1-4 | match expression with exhaustiveness                    | 1    | High      | 1.0 tgt |            | Prototype goal, INCON #6   |
+| T1-4 | match expression with exhaustiveness                    | 1    | Medium    | 1.0 tgt |            | Prototype goal, INCON #6   |
 | T1-9 | Dead assignment (overwritten before first read)         | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-10 | Unused loop variable                                  | 1    | Trivial   | 1.1     |            | Warnings audit 2026-03-15  |
 | T1-12 | Redundant null check on `not null` type               | 1    | Small     | 1.1     |            | Warnings audit 2026-03-15  |
