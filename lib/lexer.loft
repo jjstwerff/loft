@@ -117,7 +117,7 @@ pub fn parse_string(self: Lexer, name: text, content: text) {
 fn skip_whitespace(self: Lexer) {
   self.pos += self.index - self.start;
   start = self.pos == 1;
-  for t in 0..300 {
+  for _t in 0..300 {
     if self.data[self.index] == ' ' or self.data[self.index] == '\t' {
       self.index += 1;
       self.pos += 1;
@@ -133,7 +133,7 @@ fn skip_whitespace(self: Lexer) {
       self.index += 2;
       com = self.index;
       self.pos += 1;
-      for c in 0..1000 {
+      for _c in 0..1000 {
         if self.data[self.index] == '\n' {
           if self.comment != "" {
             self.comment += '\n';
@@ -234,7 +234,7 @@ fn scan(self: Lexer) {
   if self.data[self.index] >= '0' and self.data[self.index] <= '9' {
     // Various numbers
     self.scanned = Integer;
-    for tn in 0..30 {
+    for _tn in 0..30 {
       l = self.data[self.index];
       if l == '.' or l == 'e' or l == '-' {
         self.scanned = Float;
@@ -254,7 +254,7 @@ fn scan(self: Lexer) {
   if l == '_' or l.is_alphabetic() {
     // Identifiers or keywords
     self.scanned = Identifier;
-    for t in 0..300 {
+    for _t in 0..300 {
       l = self.data[self.index];
       if !l.is_alphanumeric() and l != '_' {
         break;

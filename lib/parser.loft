@@ -64,7 +64,7 @@ pub fn parse(name: text, s: text) {
 // <file> ::= { 'use' <identifier> ';' } { 'pub' ( <structure> | <def_enumerate> | <def_type> | <function> | <constant> ) }
 
 fn parse_file(self: Parser) {
-  for u in 0..100 {
+  for _u in 0..100 {
     if self.lexer.matches("use") {
       self.lexer.identifier();
       self.expect(";");
@@ -592,7 +592,7 @@ fn value(self: Parser) -> boolean {
 // <formatting> :: { [ 'for' <id> 'in' <expression> [ 'if' <expression> ] | <expression> ] [ <flags> ] <constant_text> }
 
 fn formatting(self: Parser) {
-  for part in 0..256 {
+  for _part in 0..256 {
     if !self.lexer.is_formatting() {
       return;
     }

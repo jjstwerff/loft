@@ -106,26 +106,6 @@ fn compute(a: integer, b: integer) -> integer {
 
 ---
 
-### T1-10  Unused loop variable
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Low–Medium — a loop variable that is never read in the body usually indicates
-iterating only to count, but accidentally using the wrong name inside the loop body
-**Description:** The existing "Variable is never read" check skips names containing `#`
-(synthetic loop metadata) but not the primary loop iteration variable.  Extend the check:
-```loft
-for item in items {
-    total += 1   // Warning: loop variable 'item' is never read
-}
-```
-`_`-prefixed loop variables (e.g. `for _ in items`) suppress the warning, consistent with
-the existing convention for unused variables.
-**Fix path:** In `variables.rs:test_used`, narrow the `contains('#')` exemption so it only
-skips synthetic internal names; apply the same `uses == 0` check to loop iteration variables.
-**Effort:** Trivial (variables.rs — one-line scope change of the existing exemption)
-**Target:** 1.1
-
----
-
 ### T1-13  Unreachable code after unconditional terminator
 **Sources:** Compiler warnings audit 2026-03-15
 **Severity:** Medium — any statement after an unconditional `return`, `break`, or `continue`
@@ -769,7 +749,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T1-14 | Scalar patterns in `match` (int, text, bool, …)           | 1    | Medium    | 1.1     |             | MATCH.md T1-14             |
 | T1-9  | Dead assignment (overwritten before first read)            | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
-| T1-10 | Unused loop variable                                      | 1    | Trivial   | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-13 | Unreachable code after return/break/continue              | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |

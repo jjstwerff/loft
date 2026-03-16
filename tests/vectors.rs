@@ -369,7 +369,6 @@ cnt = 0;
 for r in db.map { cnt += 1; }
 cnt",
     )
-    .warning("Variable r is never read at index_loop_remove_small:10:18")
     .result(Value::Int(0));
 }
 
@@ -391,7 +390,6 @@ fn test() {
     assert(cnt == 0, \"count after loop-remove {cnt}\");
 }"
     )
-    .warning("Variable r is never read at index_loop_remove_large:7:23")
     .result(Value::Null);
 }
 
@@ -460,8 +458,7 @@ fn test() {
         "#index is not supported on index<T> collections \
 (it holds an internal record number, not a sequential counter); \
 use #count instead at index_loop_attr_index_rejected:5:36",
-    )
-    .warning("Variable e is never read at index_loop_attr_index_rejected:5:23");
+    );
 }
 
 // Hash collections cannot be iterated directly at all; `fill_iter` emits a

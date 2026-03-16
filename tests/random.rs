@@ -21,7 +21,7 @@ fn rand_in_range() {
         "fn test() {
     rand_seed(42);
     ok = true;
-    for i in 0..200 {
+    for _i in 0..200 {
         r = rand(10, 20);
         if r < 10 || r > 20 { ok = false }
     }

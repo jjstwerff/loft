@@ -85,6 +85,12 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-10** — Unused loop variable warning. `for i in 0..10 { total += 1 }` now
+  warns "Variable i is never read" when the loop variable is not referenced in
+  the body. Prefix with `_` (e.g. `for _i in`) to suppress. Also fixed:
+  `v#count`, `v#first`, `v#remove` etc. now correctly mark the base variable as
+  used, preventing false positives. (2026-03-16)
+
 - **T1-4** — `match` expression for enum dispatch with compiler-checked exhaustiveness.
   Plain enums dispatch on variant equality; struct-enum arms optionally bind fields
   (`Circle { radius } => ...`). All arms must return compatible types; missing variants
