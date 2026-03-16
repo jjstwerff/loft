@@ -156,10 +156,8 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 - Clippy pedantic: all `#[allow(clippy::...)]` annotations justified or replaced; zero warnings.
 - Source file splits: `parser.rs` (7687 lines) → `src/parser/` (6 modules);
   `database.rs` (3792) → `src/database/` (7 modules); `state.rs` (3525) → `src/state/` (5 modules).
-
-### Planned for 1.0
-
-- Wildcard imports: `use mylib::*` and `use mylib::Name` (T1-2)
+- **R1** — Standalone `loft` GitHub repository created (`github.com/jjstwerff/loft`).
+  Package renamed, game-engine content removed, README rewritten. (2026-03-16)
 
 ---
 
@@ -222,12 +220,9 @@ First tagged release. All language features listed below are stable within the 0
 
 ### Known limitations
 
-- **No `match` expressions** — enum dispatch uses per-variant method overloading; `match` planned for 1.1
 - **No lambda expressions** — anonymous functions planned for 1.1; `fn name` references work with `map`, `filter`, `reduce`, and the `par(...)` for-loop clause
 - **No REPL** — interactive mode planned for 1.1
-- **Library prefix required** — `use mylib;` requires `mylib::` on all references; `use mylib::*` planned for 1.0
 - **`sizeof(u8)` returns 4** — stack alignment means `sizeof` returns the stack slot size, not the byte-packed size; documented in `doc/claude/INCONSISTENCIES.md #23`
-- **Plain enums cannot have methods** — only struct-enum variants support method dispatch; workaround: use a free function with an `if`/`else` chain; resolved by T1-4 (match)
 
 ---
 

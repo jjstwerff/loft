@@ -45,17 +45,17 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 
 **Hard gate items** (must be resolved before tagging 1.0):
-R1 — see Quick Reference for full details
+_(all completed)_
 
 **1.0 target items** (include if time allows; 1.1 if not):
-T2-0 — see Quick Reference for full details
+_(all completed)_
 
 **Explicitly 1.1+**:
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible: T2-0, T2-1, T2-2.
+New language features that are strictly backward-compatible: T2-1, T2-2.
 Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of interpreter versions.
 
 ### Version 2.0 — Breaking changes only
@@ -287,20 +287,6 @@ Detect `has_token("[")` in arm; parse slice elements; emit `OpLengthVector` leng
 ---
 
 ## Tier 2 — Prototype-Friendly Features
-
-### T2-0  Code formatter (`loft --format`)
-**Sources:** [FORMATTER.md](FORMATTER.md)
-**Severity:** Low — no correctness impact; quality-of-life
-**Description:** Token-stream formatter imposing one canonical loft style (no configuration).
-Key rules: 2-space indent, opening brace on same line, every block body multi-line, spaces
-around operators, fields on separate lines in struct/enum definitions, param/call/array lists
-wrapped at 80 cols, consecutive `use` lines sorted alphabetically, trailing commas stripped.
-Invoked as `loft --format file.loft` (in-place) or `--format-check` (CI exit 1 if differs).
-Works via a new `Mode::Raw` lexer pass that preserves `LineComment` tokens; ~400 lines in
-`src/formatter.rs`.
-**Effort:** Small–Medium (new `src/formatter.rs`; minor additions to `src/lexer.rs`, `src/main.rs`)
-
----
 
 ### T2-13  Empty `[]` literal unusable as a direct mutable vector argument
 **Sources:** PROBLEMS #44
@@ -767,25 +753,8 @@ Stack after call:   [ ]   // result already written to dest
 
 ## Tier R — Repository Extraction
 
-The interpreter lives inside the Dryopea game-engine repository, which gives it the wrong
-identity in every public artifact (Cargo.toml, crates.io, README, generated Rust).  All R items
-must be complete before tagging 1.0.  None requires language changes; they are purely
-packaging and naming work.  The IDE (Tier W) is the continuation after extraction.
-
-**Finding:** Every `.rs` file in `src/` is language-core — there are no game-engine modules.
-The only "game" references are ~10 text strings and the `Cargo.toml` identity.
-
----
-
-### R1  Create standalone repository
-**Description:** Create a new public GitHub repository named `loft` (matches binary name
-and planned crates.io crate name).  Description: `loft — interpreter for the loft scripting language`.
-Before copying, audit these directories that may contain game content and do not belong in
-the language repo: `archive/`, `code/`, `work/`, `webassembly/`, `example/`, `todo`.
-Drop `Dryopea.iml` (IntelliJ project file).
-Everything else copies cleanly: `src/`, `default/`, `doc/`, `tests/`, `Cargo.toml`,
-`clippy.toml`, `Makefile`, `LICENSE`.
-**Effort:** Trivial
+Standalone `loft` repository created (R1, 2026-03-16).  The remaining R item is the
+workspace split needed before starting the Web IDE.
 
 ---
 
@@ -803,7 +772,7 @@ ide/                           (W2+: index.html, src/*.js, sw.js, manifest.json)
 This change is a **prerequisite for W1** and should happen at the same time, not before.
 For 1.0 the single-crate layout is correct and should not be changed early.
 **Effort:** Small (Cargo workspace wiring; no logic changes)
-**Depends on:** R1–R5; gates W1
+**Depends on:** R1 (done); gates W1
 
 ---
 
@@ -925,7 +894,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
-| T2-0  | Code formatter (`loft --format`)                        | 2    | Small–Med | 1.0 tgt |             | FORMATTER.md               |
 | T2-13 | Empty `[]` literal unusable as direct mutable vector arg | 2   | Medium    | 1.1     |             | PROBLEMS #44               |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
 | T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
@@ -935,7 +903,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
 | T2-12 | Bytecode cache (`.loftc`, skip recompile on rerun)      | 2    | Medium    | 1.1     |             | BYTECODE_CACHE.md          |
 | T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 1.1+    |             | THREADING deferred         |
-| T3-2  | Logger: production mode, source injection               | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
+| T3-2  | Logger: production mode, source injection, hot-reload   | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
 | T3-3  | Optional Cargo features                                  | 3    | Medium    | 1.1+    |             | OPTIONAL_FEATURES.md       |
 | T3-4  | Spatial index operations (full implementation)           | 3    | High      | 1.1+    |             | PROBLEMS #22               |
 | T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
@@ -944,8 +912,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
-| R1    | Create standalone `loft` GitHub repository              | R    | Trivial   | **1.0** |             | Extraction plan            |
-| R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1–R5       | Extraction plan            |
+| R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
 | W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
 | W3    | Symbol navigation (go-to-def, find-usages)              | W    | Medium    | post-1.0 | W1, W2     | WEB_IDE.md M3              |
@@ -953,7 +920,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | W5    | Docs & examples browser                                 | W    | Small–Med | post-1.0 | W2         | WEB_IDE.md M5              |
 | W6    | Export/import ZIP + PWA offline                         | W    | Small–Med | post-1.0 | W4         | WEB_IDE.md M6              |
 
-**Target key:** **1.0** = hard gate · **1.0 tgt** = target, not blocking · **1.1** = first post-1.0 minor · **1.1+** = later minor · **post-1.0** = independent track · **pre-W1** = must precede W1
+**Target key:** **1.1** = first post-1.0 minor · **1.1+** = later minor · **post-1.0** = independent track · **pre-W1** = must precede W1
 
 _Note: T1-3 requires compiler special-casing (not loft-only) — loft has no generic type parameters._
 _Note: W2 and W4 can be developed in parallel once W1 is complete; W3 and W5 can follow independently._
