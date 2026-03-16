@@ -121,9 +121,7 @@ Stop and reconsider if you find yourself:
 ### Currently out of scope (planned for a future major version)
 
 - Lambda / closure expressions (planned 1.1).
-- Pattern matching with `match` (planned 1.1).
 - REPL / interactive mode (planned 1.1).
-- Module wildcard imports (`use lib::*`) (planned 1.0).
 - Generics beyond the built-in collection types.
 - Async/await.
 - FFI / C interop.
@@ -529,7 +527,7 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 | Red-Black tree | Negative values encode back-links — easy to misread | Read the layout comment in `src/tree.rs` before modifying |
 | Hash table | 87.5% load threshold causes long probe chains under load | Do not rely on worst-case hash performance |
 | `spacial<T>` | Radix tree iteration and removal are stubs | Do not use; emits a compile-time error |
-| Library imports | No wildcard `use lib::*` — always use `lib::Name` prefix | Planned for 1.0 |
+| Library imports | `use lib::*` and `use lib::Name` are supported (T1-2) | — |
 
 ---
 

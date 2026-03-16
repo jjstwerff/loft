@@ -83,29 +83,6 @@ Extend `parse_match` subject-type dispatch; add scalar literal parsing in the ar
 
 ---
 
-### T1-9  Dead assignment — variable overwritten before first read
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Medium — a value assigned but never read before being overwritten is silently
-discarded; the most common form is a copy-paste bug (wrong variable on the left-hand side)
-**Description:** Extend the existing "Variable is never read" infrastructure to detect when
-a variable is assigned, then assigned again without any intervening read:
-```loft
-fn compute(a: integer, b: integer) -> integer {
-    result = a + b    // Warning: dead assignment — 'result' overwritten before first read
-    result = a * b
-    result
-}
-```
-**Fix path:**
-1. Add a `last_write: Option<Source>` field to `Variable` alongside the existing `uses` counter.
-2. On each assignment, if `uses` has not grown since the previous write, emit the warning at `last_write`.
-3. Update `last_write` to the current assignment source position.
-4. `_`-prefixed variables are exempt (consistent with "Variable is never read").
-**Effort:** Small (variables.rs — extends existing write-tracking)
-**Target:** 1.1
-
----
-
 ### T1-13  Unreachable code after unconditional terminator
 **Sources:** Compiler warnings audit 2026-03-15
 **Severity:** Medium — any statement after an unconditional `return`, `break`, or `continue`
@@ -882,7 +859,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T1-14 | Scalar patterns in `match` (int, text, bool, …)           | 1    | Medium    | 1.1     |             | MATCH.md T1-14             |
-| T1-9  | Dead assignment (overwritten before first read)            | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-13 | Unreachable code after return/break/continue              | 1    | Medium    | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
