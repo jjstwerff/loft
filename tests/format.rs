@@ -9,7 +9,6 @@ use loft::formatter;
 
 /// Formatting an already-formatted file produces identical output (idempotent).
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_comments() {
     let input = include_str!("format/comments.loft");
     let result = formatter::format_source(input);
@@ -18,7 +17,6 @@ fn roundtrip_comments() {
 
 /// Formatting an already-formatted struct definition is idempotent.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_struct_def() {
     let input = include_str!("format/struct_def.loft");
     let result = formatter::format_source(input);
@@ -27,7 +25,6 @@ fn roundtrip_struct_def() {
 
 /// A messy input file is normalised to the golden output.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn normalize_messy() {
     let input = include_str!("format/messy.loft");
     let expected = include_str!("format/messy.loft.fmt");
@@ -37,7 +34,6 @@ fn normalize_messy() {
 
 /// check_source returns true for already-formatted source.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn format_check_already_formatted() {
     let input = include_str!("format/comments.loft");
     assert!(
@@ -48,7 +44,6 @@ fn format_check_already_formatted() {
 
 /// check_source returns false for source that needs formatting.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn format_check_needs_formatting() {
     let input = include_str!("format/messy.loft");
     assert!(
@@ -62,7 +57,6 @@ fn format_check_needs_formatting() {
 /// Unary minus and plus do not get a space after them (`-5`, not `- 5`),
 /// but do get a space before them when context requires it (`a = -5`, not `a =-5`).
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_unary_minus() {
     let input = include_str!("format/unary_minus.loft");
     let result = formatter::format_source(input);
@@ -71,7 +65,6 @@ fn roundtrip_unary_minus() {
 
 /// Range operators `..` and `..=` are kept together without surrounding spaces.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_range_ops() {
     let input = include_str!("format/range_ops.loft");
     let result = formatter::format_source(input);
@@ -80,7 +73,6 @@ fn roundtrip_range_ops() {
 
 /// Binary literals `0b...` are kept as a single token (not split at `b`).
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_binary_literals() {
     let input = include_str!("format/binary_literals.loft");
     let result = formatter::format_source(input);
@@ -90,7 +82,6 @@ fn roundtrip_binary_literals() {
 /// `if`, `for`, and `while` blocks open a Block context, not a StructLit.
 /// Body statements are properly indented at depth+1.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_if_for_blocks() {
     let input = include_str!("format/if_for_blocks.loft");
     let result = formatter::format_source(input);
@@ -100,7 +91,6 @@ fn roundtrip_if_for_blocks() {
 /// Two consecutive identifier/keyword tokens always get a space between them
 /// (e.g. `boolean size(1)`, not `booleansize(1)`).
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn roundtrip_adjacent_words() {
     let input = include_str!("format/adjacent_words.loft");
     let result = formatter::format_source(input);
@@ -109,7 +99,6 @@ fn roundtrip_adjacent_words() {
 
 /// `else` on a separate line after `}` is pulled onto the same line: `} else {`.
 #[test]
-#[ignore = "T2-0: not yet implemented"]
 fn normalize_else_same_line() {
     let input = include_str!("format/else_same_line.loft");
     let expected = include_str!("format/else_same_line.loft.fmt");
