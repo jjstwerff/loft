@@ -181,9 +181,7 @@ impl Parser {
         // the Enum definition, so we also handle that case.
         let (e_nr, is_struct, valid_enum) = match &subject_type {
             Type::Enum(nr, s, _) => (*nr, *s, true),
-            Type::Reference(d_nr, _)
-                if self.data.def_type(*d_nr) == DefType::EnumValue =>
-            {
+            Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::EnumValue => {
                 let parent = self.data.def(*d_nr).parent;
                 (parent, true, true)
             }
@@ -362,11 +360,8 @@ impl Parser {
                             let v_nr = self.create_var(&field_name, &field_type);
                             if v_nr != u16::MAX {
                                 self.vars.defined(v_nr);
-                                let field_read = self.get_field(
-                                    variant_def_nr,
-                                    attr_idx,
-                                    subject_val.clone(),
-                                );
+                                let field_read =
+                                    self.get_field(variant_def_nr, attr_idx, subject_val.clone());
                                 arm_stmts.push(v_set(v_nr, field_read));
                             }
                         }
@@ -399,9 +394,7 @@ impl Parser {
             // Type unification across arms.
             if result_type == Type::Void {
                 result_type = arm_type.clone();
-            } else if !self.first_pass
-                && arm_type != Type::Void
-                && !result_type.is_same(&arm_type)
+            } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type)
             {
                 diagnostic!(
                     self.lexer,
@@ -458,8 +451,7 @@ impl Parser {
                     chain = arm_code.clone();
                 }
                 Some(disc_nr) => {
-                    let cmp =
-                        self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(*disc_nr)]);
+                    let cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(*disc_nr)]);
                     chain = v_if(cmp, arm_code.clone(), chain);
                 }
             }

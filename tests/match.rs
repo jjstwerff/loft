@@ -15,51 +15,45 @@ mod testing;
 #[test]
 
 fn plain_all_arms() {
-    code!(
-        "enum Direction { North, East, South, West }"
-    )
-    .expr(
-        "d = South;
+    code!("enum Direction { North, East, South, West }")
+        .expr(
+            "d = South;
 match d {
     North => \"N\"
     East  => \"E\"
     South => \"S\"
     West  => \"W\"
 }",
-    )
-    .result(Value::str("S"));
+        )
+        .result(Value::str("S"));
 }
 
 /// Partial coverage with a wildcard `_` arm.
 #[test]
 fn plain_wildcard() {
-    code!(
-        "enum Direction { North, East, South, West }"
-    )
-    .expr(
-        "d = West;
+    code!("enum Direction { North, East, South, West }")
+        .expr(
+            "d = West;
 match d {
     North => \"north\"
     _     => \"other\"
 }",
-    )
-    .result(Value::str("other"));
+        )
+        .result(Value::str("other"));
 }
 
 /// Wildcard arm catches the first variant too.
 #[test]
 fn plain_wildcard_first() {
-    code!(
-        "enum Direction { North, East, South, West }"
-    )
-    .expr(
-        "d = North;
+    code!("enum Direction { North, East, South, West }")
+        .expr(
+            "d = North;
 match d {
     South => \"south\"
     _     => \"not south\"
 }",
-    )
-    .result(Value::str("not south"));
+        )
+        .result(Value::str("not south"));
 }
 
 /// Missing variant without wildcard — compile-time error.
@@ -104,19 +98,17 @@ pub fn label(d: Direction) -> text {
 /// match produces an integer value used in arithmetic.
 #[test]
 fn plain_as_integer_value() {
-    code!(
-        "enum Priority { Low, Medium, High }"
-    )
-    .expr(
-        "p = High;
+    code!("enum Priority { Low, Medium, High }")
+        .expr(
+            "p = High;
 v = match p {
     Low    => 1
     Medium => 5
     High   => 10
 };
 v * 2",
-    )
-    .result(Value::Int(20));
+        )
+        .result(Value::Int(20));
 }
 
 /// match used inside a function return position.
@@ -274,17 +266,15 @@ match x {
 /// match result fed directly into a function call.
 #[test]
 fn match_in_call() {
-    code!(
-        "enum Flag { On, Off }"
-    )
-    .expr(
-        "f = On;
+    code!("enum Flag { On, Off }")
+        .expr(
+            "f = On;
 len(match f {
     On  => \"enabled\"
     Off => \"disabled\"
 })",
-    )
-    .result(Value::Int(7));
+        )
+        .result(Value::Int(7));
 }
 
 // ── Error cases ───────────────────────────────────────────────────────────────
