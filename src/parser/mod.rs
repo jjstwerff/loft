@@ -249,11 +249,7 @@ impl Parser {
     }
 
     fn output(&mut self, f: &str, types: usize, from: u32) -> std::io::Result<()> {
-        let file = if let Some(p) = f.rfind('/') {
-            &f[p + 1..]
-        } else {
-            f
-        };
+        let file = f.rsplit(['/', '\\']).next().unwrap_or(f);
         let to = format!("tests/dumps/{file}.txt");
         let _ = std::fs::create_dir_all("tests/dumps");
         if let Ok(mut w) = File::create(to.clone()) {
