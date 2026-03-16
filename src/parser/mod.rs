@@ -14,7 +14,7 @@ use crate::database::{Parts, Stores};
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
 use crate::lexer::{LexItem, LexResult, Lexer, Link, Mode, Position};
 use crate::variables::{Function, size as var_size};
-use crate::{scopes, typedef};
+use crate::{manifest, scopes, typedef};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs::{File, metadata, read_dir};
@@ -1029,7 +1029,9 @@ impl Parser {
         if !std::path::Path::new(&f).exists() {
             f = format!("{id}.loft");
         }
-        let cur_script = &self.lexer.pos().file;
+        // Clone the file path so it is owned; slices of it won't borrow `self`,
+        // allowing &mut self calls (lib_path_manifest) later in this method.
+        let cur_script = self.lexer.pos().file.clone();
         let cur_dir = if let Some(p) = cur_script.rfind('/') {
             &cur_script[0..p]
         } else {
@@ -1052,7 +1054,7 @@ impl Parser {
         if !std::path::Path::new(&f).exists() {
             f = format!("{}/{id}.loft", &cur_script[0..cur_script.len() - 5]);
         }
-        // - extra library directories from --lib / --project command-line flags
+        // - extra library directories from --lib / --project command-line flags (single-file)
         if !std::path::Path::new(&f).exists() {
             for l in &self.lib_dirs {
                 let candidate = format!("{l}/{id}.loft");
@@ -1062,14 +1064,37 @@ impl Parser {
                 }
             }
         }
-        // - a user-defined lib directory (externally downloaded)
+        // step 7c: packaged layout (<dir>/<id>/src/<id>.loft) in lib_dirs
+        if !std::path::Path::new(&f).exists() {
+            let lib_dirs = self.lib_dirs.clone();
+            for l in &lib_dirs {
+                if let Some(entry) = self.lib_path_manifest(l, id) {
+                    f = entry;
+                    break;
+                }
+            }
+        }
+        // - a user-defined lib directory (externally downloaded), single-file
         if !std::path::Path::new(&f).exists()
             && let Some(v) = env::var_os("LOFT_LIB")
         {
-            let libs = v.to_str().unwrap();
+            let libs = v.to_str().unwrap().to_string();
             for l in libs.split(':') {
-                f = format!("{l}/{id}.loft");
-                if std::path::Path::new(&f).exists() {
+                let candidate = format!("{l}/{id}.loft");
+                if std::path::Path::new(&candidate).exists() {
+                    f = candidate;
+                    break;
+                }
+            }
+        }
+        // step 7d: packaged layout in LOFT_LIB
+        if !std::path::Path::new(&f).exists()
+            && let Some(v) = env::var_os("LOFT_LIB")
+        {
+            let libs = v.to_str().unwrap().to_string();
+            for l in libs.split(':') {
+                if let Some(entry) = self.lib_path_manifest(l, id) {
+                    f = entry;
                     break;
                 }
             }
@@ -1083,6 +1108,44 @@ impl Parser {
             f = format!("{base_dir}/{id}.loft");
         }
         f
+    }
+
+    /// Check whether `<dir>/<id>` contains a valid loft package layout.
+    /// Reads `loft.toml` when present and validates the interpreter version
+    /// requirement.  Emits a fatal diagnostic on version mismatch.
+    /// Returns `Some(entry_path)` when the layout exists and the version passes,
+    /// `None` otherwise.
+    fn lib_path_manifest(&mut self, dir: &str, id: &str) -> Option<String> {
+        let pkg_dir = format!("{dir}/{id}");
+        if !std::path::Path::new(&pkg_dir).is_dir() {
+            return None;
+        }
+        let manifest_path = format!("{pkg_dir}/loft.toml");
+        let entry = if std::path::Path::new(&manifest_path).exists() {
+            let m = manifest::read_manifest(&manifest_path)?;
+            if let Some(ref req) = m.loft_version {
+                let current = env!("CARGO_PKG_VERSION");
+                if !manifest::check_version(req, current) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Fatal,
+                        "Package '{id}' requires loft {req} but interpreter is {current}"
+                    );
+                    return None;
+                }
+            }
+            m.entry.map_or_else(
+                || format!("{pkg_dir}/src/{id}.loft"),
+                |e| format!("{pkg_dir}/{e}"),
+            )
+        } else {
+            format!("{pkg_dir}/src/{id}.loft")
+        };
+        if std::path::Path::new(&entry).exists() {
+            Some(entry)
+        } else {
+            None
+        }
     }
 
     // Determine if there need to be special enum functions that call enum_value variants.

@@ -995,7 +995,11 @@ use a separate collection or add after the loop"
                         self.lexer,
                         Level::Warning,
                         "{} by constant zero — result is always null",
-                        if operator == "/" { "Division" } else { "Modulo" }
+                        if operator == "/" {
+                            "Division"
+                        } else {
+                            "Modulo"
+                        }
                     );
                 }
             }
