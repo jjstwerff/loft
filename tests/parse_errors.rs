@@ -283,15 +283,13 @@ fn add_to_outer_loop_iterated() {
 
 // T1-10: unused loop variable warning
 #[test]
-#[ignore = "T1-10: not yet implemented"]
 fn unused_loop_var_range() {
     // Loop variable never read in body — should warn.
     code!("fn test() { total = 0; for i in 0..3 { total += 1; } assert(total == 3, \"t\"); }")
-        .warning("Variable i is never read at unused_loop_var_range:1:33");
+        .warning("Variable i is never read at unused_loop_var_range:1:39");
 }
 
 #[test]
-#[ignore = "T1-10: not yet implemented"]
 fn unused_loop_var_int_vector() {
     // Integer-element vector loop — should warn when element never read.
     code!(
@@ -302,11 +300,10 @@ fn unused_loop_var_int_vector() {
   assert(total == 3, \"t\");
 }"
     )
-    .warning("Variable item is never read at unused_loop_var_int_vector:4:7");
+    .warning("Variable item is never read at unused_loop_var_int_vector:4:22");
 }
 
 #[test]
-#[ignore = "T1-10: not yet implemented"]
 fn unused_loop_var_suppressed_by_underscore() {
     // _ prefix suppresses the warning — consistent with other unused-variable rules.
     code!(
