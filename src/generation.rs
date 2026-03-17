@@ -1037,6 +1037,19 @@ extern crate loft;"
             }
             "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
             "OpFreeText" | "OpCreateStack" | "OpNullRefSentinel" => return Ok(()),
+            "OpCopyRecord" => {
+                // Deep copy: copy_block + copy_claims
+                if let [ref src, ref dst, ref tp_val] = vals[..] {
+                    write!(w, "OpCopyRecord(stores, ")?;
+                    self.output_code_inner(w, src)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, dst)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, tp_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             "OpConvTextFromNull" => {
                 write!(w, "\"\"")?;
                 return Ok(());

@@ -85,6 +85,10 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N10** — Add `OpCopyRecord` to `codegen_runtime` (deep struct copy with
+  `copy_block` + `copy_claims`). 51 of 85 generated files compile, 45 pass.
+  (2026-03-17)
+
 - **N10** — Fix variable shadowing in generated native code. `output_function()` now
   populates `self.declared` with argument var numbers directly, preventing inner-block
   variable shadows that caused infinite recursion. 45 of 50 compiled files now pass
