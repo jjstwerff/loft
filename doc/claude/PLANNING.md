@@ -686,15 +686,6 @@ these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### N3  Add `codegen_runtime` module for database operations
-**Description:** Create `src/codegen_runtime.rs` with wrapper functions for opcodes
-that have no `#rust` template: `op_database`, `op_new_record`, `op_finish_record`,
-`op_free_ref`, `op_get_record`, `op_format_database`, `op_conv_text_from_null`.
-Reference implementations in `src/fill.rs` and `src/state/io.rs`.  Add
-`pub mod codegen_runtime` to `src/lib.rs`; import in generated preamble.
-**Effort:** Medium (~200 lines new code)
-**Eliminates:** ~260 compilation errors; most files compile after N3
-
 ---
 
 ### N4  Handle `Value::Iter` and `Value::Keys` in code generation
@@ -888,7 +879,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
-| N3    | `codegen_runtime` module for database operations         | N    | Medium    | 1.1     |             | NATIVE.md                  |
 | N4    | Handle `Value::Iter` / `Value::Keys` in codegen         | N    | Medium    | 1.1     | N3          | NATIVE.md                  |
 | N5    | Skip/fix empty native function bodies                   | N    | Small     | 1.1     |             | NATIVE.md                  |
 | N6    | Compilation gate test                                   | N    | Small     | 1.1     | N1–N5       | NATIVE.md                  |

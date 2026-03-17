@@ -85,6 +85,12 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N3** — Native codegen runtime module (`src/codegen_runtime.rs`). Wrapper functions
+  for database operations: `OpDatabase`, `OpNewRecord`, `OpFinishRecord`, `OpFreeRef`,
+  `OpFormatDatabase`, `OpGetRecord`. Special-case handlers in `generation.rs` for
+  `OpDatabase` (reassignment) and `OpFormatDatabase` (`&mut String`). 42 of 86 generated
+  test files now compile. (2026-03-17)
+
 - **N1+N2** — Native Rust code generation fixes. Fixed `#rust` templates:
   `external::` → `ops::`, `u32::from(@fld)` → `((@fld) as u32)`, added
   `s.database.` → `stores.` substitution in `generation.rs`. Added `n_assert`
