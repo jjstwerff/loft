@@ -97,7 +97,49 @@ necessary, or left for a separate cleanup task if they are pre-existing.
 
 ---
 
-## Rebase into a Clean Commit History
+## Choosing the Right Workflow
+
+Use the item's **effort** rating from PLANNING.md to pick the workflow:
+
+| Effort | Workflow | Typical commits |
+|--------|----------|-----------------|
+| Trivial | [Simplified](#simplified-workflow--trivial--small-items) — single commit with code + tests | 1–2 |
+| Small | [Simplified](#simplified-workflow--trivial--small-items) — code+tests commit + docs commit | 2 |
+| Medium+ | [Full 5-step rebase](#rebase-into-a-clean-commit-history--medium-items) below | 3–5 |
+
+Items may also be **batched** when they touch the same file(s) and have no
+inter-dependencies.  Use a single branch for the batch (e.g. `n1-n3-template-fixes`)
+and mention all item IDs in commit messages.
+
+---
+
+## Simplified Workflow — Trivial / Small Items
+
+For items rated **Trivial** or **Small** in PLANNING.md: skip the `#[ignore]` dance.
+Combine code changes and their tests in a single commit.
+
+```
+Commit 1 — Code + tests
+    {ID}: {summary}
+
+    Implementation and tests in a single commit. Tests pass immediately.
+
+Commit 2 — Documentation (if any docs need updating)
+    docs: {ID} — update CHANGELOG, PLANNING
+```
+
+**When to use:**
+- Pure search-and-replace (N1, N2, N3) — verification is `grep` + existing test suite
+- One-line fixes (N4) — no new tests needed
+- Adding a single warning (T1-23) — one test function + one parser change
+- Adding a simple stdlib function (T2-7) — function + test in one commit
+
+**Verification is still required:** `cargo test`, `cargo clippy -- -D warnings`,
+`cargo fmt -- --check` must all pass before pushing.
+
+---
+
+## Rebase into a Clean Commit History — Medium+ Items
 
 Once all tests pass and CODE.md validation is complete, split the WIP commit into
 an ordered sequence of commits.  Use an interactive rebase:

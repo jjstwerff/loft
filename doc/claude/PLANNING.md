@@ -31,6 +31,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [Tier 1 — Language Quality & Consistency](#tier-1--language-quality--consistency)
 - [Tier 2 — Prototype-Friendly Features](#tier-2--prototype-friendly-features)
 - [Tier 3 — Architectural / Future Work](#tier-3--architectural--future-work)
+- [Tier N — Native Rust Code Generation](#tier-n--native-rust-code-generation)
 - [Tier R — Repository Extraction](#tier-r--repository-extraction)
 - [Tier W — Web IDE](#tier-w--web-ide)
 - [Quick Reference](#quick-reference)
@@ -51,7 +52,7 @@ _(all completed)_
 _(all completed)_
 
 **Explicitly 1.1+**:
-T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T2-12, T3-1..T3-5, T3-7, T3-8, W1..W6 (Web IDE; starts after R6)
+T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T3-1..T3-5, T3-7, T3-8, N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
@@ -62,6 +63,25 @@ Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of in
 
 Reserved for language-level breaking changes (syntax removal, sentinel redesign).
 Not expected in the near term.
+
+---
+
+### Recommended Implementation Order
+
+Ordered by unblocking impact, batching efficiency, and value-to-effort ratio.
+Items on the same line can be done in a single PR.
+
+1. **T1-14** (scalar match) — unblocks T1-15, T1-16, T1-17, T1-19, T1-20, T1-21
+2. **N1** (template fixes) — trivial, unblocks all native codegen
+3. **N2** (stdlib in generated files) + **N5** (empty bodies) — completes simple-file compilation
+4. **T1-14 follow-ups**: T1-17 (range patterns, Small) and T1-16 (guards, Small–Med) batch well with T1-14
+5. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
+6. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
+7. **T2-7 + T2-8** (stdlib: mkdir + vector ops) — batch into one PR, both Small
+8. **N4** (iterators) + **N6** (compile gate) — completes native codegen
+9. **T1-23 + T3-6** (shadowing + redundant const) — batch two Small warning items
+
+Tier W (Web IDE) is an independent parallel track that can start any time after R6.
 
 ---
 
@@ -76,40 +96,18 @@ Not expected in the near term.
 **Sources:** [MATCH.md](MATCH.md) — T1-14
 **Severity:** Medium — `match` currently only handles enum subjects; scalar dispatch requires if/else chains
 **Description:** Allow `match` on `integer`, `long`, `float`, `single`, `text`, `boolean`, and `character` values.  Arm patterns are literals; boolean is exhaustive (two values); float arms warn about NaN equality.
-**Fix path:** See [MATCH.md#t1-14](MATCH.md#t1-14--scalar-patterns) for full design.
+**Fix path:** See [MATCH.md#t1-14](MATCH.md#t1-14-scalar-patterns) for full design.
 Extend `parse_match` subject-type dispatch; add scalar literal parsing in the arm loop; reuse `OpEqInt` / `OpEqText` / `OpEqBool` etc.
 **Effort:** Medium (parser/control.rs — subject dispatch + literal pattern parsing)
 **Target:** 1.1
 
 ---
 
-### T1-9  Dead assignment — variable overwritten before first read
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Medium — a value assigned but never read before being overwritten is silently
-discarded; the most common form is a copy-paste bug (wrong variable on the left-hand side)
-**Description:** Extend the existing "Variable is never read" infrastructure to detect when
-a variable is assigned, then assigned again without any intervening read:
-```loft
-fn compute(a: integer, b: integer) -> integer {
-    result = a + b    // Warning: dead assignment — 'result' overwritten before first read
-    result = a * b
-    result
-}
-```
-**Fix path:**
-1. Add a `last_write: Option<Source>` field to `Variable` alongside the existing `uses` counter.
-2. On each assignment, if `uses` has not grown since the previous write, emit the warning at `last_write`.
-3. Update `last_write` to the current assignment source position.
-4. `_`-prefixed variables are exempt (consistent with "Variable is never read").
-**Effort:** Small (variables.rs — extends existing write-tracking)
-**Target:** 1.1
-
----
 ### T1-16  Guard clauses (`if`) in `match` arms
 **Sources:** [MATCH.md](MATCH.md) — T1-16
 **Severity:** Medium — without guards, per-arm conditions require a nested `if` inside the arm body and cannot affect exhaustiveness
 **Description:** `Circle { r } if r > 0.0 => ...` — optional boolean guard after a pattern.  Guard failure falls through to the next arm.  Guarded arms do not contribute to exhaustiveness coverage.
-**Fix path:** See [MATCH.md#t1-16](MATCH.md#t1-16--guard-clauses-if) for full design.
+**Fix path:** See [MATCH.md#t1-16](MATCH.md#t1-16-guard-clauses-if) for full design.
 Parse optional `if expr` after pattern; emit `If(pattern_cmp, If(guard, body, chain_rest), chain_rest)` with chain_rest cloned.
 **Effort:** Small–Medium (parser/control.rs — guard parsing + chain-building change)
 **Depends on:** T1-14
@@ -121,7 +119,7 @@ Parse optional `if expr` after pattern; emit `If(pattern_cmp, If(guard, body, ch
 **Sources:** [MATCH.md](MATCH.md) — T1-15
 **Severity:** Low–Medium — disjunction over patterns requires duplicating arm bodies today
 **Description:** `North | South => "vertical"` — multiple patterns per arm, combined with `||`.  Works for enum variants, scalars, and ranges.
-**Fix path:** See [MATCH.md#t1-15](MATCH.md#t1-15--or-patterns-) for full design.
+**Fix path:** See [MATCH.md#t1-15](MATCH.md#t1-15-or-patterns) for full design.
 Refactor `arms` storage from `(Option<i32>, ...)` to `(Option<Value>, ...)` (pre-built condition); add `|`-loop in pattern parser.
 **Effort:** Medium (parser/control.rs — structural refactor of arms vec + pattern loop)
 **Depends on:** T1-14
@@ -133,7 +131,7 @@ Refactor `arms` storage from `(Option<i32>, ...)` to `(Option<Value>, ...)` (pre
 **Sources:** [MATCH.md](MATCH.md) — T1-17
 **Severity:** Low–Medium — range dispatch currently requires chained `if`/`else if` comparisons
 **Description:** `1..=10 =>` (inclusive) and `1..100 =>` (exclusive) patterns for integer, long, float, single, text, and character subjects.  Open-start `..=hi` supported; open-end `lo..` is an error in pattern position.
-**Fix path:** See [MATCH.md#t1-17](MATCH.md#t1-17--range-patterns) for full design.
+**Fix path:** See [MATCH.md#t1-17](MATCH.md#t1-17-range-patterns) for full design.
 After parsing scalar literal, check for `..` + optional `=`; build `OpLeXxx(lo, subj) && OpLeXxx/OpLtXxx(subj, hi)`.
 **Effort:** Small (parser/control.rs — extends scalar pattern parser)
 **Depends on:** T1-14
@@ -145,14 +143,10 @@ After parsing scalar literal, check for `..` + optional `=`; build `OpLeXxx(lo, 
 **Sources:** [MATCH.md](MATCH.md) — T1-18
 **Severity:** Low–Medium — struct field extraction currently requires separate field-access statements
 **Description:** `match p { Point { x, y } => x + y }` — bind struct fields directly in a match arm.  No discriminant comparison (one shape); exhaustive once any unconditional arm appears.
-**Fix path:** See [MATCH.md#t1-18](MATCH.md#t1-18--plain-struct-destructuring) for full design.
+**Fix path:** See [MATCH.md#t1-18](MATCH.md#t1-18-plain-struct-destructuring) for full design.
 Extend subject-type dispatch to `Type::Reference(d_nr)` with `DefType::Struct`; reuse field-binding mechanism from T1-4 struct-enum.
 **Effort:** Small (parser/control.rs — subject dispatch + reuse existing field-bind code)
 **Target:** 1.1
-
----
-
----
 
 ---
 
@@ -184,7 +178,7 @@ for x in items {    // Warning: loop variable 'x' shadows outer variable 'x'
 **Sources:** [MATCH.md](MATCH.md) — T1-19
 **Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
 **Description:** `Order { status: Paid, amount } => charge(amount)` — a field may carry a sub-pattern (`:` separator) instead of (or in addition to) a binding variable.  Sub-patterns generate additional `&&` conditions on the arm.
-**Fix path:** See [MATCH.md#t1-19](MATCH.md#t1-19--nested-patterns-in-field-positions) for full design.
+**Fix path:** See [MATCH.md#t1-19](MATCH.md#t1-19-nested-patterns-in-field-positions) for full design.
 Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
 **Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
 **Depends on:** T1-14, T1-18
@@ -196,7 +190,7 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 **Sources:** [MATCH.md](MATCH.md) — T1-20
 **Severity:** Low
 **Description:** `null` pattern; wildcard-binding (`x => body`); explicit `name @ pattern` binding; character literal patterns.
-**Fix path:** See [MATCH.md#t1-20](MATCH.md#t1-20--remaining-patterns-null-binding) for full design.
+**Fix path:** See [MATCH.md#t1-20](MATCH.md#t1-20-remaining-patterns-null-binding) for full design.
 `null`: detect `has_token("null")`; emit null-equality condition.  Wildcard binding: unrecognised identifier in scalar arm creates a variable.  `@`: add `"@"` to TOKENS; parse `name @ pattern`.
 **Effort:** Small (parser/control.rs — a few new checks in arm parsing; one TOKENS addition)
 **Depends on:** T1-14
@@ -208,7 +202,7 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 **Sources:** [MATCH.md](MATCH.md) — T1-21
 **Severity:** Low — vector/text structural dispatch requires manual length checks and element access today
 **Description:** `[first, ..] =>`, `[.., last] =>`, `[a, b] =>` and similar patterns for `vector<T>` and `text` subjects.  Binds elements by position; `..` skips the rest.  Rest binding (`rest..`) deferred to a follow-up.
-**Fix path:** See [MATCH.md#t1-21](MATCH.md#t1-21--slice-and-vector-patterns) for full design.
+**Fix path:** See [MATCH.md#t1-21](MATCH.md#t1-21-slice-and-vector-patterns) for full design.
 Detect `has_token("[")` in arm; parse slice elements; emit `OpLengthVector` length test + `OpGetVector` element bindings.
 **Effort:** Medium (parser/control.rs — new `parse_slice_pattern` helper)
 **Depends on:** T1-14, T1-15
@@ -396,7 +390,8 @@ Phases:
 - **C4** — `--cache-dir xdg` and `--no-cache` / `--invalidate-cache` flags
 **Fix path:** See [BYTECODE_CACHE.md](BYTECODE_CACHE.md) for full detail.
 **Effort:** Medium (C1 is Small; full C1–C4 is Medium)
-**Target:** 1.1
+**Target:** Deferred — superseded by Tier N (native Rust code generation eliminates
+the recompile overhead that caching was designed to address)
 
 ---
 
@@ -681,6 +676,85 @@ Stack after call:   [ ]   // result already written to dest
 
 ---
 
+## Tier N — Native Rust Code Generation
+
+`src/generation.rs` already translates the loft IR tree into Rust source files
+(`tests/generated/*.rs`), but none compile (~1500 errors).  The steps below fix
+these incrementally.  Full design in [NATIVE.md](NATIVE.md).
+
+---
+
+### N1  Fix `#rust` templates for generated code
+**Description:** Three fixes, batchable into a single commit:
+1. In `default/01_code.loft`: replace `external::op_*` with `ops::op_*` (two renames:
+   `op_min_single_int` → `ops::op_negate_int`, `op_min_single_long` →
+   `ops::op_negate_long`).
+2. In `default/01_code.loft`: replace `u32::from(@fld)` with `((@fld) as u32)` — field
+   offsets are always non-negative; `u32::from(i32)` has no Rust impl.
+3. In `src/generation.rs` (NOT in templates): add `s.database.` → `stores.` substitution
+   in the template expansion path.  Templates must keep `s.database.*` because `create.rs`
+   needs it for fill.rs (the bytecode interpreter).
+**Effort:** Small (template search-and-replace + one line in generation.rs)
+**Eliminates:** ~1019 compilation errors
+**Interpreter safety:** Templates 1a/1b are safe (fill.rs already uses `ops::` and both
+cast forms work); 1c changes only generation.rs, not templates or fill.rs.
+
+---
+
+### N2  Include stdlib in each generated test file
+**Description:** Change `tests/testing.rs` to pass `(0, def_nr)` instead of
+`(start, def_nr)` to `output_native()` for test files, making each self-contained.
+**Effort:** Trivial (one-line change)
+**Depends on:** N1
+**Eliminates:** ~92 compilation errors; ~41 simple files compile after N1–N2
+
+---
+
+### N3  Add `codegen_runtime` module for database operations
+**Description:** Create `src/codegen_runtime.rs` with wrapper functions for opcodes
+that have no `#rust` template: `op_database`, `op_new_record`, `op_finish_record`,
+`op_free_ref`, `op_get_record`, `op_format_database`, `op_conv_text_from_null`.
+Reference implementations in `src/fill.rs` and `src/state/io.rs`.  Add
+`pub mod codegen_runtime` to `src/lib.rs`; import in generated preamble.
+**Effort:** Medium (~200 lines new code)
+**Eliminates:** ~260 compilation errors; most files compile after N3
+
+---
+
+### N4  Handle `Value::Iter` and `Value::Keys` in code generation
+**Description:** Add match arms in `output_code_inner()` for `Value::Iter` (emit
+loop using `codegen_runtime::op_iterate/op_step`) and `Value::Keys` (emit key
+array literal).
+**Effort:** Medium (generation.rs + codegen_runtime.rs)
+**Depends on:** N3
+**Eliminates:** ~11 compilation errors; iterator tests compile
+
+---
+
+### N5  Skip or fix empty native function bodies
+**Description:** In `output_function()`, skip emitting operator functions that are
+inlined via `#rust` templates and native functions with no IR body.  Add missing
+`#rust` templates where needed.
+**Effort:** Small (generation.rs + default/01_code.loft)
+**Eliminates:** remaining ~50 errors; all files compile
+
+---
+
+### N6  Add compilation gate test
+**Description:** Add a test that compiles a representative generated file with
+`rustc` to prevent regressions.
+**Effort:** Small
+
+---
+
+### N7  Add `--native` CLI flag
+**Description:** Add `--native <file.loft>` to `src/main.rs`: parse, generate Rust
+source via `Output::output_native()`, compile with `rustc`, run the binary.
+**Effort:** Medium
+**Depends on:** N1–N6
+
+---
+
 ## Tier R — Repository Extraction
 
 Standalone `loft` repository created (R1, 2026-03-16).  The remaining R item is the
@@ -812,7 +886,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T1-14 | Scalar patterns in `match` (int, text, bool, …)           | 1    | Medium    | 1.1     |             | MATCH.md T1-14             |
-| T1-9  | Dead assignment (overwritten before first read)            | 1    | Small     | 1.1     |             | Warnings audit 2026-03-15  |
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
@@ -828,7 +901,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T2-7  | File system: `mkdir`, `mkdir_all`                        | 2    | Small     | 1.1     |             | Stdlib audit 2026-03-15    |
 | T2-8  | Expose `reverse`, `clear`, `insert` on vectors          | 2    | Low–Med   | 1.1     |             | Stdlib audit 2026-03-15    |
 | T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
-| T2-12 | Bytecode cache (`.loftc`, skip recompile on rerun)      | 2    | Medium    | 1.1     |             | BYTECODE_CACHE.md          |
+| T2-12 | Bytecode cache (`.loftc`) — deferred, superseded by Tier N | 2  | Medium    | deferred |            | BYTECODE_CACHE.md          |
 | T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 1.1+    |             | THREADING deferred         |
 | T3-2  | Logger: production mode, source injection, hot-reload   | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
 | T3-3  | Optional Cargo features                                  | 3    | Medium    | 1.1+    |             | OPTIONAL_FEATURES.md       |
@@ -839,6 +912,13 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
+| N1    | Fix `#rust` templates (`external::`, `u32::from`, `s.database`) | N | Small | 1.1  |             | NATIVE.md                  |
+| N2    | Include stdlib in generated test files                   | N    | Trivial   | 1.1     | N1          | NATIVE.md                  |
+| N3    | `codegen_runtime` module for database operations         | N    | Medium    | 1.1     |             | NATIVE.md                  |
+| N4    | Handle `Value::Iter` / `Value::Keys` in codegen         | N    | Medium    | 1.1     | N3          | NATIVE.md                  |
+| N5    | Skip/fix empty native function bodies                   | N    | Small     | 1.1     |             | NATIVE.md                  |
+| N6    | Compilation gate test                                   | N    | Small     | 1.1     | N1–N5       | NATIVE.md                  |
+| N7    | `--native` CLI flag                                     | N    | Medium    | 1.1+    | N1–N6       | NATIVE.md                  |
 | R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
 | W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
@@ -865,5 +945,6 @@ _Note: W2 and W4 can be developed in parallel once W1 is complete; W3 and W5 can
 - [THREADING.md](THREADING.md) — Parallel for-loop design (T3-1 detail)
 - [LOGGER.md](LOGGER.md) — Logger design (T3-2 detail)
 - [FORMATTER.md](FORMATTER.md) — Code formatter design (T2-0 detail)
+- [NATIVE.md](NATIVE.md) — Native Rust code generation: root cause analysis, step details, verification (Tier N detail)
 - [WEB_IDE.md](WEB_IDE.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
 - [RELEASE.md](RELEASE.md) — 1.0 gate items, project structure changes, release artifacts checklist, post-1.0 versioning policy

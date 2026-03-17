@@ -467,7 +467,7 @@ writing ~20 large files during a routine `cargo test` run.
 
 Not connected to the `Test` builder API. The `last` test runs only the final file for fast iteration.
 
-Current docs files (22 files, `00`–`21`):
+Current docs files (23 files, `00`–`22`):
 
 | File | Topic |
 |---|---|
@@ -493,6 +493,7 @@ Current docs files (22 files, `00`–`21`):
 | `19-threading.loft` | Parallel execution (`par(b=worker, threads)` for-loop clause) |
 | `20-logging.loft` | Runtime logging (`log_info`, `log_warn`, `log_error`, `log_fatal`) |
 | `21-random.loft` | Random numbers (`rand`, `rand_seed`, `rand_indices`) |
+| `22-time.loft` | Time functions (`now`, `ticks`) |
 
 ---
 

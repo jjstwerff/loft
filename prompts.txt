@@ -8,6 +8,7 @@ Optimize the doc/claude documentation files for discoverability and efficiency. 
 
 
 ** Session **
+Implement N1+N2+N2 from PLANNING.md as a single branch. Follow DEVELOPMENT.md.
 Continue with one issue for the 1.0 release, state what you chose and why, check against DEVELOPMENT.md.
 Evaluate if better temporary logging, an optional internal analysis tool or boundary checking would help by investigating this issue.
 Evaluate if better temporary logging, an optional internal analysis tool or boundary checking would have helped by investigating the last issue.
