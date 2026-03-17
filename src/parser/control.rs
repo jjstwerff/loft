@@ -1330,6 +1330,15 @@ impl Parser {
         if name == "reduce" {
             return self.parse_reduce(val, &list, &types);
         }
+        if name == "sort" {
+            return self.parse_sort(val, &list, &types);
+        }
+        if name == "insert" {
+            return self.parse_insert(val, &list, &types);
+        }
+        if name == "reverse" {
+            return self.parse_reverse(val, &list, &types);
+        }
         // If the name refers to a fn-ref variable, emit a dynamic call through it.
         if self.vars.name_exists(name) {
             let v_nr = self.vars.var(name);

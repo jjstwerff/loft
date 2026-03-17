@@ -481,3 +481,74 @@ fn vector_clear() {
 }"
     );
 }
+
+// --- T2-5: sort ---
+
+#[test]
+fn sort_int_vector() {
+    expr!("v = [3, 1, 4, 1, 5, 9, 2]; sort(v); \"{v}\"").result(Value::str("[1,1,2,3,4,5,9]"));
+}
+
+#[test]
+fn sort_long_vector() {
+    expr!("v = [30l, 10l, 20l]; sort(v); \"{v}\"").result(Value::str("[10,20,30]"));
+}
+
+#[test]
+fn sort_float_vector() {
+    expr!("v = [3.0, 1.0, 2.0]; sort(v); \"{v}\"").result(Value::str("[1,2,3]"));
+}
+
+#[test]
+fn sort_single_vector() {
+    expr!("v = [3.0f, 1.0f, 2.0f]; sort(v); \"{v}\"").result(Value::str("[1,2,3]"));
+}
+
+#[test]
+fn sort_empty() {
+    expr!("v = [1]; clear(v); sort(v); \"{v}\"").result(Value::str("[]"));
+}
+
+// --- T2-8: insert ---
+
+#[test]
+fn insert_int_vector() {
+    expr!("v = [1, 3, 4]; insert(v, 1, 2); \"{v}\"").result(Value::str("[1,2,3,4]"));
+}
+
+#[test]
+fn insert_long_vector() {
+    expr!("v = [10l, 30l]; insert(v, 1, 20l); \"{v}\"").result(Value::str("[10,20,30]"));
+}
+
+#[test]
+fn insert_float_vector() {
+    expr!("v = [1.0, 3.0]; insert(v, 1, 2.0); \"{v}\"").result(Value::str("[1,2,3]"));
+}
+
+#[test]
+fn insert_at_start() {
+    expr!("v = [2, 3]; insert(v, 0, 1); \"{v}\"").result(Value::str("[1,2,3]"));
+}
+
+#[test]
+fn insert_at_end() {
+    expr!("v = [1, 2]; insert(v, 2, 3); \"{v}\"").result(Value::str("[1,2,3]"));
+}
+
+// --- T2-8: reverse ---
+
+#[test]
+fn reverse_int_vector() {
+    expr!("v = [1, 2, 3, 4]; reverse(v); \"{v}\"").result(Value::str("[4,3,2,1]"));
+}
+
+#[test]
+fn reverse_single_element() {
+    expr!("v = [42]; reverse(v); \"{v}\"").result(Value::str("[42]"));
+}
+
+#[test]
+fn reverse_empty() {
+    expr!("v = [1]; clear(v); reverse(v); \"{v}\"").result(Value::str("[]"));
+}
