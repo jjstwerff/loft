@@ -718,3 +718,35 @@ fn or_pattern_scalar() {
     .expr("classify(2)")
     .result(Value::Text("low".to_string()));
 }
+
+// ── T1-20: binding patterns ─────────────────────────────────────────────────
+
+/// Bare identifier in scalar match creates a variable binding (wildcard + capture).
+#[test]
+fn scalar_binding_wildcard() {
+    code!(
+        "fn classify(x: integer) -> integer {
+    match x {
+        1 => 100,
+        n => n * 10
+    }
+}
+fn test() { assert(classify(5) == 50, \"wildcard bind\") }"
+    )
+    .result(Value::Null);
+}
+
+/// `name @ pattern` — capture the matched value in a binding while testing a pattern.
+#[test]
+fn scalar_binding_at() {
+    code!(
+        "fn describe(x: integer) -> text {
+    match x {
+        v @ 1 => \"{v} is one\",
+        _ => \"other\"
+    }
+}
+fn test() { assert(describe(1) == \"1 is one\", \"at bind\") }"
+    )
+    .result(Value::Null);
+}
