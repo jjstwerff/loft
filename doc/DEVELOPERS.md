@@ -486,9 +486,10 @@ lifetimes.
 - This is the most fragile subsystem. The `var_mapping` table (which maps a variable
   slot to a "copy" slot when a name is reused across sibling scopes) is hard to
   reason about. Read `ASSIGNMENT.md` before touching it.
-- Pre-init for borrowed references (`&T`) is incomplete (Issue 24 in `PROBLEMS.md`).
-  Do not assume all reference types are correctly pre-initialised; write a test that
-  exercises the new type inside an `if` branch.
+- Pre-init for reference types first assigned inside a branch is handled by
+  `find_first_ref_vars` (with `deps_ready` guard for borrowed types).  This was
+  fixed in 2026-03-13 (PROBLEMS #2).  When adding a new owned type, write a test
+  that assigns it first inside an `if` branch to verify pre-init works.
 - Bugs in scope analysis manifest at runtime (wrong `store_nr`, double-free, garbage
   pointers) — not at compile time. They are hard to diagnose. Add a new test to
   `tests/slot_assign.rs` for any new variable interaction you add.
@@ -697,7 +698,7 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 | Lexer | `\"` inside `{...}` format expression requires `in_format_expr` flag (fixed in 2026) | Fixed; test in `tests/format_strings.rs` |
 | Parser | `first_pass: bool` has no type safety — wrong-pass code is a silent bug | Always check `self.first_pass` at the top of IR-generating branches |
 | Type resolution | Type cycles panic instead of producing a diagnostic | Avoid recursive struct definitions for now |
-| Scope analysis | Borrowed-ref pre-init is incomplete (Issue 24) | Test any `&T` variable inside an `if` branch; expect possible runtime crash |
+| Scope analysis | Pre-init for refs in branches is handled but fragile | Test new owned types inside `if` branches; `find_first_ref_vars` + `deps_ready` gate |
 | Variable liveness | Global first_def/last_use is conservative; may flag false conflicts | Write a `tests/slot_assign.rs` test to verify |
 | Stack tracker | No runtime depth assertion; mismatches corrupt silently | Use `LOFT_LOG=minimal` and verify depth by hand |
 | Bytecode gen | Forward jumps must be manually patched; missing patch = garbage target | Always pair a `goto_false` emit with a `patch` call |
