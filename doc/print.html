@@ -1529,20 +1529,21 @@
 <p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> + big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> == <span class="nm">4000000000l</span>, <span class="st">"long avoids wrap"</span>);</code></pre>
-<h2 id="shift-by-zero-produces-null">Shift by zero produces null</h2>
-<p>Bitwise AND, OR, and XOR with zero return the expected identity value. Shift operators, however, treat a zero shift amount as a null operand and return null instead of the original value.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> &amp; <span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: identity"</span>);
+<h2 id="bitwise-operators-with-zero">Bitwise operators with zero</h2>
+<p>All bitwise operators (AND, OR, XOR, shift) work correctly with zero. Zero is the identity element for OR, XOR, and shift; zero for AND.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> &amp; <span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: zero"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> | <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"OR with 0: identity"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> ^ <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"XOR with 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">5</span> &lt;&lt; <span class="nm">0</span>), <span class="st">"shift by 0 is null, not 5"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">5</span> &gt;&gt; <span class="nm">0</span>), <span class="st">"right-shift by 0 is also null"</span>);</code></pre>
-<p>Mitigation: Guard shift amounts: `if n &gt; 0 { x &lt;&lt; n } else { x }`.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &lt;&lt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &gt;&gt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
 <h2 id="float-null-is-nan">Float null is NaN</h2>
-<p>Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is not equal to itself. The language hides this behind `!f`, but direct comparisons can still surprise you.</p>
+<p>Floats represent null as `NaN` (Not a Number). Null floats behave consistently with other null types: null is not equal to anything (including itself), and null is not-equal to everything.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"NaN is falsy — this is how you detect null floats"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(bad == bad), <span class="st">"NaN != NaN — IEEE 754 rule leaks through"</span>);</code></pre>
-<p>Mitigation: Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(bad == bad), <span class="st">"null == null is false"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != bad, <span class="st">"null != null is true"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != <span class="nm">0.0</span>, <span class="st">"null != 0.0 is true"</span>);</code></pre>
+<p>Use `!f` or `f ?? default` to check for null floats.</p>
 <h2 id="text-length-counts-bytes-not-characters">Text length counts bytes, not characters</h2>
 <p>`len()` on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.</p>
 <pre><code>  emoji = <span class="st">"Hi 😊!"</span>;
@@ -1563,8 +1564,7 @@
   <span class="kw">for</span> c <span class="kw">in</span> t { byte_pos = c#<span class="ty">index</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(byte_pos == <span class="nm">1</span>, <span class="st">"text #index: byte offset of 'é' (byte 1, not char 1)"</span>);</code></pre>
 <h2 id="evaluates-the-left-side-twice-for-complex-expressions">`??` evaluates the left side twice for complex expressions</h2>
-<p>The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;</p>
-<p>// FAST: call only once temp = expensive_call(); result = temp ?? default; ```</p>
+<p>The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.</p>
 <h2 id="text-indexing-and-slicing-return-different-types">Text indexing and slicing return different types</h2>
 <p>`txt[i]` returns a `character` (a single Unicode scalar value). `txt[i..j]` returns `text` (a UTF-8 string). These are different types.</p>
 <pre><code>  txt = <span class="st">"hello"</span>;

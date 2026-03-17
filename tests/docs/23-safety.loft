@@ -97,14 +97,9 @@ fn main() {
   // for a function call or complex expression the left side is evaluated
   // once for the null check and once for the result.
   // Mitigation: Assign complex expressions to a temporary variable first.
-  // ```loft
-  // // SLOW: expensive_call() runs twice
-  // result = expensive_call() ?? default;
-  //
-  // // FAST: call only once
-  // temp = expensive_call();
-  // result = temp ?? default;
-  // ```
+  // For example, instead of `result = expensive_call() ?? default` (which
+  // calls the function twice), write `temp = expensive_call()` on one line
+  // and then `result = temp ?? default` on the next.
 
   // ## Text indexing and slicing return different types
   // `txt[i]` returns a `character` (a single Unicode scalar value).

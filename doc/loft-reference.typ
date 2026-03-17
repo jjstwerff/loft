@@ -3637,31 +3637,31 @@ Mitigation: Use `long` when you need the full 32-bit range, or declare struct fi
   assert(big as long + big as long == 4000000000l, "long avoids wrap");
 ```
 
-=== Shift by zero produces null
+=== Bitwise operators with zero
 
-Bitwise AND, OR, and XOR with zero return the expected identity value. Shift operators, however, treat a zero shift amount as a null operand and return null instead of the original value.
+All bitwise operators (AND, OR, XOR, shift) work correctly with zero. Zero is the identity element for OR, XOR, and shift; zero for AND.
 
 ```rust
-  assert(0b1010 & 0 == 0, "AND with 0: identity");
+  assert(0b1010 & 0 == 0, "AND with 0: zero");
   assert(0b1010 | 0 == 0b1010, "OR with 0: identity");
   assert(0b1010 ^ 0 == 0b1010, "XOR with 0: identity");
-  assert(!(5 << 0), "shift by 0 is null, not 5");
-  assert(!(5 >> 0), "right-shift by 0 is also null");
+  assert(5 << 0 == 5, "shift left by 0: identity");
+  assert(5 >> 0 == 5, "shift right by 0: identity");
 ```
-
-Mitigation: Guard shift amounts: `if n \> 0 { x \<\< n } else { x }`.
 
 === Float null is NaN
 
-Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is not equal to itself. The language hides this behind `!f`, but direct comparisons can still surprise you.
+Floats represent null as `NaN` (Not a Number). Null floats behave consistently with other null types: null is not equal to anything (including itself), and null is not-equal to everything.
 
 ```rust
   bad = 0.0 / 0.0;
   assert(!bad, "NaN is falsy — this is how you detect null floats");
-  assert(!(bad == bad), "NaN != NaN — IEEE 754 rule leaks through");
+  assert(!(bad == bad), "null == null is false");
+  assert(bad != bad, "null != null is true");
+  assert(bad != 0.0, "null != 0.0 is true");
 ```
 
-Mitigation: Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.
+Use `!f` or `f ?? default` to check for null floats.
 
 === Text length counts bytes, not characters
 
@@ -3702,9 +3702,7 @@ Text \#index is a byte offset, not a character count:
 
 === `??` evaluates the left side twice for complex expressions
 
-The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;
-
-// FAST: call only once temp = expensive_call(); result = temp ?? default; ```
+The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.
 
 === Text indexing and slicing return different types
 
