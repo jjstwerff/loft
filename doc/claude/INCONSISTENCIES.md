@@ -13,7 +13,7 @@ Low = cosmetic or minor. Where a path to resolution is obvious it is included.
 - [~~1. `const` Has Two Different Meanings~~ **FIXED**](#1-const-has-two-different-meanings--fixed-2026-03-14)
 - [2. Vector Has a Much Richer API Than Sorted / Index / Hash](#2-vector-has-a-much-richer-api-than-sorted--index--hash)
 - [3. Loop Attribute `#index` Has Different Semantics on Text vs. Vector](#3-loop-attribute-index-has-different-semantics-on-text-vs-vector)
-- [6. Plain Enums Cannot Have Methods; Struct-Enum Variants Can](#6-plain-enums-cannot-have-methods-struct-enum-variants-can)
+- [~~6. Plain Enums Cannot Have Methods; Struct-Enum Variants Can~~ **RESOLVED 2026-03-16**](#6-plain-enums-cannot-have-methods-struct-enum-variants-can--resolved-2026-03-16)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
 - [9. Text/Character Split: Indexing and Slicing Return Different Types](#9-textcharacter-split-indexing-and-slicing-return-different-types)
 - [10. Null Sentinel Values Vary Invisibly by Type](#10-null-sentinel-values-vary-invisibly-by-type)
@@ -124,28 +124,13 @@ Tests: `vec_field_append_scalar`, `vec_field_append_bracket_scalar_works`,
 
 ---
 
-## 6. Plain Enums Cannot Have Methods; Struct-Enum Variants Can
+## ~~6. Plain Enums Cannot Have Methods; Struct-Enum Variants Can~~ **RESOLVED 2026-03-16**
 
-**Severity: Medium**
+**Was: Medium**
 
-```loft
-enum Direction { North, East, South, West }    // plain enum (integer under the hood)
-enum Shape { Circle { r: float }, Rect { ... } }  // struct enum
-
-fn area(self: Circle) -> float { ... }   // OK: polymorphic dispatch on variant type
-fn area(self: Rect)   -> float { ... }   // OK
-
-fn label(self: Direction) -> text { ... }  // ERROR: plain enum variant is not a struct type
-```
-
-Struct-enum variants are distinct struct types and support method dispatch. Plain enum
-values are named integers and cannot be method receivers. There is no way to attach
-behaviour directly to a plain enum variant — you must write a free function that switches
-on the value. This surprises users who expect uniform OOP-like dispatch across all enums.
-
-**Resolution path:** T1-4 (`match` expression) resolves this. Once `match` exists, a free
-function on a plain enum is simply a `match` body — no per-variant method syntax needed.
-T1-5 (plain enum methods) is superseded by T1-4 and will be skipped.
+Resolved by T1-4 (`match` expression, 2026-03-16). A free function on a plain enum is
+now written as a `match` body — no per-variant method syntax needed. T1-5 (plain enum
+methods) was superseded by T1-4 and skipped.
 
 ---
 

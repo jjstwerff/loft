@@ -28,7 +28,7 @@ existing pipeline works so you can locate the right place to make a change.
   - [9. Data Store & Type Schema](#9-data-store--type-schema-srcdatabasers)
   - [10. Standard Library (native functions)](#10-standard-library-srcnativersdefaultloft)
 - [Known Caveats by Subsystem](#known-caveats-by-subsystem)
-- [Debugging Strategy](#debugging-strategy)
+- [Debugging Strategy](#debugging-strategy) *(see [claude/DEBUG.md](claude/DEBUG.md) for full guide)*
 - [Working Effectively with Claude](#working-effectively-with-claude)
 
 ---
@@ -533,106 +533,21 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 
 ## Debugging Strategy
 
-The primary debug surface is the `LOFT_LOG` environment variable, which selects a
-preset from `log.conf`. Set it before running a test:
-
-```bash
-LOFT_LOG=minimal cargo test -- my_test 2>&1 | head -200
-LOFT_LOG=ref_debug cargo test -- my_test 2>&1 | head -500
-LOFT_LOG=full cargo test -- my_test 2>&1
-```
-
-### Preset guide
-
-| Preset | What it shows | When to use |
-|--------|---------------|-------------|
-| `minimal` | Bytecode execution trace (opcode + stack state per step) | Stack corruption, wrong opcode, wrong result |
-| `ref_debug` | Reference allocation and free events | Double-free, use-after-free, wrong store_nr |
-| `full` | IR tree + bytecode + execution | Everything at once; output is very large |
-| `static` | IR tree and bytecode only (no execution) | Codegen bugs, wrong IR, wrong opcode selection |
-| `crash_tail:N` | Last N lines before panic | Crash triage when full output is too large |
-| `file_debug` | File I/O events | File read/write position bugs |
-
-### Debugging a parse error or wrong IR
-
-1. Add `LOFT_LOG=static` and run the failing test.
-2. In the output, find the function that contains the wrong code.
-3. Compare the emitted IR (`Value` tree) against what you expect.
-4. If the IR is wrong: the bug is in the parser. Search for the relevant `Value`
-   variant in `src/parser/` and trace through `parse_single` or `parse_operators`.
-5. If the IR is correct but the bytecode is wrong: the bug is in `src/state/codegen.rs`,
-   in the `value_code` branch for the relevant `Value` variant.
-
-### Debugging a runtime crash or wrong result
-
-1. Reproduce with the smallest possible loft program (isolate to a single function).
-2. Add `LOFT_LOG=minimal` and run. Find the last opcode executed before the crash or
-   wrong result.
-3. If the opcode is a memory access (`set_int`, `get_int`, `set_long`, etc.) and the
-   `store_nr` is a large or unexpected value (like 60 or 0x3C), the DbRef on the
-   stack is garbage — the bug is in scope analysis or codegen, not in the opcode.
-   Switch to `LOFT_LOG=ref_debug` to find where the bad DbRef was created.
-4. If the opcode itself is wrong (wrong opcode for the operation), check
-   `src/state/codegen.rs` and the `Stack::operator` delta table in `src/stack.rs`.
-
-### Debugging a validate_slots panic
-
-`validate_slots` panics in debug builds when two variables with overlapping live
-intervals share the same stack slot. The panic message includes both variable names,
-their slot range, and their live intervals.
-
-1. Identify which function and which two variables conflict.
-2. Add a minimal reproducer to `tests/slot_assign.rs`.
-3. Check whether the live intervals truly overlap (can both variables be live at the
-   same time?) or whether `compute_intervals` is computing a conservatively wide range.
-4. If the overlap is real: a bug in scope analysis assigned the same slot to two
-   simultaneously-live variables. Check `scopes.rs::copy_variable`.
-5. If the overlap is spurious (a sequential block reuse): the exemption in
-   `find_conflict` may need to be extended.
-
-### Debugging a scope analysis bug
-
-Scope analysis bugs are the hardest to diagnose. The gap between the wrong IR
-insertion and the runtime crash is large.
-
-Strategy:
-1. Use `LOFT_LOG=ref_debug` to capture all allocation and free events.
-2. Look for a `free` event on a DbRef whose `store_nr` does not match any live
-   allocation — that is the double-free or wrong-store free.
-3. Search backwards in the log for the `alloc` event for that DbRef. The function and
-   variable name tell you where the wrong free was inserted.
-4. In `src/scopes.rs`, find the `get_free_vars` or `exit_scope` call that produced
-   the wrong `OpFreeRef` / `OpFreeText`, and fix the scope assignment for that variable.
-
-### Using the test framework for quick iteration
-
-The `code!` and `expr!` macros in `tests/testing.rs` let you write a loft program
-inline in a Rust test:
-
-```rust
-#[test]
-fn my_feature() {
-    expr!("my_expr_result").result(Value::Int(42)).run();
-    code!("fn main() { assert(1 + 1 == 2, \"math\"); }").run();
-}
-```
-
-Use `.error("expected error message")` to assert on compile-time diagnostics.
-Use `.warning("expected warning")` for non-fatal diagnostics.
-
-For end-to-end tests on `.loft` files, add to `tests/docs/` and the `wrap.rs`
-runner will pick it up automatically.
+See [claude/DEBUG.md](claude/DEBUG.md) for the full debugging guide: LOFT_LOG presets,
+diagnosing parse errors, runtime crashes, validate_slots panics, scope analysis bugs,
+and using the test framework for quick iteration.
 
 ---
 
 ## See also
 
+- [claude/DEBUG.md](claude/DEBUG.md) — Debugging guide: LOFT_LOG presets, diagnosing crashes, scope bugs, slot panics
 - [PROMPTS.md](PROMPTS.md) — Working effectively with Claude and when to use each prompt in `prompts.txt`
-- [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog and version milestones
-- [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — Design for separately-packaged libraries and native (Rust) extensions
-- [PROBLEMS.md](PROBLEMS.md) — Known bugs with severity, workarounds, and fix paths
-- [COMPILER.md](COMPILER.md) — Deep dive into the lexer, parser, IR, and bytecode pipeline
-- [DESIGN.md](DESIGN.md) — Algorithm analysis for every major subsystem
-- [TESTING.md](TESTING.md) — Test framework, running tests, debugging `.loft` script failures
-- [ASSIGNMENT.md](ASSIGNMENT.md) — Variable scoping and slot assignment details
-- [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language quirks and known semantic asymmetries
+- [claude/PLANNING.md](claude/PLANNING.md) — Priority-ordered enhancement backlog and version milestones
+- [claude/EXTERNAL_LIBS.md](claude/EXTERNAL_LIBS.md) — Design for separately-packaged libraries and native (Rust) extensions
+- [claude/PROBLEMS.md](claude/PROBLEMS.md) — Known bugs with severity, workarounds, and fix paths
+- [claude/COMPILER.md](claude/COMPILER.md) — Deep dive into the lexer, parser, IR, and bytecode pipeline
+- [claude/DESIGN.md](claude/DESIGN.md) — Algorithm analysis for every major subsystem
+- [claude/TESTING.md](claude/TESTING.md) — Test framework, running tests, debugging `.loft` script failures
+- [claude/ASSIGNMENT.md](claude/ASSIGNMENT.md) — Variable scoping and slot assignment details
+- [claude/INCONSISTENCIES.md](claude/INCONSISTENCIES.md) — Language quirks and known semantic asymmetries

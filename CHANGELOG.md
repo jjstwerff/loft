@@ -85,6 +85,13 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-22** — Missing return path warning for `not null` return types. Functions declared
+  with `-> type not null` that may fall through without returning now warn "Not all code
+  paths return a value — function 'name' may return null". Nullable return types (`-> type`)
+  keep the existing error. Also fixes a false-positive "void should be X" error when all
+  branches of an if/else use explicit `return`. Adds `definitely_returns` predicate and
+  `returned_not_null` field to `Definition`. Five tests in `tests/parse_errors.rs`. (2026-03-16)
+
 - **T1-12** — Redundant null check on `not null` field. Comparing a `not null` struct
   field to `null` with `==` or `!=` now warns ("comparison is always false/true").
   Using `??` (null-coalescing) on a `not null` field warns ("default is never used").
