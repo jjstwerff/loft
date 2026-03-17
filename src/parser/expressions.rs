@@ -925,13 +925,11 @@ use a separate collection or add after the loop"
                     self.can_convert(&rhs_type, &lhs_type);
                 }
                 let lhs = code.clone();
+                // Use boolean truthiness (!is_null) instead of `!= null` comparison.
+                // For floats, `!= NaN` is always true after NaN-guard fix; boolean
+                // conversion (`conv_bool_from_float`) correctly detects NaN as falsy.
                 let mut null_check = code.clone();
-                self.call_op(
-                    &mut null_check,
-                    "!=",
-                    &[lhs.clone(), Value::Null],
-                    &[lhs_type.clone(), Type::Null],
-                );
+                self.convert(&mut null_check, &lhs_type, &Type::Boolean);
                 *code = v_if(null_check, lhs, rhs);
                 *ctp = lhs_type;
             }

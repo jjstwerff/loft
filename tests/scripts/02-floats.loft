@@ -34,6 +34,15 @@ fn main() {
   // 0.0 / 0.0 produces NaN which is null for float
   bad = n / n;
   assert(!bad, "float nan is null");
+  // Null float comparisons: null is not equal to anything, not even itself.
+  assert(!(bad == bad), "null == null is false");
+  assert(bad != bad, "null != null is true");
+  assert(bad != 0.0, "null != 0.0 is true");
+  assert(!(bad == 0.0), "null == 0.0 is false");
+  assert(!(bad < 0.0), "null < 0.0 is false");
+  assert(!(bad <= 0.0), "null <= 0.0 is false");
+  // Null-coalescing works correctly on floats:
+  assert((bad ?? 99.0) == 99.0, "null ?? default returns default");
   // --- Comparisons ---
   assert(1.0 < 2.0, "float lt");
   assert(2.0 <= 2.0, "float le");

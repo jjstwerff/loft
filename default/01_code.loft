@@ -300,13 +300,13 @@ pub fn pow(both: single, v2: single) -> single {
 }
 
 fn OpEqSingle(v1: single, v2: single) -> boolean;
-#rust"(@v1 - @v2).abs() < 0.000_001f32"
+#rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_001f32"
 fn OpNeSingle(v1: single, v2: single) -> boolean;
-#rust"(@v1 - @v2).abs() > 0.000_001f32"
+#rust"@v1.is_nan() || @v2.is_nan() || (@v1 - @v2).abs() > 0.000_001f32"
 fn OpLtSingle(v1: single, v2: single) -> boolean;
-#rust"@v1 < @v2"
+#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
-#rust"@v1 <= @v2"
+#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 <= @v2"
 fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer);
 fn OpFormatStackSingle(pos: const u16, val: single, width: integer, precision: integer);
 // Double-precision (64-bit) floating-point math.
@@ -466,13 +466,13 @@ fn OpDivFloat(v1: float, v2: float) -> float;
 fn OpRemFloat(v1: float, v2: float) -> float;
 #rust"@v1 % @v2"
 fn OpEqFloat(v1: float, v2: float) -> boolean;
-#rust"(@v1 - @v2).abs() < 0.000_000_001f64"
+#rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_000_001f64"
 fn OpNeFloat(v1: float, v2: float) -> boolean;
-#rust"(@v1 - @v2).abs() > 0.000_000_001f64"
+#rust"@v1.is_nan() || @v2.is_nan() || (@v1 - @v2).abs() > 0.000_000_001f64"
 fn OpLtFloat(v1: float, v2: float) -> boolean;
-#rust"@v1 < @v2"
+#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
-#rust"@v1 <= @v2"
+#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 <= @v2"
 fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer);
 fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer);
 // --- min / max / clamp ---

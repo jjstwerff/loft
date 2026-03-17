@@ -53,14 +53,15 @@ fn main() {
   assert(5 >> 0 == 5, "shift right by 0: identity");
 
   // ## Float null is NaN
-  // Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is
-  // not equal to itself. The language hides this behind `!f`, but direct
-  // comparisons can still surprise you.
+  // Floats represent null as `NaN` (Not a Number). Null floats behave
+  // consistently with other null types: null is not equal to anything
+  // (including itself), and null is not-equal to everything.
   bad = 0.0 / 0.0;
   assert(!bad, "NaN is falsy — this is how you detect null floats");
-  assert(!(bad == bad), "NaN != NaN — IEEE 754 rule leaks through");
-  // Mitigation: Always use `!f` or `f ?? default` to check for null
-  // floats, never `f == null` or `f != f`.
+  assert(!(bad == bad), "null == null is false");
+  assert(bad != bad, "null != null is true");
+  assert(bad != 0.0, "null != 0.0 is true");
+  // Use `!f` or `f ?? default` to check for null floats.
 
   // ## Text length counts bytes, not characters
   // `len()` on text returns the number of UTF-8 bytes, not the number of
