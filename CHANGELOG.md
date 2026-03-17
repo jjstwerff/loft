@@ -85,6 +85,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T2-7** — `mkdir(path)` and `mkdir_all(path)` stdlib functions for creating
+  directories. Both return true on success, false on failure. Paths validated
+  against the project directory. (2026-03-17)
+
+- **T1-18** — Plain struct destructuring in `match` expressions. Match subjects
+  can now be plain struct types (not just enums). A struct pattern binds fields
+  directly: `match p { Point { x, y } => x + y }`. (2026-03-17)
+
 - **N10** — Add `OpCopyRecord` to `codegen_runtime` (deep struct copy with
   `copy_block` + `copy_claims`). 51 of 85 generated files compile, 45 pass.
   (2026-03-17)

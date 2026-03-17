@@ -139,15 +139,6 @@ After parsing scalar literal, check for `..` + optional `=`; build `OpLeXxx(lo, 
 
 ---
 
-### T1-18  Plain struct destructuring in `match`
-**Sources:** [MATCH.md](MATCH.md) — T1-18
-**Severity:** Low–Medium — struct field extraction currently requires separate field-access statements
-**Description:** `match p { Point { x, y } => x + y }` — bind struct fields directly in a match arm.  No discriminant comparison (one shape); exhaustive once any unconditional arm appears.
-**Fix path:** See [MATCH.md#t1-18](MATCH.md#t1-18-plain-struct-destructuring) for full design.
-Extend subject-type dispatch to `Type::Reference(d_nr)` with `DefType::Struct`; reuse field-binding mechanism from T1-4 struct-enum.
-**Effort:** Small (parser/control.rs — subject dispatch + reuse existing field-bind code)
-**Target:** 1.1
-
 ---
 
 ### T1-23  Variable shadowing
@@ -300,24 +291,6 @@ the vector storage, or copies to a `Vec<T>`, sorts, writes back.
 ---
 
 
-### T2-7  File system — `mkdir` and `mkdir_all`
-**Sources:** Standard library audit 2026-03-15
-**Severity:** Low — files can be read, written, deleted, and listed, but directories cannot
-be created; output pipelines that write to a new subdirectory require a shell workaround
-**Description:**
-```loft
-// Create one directory level (fails if parent does not exist).
-pub fn mkdir(path: text) -> boolean;
-
-// Create directory and all missing parents (like Unix mkdir -p).
-pub fn mkdir_all(path: text) -> boolean;
-```
-Returns `true` on success, `false` (not null) on failure so callers can check without
-null-testing.
-**Fix path:** Native Rust using `std::fs::create_dir` / `create_dir_all`; declaration
-alongside `delete` and `move` in `default/02_images.loft`.
-**Effort:** Small (native Rust ~15 lines)
-**Target:** 1.1 — useful but not blocking
 
 ---
 
@@ -861,7 +834,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
-| T1-18 | Plain struct destructuring in `match`                    | 1    | Small     | 1.1     |             | MATCH.md T1-18             |
 | T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
@@ -870,7 +842,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
 | T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
 | T2-5  | In-place sort for primitive vectors                      | 2    | Medium    | 1.1     |             | Stdlib audit 2026-03-15    |
-| T2-7  | File system: `mkdir`, `mkdir_all`                        | 2    | Small     | 1.1     |             | Stdlib audit 2026-03-15    |
 | T2-8  | Expose `reverse`, `clear`, `insert` on vectors          | 2    | Low–Med   | 1.1     |             | Stdlib audit 2026-03-15    |
 | T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
 | T2-12 | Bytecode cache (`.loftc`) — deferred, superseded by Tier N | 2  | Medium    | deferred |            | BYTECODE_CACHE.md          |
