@@ -85,6 +85,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N18** — Fix `crate::state::` template references in generated native code.
+  Substitutes with `loft::state::` so constants like `STRING_NULL` resolve
+  correctly in standalone generated files. (2026-03-17)
+
+- **T2-8** — Expose `vector.clear()` as a public stdlib function. Wraps the
+  existing `OpClearVector` bytecode operator. Removes all elements from a vector,
+  setting its length to 0. (2026-03-17)
+
 - **T2-7** — `mkdir(path)` and `mkdir_all(path)` stdlib functions for creating
   directories. Both return true on success, false on failure. Paths validated
   against the project directory. (2026-03-17)

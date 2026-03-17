@@ -1277,6 +1277,7 @@ extern crate loft;"
         // In generated native code, `stores` is the direct Stores reference.
         res = res.replace("s.database.", "stores.");
         res = res.replace("s.db_from_text(", "db_from_text(stores, ");
+        res = res.replace("crate::state::", "loft::state::");
         write!(w, "{res}")
     }
 }

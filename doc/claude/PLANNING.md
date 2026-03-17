@@ -294,25 +294,21 @@ the vector storage, or copies to a `Vec<T>`, sorts, writes back.
 
 ---
 
-### T2-8  Expose hidden vector operations — `reverse`, `clear`, `insert`
+### T2-8  Expose hidden vector operations — `reverse`, `insert`
 **Sources:** Standard library audit 2026-03-15
-**Severity:** Low — `OpClearVector` and `OpInsertVector` exist in the bytecode but have no
-public loft wrappers; `reverse` has no operator at all
+**Severity:** Low — `OpInsertVector` exists in the bytecode but has no
+public loft wrapper; `reverse` has no operator at all.  (`clear` done 2026-03-17.)
 **Description:**
 ```loft
-pub fn clear(v: &vector);                           // set length to 0; O(1)
 pub fn insert(v: &vector<integer>, idx: integer, elem: integer);  // insert at position
 pub fn reverse(v: &vector<integer>);                // reverse in-place; O(n)
 // + typed overloads per element type for insert/reverse
 ```
-`clear` wraps `OpClearVector` (trivial).  `insert` wraps `OpInsertVector`.
-`reverse` has no existing operator; needs a native implementation or an O(n) loft loop.
 **Fix path:**
-- `clear`: pure loft using `OpClearVector` (or in-place loop if that's cleaner).
 - `insert`: expose existing `OpInsertVector` via a public loft declaration.
 - `reverse`: native Rust for efficiency, or O(n) swap loop in loft for each type.
-**Effort:** Low–Medium (clear and insert low; reverse medium per type)
-**Target:** 1.1 — nice to have, no urgency
+**Effort:** Low–Medium (insert low; reverse medium per type)
+**Target:** 1.1
 
 ---
 
@@ -534,13 +530,16 @@ time the next statement begins, no live `Str` points into `scratch`.
    memory does not grow (measure `scratch.capacity()` before/after, or simply check that
    `scratch.len() <= 1` at a statement boundary).
 
-**Alternative (simpler but less precise):** instead of a new opcode, call
-`self.database.scratch.clear()` at the top of the interpreter main loop (before each
-opcode dispatch in `fill.rs`).  This is correct because `Str` values on the stack are
-consumed by the very next opcode in the expression.  More clearing calls than necessary,
-but `Vec::clear()` on a non-empty vec is O(n) drops and on an empty vec is free.
+**Alternative REJECTED (2026-03-17):** Clearing scratch at the top of the interpreter
+main loop (before each opcode dispatch) was attempted and breaks `Str` lifetimes.
+A `Str` returned from a scratch-backed native (e.g. `to_uppercase`) is NOT consumed
+by the very next opcode — there can be multiple opcodes between the scratch push and
+the `OpAppendText` that copies the content.  Clearing scratch between opcodes
+invalidates the `Str` pointer before it is consumed, causing `to_uppercase` and
+`replace` tests to fail.  The `OpClearScratch` opcode approach (emitted at statement
+boundaries) is the only correct solution.
 
-**Effort:** Trivial (1 new opcode or 1-line change in the interpreter loop; ~20 lines total)
+**Effort:** Small (new opcode + emit in codegen; NOT trivial as originally estimated)
 **Target:** 1.1
 
 ---
@@ -721,13 +720,6 @@ Handle `Value::Iter` in `output_code_inner` by emitting a loop with these functi
 **Detail:** [NATIVE.md](NATIVE.md) § N10e-3
 
 ---
-
-### N18  Fix `crate::state::` references in templates
-**Description:** Add `crate::state::` → `loft::state::` substitution in
-`output_call_template` so `STRING_NULL` and other state constants resolve.
-**Effort:** Trivial (generation.rs, one line)
-**Fixes:** 2 compile failures
-**Detail:** [NATIVE.md](NATIVE.md) § N10e-4
 
 ---
 
@@ -921,7 +913,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | N15   | Fix `output_if` missing else (typed nulls)               | N    | Medium    | 1.1     |             | NATIVE.md N10e-1           |
 | N16   | Implement `OpIterate`/`OpStep` in codegen_runtime        | N    | High      | 1.1     |             | NATIVE.md N10e-2           |
 | N17   | Add `OpFormatFloat`/`OpFormatStackLong` handlers         | N    | Small     | 1.1     |             | NATIVE.md N10e-3           |
-| N18   | Fix `crate::state::` references in templates             | N    | Trivial   | 1.1     |             | NATIVE.md N10e-4           |
 | N19   | Fix empty pre-eval and prefix issues                    | N    | Small     | 1.1     |             | NATIVE.md N10e-5           |
 | N20   | Repair fill.rs auto-generation                          | N    | Medium    | 1.1     |             | NATIVE.md N20              |
 | R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |

@@ -465,3 +465,19 @@ use #count instead at index_loop_attr_index_rejected:5:36",
 // diagnostic and the for-loop fails to compile.  Behaviour is verified by the
 // absence of hash-iteration code in 10-collections.loft and the error message
 // produced at compile time when such code is written.
+
+/// T2-8: vector.clear() removes all elements.
+#[test]
+fn vector_clear() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3];
+    assert(v.len() == 3, \"before clear\");
+    v.clear();
+    assert(v.len() == 0, \"after clear\");
+    v += [4];
+    assert(v.len() == 1, \"after re-add\");
+    assert(v[0] == 4, \"value after clear+add\");
+}"
+    );
+}
