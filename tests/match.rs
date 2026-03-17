@@ -71,7 +71,7 @@ fn test() {
     }
 }"
     )
-    .error("match on Direction is not exhaustive — missing: West; add the missing variants or a '_ =>' wildcard at plain_missing_arm:10:2");
+    .error("match on Direction is not exhaustive — missing: West; add the missing variants or a '_ =>' wildcard at plain_missing_arm:5:12");
 }
 
 /// match used as a void statement (result is dropped).
@@ -238,7 +238,7 @@ fn test() {
     }
 }"
     )
-    .error("match on Shape is not exhaustive — missing: Square; add the missing variants or a '_ =>' wildcard at struct_missing_arm:13:2");
+    .error("match on Shape is not exhaustive — missing: Square; add the missing variants or a '_ =>' wildcard at struct_missing_arm:9:12");
 }
 
 // ── Nesting and composition ───────────────────────────────────────────────────

@@ -11,6 +11,27 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Bug fixes
 
+- **T0-8** — Seven `panic!`/`unreachable!` calls in the parser converted to `diagnostic!`
+  + early return. Malformed input now produces an error message instead of crashing the
+  compiler.
+
+- **T1-31** — All integer and long arithmetic operators in `ops.rs` now use checked
+  arithmetic in debug builds. Overflow panics with a clear message; results that collide
+  with the null sentinel (`i32::MIN` / `i64::MIN`) are also caught. Release builds retain
+  the fast unchecked path.
+
+- **P20** — `f#next = pos` (file seek) before the first read or write now stores the
+  position in `#next` so the first I/O operation applies the pending seek.
+
+- **P45** — `&vector` parameter no longer triggers a false "never modified" warning
+  when the function body uses `OpClearVector`, `OpInsertVector`, or `OpRemoveVector`.
+
+### Diagnostics
+
+- **T1-26** — Match exhaustiveness error now points at the `match` keyword instead of the
+  closing brace. Unused-definition warnings now use `at file:line:col` format instead of
+  Rust Debug formatting.
+
 - **T0-9** — `read_to_string().unwrap()` in `get_file_text` now gracefully clears the
   buffer on non-UTF-8 file data instead of panicking the runtime. (PROBLEMS #48)
 

@@ -1423,14 +1423,17 @@ impl Data {
                     if !self.used_attributes.contains(&(d_nr as u32, a_nr)) {
                         diagnostics.add(
                             Level::Warning,
-                            &format!("Unused field {}.{} {:?}", def.name, attr.name, def.position),
+                            &format!(
+                                "Unused field {}.{} at {}",
+                                def.name, attr.name, def.position
+                            ),
                         );
                     }
                 }
             } else {
                 diagnostics.add(
                     Level::Warning,
-                    &format!("Unused definition {} {:?}", def.name, def.position),
+                    &format!("Unused definition {} at {}", def.name, def.position),
                 );
             }
         }

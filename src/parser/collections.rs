@@ -53,7 +53,8 @@ impl Parser {
                 *code = *start;
                 return *next.clone();
             }
-            panic!("Incorrect Iter");
+            diagnostic!(self.lexer, Level::Error, "Malformed iterator expression");
+            return Value::Null;
         }
         if matches!(*is_type, Type::Text(_)) {
             return self.iter_text(code, iter_var, pre_var);

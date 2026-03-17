@@ -2263,7 +2263,8 @@ use a separate collection or add after the loop"
                     Box::new(Type::Null),
                 ));
             }
-            unreachable!("Value::Iter with non-Block next field");
+            diagnostic!(self.lexer, Level::Error, "Malformed iterator in IR");
+            return None;
         }
         if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
             diagnostic!(
