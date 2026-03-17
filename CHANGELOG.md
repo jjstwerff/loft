@@ -85,6 +85,10 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N10** — Fix type registration in generated native code. `output_native_reachable()`
+  now registers ALL types (0..till) in `init()` so runtime type IDs match compile-time
+  IDs. Native pass rate: 44 of 50 compiled files now pass (up from 24). (2026-03-17)
+
 - **N7** — Native test suite. `native_test_suite` in `tests/expressions.rs` compiles
   and runs all generated test files when `LOFT_TEST_NATIVE=1` is set. Reports compile
   rate and execution pass rate. Baseline: 50 compile, 24 pass of 85 files. (2026-03-17)

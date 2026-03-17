@@ -684,6 +684,39 @@ these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
+### N10  Fix remaining native codegen failures (35 compile, 26 runtime)
+**Description:** Make all 85 generated test files compile and pass.  Current state
+(after N1–N7): 50 compile, 24 pass, 26 fail at runtime, 35 can't compile.
+
+**Compile failures (35 files) — categories:**
+- 16 mismatched types — `output_if` emits `()` for missing else when the true branch
+  returns a value; `Str` vs `&str` confusion in text-returning functions
+- 4 `if`/`else` incompatible types — both branches must produce the same Rust type
+- 3 `Keys(...)` / `OpIterate` / `OpStep` — iterator codegen not yet complete
+- 3 `OpGetTextSub` / `OpSizeofRef` / `OpCopyRecord` — missing codegen_runtime wrappers
+- 2 empty pre-eval (`let _pre = ;`) — `collect_pre_evals` produces empty expression
+- misc: `crate::keys` import, `OpFormatFloat`, double borrow, wrong arg counts
+
+**Runtime failures (26 files) — categories:**
+- Database operations: `OpDatabase` / `OpNewRecord` / `OpFinishRecord` produce records
+  with wrong field layout (init() type registration order may differ from interpreter)
+- Text handling: `Str` vs `String` vs `&str` lifetime mismatches at runtime
+- Enum dispatch: polymorphic function bodies empty (enum_fn IR not emitted)
+- Collection iteration: `OpIterate` / `OpStep` not implemented in codegen_runtime
+
+**Fix path (incremental — each sub-step improves the pass rate):**
+1. Fix `output_if` to emit a typed null (`i32::MIN`, `""`, `DbRef::null()`) for
+   the missing else branch instead of `()`.
+2. Add `OpFormatFloat`, `OpFormatStackLong`, `OpCopyRecord` to codegen_runtime.
+3. Implement `OpIterate` / `OpStep` in codegen_runtime (sorted + index + vector).
+4. Fix `Str` → `&str` return type: use `&str` consistently in generated signatures
+   instead of `Str` (avoids lifetime issues with stack-local strings).
+5. Fix empty pre-eval: skip pre-eval generation when the expression buffer is empty.
+6. Fix enum dispatch: emit the `enum_fn` polymorphic body as a match/if-chain.
+
+**Effort:** High (generation.rs + codegen_runtime.rs — multiple structural fixes)
+**Target:** 1.1
+
 ---
 
 ### N8  Add `--native` CLI flag
@@ -852,6 +885,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
 | N8    | `--native` CLI flag                                     | N    | Medium    | 1.1+    |             | NATIVE.md                  |
+| N10   | Fix remaining native codegen failures (35+26)            | N    | High      | 1.1     |             | NATIVE.md                  |
 | R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
 | W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
