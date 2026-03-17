@@ -26,6 +26,7 @@ recommended fix path are described.
 | 22 | Spatial index (spacial<T>) operations not implemented | Low | N/A |
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
+| 45 | `&vector` parameter triggers "never modified" for clear-like ops | Low | Declare without `&` |
 
 ---
 
@@ -754,6 +755,24 @@ path does when `block = true`.  The difficulty is that `assign_tp` (the element 
 second pass or this path must be deferred until the call-site type is known.
 
 **Effort:** Medium (parser change; requires careful handling of the Unknown element type)
+
+---
+
+### 45. `&vector` parameter annotation triggers "never modified" warning for clear-like operations
+
+**Symptom:** Declaring a stdlib wrapper as `pub fn clear(both: &vector)` with `&`
+(mutable reference) causes a compile error: "Parameter 'both' has & but is never
+modified".  The `OpClearVector` operator takes `vector` by value (it reads the DbRef
+and modifies the underlying store), so from the parser's perspective the parameter
+variable itself is never written to.
+
+**Workaround:** Declare without `&`: `pub fn clear(both: vector)`.  The operation
+still modifies the vector's backing store — `&` is only needed when the function
+reassigns the variable itself (e.g. `both = new_vector`).
+
+**Impact:** Low — the workaround is correct and idiomatic.  The `&` annotation is
+designed for functions that reassign the parameter, not for functions that modify
+through a DbRef.
 
 ---
 

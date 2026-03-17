@@ -530,13 +530,16 @@ time the next statement begins, no live `Str` points into `scratch`.
    memory does not grow (measure `scratch.capacity()` before/after, or simply check that
    `scratch.len() <= 1` at a statement boundary).
 
-**Alternative (simpler but less precise):** instead of a new opcode, call
-`self.database.scratch.clear()` at the top of the interpreter main loop (before each
-opcode dispatch in `fill.rs`).  This is correct because `Str` values on the stack are
-consumed by the very next opcode in the expression.  More clearing calls than necessary,
-but `Vec::clear()` on a non-empty vec is O(n) drops and on an empty vec is free.
+**Alternative REJECTED (2026-03-17):** Clearing scratch at the top of the interpreter
+main loop (before each opcode dispatch) was attempted and breaks `Str` lifetimes.
+A `Str` returned from a scratch-backed native (e.g. `to_uppercase`) is NOT consumed
+by the very next opcode — there can be multiple opcodes between the scratch push and
+the `OpAppendText` that copies the content.  Clearing scratch between opcodes
+invalidates the `Str` pointer before it is consumed, causing `to_uppercase` and
+`replace` tests to fail.  The `OpClearScratch` opcode approach (emitted at statement
+boundaries) is the only correct solution.
 
-**Effort:** Trivial (1 new opcode or 1-line change in the interpreter loop; ~20 lines total)
+**Effort:** Small (new opcode + emit in codegen; NOT trivial as originally estimated)
 **Target:** 1.1
 
 ---
