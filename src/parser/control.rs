@@ -338,6 +338,7 @@ impl Parser {
                     );
                 }
                 arms.push((None, arm_code, arm_type));
+                self.lexer.has_token(","); // optional trailing comma
                 break;
             }
 
@@ -555,6 +556,7 @@ impl Parser {
             };
 
             arms.push((Some(disc), arm_code, arm_type));
+            self.lexer.has_token(","); // optional comma between arms
         }
 
         self.lexer.token("}");
@@ -665,8 +667,10 @@ impl Parser {
             }
             arms.push((pattern_val, arm_code, arm_type));
             if has_wildcard {
+                self.lexer.has_token(","); // optional trailing comma
                 break;
             }
+            self.lexer.has_token(","); // optional comma between arms
         }
         self.lexer.token("}");
 

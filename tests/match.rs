@@ -399,10 +399,72 @@ fn match_scalar_boolean() {
         "fn test() {
     flag = true;
     r = match flag {
-        true  => \"on\"
+        true  => \"on\",
         false => \"off\"
     };
     assert(r == \"on\", \"r\");
+}"
+    );
+}
+
+/// Commas between match arms are accepted and optional.
+#[test]
+fn match_with_commas() {
+    code!("enum Direction { North, East, South, West }")
+        .expr(
+            "d = East;
+match d {
+    North => \"N\",
+    East  => \"E\",
+    South => \"S\",
+    West  => \"W\",
+}",
+        )
+        .result(Value::str("E"));
+}
+
+/// Scalar match with no matching arm and no wildcard returns null.
+#[test]
+fn match_scalar_no_match() {
+    code!(
+        "fn test() {
+    x = 99;
+    r = match x {
+        1 => 10,
+        2 => 20
+    };
+    assert(r == null, \"r should be null\");
+}"
+    );
+}
+
+/// Scalar match with a single arm.
+#[test]
+fn match_scalar_single_arm() {
+    code!(
+        "fn test() {
+    x = 5;
+    r = match x {
+        5 => \"five\"
+    };
+    assert(r == \"five\", \"r\");
+}"
+    );
+}
+
+/// Negative integer literal in match arm.
+#[test]
+fn match_scalar_negative() {
+    code!(
+        "fn test() {
+    x = -1;
+    r = match x {
+        -1 => \"neg\",
+        0  => \"zero\",
+        1  => \"pos\",
+        _  => \"other\"
+    };
+    assert(r == \"neg\", \"r\");
 }"
     );
 }
