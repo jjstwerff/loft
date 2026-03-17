@@ -85,6 +85,75 @@ New parse or type errors must:
 - Not panic. Use the diagnostic system (`src/diagnostics.rs`); prefer `Warning` or
   `Error` over `Fatal` unless the compiler cannot continue.
 
+#### Diagnostic positioning — current state and improvement plan
+
+The diagnostic system offers three methods with different position accuracy:
+
+| Method | Position source | When to use |
+|--------|----------------|-------------|
+| `diagnostic!(lexer, level, msg)` | Current `lexer.position` | Simple errors where the lexer is at or near the problem |
+| `specific!(lexer, &lex_result, level, msg)` | Saved `LexResult.position` | When you have the exact token that caused the error |
+| `lexer.pos_diagnostic(level, &pos, msg)` | Explicit `Position` | When using a stored definition site (e.g. from `Definition.position`) |
+
+**Known positioning issues (improvement opportunities):**
+
+The following diagnostics point to a suboptimal location. Each can be improved
+by saving the relevant token position before the parser advances past it.
+
+1. **Operator errors point one token ahead** (`parser/mod.rs:527, 762, 771`).
+   `call_op` and `validate_convert` use `lexer.peek()` to get the error position,
+   which points to the *next* token, not the operator or operand that failed.
+   **Fix:** Save the operator token's `LexResult` before calling `call_op`, and
+   pass it to `specific!()` in the error branch.
+
+2. **Division-by-zero warning points past the zero** (`parser/expressions.rs:1036`).
+   The warning fires after the right-hand operand has been consumed.
+   **Fix:** Save the position of the operator token (`*`, `/`, `%`) before
+   parsing the RHS. Use that position in the diagnostic.
+
+3. **Match exhaustiveness error points at closing `}`** (`parser/control.rs:719`).
+   The error fires after the entire match body has been parsed.
+   **Fix:** Save `lexer.at()` at the `match` keyword (before parsing arms)
+   and use `lexer.to(saved)` before emitting the exhaustiveness error.
+
+4. **"Not all code paths return" warning points at end of block** (`parser/control.rs:175`).
+   **Fix:** Save the position of the `->` return-type annotation and use it
+   for the diagnostic, since that is where the return-type promise was made.
+
+5. **Unused-definition warning uses `{:?}` debug format** (`data.rs:1424-1434`).
+   The position is correct but rendered via Rust `Debug` formatting instead of
+   the `pos_diagnostic()` API.
+   **Fix:** Call `lexer.pos_diagnostic()` with `def.position` instead of embedding
+   `{:?}` in a format string.
+
+**General pattern for improving a diagnostic position:**
+
+```rust
+// BEFORE (position drifts past the error):
+let rhs_type = self.expression(&mut rhs);
+if rhs_type != expected {
+    diagnostic!(self.lexer, Level::Error, "type mismatch");
+    //                                    ^ points at token AFTER rhs
+}
+
+// AFTER (position pinned to the operator):
+let op_pos = self.lexer.at();          // save BEFORE parsing rhs
+let rhs_type = self.expression(&mut rhs);
+if rhs_type != expected {
+    self.lexer.to(op_pos);             // restore to operator
+    diagnostic!(self.lexer, Level::Error, "type mismatch");
+    //                                    ^ points at the operator
+}
+```
+
+When adding a new diagnostic:
+1. Decide what the user should see underlined: the token, the name, or the
+   whole expression.
+2. Save `lexer.at()` *before* the parser advances past that point.
+3. Use `lexer.to(saved)` just before the `diagnostic!()` call, or use
+   `specific!()` / `pos_diagnostic()` with the saved position.
+4. Add a test in `tests/parse_errors.rs` that asserts the exact `file:line:col`.
+
 ### Documentation
 All user-visible syntax or standard library additions must be documented in the
 appropriate `tests/docs/*.loft` file. Changes to compiler internals must be reflected
