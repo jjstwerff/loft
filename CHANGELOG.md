@@ -85,6 +85,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **P46** — Match arms can now use block expressions `{ ... }` as bodies.
+  The parser detects `{` after `=>` and parses it as a scoped block. Was a
+  segfault because the block's `}` was confused with the match's `}`. (2026-03-17)
+
+- **T1-24** — Commas between match arms are now mandatory (trailing comma before
+  `}` is optional). Consistent with struct fields, enum variants, and function
+  arguments. (2026-03-17)
+
 - **T1-14** — Scalar patterns in match expressions. Match subjects can now be
   integer, long, float, single, text, boolean, or character values. Arm patterns
   are literals; lowers to an if/else chain. Unblocks T1-15, T1-16, T1-17.

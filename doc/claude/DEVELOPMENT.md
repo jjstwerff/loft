@@ -379,6 +379,27 @@ Do not merge until all three jobs are green on all platforms.  If a job fails:
 
 ---
 
+## Renaming a Branch After Completion
+
+When a branch ends up implementing different items than originally planned (e.g.
+you started with `t1-17-range-patterns` but ended up doing `p46-t124-match-fixes`
+instead), rename the branch before pushing the PR so the name reflects the actual
+work:
+
+```bash
+# Rename the local branch
+git branch -m old-name new-name
+
+# If already pushed under the old name, delete the old remote and push the new one
+git push origin --delete old-name
+git push -u origin new-name
+```
+
+The branch name appears in the merge commit and PR title.  A misleading name
+makes history harder to navigate.  Rename before opening the PR, not after.
+
+---
+
 ## See also
 
 - [CODE.md](CODE.md) — Naming conventions, function-length rules, clippy policy, null sentinels
