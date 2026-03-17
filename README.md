@@ -89,7 +89,7 @@ parses and executes `<file.loft>`. The entry point is `fn main()`.
 
 The user documentation is generated HTML — run `cargo run --bin gendoc` to build it,
 then open `doc/index.html` in a browser. A single-page version is at `doc/print.html`
-and a PDF at `doc/loft-reference.pdf`.
+and a printable reference at [doc/loft-reference.pdf](doc/loft-reference.pdf).
 
 **Language tutorial** (each page is also a live test):
 
