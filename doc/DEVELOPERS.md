@@ -154,6 +154,117 @@ When adding a new diagnostic:
    `specific!()` / `pos_diagnostic()` with the saved position.
 4. Add a test in `tests/parse_errors.rs` that asserts the exact `file:line:col`.
 
+#### Diagnostic message quality — improvement plan
+
+The compiler emits ~200 diagnostics across 9 files. The overall quality is
+reasonable but several categories of improvement would make the experience
+significantly better for new users.
+
+**Step 1 — Convert panics to diagnostics (7 locations)**
+
+These `panic!` / `unreachable!` calls crash the compiler instead of showing a
+useful error. Each should become a `diagnostic!` + `return`:
+
+| File | Line | Current message | Suggested replacement |
+|------|------|-----------------|-----------------------|
+| `parser/mod.rs` | 644 | `panic!("Get not implemented on '{}'")` | `Error: Field access not supported on type '{}'` |
+| `parser/mod.rs` | 718 | `panic!(...)` | `Error: Internal: unexpected type in field access` |
+| `parser/mod.rs` | 795 | `panic!("Incorrect Dynamic function {}")` | `Error: Cannot call '{}' dynamically` |
+| `parser/mod.rs` | 965 | `panic!("Unexpected reference type {}")` | `Error: Unexpected reference type '{}'` |
+| `parser/expressions.rs` | 2268 | `unreachable!("Value::Iter with non-Block")` | `Error: Internal: malformed iterator` |
+| `parser/collections.rs` | 56 | `panic!("Incorrect Iter")` | `Error: Internal: malformed iterator expression` |
+| `parser/control.rs` | 1157 | `unreachable!("ref_return called with...")` | `Error: Internal: unexpected return type in ref_return` |
+
+Panics marked "Internal:" are compiler bugs, not user errors — but they should
+still produce a diagnostic instead of a stack trace.
+
+**Step 2 — Downgrade over-aggressive Fatal levels (3 locations)**
+
+`Level::Fatal` stops all further parsing. These cases are recoverable:
+
+| File | Line | Message | Change to |
+|------|------|---------|-----------|
+| `parser/mod.rs` | 1071 | `"Syntax error"` | `Level::Error` — add context: `"Unexpected token '{token}'"` |
+| `parser/mod.rs` | 1067 | `"use statements must appear before definitions"` | `Level::Error` — parse can continue |
+| `data.rs` | 1035 | `"Cannot redefine {type} {name}"` | `Level::Error` — skip the duplicate, continue |
+
+The remaining Fatal (`lexer.rs:465` unterminated character) is appropriate.
+
+**Step 3 — Add context to generic messages (5 locations)**
+
+These messages leave the user guessing. Each needs the relevant identifier:
+
+| File | Line | Current | Improved |
+|------|------|---------|----------|
+| `parser/mod.rs` | 1071 | `"Syntax error"` | `"Unexpected '{token}' — expected a declaration or statement"` |
+| `parser/expressions.rs` | 2442 | `"Cannot iterate"` | `"Cannot iterate over type '{}' — expected vector, sorted, index, text, or range"` |
+| `parser/control.rs` | 322 | `"expect variant name or '_' in match arm"` | `"Expected variant name or '_', got '{token}'"` — include the unexpected token |
+| `parser/control.rs` | 510 | `"expect variant name after '\|'"` | `"Expected variant name after '\|', got '{token}'"` |
+| `lexer.rs` | 838 | `"Expect token {token}"` | Already parameterised; verify `{token}` is actually filled (it is — the `token` parameter is the expected token string) |
+
+**Step 4 — Add fix suggestions to common errors (6 candidates)**
+
+Messages that describe the problem but don't suggest the fix:
+
+| Current message | Suggested addition |
+|-----------------|-------------------|
+| `"Parameter '{}' has & but is never modified"` | Already has: `"; remove the &"` — good |
+| `"Variable cannot change type from {} to {}"` | Add: `"; use a new variable name or cast with 'as'"` |
+| `"Cannot modify const parameter '{}'"` | Add: `"; remove 'const' from the parameter or use a local copy"` |
+| `"match on {} is not exhaustive — missing: {}"` | Add: `"; add the missing variants or a '_ =>' wildcard"` |
+| `"Cannot add elements to '{}' while it is being iterated"` | Add: `"; collect additions in a separate variable and append after the loop"` |
+| `"loop variable '{}' has type {} but was previously used as {}"` | Add: `"; use a different name for the loop variable"` |
+
+**Step 5 — Improve error recovery after token failures**
+
+Currently `lexer.token("X")` emits `"Expect token X"` and continues parsing
+at the same position. The next parse attempt sees the same unexpected token,
+producing a cascade of confusing errors.
+
+Recovery strategy per construct:
+
+| Construct | Recovery action after failed token |
+|-----------|-----------------------------------|
+| Missing `;` | Continue — the parser already handles implicit semicolons in most cases |
+| Missing `)` | Skip tokens until `)` or `{` or `;` is found |
+| Missing `}` | Skip tokens until `}` at the same brace depth |
+| Missing `=>` in match | Skip tokens until `=>` or `,` or `}` |
+| Missing `,` in args | Continue — the next identifier starts the next parameter |
+
+Implementation: add a `recover_to(tokens: &[&str])` method to `Lexer` that
+advances until one of the given tokens is found (or EOF). Call it after
+each `token()` failure in contexts where cascading is likely.
+
+**Step 6 — Normalise message style**
+
+Convention (already followed by ~95% of messages):
+- Start with an uppercase letter.
+- Name identifiers in single quotes: `'variable_name'`.
+- Name types without quotes: `integer`, `vector<text>`.
+- Use `—` (em dash) to separate the problem from the suggestion.
+- End without a period.
+
+The two exceptions to fix:
+- `parser/control.rs:510` — `"expect variant name after '|'"` → `"Expect..."`
+- `parser/expressions.rs:765` — `"set_file_size is not defined"` → `"'set_file_size' is not defined"`
+
+**Step 7 — Add missing diagnostic coverage**
+
+| Gap | Where to add | Priority |
+|-----|-------------|----------|
+| Calling a function with wrong argument count | `parser/control.rs` `parse_method` / `parse_call` — some paths lack the count | Medium |
+| Assigning to a struct field with wrong type | `parser/expressions.rs` `towards_set` — some field-type mismatches are silent | Medium |
+| Using an undefined variable in an expression | `parser/expressions.rs` — currently returns `Type::Null` silently in some paths | Low |
+| Integer literal out of range for target type | `parser/expressions.rs` — `i32` overflow not checked at parse time | Low |
+
+**Verification checklist for each step:**
+
+Every diagnostic change must:
+- [ ] Have a test in `tests/parse_errors.rs` asserting the exact message and position
+- [ ] Not break any existing tests (`cargo test`)
+- [ ] Not introduce new `panic!` paths
+- [ ] Follow the style convention above
+
 ### Documentation
 All user-visible syntax or standard library additions must be documented in the
 appropriate `tests/docs/*.loft` file. Changes to compiler internals must be reflected
