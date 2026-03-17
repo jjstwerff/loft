@@ -19,9 +19,9 @@ fn plain_all_arms() {
         .expr(
             "d = South;
 match d {
-    North => \"N\"
-    East  => \"E\"
-    South => \"S\"
+    North => \"N\",
+    East  => \"E\",
+    South => \"S\",
     West  => \"W\"
 }",
         )
@@ -35,7 +35,7 @@ fn plain_wildcard() {
         .expr(
             "d = West;
 match d {
-    North => \"north\"
+    North => \"north\",
     _     => \"other\"
 }",
         )
@@ -49,7 +49,7 @@ fn plain_wildcard_first() {
         .expr(
             "d = North;
 match d {
-    South => \"south\"
+    South => \"south\",
     _     => \"not south\"
 }",
         )
@@ -65,8 +65,8 @@ fn plain_missing_arm() {
 fn test() {
     d = North;
     match d {
-        North => \"N\"
-        East  => \"E\"
+        North => \"N\",
+        East  => \"E\",
         South => \"S\"
     }
 }"
@@ -83,9 +83,9 @@ fn plain_as_statement() {
 pub fn label(d: Direction) -> text {
     result = \"\";
     match d {
-        North => result = \"N\"
-        East  => result = \"E\"
-        South => result = \"S\"
+        North => result = \"N\",
+        East  => result = \"E\",
+        South => result = \"S\",
         West  => result = \"W\"
     }
     result
@@ -102,8 +102,8 @@ fn plain_as_integer_value() {
         .expr(
             "p = High;
 v = match p {
-    Low    => 1
-    Medium => 5
+    Low    => 1,
+    Medium => 5,
     High   => 10
 };
 v * 2",
@@ -119,9 +119,9 @@ fn plain_in_function() {
 
 pub fn label(d: Direction) -> text {
     match d {
-        North => \"N\"
-        East  => \"E\"
-        South => \"S\"
+        North => \"N\",
+        East  => \"E\",
+        South => \"S\",
         West  => \"W\"
     }
 }"
@@ -144,7 +144,7 @@ fn struct_no_binding() {
     .expr(
         "s = Circle { radius: 3.0 };
 match s {
-    Circle => true
+    Circle => true,
     _      => false
 }",
     )
@@ -164,8 +164,8 @@ fn struct_single_field() {
     .expr(
         "s = Circle { radius: 2.0 };
 match s {
-    Circle { radius }      => radius * radius
-    Rect   { width, height } => width * height
+    Circle { radius }      => radius * radius,
+    Rect   { width, height } => width * height,
     Square { side }        => side * side
 }",
     )
@@ -185,8 +185,8 @@ fn struct_multi_field() {
     .expr(
         "s = Rect { width: 4.0, height: 5.0 };
 match s {
-    Circle { radius }        => radius * radius
-    Rect   { width, height } => width * height
+    Circle { radius }        => radius * radius,
+    Rect   { width, height } => width * height,
     Square { side }          => side * side
 }",
     )
@@ -205,8 +205,8 @@ fn struct_all_variants() {
 
 pub fn area(s: Shape) -> float {
     match s {
-        Circle { radius }        => PI * radius * radius
-        Rect   { width, height } => width * height
+        Circle { radius }        => PI * radius * radius,
+        Rect   { width, height } => width * height,
         Square { side }          => side * side
     }
 }"
@@ -233,7 +233,7 @@ fn struct_missing_arm() {
 fn test() {
     s = Circle { radius: 1.0 };
     match s {
-        Circle { radius } => radius
+        Circle { radius } => radius,
         Rect { width, height } => width * height
     }
 }"
@@ -254,9 +254,9 @@ enum Y { P, Q }"
         "x = A; y = Q;
 match x {
     A => match y {
-        P => 1
+        P => 1,
         Q => 2
-    }
+    },
     B => 0
 }",
     )
@@ -270,7 +270,7 @@ fn match_in_call() {
         .expr(
             "f = On;
 len(match f {
-    On  => \"enabled\"
+    On  => \"enabled\",
     Off => \"disabled\"
 })",
         )
@@ -302,7 +302,7 @@ fn match_type_mismatch() {
 fn test() {
     d = North;
     match d {
-        North => \"text\"
+        North => \"text\",
         _     => 42
     }
 }"
@@ -319,8 +319,8 @@ fn match_duplicate_arm() {
 fn test() {
     d = North;
     match d {
-        North => \"first\"
-        North => \"second\"
+        North => \"first\",
+        North => \"second\",
         _     => \"other\"
     }
 }"
@@ -367,8 +367,8 @@ fn match_scalar_integer() {
         "fn test() {
     x = 42;
     r = match x {
-        1  => \"one\"
-        42 => \"forty-two\"
+        1  => \"one\",
+        42 => \"forty-two\",
         _  => \"other\"
     };
     assert(r == \"forty-two\", \"r\");
@@ -383,8 +383,8 @@ fn match_scalar_text() {
         "fn test() {
     cmd = \"help\";
     r = match cmd {
-        \"quit\" => 0
-        \"help\" => 1
+        \"quit\" => 0,
+        \"help\" => 1,
         _      => -1
     };
     assert(r == 1, \"r: {r}\");
@@ -465,6 +465,22 @@ fn match_scalar_negative() {
         _  => \"other\"
     };
     assert(r == \"neg\", \"r\");
+}"
+    );
+}
+
+/// P46: block expression as match arm body — was a segfault, now works.
+#[test]
+fn match_arm_block_body() {
+    code!(
+        "fn test() {
+    x = 2;
+    r = match x {
+        1 => { 10 + 1 },
+        2 => { 20 + 2 },
+        _ => 0
+    };
+    assert(r == 22, \"r: {r}\");
 }"
     );
 }

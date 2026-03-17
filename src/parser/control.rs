@@ -322,7 +322,11 @@ impl Parser {
                 has_wildcard = true;
                 self.lexer.token("=>");
                 let mut arm_code = Value::Null;
-                let arm_type = self.expression(&mut arm_code);
+                let arm_type = if self.lexer.peek_token("{") {
+                    self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
+                } else {
+                    self.expression(&mut arm_code)
+                };
                 if result_type == Type::Void {
                     result_type = arm_type.clone();
                 } else if !self.first_pass
@@ -388,7 +392,11 @@ impl Parser {
                 }
                 self.lexer.token("=>");
                 let mut arm_code = Value::Null;
-                let arm_type = self.expression(&mut arm_code);
+                let arm_type = if self.lexer.peek_token("{") {
+                    self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
+                } else {
+                    self.expression(&mut arm_code)
+                };
                 arm_stmts.push(arm_code);
                 let block = v_block(arm_stmts, arm_type.clone(), "struct_match");
                 if result_type == Type::Void {
@@ -525,12 +533,18 @@ impl Parser {
             self.lexer.token("=>");
 
             // Parse the arm body expression.
+            // If the body starts with `{`, parse it as a scoped block so
+            // the closing `}` is not confused with the match's `}`.
             // Save/restore write tracking so writes in one arm don't cause
             // false dead-assignment warnings in sibling arms.
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let arm_type = self.expression(&mut arm_body);
+            let arm_type = if self.lexer.peek_token("{") {
+                self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
+            } else {
+                self.expression(&mut arm_body)
+            };
             self.vars.restore_write_state(&arm_write_state);
 
             // Type unification across arms.
@@ -556,7 +570,11 @@ impl Parser {
             };
 
             arms.push((Some(disc), arm_code, arm_type));
-            self.lexer.has_token(","); // optional comma between arms
+            if self.lexer.peek_token("}") {
+                self.lexer.has_token(","); // optional trailing comma
+            } else {
+                self.lexer.token(","); // comma required between arms
+            }
         }
 
         self.lexer.token("}");
@@ -661,7 +679,11 @@ impl Parser {
 
             self.lexer.token("=>");
             let mut arm_code = Value::Null;
-            let arm_type = self.expression(&mut arm_code);
+            let arm_type = if self.lexer.peek_token("{") {
+                self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
+            } else {
+                self.expression(&mut arm_code)
+            };
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -670,7 +692,11 @@ impl Parser {
                 self.lexer.has_token(","); // optional trailing comma
                 break;
             }
-            self.lexer.has_token(","); // optional comma between arms
+            if self.lexer.peek_token("}") {
+                self.lexer.has_token(","); // optional trailing comma
+            } else {
+                self.lexer.token(","); // comma required between arms
+            }
         }
         self.lexer.token("}");
 
