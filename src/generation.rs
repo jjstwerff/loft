@@ -825,6 +825,49 @@ extern crate loft;"
 
     /// Use this to emit an `if/else` expression. Handles whether branches are bare
     /// blocks (no extra braces needed) or single expressions (braces required).
+    /// Infer the result type of an expression for generating typed null defaults.
+    fn infer_type(&self, v: &Value) -> Option<Type> {
+        match v {
+            Value::Int(_) => Some(Type::Integer(i32::MIN + 1, i32::MAX as u32)),
+            Value::Long(_) => Some(Type::Long),
+            Value::Float(_) => Some(Type::Float),
+            Value::Single(_) => Some(Type::Single),
+            Value::Boolean(_) => Some(Type::Boolean),
+            Value::Text(_) => Some(Type::Text(Vec::new())),
+            Value::Enum(_, tp) => Some(Type::Enum(u32::from(*tp), false, Vec::new())),
+            Value::Var(nr) => Some(self.data.def(self.def_nr).variables.tp(*nr).clone()),
+            Value::Call(d, _) => {
+                let ret = &self.data.def(*d).returned;
+                (*ret != Type::Void).then(|| ret.clone())
+            }
+            Value::Block(bl) => (bl.result != Type::Void).then(|| bl.result.clone()),
+            Value::If(_, t, _) => self.infer_type(t),
+            _ => None,
+        }
+    }
+
+    /// Emit a typed null sentinel for the given type.
+    fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
+        match tp {
+            Type::Integer(_, _) | Type::Character => write!(w, "i32::MIN"),
+            Type::Long => write!(w, "i64::MIN"),
+            Type::Float => write!(w, "f64::NAN"),
+            Type::Single => write!(w, "f32::NAN"),
+            Type::Boolean => write!(w, "false"),
+            Type::Text(_) => write!(w, "\"\""),
+            Type::Enum(_, false, _) => write!(w, "255_u8"),
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Enum(_, true, _) => {
+                write!(w, "DbRef {{ store_nr: 0, rec: 0, pos: 0 }}")
+            }
+            _ => write!(w, "()"),
+        }
+    }
+
     fn output_if(
         &mut self,
         w: &mut dyn Write,
@@ -853,7 +896,15 @@ extern crate loft;"
             write!(w, "{{")?;
         }
         self.indent += u32::from(!b_false);
-        self.output_code_inner(w, false_v)?;
+        // When the else branch is Null and the true branch returns a value,
+        // emit a typed null sentinel instead of () to match the true branch type.
+        if matches!(false_v, Value::Null)
+            && let Some(tp) = self.infer_type(true_v)
+        {
+            Self::write_typed_null(w, &tp)?;
+        } else {
+            self.output_code_inner(w, false_v)?;
+        }
         self.indent -= u32::from(!b_false);
         if !b_false {
             write!(w, "}}")?;

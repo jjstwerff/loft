@@ -279,18 +279,18 @@ len(match f {
 
 // ── Error cases ───────────────────────────────────────────────────────────────
 
-/// match on a non-enum type is a compile-time error.
+/// match on an unsupported type (vector) is a compile-time error.
 #[test]
 fn match_non_enum() {
     code!(
         "fn test() {
-    n = 42;
-    match n {
+    v = [1, 2, 3];
+    match v {
         _ => 0
     }
 }"
     )
-    .error("match requires an enum or struct type at match_non_enum:3:14");
+    .error("match requires an enum, struct, or scalar type at match_non_enum:3:14");
 }
 
 /// Arms returning incompatible types — compile-time error.
@@ -356,6 +356,115 @@ fn test() {
         Point => 42
     };
     assert(r == 42, \"r: {r}\");
+}"
+    );
+}
+
+/// T1-14: match on integer values with literal patterns.
+#[test]
+fn match_scalar_integer() {
+    code!(
+        "fn test() {
+    x = 42;
+    r = match x {
+        1  => \"one\"
+        42 => \"forty-two\"
+        _  => \"other\"
+    };
+    assert(r == \"forty-two\", \"r\");
+}"
+    );
+}
+
+/// T1-14: match on text values.
+#[test]
+fn match_scalar_text() {
+    code!(
+        "fn test() {
+    cmd = \"help\";
+    r = match cmd {
+        \"quit\" => 0
+        \"help\" => 1
+        _      => -1
+    };
+    assert(r == 1, \"r: {r}\");
+}"
+    );
+}
+
+/// T1-14: match on boolean — exhaustive (both true and false covered).
+#[test]
+fn match_scalar_boolean() {
+    code!(
+        "fn test() {
+    flag = true;
+    r = match flag {
+        true  => \"on\",
+        false => \"off\"
+    };
+    assert(r == \"on\", \"r\");
+}"
+    );
+}
+
+/// Commas between match arms are accepted and optional.
+#[test]
+fn match_with_commas() {
+    code!("enum Direction { North, East, South, West }")
+        .expr(
+            "d = East;
+match d {
+    North => \"N\",
+    East  => \"E\",
+    South => \"S\",
+    West  => \"W\",
+}",
+        )
+        .result(Value::str("E"));
+}
+
+/// Scalar match with no matching arm and no wildcard returns null.
+#[test]
+fn match_scalar_no_match() {
+    code!(
+        "fn test() {
+    x = 99;
+    r = match x {
+        1 => 10,
+        2 => 20
+    };
+    assert(r == null, \"r should be null\");
+}"
+    );
+}
+
+/// Scalar match with a single arm.
+#[test]
+fn match_scalar_single_arm() {
+    code!(
+        "fn test() {
+    x = 5;
+    r = match x {
+        5 => \"five\"
+    };
+    assert(r == \"five\", \"r\");
+}"
+    );
+}
+
+/// Negative integer literal in match arm.
+#[test]
+fn match_scalar_negative() {
+    code!(
+        "fn test() {
+    x = -1;
+    r = match x {
+        -1 => \"neg\",
+        0  => \"zero\",
+        1  => \"pos\",
+        _  => \"other\"
+    };
+    assert(r == \"neg\", \"r\");
 }"
     );
 }

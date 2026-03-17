@@ -85,6 +85,15 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-14** — Scalar patterns in match expressions. Match subjects can now be
+  integer, long, float, single, text, boolean, or character values. Arm patterns
+  are literals; lowers to an if/else chain. Unblocks T1-15, T1-16, T1-17.
+  Three tests in `tests/match.rs`. (2026-03-17)
+
+- **N15** — Generated if-expressions without an else branch now emit typed null
+  sentinels (`i32::MIN`, `""`, `f64::NAN`, etc.) instead of `()`. Fixes ~4 compile
+  failures and ~4 runtime failures. Native: 55 compile, 49 pass. (2026-03-17)
+
 - **N18** — Fix `crate::state::` template references in generated native code.
   Substitutes with `loft::state::` so constants like `STRING_NULL` resolve
   correctly in standalone generated files. (2026-03-17)
