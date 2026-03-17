@@ -71,13 +71,13 @@ Not expected in the near term.
 Ordered by unblocking impact, batching efficiency, and value-to-effort ratio.
 Items on the same line can be done in a single PR.
 
-1. **T1-14** (scalar match) — unblocks T1-15, T1-16, T1-17, T1-19, T1-20, T1-21
-2. **N1** (template fixes) — trivial, unblocks all native codegen
-3. **N2** (stdlib in generated files) + **N5** (empty bodies) — completes simple-file compilation
-4. **T1-14 follow-ups**: T1-17 (range patterns, Small) and T1-16 (guards, Small–Med) batch well with T1-14
+1. ~~**T1-14** (scalar match)~~ done
+2. ~~**N1** (template fixes)~~ done
+3. ~~**N2** + **N5**~~ done
+4. ~~**T1-17** (range patterns) and **T1-16** (guards)~~ done
 5. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
 6. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-7. **T2-7 + T2-8** (stdlib: mkdir + vector ops) — batch into one PR, both Small
+7. **T2-8** (stdlib: vector ops) — reverse + insert remain
 8. **N4** (iterators) + **N6** (compile gate) — completes native codegen
 9. **T1-23 + T3-6** (shadowing + redundant const) — batch two Small warning items
 
@@ -100,18 +100,6 @@ call context.  See PROBLEMS #44 for details.
 ---
 
 ---
-
----
-
-### T1-16  Guard clauses (`if`) in `match` arms
-**Sources:** [MATCH.md](MATCH.md) — T1-16
-**Severity:** Medium — without guards, per-arm conditions require a nested `if` inside the arm body and cannot affect exhaustiveness
-**Description:** `Circle { r } if r > 0.0 => ...` — optional boolean guard after a pattern.  Guard failure falls through to the next arm.  Guarded arms do not contribute to exhaustiveness coverage.
-**Fix path:** See [MATCH.md#t1-16](MATCH.md#t1-16-guard-clauses-if) for full design.
-Parse optional `if expr` after pattern; emit `If(pattern_cmp, If(guard, body, chain_rest), chain_rest)` with chain_rest cloned.
-**Effort:** Small–Medium (parser/control.rs — guard parsing + chain-building change)
-**Depends on:** T1-14
-**Target:** 1.1
 
 ---
 
@@ -470,70 +458,6 @@ optional dependency; new `plugin-api` workspace member).
 
 ---
 
-### T3-9  Scoped scratch reset for native text functions
-**Sources:** String architecture review 2026-03-16
-**Severity:** Low — `Stores.scratch: Vec<String>` (`database/mod.rs:118`) accumulates every
-owned `String` produced by `replace()`, `to_lowercase()`, `to_uppercase()` for the entire
-`execute()` run; a loop calling `text.replace()` 1M times leaks 1M `String` objects
-**Description:** The scratch buffer exists because these three native functions create new owned
-`String` values that must outlive the function call (the caller receives a `Str` raw-pointer
-into the `String`).  Currently `scratch` is only cleared at the start of each `execute()` call
-(`database/mod.rs:360`).  The fix: clear scratch at statement boundaries, when no `Str` can
-still point into it.
-
-**Current flow (for `text.replace`):**
-```
-native.rs:280  new_value = v_self.str().replace(...)   // create owned String
-native.rs:281  stores.scratch.push(new_value)          // park in scratch
-native.rs:282  Str { ptr → scratch.last(), len }       // return borrowed Str
-               ↓
-codegen.rs:956 OpAppendText(work_var, Str)             // consume: append into __work_N
-               — Str is now dead, scratch entry is waste —
-```
-
-The `Str` returned from a scratch-backed native is always consumed within the same
-expression — appended into a mutable `String` (work-text variable or assignment target)
-or stored into a struct field via `set_str()` (which copies bytes into the store).  By the
-time the next statement begins, no live `Str` points into `scratch`.
-
-**Fix path:**
-1. **Verify the invariant** — audit every call site that receives a `Str` from a
-   scratch-backed native (`t_4text_replace`, `t_4text_to_lowercase`,
-   `t_4text_to_uppercase` in `native.rs:276-321`).  Confirm that the returned `Str` is
-   consumed (appended/copied) before the next `OpLine` / statement boundary.
-   - `codegen.rs:956` — `OpAppendText` / `OpAppendStackText` immediately copies the
-     `Str` content into the destination `String`.
-   - `fill.rs:1578` — `set_text` calls `store.set_str(&s_val)` which copies bytes into
-     the store record.
-   - Both paths copy the data; neither holds the `Str` across a statement boundary.
-2. **Add `OpClearScratch`** — a new zero-operand opcode that calls
-   `self.database.scratch.clear()`.
-   - `fill.rs`: add handler: `fn clear_scratch(s: &mut State) { s.database.scratch.clear(); }`
-   - `data.rs`: register opcode name in the `OpConv` / `OPERATORS` table.
-3. **Emit `OpClearScratch` after each statement** — in `codegen.rs`, at the point where
-   `OpLine` is emitted (marks a new source line / statement boundary), also emit
-   `OpClearScratch`.  This is the simplest insertion point; it adds one byte per statement
-   to the bytecode stream (negligible).
-4. **Remove the `scratch.clear()` call at `execute()` start** — no longer needed since
-   scratch is cleared per-statement.
-5. **Test** — write a test that calls `text.replace()` in a loop 100k times and asserts
-   memory does not grow (measure `scratch.capacity()` before/after, or simply check that
-   `scratch.len() <= 1` at a statement boundary).
-
-**Alternative REJECTED (2026-03-17):** Clearing scratch at the top of the interpreter
-main loop (before each opcode dispatch) was attempted and breaks `Str` lifetimes.
-A `Str` returned from a scratch-backed native (e.g. `to_uppercase`) is NOT consumed
-by the very next opcode — there can be multiple opcodes between the scratch push and
-the `OpAppendText` that copies the content.  Clearing scratch between opcodes
-invalidates the `Str` pointer before it is consumed, causing `to_uppercase` and
-`replace` tests to fail.  The `OpClearScratch` opcode approach (emitted at statement
-boundaries) is the only correct solution.
-
-**Effort:** Small (new opcode + emit in codegen; NOT trivial as originally estimated)
-**Target:** 1.1
-
----
-
 ### T3-10  Destination-passing for text-returning native functions
 **Sources:** String architecture review 2026-03-16
 **Severity:** Low — eliminates the scratch buffer entirely; also removes one intermediate
@@ -633,7 +557,7 @@ Stack after call:   [ ]   // result already written to dest
   returning text should use `TextDest` from the start.
 
 **Effort:** Medium–High (compiler calling-convention change + 3 native rewrites + codegen)
-**Depends on:** T3-9 (recommended to implement the trivial fix first; T3-10 supersedes it)
+**Depends on:** T3-9 (done 2026-03-17)
 **Target:** 1.1+
 
 ---
@@ -862,7 +786,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
-| T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
@@ -881,8 +804,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-4  | Spatial index operations (full implementation)           | 3    | High      | 1.1+    |             | PROBLEMS #22               |
 | T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
 | T3-6  | Redundant `const` parameter annotation                   | 3    | Small–Med | 1.1+    |             | Warnings audit 2026-03-15  |
-| T3-9  | Scoped scratch reset for native text functions            | 3    | Trivial   | 1.1     |             | String arch review         |
-| T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
+| T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9 (done) | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
 | N8    | `--native` CLI flag                                     | N    | Medium    | 1.1+    | N11–N19     | NATIVE.md                  |
