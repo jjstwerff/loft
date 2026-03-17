@@ -167,3 +167,13 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: i32) -> DbRef {
         }
     }
 }
+
+/// Deep-copy a database record: copies the raw bytes and duplicates
+/// all owned sub-structures (text fields, vectors, etc.).
+/// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.
+pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
+    let tp = tp as u16;
+    let size = u32::from(stores.size(tp));
+    stores.copy_block(&data, &to, size);
+    stores.copy_claims(&data, &to, tp);
+}
