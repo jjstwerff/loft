@@ -14,7 +14,16 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="null-sentinels">Null sentinels</h2>
 <p>Every type uses a special in-band value to represent null. The value depends on the type:</p>
-<p>| Type        | Null sentinel               | |-------------|-----------------------------| | `boolean`   | `false`                     | | `integer`   | `i32::MIN` (-2 147 483 648) | | `long`      | `i64::MIN`                  | | `float`     | `NaN`                       | | `single`    | `NaN` (32-bit)              | | `character` | NUL (`'\0'`)                | | `text`      | internal null pointer       | | `reference` | record 0                    | | plain `enum`| byte 255                    |</p>
+<ul>
+<li>`boolean` uses `false`</li>
+<li>`integer` uses `i32::MIN` (-2 147 483 648)</li>
+<li>`long` uses `i64::MIN`</li>
+<li>`float` and `single` use `NaN`</li>
+<li>`character` uses the NUL character</li>
+<li>`text` uses an internal null pointer</li>
+<li>`reference` uses record 0</li>
+<li>plain `enum` uses byte 255 (limits enums to 255 variants)</li>
+</ul>
 <p>This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:</p>
 <pre><code>  zero = <span class="nm">0</span>;
   n = <span class="nm">1</span> / zero;
@@ -23,9 +32,9 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
-<p>**Mitigation:** Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.</p>
+<p>Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
-<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number **Mitigation:** Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
+<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> + big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> == <span class="nm">4000000000l</span>, <span class="st">"long avoids wrap"</span>);</code></pre>
 <h2 id="shift-by-zero-produces-null">Shift by zero produces null</h2>
@@ -35,18 +44,18 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> ^ <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"XOR with 0: identity"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">5</span> &lt;&lt; <span class="nm">0</span>), <span class="st">"shift by 0 is null, not 5"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">5</span> &gt;&gt; <span class="nm">0</span>), <span class="st">"right-shift by 0 is also null"</span>);</code></pre>
-<p>**Mitigation:** Guard shift amounts: `if n &gt; 0 { x &lt;&lt; n } else { x }`.</p>
+<p>Mitigation: Guard shift amounts: `if n &gt; 0 { x &lt;&lt; n } else { x }`.</p>
 <h2 id="float-null-is-nan">Float null is NaN</h2>
 <p>Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is not equal to itself. The language hides this behind `!f`, but direct comparisons can still surprise you.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"NaN is falsy — this is how you detect null floats"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(bad == bad), <span class="st">"NaN != NaN — IEEE 754 rule leaks through"</span>);</code></pre>
-<p>**Mitigation:** Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.</p>
+<p>Mitigation: Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.</p>
 <h2 id="text-length-counts-bytes-not-characters">Text length counts bytes, not characters</h2>
 <p>`len()` on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.</p>
 <pre><code>  emoji = <span class="st">"Hi 😊!"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"5 visible chars but 8 bytes (emoji is 4 bytes)"</span>);</code></pre>
-<p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. **Mitigation:** Use `for c in text` to iterate by character. Use `c#index` and `c#next` to get the byte boundaries of each character.</p>
+<p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use `for c in text` to iterate by character. Use `c#index` and `c#next` to get the byte boundaries of each character.</p>
 <pre><code>  count = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> emoji { count += <span class="nm">1</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(count == <span class="nm">5</span>, <span class="st">"for-loop iterates by character, not byte"</span>);</code></pre>
@@ -62,7 +71,7 @@
   <span class="kw">for</span> c <span class="kw">in</span> t { byte_pos = c#<span class="ty">index</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(byte_pos == <span class="nm">1</span>, <span class="st">"text #index: byte offset of 'é' (byte 1, not char 1)"</span>);</code></pre>
 <h2 id="evaluates-the-left-side-twice-for-complex-expressions">`??` evaluates the left side twice for complex expressions</h2>
-<p>The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. **Mitigation:** Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;</p>
+<p>The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;</p>
 <p>// FAST: call only once temp = expensive_call(); result = temp ?? default; ```</p>
 <h2 id="text-indexing-and-slicing-return-different-types">Text indexing and slicing return different types</h2>
 <p>`txt[i]` returns a `character` (a single Unicode scalar value). `txt[i..j]` returns `text` (a UTF-8 string). These are different types.</p>
@@ -89,11 +98,13 @@
 <p>Using `if` as a value expression without an `else` clause silently returns null when the condition is false. No compile error is raised.</p>
 <pre><code>  maybe = <span class="kw">if</span> <span class="nm">1</span> &gt; <span class="nm">10</span> { <span class="st">"yes"</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!maybe, <span class="st">"missing else: result is null, not an error"</span>);</code></pre>
-<p>Match expressions, by contrast, require exhaustiveness or a wildcard. **Mitigation:** Always write an else clause when using if as a value.</p>
+<p>Match expressions, by contrast, require exhaustiveness or a wildcard. Mitigation: Always write an else clause when using if as a value.</p>
 <h2 id="match-guards-do-not-count-for-exhaustiveness">Match guards do not count for exhaustiveness</h2>
 <p>A guarded arm like `Red if cond =&gt; ...` does not mark the variant as covered. Even if every variant has a guarded arm, you still need a wildcard `_` or unguarded arm to satisfy the exhaustiveness check.</p>
 <h2 id="ref-parameter-semantics">Ref-parameter semantics</h2>
-<p>Without `&amp;`, appending to a vector parameter is local — the caller's vector does not grow. With `&amp;`, the caller sees the new elements. Field-level mutations (e.g. `v[i].field = x`) are always visible to the caller because both sides share the same underlying database reference. **Rule of thumb:** Use `&amp;vector&lt;T&gt;` when the function needs to grow the vector. Use plain `vector&lt;T&gt;` when the function only reads or modifies existing elements.</p>
+<p>Without `&amp;`, appending to a vector parameter is local — the caller's vector does not grow. With `&amp;`, the caller sees the new elements. Field-level mutations (e.g. `v[i].field = x`) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use `&amp;vector&lt;T&gt;` when the function needs to grow the vector. Use plain `vector&lt;T&gt;` when the function only reads or modifies existing elements.</p>
+<h2 id="file-i-o-assumes-utf-8">File I/O assumes UTF-8</h2>
+<p>All file reading in loft assumes the file content is valid UTF-8. Reading a binary file or a file in a different encoding (e.g. Latin-1) will crash the program at runtime. There is currently no way to read raw bytes. Mitigation: Only read files you know to be UTF-8. If you need to process binary data, convert it to UTF-8 externally before passing it to loft.</p>
 <h2 id="xor-is-not-exponentiation">XOR is `^`, not exponentiation</h2>
 <p>Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. Use the `pow()` function for exponentiation.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);

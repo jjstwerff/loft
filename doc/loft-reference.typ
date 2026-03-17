@@ -3503,7 +3503,14 @@ fn main() {
 
 Every type uses a special in-band value to represent null. The value depends on the type:
 
-| Type        | Null sentinel               | |-------------|-----------------------------| | `boolean`   | `false`                     | | `integer`   | `i32::MIN` (-2 147 483 648) | | `long`      | `i64::MIN`                  | | `float`     | `NaN`                       | | `single`    | `NaN` (32-bit)              | | `character` | NUL (`'\\0'`)                | | `text`      | internal null pointer       | | `reference` | record 0                    | | plain `enum`| byte 255                    |
+- `boolean` uses `false`
+- `integer` uses `i32::MIN` (-2 147 483 648)
+- `long` uses `i64::MIN`
+- `float` and `single` use `NaN`
+- `character` uses the NUL character
+- `text` uses an internal null pointer
+- `reference` uses record 0
+- plain `enum` uses byte 255 (limits enums to 255 variants)
 
 This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:
 
@@ -3521,11 +3528,11 @@ Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
 ```
 
-\*\*Mitigation:\*\* Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.
+Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.
 
 === Integer overflow wraps silently
 
-32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number \*\*Mitigation:\*\* Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.
+32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.
 
 ```rust
   big = 2000000000;
@@ -3544,7 +3551,7 @@ Bitwise AND, OR, and XOR with zero return the expected identity value. Shift ope
   assert(!(5 >> 0), "right-shift by 0 is also null");
 ```
 
-\*\*Mitigation:\*\* Guard shift amounts: `if n \> 0 { x \<\< n } else { x }`.
+Mitigation: Guard shift amounts: `if n \> 0 { x \<\< n } else { x }`.
 
 === Float null is NaN
 
@@ -3556,7 +3563,7 @@ Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is not equal t
   assert(!(bad == bad), "NaN != NaN — IEEE 754 rule leaks through");
 ```
 
-\*\*Mitigation:\*\* Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.
+Mitigation: Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.
 
 === Text length counts bytes, not characters
 
@@ -3567,7 +3574,7 @@ Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is not equal t
   assert(len(emoji) == 8, "5 visible chars but 8 bytes (emoji is 4 bytes)");
 ```
 
-Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. \*\*Mitigation:\*\* Use `for c in text` to iterate by character. Use `c\#index` and `c\#next` to get the byte boundaries of each character.
+Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use `for c in text` to iterate by character. Use `c\#index` and `c\#next` to get the byte boundaries of each character.
 
 ```rust
   count = 0;
@@ -3597,7 +3604,7 @@ Text \#index is a byte offset, not a character count:
 
 === `??` evaluates the left side twice for complex expressions
 
-The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. \*\*Mitigation:\*\* Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;
+The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;
 
 // FAST: call only once temp = expensive_call(); result = temp ?? default; ```
 
@@ -3650,7 +3657,7 @@ Using `if` as a value expression without an `else` clause silently returns null 
   assert(!maybe, "missing else: result is null, not an error");
 ```
 
-Match expressions, by contrast, require exhaustiveness or a wildcard. \*\*Mitigation:\*\* Always write an else clause when using if as a value.
+Match expressions, by contrast, require exhaustiveness or a wildcard. Mitigation: Always write an else clause when using if as a value.
 
 === Match guards do not count for exhaustiveness
 
@@ -3658,7 +3665,11 @@ A guarded arm like `Red if cond =\> ...` does not mark the variant as covered. E
 
 === Ref-parameter semantics
 
-Without `&`, appending to a vector parameter is local — the caller's vector does not grow. With `&`, the caller sees the new elements. Field-level mutations (e.g. `v\[i\].field = x`) are always visible to the caller because both sides share the same underlying database reference. \*\*Rule of thumb:\*\* Use `&vector\<T\>` when the function needs to grow the vector. Use plain `vector\<T\>` when the function only reads or modifies existing elements.
+Without `&`, appending to a vector parameter is local — the caller's vector does not grow. With `&`, the caller sees the new elements. Field-level mutations (e.g. `v\[i\].field = x`) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use `&vector\<T\>` when the function needs to grow the vector. Use plain `vector\<T\>` when the function only reads or modifies existing elements.
+
+=== File I/O assumes UTF-8
+
+All file reading in loft assumes the file content is valid UTF-8. Reading a binary file or a file in a different encoding (e.g. Latin-1) will crash the program at runtime. There is currently no way to read raw bytes. Mitigation: Only read files you know to be UTF-8. If you need to process binary data, convert it to UTF-8 externally before passing it to loft.
 
 === XOR is `^`, not exponentiation
 
