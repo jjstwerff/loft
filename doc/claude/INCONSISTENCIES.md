@@ -81,20 +81,25 @@ Remaining API gaps (slicing, comprehension) are structural and not planned.
 ```loft
 txt = "12😊🙃45"
 for c in txt {
-    c#index   // byte offset AFTER the iterator has advanced (post-advance)
-    c#next    // byte offset after this character — the "next" position
+    c#index   // UTF-8 byte offset of the START of this character (pre-advance)
+    c#next    // byte offset AFTER this character — where the next character begins
+    c#count   // 0-based character position (counts whole characters)
 }
 
 for v in vec {
     v#index   // 0-based element position (counts whole elements)
+    v#count   // same as v#index for vectors
     // no v#next
 }
 ```
 
-Both are called `#index` but one is a byte offset and the other is an element count.
-The text form has an additional `#next` helper that vectors don't need. A programmer
-expecting "position of the current item" will get a byte offset on text, not a character
-count.
+Both use `#index` but the semantics differ: on text it is a **UTF-8 byte offset**
+(useful for slicing `txt[c#index..c#next]`), on vectors it is an **element position**.
+Use `c#count` for a 0-based character count that matches vector `v#index` semantics.
+
+Note: the text `c#index` value equals `c#count` only for ASCII text (one byte per
+character). For multi-byte characters (emoji, CJK, accented letters), the byte offset
+advances by 2–4 per character.
 
 ---
 
