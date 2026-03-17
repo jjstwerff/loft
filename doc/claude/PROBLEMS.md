@@ -27,6 +27,7 @@ recommended fix path are described.
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
 | 45 | `&vector` parameter triggers "never modified" for clear-like ops | Low | Declare without `&` |
+| 46 | Block `{ ... }` as match arm body causes segfault | Low | Use parentheses instead |
 
 ---
 
@@ -755,6 +756,32 @@ path does when `block = true`.  The difficulty is that `assign_tp` (the element 
 second pass or this path must be deferred until the call-site type is known.
 
 **Effort:** Medium (parser change; requires careful handling of the Unknown element type)
+
+---
+
+### 46. Block expression `{ ... }` as match arm body causes segfault
+
+**Symptom:** Using a block expression as a match arm body crashes at runtime:
+```loft
+match x {
+    1 => { 10 + 1 },   // segfault
+    _ => 0
+}
+```
+
+**Workaround:** Use parentheses or a function call instead of a block:
+```loft
+match x {
+    1 => (10 + 1),      // works
+    _ => 0
+}
+```
+
+**Root cause:** The expression parser sees `{` and starts parsing a block, but
+the closing `}` is ambiguous — it could be the block's end or the match's end.
+
+**Impact:** Low — block bodies in match arms are uncommon; parentheses or
+function calls achieve the same result.
 
 ---
 
