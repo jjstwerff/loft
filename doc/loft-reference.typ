@@ -3491,6 +3491,186 @@ Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - 
 ```
 
 
+= Safety
+
+Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.
+
+```rust
+fn main() {
+```
+
+=== Null sentinels
+
+Every type uses a special in-band value to represent null. The value depends on the type:
+
+| Type        | Null sentinel               | |-------------|-----------------------------| | `boolean`   | `false`                     | | `integer`   | `i32::MIN` (-2 147 483 648) | | `long`      | `i64::MIN`                  | | `float`     | `NaN`                       | | `single`    | `NaN` (32-bit)              | | `character` | NUL (`'\\0'`)                | | `text`      | internal null pointer       | | `reference` | record 0                    | | plain `enum`| byte 255                    |
+
+This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:
+
+```rust
+  zero = 0;
+  n = 1 / zero;
+  assert(!n, "div-by-zero is null");
+  assert(n != 0, "null sentinel is not zero; it is i32::MIN");
+  assert(n < 0, "i32::MIN is the most negative 32-bit integer");
+```
+
+Arithmetic on null propagates: null plus anything is null.
+
+```rust
+  assert(!(n + 1), "null + 1 is still null");
+```
+
+\*\*Mitigation:\*\* Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.
+
+=== Integer overflow wraps silently
+
+32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number \*\*Mitigation:\*\* Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.
+
+```rust
+  big = 2000000000;
+  assert(big as long + big as long == 4000000000l, "long avoids wrap");
+```
+
+=== Shift by zero produces null
+
+Bitwise AND, OR, and XOR with zero return the expected identity value. Shift operators, however, treat a zero shift amount as a null operand and return null instead of the original value.
+
+```rust
+  assert(0b1010 & 0 == 0, "AND with 0: identity");
+  assert(0b1010 | 0 == 0b1010, "OR with 0: identity");
+  assert(0b1010 ^ 0 == 0b1010, "XOR with 0: identity");
+  assert(!(5 << 0), "shift by 0 is null, not 5");
+  assert(!(5 >> 0), "right-shift by 0 is also null");
+```
+
+\*\*Mitigation:\*\* Guard shift amounts: `if n \> 0 { x \<\< n } else { x }`.
+
+=== Float null is NaN
+
+Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is not equal to itself. The language hides this behind `!f`, but direct comparisons can still surprise you.
+
+```rust
+  bad = 0.0 / 0.0;
+  assert(!bad, "NaN is falsy — this is how you detect null floats");
+  assert(!(bad == bad), "NaN != NaN — IEEE 754 rule leaks through");
+```
+
+\*\*Mitigation:\*\* Always use `!f` or `f ?? default` to check for null floats, never `f == null` or `f != f`.
+
+=== Text length counts bytes, not characters
+
+`len()` on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.
+
+```rust
+  emoji = "Hi 😊!";
+  assert(len(emoji) == 8, "5 visible chars but 8 bytes (emoji is 4 bytes)");
+```
+
+Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. \*\*Mitigation:\*\* Use `for c in text` to iterate by character. Use `c\#index` and `c\#next` to get the byte boundaries of each character.
+
+```rust
+  count = 0;
+  for c in emoji { count += 1; }
+  assert(count == 5, "for-loop iterates by character, not byte");
+```
+
+=== `\#index` means different things on text and vectors
+
+On a text loop, `c\#index` is the byte offset of the current character. On a vector loop, `v\#index` is the 0-based element position. Both are called `\#index` but represent different units.
+
+```rust
+  v = [10, 20, 30];
+  idx = 0;
+  for x in v { idx = x#index; }
+  assert(idx == 2, "vector #index: element position (0-based)");
+```
+
+Text \#index is a byte offset, not a character count:
+
+```rust
+  t = "aé";
+  byte_pos = 0;
+  for c in t { byte_pos = c#index; }
+  assert(byte_pos == 1, "text #index: byte offset of 'é' (byte 1, not char 1)");
+```
+
+=== `??` evaluates the left side twice for complex expressions
+
+The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. \*\*Mitigation:\*\* Assign complex expressions to a temporary variable first. ```loft // SLOW: expensive_call() runs twice result = expensive_call() ?? default;
+
+// FAST: call only once temp = expensive_call(); result = temp ?? default; ```
+
+=== Text indexing and slicing return different types
+
+`txt\[i\]` returns a `character` (a single Unicode scalar value). `txt\[i..j\]` returns `text` (a UTF-8 string). These are different types.
+
+```rust
+  txt = "hello";
+  ch = txt[0];
+  slice = txt[0..1];
+  assert(ch == 'h', "indexing returns a character");
+  assert(slice == "h", "slicing returns text");
+```
+
+Building text from characters requires format interpolation:
+
+```rust
+  result = "";
+  for c in "abc" { result += "{c}"; }
+  assert(result == "abc", "characters must be formatted into text");
+```
+
+=== Format strings: braces are always interpreted
+
+Every string literal in loft is a format string. Literal braces must be escaped as `{{` and `}}`:
+
+```rust
+  n = 42;
+  assert("{n}" == "42", "single braces: format expression");
+  assert(len("{{}}") == 2, "double braces produce literal brace chars");
+```
+
+Forgetting to escape braces in expected output is a common mistake in assertions and comparisons.
+
+=== Hash collections cannot be iterated
+
+Hashes are lookup structures, not ordered collections. You cannot write `for item in my_hash { }`. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.
+
+=== Mutation guard blocks appending during iteration
+
+The compiler prevents `v += \[x\]` inside `for e in v`. This protects against infinite loops. The guard also catches field access: `for e in db.items { db.items += \[x\]; }` is blocked too. The only allowed mutation is `e\#remove` inside a filtered loop.
+
+=== If-expression without else produces null
+
+Using `if` as a value expression without an `else` clause silently returns null when the condition is false. No compile error is raised.
+
+```rust
+  maybe = if 1 > 10 { "yes" };
+  assert(!maybe, "missing else: result is null, not an error");
+```
+
+Match expressions, by contrast, require exhaustiveness or a wildcard. \*\*Mitigation:\*\* Always write an else clause when using if as a value.
+
+=== Match guards do not count for exhaustiveness
+
+A guarded arm like `Red if cond =\> ...` does not mark the variant as covered. Even if every variant has a guarded arm, you still need a wildcard `_` or unguarded arm to satisfy the exhaustiveness check.
+
+=== Ref-parameter semantics
+
+Without `&`, appending to a vector parameter is local — the caller's vector does not grow. With `&`, the caller sees the new elements. Field-level mutations (e.g. `v\[i\].field = x`) are always visible to the caller because both sides share the same underlying database reference. \*\*Rule of thumb:\*\* Use `&vector\<T\>` when the function needs to grow the vector. Use plain `vector\<T\>` when the function only reads or modifies existing elements.
+
+=== XOR is `^`, not exponentiation
+
+Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. Use the `pow()` function for exponentiation.
+
+```rust
+  assert((0b1010 ^ 0b1100) == 0b0110, "^ is XOR");
+  assert(pow(2.0, 3.0) == 8.0, "use pow() for power");
+}
+```
+
+
 = Standard Library
 
 == Types
