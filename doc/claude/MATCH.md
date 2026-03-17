@@ -243,6 +243,7 @@ If(OpEqInt(OpConvIntFromEnum(OpGetEnum(Var(shape), 0)), 1),
 | `match` as a statement | Arms may be void; result is dropped |
 | Nested `match` inside an arm body | Works via recursive `expression()` call |
 | `null` subject | Plain enum: discriminant is 0; no arm matches (falls through to wildcard or null result). Struct enum: `OpGetEnum` on a null reference returns the null sentinel. |
+| Guarded arm exhaustiveness | A guarded arm (`Variant if cond => ...`) does **not** count as covering that variant for exhaustiveness. The guard may fail at runtime, so a wildcard `_` or unguarded arm is still required. This matches Rust's behaviour. (INCONSISTENCIES #26) |
 
 ---
 

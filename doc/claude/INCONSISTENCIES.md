@@ -10,23 +10,29 @@ Low = cosmetic or minor. Where a path to resolution is obvious it is included.
 ---
 
 ## Contents
-- [~~1. `const` Has Two Different Meanings~~ **FIXED**](#1-const-has-two-different-meanings--fixed-2026-03-14)
+
+**Open**
 - [2. Vector Has a Much Richer API Than Sorted / Index / Hash](#2-vector-has-a-much-richer-api-than-sorted--index--hash)
 - [3. Loop Attribute `#index` Has Different Semantics on Text vs. Vector](#3-loop-attribute-index-has-different-semantics-on-text-vs-vector)
-- [~~6. Plain Enums Cannot Have Methods; Struct-Enum Variants Can~~ **RESOLVED 2026-03-16**](#6-plain-enums-cannot-have-methods-struct-enum-variants-can--resolved-2026-03-16)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
 - [9. Text/Character Split: Indexing and Slicing Return Different Types](#9-textcharacter-split-indexing-and-slicing-return-different-types)
 - [10. Null Sentinel Values Vary Invisibly by Type](#10-null-sentinel-values-vary-invisibly-by-type)
-- [11. Reverse Iteration Works on Ranges and Vectors but Panics on Sorted/Index](#11-reverse-iteration-works-on-ranges-and-vectors-but-panics-on-sortedindex)
 - [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
-- [~~13. Library Definitions Always Require `libname::` Prefix~~ **FIXED**](#13-library-definitions-always-require-libname-prefix--fixed-2026-03-16)
-- [14. Format Strings: Nested Literals Fail (Zero-Pad Fixed)](#14-format-strings-nested-literals-fail-zero-pad-fixed)
-- [~~15. `fn <name>` Function References Only Work in `par(...)` Context~~ **FIXED**](#15-fn-name-function-references-only-work-in-par-context--fixed-2026-03-15)
-- [~~16. `Format` Enum Mixes File Mode With Absence~~ **FIXED**](#16-format-enum-mixes-file-mode-with-absence--fixed-2026-03-14)
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [23. `sizeof(u8)` / `sizeof(u16)` Return the Stack Size, Not the Byte-Packed Size](#23-sizeofu8--sizeofou16-return-the-stack-size-not-the-byte-packed-size)
-- [24. ~~For-loop Mutation Guard Only Catches Direct Variable Append~~ **FIXED**](#24-for-loop-mutation-guard-only-catches-direct-variable-append--fixed-2026-03-14)
+- [25. If-Expression Without `else` Silently Generates a Null Branch](#25-if-expression-without-else-silently-generates-a-null-branch)
+- [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
+
+**Fixed**
+- [~~1. `const` Has Two Different Meanings~~ **FIXED**](#1-const-has-two-different-meanings--fixed-2026-03-14)
+- [~~6. Plain Enums Cannot Have Methods~~ **RESOLVED**](#6-plain-enums-cannot-have-methods-struct-enum-variants-can--resolved-2026-03-16)
+- [~~11. Reverse Iteration Panics on Sorted/Index~~ **FIXED**](#11-reverse-iteration-works-on-ranges-and-vectors-but-panics-on-sortedindex)
+- [~~13. Library Definitions Require `libname::` Prefix~~ **FIXED**](#13-library-definitions-always-require-libname-prefix--fixed-2026-03-16)
+- [~~14. Format Strings: Nested Literals~~ **FIXED**](#14-format-strings-nested-literals-fail-zero-pad-fixed)
+- [~~15. `fn <name>` Function References~~ **FIXED**](#15-fn-name-function-references-only-work-in-par-context--fixed-2026-03-15)
+- [~~16. `Format` Enum Mixes File Mode With Absence~~ **FIXED**](#16-format-enum-mixes-file-mode-with-absence--fixed-2026-03-14)
+- [~~24. For-loop Mutation Guard~~ **FIXED**](#24-for-loop-mutation-guard-only-catches-direct-variable-append--fixed-2026-03-14)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -458,43 +464,71 @@ to consult the type's declared limit range rather than the underlying storage cl
 
 ---
 
+## 25. If-Expression Without `else` Silently Generates a Null Branch
+
+**Severity: Low**
+
+```loft
+r = if 3 > 10 { "yes" };   // r is null — implicit else branch added by compiler
+```
+
+When an if-expression (used as a value) has no `else` clause, the parser silently
+generates an else branch containing a typed null (`control.rs:234-238`). This is safe
+and convenient, but creates an asymmetry:
+
+- **`match`** expressions require explicit exhaustiveness — every variant must be covered
+  or a wildcard `_` arm must be present.
+- **`if`** expressions silently fill in the missing branch with null.
+
+A programmer might assume that a one-armed `if` used as a value would be a compile error
+(like a non-exhaustive `match`), but instead it silently produces null.
+
+---
+
+## 26. Match Exhaustiveness Ignores Guarded Arms
+
+**Severity: Medium**
+
+```loft
+match c {
+    Red if some_cond => "red",     // does NOT count as covering Red
+    Green => "green",
+    Blue => "blue",
+    _ => "fallback"                // still required even though Red has an arm
+}
+```
+
+A guarded arm (`pattern if guard => body`) does not count as covering that variant for
+exhaustiveness checking (`control.rs:582`). This is correct — the guard might fail at
+runtime — but it means a programmer who writes guards on every variant still needs a
+wildcard arm or will get a non-exhaustive error. The interaction between guards and
+exhaustiveness is not obvious from the syntax.
+
+---
+
 ## Summary by Severity
 
 ### High (silent wrong behaviour)
-| # | Issue |
-|---|---|
-| ~~4~~ | ~~`&` ref-param: vector `+=` silently discards new elements~~ **FIXED** |
-| ~~5~~ | ~~Empty vector field: `b.items += [x]` silently no-ops~~ **FIXED** |
-| ~~7~~ | ~~Polymorphic text methods on struct-enum variants cause runtime crash~~ **FIXED** |
-| ~~19~~ | ~~`for c in enum_vector` loops infinitely~~ **FIXED** |
-| ~~21~~ | ~~`a ^ 0`, `a \| 0`, `a & 0` all return null instead of the correct value~~ **FIXED** |
-| ~~22~~ | ~~Missing polymorphic method: direct call panics compiler; polymorphic call returns garbage~~ **FIXED** |
+_All fixed._
 
 ### Medium (surprising but safe)
 | # | Issue |
 |---|---|
-| 1 | `const` on params = compile-time check; `const` on locals = debug-only runtime lock |
-| 2 | `#first`/`#index`/`#remove` availability on sorted/index/hash not documented |
 | 3 | `#index` is byte-offset on text, element-position on vector |
-| 6 | Plain enums cannot have methods; struct-enum variants can |
 | 10 | Null sentinels vary by type; `i32::MIN` is ambiguous with legitimate arithmetic |
-| ~~11~~ | ~~`rev()` works on vector; panics on sorted/index~~ **FIXED** |
 | 12 | Index range-query second-key boundary depends on undeclared sort direction |
-| 14 | Nested string literals in format expressions fail; `{-1:03}` → `"0-1"` not `"-01"` |
-| 15 | `fn <name>` function references only consumable by `par(...)` |
+| 26 | Match exhaustiveness ignores guarded arms — wildcard still required |
 
 ### Low (cosmetic or minor)
 | # | Issue |
 |---|---|
+| 2 | `#first`/`#index`/`#remove` availability varies by collection type |
 | 8 | Method vs. free function assignment is arbitrary in the standard library |
 | 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
-| ~~13~~ | ~~No wildcard import; `libname::` prefix always required~~ **FIXED** |
-| 16 | `Format` enum includes `NotExists` (absence mixed with file mode) |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
-| 20 | Enum `>`, `<=`, `>=` operators work but are not documented |
 | 23 | `sizeof(u8)` returns 4 (stack size), not 1 (field byte size) |
-| ~~24~~ | ~~For-loop mutation guard only catches direct variable append; field access bypasses it~~ **FIXED** |
+| 25 | If-expression without `else` silently generates null; match requires exhaustiveness |
 
 ---
 
