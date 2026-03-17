@@ -688,30 +688,6 @@ these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### N4  Handle `Value::Iter` and `Value::Keys` in code generation
-**Description:** Add match arms in `output_code_inner()` for `Value::Iter` (emit
-loop using `codegen_runtime::op_iterate/op_step`) and `Value::Keys` (emit key
-array literal).
-**Effort:** Medium (generation.rs + codegen_runtime.rs)
-**Depends on:** N3
-**Eliminates:** ~11 compilation errors; iterator tests compile
-
----
-
-### N5  Skip or fix empty native function bodies
-**Description:** In `output_function()`, skip emitting operator functions that are
-inlined via `#rust` templates and native functions with no IR body.  Add missing
-`#rust` templates where needed.
-**Effort:** Small (generation.rs + default/01_code.loft)
-**Eliminates:** remaining ~50 errors; all files compile
-
----
-
-### N6  Add compilation gate test
-**Description:** Add a test that compiles a representative generated file with
-`rustc` to prevent regressions.
-**Effort:** Small
-
 ---
 
 ### N7  Add `--native` CLI flag
@@ -879,9 +855,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
-| N4    | Handle `Value::Iter` / `Value::Keys` in codegen         | N    | Medium    | 1.1     | N3          | NATIVE.md                  |
-| N5    | Skip/fix empty native function bodies                   | N    | Small     | 1.1     |             | NATIVE.md                  |
-| N6    | Compilation gate test                                   | N    | Small     | 1.1     | N1–N5       | NATIVE.md                  |
 | N7    | `--native` CLI flag                                     | N    | Medium    | 1.1+    | N1–N6       | NATIVE.md                  |
 | R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |

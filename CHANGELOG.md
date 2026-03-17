@@ -85,6 +85,11 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N4+N5+N6** — Native codegen: handle `Value::Keys` in code generation (emit key
+  array literal); skip all Op functions with no IR body; add `OpGetTextSub`,
+  `OpSizeofRef`, `OpConvTextFromNull`, `OpConvRefFromNull` handlers; add compilation
+  gate test `generated_code_compiles`. 46 of 86 generated files compile. (2026-03-17)
+
 - **N3** — Native codegen runtime module (`src/codegen_runtime.rs`). Wrapper functions
   for database operations: `OpDatabase`, `OpNewRecord`, `OpFinishRecord`, `OpFreeRef`,
   `OpFormatDatabase`, `OpGetRecord`. Special-case handlers in `generation.rs` for
