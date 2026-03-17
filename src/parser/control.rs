@@ -526,9 +526,7 @@ impl Parser {
                     );
                 } else {
                     let next_disc = if is_struct {
-                        if let Value::Enum(nr, _) =
-                            self.data.def(next_def_nr).attributes[0].value
-                        {
+                        if let Value::Enum(nr, _) = self.data.def(next_def_nr).attributes[0].value {
                             i32::from(nr)
                         } else {
                             0
@@ -742,10 +740,7 @@ impl Parser {
                 };
             } else {
                 // T1-15: build OR'd comparison for all discriminants in this arm.
-                let mut cmp = self.cl(
-                    "OpEqInt",
-                    &[disc_expr.clone(), Value::Int(arm.discs[0])],
-                );
+                let mut cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(arm.discs[0])]);
                 for &d in &arm.discs[1..] {
                     let next = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(d)]);
                     cmp = v_if(cmp, Value::Boolean(true), next);
@@ -886,11 +881,7 @@ impl Parser {
                     &[subject_type.clone()],
                 );
                 // Wrap as a Block so build_scalar_chain recognizes it as a pre-built condition.
-                pattern_val = Some(v_block(
-                    vec![null_cond],
-                    Type::Boolean,
-                    "null_pattern",
-                ));
+                pattern_val = Some(v_block(vec![null_cond], Type::Boolean, "null_pattern"));
             // Check for wildcard `_` — try identifier first.
             } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "_" {
@@ -918,11 +909,7 @@ impl Parser {
                     let mut next_cond = Value::Null;
                     self.build_scalar_cond(&mut next_cond, v, subject_type, next_pat);
                     let or_cond = v_if(prev_cond, Value::Boolean(true), next_cond);
-                    pattern_val = Some(v_block(
-                        vec![or_cond],
-                        Type::Boolean,
-                        "or_pattern",
-                    ));
+                    pattern_val = Some(v_block(vec![or_cond], Type::Boolean, "or_pattern"));
                 }
             }
 
@@ -981,19 +968,11 @@ impl Parser {
     }
 
     /// T1-15: build a boolean condition for a single scalar pattern value.
-    fn build_scalar_cond(
-        &mut self,
-        cond: &mut Value,
-        v: u16,
-        subject_type: &Type,
-        pat: Value,
-    ) {
+    fn build_scalar_cond(&mut self, cond: &mut Value, v: u16, subject_type: &Type, pat: Value) {
         // Reuse the same logic as build_scalar_chain for special block patterns.
         if let Value::Block(ref bl) = pat
             && bl.result == Type::Boolean
-            && (bl.name == "range_pattern"
-                || bl.name == "null_pattern"
-                || bl.name == "or_pattern")
+            && (bl.name == "range_pattern" || bl.name == "null_pattern" || bl.name == "or_pattern")
         {
             *cond = bl.operators[0].clone();
             return;
