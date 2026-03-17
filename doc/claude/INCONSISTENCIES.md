@@ -19,7 +19,6 @@ Low = cosmetic or minor. Where a path to resolution is obvious it is included.
 - [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
-- [25. If-Expression Without `else` Silently Generates a Null Branch](#25-if-expression-without-else-silently-generates-a-null-branch)
 - [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
 
 **Fixed**
@@ -33,6 +32,7 @@ Low = cosmetic or minor. Where a path to resolution is obvious it is included.
 - [~~15. `fn <name>` Function References~~ **FIXED**](#15-fn-name-function-references-only-work-in-par-context--fixed-2026-03-15)
 - [~~16. `Format` Enum Mixes File Mode With Absence~~ **FIXED**](#16-format-enum-mixes-file-mode-with-absence--fixed-2026-03-14)
 - [~~24. For-loop Mutation Guard~~ **FIXED**](#24-for-loop-mutation-guard-only-catches-direct-variable-append--fixed-2026-03-14)
+- [~~25. If-Expression Without `else`~~ **FIXED**](#25-if-expression-without-else-silently-generates-a-null-branch--fixed-2026-03-17)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -423,24 +423,14 @@ Tests: `sizeof_packed_integer_types` in `tests/sizes.rs`; assertions in `tests/s
 
 ---
 
-## 25. If-Expression Without `else` Silently Generates a Null Branch
+## ~~25. If-Expression Without `else` Silently Generates a Null Branch~~ **FIXED 2026-03-17**
 
-**Severity: Low**
+**Was: Low**
 
-```loft
-r = if 3 > 10 { "yes" };   // r is null — implicit else branch added by compiler
-```
-
-When an if-expression (used as a value) has no `else` clause, the parser silently
-generates an else branch containing a typed null (`control.rs:234-238`). This is safe
-and convenient, but creates an asymmetry:
-
-- **`match`** expressions require explicit exhaustiveness — every variant must be covered
-  or a wildcard `_` arm must be present.
-- **`if`** expressions silently fill in the missing branch with null.
-
-A programmer might assume that a one-armed `if` used as a value would be a compile error
-(like a non-exhaustive `match`), but instead it silently produces null.
+Using an if-expression as a value without an `else` clause is now a compile error:
+`"If-expression produces a value but has no else clause"`. If-statements (void body)
+are unaffected. This makes `if` consistent with `match`, which also requires all
+cases to be handled.
 
 ---
 
@@ -485,7 +475,6 @@ _All fixed._
 | 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
-| 25 | If-expression without `else` silently generates null; match requires exhaustiveness |
 
 ---
 

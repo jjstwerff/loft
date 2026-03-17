@@ -473,3 +473,39 @@ fn shadow_same_type_ok() {
 }"
     );
 }
+
+#[test]
+fn if_expr_without_else() {
+    // Using if as a value expression without else is a compile error.
+    code!(
+        "fn test() {
+    x = if true { 42 };
+    println(\"{x}\");
+}"
+    )
+    .error("If-expression produces a value but has no else clause; add an else branch or make the body a statement at if_expr_without_else:2:24");
+}
+
+#[test]
+fn if_expr_with_else_ok() {
+    // If-expression with else is fine.
+    code!(
+        "fn test() {
+    x = if true { 42 } else { 0 };
+    assert(x == 42, \"ok\");
+}"
+    );
+}
+
+#[test]
+fn if_statement_without_else_ok() {
+    // If-statement (void body) without else is fine — no error.
+    code!(
+        "fn test() {
+    x = 10;
+    if x > 5 {
+        println(\"{x}\");
+    }
+}"
+    );
+}

@@ -139,15 +139,11 @@ fn main() {
   assert(!maybe_inc(5), "maybe_inc(5) returns null");
   assert(maybe_str(1) == "#1#", "maybe_str(1) is non-null");
   assert(!maybe_str(5), "maybe_str(5) returns null");
-  // --- if without else returns null ---
-  r_if = if 3 > 10 {
-    "yes"
-  };
-  assert(!r_if, "if-without-else: false condition returns null");
-  r_if2 = if 3 < 10 {
-    "yes"
-  };
-  assert(r_if2 == "yes", "if-without-else: true condition returns value");
+  // --- if-else expression ---
+  r_if = if 3 > 10 { "yes" } else { "no" };
+  assert(r_if == "no", "if-else: false branch");
+  r_if2 = if 3 < 10 { "yes" } else { "no" };
+  assert(r_if2 == "yes", "if-else: true branch");
   // --- Mutable struct reference parameter ---
   acc = Accum {total: 0 };
   accumulate(acc, 5);

@@ -235,6 +235,13 @@ impl Parser {
         } else {
             self.vars.restore_write_state(&write_state);
             if true_type != Type::Void {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "If-expression produces a value but has no else clause; add an else branch or make the body a statement"
+                    );
+                }
                 false_code = v_block(vec![self.null(&true_type)], true_type.clone(), "else");
             }
         }

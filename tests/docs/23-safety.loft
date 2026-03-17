@@ -135,13 +135,11 @@ fn main() {
   // `for e in db.items { db.items += [x]; }` is blocked too.
   // The only allowed mutation is `e#remove` inside a filtered loop.
 
-  // ## If-expression without else produces null
-  // Using `if` as a value expression without an `else` clause silently
-  // returns null when the condition is false. No compile error is raised.
-  maybe = if 1 > 10 { "yes" };
-  assert(!maybe, "missing else: result is null, not an error");
-  // Match expressions, by contrast, require you to handle every case.
-  // Mitigation: Always write an else clause when using if as a value.
+  // ## If-expression requires else when used as a value
+  // Using `if` as a value expression without an `else` clause is a compile
+  // error. This prevents accidental null values from missing branches.
+  // If-statements (where the body has no value) do not need else.
+  // For example, `x = if cond { 1 }` is an error; write `x = if cond { 1 } else { 0 }`.
 
   // ## Match guards do not prove a variant is handled
   // A guarded arm like `Red if cond => ...` does not count as handling

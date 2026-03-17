@@ -145,6 +145,8 @@ fn build() -> text {
     t = \"abcde\";
     if t.len() > 3 {
         t
+    } else {
+        \"\"
     }
 }"
     )
