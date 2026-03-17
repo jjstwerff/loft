@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 234] = &[
+pub const OPERATORS: &[fn(&mut State); 236] = &[
     goto,
     goto_word,
     goto_false,
@@ -243,6 +243,8 @@ pub const OPERATORS: &[fn(&mut State); 234] = &[
     move_file,
     truncate_file,
     call_ref,
+    mkdir,
+    mkdir_all,
 ];
 
 fn goto(s: &mut State) {
@@ -1809,4 +1811,16 @@ fn move_file(s: &mut State) {
 
 fn truncate_file(s: &mut State) {
     s.truncate_file();
+}
+
+fn mkdir(s: &mut State) {
+    let v_path = s.string();
+    let new_value = std::fs::create_dir(v_path.str()).is_ok();
+    s.put_stack(new_value);
+}
+
+fn mkdir_all(s: &mut State) {
+    let v_path = s.string();
+    let new_value = std::fs::create_dir_all(v_path.str()).is_ok();
+    s.put_stack(new_value);
 }

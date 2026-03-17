@@ -887,3 +887,22 @@ assert(!db.map[1], \"nr 1 removed\");
 assert(db.map[2].val == 20, \"nr 2 still present: {db.map[2].val}\");",
     );
 }
+
+/// T2-7: mkdir creates a directory, mkdir_all creates nested directories.
+#[test]
+fn mkdir_and_mkdir_all() {
+    // Clean up from any previous failed run
+    let _ = std::fs::remove_dir_all("tests/tmp_mkdir_test");
+    code!(
+        "fn test() {
+    // mkdir_all creates nested path
+    assert(mkdir_all(\"tests/tmp_mkdir_test/sub\"), \"mkdir_all\");
+    // mkdir on existing directory returns false
+    assert(!mkdir(\"tests/tmp_mkdir_test/sub\"), \"mkdir existing\");
+    // mkdir on a new sibling
+    assert(mkdir(\"tests/tmp_mkdir_test/other\"), \"mkdir sibling\");
+}"
+    );
+    // Clean up after test
+    let _ = std::fs::remove_dir_all("tests/tmp_mkdir_test");
+}

@@ -81,6 +81,10 @@ fn OpTruncateFile(self: File, size: long) -> boolean;
 // arg_size — total byte size of the already-pushed arguments.
 fn OpCallRef(fn_var: const u16, arg_size: const u16);
 #rust"s.fn_call_ref(@fn_var, @arg_size);"
+fn OpMkdir(path: text) -> boolean;
+#rust"std::fs::create_dir(@path).is_ok()"
+fn OpMkdirAll(path: text) -> boolean;
+#rust"std::fs::create_dir_all(@path).is_ok()"
 // Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
 // Use for fast colour comparison or storage.
 pub fn value(self: Pixel) -> integer {
@@ -201,6 +205,18 @@ pub fn delete(path: text) -> boolean {
 
 pub fn move(from: text, to: text) -> boolean {
   valid_path(to) && exists(from) && !exists(to) && OpMoveFile(from, to)
+}
+// Create a single directory level. Returns false if the parent does not exist
+// or the directory already exists.
+
+pub fn mkdir(path: text) -> boolean {
+  valid_path(path) && OpMkdir(path)
+}
+// Create a directory and all missing parents (like Unix mkdir -p).
+// Returns false if the path is outside the project directory.
+
+pub fn mkdir_all(path: text) -> boolean {
+  valid_path(path) && OpMkdirAll(path)
 }
 // Truncate or extend the file to exactly `size` bytes.
 // Truncating removes bytes beyond `size`; extending fills with null bytes.

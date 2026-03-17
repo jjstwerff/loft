@@ -223,19 +223,444 @@ it compiles without errors. This prevents future changes from breaking the code 
 
 ---
 
+### N10 — Fix remaining native codegen failures
+
+**Current state** (after N1–N7): 51 compile, 45 pass, 6 fail, 34 skip of 85 files.
+
+The 6 runtime failures and 34 compile failures have distinct root causes.  Each
+sub-step below fixes one root cause and is independently testable.
+
+---
+
+#### N10a — Fix `output_init` to register ALL intermediate types
+
+**Problem:** `output_init` (generation.rs:273–318) skips intermediate type
+registrations.  The compile-time type IDs are sequential across ALL definitions
+with `known_type != u16::MAX`, but `output_init` only emits types matching:
+`DefType::Struct || DefType::Enum || DefType::Vector || (EnumValue with attrs)`.
+
+This skips:
+- Plain `EnumValue` variants without attributes (like `Start`, `Ongoing`)
+- `DefType::Type` entries (byte/short field types created by `db.byte()`)
+- Anonymous vector types created as struct fields
+
+**Symptoms:**
+- `enums_types`: "index out of bounds: the len is 20 but the index is 20"
+- `enums_enum_field`: "Unknown record 1150964204" (garbage from wrong type layout)
+
+**Root cause detail:** The compile-time `fill_database` (`src/typedef.rs:135–232`)
+assigns `known_type` via `database.structure()`, `database.enumerate()`, etc. to
+every definition in order.  The runtime must register types in exactly the same
+order.  When `output_init` skips a type, all subsequent type IDs shift down.
+
+**Fix (generation.rs `output_init`):**
+1. Collect ALL definitions with `known_type != u16::MAX` into `type_defs` — remove
+   the `def_type` filter at line 281–285.
+2. Sort by `known_type` (already done at line 290).
+3. For each type, dispatch on `def_type`:
+   - `Struct` → `db.structure(name, 0)` + fields (existing code)
+   - `EnumValue` with attrs → `db.structure(name, enum_value)` + fields (existing)
+   - `EnumValue` without attrs → skip (no runtime registration needed — the parent
+     Enum's `db.value()` already created the slot)
+   - `Enum` → `db.enumerate(name)` + `db.value()` per variant (existing)
+   - `Vector` → `db.vector(content_type)` (existing)
+   - `Type` → check if it's a byte/short type; emit `db.byte(min, nullable)` or
+     `db.short(min, nullable)` or skip (field-types are registered implicitly by
+     their parent struct's `db.field()` call)
+
+The key insight: `DefType::Type` entries with `known_type != u16::MAX` represent
+standalone byte/short types (like the text type = 5).  They must be registered
+with `db.byte()` or `db.short()` so their type ID is consumed.  Compare with
+`typedef.rs:173–195` which handles `Parts::Byte` and `Parts::Short`.
+
+**Files:** `src/generation.rs` (`output_init`, lines 273–318)
+**Test:** `enums_types` and `enums_enum_field` pass
+**Verify:** `grep -c 'db\.' tests/generated/enums_types.rs` registration count
+matches compile-time types: `cargo test --test expressions -- enums_types` then
+count db.structure + db.enumerate + db.vector + db.byte calls in the generated file
+
+---
+
+#### N10b — Fix `output_set` for DbRef deep copy
+
+**Problem:** `Set(var_b, Var(var_a))` where both are `Type::Reference` emits
+`var_b = var_a` — a pointer copy.  Both variables then share the same database
+record.  Modifying one modifies the other.
+
+**Symptom:** `objects_independent_strings`: "hello world" instead of "hello" —
+modifying `b.name` also changes `a.name` because they share the same record.
+
+**Root cause detail:** The bytecode codegen (`src/state/codegen.rs:405–423`)
+detects same-type reference assignment in `generate_set` and synthesises a
+`Value::Call(OpCopyRecord, [Var(src), Var(dst), Int(tp_nr)])`.  The `generation.rs`
+`output_set` does not perform this synthesis — it emits a plain `var_b = var_a`.
+
+**Fix (generation.rs `output_set`, after line 997):**
+After emitting the assignment, check if:
+1. Variable type is `Type::Reference(d_nr, _)`
+2. RHS is `Value::Var(src_var)` where src_var has the same reference type
+3. RHS is NOT `Value::Null`
+
+If all three hold, emit an `OpCopyRecord` call:
+```rust
+// In output_set, after the regular assignment emission:
+if let Type::Reference(d_nr, _) = variables.tp(var) {
+    if let Value::Var(src) = to {
+        if let Type::Reference(_, _) = variables.tp(*src) {
+            let tp_nr = self.data.def(*d_nr).known_type;
+            writeln!(w)?;
+            self.indent(w)?;
+            write!(w, "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)")?;
+        }
+    }
+}
+```
+
+The `tp_nr` comes from `data.def(d_nr).known_type` where `d_nr` is the struct
+definition number from the `Type::Reference(d_nr, _)`.
+
+**Files:** `src/generation.rs` (`output_set`, lines 967–1014)
+**Test:** `objects_independent_strings` passes
+
+---
+
+#### N10c — Fix `OpFormatDatabase` for struct-enum variants
+
+**Problem:** `OpFormatDatabase` outputs only the enum type name (e.g. "Call")
+instead of the full struct representation ("Call {function:\"foo\",parameters:2}").
+
+**Symptom:** `enums_define_enum`: 'Call != "Call {function:\"foo\",parameters:2}"'
+
+**Root cause detail:** `ShowDb::write` (`src/database/format.rs:295–349`) handles
+struct-enum variants by reading the discriminator byte from the record to determine
+the variant, then dispatching to `write_struct()` for the variant's fields.  This
+works correctly — the issue is in how `output_call` passes the type to
+`OpFormatDatabase`.
+
+The bytecode interpreter's `format_db` (`src/state/io.rs:301–317`) reads `db_tp`
+from bytecode and passes it as `known_type` to `ShowDb`.  The `known_type` must
+be the PARENT enum type (e.g. the `Val` enum containing `A` and `B` variants),
+not a specific variant.  `ShowDb` then reads the discriminator to pick the variant.
+
+Check what the generated code passes — if `output_call`'s `OpFormatDatabase`
+handler passes the variant type instead of the parent enum type, the format will
+only show the variant name without struct fields.
+
+**Fix (src/generation.rs or src/codegen_runtime.rs):**
+1. In `output_call`'s `OpFormatDatabase` handler, verify the `tp_val` argument
+   is the parent enum's `known_type`, not a variant's.
+2. If the IR passes the wrong type, fix the `output_call` handler to look up
+   the parent enum type from the definition.
+3. If the IR passes the correct type but `ShowDb` doesn't recurse into variant
+   fields, the bug is in `ShowDb::write` — check `Parts::Enum` handling at
+   format.rs:328–349.
+
+**Debug approach:** Compare the `db_tp` value passed by the bytecode interpreter
+vs the generated code by adding a `eprintln!("OpFormatDatabase db_tp={db_tp}")` in
+both `codegen_runtime::OpFormatDatabase` and `State::format_db`.
+
+**Files:** `src/codegen_runtime.rs` and/or `src/generation.rs`
+**Test:** `enums_define_enum` and `enums_general_json` pass
+
+---
+
+#### N10d — Fix null DbRef handling in vector operations
+
+**Problem:** `vectors_fill_result` panics with "Unknown record 2147483648" (`u32::MAX`).
+
+**Symptom:** `vectors_fill_result`: "Unknown record 2147483648"
+
+**Root cause detail:** `stores.null()` (`src/database/allocation.rs:103–105`) calls
+`self.database(u32::MAX)` which allocates a store but returns `DbRef { store_nr, rec: 0, pos: 0 }`.
+The `store_nr` is a real store index (not 0).  The null DbRef is passed to
+`n_fill(stores, var_result)` by value.  Inside `n_fill`:
+1. `vector::clear_vector(&var_result, &mut stores.allocations)` is called
+2. `var_result.rec == 0` but `store_nr` points to a real store
+3. `clear_vector` tries to access the store and hits an invalid record
+
+The bytecode interpreter avoids this because the variable sits on the stack and
+`OpDatabase` modifies it in-place before `clear_vector` runs.  In generated code,
+`OpDatabase` returns a new DbRef (assigned to `var_result`), but `clear_vector`
+runs BEFORE `OpDatabase` in the generated sequence.
+
+**Fix (src/codegen_runtime.rs and/or src/generation.rs):**
+
+Option A — Guard `clear_vector` calls:
+In generated code, add a null check before `clear_vector`:
+```rust
+if var_result.rec != 0 { vector::clear_vector(&var_result, &mut stores.allocations); }
+```
+This requires detecting `OpClearVector` in `output_call` and wrapping it.
+
+Option B — Fix `stores.null()` return value:
+Return `DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }` as the sentinel.
+The `u16::MAX` store_nr is already used by `OpNullRefSentinel` and guards in
+`Stores::free/valid` already check for it.  However, this changes `Stores::null()`
+behaviour which could affect the interpreter.
+
+Option C — Reorder in generated code:
+Ensure `OpDatabase` runs before `clear_vector`.  Check the IR ordering and whether
+`output_code_inner` preserves statement order correctly.
+
+**Recommended:** Option A — minimal, codegen-only change, no interpreter impact.
+
+**Files:** `src/generation.rs` (`output_call` for `OpClearVector`)
+**Test:** `vectors_fill_result` passes
+
+---
+
+#### N10e — Fix remaining 34 compile failures
+
+After N10a–N10d fix the 6 runtime failures, the 34 compile failures remain.
+
+| Category | Count | Sub-step |
+|----------|-------|----------|
+| Mismatched types (`()` for missing else) | 16 | N10e-1 |
+| `if`/`else` incompatible types | 4 | N10e-1 |
+| `OpIterate` / `OpStep` / `Keys` not found | 3 | N10e-2 |
+| `OpFormatFloat` / `OpFormatStackLong` | 2 | N10e-3 |
+| Empty pre-eval (`let _pre = ;`) | 2 | N10e-5 |
+| `crate::state::STRING_NULL` reference | 2 | N10e-4 |
+| Double borrow of `stores` | 1 | N10e-5 |
+| Wrong argument count for `OpGetRecord` | 1 | N10e-5 |
+| `prefix _pre14 is unknown` | 1 | N10e-5 |
+
+---
+
+**N10e-1: Fix `output_if` for missing else branches (fixes ~20 files)**
+
+**Location:** `src/generation.rs` `output_if` (lines 828–862) and
+`output_code_inner` (line 747: `Value::Null => write!(w, "()")`)
+
+**Problem:** When `false_v` is `Value::Null`, the if-expression emits `()` for the
+else branch.  If the true branch produces a value (e.g. `i32`, `&str`), Rust
+reports "mismatched types: expected i32, found ()".
+
+**Current code path:** `output_if` at line 856 calls `output_code_inner(w, false_v)`
+which hits `Value::Null => write!(w, "()")` at line 747.
+
+**Fix approach:** `output_if` does not receive type information.  The type must be
+inferred from the true branch.  Two options:
+
+Option A (simpler): Add a helper `fn infer_if_type(&self, true_v: &Value) -> Option<Type>`
+that inspects the true branch to determine its result type.  Then in `output_if`,
+when `false_v` is `Value::Null` and `infer_if_type` returns a non-void type, emit
+a typed null instead of `()`:
+
+```rust
+// In output_if, when false_v is Value::Null and true branch returns a value:
+match inferred_type {
+    Type::Integer(_, _) => write!(w, "{{ i32::MIN }}")?,
+    Type::Long => write!(w, "{{ i64::MIN }}")?,
+    Type::Float => write!(w, "{{ f64::NAN }}")?,
+    Type::Single => write!(w, "{{ f32::NAN }}")?,
+    Type::Boolean => write!(w, "{{ false }}")?,
+    Type::Text(_) => write!(w, "{{ \"\" }}")?,
+    Type::Reference(_, _) => write!(w, "{{ stores.null() }}")?,
+    Type::Enum(_, false, _) => write!(w, "{{ 255_u8 }}")?,
+    _ => write!(w, "{{ () }}")?,
+}
+```
+
+Option B: Track the expected result type through the `output_code_inner` recursion
+by adding a `result_type: Option<&Type>` parameter.  More invasive but cleaner.
+
+**Recommended:** Option A — `infer_if_type` can inspect:
+- `Value::Call(d, _)` → `data.def(d).returned`
+- `Value::Var(v)` → `variables.tp(v)`
+- `Value::Int(_)` → `Type::Integer(...)`
+- `Value::Block(bl)` → `bl.result`
+
+**Files:** `src/generation.rs`
+**Test:** 20 files that currently fail with "mismatched types" or "if/else incompatible"
+
+---
+
+**N10e-2: Add `OpIterate`/`OpStep` + `Value::Iter` handler (fixes 3 files)**
+
+**Problem:** Iterator operations are complex bytecode sequences.  The generated
+code currently falls through to debug output for `Value::Iter`.
+
+**Reference implementation:**
+- `iterate()`: `src/state/io.rs:373–446` — reads `on: u8` (flags), `arg: u16`
+  (field ref), `keys: Vec<Key>`, `from_key`/`till_key`, stack values `from`/`till`,
+  then dispatches on collection type (1=index/tree, 2=sorted/vector, 3=ordered)
+  to compute `(start, finish)` position markers.
+- `step()`: `src/state/io.rs:473–570` — reads current position from state variable,
+  advances to next element via `tree::next()`/`vector::vector_step()`, signals
+  loop end with `u32::MAX` sentinel.
+
+**Codegen_runtime signatures:**
+```rust
+/// Returns (start_pos, finish_pos) for the iteration range.
+pub fn OpIterate(
+    stores: &Stores,
+    data: DbRef,       // collection reference
+    on: u8,            // flags: bits 0-5=type, bit 6=reverse, bit 7=exclusive
+    arg: u16,          // field type reference
+    keys: &[Key],      // sort/index key definitions
+    from: &[Content],  // start key values
+    till: &[Content],  // end key values
+) -> (u32, u32)
+
+/// Advances iterator; returns next element DbRef or None if done.
+pub fn OpStep(
+    stores: &Stores,
+    cur: &mut u32,     // current position (mutated in-place)
+    finish: u32,       // end sentinel from OpIterate
+    data: DbRef,       // collection reference
+    on: u8,            // same flags as OpIterate
+    arg: u16,          // field type reference
+) -> DbRef             // next element (rec=0 when done)
+```
+
+**Value::Iter handler in `output_code_inner`:**
+`Value::Iter(var_nr, create, step, extra_init)` should emit:
+```rust
+{
+    <extra_init>;
+    let (mut _iter_pos, _iter_end) = { <create> };
+    loop {
+        let var_<name> = { <step> };
+        if var_<name>.rec == 0 { break; }
+        // loop body follows in the enclosing Block
+    }
+}
+```
+
+The `create` sub-expression is a `Value::Call(OpIterate, ...)`.
+The `step` sub-expression is a `Value::Call(OpStep, ...)`.
+The loop body is NOT inside the Iter — it follows in the parent Block.
+
+**Files:** `src/generation.rs` (`output_code_inner`), `src/codegen_runtime.rs`
+**Test:** 3 files with iterator operations compile and pass
+
+---
+
+**N10e-3: Add `OpFormatFloat`/`OpFormatStackLong` handlers (fixes 2 files)**
+
+**Problem:** Format operations for float and long values are not handled in
+`output_call`, so they're emitted as function calls to non-existent functions.
+
+**Reference implementation:** `src/ops.rs:518–586`
+```rust
+pub fn format_long(s: &mut String, val: i64, radix: u8, width: i32, token: u8, plus: bool, note: bool)
+pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32)
+pub fn format_single(s: &mut String, val: f32, width: i32, precision: i32)
+```
+
+These are already public in `loft::ops`.  The bytecode versions
+(`src/state/text.rs:351–391`) read parameters from bytecode + stack and call
+these `ops` functions.
+
+**Fix:** Add special-case handlers in `output_call` that emit direct calls to
+`ops::format_long` / `ops::format_float`:
+
+```rust
+"OpFormatLong" | "OpFormatStackLong" => {
+    // Already handled by self.format_long(w, vals) — verify it works
+}
+"OpFormatFloat" | "OpFormatStackFloat" => {
+    if let [ref work_var, ref val, ref width, ref precision] = vals[..] {
+        write!(w, "ops::format_float(&mut ")?;
+        // emit work_var as mutable String ref
+        // emit val, width, precision
+        write!(w, ")")?;
+    }
+    return Ok(());
+}
+```
+
+Check whether `OpFormatLong` is already handled (line 1028: `"OpFormatLong" => return self.format_long(w, vals)`).  If so, only `OpFormatFloat` /
+`OpFormatStackFloat` need new handlers.
+
+**Files:** `src/generation.rs` (`output_call`)
+**Test:** 2 files with float/long formatting compile
+
+---
+
+**N10e-4: Fix `crate::state::STRING_NULL` reference (fixes 2 files)**
+
+**Problem:** The `#rust` template for `OpConvBoolFromText` contains:
+```
+@v1 != crate::state::STRING_NULL
+```
+In the bytecode interpreter (`fill.rs`), this resolves because `crate` = the
+`loft` crate.  In generated standalone `.rs` files, `crate` refers to the
+generated file itself — not the `loft` crate.
+
+**`STRING_NULL` definition:** `src/state/mod.rs:24`:
+```rust
+pub const STRING_NULL: &str = "\0";
+```
+
+**Fix:** In `output_call_template` (generation.rs, after the `s.database.` → `stores.`
+substitution at line 1102), add:
+```rust
+res = res.replace("crate::state::", "loft::state::");
+```
+
+This handles any `crate::` reference in templates that should point to the `loft`
+crate in generated code.
+
+**Files:** `src/generation.rs` (`output_call_template`, ~line 1103)
+**Test:** 2 files with `crate::state::` references compile
+
+---
+
+**N10e-5: Fix empty pre-eval, prefix, and argument count issues (fixes 3 files)**
+
+**Problem 1 — Empty pre-eval:** `collect_pre_evals` (`src/generation.rs:601–655`)
+can produce a pre-eval binding where the expression buffer is empty:
+`let _pre19 = ;` — a syntax error.
+
+**Root cause:** `rewrite_code` (line 659) calls `generate_expr_buf(arg)` which
+for certain `Value::Null` or void expressions returns an empty string.
+
+**Fix:** In `output_code_with_subst` or `rewrite_code`, skip emitting a pre-eval
+binding when the expression is empty or when `generate_expr_buf` returns `"()"`.
+
+**Problem 2 — Prefix `_pre14`:** Rust edition 2021+ treats `_pre14` as a prefix
+token (like `b"..."` or `r"..."`), causing parse errors in some contexts.
+
+**Fix:** Change the pre-eval naming from `_pre{counter}` to `_pre_{counter}`
+(underscore separator).  In `collect_pre_evals_inner` at lines 615 and 640:
+```rust
+let name = format!("_pre_{}", self.counter);
+```
+
+**Problem 3 — Wrong argument count for `OpGetRecord`:** The generated code
+passes inline key values as separate arguments, but the `codegen_runtime`
+function expects a `&[Content]` slice.
+
+**Fix:** In `output_call`, add a handler for `OpGetRecord` that collects
+the key arguments into a `vec![...]` literal before calling the runtime function.
+
+**Files:** `src/generation.rs`
+**Test:** 3 remaining files compile
+
+---
+
 ## Dependency Graph
 
 ```
-N1 (template fixes) ── N2 (stdlib) ──── ~41 simple files compile
-                        N3 (codegen_runtime) ── most files compile
-                        N4 (Iter/Keys) ──────── iterator files compile
-                        N5 (empty bodies) ────── all files compile
-                        N6 (compile gate) ────── CI protection
-                        N7 (--native flag) ───── user feature
+N1–N7 (done) ── 51 compile, 45 pass
+
+N10a (output_init types) ──── fixes enums_types, enums_enum_field
+N10b (DbRef deep copy) ────── fixes objects_independent_strings
+N10c (FormatDatabase enum) ── fixes enums_define_enum, enums_general_json
+N10d (null DbRef guard) ───── fixes vectors_fill_result
+N10e-1 (output_if typed null) ── fixes 20 compile failures
+N10e-2 (OpIterate/OpStep) ───── fixes 3 compile failures
+N10e-3 (OpFormatFloat/Long) ─── fixes 2 compile failures
+N10e-4 (crate::state:: fix) ─── fixes 2 compile failures
+N10e-5 (pre-eval/prefix) ────── fixes 3 compile failures
+                                ── all 85 files compile and pass
 ```
 
-N1 is search-and-replace in one file. N2 is a one-line change.
-N3 is the largest new code (~200 lines).
+N10a–N10d fix the 6 runtime failures (independent of each other).
+N10e-1 is the highest-impact compile fix (20 files).
+N10e-2–N10e-5 fix the remaining 10 compile failures.
 
 ---
 
