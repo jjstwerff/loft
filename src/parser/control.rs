@@ -635,9 +635,68 @@ impl Parser {
         result_type
     }
 
+    /// Parse a match pattern literal (integer, float, text, boolean) and optionally
+    /// a range suffix `..` or `..=`. Returns the pattern Value and its type.
+    fn parse_match_pattern(&mut self, subject_type: &Type, subject_var: u16) -> (Value, Type) {
+        let mut lit = Value::Null;
+        let negate = self.lexer.has_token("-");
+        let lit_type = if let Some(n) = self.lexer.has_integer() {
+            let v = n as i32;
+            lit = Value::Int(if negate { -v } else { v });
+            Type::Integer(i32::MIN + 1, i32::MAX as u32)
+        } else if let Some(n) = self.lexer.has_long() {
+            let v = n as i64;
+            lit = Value::Long(if negate { -v } else { v });
+            Type::Long
+        } else if let Some(n) = self.lexer.has_float() {
+            lit = Value::Float(if negate { -n } else { n });
+            Type::Float
+        } else if let Some(s) = self.lexer.has_cstring() {
+            lit = Value::Text(s);
+            Type::Text(Vec::new())
+        } else if self.lexer.has_token("true") {
+            lit = Value::Boolean(true);
+            Type::Boolean
+        } else if self.lexer.has_token("false") {
+            lit = Value::Boolean(false);
+            Type::Boolean
+        } else {
+            self.expression(&mut lit)
+        };
+        if !self.first_pass && lit_type != Type::Null && !lit_type.is_same(subject_type) {
+            self.can_convert(&lit_type, subject_type);
+        }
+        // T1-17: check for range pattern `lo..hi` or `lo..=hi`.
+        if self.lexer.has_token("..") {
+            let inclusive = self.lexer.has_token("=");
+            let mut hi = Value::Null;
+            self.expression(&mut hi);
+            let mut lo_cond = Value::Null;
+            self.call_op(
+                &mut lo_cond,
+                "<=",
+                &[lit, Value::Var(subject_var)],
+                &[subject_type.clone(), subject_type.clone()],
+            );
+            let mut hi_cond = Value::Null;
+            self.call_op(
+                &mut hi_cond,
+                if inclusive { "<=" } else { "<" },
+                &[Value::Var(subject_var), hi],
+                &[subject_type.clone(), subject_type.clone()],
+            );
+            let range_cond = v_if(lo_cond, hi_cond, Value::Boolean(false));
+            (
+                v_block(vec![range_cond], Type::Boolean, "range_pattern"),
+                Type::Boolean,
+            )
+        } else {
+            (lit, lit_type)
+        }
+    }
+
     /// T1-14: parse a match expression over a scalar (integer, text, boolean, etc.).
     /// Builds an if/else chain: `if subject == lit1 { arm1 } else if subject == lit2 { arm2 } else { wildcard }`
-    #[allow(clippy::too_many_lines)]
     fn parse_scalar_match(
         &mut self,
         subject: Value,
@@ -675,65 +734,8 @@ impl Parser {
                     );
                 }
             } else {
-                // Parse a literal pattern, possibly followed by a range `..` or `..=`.
-                let mut lit = Value::Null;
-                let negate = self.lexer.has_token("-");
-                let lit_type = if let Some(n) = self.lexer.has_integer() {
-                    let v = n as i32;
-                    lit = Value::Int(if negate { -v } else { v });
-                    Type::Integer(i32::MIN + 1, i32::MAX as u32)
-                } else if let Some(n) = self.lexer.has_long() {
-                    let v = n as i64;
-                    lit = Value::Long(if negate { -v } else { v });
-                    Type::Long
-                } else if let Some(n) = self.lexer.has_float() {
-                    lit = Value::Float(if negate { -n } else { n });
-                    Type::Float
-                } else if let Some(s) = self.lexer.has_cstring() {
-                    lit = Value::Text(s);
-                    Type::Text(Vec::new())
-                } else if self.lexer.has_token("true") {
-                    lit = Value::Boolean(true);
-                    Type::Boolean
-                } else if self.lexer.has_token("false") {
-                    lit = Value::Boolean(false);
-                    Type::Boolean
-                } else {
-                    // Fall back to expression for complex patterns
-                    self.expression(&mut lit)
-                };
-                if !self.first_pass && lit_type != Type::Null && !lit_type.is_same(subject_type) {
-                    self.can_convert(&lit_type, subject_type);
-                }
-                // T1-17: check for range pattern `lo..hi` or `lo..=hi`.
-                if self.lexer.has_token("..") {
-                    let inclusive = self.lexer.has_token("=");
-                    let mut hi = Value::Null;
-                    self.expression(&mut hi);
-                    // Build range condition: if (lo <= subject) { subject <(=) hi } else { false }
-                    let mut lo_cond = Value::Null;
-                    self.call_op(
-                        &mut lo_cond,
-                        "<=",
-                        &[lit, Value::Var(v)],
-                        &[subject_type.clone(), subject_type.clone()],
-                    );
-                    let mut hi_cond = Value::Null;
-                    self.call_op(
-                        &mut hi_cond,
-                        if inclusive { "<=" } else { "<" },
-                        &[Value::Var(v), hi],
-                        &[subject_type.clone(), subject_type.clone()],
-                    );
-                    // Short-circuit AND: if lo_cond { hi_cond } else { false }
-                    let range_cond = v_if(lo_cond, hi_cond, Value::Boolean(false));
-                    // Use the range condition directly as the pattern (not a literal).
-                    // Store as a special marker — None means wildcard, Some(lit) means
-                    // equality. For ranges, we store the pre-built condition in a Block.
-                    pattern_val = Some(v_block(vec![range_cond], Type::Boolean, "range_pattern"));
-                } else {
-                    pattern_val = Some(lit);
-                }
+                let (pat, _) = self.parse_match_pattern(subject_type, v);
+                pattern_val = Some(pat);
             }
 
             self.lexer.token("=>");
