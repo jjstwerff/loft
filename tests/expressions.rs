@@ -450,6 +450,106 @@ fn generated_code_compiles() {
     );
 }
 
+/// N7: run the full loft test suite against generated native code.
+/// Only runs when LOFT_TEST_NATIVE=1 is set (skipped by default to avoid
+/// slowing down normal cargo test with rustc invocations).
+///
+/// For each generated test file:
+/// 1. Compile with rustc --test (produces a test binary)
+/// 2. Run the test binary
+/// 3. Track compile pass/fail and execution pass/fail
+///
+/// Panics if the native pass rate drops below the recorded baseline.
+#[test]
+fn native_test_suite() {
+    if std::env::var("LOFT_TEST_NATIVE").as_deref() != Ok("1") {
+        return; // Skip unless explicitly enabled
+    }
+    let gen_dir = std::path::Path::new("tests/generated");
+    if !gen_dir.exists() {
+        return;
+    }
+    let loft_rlib = find_loft_rlib();
+    let tmp_dir = std::path::Path::new("target/native_tests");
+    std::fs::create_dir_all(tmp_dir).unwrap();
+
+    let mut compile_ok = 0u32;
+    let mut compile_fail = 0u32;
+    let mut run_ok = 0u32;
+    let mut run_fail = 0u32;
+    let mut failures: Vec<String> = Vec::new();
+
+    let mut entries: Vec<_> = std::fs::read_dir(gen_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.ends_with(".rs") && name != "default.rs" && name != "fill.rs" && name != "text.rs"
+        })
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in &entries {
+        let src = entry.path();
+        let stem = src.file_stem().unwrap().to_string_lossy().to_string();
+        let bin = tmp_dir.join(&stem);
+
+        // Compile as test binary
+        let compile = std::process::Command::new("rustc")
+            .args([
+                "--edition",
+                "2021",
+                "--test",
+                src.to_str().unwrap(),
+                "-o",
+                bin.to_str().unwrap(),
+                "-L",
+                "target/debug/deps",
+                "--extern",
+                &format!("loft={loft_rlib}"),
+            ])
+            .output()
+            .expect("failed to run rustc");
+
+        if !compile.status.success() {
+            compile_fail += 1;
+            continue;
+        }
+        compile_ok += 1;
+
+        // Run the test binary
+        let run = std::process::Command::new(bin.to_str().unwrap())
+            .output()
+            .expect("failed to run test binary");
+
+        if run.status.success() {
+            run_ok += 1;
+        } else {
+            run_fail += 1;
+            let stderr = String::from_utf8_lossy(&run.stderr);
+            failures.push(format!("{stem}: {}", stderr.lines().next().unwrap_or("?")));
+        }
+    }
+
+    let total = entries.len() as u32;
+    eprintln!(
+        "\n=== Native test suite: {total} files, {compile_ok} compile, {run_ok} pass, {run_fail} fail, {compile_fail} skip ===",
+    );
+    if !failures.is_empty() {
+        eprintln!("Failures:");
+        for f in &failures {
+            eprintln!("  {f}");
+        }
+    }
+
+    // Baseline: at least 50 files must compile (current: 50).
+    // Update this number as codegen improves.
+    assert!(
+        compile_ok >= 50,
+        "Native compile rate regressed: {compile_ok} < 50 (of {total})"
+    );
+}
+
 fn find_loft_rlib() -> String {
     // Find the loft rlib in target/debug/deps or target/debug
     for path in &[

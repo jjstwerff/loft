@@ -85,6 +85,10 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N7** — Native test suite. `native_test_suite` in `tests/expressions.rs` compiles
+  and runs all generated test files when `LOFT_TEST_NATIVE=1` is set. Reports compile
+  rate and execution pass rate. Baseline: 50 compile, 24 pass of 85 files. (2026-03-17)
+
 - **N4+N5+N6** — Native codegen: handle `Value::Keys` in code generation (emit key
   array literal); skip all Op functions with no IR body; add `OpGetTextSub`,
   `OpSizeofRef`, `OpConvTextFromNull`, `OpConvRefFromNull` handlers; add compilation
