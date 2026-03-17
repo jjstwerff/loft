@@ -53,8 +53,7 @@ map/filter/reduce, vector.clear(), mkdir, time functions, logging, parallel exec
 release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 
 **Remaining items before 1.0:**
-- T0-8 (convert parser panics to diagnostics)
-- T1-26 (diagnostic positions), T1-28 (error recovery)
+- T1-28 (error recovery after token failures)
 
 **Deferred to 1.1+:**
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-8, T3-1..T3-5, T3-7, T3-8,
@@ -83,10 +82,9 @@ Items on the same line can be done in a single PR.
 4. ~~**T1-17** (range patterns) and **T1-16** (guards)~~ done
 5. ~~**T1-15** (or-patterns) and **T1-20** (null/char patterns)~~ done
 6. ~~**T0-9** (UTF-8 crash) + **T0-10** (UTF-8 source truncation) + **T1-27** (fix suggestions) + **T1-29** (Fatal→Error) + **T1-30** (exhaustiveness docs)~~ done
-7. **T0-8** (panic→diagnostic) + **T1-31** (checked integer arithmetic) — eliminate remaining crashes and silent wrong results
-8. **T1-26** (diagnostic positions) + **T1-28** (error recovery) — low-effort, high UX impact
-9. **P20** (file seek) + **P45** (`&vector` warning) — small fixes from open PROBLEMS
-10. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
+7. ~~**T0-8** (panic→diagnostic) + **T1-31** (checked arithmetic) + **T1-26** (diagnostic positions) + **P20** (file seek) + **P45** (`&vector` warning)~~ done
+8. **T1-28** (error recovery) — medium effort, high UX impact
+9. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
 11. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
 12. **T2-8** (stdlib: vector ops) — reverse + insert remain
 13. **T2-14** (text `#index` semantics) — document or fix the byte-offset vs character-position gap
@@ -95,31 +93,6 @@ Items on the same line can be done in a single PR.
 Tier W (Web IDE) is an independent parallel track that can start any time after R6.
 
 ---
-
-## Tier 0 — Crashes / Silent Wrong Results
-
-### T0-8  Convert parser panics to diagnostics
-**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 1
-**Severity:** Medium — 7 `panic!`/`unreachable!` calls in the parser crash the compiler
-instead of producing a user-friendly error message
-**Description:** Each location should become a `diagnostic!` + early return:
-
-| File | Line | Trigger |
-|------|------|---------|
-| `parser/mod.rs` | 644 | Field access on unsupported type |
-| `parser/mod.rs` | 718 | Unexpected type in field resolution |
-| `parser/mod.rs` | 795 | Dynamic call on invalid function |
-| `parser/mod.rs` | 965 | Unexpected reference type in codegen |
-| `parser/expressions.rs` | 2268 | Malformed iterator in IR |
-| `parser/collections.rs` | 56 | Malformed iterator expression |
-| `parser/control.rs` | 1157 | Unexpected return type in ref_return |
-
-Most of these are internal-error paths triggered by malformed input, not
-normal user mistakes.  The fix for each is: emit `Level::Error` with context,
-return a fallback value (`Type::Void`, `Value::Null`), and let parsing continue.
-**Fix path:** One function at a time; each needs a test in `tests/parse_errors.rs`.
-**Effort:** Small (7 × ~5 lines each)
-**Target:** 1.1
 
 ---
 
@@ -131,22 +104,6 @@ return a fallback value (`Type::Void`, `Value::Null`), and let parsing continue.
 **Fix path:** In `parse_vector`, synthesise a temporary variable for empty `[]` in
 call context.  See PROBLEMS #44 for details.
 **Effort:** Medium (parser/expressions.rs)
-
----
-
-### T1-26  Improve diagnostic positions
-**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic positioning"
-**Severity:** Low — 5 diagnostics point at a suboptimal source location
-**Description:** Save `lexer.at()` before the parser advances past the relevant token,
-restore with `lexer.to()` before emitting the diagnostic.  Specific targets:
-1. Operator errors in `call_op` / `validate_convert` — point at operator, not next token
-2. Division-by-zero warning — point at operator, not past the zero
-3. Match exhaustiveness error — point at `match` keyword, not closing `}`
-4. "Not all paths return" — point at `->` return-type annotation
-5. Unused-definition warning — use `pos_diagnostic()` instead of `{:?}` format
-**Fix path:** See DEVELOPERS.md for before/after code patterns.
-**Effort:** Small (5 × ~3 lines each; test position in `tests/parse_errors.rs`)
-**Target:** 1.1
 
 ---
 
@@ -162,64 +119,6 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 2. Modify `token()` to call `recover_to` with context-appropriate delimiters.
 3. Add tests that verify a single-error input produces at most 2 diagnostics.
 **Effort:** Medium (lexer.rs + parser call sites; needs per-construct recovery targets)
-**Target:** 1.1+
-
----
-
-### T1-31  Checked integer arithmetic in debug builds
-**Sources:** Goal 1 (Correct — no silent wrong results); `src/ops.rs` overflow-prone operators
-**Severity:** Medium — `i32::MAX + 1` silently wraps to a wrong value; overflow to exactly
-`i32::MIN` / `i64::MIN` is indistinguishable from null
-**Description:** All 16 integer and long arithmetic operators in `src/ops.rs` use unchecked
-Rust arithmetic after a null-sentinel guard.  Two defects:
-1. **Silent overflow**: e.g. `op_add_int(i32::MAX, 1)` wraps to `i32::MIN + 1` — wrong answer.
-2. **Null-sentinel collision**: non-null computation producing exactly `i32::MIN` (or `i64::MIN`)
-   is treated as null by the rest of the runtime.  E.g. `-2_147_483_647 - 1` returns null.
-
-**Fix path:** Use `#[cfg(debug_assertions)]` to add checked paths in debug builds, keeping
-release builds unchanged.  Pattern for each op:
-- Binary arithmetic (`op_add_int`, `op_min_int`, `op_mul_int`, `op_div_int`, `op_rem_int`
-  + long equivalents): use `checked_add` / `checked_sub` / `checked_mul` / `checked_div` /
-  `checked_rem`; panic on overflow.  Assert `result != SENTINEL` for null-collision.
-- Shift left (`op_shift_left_int/long`): assert shift amount in range; assert result != sentinel.
-- Bitwise (`op_logical_and/or`, `op_exclusive_or` + long equivalents): assert result != sentinel
-  (bitwise ops cannot overflow but can produce the sentinel bit pattern).
-- Unary (`op_negate_int/long`, `op_abs_int/long`): no change needed — already treat `MIN` input
-  as null propagation.
-- Shift right (`op_shift_right_int/long`): no change needed — cannot overflow or produce sentinel.
-
-Add `#[cfg(debug_assertions)] #[should_panic]` tests for overflow and sentinel collision.
-
-**Files changed:** `src/ops.rs` only (~120 lines of changes + ~40 lines of tests).
-No changes to `fill.rs`, `default/01_code.loft`, or `generation.rs`.
-**Effort:** Small (single file, pure functions, no cross-file dependencies)
-**Target:** 1.1
-
----
-
-### P20  File seek before first open is a no-op
-**Sources:** PROBLEMS #20
-**Severity:** Low — `f#next = pos` before the first read or write is silently ignored;
-`f#next` stays at 0 and the next operation starts from the beginning
-**Fix path:** In the file handle struct, store a `pending_seek: i64` field (default −1 = no
-pending seek).  `OpSeekFile` writes to it when `file_ref == i32::MIN` (file not yet open).
-The first `OpReadFile` / `OpWriteFile` that opens the file applies the pending seek
-immediately after the `File::open` call.
-**Effort:** Small (state/io.rs — pending seek field + apply on first open)
-**Target:** 1.1
-
----
-
-### P45  `&vector` parameter triggers "never modified" warning for clear-like ops
-**Sources:** PROBLEMS #45
-**Severity:** Low — `pub fn clear(both: &vector)` with `&` causes "Parameter 'both' has &
-but is never modified" because `OpClearVector` reads the DbRef without writing the variable
-itself
-**Workaround:** Declare without `&` — the operation still modifies the backing store.
-**Fix path:** Track mutation through DbRef-modifying operators (`OpClearVector`,
-`OpAppendVector`, `OpInsertVector`, `OpRemoveVector`) as writes to the `&` parameter in
-`find_written_vars`.
-**Effort:** Small (parser — extend `find_written_vars` to recognise DbRef-modifying ops)
 **Target:** 1.1+
 
 ---
@@ -907,12 +806,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
-| T0-8  | Convert 7 parser panics to diagnostics                   | 0    | Small     | 1.1     |             | DEVELOPERS.md Step 1       |
-| T1-26 | Improve 5 diagnostic positions                           | 1    | Small     | 1.1     |             | DEVELOPERS.md positioning  |
 | T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
-| T1-31 | Checked integer arithmetic in debug builds              | 1    | Small     | 1.1     |             | Goal 1 (correctness)       |
-| P20   | File seek before first open is a no-op                  | 1    | Small     | 1.1     |             | PROBLEMS #20               |
-| P45   | `&vector` "never modified" for DbRef-mutating ops       | 1    | Small     | 1.1+    |             | PROBLEMS #45               |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (binding `@`)                         | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |

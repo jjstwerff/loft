@@ -22,12 +22,12 @@ recommended fix path are described.
 
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
-| 20 | `f#next = pos` seek before first open is a no-op | Low | Read/write first, then seek |
 | 22 | Spatial index (spacial<T>) operations not implemented | Low | N/A |
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
-| 45 | `&vector` parameter triggers "never modified" for clear-like ops | Low | Declare without `&` |
-| 49 | Integer arithmetic silently wraps on overflow; may collide with null sentinel | Medium | Use `long` for values near `i32::MAX` |
+| ~~20~~ | ~~`f#next = pos` seek before first open is a no-op~~ | ~~Low~~ | **FIXED** |
+| ~~45~~ | ~~`&vector` parameter triggers "never modified" for clear-like ops~~ | ~~Low~~ | **FIXED** |
+| ~~49~~ | ~~Integer arithmetic silently wraps on overflow~~ | ~~Medium~~ | **FIXED** (debug builds) |
 | ~~47~~ | ~~Invalid UTF-8 in source file silently truncates parsing~~ | ~~Low~~ | **FIXED** |
 | ~~48~~ | ~~Runtime `read_to_string` panics on non-UTF-8 file data~~ | ~~Medium~~ | **FIXED** |
 
@@ -345,18 +345,10 @@ Two parser/state bugs fixed (wrong lookup name; format not updated after create)
 
 ---
 
-### 20. `f#next = pos` (file seek) only works after the file is already open
+### ~~20. `f#next = pos` (file seek) only works after the file is already open~~ **FIXED**
 
-**Symptom:** Seeking before the first read or write on a file handle is a no-op;
-`f#next` stays at 0 and the next operation starts from the beginning anyway.
-
-**Workaround:** Perform at least one read or write before seeking. This is the normal
-usage pattern (open → read/write → seek → read/write).
-
-**Best way forward:** In the file handle struct, store a `pending_seek: i64` field
-(default −1 = no pending seek). `OpSeekFile` writes to it when `file_ref == i32::MIN`
-(file not yet open). The first `OpReadFile` / `OpWriteFile` that opens the file
-applies the pending seek immediately after the `File::open` call.
+**Fixed:** `seek_file()` now stores the position in `#next` when the file is not yet
+open, so the first read/write applies the pending seek automatically.
 
 ---
 
@@ -787,21 +779,10 @@ function calls achieve the same result.
 
 ---
 
-### 45. `&vector` parameter annotation triggers "never modified" warning for clear-like operations
+### ~~45. `&vector` parameter annotation triggers "never modified" warning for clear-like operations~~ **FIXED**
 
-**Symptom:** Declaring a stdlib wrapper as `pub fn clear(both: &vector)` with `&`
-(mutable reference) causes a compile error: "Parameter 'both' has & but is never
-modified".  The `OpClearVector` operator takes `vector` by value (it reads the DbRef
-and modifies the underlying store), so from the parser's perspective the parameter
-variable itself is never written to.
-
-**Workaround:** Declare without `&`: `pub fn clear(both: vector)`.  The operation
-still modifies the vector's backing store — `&` is only needed when the function
-reassigns the variable itself (e.g. `both = new_vector`).
-
-**Impact:** Low — the workaround is correct and idiomatic.  The `&` annotation is
-designed for functions that reassign the parameter, not for functions that modify
-through a DbRef.
+**Fixed:** `find_written_vars` now recognizes `OpClearVector`, `OpInsertVector`, and
+`OpRemoveVector` as mutations to the first argument, suppressing the false warning.
 
 ---
 
@@ -822,31 +803,13 @@ failure instead of panicking. Non-UTF-8 files produce an empty string result.
 
 ## Arithmetic Safety
 
-### 49. Integer arithmetic silently wraps on overflow; may collide with null sentinel
+### ~~49. Integer arithmetic silently wraps on overflow; may collide with null sentinel~~ **FIXED (debug builds)**
 
-**Symptom:** All integer and long arithmetic in `src/ops.rs` uses unchecked Rust operations.
-Overflow wraps silently — `i32::MAX + 1` produces `i32::MIN + 1` with no error. If the
-result happens to be exactly `i32::MIN` (the null sentinel), the value is indistinguishable
-from null for the rest of the program.
-
-**Example:**
-```loft
-x = -2147483647 - 1   // produces i32::MIN = null, not -2147483648
-if !x { "null" }       // true — x looks null
-```
-
-**Impact:** Medium — most programs don't approach `i32::MAX`/`i32::MIN`, but scientific
-or data-processing programs can. The null-sentinel collision is especially insidious
-because the program silently continues with a null instead of a wrong number.
-
-**Workaround:** Use `long` instead of `integer` for values that may approach the 32-bit
-boundary.  For struct fields, `not null` reclaims the sentinel value.
-
-**Fix path:** PLANNING T1-31 — add `#[cfg(debug_assertions)]` checked arithmetic in
-`src/ops.rs` so that debug builds panic on overflow and sentinel collision.  Release
-builds retain the current fast unchecked path.
-
-**Effort:** Small (single file `src/ops.rs`)
+**Fixed (T1-31):** All integer and long binary operators in `ops.rs` now use
+`checked_add`/`sub`/`mul`/`div`/`rem` in debug builds and assert results do not
+collide with the null sentinel. Bitwise ops get sentinel-only checks. Release builds
+retain the fast unchecked path. The underlying sentinel design is unchanged — use
+`long` for values near `i32::MAX`/`i32::MIN`.
 
 ---
 
