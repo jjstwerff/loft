@@ -15,6 +15,7 @@ pub mod scopes;
 mod variables;
 pub mod vector;
 
+pub mod codegen_runtime;
 pub mod generation;
 pub mod ops;
 pub mod parser;
