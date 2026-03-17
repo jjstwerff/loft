@@ -232,17 +232,13 @@ impl Test {
         if self.result != Value::Null || !self.tp.is_unknown() {
             let w = &mut File::create(format!("tests/generated/{}_{}.rs", self.file, self.name))?;
             let def_nr = p.data.definitions();
-            o.output_native(w, start, def_nr)?;
-            // Emit n_assert stub so generated test files compile standalone.
-            writeln!(
-                w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i32) {{"
-            )?;
-            writeln!(
-                w,
-                "  if !test {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
-            )?;
-            writeln!(w, "}}\n")?;
+            // Find the entry function n_test and emit only reachable functions.
+            let test_fn = p.data.def_nr("n_test");
+            if test_fn != u32::MAX {
+                o.output_native_reachable(w, start, def_nr, &[test_fn])?;
+            } else {
+                o.output_native(w, start, def_nr)?;
+            }
             writeln!(w, "#[test]\nfn code_{}() {{", self.name)?;
             writeln!(w, "    let mut stores = Stores::new();")?;
             writeln!(w, "    init(&mut stores);")?;

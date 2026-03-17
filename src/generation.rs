@@ -3,8 +3,65 @@
 
 use crate::data::{Block, Context, Data, DefType, Definition, Type, Value};
 use crate::database::Stores;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
+
+/// Walk the Value IR tree and collect all function definition numbers
+/// referenced by `Value::Call(def_nr, _)` nodes.
+fn collect_calls(val: &Value, calls: &mut HashSet<u32>) {
+    match val {
+        Value::Call(d, args) => {
+            calls.insert(*d);
+            for a in args {
+                collect_calls(a, calls);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                collect_calls(op, calls);
+            }
+        }
+        Value::If(test, t, f) => {
+            collect_calls(test, calls);
+            collect_calls(t, calls);
+            collect_calls(f, calls);
+        }
+        Value::Set(_, v) | Value::Return(v) | Value::Drop(v) => collect_calls(v, calls),
+        Value::Insert(ops) => {
+            for op in ops {
+                collect_calls(op, calls);
+            }
+        }
+        Value::Iter(_, create, next, extra) => {
+            collect_calls(create, calls);
+            collect_calls(next, calls);
+            collect_calls(extra, calls);
+        }
+        _ => {}
+    }
+}
+
+/// Compute the set of function definitions reachable from `entry_defs` via
+/// transitive calls.  Returns the full reachable set including `entry_defs`.
+#[must_use]
+pub fn reachable_functions(data: &Data, entry_defs: &[u32]) -> HashSet<u32> {
+    let mut reachable = HashSet::new();
+    let mut queue: VecDeque<u32> = entry_defs.iter().copied().collect();
+    while let Some(d) = queue.pop_front() {
+        if !reachable.insert(d) {
+            continue;
+        }
+        let def = data.def(d);
+        let mut calls = HashSet::new();
+        collect_calls(&def.code, &mut calls);
+        for c in calls {
+            if !reachable.contains(&c) {
+                queue.push_back(c);
+            }
+        }
+    }
+    reachable
+}
 
 /// Use this to drive Rust code generation from a compiled loft program.
 /// It bundles the read-only compile-time data with the mutable emission state
@@ -162,7 +219,52 @@ extern crate loft;"
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
-        self.output_functions(w, from, till)
+        self.output_functions(w, from, till, None)
+    }
+
+    /// Like `output_native`, but only emits functions reachable from `entry_defs`.
+    /// Stdlib functions outside `[from, till)` are included if they are transitively
+    /// called.  Use this for per-test files so they are self-contained without
+    /// emitting the entire stdlib.
+    ///
+    /// # Errors
+    /// Returns an error if any write action to `w` fails.
+    pub fn output_native_reachable(
+        &mut self,
+        w: &mut dyn Write,
+        from: u32,
+        till: u32,
+        entry_defs: &[u32],
+    ) -> std::io::Result<()> {
+        let reachable = reachable_functions(self.data, entry_defs);
+        writeln!(
+            w,
+            "\
+#![allow(unused_imports)]
+#![allow(unused_parens)]
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
+#![allow(unused_mut)]
+#![allow(non_snake_case)]
+#![allow(dead_code)]
+#![allow(redundant_semicolons)]
+#![allow(unused_assignments)]
+#![allow(clippy::double_parens)]
+#![allow(clippy::unused_unit)]
+
+extern crate loft;"
+        )?;
+        writeln!(w, "use loft::database::Stores;")?;
+        writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
+        writeln!(w, "use loft::ops;")?;
+        writeln!(w, "use loft::vector;")?;
+        writeln!(w, "use loft::codegen_runtime::*;\n")?;
+        writeln!(w, "fn init(db: &mut Stores) {{")?;
+        self.output_init(w, from, till)?;
+        writeln!(w, "    db.finish();\n}}\n")?;
+        // Emit all reachable functions across the full definition range (0..till),
+        // not just from..till, so that stdlib dependencies are included.
+        self.output_functions(w, 0, till, Some(&reachable))
     }
 
     /// Use this to emit only the `init` body that registers all types.
@@ -216,11 +318,24 @@ extern crate loft;"
     }
 
     /// Use this to emit all function bodies for the given definition range.
-    fn output_functions(&mut self, w: &mut dyn Write, from: u32, till: u32) -> std::io::Result<()> {
+    /// When `reachable` is Some, only functions in the set are emitted.
+    fn output_functions(
+        &mut self,
+        w: &mut dyn Write,
+        from: u32,
+        till: u32,
+        reachable: Option<&HashSet<u32>>,
+    ) -> std::io::Result<()> {
         for dnr in from..till {
-            if matches!(self.data.def(dnr).def_type, DefType::Function) {
-                self.output_function(w, dnr)?;
+            if !matches!(self.data.def(dnr).def_type, DefType::Function) {
+                continue;
             }
+            if let Some(r) = reachable
+                && !r.contains(&dnr)
+            {
+                continue;
+            }
+            self.output_function(w, dnr)?;
         }
         Ok(())
     }
@@ -362,9 +477,21 @@ extern crate loft;"
     fn output_function(&mut self, w: &mut dyn Write, def_nr: u32) -> std::io::Result<()> {
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
-        // Skip Op functions with no callable body — they are either inlined via #rust
-        // templates at call sites, or handled by codegen_runtime wrapper functions.
+        // Skip Op functions with no callable body.
         if def.name.starts_with("Op") && def.code == Value::Null {
+            return Ok(());
+        }
+        // n_assert needs generic Display parameters to accept both Str and &str.
+        if def.name == "n_assert" && def.code == Value::Null {
+            writeln!(
+                w,
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i32) {{"
+            )?;
+            writeln!(
+                w,
+                "  if !test {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
+            )?;
+            writeln!(w, "}}\n")?;
             return Ok(());
         }
         write!(w, "fn {}(stores: &mut Stores", def.name)?;
@@ -385,17 +512,10 @@ extern crate loft;"
         if let Value::Block(bl) = &def.code {
             self.output_block(w, bl, returns_text)?;
         } else if def.code == Value::Null {
-            // Native-only function with no loft body — emit a stub.
-            if def.name == "n_assert" {
-                writeln!(
-                    w,
-                    "{{\n  if !var_test {{ panic!(\"{{}}:{{}} {{}}\", var_file, var_line, var_message); }}"
-                )?;
-            } else {
-                writeln!(w, "{{")?;
-                if def.returned != Type::Void {
-                    writeln!(w, "  todo!(\"native function {}\")", def.name)?;
-                }
+            // Native-only function with no loft body — emit a todo!() stub.
+            writeln!(w, "{{")?;
+            if def.returned != Type::Void {
+                writeln!(w, "  todo!(\"native function {}\")", def.name)?;
             }
             writeln!(w, "}}")?;
         } else {
@@ -1141,9 +1261,10 @@ extern crate loft;"
                 break;
             }
         }
-        // Templates use `s.database.` for bytecode interpreter (State.database).
+        // Templates use `s.database.` and `s.` for bytecode interpreter (State).
         // In generated native code, `stores` is the direct Stores reference.
         res = res.replace("s.database.", "stores.");
+        res = res.replace("s.db_from_text(", "db_from_text(stores, ");
         write!(w, "{res}")
     }
 }

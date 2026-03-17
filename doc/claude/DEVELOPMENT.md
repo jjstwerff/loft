@@ -36,13 +36,33 @@ Examples:
 | T2-6 — `now()` and `ticks()` | `t2-6-time-functions` |
 | T2-11 — `loft.toml` package layout | `t2-11-package-layout` |
 
-Create the branch from the tip of `main`:
+Create the branch from the tip of `main`.  **Always start from a clean, up-to-date
+`main`** — if you are on a different branch, check for uncommitted documentation
+changes first and carry them over:
 
 ```bash
+# 1. Check for uncommitted changes on the current branch
+git status --short
+
+# 2. If doc/claude/*.md files were modified, save them before switching
+git stash push -m "doc changes" -- doc/claude/ CHANGELOG.md
+
+# 3. Switch to main and pull the latest merge
 git checkout main
 git pull
+
+# 4. Create the new feature branch
 git checkout -b t2-6-time-functions
+
+# 5. Restore the documentation changes into the new branch
+git stash pop
 ```
+
+If the stash conflicts (the same doc was modified in main), resolve manually:
+keep the main version for sections you did not write, keep your additions.
+
+Skip steps 2 and 5 when there are no uncommitted documentation changes.
+Never create a feature branch from another feature branch.
 
 ---
 
