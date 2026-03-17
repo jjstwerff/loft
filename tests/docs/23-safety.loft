@@ -167,6 +167,13 @@ fn main() {
   // vector. Use plain `vector<T>` when the function only reads or modifies
   // existing elements.
 
+  // ## File I/O assumes UTF-8
+  // All file reading in loft assumes the file content is valid UTF-8. Reading
+  // a binary file or a file in a different encoding (e.g. Latin-1) will crash
+  // the program at runtime. There is currently no way to read raw bytes.
+  // **Mitigation:** Only read files you know to be UTF-8. If you need to process
+  // binary data, convert it to UTF-8 externally before passing it to loft.
+
   // ## XOR is `^`, not exponentiation
   // Unlike some languages where `^` means "power", in loft `^` is bitwise
   // XOR. Use the `pow()` function for exponentiation.
