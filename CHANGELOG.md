@@ -85,6 +85,12 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **N1+N2** — Native Rust code generation fixes. Fixed `#rust` templates:
+  `external::` → `ops::`, `u32::from(@fld)` → `((@fld) as u32)`, added
+  `s.database.` → `stores.` substitution in `generation.rs`. Added `n_assert`
+  stub and `todo!()` stubs for native functions in generated test files.
+  26 of 86 generated files now compile (from 0 before). (2026-03-17)
+
 - **T1-22** — Missing return path warning for `not null` return types. Functions declared
   with `-> type not null` that may fall through without returning now warn "Not all code
   paths return a value — function 'name' may return null". Nullable return types (`-> type`)

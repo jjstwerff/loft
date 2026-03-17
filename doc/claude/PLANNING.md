@@ -684,30 +684,6 @@ these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### N1  Fix `#rust` templates for generated code
-**Description:** Three fixes, batchable into a single commit:
-1. In `default/01_code.loft`: replace `external::op_*` with `ops::op_*` (two renames:
-   `op_min_single_int` → `ops::op_negate_int`, `op_min_single_long` →
-   `ops::op_negate_long`).
-2. In `default/01_code.loft`: replace `u32::from(@fld)` with `((@fld) as u32)` — field
-   offsets are always non-negative; `u32::from(i32)` has no Rust impl.
-3. In `src/generation.rs` (NOT in templates): add `s.database.` → `stores.` substitution
-   in the template expansion path.  Templates must keep `s.database.*` because `create.rs`
-   needs it for fill.rs (the bytecode interpreter).
-**Effort:** Small (template search-and-replace + one line in generation.rs)
-**Eliminates:** ~1019 compilation errors
-**Interpreter safety:** Templates 1a/1b are safe (fill.rs already uses `ops::` and both
-cast forms work); 1c changes only generation.rs, not templates or fill.rs.
-
----
-
-### N2  Include stdlib in each generated test file
-**Description:** Change `tests/testing.rs` to pass `(0, def_nr)` instead of
-`(start, def_nr)` to `output_native()` for test files, making each self-contained.
-**Effort:** Trivial (one-line change)
-**Depends on:** N1
-**Eliminates:** ~92 compilation errors; ~41 simple files compile after N1–N2
-
 ---
 
 ### N3  Add `codegen_runtime` module for database operations
@@ -912,8 +888,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
-| N1    | Fix `#rust` templates (`external::`, `u32::from`, `s.database`) | N | Small | 1.1  |             | NATIVE.md                  |
-| N2    | Include stdlib in generated test files                   | N    | Trivial   | 1.1     | N1          | NATIVE.md                  |
 | N3    | `codegen_runtime` module for database operations         | N    | Medium    | 1.1     |             | NATIVE.md                  |
 | N4    | Handle `Value::Iter` / `Value::Keys` in codegen         | N    | Medium    | 1.1     | N3          | NATIVE.md                  |
 | N5    | Skip/fix empty native function bodies                   | N    | Small     | 1.1     |             | NATIVE.md                  |
