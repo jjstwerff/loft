@@ -788,6 +788,7 @@ impl Parser {
     }
 
     /// Call a specific definition
+    #[allow(clippy::too_many_lines)] // P44: empty-vector-arg handling adds necessary dispatch
     fn call_nr(
         &mut self,
         code: &mut Value,
@@ -853,6 +854,21 @@ impl Parser {
                     {
                         self.change_var(&actual_code, &tp);
                         actual.push(actual_code);
+                        continue;
+                    }
+                    // P44: empty `[]` literal passed as a vector argument produces
+                    // Value::Insert([Null]) with no stack presence.  Create a temp
+                    // vector variable with OpDatabase here where the parameter type
+                    // is known.
+                    if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
+                        && let Type::Vector(elm_tp, dep) = &tp
+                    {
+                        let vec =
+                            self.create_unique("vec", &Type::Vector(elm_tp.clone(), dep.clone()));
+                        let mut ls = self.vector_db(elm_tp, vec);
+                        ls.push(Value::Var(vec));
+                        actual.push(v_block(ls, tp.clone(), "empty_vector_arg"));
+                        all_types[nr] = tp.clone();
                         continue;
                     }
                     if actual_type.is_unknown()

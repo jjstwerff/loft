@@ -131,8 +131,7 @@ fn main() {
   // --- join ---
   assert(join(["a", "b", "c"], ", ") == "a, b, c", "join three parts");
   assert(join(["x"], "-") == "x", "join single element has no separator");
-  join_empty =[];
-  assert(join(join_empty, "-") == "", "join empty vector is empty string");
+  assert(join([], "-") == "", "join empty vector is empty string");
   assert(join(["hello", "world"], " ") == "hello world", "join with space");
   assert(join(["a", "b", "c"], "") == "abc", "join with empty separator");
   assert(join(["one"], "") == "one", "join single with empty separator");
