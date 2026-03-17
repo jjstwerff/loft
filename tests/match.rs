@@ -469,6 +469,51 @@ fn match_scalar_negative() {
     );
 }
 
+/// T1-17: inclusive range pattern with ..=
+#[test]
+fn match_range_inclusive() {
+    code!(
+        "fn test() {
+    x = 5;
+    r = match x {
+        1..=3 => \"low\",
+        4..=6 => \"mid\",
+        7..=9 => \"high\",
+        _ => \"other\"
+    };
+    assert(r == \"mid\", \"r\");
+}"
+    );
+}
+
+/// T1-17: exclusive range pattern with ..
+#[test]
+fn match_range_exclusive() {
+    code!(
+        "fn test() {
+    x = 10;
+    r = match x {
+        0..10 => \"single\",
+        10..100 => \"double\",
+        _ => \"large\"
+    };
+    assert(r == \"double\", \"r\");
+}"
+    );
+}
+
+/// T1-17: range pattern on boundary values
+#[test]
+fn match_range_boundary() {
+    code!(
+        "fn test() {
+    assert(match 0 { 0..=0 => true, _ => false }, \"zero\");
+    assert(match 10 { 0..10 => false, _ => true }, \"exclusive end\");
+    assert(match 9 { 0..10 => true, _ => false }, \"just inside\");
+}"
+    );
+}
+
 /// P46: block expression as match arm body — was a segfault, now works.
 #[test]
 fn match_arm_block_body() {

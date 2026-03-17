@@ -127,16 +127,6 @@ Refactor `arms` storage from `(Option<i32>, ...)` to `(Option<Value>, ...)` (pre
 
 ---
 
-### T1-17  Range patterns in `match` arms
-**Sources:** [MATCH.md](MATCH.md) — T1-17
-**Severity:** Low–Medium — range dispatch currently requires chained `if`/`else if` comparisons
-**Description:** `1..=10 =>` (inclusive) and `1..100 =>` (exclusive) patterns for integer, long, float, single, text, and character subjects.  Open-start `..=hi` supported; open-end `lo..` is an error in pattern position.
-**Fix path:** See [MATCH.md#t1-17](MATCH.md#t1-17-range-patterns) for full design.
-After parsing scalar literal, check for `..` + optional `=`; build `OpLeXxx(lo, subj) && OpLeXxx/OpLtXxx(subj, hi)`.
-**Effort:** Small (parser/control.rs — extends scalar pattern parser)
-**Depends on:** T1-14
-**Target:** 1.1
-
 ---
 
 ---
@@ -874,7 +864,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
-| T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
 | T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
