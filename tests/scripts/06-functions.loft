@@ -38,7 +38,7 @@ fn append_to(buf:  & text, item: text) {
   buf += item;
 }
 
-fn double_val(x: const integer) -> integer {
+fn double_val(x: integer) -> integer {
   x * 2
 }
 

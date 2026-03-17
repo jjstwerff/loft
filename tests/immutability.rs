@@ -34,13 +34,14 @@ fn test() {}"
     );
 }
 
-/// A `const` parameter that is only read: no error.
+/// A `const` parameter that is only read: T3-6 warns on primitive types.
 #[test]
 fn const_param_read_only() {
     code!(
         "fn double(a: const integer) -> integer { a * 2 }
 fn test() { assert(double(5) == 10, \"double\") }"
     )
+    .warning("Parameter 'a' is const but is never modified; 'const' has no effect on an unmodified primitive parameter at const_param_read_only:1:41")
     .result(loft::data::Value::Null);
 }
 
@@ -74,6 +75,19 @@ fn ref_param_mutated_via_call() {
 fn wrapper(a: &integer) { add_one(a) }
 fn test() {}"
     );
+}
+
+/// T3-6: `const` on a compound type (vector) that is never written — no warning.
+/// `const` serves as read-only documentation for compound types.
+#[test]
+fn const_param_compound_no_warning() {
+    code!(
+        "fn total(v: const vector<integer>) -> integer {
+    t = 0; for x in v { t += x }; t
+}
+fn test() { assert(total([1, 2, 3]) == 6, \"ok\") }"
+    )
+    .result(loft::data::Value::Null);
 }
 
 // ── Local `const` variable tests ────────────────────────────────────────────
