@@ -85,6 +85,10 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-17** — Range patterns in match expressions: `1..=9` (inclusive) and
+  `10..100` (exclusive). Lowered to short-circuit AND condition.
+  Three tests in `tests/match.rs`. (2026-03-17)
+
 - **P46** — Match arms can now use block expressions `{ ... }` as bodies.
   The parser detects `{` after `=>` and parses it as a scoped block. Was a
   segfault because the block's `}` was confused with the match's `}`. (2026-03-17)
