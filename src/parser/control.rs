@@ -252,12 +252,22 @@ impl Parser {
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Struct => {
                 (*d_nr, true, true, true)
             }
+            // T1-14: scalar types — dispatch to scalar match handler.
+            Type::Integer(_, _)
+            | Type::Long
+            | Type::Float
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Text(_) => {
+                return self.parse_scalar_match(subject, &subject_type, code);
+            }
             _ => {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "match requires an enum or struct type"
+                        "match requires an enum, struct, or scalar type"
                     );
                 }
                 (u32::MAX, false, false, false)
@@ -602,6 +612,100 @@ impl Parser {
         } else {
             chain
         };
+        result_type
+    }
+
+    /// T1-14: parse a match expression over a scalar (integer, text, boolean, etc.).
+    /// Builds an if/else chain: `if subject == lit1 { arm1 } else if subject == lit2 { arm2 } else { wildcard }`
+    fn parse_scalar_match(
+        &mut self,
+        subject: Value,
+        subject_type: &Type,
+        code: &mut Value,
+    ) -> Type {
+        // Store subject in a temp var to avoid re-evaluation.
+        let v = self.create_unique("match_subj", subject_type);
+        self.vars.defined(v);
+
+        self.lexer.token("{");
+
+        // Collect arms: (literal_value, arm_code, arm_type)
+        let mut arms: Vec<(Option<Value>, Value, Type)> = Vec::new();
+        let mut has_wildcard = false;
+        let mut result_type = Type::Void;
+
+        loop {
+            if self.lexer.peek_token("}") {
+                break;
+            }
+
+            // Parse pattern: literal, `true`, `false`, `_`, or string.
+            let mut pattern_val: Option<Value> = None;
+
+            // Check for wildcard `_` — it's an identifier, not a token.
+            let link = self.lexer.link();
+            if self.lexer.has_identifier().as_deref() == Some("_") && self.lexer.peek_token("=>") {
+                has_wildcard = true;
+            } else {
+                self.lexer.revert(link);
+                // Parse a literal pattern (integer, float, text, true, false, etc.)
+                let mut lit = Value::Null;
+                let lit_type = self.expression(&mut lit);
+                if !self.first_pass && lit_type != Type::Null && !lit_type.is_same(subject_type) {
+                    self.can_convert(&lit_type, subject_type);
+                }
+                pattern_val = Some(lit);
+            }
+
+            self.lexer.token("=>");
+            let mut arm_code = Value::Null;
+            let arm_type = self.expression(&mut arm_code);
+            if result_type == Type::Void {
+                result_type = arm_type.clone();
+            }
+            arms.push((pattern_val, arm_code, arm_type));
+            if has_wildcard {
+                break;
+            }
+        }
+        self.lexer.token("}");
+
+        // Build if/else chain from last arm to first.
+        // The last arm without a pattern (wildcard) is the else fallback.
+        let fallback = if has_wildcard {
+            let (_, arm_code, _) = arms.pop().unwrap();
+            arm_code
+        } else {
+            // No wildcard — result is nullable (null if no arm matches).
+            self.null(&result_type)
+        };
+
+        let mut chain = fallback;
+        for (pattern_val, arm_code, _) in arms.into_iter().rev() {
+            if let Some(lit) = pattern_val {
+                let mut cond = Value::Null;
+                let cond_tp = self.call_op(
+                    &mut cond,
+                    "==",
+                    &[Value::Var(v), lit],
+                    &[subject_type.clone(), subject_type.clone()],
+                );
+                if cond_tp == Type::Null {
+                    // Comparison not found — fall through without condition.
+                    chain = arm_code;
+                } else {
+                    chain = v_if(cond, arm_code, chain);
+                }
+            } else {
+                chain = arm_code;
+            }
+        }
+
+        *code = v_block(
+            vec![v_set(v, subject), chain],
+            result_type.clone(),
+            "scalar_match",
+        );
         result_type
     }
 
