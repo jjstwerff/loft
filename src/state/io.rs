@@ -23,8 +23,10 @@ impl State {
         let store = self.database.store(&file);
         let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
         let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
-        if let Ok(mut f) = File::open(file_path) {
-            f.read_to_string(buf).unwrap();
+        if let Ok(mut f) = File::open(file_path)
+            && f.read_to_string(buf).is_err()
+        {
+            buf.clear();
         }
     }
 

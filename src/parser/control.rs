@@ -726,7 +726,7 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "match on {} is not exhaustive — missing: {}",
+                    "match on {} is not exhaustive — missing: {}; add the missing variants or a '_ =>' wildcard",
                     self.data.def(e_nr).name,
                     missing.join(", ")
                 );
@@ -885,7 +885,7 @@ impl Parser {
                     &mut null_cond,
                     "!",
                     &[Value::Var(v)],
-                    &[subject_type.clone()],
+                    std::slice::from_ref(subject_type),
                 );
                 // Wrap as a Block so build_scalar_chain recognizes it as a pre-built condition.
                 pattern_val = Some(v_block(vec![null_cond], Type::Boolean, "null_pattern"));

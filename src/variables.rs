@@ -628,7 +628,7 @@ impl Function {
                 diagnostic!(
                     lexer,
                     Level::Error,
-                    "Variable '{}' cannot change type from {} to {}",
+                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
                     self.variables[var_nr as usize].name,
                     self.variables[var_nr as usize].type_def.name(data),
                     type_def.name(data)
@@ -643,7 +643,7 @@ impl Function {
             diagnostic!(
                 lexer,
                 Level::Error,
-                "Variable '{}' cannot change type from {} to {}",
+                "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
                 self.name(var_nr),
                 self.variables[var_nr as usize].type_def.name(data),
                 type_def.name(data)

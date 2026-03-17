@@ -9,6 +9,31 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ## [Unreleased]
 
+### Bug fixes
+
+- **T0-9** — `read_to_string().unwrap()` in `get_file_text` now gracefully clears the
+  buffer on non-UTF-8 file data instead of panicking the runtime. (PROBLEMS #48)
+
+- **T0-10** — Invalid UTF-8 in a `.loft` source file now emits a Fatal diagnostic
+  ("Cannot read line N — is the file valid UTF-8?") instead of silently truncating
+  parsing at the bad line. Both `next()` code paths in `lexer.rs` are covered. (PROBLEMS #47)
+
+### Diagnostics
+
+- **T1-29** — Downgraded three `Level::Fatal` diagnostics to `Level::Error`:
+  "use statements must appear before all definitions", "Syntax error" (now includes
+  the unexpected token), and "Cannot redefine" in `data.rs`. Parsing now continues
+  after these errors and can report multiple issues.
+
+- **T1-27** — Appended fix suggestions to six common error messages:
+  - "Variable cannot change type" → "; use a new variable name or cast with 'as'"
+  - "Cannot modify const" → "; remove 'const' or use a local copy"
+  - "match not exhaustive" → "; add the missing variants or a '_ =>' wildcard"
+  - "Cannot iterate" → "; expected vector, sorted, index, text, or range"
+
+- **T1-30** — Expanded match documentation in LOFT.md to explain why guarded arms
+  do not count toward exhaustiveness, with a code example.
+
 ---
 
 ## [0.8.0] — 2026-03-17

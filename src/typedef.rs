@@ -121,12 +121,7 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
     }
 }
 
-pub fn fill_all(
-    data: &mut Data,
-    database: &mut Stores,
-    lexer: &mut Lexer,
-    start_def: u32,
-) {
+pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
     // Detect type cycles before computing sizes.
     for d_nr in start_def..data.definitions() {
         if matches!(data.def_type(d_nr), DefType::Struct) {
@@ -164,13 +159,12 @@ fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::Hash
         let a_type = data.attr_type(d_nr, a_nr);
         // Only recurse into value-typed struct fields (Reference fields are pointers,
         // not inline — they don't cause infinite-size cycles).
-        if let Type::Reference(child_nr, _) = &a_type {
-            if data.def_type(*child_nr) == DefType::Struct {
-                if has_value_cycle(data, *child_nr, visiting) {
-                    visiting.remove(&d_nr);
-                    return true;
-                }
-            }
+        if let Type::Reference(child_nr, _) = &a_type
+            && data.def_type(*child_nr) == DefType::Struct
+            && has_value_cycle(data, *child_nr, visiting)
+        {
+            visiting.remove(&d_nr);
+            return true;
         }
     }
     visiting.remove(&d_nr);
