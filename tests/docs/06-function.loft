@@ -48,7 +48,7 @@ fn classify(n: integer) -> text {
 // Declaring '&' without actually writing to the parameter is also a compile error.
 // These rules make it easy to read a function signature and know what it does to its inputs.
 
-fn scale(a: const integer, factor: const integer) -> integer {
+fn scale(a: integer, factor: integer) -> integer {
   a * factor
 }
 // ## Type-Based Dispatch

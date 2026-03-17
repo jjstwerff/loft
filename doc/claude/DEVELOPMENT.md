@@ -146,9 +146,10 @@ limitations, edge cases, incorrect assumptions, or new issues.  **Update the
 relevant documentation before including it in the commit:**
 
 - **PROBLEMS.md** — new bugs or limitations discovered during implementation
-- **PLANNING.md** — update the item description if scope changed, or add notes
-  about what was deferred (e.g. "insert and reverse remain" when only `clear`
-  was implemented for T2-8)
+- **PLANNING.md** — **remove the completed item entirely** (both the section and
+  the Quick Reference row).  PLANNING.md is strictly for future work; completion
+  history belongs in git and CHANGELOG.md.  If only part of an item was done,
+  update the section to describe what remains.
 - **NATIVE.md** — design corrections found during implementation
 - **INCONSISTENCIES.md** — new language quirks discovered
 

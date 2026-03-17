@@ -281,6 +281,10 @@ impl Parser {
             | Type::Text(_) => {
                 return self.parse_scalar_match(subject, &subject_type, code);
             }
+            // T1-21: vector types — dispatch to vector match handler.
+            Type::Vector(_, _) => {
+                return self.parse_vector_match(subject, &subject_type, code);
+            }
             _ => {
                 if !self.first_pass {
                     diagnostic!(
@@ -988,6 +992,187 @@ impl Parser {
             vec![v_set(v, subject), chain],
             result_type.clone(),
             "scalar_match",
+        );
+        result_type
+    }
+
+    /// T1-21: parse a match expression over a vector subject.
+    /// Slice patterns: `[a, b] =>`, `[first, ..] =>`, `[.., last] =>`, `_ =>`.
+    /// Each arm generates a length check and element bindings.
+    #[allow(clippy::too_many_lines)] // slice pattern parsing with head/tail/rest dispatch
+    fn parse_vector_match(
+        &mut self,
+        subject: Value,
+        subject_type: &Type,
+        code: &mut Value,
+    ) -> Type {
+        let elm_tp = subject_type.content();
+        let v = self.create_unique("match_subj", subject_type);
+        self.vars.defined(v);
+        let elm_size = Value::Int(self.element_store_size(&elm_tp));
+
+        self.lexer.token("{");
+        let mut result_type = Type::Void;
+        let mut arms: Vec<(Option<Value>, Value, Type)> = Vec::new();
+        let mut has_wildcard = false;
+        loop {
+            if self.lexer.peek_token("}") {
+                break;
+            }
+            let mut bindings: Vec<Value> = Vec::new();
+            let mut cond: Option<Value> = None;
+            if self.lexer.has_token("[") {
+                // Parse slice pattern elements
+                let mut head: Vec<String> = Vec::new();
+                let mut tail: Vec<String> = Vec::new();
+                let mut has_rest = false;
+                loop {
+                    if self.lexer.has_token("]") {
+                        break;
+                    }
+                    if self.lexer.has_token("..") {
+                        has_rest = true;
+                    } else if let Some(id) = self.lexer.has_identifier() {
+                        if has_rest {
+                            tail.push(id);
+                        } else {
+                            head.push(id);
+                        }
+                    } else if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "expected identifier or '..' in slice pattern"
+                        );
+                        break;
+                    }
+                    self.lexer.has_token(",");
+                }
+                let fixed = (head.len() + tail.len()) as i32;
+                // Generate length condition
+                let len_call = self.cl("OpLengthVector", &[Value::Var(v)]);
+                if has_rest {
+                    // length >= fixed  →  fixed <= length
+                    self.call_op(
+                        cond.get_or_insert(Value::Null),
+                        "<=",
+                        &[Value::Int(fixed), len_call],
+                        &[Type::Integer(0, 0), Type::Integer(0, 0)],
+                    );
+                } else {
+                    // length == fixed
+                    self.call_op(
+                        cond.get_or_insert(Value::Null),
+                        "==",
+                        &[len_call, Value::Int(fixed)],
+                        &[Type::Integer(0, 0), Type::Integer(0, 0)],
+                    );
+                }
+                // Bind head elements: head[i] = v[i]
+                for (i, name) in head.iter().enumerate() {
+                    if name == "_" {
+                        continue;
+                    }
+                    let bind_nr = self.vars.add_variable(name, &elm_tp, &mut self.lexer);
+                    self.vars.defined(bind_nr);
+                    let get = self.cl(
+                        "OpGetVector",
+                        &[Value::Var(v), elm_size.clone(), Value::Int(i as i32)],
+                    );
+                    let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                    bindings.push(v_set(bind_nr, val));
+                }
+                // Bind tail elements: tail[j] = v[len - tail.len() + j]
+                for (j, name) in tail.iter().enumerate() {
+                    if name == "_" {
+                        continue;
+                    }
+                    let bind_nr = self.vars.add_variable(name, &elm_tp, &mut self.lexer);
+                    self.vars.defined(bind_nr);
+                    let idx = Value::Int(-((tail.len() - j) as i32));
+                    let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), idx]);
+                    let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                    bindings.push(v_set(bind_nr, val));
+                }
+            } else if let Some(id) = self.lexer.has_identifier() {
+                if id == "_" {
+                    has_wildcard = true;
+                } else {
+                    // bare name — wildcard binding
+                    let bind_nr = self.vars.add_variable(&id, subject_type, &mut self.lexer);
+                    self.vars.defined(bind_nr);
+                    bindings.push(v_set(bind_nr, Value::Var(v)));
+                    has_wildcard = true;
+                }
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "expected slice pattern '[...]' or '_' in vector match arm"
+                );
+                break;
+            }
+            // Parse guard
+            let guard_opt = if self.lexer.has_keyword("if") {
+                let mut guard = Value::Null;
+                let gt = self.expression(&mut guard);
+                if !self.first_pass && gt != Type::Boolean {
+                    self.convert(&mut guard, &gt, &Type::Boolean);
+                }
+                Some(guard)
+            } else {
+                None
+            };
+            self.lexer.token("=>");
+            let mut arm_code = Value::Null;
+            let arm_type = self.expression(&mut arm_code);
+            if result_type == Type::Void {
+                result_type = arm_type.clone();
+            }
+            // Prepend bindings
+            if !bindings.is_empty() {
+                bindings.push(arm_code);
+                arm_code = v_block(bindings, arm_type.clone(), "slice_binding");
+            }
+            // Combine condition with guard
+            let full_cond = match (cond, guard_opt) {
+                (Some(c), Some(g)) => Some(self.op("&&", c, g, Type::Boolean)),
+                (Some(c), None) => Some(c),
+                (None, Some(g)) => Some(g),
+                (None, None) => None,
+            };
+            arms.push((full_cond, arm_code, arm_type));
+            if has_wildcard {
+                self.lexer.has_token(",");
+                break;
+            }
+            if self.lexer.peek_token("}") {
+                self.lexer.has_token(",");
+            } else {
+                self.lexer.token(",");
+            }
+        }
+        self.lexer.token("}");
+
+        // Build if-else chain from arms
+        let fallback = if has_wildcard {
+            let (_, arm_code, _) = arms.pop().unwrap();
+            arm_code
+        } else {
+            self.null(&result_type)
+        };
+        let mut chain = fallback;
+        for (cond_opt, arm_code, _) in arms.into_iter().rev() {
+            if let Some(cond) = cond_opt {
+                chain = v_if(cond, arm_code, chain);
+            } else {
+                chain = arm_code;
+            }
+        }
+        *code = v_block(
+            vec![v_set(v, subject), chain],
+            result_type.clone(),
+            "vector_match",
         );
         result_type
     }

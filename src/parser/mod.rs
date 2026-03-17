@@ -788,6 +788,7 @@ impl Parser {
     }
 
     /// Call a specific definition
+    #[allow(clippy::too_many_lines)] // P44: empty-vector-arg handling adds necessary dispatch
     fn call_nr(
         &mut self,
         code: &mut Value,
@@ -853,6 +854,21 @@ impl Parser {
                     {
                         self.change_var(&actual_code, &tp);
                         actual.push(actual_code);
+                        continue;
+                    }
+                    // P44: empty `[]` literal passed as a vector argument produces
+                    // Value::Insert([Null]) with no stack presence.  Create a temp
+                    // vector variable with OpDatabase here where the parameter type
+                    // is known.
+                    if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
+                        && let Type::Vector(elm_tp, dep) = &tp
+                    {
+                        let vec =
+                            self.create_unique("vec", &Type::Vector(elm_tp.clone(), dep.clone()));
+                        let mut ls = self.vector_db(elm_tp, vec);
+                        ls.push(Value::Var(vec));
+                        actual.push(v_block(ls, tp.clone(), "empty_vector_arg"));
+                        all_types[nr] = tp.clone();
                         continue;
                     }
                     if actual_type.is_unknown()
@@ -1305,6 +1321,8 @@ impl Parser {
 
     /// After parsing a function body, check that each `&` (`RefVar`) argument is actually
     /// mutated somewhere in the body. If not, emit a compile error suggesting to drop the `&`.
+    /// Also check for redundant `const` annotations on primitive parameters that are never
+    /// written to — the `const` has no effect when the parameter is not modified.
     fn check_ref_mutations(&mut self, arguments: &[Argument]) {
         let code = self.data.def(self.context).code.clone();
         let mut written: HashSet<u16> = HashSet::new();
@@ -1320,6 +1338,37 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Parameter '{}' has & but is never modified; remove the &",
+                    a.name
+                );
+            }
+            // T3-6: warn when `const` is used on a primitive parameter that is never
+            // written to — the annotation is redundant since the parameter would not
+            // have been modified anyway.  Compound types (vector, reference, struct)
+            // are exempt: `const` serves as read-only documentation on those.
+            let base_tp = if let Type::RefVar(inner) = &a.typedef {
+                inner.as_ref()
+            } else {
+                &a.typedef
+            };
+            if a.constant
+                && !written.contains(&(a_nr as u16))
+                && matches!(
+                    base_tp,
+                    Type::Integer(_, _)
+                        | Type::Long
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                )
+            {
+                let src = self.vars.var_source(a_nr as u16);
+                self.lexer.to(src);
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "Parameter '{}' is const but is never modified; \
+                     'const' has no effect on an unmodified primitive parameter",
                     a.name
                 );
             }

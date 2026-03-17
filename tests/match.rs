@@ -279,18 +279,19 @@ len(match f {
 
 // ── Error cases ───────────────────────────────────────────────────────────────
 
-/// match on an unsupported type (vector) is a compile-time error.
+/// T1-21: match on a vector with wildcard arm works.
 #[test]
 fn match_non_enum() {
     code!(
         "fn test() {
     v = [1, 2, 3];
-    match v {
+    r = match v {
         _ => 0
-    }
+    };
+    assert(r == 0, \"wildcard\")
 }"
     )
-    .error("match requires an enum, struct, or scalar type at match_non_enum:3:14");
+    .result(Value::Null);
 }
 
 /// Arms returning incompatible types — compile-time error.
@@ -717,6 +718,73 @@ fn or_pattern_scalar() {
     )
     .expr("classify(2)")
     .result(Value::Text("low".to_string()));
+}
+
+// ── T1-21: slice / vector patterns ──────────────────────────────────────────
+
+/// Match on vector length with element bindings.
+#[test]
+fn vector_match_exact() {
+    code!(
+        "fn test() {
+    v = [10, 20, 30];
+    r = match v {
+        [a, b] => a + b,
+        [a, b, c] => a + b + c,
+        _ => 0
+    };
+    assert(r == 60, \"exact 3-elem match {r}\")
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `[first, ..]` matches any vector with at least one element.
+#[test]
+fn vector_match_head_rest() {
+    code!(
+        "fn test() {
+    v = [5, 6, 7];
+    r = match v {
+        [x, ..] => x,
+        _ => 0
+    };
+    assert(r == 5, \"head rest {r}\")
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `[.., last]` matches any vector with at least one element.
+#[test]
+fn vector_match_tail() {
+    code!(
+        "fn test() {
+    v = [5, 6, 7];
+    r = match v {
+        [.., x] => x,
+        _ => 0
+    };
+    assert(r == 7, \"tail {r}\")
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Empty vector matches `[]` pattern (length == 0).
+#[test]
+fn vector_match_empty() {
+    code!(
+        "fn test() {
+    v = [1]; clear(v);
+    r = match v {
+        [] => 1,
+        _ => 0
+    };
+    assert(r == 1, \"empty match {r}\")
+}"
+    )
+    .result(Value::Null);
 }
 
 // ── T1-20: binding patterns ─────────────────────────────────────────────────

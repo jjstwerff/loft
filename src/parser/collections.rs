@@ -1315,7 +1315,7 @@ use #count instead"
     }
 
     /// Compute the in-store byte size of a vector element type.
-    fn element_store_size(&self, elm: &Type) -> i32 {
+    pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);
         if elm_td != u32::MAX {
             let known = self.data.def(elm_td).known_type;
