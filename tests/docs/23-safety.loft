@@ -43,16 +43,14 @@ fn main() {
   big = 2000000000;
   assert(big as long + big as long == 4000000000l, "long avoids wrap");
 
-  // ## Shift by zero produces null
-  // Bitwise AND, OR, and XOR with zero return the expected identity value.
-  // Shift operators, however, treat a zero shift amount as a null operand
-  // and return null instead of the original value.
-  assert(0b1010 & 0 == 0, "AND with 0: identity");
+  // ## Bitwise operators with zero
+  // All bitwise operators (AND, OR, XOR, shift) work correctly with zero.
+  // Zero is the identity element for OR, XOR, and shift; zero for AND.
+  assert(0b1010 & 0 == 0, "AND with 0: zero");
   assert(0b1010 | 0 == 0b1010, "OR with 0: identity");
   assert(0b1010 ^ 0 == 0b1010, "XOR with 0: identity");
-  assert(!(5 << 0), "shift by 0 is null, not 5");
-  assert(!(5 >> 0), "right-shift by 0 is also null");
-  // Mitigation: Guard shift amounts: `if n > 0 { x << n } else { x }`.
+  assert(5 << 0 == 5, "shift left by 0: identity");
+  assert(5 >> 0 == 5, "shift right by 0: identity");
 
   // ## Float null is NaN
   // Floats represent null as `NaN` (Not a Number). In IEEE 754, `NaN` is

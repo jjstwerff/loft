@@ -284,7 +284,7 @@ pub fn op_exclusive_or_long(v1: i64, v2: i64) -> i64 {
 #[inline]
 #[must_use]
 pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
-    if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
+    if v1 != i64::MIN && v2 != i64::MIN {
         v1 << v2
     } else {
         i64::MIN
@@ -294,7 +294,7 @@ pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
 #[inline]
 #[must_use]
 pub fn op_shift_right_long(v1: i64, v2: i64) -> i64 {
-    if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
+    if v1 != i64::MIN && v2 != i64::MIN {
         v1 >> v2
     } else {
         i64::MIN
@@ -438,7 +438,7 @@ pub fn op_exclusive_or_int(v1: i32, v2: i32) -> i32 {
 #[inline]
 #[must_use]
 pub fn op_shift_left_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+    if v1 != i32::MIN && v2 != i32::MIN {
         v1 << v2
     } else {
         i32::MIN
@@ -448,7 +448,7 @@ pub fn op_shift_left_int(v1: i32, v2: i32) -> i32 {
 #[inline]
 #[must_use]
 pub fn op_shift_right_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+    if v1 != i32::MIN && v2 != i32::MIN {
         v1 >> v2
     } else {
         i32::MIN

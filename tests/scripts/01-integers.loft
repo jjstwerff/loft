@@ -80,9 +80,9 @@ fn main() {
   // Shifting the value zero by any positive amount stays zero:
   assert(0 << 1 == 0, "zero shifted left stays zero");
   assert(0 >> 1 == 0, "zero shifted right stays zero");
-  // Shifting by 0 produces null (null-guarded shift operators):
-  assert(!(5 << 0), "shift left by 0 is null");
-  assert(!(5 >> 0), "shift right by 0 is null");
+  // Shifting by 0 returns the value unchanged (identity):
+  assert(5 << 0 == 5, "shift left by 0 is identity");
+  assert(5 >> 0 == 5, "shift right by 0 is identity");
   // Normal shifts work as expected:
   assert(1 << 3 == 8, "1 << 3 == 8");
   assert(16 >> 2 == 4, "16 >> 2 == 4");

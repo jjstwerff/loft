@@ -372,7 +372,7 @@ Added a note under "Enum types" in [`LOFT.md`](LOFT.md): all six comparison oper
 
 ## 21. Bitwise `^`, `|`, `&` Treat Zero as a Null Operand — **FIXED**
 
-~~**Severity: High**~~ **Fixed 2026-03-13** (`src/native.rs`): removed `&& v2 != 0` guard from XOR/AND/OR bitwise operators. Division, remainder, and shift operators retain their guard. Tests: `tests/scripts/01-integers.loft`.
+~~**Severity: High**~~ **Fixed 2026-03-13** (`src/native.rs`): removed `&& v2 != 0` guard from XOR/AND/OR bitwise operators. Division and remainder operators retain their zero guard. Shift operators' zero guard also removed 2026-03-17 (`src/ops.rs`): `x << 0` and `x >> 0` now correctly return `x`. Tests: `tests/scripts/01-integers.loft`.
 
 ---
 
