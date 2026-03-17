@@ -752,6 +752,9 @@ impl Parser {
         } else if let Some(s) = self.lexer.has_cstring() {
             lit = Value::Text(s);
             Type::Text(Vec::new())
+        } else if let Some(c) = self.lexer.has_char() {
+            lit = Value::Int(c as i32);
+            Type::Character
         } else if self.lexer.has_token("true") {
             lit = Value::Boolean(true);
             Type::Boolean
@@ -821,8 +824,23 @@ impl Parser {
             let mut pattern_val: Option<Value> = None;
             let mut is_wildcard = false;
 
+            // T1-20: null pattern — matches when subject is null.
+            if self.lexer.has_token("null") {
+                let mut null_cond = Value::Null;
+                self.call_op(
+                    &mut null_cond,
+                    "!",
+                    &[Value::Var(v)],
+                    &[subject_type.clone()],
+                );
+                // Wrap as a Block so build_scalar_chain recognizes it as a pre-built condition.
+                pattern_val = Some(v_block(
+                    vec![null_cond],
+                    Type::Boolean,
+                    "null_pattern",
+                ));
             // Check for wildcard `_` — try identifier first.
-            if let Some(id) = self.lexer.has_identifier() {
+            } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "_" {
                     is_wildcard = true;
                 } else if !self.first_pass {
@@ -910,10 +928,10 @@ impl Parser {
         let mut chain = fallback;
         for (pattern_val, arm_code, _, guard_opt) in arms.into_iter().rev() {
             if let Some(lit) = pattern_val {
-                // T1-17: range patterns are stored as Block with Boolean result.
+                // T1-17/T1-20: range/null patterns are stored as Block with Boolean result.
                 if let Value::Block(ref bl) = lit
                     && bl.result == Type::Boolean
-                    && bl.name == "range_pattern"
+                    && (bl.name == "range_pattern" || bl.name == "null_pattern")
                 {
                     let range_cond = bl.operators[0].clone();
                     chain = match guard_opt {

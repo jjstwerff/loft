@@ -654,3 +654,35 @@ fn match_arm_block_body() {
 }"
     );
 }
+
+/// T1-20: null pattern in scalar match.
+#[test]
+fn scalar_null_pattern() {
+    code!(
+        "fn classify(n: integer) -> text {
+    match n {
+        null => \"absent\",
+        0 => \"zero\",
+        _ => \"other\"
+    }
+}"
+    )
+    .expr("classify(0)")
+    .result(Value::Text("zero".to_string()));
+}
+
+/// T1-20: character literal pattern in scalar match.
+#[test]
+fn scalar_char_pattern() {
+    code!(
+        "fn describe(c: character) -> text {
+    match c {
+        'a' => \"vowel a\",
+        'e' => \"vowel e\",
+        _ => \"other\"
+    }
+}"
+    )
+    .expr("describe('a')")
+    .result(Value::Text("vowel a".to_string()));
+}
