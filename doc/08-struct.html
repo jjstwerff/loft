@@ -79,7 +79,14 @@
   <span class="nm">16</span>];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{map[3]}"</span> == <span class="st">"{{height:0,terrain:1,water:1,direction:1}}"</span>, <span class="st">"tile record"</span>);
   map[<span class="nm">3</span>].height = <span class="nm">200</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(map[<span class="nm">3</span>].height == <span class="nm">200</span>, <span class="st">"individual tile update"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(map[<span class="nm">3</span>].height == <span class="nm">200</span>, <span class="st">"individual tile update"</span>);</code></pre>
+<h2 id="sizeof">sizeof</h2>
+<p>'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">4</span>, <span class="st">"integer: 4 bytes"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u8</a></span>) == <span class="nm">1</span>, <span class="st">"u8: 1 byte (packed)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u16</a></span>) == <span class="nm">2</span>, <span class="st">"u16: 2 bytes (packed)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Colour</span>) == <span class="nm">3</span>, <span class="st">"Colour: 3 × u8 = 3 bytes"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Area</span>) == <span class="nm">5</span>, <span class="st">"Area: u16 + 3 × u8 = 5 bytes"</span>);
 }</code></pre>
 
   </article>

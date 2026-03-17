@@ -1673,6 +1673,17 @@ Create a vector with a literal and loop over it with 'for'. Two special loop ann
   assert("{x}" == "[3,6,9,12,15]", "result {x}");
 ```
 
+=== Clearing
+
+'v.clear()' removes all elements, setting the length to 0. The underlying storage is kept so appending afterwards is efficient.
+
+```rust
+  x.clear();
+  assert(x.len() == 0, "clear empties the vector");
+  x += [99];
+  assert(x[0] == 99, "append after clear works");
+```
+
 === Slicing
 
 A slice gives you a window into part of a vector without copying it. 'v\[a..b\]' contains elements at positions a, a+1, ..., b-1 (b is excluded). 'v\[a..\]'  goes from position a to the very last element. 'v\[..b\]'  goes from the beginning up to (but not including) position b.
@@ -1901,6 +1912,18 @@ Fill a vector with copies of the same struct using '; count' syntax. This create
   assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
   map[3].height = 200;
   assert(map[3].height == 200, "individual tile update");
+```
+
+=== sizeof
+
+'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.
+
+```rust
+  assert(sizeof(integer) == 4, "integer: 4 bytes");
+  assert(sizeof(u8) == 1, "u8: 1 byte (packed)");
+  assert(sizeof(u16) == 2, "u16: 2 bytes (packed)");
+  assert(sizeof(Colour) == 3, "Colour: 3 × u8 = 3 bytes");
+  assert(sizeof(Area) == 5, "Area: u16 + 3 × u8 = 5 bytes");
 }
 ```
 
@@ -2032,7 +2055,82 @@ describe() uses format strings with field access inside each variant's method.
 
 If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it: fn area(self: SomeVariant) -\> float { } A stub returns null at runtime and suppresses the warning.
 
+=== Match expressions on enums
+
+Match dispatches on the active variant. All variants must be covered, or a wildcard `_` arm must be present.
+
 ```rust
+  axis = match d {
+    North | South => "vertical",
+    East | West => "horizontal"
+  };
+  assert(axis == "horizontal", "or-pattern: East matches East|West");
+```
+
+Struct-enum match can destructure fields directly into the arm body.
+
+```rust
+  label = match c {
+    Circle { radius } => "r={radius}",
+    Rect { width, height } => "{width}x{height}"
+  };
+  assert(label == "r=1", "field destructuring in match arm");
+```
+
+=== Guard clauses
+
+An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Guarded arms do not count toward exhaustiveness, so a wildcard or unguarded arm is still needed.
+
+```rust
+  area = match c {
+    Circle { radius } if radius > 0.0 => PI * radius * radius,
+    _ => 0.0
+  };
+  assert(round(area * 1000) == round(PI * 1000), "guarded match on Circle");
+```
+
+=== Scalar match
+
+Match also works on integers, text, floats, booleans, and characters. Arms can be literals, ranges, `null`, or `_`.
+
+```rust
+  grade = match 85 {
+    90..=100 => "A",
+    80..90   => "B",
+    _        => "C"
+  };
+  assert(grade == "B", "range pattern 80..90 matches 85");
+```
+
+Or-patterns work on scalars too.
+
+```rust
+  kind = match 2 {
+    1 | 2 | 3 => "low",
+    _         => "high"
+  };
+  assert(kind == "low", "scalar or-pattern");
+```
+
+Null patterns match the null sentinel value.
+
+```rust
+  zero = 0;
+  check = match 1 / zero {
+    null => "absent",
+    _    => "present"
+  };
+  assert(check == "absent", "null pattern matches div-by-zero");
+```
+
+Character literals work in match arms.
+
+```rust
+  vowel = match 'e' {
+    'a' | 'e' | 'i' | 'o' | 'u' => true,
+    _ => false
+  };
+  assert(vowel, "character or-pattern");
 }
 ```
 
@@ -2929,7 +3027,7 @@ If the interpreter version is below the stated minimum, loading the library prod
 
 === Limitations
 
-These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error: fn foo() {} use testlib;   // ERROR: Syntax error All names from a library must be written with the `name::` prefix. Writing `Point {}`, `MAX_SIZE`, or `add(1, 2)` without the prefix causes a parse error or an unknown-name error. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
+These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error: fn foo() {} use testlib;   // ERROR: Syntax error By default, names from a library must be written with the `name::` prefix. You can avoid the prefix by importing specific names or everything: use mylib::Point, add;     import specific names use mylib::\*;              import all names from mylib After a wildcard or selective import, `Point {}` and `add(1, 2)` work without the prefix. Local definitions shadow imported names silently. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
 
 ```rust
 }

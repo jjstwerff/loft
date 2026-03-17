@@ -113,9 +113,12 @@ fn main() {
   // and then a `use`, the compiler reports a syntax error:
   //   fn foo() {}
   //   use testlib;   // ERROR: Syntax error
-  // All names from a library must be written with the `name::` prefix.
-  // Writing `Point {}`, `MAX_SIZE`, or `add(1, 2)` without the prefix
-  // causes a parse error or an unknown-name error.
+  // By default, names from a library must be written with the `name::` prefix.
+  // You can avoid the prefix by importing specific names or everything:
+  //   use mylib::Point, add;     import specific names
+  //   use mylib::*;              import all names from mylib
+  // After a wildcard or selective import, `Point {}` and `add(1, 2)` work
+  // without the prefix. Local definitions shadow imported names silently.
   // `pub` on struct fields is not supported and causes a parse error.
   // Writing `pub` on a top-level `struct` or `fn` is accepted but has no
   // effect — all library definitions are always visible to importers.

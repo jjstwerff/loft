@@ -77,7 +77,54 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r.<span class="fn-call">describe</span>() == <span class="st">"rect 4 by 5"</span>, <span class="st">"describe rect: {r.describe()}"</span>);</code></pre>
 <h2 id="stubs-for-missing-implementations">Stubs for missing implementations</h2>
 <p>If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } A stub returns null at runtime and suppresses the warning.</p>
-<pre><code>}</code></pre>
+<h2 id="match-expressions-on-enums">Match expressions on enums</h2>
+<p>Match dispatches on the active variant. All variants must be covered, or a wildcard `_` arm must be present.</p>
+<pre><code>  axis = match d {
+    <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="st">"vertical"</span>,
+    <span class="en">East</span> | <span class="en">West</span> =&gt; <span class="st">"horizontal"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(axis == <span class="st">"horizontal"</span>, <span class="st">"or-pattern: East matches East|West"</span>);</code></pre>
+<p>Struct-enum match can destructure fields directly into the arm body.</p>
+<pre><code>  label = match c {
+    <span class="en">Circle</span> { radius } =&gt; <span class="st">"r={radius}"</span>,
+    <span class="en">Rect</span> { width, height } =&gt; <span class="st">"{width}x{height}"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"r=1"</span>, <span class="st">"field destructuring in match arm"</span>);</code></pre>
+<h2 id="guard-clauses">Guard clauses</h2>
+<p>An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Guarded arms do not count toward exhaustiveness, so a wildcard or unguarded arm is still needed.</p>
+<pre><code>  area = match c {
+    <span class="en">Circle</span> { radius } <span class="kw">if</span> radius &gt; <span class="nm">0.0</span> =&gt; <span class="en"><a href="stdlib-math.html">PI</a></span> * radius * radius,
+    _ =&gt; <span class="nm">0.0</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">round</a></span>(area * <span class="nm">1000</span>) == <span class="bi"><a href="stdlib-math.html">round</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="nm">1000</span>), <span class="st">"guarded match on Circle"</span>);</code></pre>
+<h2 id="scalar-match">Scalar match</h2>
+<p>Match also works on integers, text, floats, booleans, and characters. Arms can be literals, ranges, `null`, or `_`.</p>
+<pre><code>  grade = match <span class="nm">85</span> {
+    <span class="nm">90..</span>=<span class="nm">100</span> =&gt; <span class="st">"A"</span>,
+    <span class="nm">80..90</span>   =&gt; <span class="st">"B"</span>,
+    _        =&gt; <span class="st">"C"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(grade == <span class="st">"B"</span>, <span class="st">"range pattern 80..90 matches 85"</span>);</code></pre>
+<p>Or-patterns work on scalars too.</p>
+<pre><code>  kind = match <span class="nm">2</span> {
+    <span class="nm">1</span> | <span class="nm">2</span> | <span class="nm">3</span> =&gt; <span class="st">"low"</span>,
+    _         =&gt; <span class="st">"high"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"low"</span>, <span class="st">"scalar or-pattern"</span>);</code></pre>
+<p>Null patterns match the null sentinel value.</p>
+<pre><code>  zero = <span class="nm">0</span>;
+  check = match <span class="nm">1</span> / zero {
+    <span class="kw">null</span> =&gt; <span class="st">"absent"</span>,
+    _    =&gt; <span class="st">"present"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(check == <span class="st">"absent"</span>, <span class="st">"null pattern matches div-by-zero"</span>);</code></pre>
+<p>Character literals work in match arms.</p>
+<pre><code>  vowel = match <span class="ch">'e'</span> {
+    <span class="ch">'a'</span> | <span class="ch">'e'</span> | <span class="ch">'i'</span> | <span class="ch">'o'</span> | <span class="ch">'u'</span> =&gt; <span class="kw">true</span>,
+    _ =&gt; <span class="kw">false</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(vowel, <span class="st">"character or-pattern"</span>);
+}</code></pre>
 
   </article>
 <script src="search-index.js"></script>

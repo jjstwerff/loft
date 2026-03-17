@@ -56,6 +56,13 @@ fn main() {
     v#remove;
   }
   assert("{x}" == "[3,6,9,12,15]", "result {x}");
+  // ## Clearing
+  // 'v.clear()' removes all elements, setting the length to 0.
+  // The underlying storage is kept so appending afterwards is efficient.
+  x.clear();
+  assert(x.len() == 0, "clear empties the vector");
+  x += [99];
+  assert(x[0] == 99, "append after clear works");
   // ## Slicing
   // A slice gives you a window into part of a vector without copying it.
   // 'v[a..b]' contains elements at positions a, a+1, ..., b-1 (b is excluded).

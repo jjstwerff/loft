@@ -42,6 +42,12 @@
     v#remove;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{x}"</span> == <span class="st">"[3,6,9,12,15]"</span>, <span class="st">"result {x}"</span>);</code></pre>
+<h2 id="clearing">Clearing</h2>
+<p>'v.clear()' removes all elements, setting the length to 0. The underlying storage is kept so appending afterwards is efficient.</p>
+<pre><code>  x.<span class="fn-call"><a href="stdlib-collections.html">clear</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"clear empties the vector"</span>);
+  x += [<span class="nm">99</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"append after clear works"</span>);</code></pre>
 <h2 id="slicing">Slicing</h2>
 <p>A slice gives you a window into part of a vector without copying it. 'v[a..b]' contains elements at positions a, a+1, ..., b-1 (b is excluded). 'v[a..]'  goes from position a to the very last element. 'v[..b]'  goes from the beginning up to (but not including) position b.</p>
 <pre><code>  pows =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">4</span>, <span class="nm">8</span>, <span class="nm">16</span>];

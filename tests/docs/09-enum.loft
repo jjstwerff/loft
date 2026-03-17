@@ -95,4 +95,62 @@ fn main() {
   // emits a warning. Provide an empty-body stub to silence it:
   //   fn area(self: SomeVariant) -> float { }
   // A stub returns null at runtime and suppresses the warning.
+
+  // ## Match expressions on enums
+  // Match dispatches on the active variant. All variants must be covered,
+  // or a wildcard `_` arm must be present.
+  axis = match d {
+    North | South => "vertical",
+    East | West => "horizontal"
+  };
+  assert(axis == "horizontal", "or-pattern: East matches East|West");
+
+  // Struct-enum match can destructure fields directly into the arm body.
+  label = match c {
+    Circle { radius } => "r={radius}",
+    Rect { width, height } => "{width}x{height}"
+  };
+  assert(label == "r=1", "field destructuring in match arm");
+
+  // ## Guard clauses
+  // An arm can have an `if` guard after the pattern. If the guard fails,
+  // matching falls through to the next arm. Guarded arms do not count
+  // toward exhaustiveness, so a wildcard or unguarded arm is still needed.
+  area = match c {
+    Circle { radius } if radius > 0.0 => PI * radius * radius,
+    _ => 0.0
+  };
+  assert(round(area * 1000) == round(PI * 1000), "guarded match on Circle");
+
+  // ## Scalar match
+  // Match also works on integers, text, floats, booleans, and characters.
+  // Arms can be literals, ranges, `null`, or `_`.
+  grade = match 85 {
+    90..=100 => "A",
+    80..90   => "B",
+    _        => "C"
+  };
+  assert(grade == "B", "range pattern 80..90 matches 85");
+
+  // Or-patterns work on scalars too.
+  kind = match 2 {
+    1 | 2 | 3 => "low",
+    _         => "high"
+  };
+  assert(kind == "low", "scalar or-pattern");
+
+  // Null patterns match the null sentinel value.
+  zero = 0;
+  check = match 1 / zero {
+    null => "absent",
+    _    => "present"
+  };
+  assert(check == "absent", "null pattern matches div-by-zero");
+
+  // Character literals work in match arms.
+  vowel = match 'e' {
+    'a' | 'e' | 'i' | 'o' | 'u' => true,
+    _ => false
+  };
+  assert(vowel, "character or-pattern");
 }

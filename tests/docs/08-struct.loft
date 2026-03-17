@@ -100,4 +100,13 @@ fn main() {
   assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
   map[3].height = 200;
   assert(map[3].height == 200, "individual tile update");
+  // ## sizeof
+  // 'sizeof(Type)' returns the packed byte size used when the type is stored
+  // as a struct field or vector element. Range-constrained integer types like
+  // u8 and u16 report their packed size, not the 4-byte stack slot size.
+  assert(sizeof(integer) == 4, "integer: 4 bytes");
+  assert(sizeof(u8) == 1, "u8: 1 byte (packed)");
+  assert(sizeof(u16) == 2, "u16: 2 bytes (packed)");
+  assert(sizeof(Colour) == 3, "Colour: 3 × u8 = 3 bytes");
+  assert(sizeof(Area) == 5, "Area: u16 + 3 × u8 = 5 bytes");
 }
