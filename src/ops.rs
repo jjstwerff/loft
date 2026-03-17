@@ -27,6 +27,80 @@ thread_local! {
     static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::seed_from_u64(12345));
 }
 
+/// In debug builds, use checked arithmetic and panic on overflow.
+/// In release builds, use unchecked arithmetic for speed.
+macro_rules! checked_int {
+    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+        #[cfg(debug_assertions)]
+        {
+            let r = $checked.unwrap_or_else(|| panic!("integer overflow: {} {} {}", $v1, $op, $v2));
+            assert!(
+                r != i32::MIN,
+                "integer null-sentinel collision: {} {} {} = i32::MIN",
+                $v1,
+                $op,
+                $v2
+            );
+            r
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            $checked.unwrap_or(i32::MIN)
+        }
+    }};
+}
+
+macro_rules! checked_long {
+    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+        #[cfg(debug_assertions)]
+        {
+            let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
+            assert!(
+                r != i64::MIN,
+                "long null-sentinel collision: {} {} {} = i64::MIN",
+                $v1,
+                $op,
+                $v2
+            );
+            r
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            $checked.unwrap_or(i64::MIN)
+        }
+    }};
+}
+
+macro_rules! sentinel_int {
+    ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
+        let r = $expr;
+        #[cfg(debug_assertions)]
+        assert!(
+            r != i32::MIN,
+            "integer null-sentinel collision: {} {} {} = i32::MIN",
+            $v1,
+            $op,
+            $v2
+        );
+        r
+    }};
+}
+
+macro_rules! sentinel_long {
+    ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
+        let r = $expr;
+        #[cfg(debug_assertions)]
+        assert!(
+            r != i64::MIN,
+            "long null-sentinel collision: {} {} {} = i64::MIN",
+            $v1,
+            $op,
+            $v2
+        );
+        r
+    }};
+}
+
 /// Return a random integer in `[lo, hi]` (inclusive).
 /// Returns `i32::MIN` (null) if `lo > hi` or if either bound is null.
 #[must_use]
@@ -205,7 +279,7 @@ pub fn op_conv_bool_from_long(val: i64) -> bool {
 #[must_use]
 pub fn op_add_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 + v2
+        checked_long!(v1.checked_add(v2), "+", v1, v2)
     } else {
         i64::MIN
     }
@@ -215,7 +289,7 @@ pub fn op_add_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_min_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 - v2
+        checked_long!(v1.checked_sub(v2), "-", v1, v2)
     } else {
         i64::MIN
     }
@@ -225,7 +299,7 @@ pub fn op_min_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_mul_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 * v2
+        checked_long!(v1.checked_mul(v2), "*", v1, v2)
     } else {
         i64::MIN
     }
@@ -235,7 +309,7 @@ pub fn op_mul_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_div_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
-        v1 / v2
+        checked_long!(v1.checked_div(v2), "/", v1, v2)
     } else {
         i64::MIN
     }
@@ -245,7 +319,7 @@ pub fn op_div_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_rem_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
-        v1 % v2
+        checked_long!(v1.checked_rem(v2), "%", v1, v2)
     } else {
         i64::MIN
     }
@@ -255,7 +329,7 @@ pub fn op_rem_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_logical_and_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 & v2
+        sentinel_long!(v1 & v2, "&", v1, v2)
     } else {
         i64::MIN
     }
@@ -265,7 +339,7 @@ pub fn op_logical_and_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_logical_or_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 | v2
+        sentinel_long!(v1 | v2, "|", v1, v2)
     } else {
         i64::MIN
     }
@@ -275,7 +349,7 @@ pub fn op_logical_or_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_exclusive_or_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 ^ v2
+        sentinel_long!(v1 ^ v2, "^", v1, v2)
     } else {
         i64::MIN
     }
@@ -283,9 +357,15 @@ pub fn op_exclusive_or_long(v1: i64, v2: i64) -> i64 {
 
 #[inline]
 #[must_use]
+#[allow(clippy::missing_panics_doc)] // debug-only assertion
 pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        v1 << v2
+        #[cfg(debug_assertions)]
+        assert!(
+            (0..64).contains(&v2),
+            "long shift out of range: {v1} << {v2}"
+        );
+        sentinel_long!(v1 << v2, "<<", v1, v2)
     } else {
         i64::MIN
     }
@@ -359,7 +439,7 @@ pub fn op_conv_bool_from_character(v: char) -> bool {
 #[must_use]
 pub fn op_add_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 + v2
+        checked_int!(v1.checked_add(v2), "+", v1, v2)
     } else {
         i32::MIN
     }
@@ -369,7 +449,7 @@ pub fn op_add_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_min_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 - v2
+        checked_int!(v1.checked_sub(v2), "-", v1, v2)
     } else {
         i32::MIN
     }
@@ -379,7 +459,7 @@ pub fn op_min_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_mul_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 * v2
+        checked_int!(v1.checked_mul(v2), "*", v1, v2)
     } else {
         i32::MIN
     }
@@ -389,7 +469,7 @@ pub fn op_mul_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_div_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
-        v1 / v2
+        checked_int!(v1.checked_div(v2), "/", v1, v2)
     } else {
         i32::MIN
     }
@@ -399,7 +479,7 @@ pub fn op_div_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
-        v1 % v2
+        checked_int!(v1.checked_rem(v2), "%", v1, v2)
     } else {
         i32::MIN
     }
@@ -409,7 +489,7 @@ pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_logical_and_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 & v2
+        sentinel_int!(v1 & v2, "&", v1, v2)
     } else {
         i32::MIN
     }
@@ -419,7 +499,7 @@ pub fn op_logical_and_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_logical_or_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 | v2
+        sentinel_int!(v1 | v2, "|", v1, v2)
     } else {
         i32::MIN
     }
@@ -429,7 +509,7 @@ pub fn op_logical_or_int(v1: i32, v2: i32) -> i32 {
 #[must_use]
 pub fn op_exclusive_or_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 ^ v2
+        sentinel_int!(v1 ^ v2, "^", v1, v2)
     } else {
         i32::MIN
     }
@@ -437,9 +517,15 @@ pub fn op_exclusive_or_int(v1: i32, v2: i32) -> i32 {
 
 #[inline]
 #[must_use]
+#[allow(clippy::missing_panics_doc)] // debug-only assertion
 pub fn op_shift_left_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
-        v1 << v2
+        #[cfg(debug_assertions)]
+        assert!(
+            (0..32).contains(&v2),
+            "integer shift out of range: {v1} << {v2}"
+        );
+        sentinel_int!(v1 << v2, "<<", v1, v2)
     } else {
         i32::MIN
     }
@@ -652,5 +738,72 @@ mod test {
         s.clear();
         format_int(&mut s, 1, 10, 3, b'0', true, false);
         assert_eq!("+01", s);
+    }
+
+    // --- T1-31: checked integer arithmetic tests ---
+
+    #[test]
+    fn add_int_normal() {
+        assert_eq!(op_add_int(3, 4), 7);
+    }
+
+    #[test]
+    fn add_int_null_propagation() {
+        assert_eq!(op_add_int(i32::MIN, 5), i32::MIN);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "integer overflow")]
+    fn add_int_overflow() {
+        let _ = op_add_int(i32::MAX, 1);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "integer overflow")]
+    fn sub_int_overflow() {
+        let _ = op_min_int(i32::MIN + 1, 2);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "integer overflow")]
+    fn mul_int_overflow() {
+        let _ = op_mul_int(i32::MAX, 2);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "integer null-sentinel collision")]
+    fn sub_int_sentinel() {
+        let _ = op_min_int(-2_147_483_647, 1);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "integer null-sentinel collision")]
+    fn and_int_sentinel() {
+        // 0x80000001 & 0x80000002 = 0x80000000 = i32::MIN
+        let _ = op_logical_and_int(i32::MIN + 1, i32::MIN + 2);
+    }
+
+    #[test]
+    fn add_long_normal() {
+        assert_eq!(op_add_long(100, 200), 300);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "long overflow")]
+    fn add_long_overflow() {
+        let _ = op_add_long(i64::MAX, 1);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "long null-sentinel collision")]
+    fn sub_long_sentinel() {
+        let _ = op_min_long(i64::MIN + 1, 1);
     }
 }

@@ -641,11 +641,15 @@ impl Parser {
                     self.cl("OpGetField", &[code, p, self.type_info(tp)])
                 }
             }
-            _ => panic!(
-                "Get not implemented on '{}' at {}",
-                tp.name(&self.data),
-                self.lexer.pos()
-            ),
+            _ => {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Field access not supported on type {}",
+                    tp.name(&self.data)
+                );
+                Value::Null
+            }
         }
     }
 
@@ -715,12 +719,16 @@ impl Parser {
                 if self.first_pass {
                     Value::Null
                 } else {
-                    panic!(
-                        "Set not implemented on {}/{} at {}",
-                        self.data.attr_name(d_nr, f_nr),
-                        self.data.attr_type(d_nr, f_nr).name(&self.data),
-                        self.lexer.pos()
-                    )
+                    {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Cannot assign to field '{}' of type {}",
+                            self.data.attr_name(d_nr, f_nr),
+                            self.data.attr_type(d_nr, f_nr).name(&self.data)
+                        );
+                        Value::Null
+                    }
                 }
             }
         }
@@ -792,7 +800,13 @@ impl Parser {
         if self.data.def_type(d_nr) == DefType::Dynamic {
             for a_nr in 0..self.data.attributes(d_nr) {
                 let Type::Routine(r_nr) = self.data.attr_type(d_nr, a_nr) else {
-                    panic!("Incorrect Dynamic function {}", self.data.def(d_nr).name);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Incorrect dynamic function {}",
+                        self.data.def(d_nr).name
+                    );
+                    return Type::Void;
                 };
                 if self.data.attr_type(r_nr, 0).is_equal(&types[0]) {
                     return self.call_nr(code, r_nr, list, types, report);
@@ -962,7 +976,13 @@ impl Parser {
                         }
                         wv
                     } else {
-                        panic!("Unexpected reference type {}", vtp.name(&self.data));
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unexpected reference type {}",
+                            vtp.name(&self.data)
+                        );
+                        0
                     };
                     ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
                     actual.push(v_block(
@@ -1413,7 +1433,10 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
             // OpAppendVector mutates the vector pointed to by its first Var argument.
             let stack_write = def.name.starts_with("OpAppendStack")
                 || def.name.starts_with("OpClearStack")
-                || def.name == "OpAppendVector";
+                || def.name == "OpAppendVector"
+                || def.name == "OpClearVector"
+                || def.name == "OpInsertVector"
+                || def.name == "OpRemoveVector";
             // Field-write and vector-append operators: any Var appearing in the first
             // argument is being mutated (e.g. v[idx].field = val, r += [x]).
             let field_write = def.name.starts_with("OpSet")

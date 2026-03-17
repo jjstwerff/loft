@@ -198,11 +198,14 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        let store = self.database.store(&file);
-        let file_ref = store.get_int(file.rec, file.pos + 28);
-        if file_ref != i32::MIN
-            && let Some(f) = &mut self.database.files[file_ref as usize]
-        {
+        let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+        if file_ref == i32::MIN {
+            // File not yet open — store the seek position in #next so the first
+            // read/write applies it after opening the file.
+            self.database
+                .store_mut(&file)
+                .set_long(file.rec, file.pos + 16, pos);
+        } else if let Some(f) = &mut self.database.files[file_ref as usize] {
             f.seek(SeekFrom::Start(pos as u64)).unwrap_or_default();
         }
     }

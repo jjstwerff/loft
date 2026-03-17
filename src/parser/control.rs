@@ -254,6 +254,8 @@ impl Parser {
     // <pattern> ::= '_' | <variant> [ '{' <field> { ',' <field> } '}' ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
+        // Save position of the match keyword for exhaustiveness diagnostics.
+        let match_pos = self.lexer.pos().clone();
         // 1. Parse the subject expression.
         let mut subject = Value::Null;
         let subject_type = self.expression(&mut subject);
@@ -723,13 +725,12 @@ impl Parser {
                 .map(|(_, d)| d.name.clone())
                 .collect();
             if !missing.is_empty() {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "match on {} is not exhaustive — missing: {}; add the missing variants or a '_ =>' wildcard",
+                let msg = format!(
+                    "Error: match on {} is not exhaustive — missing: {}; add the missing variants or a '_ =>' wildcard",
                     self.data.def(e_nr).name,
                     missing.join(", ")
                 );
+                self.lexer.pos_diagnostic(Level::Error, &match_pos, &msg);
             }
         }
 
@@ -1161,7 +1162,15 @@ impl Parser {
             self.data.definitions[self.context as usize].returned = match ret {
                 Type::Vector(it, _) => Type::Vector(it, dep),
                 Type::Reference(td, _) => Type::Reference(td, dep),
-                _ => unreachable!("ref_return called with non-Vector/Reference return type"),
+                _ => {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unexpected return type in ref_return: {}",
+                        ret.name(&self.data)
+                    );
+                    return;
+                }
             };
         }
     }
