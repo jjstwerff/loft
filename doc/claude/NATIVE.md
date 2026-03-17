@@ -641,6 +641,101 @@ the key arguments into a `vec![...]` literal before calling the runtime function
 
 ---
 
+## N20 — Repair fill.rs Auto-Generation
+
+### Problem
+
+`src/fill.rs` (the bytecode operator dispatch table) is hand-maintained.
+`src/create.rs::generate_code()` produces `tests/generated/fill.rs` on every
+debug test run, but it cannot replace `src/fill.rs` because:
+
+1. **Missing `use crate::ops;`** — the generated file omits the `ops` import
+2. **Formatting** — inline braces (`if x {y}`) vs expanded (`if x {\n    y\n}`)
+3. **Math functions inlined vs delegated** — the hand-maintained version inlines
+   match arms for `math_func_single` etc.; the generated version calls
+   `s.math_func_single()` which delegates to the same State method
+
+The OPERATORS array order and function bodies are otherwise identical.  The
+generated file compiles inside the crate.
+
+### Impact
+
+When a new opcode is added to `default/01_code.loft` or `default/02_images.loft`,
+the developer must manually add the operator to `src/fill.rs` — find the right
+position in the OPERATORS array, write the function body, and update the array
+size constant.  This is error-prone (the T2-7 `mkdir` issue showed this).
+
+### Fix Path
+
+#### N20a — Add `ops` import to generated fill.rs
+
+In `create.rs::generate_code()`, add `use crate::ops;` to the generated header.
+
+**File:** `src/create.rs` (line 125)
+**Effort:** Trivial
+
+---
+
+#### N20b — Run `cargo fmt` on generated fill.rs
+
+After `generate_code()` writes `tests/generated/fill.rs`, run `rustfmt` on it
+(or call `std::process::Command::new("rustfmt")` from the test).  This fixes
+all formatting differences.
+
+Alternatively, emit properly formatted code in `generate_code()` by adding
+newlines after `{` and before `}` in the template expansion.
+
+**File:** `src/create.rs` or `tests/testing.rs`
+**Effort:** Small
+
+---
+
+#### N20c — Replace src/fill.rs with generated version
+
+Once N20a+N20b produce a generated fill.rs that is byte-for-byte equivalent to
+the hand-maintained one (after formatting), add a CI step that:
+
+1. Runs `generate_code()` (happens automatically in debug tests)
+2. Compares `tests/generated/fill.rs` with `src/fill.rs`
+3. Fails if they differ — forces the developer to copy the generated version
+
+This eliminates manual maintenance.  New opcodes added to `default/*.loft` with
+`#rust` templates are automatically included.  Operators without templates
+(those that delegate to State methods) need a `#rust` template added, or a
+new `#state_call "method_name"` annotation.
+
+**File:** `tests/testing.rs` or CI script
+**Effort:** Medium
+
+---
+
+#### N20d — Add `#state_call` annotation for delegation operators
+
+Currently, 52 operators have no `#rust` template because they delegate to
+a State method.  Their function bodies are `s.method_name()`.
+
+Add a new annotation in `default/*.loft`:
+```loft
+fn OpIterate(...);
+#state_call"iterate"
+```
+
+`create.rs::generate_code()` recognises `#state_call` and emits:
+```rust
+fn iterate(s: &mut State) {
+    s.iterate();
+}
+```
+
+This covers all 52 delegation operators and eliminates the last hand-written
+functions from fill.rs.
+
+**Files:** `default/01_code.loft`, `default/02_images.loft`, `src/create.rs`,
+`src/parser/definitions.rs` (parse the new annotation)
+**Effort:** Medium
+
+---
+
 ## Dependency Graph
 
 ```

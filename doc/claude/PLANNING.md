@@ -748,6 +748,16 @@ source via `Output::output_native()`, compile with `rustc`, run the binary.
 
 ---
 
+### N20  Repair fill.rs auto-generation
+**Description:** Make `create.rs::generate_code()` produce a `fill.rs` that can
+replace the hand-maintained `src/fill.rs`. Add `ops` import, fix formatting,
+add CI check for drift, and introduce `#state_call` annotation for the 52
+delegation operators. Eliminates manual maintenance when adding new opcodes.
+**Effort:** Medium (create.rs + default/*.loft + CI)
+**Detail:** [NATIVE.md](NATIVE.md) § N20
+
+---
+
 ## Tier R — Repository Extraction
 
 Standalone `loft` repository created (R1, 2026-03-16).  The remaining R item is the
@@ -913,6 +923,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | N17   | Add `OpFormatFloat`/`OpFormatStackLong` handlers         | N    | Small     | 1.1     |             | NATIVE.md N10e-3           |
 | N18   | Fix `crate::state::` references in templates             | N    | Trivial   | 1.1     |             | NATIVE.md N10e-4           |
 | N19   | Fix empty pre-eval and prefix issues                    | N    | Small     | 1.1     |             | NATIVE.md N10e-5           |
+| N20   | Repair fill.rs auto-generation                          | N    | Medium    | 1.1     |             | NATIVE.md N20              |
 | R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
 | W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
