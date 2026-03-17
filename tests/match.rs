@@ -514,6 +514,131 @@ fn match_range_boundary() {
     );
 }
 
+// ── T1-16: Guard clauses ─────────────────────────────────────────────────────
+
+/// T1-16: single guarded arm with unconditional fallback.
+#[test]
+fn guard_basic() {
+    code!("enum Priority { Low, Medium, High }")
+        .expr(
+            "p = High;
+match p {
+    High if false => 99,
+    High          => 10,
+    _             => 0
+}",
+        )
+        .result(Value::Int(10));
+}
+
+/// T1-16: multiple guarded arms for the same variant.
+#[test]
+fn guard_multiple() {
+    code!(
+        "enum Level { A, B, C }
+
+pub fn score(l: Level, x: integer) -> text {
+    match l {
+        A if x > 90 => \"excellent\",
+        A if x > 70 => \"good\",
+        A            => \"ok\",
+        B            => \"meh\",
+        C            => \"bad\"
+    }
+}"
+    )
+    .expr("score(A, 95)")
+    .result(Value::str("excellent"));
+}
+
+/// T1-16: field binding used inside guard expression.
+#[test]
+fn guard_with_binding() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect   { width: float, height: float }
+}
+
+pub fn area(s: Shape) -> float {
+    match s {
+        Circle { radius } if radius > 0.0 => PI * radius * radius,
+        Circle { radius }                 => 0.0,
+        Rect { width, height }            => width * height
+    }
+}"
+    )
+    .expr("area(Circle { radius: -1.0 })")
+    .result(Value::Float(0.0));
+}
+
+/// T1-16: guard with non-boolean type produces compile error.
+#[test]
+fn guard_non_bool() {
+    code!(
+        "enum X { A, B }
+
+fn test() {
+    x = A;
+    match x {
+        A if 42 => 1,
+        _ => 0
+    }
+}"
+    )
+    .error("guard must be boolean, got integer at guard_non_bool:6:19");
+}
+
+/// T1-16: guarded + unconditional same variant — no exhaustiveness error.
+#[test]
+fn guard_exhaustive() {
+    code!(
+        "enum Direction { North, South }
+
+pub fn label(d: Direction) -> text {
+    match d {
+        North if false => \"never\",
+        North          => \"N\",
+        South          => \"S\"
+    }
+}"
+    )
+    .expr("label(North)")
+    .result(Value::str("N"));
+}
+
+/// T1-16: guard on scalar match.
+#[test]
+fn guard_scalar() {
+    code!(
+        "fn test() {
+    x = 5;
+    r = match x {
+        5 if x > 10 => \"big five\",
+        5            => \"five\",
+        _            => \"other\"
+    };
+    assert(r == \"five\", \"r: {r}\");
+}"
+    );
+}
+
+/// T1-16: guard on scalar match with wildcard guard.
+#[test]
+fn guard_scalar_wildcard() {
+    code!(
+        "fn test() {
+    x = 42;
+    r = match x {
+        _ if x > 100 => \"big\",
+        _ if x > 10  => \"medium\",
+        _            => \"small\"
+    };
+    assert(r == \"medium\", \"r: {r}\");
+}"
+    );
+}
+
 /// P46: block expression as match arm body — was a segfault, now works.
 #[test]
 fn match_arm_block_body() {

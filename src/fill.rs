@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 236] = &[
+pub const OPERATORS: &[fn(&mut State); 237] = &[
     goto,
     goto_word,
     goto_false,
@@ -245,6 +245,7 @@ pub const OPERATORS: &[fn(&mut State); 236] = &[
     call_ref,
     mkdir,
     mkdir_all,
+    clear_scratch,
 ];
 
 fn goto(s: &mut State) {
@@ -1823,4 +1824,8 @@ fn mkdir_all(s: &mut State) {
     let v_path = s.string();
     let new_value = std::fs::create_dir_all(v_path.str()).is_ok();
     s.put_stack(new_value);
+}
+
+fn clear_scratch(s: &mut State) {
+    s.database.scratch.clear();
 }

@@ -560,7 +560,7 @@ For enum or-patterns, each variant's `def_nr` is added to `covered`.
 
 ### T1-16  Guard clauses (`if`)
 
-> **Status: planned**
+> **Status: implemented** — 7 tests pass; shipped 2026-03-17.
 
 An optional boolean condition after the pattern.  If the guard fails,
 the arm does not fire and matching continues with the next arm.

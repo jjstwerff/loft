@@ -85,6 +85,17 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-16** — Guard clauses in match arms. Match arms now support `if guard`
+  after the pattern: `Circle { r } if r > 0.0 => ...`. Guard failure falls
+  through to the next arm. Guarded arms don't count for exhaustiveness.
+  Works for enum, struct-enum, and scalar match expressions. Seven tests
+  in `tests/match.rs`. (2026-03-17)
+
+- **T3-9** — Scoped scratch reset. `OpClearScratch` opcode clears the
+  temporary string buffer at every statement boundary. Native text functions
+  (`replace`, `to_lowercase`, `to_uppercase`) no longer leak one `String`
+  per call for the entire program run. (2026-03-17)
+
 - **T1-17** — Range patterns in match expressions: `1..=9` (inclusive) and
   `10..100` (exclusive). Lowered to short-circuit AND condition.
   Three tests in `tests/match.rs`. (2026-03-17)
