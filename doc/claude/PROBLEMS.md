@@ -27,6 +27,7 @@ recommended fix path are described.
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
 | 45 | `&vector` parameter triggers "never modified" for clear-like ops | Low | Declare without `&` |
+| 49 | Integer arithmetic silently wraps on overflow; may collide with null sentinel | Medium | Use `long` for values near `i32::MAX` |
 | ~~47~~ | ~~Invalid UTF-8 in source file silently truncates parsing~~ | ~~Low~~ | **FIXED** |
 | ~~48~~ | ~~Runtime `read_to_string` panics on non-UTF-8 file data~~ | ~~Medium~~ | **FIXED** |
 
@@ -816,6 +817,36 @@ Parsing stops cleanly with a meaningful message.
 
 **Fixed:** `get_file_text()` in `state/io.rs` now clears the buffer on `read_to_string`
 failure instead of panicking. Non-UTF-8 files produce an empty string result.
+
+---
+
+## Arithmetic Safety
+
+### 49. Integer arithmetic silently wraps on overflow; may collide with null sentinel
+
+**Symptom:** All integer and long arithmetic in `src/ops.rs` uses unchecked Rust operations.
+Overflow wraps silently — `i32::MAX + 1` produces `i32::MIN + 1` with no error. If the
+result happens to be exactly `i32::MIN` (the null sentinel), the value is indistinguishable
+from null for the rest of the program.
+
+**Example:**
+```loft
+x = -2147483647 - 1   // produces i32::MIN = null, not -2147483648
+if !x { "null" }       // true — x looks null
+```
+
+**Impact:** Medium — most programs don't approach `i32::MAX`/`i32::MIN`, but scientific
+or data-processing programs can. The null-sentinel collision is especially insidious
+because the program silently continues with a null instead of a wrong number.
+
+**Workaround:** Use `long` instead of `integer` for values that may approach the 32-bit
+boundary.  For struct fields, `not null` reclaims the sentinel value.
+
+**Fix path:** PLANNING T1-31 — add `#[cfg(debug_assertions)]` checked arithmetic in
+`src/ops.rs` so that debug builds panic on overflow and sentinel collision.  Release
+builds retain the current fast unchecked path.
+
+**Effort:** Small (single file `src/ops.rs`)
 
 ---
 

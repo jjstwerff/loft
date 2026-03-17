@@ -83,14 +83,14 @@ Items on the same line can be done in a single PR.
 4. ~~**T1-17** (range patterns) and **T1-16** (guards)~~ done
 5. ~~**T1-15** (or-patterns) and **T1-20** (null/char patterns)~~ done
 6. ~~**T0-9** (UTF-8 crash) + **T0-10** (UTF-8 source truncation) + **T1-27** (fix suggestions) + **T1-29** (Fatal→Error) + **T1-30** (exhaustiveness docs)~~ done
-7. **T0-8** (panic→diagnostic) — eliminate remaining crashes
+7. **T0-8** (panic→diagnostic) + **T1-31** (checked integer arithmetic) — eliminate remaining crashes and silent wrong results
 8. **T1-26** (diagnostic positions) + **T1-28** (error recovery) — low-effort, high UX impact
 9. **P20** (file seek) + **P45** (`&vector` warning) — small fixes from open PROBLEMS
 10. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
-10. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-11. **T2-8** (stdlib: vector ops) — reverse + insert remain
-12. **T2-14** (text `#index` semantics) — document or fix the byte-offset vs character-position gap
-13. **N4** (iterators) + **N6** (compile gate) — completes native codegen
+11. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
+12. **T2-8** (stdlib: vector ops) — reverse + insert remain
+13. **T2-14** (text `#index` semantics) — document or fix the byte-offset vs character-position gap
+14. **N4** (iterators) + **N6** (compile gate) — completes native codegen
 
 Tier W (Web IDE) is an independent parallel track that can start any time after R6.
 
@@ -120,8 +120,6 @@ return a fallback value (`Type::Void`, `Value::Null`), and let parsing continue.
 **Fix path:** One function at a time; each needs a test in `tests/parse_errors.rs`.
 **Effort:** Small (7 × ~5 lines each)
 **Target:** 1.1
-
----
 
 ---
 
@@ -165,6 +163,37 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 3. Add tests that verify a single-error input produces at most 2 diagnostics.
 **Effort:** Medium (lexer.rs + parser call sites; needs per-construct recovery targets)
 **Target:** 1.1+
+
+---
+
+### T1-31  Checked integer arithmetic in debug builds
+**Sources:** Goal 1 (Correct — no silent wrong results); `src/ops.rs` overflow-prone operators
+**Severity:** Medium — `i32::MAX + 1` silently wraps to a wrong value; overflow to exactly
+`i32::MIN` / `i64::MIN` is indistinguishable from null
+**Description:** All 16 integer and long arithmetic operators in `src/ops.rs` use unchecked
+Rust arithmetic after a null-sentinel guard.  Two defects:
+1. **Silent overflow**: e.g. `op_add_int(i32::MAX, 1)` wraps to `i32::MIN + 1` — wrong answer.
+2. **Null-sentinel collision**: non-null computation producing exactly `i32::MIN` (or `i64::MIN`)
+   is treated as null by the rest of the runtime.  E.g. `-2_147_483_647 - 1` returns null.
+
+**Fix path:** Use `#[cfg(debug_assertions)]` to add checked paths in debug builds, keeping
+release builds unchanged.  Pattern for each op:
+- Binary arithmetic (`op_add_int`, `op_min_int`, `op_mul_int`, `op_div_int`, `op_rem_int`
+  + long equivalents): use `checked_add` / `checked_sub` / `checked_mul` / `checked_div` /
+  `checked_rem`; panic on overflow.  Assert `result != SENTINEL` for null-collision.
+- Shift left (`op_shift_left_int/long`): assert shift amount in range; assert result != sentinel.
+- Bitwise (`op_logical_and/or`, `op_exclusive_or` + long equivalents): assert result != sentinel
+  (bitwise ops cannot overflow but can produce the sentinel bit pattern).
+- Unary (`op_negate_int/long`, `op_abs_int/long`): no change needed — already treat `MIN` input
+  as null propagation.
+- Shift right (`op_shift_right_int/long`): no change needed — cannot overflow or produce sentinel.
+
+Add `#[cfg(debug_assertions)] #[should_panic]` tests for overflow and sentinel collision.
+
+**Files changed:** `src/ops.rs` only (~120 lines of changes + ~40 lines of tests).
+No changes to `fill.rs`, `default/01_code.loft`, or `generation.rs`.
+**Effort:** Small (single file, pure functions, no cross-file dependencies)
+**Target:** 1.1
 
 ---
 
@@ -881,6 +910,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T0-8  | Convert 7 parser panics to diagnostics                   | 0    | Small     | 1.1     |             | DEVELOPERS.md Step 1       |
 | T1-26 | Improve 5 diagnostic positions                           | 1    | Small     | 1.1     |             | DEVELOPERS.md positioning  |
 | T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
+| T1-31 | Checked integer arithmetic in debug builds              | 1    | Small     | 1.1     |             | Goal 1 (correctness)       |
 | P20   | File seek before first open is a no-op                  | 1    | Small     | 1.1     |             | PROBLEMS #20               |
 | P45   | `&vector` "never modified" for DbRef-mutating ops       | 1    | Small     | 1.1+    |             | PROBLEMS #45               |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
