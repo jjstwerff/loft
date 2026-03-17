@@ -112,8 +112,12 @@ fn main() {
   assert(sizeof(long) == 8, "sizeof long is 8");
   assert(sizeof(float) == 8, "sizeof float is 8");
   assert(sizeof(boolean) == 1, "sizeof boolean is 1");
-  // Note: sizeof(u8) and sizeof(u16) return 4 (integer stack size); byte-packing
-  // only applies inside struct fields.
+  // Range-constrained integer types return their packed size
+  assert(sizeof(u8) == 1, "sizeof u8 is 1");
+  assert(sizeof(u16) == 2, "sizeof u16 is 2");
+  assert(sizeof(i8) == 1, "sizeof i8 is 1");
+  assert(sizeof(i16) == 2, "sizeof i16 is 2");
+  assert(sizeof(i32) == 4, "sizeof i32 is 4");
   // Struct sizes
   assert(sizeof(Pos) == 8, "sizeof Pos (2x integer) is 8");
   // Point has 3 fields of integer limit(0,255) — packed to 1 byte each in DB storage

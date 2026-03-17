@@ -1380,10 +1380,16 @@ impl Parser {
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {
-                        *val = Value::Int(i32::from(
-                            self.database
-                                .size(self.data.def(self.data.type_elm(&tp)).known_type),
-                        ));
+                        let packed = tp.size(false);
+                        *val = if packed > 0 {
+                            // Range-constrained integer: use packed field size
+                            Value::Int(i32::from(packed))
+                        } else {
+                            Value::Int(i32::from(
+                                self.database
+                                    .size(self.data.def(self.data.type_elm(&tp)).known_type),
+                            ))
+                        };
                     }
                 }
             }

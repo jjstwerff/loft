@@ -14,66 +14,71 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="conditionals">Conditionals</h2>
 <p>'if' runs a block only when its condition is true. If the condition is false the block is skipped entirely — nothing else happens. 'panic' stops the program immediately with a message. During development it is a clear way to mark situations that should never occur.</p>
-<pre><code>    <span class="kw">if</span> <span class="nm">2</span> &gt; <span class="nm">5</span> {
-       <span class="bi"><a href="stdlib-output-and-diagnostics.html">panic</a></span>(<span class="st">"Incorrect test"</span>);
-    }</code></pre>
+<pre><code>  <span class="kw">if</span> <span class="nm">2</span> &gt; <span class="nm">5</span> {
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">panic</a></span>(<span class="st">"Incorrect test"</span>);
+  }</code></pre>
 <p>Combine conditions with 'and' / 'or' (or their symbol equivalents '&amp;&amp;' / '||'). Note that '&amp;' is the bitwise AND operator — it works on the individual bits of a number, which is different from the logical 'and' keyword. An 'if/else' chain picks exactly one branch to execute.</p>
-<pre><code>    a = <span class="nm">12</span>;
-    <span class="kw">if</span> a &gt; <span class="nm">10</span> <span class="kw">and</span> a &amp; <span class="nm">7</span> == <span class="nm">4</span> {
-        a += <span class="nm">1</span>;
-    } <span class="kw">else</span> {
-        a -= <span class="nm">1</span>;
-    }</code></pre>
+<pre><code>  a = <span class="nm">12</span>;
+  <span class="kw">if</span> a &gt; <span class="nm">10</span> <span class="kw">and</span> a &amp; <span class="nm">7</span> == <span class="nm">4</span> {
+    a += <span class="nm">1</span>;
+  } <span class="kw">else</span> {
+    a -= <span class="nm">1</span>;
+  }</code></pre>
 <p>Text enclosed in double quotes can contain expressions inside curly braces — the expression is evaluated and its result is inserted into the text. 'assert' checks that its first argument is true; if it is false the second argument is printed as an error message.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">13</span>, <span class="st">"Incorrect value {a} != 13"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">13</span>, <span class="st">"Incorrect value {a} != 13"</span>);</code></pre>
 <h2 id="if-as-an-expression">if as an expression</h2>
 <p>Every block in Loft produces a value — the last expression inside it. That means you can use 'if/else' on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed.</p>
-<pre><code>    b = <span class="kw">if</span> a == <span class="nm">13</span> { <span class="st">"Correct"</span> } <span class="kw">else</span> { <span class="st">"Wrong"</span> };
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"Correct"</span>, <span class="st">"Logic expression"</span>);</code></pre>
+<pre><code>  b = <span class="kw">if</span> a == <span class="nm">13</span> {
+    <span class="st">"Correct"</span>
+  } <span class="kw">else</span> {
+    <span class="st">"Wrong"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"Correct"</span>, <span class="st">"Logic expression"</span>);</code></pre>
 <h2 id="iteration">Iteration</h2>
 <p>'for x in a..b' loops over the integers starting at a and stopping before b (exclusive upper bound). Use '..=' to include the upper bound. Here we sum 1 + 2 + 3 + 4 + 5 = 15.</p>
-<pre><code>    t = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> <span class="nm">1..6</span> {
-        t += a;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">15</span>, <span class="st">"Total was {t} instead of 15"</span>);</code></pre>
+<pre><code>  t = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> <span class="nm">1..6</span> {
+    t += a;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">15</span>, <span class="st">"Total was {t} instead of 15"</span>);</code></pre>
 <p>'rev(range)' reverses the direction of any range. '1..=5' is inclusive, so it visits 5, 4, 3, 2, 1 in that order. Multiplying each digit into a running total builds the number 54321.</p>
-<pre><code>    t = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> <span class="bi">rev</span>(<span class="nm">1..</span>=<span class="nm">5</span>) {
-        t = t * <span class="nm">10</span> + a;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">54321</span>, <span class="st">"Result was {t} instead of 54321"</span>);</code></pre>
+<pre><code>  t = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> <span class="bi">rev</span>(<span class="nm">1..</span>=<span class="nm">5</span>) {
+    t = t * <span class="nm">10</span> + a;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">54321</span>, <span class="st">"Result was {t} instead of 54321"</span>);</code></pre>
 <h2 id="nested-loops-and-break">Nested loops and break</h2>
 <p>Loft has no 'while' or 'loop' keyword — all repetition uses 'for' with a range, so there is always a clear upper bound on how many iterations can occur. 'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar#break'. Here x#break leaves both loops when the product x*y reaches 16.</p>
-<pre><code>    b = <span class="st">""</span>;
-    <span class="kw">for</span> x <span class="kw">in</span> <span class="nm">1..5</span> {
-        <span class="kw">for</span> y <span class="kw">in</span> <span class="nm">1..5</span> {
-            <span class="kw">if</span> y &gt; x {
-                <span class="kw">break</span>; <span class="cm">// this breaks the inner y loop</span>
-            }
-            <span class="kw">if</span> x * y &gt;= <span class="nm">16</span> {
-                x#<span class="kw">break</span>;
-            }
-            <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(b) &gt; <span class="nm">0</span> {
-                b += <span class="st">"; "</span>;
-            }
-            b += <span class="st">"{x}:{y}"</span>;
-        }
+<pre><code>  b = <span class="st">""</span>;
+  <span class="kw">for</span> x <span class="kw">in</span> <span class="nm">1..5</span> {
+    <span class="kw">for</span> y <span class="kw">in</span> <span class="nm">1..5</span> {
+      <span class="kw">if</span> y &gt; x {
+        <span class="kw">break</span>;</code></pre>
+<p>this breaks the inner y loop</p>
+<pre><code>      }
+      <span class="kw">if</span> x * y &gt;= <span class="nm">16</span> {
+        x# <span class="kw">break</span>;
+      }
+      <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(b) &gt; <span class="nm">0</span> {
+        b += <span class="st">"; "</span>;
+      }
+      b += <span class="st">"{x}:{y}"</span>;
     }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"1:1; 2:1; 2:2; 3:1; 3:2; 3:3; 4:1; 4:2; 4:3"</span>, <span class="st">"Incorrect sequence '{b}'"</span>);</code></pre>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"1:1; 2:1; 2:2; 3:1; 3:2; 3:3; 4:1; 4:2; 4:3"</span>, <span class="st">"Incorrect sequence '{b}'"</span>);</code></pre>
 <h2 id="loop-helpers-first-and-count">Loop helpers: #first and #count</h2>
 <p>Inside a loop body you have access to some useful metadata about the current iteration. 'x#first' is true only for the very first element that passes the filter. 'x#count' is a zero-based index counting only the elements that were not filtered out. An 'if' clause directly after 'in range' filters which values enter the loop — here we skip every value where x % 3 == 1, keeping 2, 3, 5, 6, 8, 9.</p>
-<pre><code>    b = <span class="st">""</span>;
-    <span class="kw">for</span> x <span class="kw">in</span> <span class="nm">1..</span>=<span class="nm">9</span> <span class="kw">if</span> x % <span class="nm">3</span> != <span class="nm">1</span> {
-        <span class="kw">if</span> !x#first {
-            b += <span class="st">", "</span>;
-        }
-        b += <span class="st">"{x#count}:{x}"</span>;
+<pre><code>  b = <span class="st">""</span>;
+  <span class="kw">for</span> x <span class="kw">in</span> <span class="nm">1..</span>=<span class="nm">9</span> <span class="kw">if</span> x % <span class="nm">3</span> != <span class="nm">1</span> {
+    <span class="kw">if</span> !x#first {
+      b += <span class="st">", "</span>;
     }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"0:2, 1:3, 2:5, 3:6, 4:8, 5:9"</span>, <span class="st">"Sequence '{b}'"</span>);</code></pre>
+    b += <span class="st">"{x#count}:{x}"</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"0:2, 1:3, 2:5, 3:6, 4:8, 5:9"</span>, <span class="st">"Sequence '{b}'"</span>);</code></pre>
 <h2 id="formatting-a-loop-inline">Formatting a loop inline</h2>
 <p>A for loop can appear inside a format string. The results are collected into a bracketed, comma-separated list. A format specifier after the closing brace is applied to every element — ':02' means at least 2 digits, zero-padded. This is handy for building compact representations on the fly.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{for x in 1..7 {x*2}:02}b"</span> == <span class="st">"a[02,04,06,08,10,12]b"</span>, <span class="st">"Format range"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{for x in 1..7 {x*2}:02}b"</span> == <span class="st">"a[02,04,06,08,10,12]b"</span>, <span class="st">"Format range"</span>);
 }</code></pre>
 
   </article>

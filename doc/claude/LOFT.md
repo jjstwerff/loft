@@ -59,6 +59,28 @@ and can emit Rust code for host integration.
 
 Any variable or field can hold a `null` (absent) value unless declared `not null`.
 
+#### Null representation
+
+Loft uses in-band sentinel values to represent `null`. Each type has a dedicated sentinel:
+
+| Type | Null sentinel | Notes |
+|------|---------------|-------|
+| `boolean` | `false` | `!b` is true for both `null` and `false` |
+| `integer` | `i32::MIN` (-2 147 483 648) | See warning below |
+| `long` | `i64::MIN` | Same risk as integer at the `i64` boundary |
+| `float` | `NaN` | IEEE 754: `NaN != NaN`, but `!f` correctly detects null |
+| `single` | `NaN` (32-bit) | Same as `float` |
+| `character` | `'\0'` (NUL) | The null character is not a valid loft character value |
+| `text` | internal null pointer | Opaque; `!t` detects it; `len(t)` returns null |
+| `reference` | record 0 | Opaque; `!r` detects it |
+| plain `enum` | byte `255` | Limits plain enums to 255 variants |
+
+**Integer sentinel warning:** Arithmetic that produces exactly `i32::MIN` (e.g.
+`-2147483647 - 1`) becomes indistinguishable from `null`. Division by zero also
+returns `null` (`i32::MIN`). If a program needs the full 32-bit signed range, use
+`long` instead. For struct fields, `not null` reclaims the sentinel value for
+storage, allowing the full range.
+
 Integer ranges can be constrained with `limit`:
 ```
 integer limit(-128, 127)   // fits in a byte

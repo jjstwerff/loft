@@ -85,6 +85,15 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-25** — `sizeof(u8)` now returns 1 (packed field size) instead of 4 (stack slot
+  size). Range-constrained integer types (`u8`, `i8`, `u16`, `i16`) report their packed
+  byte size, consistent with `sizeof(Struct)` for structs containing those fields.
+  (2026-03-17)
+
+- **T1-24** — Documented null sentinel values for every type in the language reference
+  (LOFT.md § "Null representation"). Includes the `i32::MIN` arithmetic risk and
+  mitigation via `long` or `not null`. (2026-03-17)
+
 - **T1-16** — Guard clauses in match arms. Match arms now support `if guard`
   after the pattern: `Circle { r } if r > 0.0 => ...`. Guard failure falls
   through to the next arm. Guarded arms don't count for exhaustiveness.

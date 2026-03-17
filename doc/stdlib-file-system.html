@@ -10,51 +10,51 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <span class="cur">File System</span> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>File System</h1>
 <article>
-<div class="section-desc"><p>Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference.</p></div>
 <div class="item">
 <pre><code>pub struct EnvVariable {
-    name: text,
-    value: text
+  name: text,
+  value: text
 }</code></pre>
-<p>An environment variable as a name/value pair.</p>
+<p>Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair.</p>
 </div>
 <div class="item">
 <pre><code>pub struct Pixel {
-    r: integer limit(0, 255) not null,
-    g: integer limit(0, 255) not null,
-    b: integer limit(0, 255) not null
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
 }</code></pre>
-<p>Data per pixel of the png graph. Fields r, g, b hold red, green and blue intensity, each 0–255.</p>
 </div>
 <div class="item">
 <pre><code>pub struct Image {
-    name: text,
-    width: integer,
-    height: integer,
-    data: vector&lt;Pixel&gt;
+  name: text,
+  width: integer,
+  height: integer,
+  data: vector &lt; Pixel &gt;
 }</code></pre>
-<p>Database structure with image data. The actual data is in height rows of width length.</p>
 </div>
 <div class="item">
 <pre><code>pub enum Format {
-    TextFile,
-    LittleEndian,
-    BigEndian,
-    Directory,
-    NotExists
+  TextFile,
+  LittleEndian,
+  BigEndian,
+  Directory,
+  NotExists
 }</code></pre>
-<p>Describes how a file is opened. TextFile: read or write as UTF-8 text (default). LittleEndian: binary mode, least-significant byte first. BigEndian: binary mode, most-significant byte first. Directory: represents a directory path. NotExists: no file or directory exist.</p>
 </div>
 <div class="item">
 <pre><code>pub struct File {
-    path: text,
-    size: long,
-    format: Format,
-    ref: i32,
-    current: long,
-    next: long
+  path: text,
+
+  size: long,
+
+  format: Format,
+
+  ref: i32,
+
+  current: long,
+
+  next: long
 }</code></pre>
-<p>A handle to a filesystem entry. Fields: path (full path), size (file size in bytes), format (open mode), current (byte position after last read), next (byte position to read next).</p>
 </div>
 <div class="item">
 <pre><code>pub fn value(self: Pixel) -&gt; integer</code></pre>
@@ -62,39 +62,40 @@
 </div>
 <div class="item">
 <pre><code>pub fn content(self: File) -&gt; text</code></pre>
-<p>Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts.</p>
 </div>
 <div class="item">
-<pre><code>pub fn lines(self: File) -&gt; vector&lt;text&gt;</code></pre>
-<p>Reads the file and splits it into lines. Use when processing line-by-line (logs, CSV, etc.).</p>
+<pre><code>pub fn lines(self: File) -&gt; vector &lt; text &gt;</code></pre>
+</div>
+<div class="section-desc"><p>Returns the platform path separator character: '\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.</p></div>
+<div class="item">
+<pre><code>pub fn path_sep() -&gt; character</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn file(path: text) -&gt; File</code></pre>
-<p>Use as the entry point for all file I/O. Paths outside the project directory are treated as NotExists without touching the filesystem.</p>
 </div>
 <div class="item">
 <pre><code>pub fn exists(path: text) -&gt; boolean</code></pre>
-<p>Use to check whether a path is accessible before reading or writing it. Paths outside the project directory are always absent.</p>
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; boolean</code></pre>
-<p>Use to remove a file after processing or as a cleanup step. Returns false when the file did not exist or is outside the project directory.</p>
 </div>
 <div class="item">
 <pre><code>pub fn move(from: text, to: text) -&gt; boolean</code></pre>
-<p>Use to rename or relocate a file within the project. Both paths must stay within the project directory; the destination must not already exist.</p>
+</div>
+<div class="item">
+<pre><code>pub fn mkdir(path: text) -&gt; boolean</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn mkdir_all(path: text) -&gt; boolean</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn set_file_size(self: File, size: long) -&gt; boolean</code></pre>
-<p>Truncate or extend the file to exactly `size` bytes. Truncating removes bytes beyond `size`; extending fills with null bytes. Returns false if the file is a directory, does not exist, or `size` is negative. Any open handle to the file is closed; reopen the file for further I/O.</p>
 </div>
 <div class="item">
-<pre><code>pub fn files(self: File) -&gt; vector&lt;File&gt;</code></pre>
-<p>Returns the entries inside a directory. The File must have format == Format.Directory. Use to iterate over all files in a folder.</p>
+<pre><code>pub fn files(self: File) -&gt; vector &lt; File &gt;</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn write(self: File, v: text)</code></pre>
-<p>Writes v as UTF-8 text to the file. Overwrites existing content.</p>
 </div>
 <div class="item">
 <pre><code>pub fn png(self: File) -&gt; Image</code></pre>

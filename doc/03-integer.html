@@ -15,48 +15,49 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="converting-between-numbers-and-text">Converting between numbers and text</h2>
 <p>Wrapping a value in '{...}' inside a string formats it as text. Going the other way, 'as integer' parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.</p>
-<pre><code>    v = <span class="nm">4</span>;
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"4"</span>, <span class="st">"Format integer as text"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"123"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">123</span>, <span class="st">"Parse text to integer"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="st">"abc"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>), <span class="st">"Unparseable text gives null"</span>);</code></pre>
+<pre><code>  v = <span class="nm">4</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"4"</span>, <span class="st">"Format integer as text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"123"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">123</span>, <span class="st">"Parse text to integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="st">"abc"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>), <span class="st">"Unparseable text gives null"</span>);</code></pre>
 <h2 id="arithmetic-and-operator-precedence">Arithmetic and operator precedence</h2>
 <p>Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> * <span class="nm">4</span> == <span class="nm">9</span>, <span class="st">"Multiplication before addition"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> &lt;&lt; <span class="nm">2</span> == <span class="nm">12</span>, <span class="st">"Shift: (1+2) &lt;&lt; 2 = 12"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x0a8</span> &amp; <span class="nm">15</span> == <span class="nm">8</span>, <span class="st">"Bitwise AND masks low 4 bits"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">42</span> ^ <span class="nm">0b111111</span> == <span class="nm">21</span>, <span class="st">"Bitwise XOR"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() for exponentiation"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> * <span class="nm">4</span> == <span class="nm">9</span>, <span class="st">"Multiplication before addition"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> &lt;&lt; <span class="nm">2</span> == <span class="nm">12</span>, <span class="st">"Shift: (1+2) &lt;&lt; 2 = 12"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x0a8</span> &amp; <span class="nm">15</span> == <span class="nm">8</span>, <span class="st">"Bitwise AND masks low 4 bits"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">42</span> ^ <span class="nm">0b111111</span> == <span class="nm">21</span>, <span class="st">"Bitwise XOR"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() for exponentiation"</span>);</code></pre>
 <p>'abs()' returns the absolute value — the distance from zero, always positive.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2</span>) == <span class="nm">3</span>, <span class="st">"abs(-2) == 2"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2</span>) == <span class="nm">3</span>, <span class="st">"abs(-2) == 2"</span>);</code></pre>
 <h2 id="division-by-zero-produces-null-not-a-crash">Division by zero produces null, not a crash</h2>
 <p>Most languages crash or throw an exception on division by zero. Loft produces null instead, which behaves like false in conditions. This lets you handle missing or bad data gracefully with a simple '!'.</p>
-<pre><code>    a = <span class="nm">2</span> * <span class="nm">2</span>;
-    a -= <span class="nm">4</span>;              <span class="cm">// a is now 0</span>
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / a), <span class="st">"Division by zero gives null"</span>);</code></pre>
+<pre><code>  a = <span class="nm">2</span> * <span class="nm">2</span>;
+  a -= <span class="nm">4</span>;</code></pre>
+<p>a is now 0</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / a), <span class="st">"Division by zero gives null"</span>);</code></pre>
 <h2 id="compile-time-warning-for-constant-zero-divisor">Compile-time warning for constant zero divisor</h2>
 <p>When the divisor is a literal 0 in source code, loft emits a compile-time warning because a constant-zero divisor is almost certainly a bug: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still compiles and returns null at runtime — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.</p>
 <h2 id="embedding-integers-in-text">Embedding integers in text</h2>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{12}b"</span> == <span class="st">"a12b"</span>, <span class="st">"Integer in format string"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{12}b"</span> == <span class="st">"a12b"</span>, <span class="st">"Integer in format string"</span>);</code></pre>
 <p>A full expression can appear inside '{...}', not just a variable name.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{1 + 2 * 3}b"</span> == <span class="st">"a7b"</span>, <span class="st">"Expression in format string"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{1 + 2 * 3}b"</span> == <span class="st">"a7b"</span>, <span class="st">"Expression in format string"</span>);</code></pre>
 <h2 id="number-format-specifiers">Number format specifiers</h2>
 <p>After a ':' inside '{...}' you can control how a number is displayed: #x  — hexadecimal with '0x' prefix o   — octal b   — binary +   — always show a sign (+ or -) N   — minimum field width (space-padded on the left) 0N  — minimum field width (zero-padded on the left)</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{1+2+32:#x}b"</span> == <span class="st">"a0x23b"</span>, <span class="st">"Hex format with 0x prefix"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12:o}"</span> == <span class="st">"14"</span>, <span class="st">"Octal"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12:+4}"</span> == <span class="st">" +12"</span>, <span class="st">"Sign and width"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1:03}"</span> == <span class="st">"001"</span>, <span class="st">"Zero-padded width"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:b}"</span> == <span class="st">"101010"</span>, <span class="st">"Binary"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{1+2+32:#x}b"</span> == <span class="st">"a0x23b"</span>, <span class="st">"Hex format with 0x prefix"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12:o}"</span> == <span class="st">"14"</span>, <span class="st">"Octal"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12:+4}"</span> == <span class="st">" +12"</span>, <span class="st">"Sign and width"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1:03}"</span> == <span class="st">"001"</span>, <span class="st">"Zero-padded width"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:b}"</span> == <span class="st">"101010"</span>, <span class="st">"Binary"</span>);</code></pre>
 <p>Hexadecimal literals in source code accept both lower and upper case digits.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0xff</span> == <span class="nm">255</span>, <span class="st">"Lowercase hex literal"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0xFF</span> == <span class="nm">255</span>, <span class="st">"Uppercase hex literal"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x2A</span> == <span class="nm">42</span>,  <span class="st">"Uppercase hex digit"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0xff</span> == <span class="nm">255</span>, <span class="st">"Lowercase hex literal"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0xFF</span> == <span class="nm">255</span>, <span class="st">"Uppercase hex literal"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x2A</span> == <span class="nm">42</span>, <span class="st">"Uppercase hex digit"</span>);</code></pre>
 <h2 id="the-long-type-for-large-numbers">The 'long' type for large numbers</h2>
 <p>'long' is a 64-bit signed integer — use it when values might exceed 2 billion. Write a long literal by appending 'l': '1l', '100000000000l'. Long values support the same arithmetic and format specifiers as integer. Convert a long back to an integer with 'as integer'.</p>
-<pre><code>    big = <span class="nm">1000000000l</span> * <span class="nm">5l</span>;
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big == <span class="nm">5000000000l</span>, <span class="st">"Long arithmetic"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1l + 1:+4}"</span> == <span class="st">"  +2"</span>, <span class="st">"Long in format string"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12l</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">12</span>, <span class="st">"Long to integer conversion"</span>);</code></pre>
+<pre><code>  big = <span class="nm">1000000000l</span> * <span class="nm">5l</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big == <span class="nm">5000000000l</span>, <span class="st">"Long arithmetic"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1l + 1:+4}"</span> == <span class="st">"  +2"</span>, <span class="st">"Long in format string"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12l</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">12</span>, <span class="st">"Long to integer conversion"</span>);</code></pre>
 <h2 id="common-pitfall-integer-overflow">Common pitfall: integer overflow</h2>
 <p>If a 32-bit integer calculation overflows the max value (~2 billion), the result wraps around silently. Use 'long' when you expect large values. For example, a score that multiplies two large numbers can silently wrap. Switching to 'long' avoids this: 'score = big_a as long * big_b as long'.</p>
 <pre><code>}</code></pre>

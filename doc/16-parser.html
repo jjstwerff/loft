@@ -15,25 +15,25 @@
 <p>If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.</p>
 <h2 id="what-the-parser-understands">What the parser understands</h2>
 <p>The parser handles the complete Loft grammar: * 'struct Name { field: type [= default] }' — named-field aggregates * 'enum Name { Variant [{ field: type }] }' — tagged unions with optional fields * 'fn name(params) [-&gt; type] { body }' — functions with a block body * 'fn name(params) [-&gt; type]; #rust "template"' — operator templates backed by Rust * 'use module;' — module imports * Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals * Type expressions: plain names, generic types like 'vector&lt;T&gt;', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'</p>
-<pre><code><span class="kw">use</span> parser;</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<pre><code><span class="kw">use</span> parser;
+<span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
 <p>The double braces '{{' and '}}' produce literal '{' and '}' inside a Loft format string — needed here because the source code itself contains braces.</p>
-<pre><code>    parser::<span class="fn-call">parse</span>(<span class="st">"hello"</span>, <span class="st">"fn main() {{ println(\"</span><span class="en">Hello</span> <span class="en">World</span>\<span class="st">"); }}"</span>);</code></pre>
+<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"hello"</span>, <span class="st">"fn main() {{ println(\"</span><span class="en">Hello</span> <span class="en">World</span>\<span class="st">"); }}"</span>);</code></pre>
 <h2 id="parsing-a-struct-and-function-together">Parsing a struct and function together</h2>
 <p>The parser validates the entire source snippet as one unit. Both the struct definition and the function body are checked.</p>
-<pre><code>    parser::<span class="fn-call">parse</span>(<span class="st">"point"</span>, <span class="st">"struct Point {{ x: integer, y: integer }} fn origin() -&gt; Point {{ Point {{ x: 0, y: 0 }} }}"</span>);</code></pre>
+<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"point"</span>, <span class="st">"struct Point {{ x: integer, y: integer }} fn origin() -&gt; Point {{ Point {{ x: 0, y: 0 }} }}"</span>);</code></pre>
 <h2 id="parsing-an-enum">Parsing an enum</h2>
 <p>Both a plain variant and a struct variant (with fields) are recognised.</p>
-<pre><code>    parser::<span class="fn-call">parse</span>(<span class="st">"shape"</span>, <span class="st">"enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}"</span>);</code></pre>
+<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"shape"</span>, <span class="st">"enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}"</span>);</code></pre>
 <h2 id="parsing-a-for-loop-and-arithmetic">Parsing a for loop and arithmetic</h2>
 <p>This exercises the expression parser and range syntax.</p>
-<pre><code>    parser::<span class="fn-call">parse</span>(<span class="st">"loop"</span>, <span class="st">"fn sum(n: integer) -&gt; integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}"</span>);</code></pre>
+<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"loop"</span>, <span class="st">"fn sum(n: integer) -&gt; integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}"</span>);</code></pre>
 <h2 id="practical-use-validating-user-supplied-code">Practical use: validating user-supplied code</h2>
 <p>If your application lets users write Loft snippets (for scripting or configuration), you can parse them before executing:</p>
 <p>snippet = read_user_input(); parser::parse("user_code", snippet); // If parse() emits errors, the snippet was invalid — show them to the user.</p>
 <p>Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate the whole grammar.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"parser test passed"</span>);
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"parser test passed"</span>);
 }</code></pre>
 
   </article>

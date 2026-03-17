@@ -16,17 +16,17 @@ Low = cosmetic or minor. Where a path to resolution is obvious it is included.
 - [3. Loop Attribute `#index` Has Different Semantics on Text vs. Vector](#3-loop-attribute-index-has-different-semantics-on-text-vs-vector)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
 - [9. Text/Character Split: Indexing and Slicing Return Different Types](#9-textcharacter-split-indexing-and-slicing-return-different-types)
-- [10. Null Sentinel Values Vary Invisibly by Type](#10-null-sentinel-values-vary-invisibly-by-type)
 - [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
-- [23. `sizeof(u8)` / `sizeof(u16)` Return the Stack Size, Not the Byte-Packed Size](#23-sizeofu8--sizeofou16-return-the-stack-size-not-the-byte-packed-size)
 - [25. If-Expression Without `else` Silently Generates a Null Branch](#25-if-expression-without-else-silently-generates-a-null-branch)
 - [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
 
 **Fixed**
 - [~~1. `const` Has Two Different Meanings~~ **FIXED**](#1-const-has-two-different-meanings--fixed-2026-03-14)
 - [~~6. Plain Enums Cannot Have Methods~~ **RESOLVED**](#6-plain-enums-cannot-have-methods-struct-enum-variants-can--resolved-2026-03-16)
+- [~~10. Null Sentinel Values~~ **DOCUMENTED**](#10-null-sentinel-values-vary-invisibly-by-type)
+- [~~23. `sizeof(u8)` Packed Size~~ **FIXED**](#23-sizeofu8--sizeofou16-return-the-stack-size-not-the-byte-packed-size)
 - [~~11. Reverse Iteration Panics on Sorted/Index~~ **FIXED**](#11-reverse-iteration-works-on-ranges-and-vectors-but-panics-on-sortedindex)
 - [~~13. Library Definitions Require `libname::` Prefix~~ **FIXED**](#13-library-definitions-always-require-libname-prefix--fixed-2026-03-16)
 - [~~14. Format Strings: Nested Literals~~ **FIXED**](#14-format-strings-nested-literals-fail-zero-pad-fixed)
@@ -197,33 +197,12 @@ type) would be cleaner.
 
 ---
 
-## 10. Null Sentinel Values Vary Invisibly by Type
+## ~~10. Null Sentinel Values Vary Invisibly by Type~~ **DOCUMENTED 2026-03-17**
 
-**Severity: Medium**
+**Was: Medium**
 
-Every nullable type uses a different in-band sentinel to represent null:
-
-| Type | Null sentinel |
-|---|---|
-| `integer` | `i32::MIN` (-2 147 483 648) |
-| `long` | `i64::MIN` |
-| `float` / `single` | `NaN` |
-| `text` | opaque `STRING_NULL` pointer |
-| `reference` | `DbRef { rec: 0 }` |
-| `enum (plain)` | byte value `255` |
-| `boolean` | not documented |
-| `character` | not documented |
-
-Practical consequence: a legitimate integer value of `i32::MIN` is indistinguishable from
-null. Division by zero returns `i32::MIN`, but so does `(-2147483648 / 1)`. Arithmetic
-that reaches the sentinel exactly appears null.
-
-For floats, `NaN != NaN` in IEEE 754, so `f == null` requires a special null check; the
-language papers over this with `!f` but the underlying sentinel leaks when floats are
-compared directly.
-
-**Resolution path:** Document the sentinel for every type. Clarify whether `i32::MIN` can
-arise from non-null arithmetic, and if so, provide a way to distinguish it.
+Documented in [LOFT.md](LOFT.md) § "Null representation" (T1-24). Every type's sentinel is
+now listed with the `i32::MIN` arithmetic risk and mitigations (`long`, `not null`).
 
 ---
 
@@ -433,34 +412,14 @@ for e in db.items  { db.items += [x]; } // ERROR — field access (now caught to
 
 ---
 
-## 23. `sizeof(u8)` / `sizeof(u16)` Return the Stack Size, Not the Byte-Packed Size
+## ~~23. `sizeof(u8)` / `sizeof(u16)` Return the Stack Size, Not the Byte-Packed Size~~ **FIXED 2026-03-17**
 
-**Severity: Low**
+**Was: Low**
 
-Range-constrained integer types (`u8`, `u16`, `i32`) pack to 1, 2, and 4 bytes respectively
-when stored as struct fields. However, using them as an argument to `sizeof()` returns the
-**stack slot size** (always 4, the underlying `integer`), not the field byte size:
-
-```loft
-sizeof(u8)     // 4  — surprising: "should be 1"
-sizeof(u16)    // 4  — surprising: "should be 2"
-sizeof(integer) // 4  — consistent
-
-struct Tiny { a: u8, b: u8 }
-sizeof(Tiny)   // 2  — correct: fields are packed
-```
-
-So `sizeof(u8)` and `sizeof(Tiny.a)` give different answers for the same field type. A
-programmer reasoning about struct layout will find `sizeof(u8) != sizeof(u8 in a struct)`.
-
-The distinction is:
-- `sizeof(TYPE_KEYWORD)` — stack slot size used for local variables (always the base type
-  size: `integer` = 4).
-- `sizeof(STRUCT)` — sum of packed field sizes as stored in the database/vector.
-
-**Resolution path:** Either document the distinction clearly in the language reference, or
-make `sizeof(u8)` return 1 to match struct packing. The second option would require `sizeof`
-to consult the type's declared limit range rather than the underlying storage class.
+Fixed by T1-25. `sizeof(u8)` now returns 1, `sizeof(u16)` returns 2, matching the packed
+field size used in structs. The fix uses `Type::size(false)` to compute the packed byte
+count from the integer range before falling through to the database type lookup.
+Tests: `sizeof_packed_integer_types` in `tests/sizes.rs`; assertions in `tests/scripts/07-structs.loft`.
 
 ---
 
@@ -515,7 +474,6 @@ _All fixed._
 | # | Issue |
 |---|---|
 | 3 | `#index` is byte-offset on text, element-position on vector |
-| 10 | Null sentinels vary by type; `i32::MIN` is ambiguous with legitimate arithmetic |
 | 12 | Index range-query second-key boundary depends on undeclared sort direction |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required |
 
@@ -527,7 +485,6 @@ _All fixed._
 | 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
-| 23 | `sizeof(u8)` returns 4 (stack size), not 1 (field byte size) |
 | 25 | If-expression without `else` silently generates null; match requires exhaustiveness |
 
 ---

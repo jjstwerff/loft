@@ -936,26 +936,26 @@ fn main() {
 'if' runs a block only when its condition is true. If the condition is false the block is skipped entirely — nothing else happens. 'panic' stops the program immediately with a message. During development it is a clear way to mark situations that should never occur.
 
 ```rust
-    if 2 > 5 {
-       panic("Incorrect test");
-    }
+  if 2 > 5 {
+    panic("Incorrect test");
+  }
 ```
 
 Combine conditions with 'and' / 'or' (or their symbol equivalents '&&' / '||'). Note that '&' is the bitwise AND operator — it works on the individual bits of a number, which is different from the logical 'and' keyword. An 'if/else' chain picks exactly one branch to execute.
 
 ```rust
-    a = 12;
-    if a > 10 and a & 7 == 4 {
-        a += 1;
-    } else {
-        a -= 1;
-    }
+  a = 12;
+  if a > 10 and a & 7 == 4 {
+    a += 1;
+  } else {
+    a -= 1;
+  }
 ```
 
 Text enclosed in double quotes can contain expressions inside curly braces — the expression is evaluated and its result is inserted into the text. 'assert' checks that its first argument is true; if it is false the second argument is printed as an error message.
 
 ```rust
-    assert(a == 13, "Incorrect value {a} != 13");
+  assert(a == 13, "Incorrect value {a} != 13");
 ```
 
 === if as an expression
@@ -963,8 +963,12 @@ Text enclosed in double quotes can contain expressions inside curly braces — t
 Every block in Loft produces a value — the last expression inside it. That means you can use 'if/else' on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed.
 
 ```rust
-    b = if a == 13 { "Correct" } else { "Wrong" };
-    assert(b == "Correct", "Logic expression");
+  b = if a == 13 {
+    "Correct"
+  } else {
+    "Wrong"
+  };
+  assert(b == "Correct", "Logic expression");
 ```
 
 === Iteration
@@ -972,21 +976,21 @@ Every block in Loft produces a value — the last expression inside it. That mea
 'for x in a..b' loops over the integers starting at a and stopping before b (exclusive upper bound). Use '..=' to include the upper bound. Here we sum 1 + 2 + 3 + 4 + 5 = 15.
 
 ```rust
-    t = 0;
-    for a in 1..6 {
-        t += a;
-    }
-    assert(t == 15, "Total was {t} instead of 15");
+  t = 0;
+  for a in 1..6 {
+    t += a;
+  }
+  assert(t == 15, "Total was {t} instead of 15");
 ```
 
 'rev(range)' reverses the direction of any range. '1..=5' is inclusive, so it visits 5, 4, 3, 2, 1 in that order. Multiplying each digit into a running total builds the number 54321.
 
 ```rust
-    t = 0;
-    for a in rev(1..=5) {
-        t = t * 10 + a;
-    }
-    assert(t == 54321, "Result was {t} instead of 54321");
+  t = 0;
+  for a in rev(1..=5) {
+    t = t * 10 + a;
+  }
+  assert(t == 54321, "Result was {t} instead of 54321");
 ```
 
 === Nested loops and break
@@ -994,22 +998,27 @@ Every block in Loft produces a value — the last expression inside it. That mea
 Loft has no 'while' or 'loop' keyword — all repetition uses 'for' with a range, so there is always a clear upper bound on how many iterations can occur. 'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
 
 ```rust
-    b = "";
-    for x in 1..5 {
-        for y in 1..5 {
-            if y > x {
-                break; // this breaks the inner y loop
-            }
-            if x * y >= 16 {
-                x#break;
-            }
-            if len(b) > 0 {
-                b += "; ";
-            }
-            b += "{x}:{y}";
-        }
+  b = "";
+  for x in 1..5 {
+    for y in 1..5 {
+      if y > x {
+        break;
+```
+
+this breaks the inner y loop
+
+```rust
+      }
+      if x * y >= 16 {
+        x# break;
+      }
+      if len(b) > 0 {
+        b += "; ";
+      }
+      b += "{x}:{y}";
     }
-    assert(b == "1:1; 2:1; 2:2; 3:1; 3:2; 3:3; 4:1; 4:2; 4:3", "Incorrect sequence '{b}'");
+  }
+  assert(b == "1:1; 2:1; 2:2; 3:1; 3:2; 3:3; 4:1; 4:2; 4:3", "Incorrect sequence '{b}'");
 ```
 
 === Loop helpers: \#first and \#count
@@ -1017,14 +1026,14 @@ Loft has no 'while' or 'loop' keyword — all repetition uses 'for' with a range
 Inside a loop body you have access to some useful metadata about the current iteration. 'x\#first' is true only for the very first element that passes the filter. 'x\#count' is a zero-based index counting only the elements that were not filtered out. An 'if' clause directly after 'in range' filters which values enter the loop — here we skip every value where x % 3 == 1, keeping 2, 3, 5, 6, 8, 9.
 
 ```rust
-    b = "";
-    for x in 1..=9 if x % 3 != 1 {
-        if !x#first {
-            b += ", ";
-        }
-        b += "{x#count}:{x}";
+  b = "";
+  for x in 1..=9 if x % 3 != 1 {
+    if !x#first {
+      b += ", ";
     }
-    assert(b == "0:2, 1:3, 2:5, 3:6, 4:8, 5:9", "Sequence '{b}'");
+    b += "{x#count}:{x}";
+  }
+  assert(b == "0:2, 1:3, 2:5, 3:6, 4:8, 5:9", "Sequence '{b}'");
 ```
 
 === Formatting a loop inline
@@ -1032,7 +1041,7 @@ Inside a loop body you have access to some useful metadata about the current ite
 A for loop can appear inside a format string. The results are collected into a bracketed, comma-separated list. A format specifier after the closing brace is applied to every element — ':02' means at least 2 digits, zero-padded. This is handy for building compact representations on the fly.
 
 ```rust
-    assert("a{for x in 1..7 {x*2}:02}b" == "a[02,04,06,08,10,12]b", "Format range");
+  assert("a{for x in 1..7 {x*2}:02}b" == "a[02,04,06,08,10,12]b", "Format range");
 }
 ```
 
@@ -1052,17 +1061,17 @@ fn main() {
 Use '+' to join two pieces of text into one. The result is a new value — neither of the originals is modified. Placing a value name inside curly braces inside a format string inserts the value as text. You can also control the width: '{a:4}' pads the value on the right to at least 4 characters.
 
 ```rust
-    a = "1" + "2";
-    assert("'{a:4}'" == "'12  '", "Formatting text");
-    assert(len(a + "123") == 5, "Text length");
+  a = "1" + "2";
+  assert("'{a:4}'" == "'12  '", "Formatting text");
+  assert(len(a + "123") == 5, "Text length");
 ```
 
 'len()' counts bytes, not visible characters. An emoji like '😃' takes 4 bytes in UTF-8, a heart symbol '♥' takes 3, and every plain ASCII letter takes exactly 1. Keep this in mind whenever you use len() to check how "long" something is to a human reader.
 
 ```rust
-    assert(len("😃") == 4, "Emoji byte length");
-    assert(len("♥") == 3, "Heart byte length");
-    assert(len("abc") == 3, "ASCII byte length");
+  assert(len("😃") == 4, "Emoji byte length");
+  assert(len("♥") == 3, "Heart byte length");
+  assert(len("abc") == 3, "ASCII byte length");
 ```
 
 === Reading individual characters
@@ -1070,9 +1079,9 @@ Use '+' to join two pieces of text into one. The result is a new value — neith
 Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full Unicode character even if it spans multiple bytes.
 
 ```rust
-    s = "ABCDE";
-    assert(s[0] == 'A', "Character at byte 0");
-    assert(s[2] == 'C', "Character at byte 2");
+  s = "ABCDE";
+  assert(s[0] == 'A', "Character at byte 0");
+  assert(s[2] == 'C', "Character at byte 2");
 ```
 
 === Slicing text
@@ -1080,17 +1089,17 @@ Square brackets with a single byte index give you the character at that position
 A slice 's\[start..end\]' gives you the bytes from 'start' up to but not including 'end'. You can omit the start to begin at 0, or omit the end to go all the way to the last byte. Loft snaps offsets to valid character boundaries so you can never accidentally cut a multi-byte character in half.
 
 ```rust
-    assert(s[0..2] == "AB", "Explicit start slice");
-    assert(s[..2] == "AB", "Open-start slice");
-    assert(s[1..4] == "BCD", "Sub-string by byte range");
-    assert(s[3..] == "DE", "Open-ended sub-string");
+  assert(s[0..2] == "AB", "Explicit start slice");
+  assert(s[..2] == "AB", "Open-start slice");
+  assert(s[1..4] == "BCD", "Sub-string by byte range");
+  assert(s[3..] == "DE", "Open-ended sub-string");
 ```
 
 A negative end index counts backwards from the end of the text. '-1' means "stop one byte before the very last byte". Combined with a start offset this lets you trim a known suffix without knowing the exact length.
 
 ```rust
-    txt = "12😊🙃45";
-    assert(txt[2..-1] == "😊🙃4", "UTF-8 sub-string by byte range");
+  txt = "12😊🙃45";
+  assert(txt[2..- 1] == "😊🙃4", "UTF-8 sub-string by byte range");
 ```
 
 === Iterating over characters
@@ -1098,19 +1107,19 @@ A negative end index counts backwards from the end of the text. '-1' means "stop
 A 'for' loop over a text value visits one Unicode character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c\#index' is the byte offset where the current character starts. 'c\#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.
 
 ```rust
-    result = "";
-    positions = [];
-    nexts = [];
-    for c in "Hi 😊!" {
-        positions += [c#index];
-        nexts += [c#next];
-        if c#index >= 3 {
-            result += c;
-        }
+  result = "";
+  positions =[];
+  nexts =[];
+  for c in "Hi 😊!" {
+    positions +=[c#index];
+    nexts +=[c#next];
+    if c#index >= 3 {
+      result += c;
     }
-    assert(result == "😊!", "Character iteration was {result}");
-    assert("{positions}" == "[0,1,2,3,7]", "Character positions was {positions}");
-    assert("{nexts}" == "[1,2,3,7,8]", "Character nexts was {nexts}");
+  }
+  assert(result == "😊!", "Character iteration was {result}");
+  assert("{positions}" == "[0,1,2,3,7]", "Character positions was {positions}");
+  assert("{nexts}" == "[1,2,3,7,8]", "Character nexts was {nexts}");
 ```
 
 === Searching inside text
@@ -1118,16 +1127,16 @@ A 'for' loop over a text value visits one Unicode character at a time, even when
 These built-in functions answer common "does this text contain…?" questions. 'starts_with' and 'ends_with' check the boundaries. 'find' returns the byte offset of the first match, or null if not found. 'contains' is true if the needle appears anywhere in the text. All positions are byte offsets, consistent with 'len()' and slicing.
 
 ```rust
-    assert("something".starts_with("some"), "starts_with");
-    assert("something".ends_with("thing"), "ends_with");
-    assert("something".find("th") == 4, "find returns byte offset");
-    assert("a longer text".contains("longer"), "contains");
+  assert("something".starts_with("some"), "starts_with");
+  assert("something".ends_with("thing"), "ends_with");
+  assert("something".find("th") == 4, "find returns byte offset");
+  assert("a longer text".contains("longer"), "contains");
 ```
 
 'trim()' removes spaces and other whitespace from both ends of a text value. It is useful when reading user input or parsing text from a file.
 
 ```rust
-    assert(trim("  hello  ") == "hello", "trim");
+  assert(trim("  hello  ") == "hello", "trim");
 ```
 
 === Escaping braces in format strings
@@ -1135,8 +1144,8 @@ These built-in functions answer common "does this text contain…?" questions. '
 Inside a format string '{' and '}' are special: they introduce an interpolated expression. To include a literal brace in the output, double it: '{{' produces '{' and '}}' produces '}'.
 
 ```rust
-    brace_inner = "cd";
-    assert("ab{{cd}}e" == "ab{{{brace_inner}}}e", "Escaping braces");
+  brace_inner = "cd";
+  assert("ab{{cd}}e" == "ab{{{brace_inner}}}e", "Escaping braces");
 ```
 
 === Aligning text in a fixed-width field
@@ -1144,8 +1153,8 @@ Inside a format string '{' and '}' are special: they introduce an interpolated e
 The ':' specifier controls alignment and width. '\<' left-aligns the value, '\>' right-aligns it (the default). The width can be a constant or a small arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
 
 ```rust
-    vr = "abc";
-    assert("1{vr:<2+3}2{vr}3{vr:6}4{vr:>7}" == "1abc  2abc3abc   4    abc", "Text alignment");
+  vr = "abc";
+  assert("1{vr:<2+3}2{vr}3{vr:6}4{vr:>7}" == "1abc  2abc3abc   4    abc", "Text alignment");
 }
 ```
 
@@ -1165,10 +1174,10 @@ fn main() {
 Wrapping a value in '{...}' inside a string formats it as text. Going the other way, 'as integer' parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.
 
 ```rust
-    v = 4;
-    assert("{v}" == "4", "Format integer as text");
-    assert("123" as integer == 123, "Parse text to integer");
-    assert(!("abc" as integer), "Unparseable text gives null");
+  v = 4;
+  assert("{v}" == "4", "Format integer as text");
+  assert("123" as integer == 123, "Parse text to integer");
+  assert(!("abc" as integer), "Unparseable text gives null");
 ```
 
 === Arithmetic and operator precedence
@@ -1176,18 +1185,18 @@ Wrapping a value in '{...}' inside a string formats it as text. Going the other 
 Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. Bitwise operators (\<\<, &, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
 
 ```rust
-    assert(1 + 2 * 4 == 9, "Multiplication before addition");
-    assert(1 + 2 << 2 == 12, "Shift: (1+2) << 2 = 12");
-    assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
-    assert(42 ^ 0b111111 == 21, "Bitwise XOR");
-    assert(105 % 100 == 5, "Modulus (remainder)");
-    assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+  assert(1 + 2 * 4 == 9, "Multiplication before addition");
+  assert(1 + 2 << 2 == 12, "Shift: (1+2) << 2 = 12");
+  assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
+  assert(42 ^ 0b111111 == 21, "Bitwise XOR");
+  assert(105 % 100 == 5, "Modulus (remainder)");
+  assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
 ```
 
 'abs()' returns the absolute value — the distance from zero, always positive.
 
 ```rust
-    assert(1 + abs(-2) == 3, "abs(-2) == 2");
+  assert(1 + abs(-2) == 3, "abs(-2) == 2");
 ```
 
 === Division by zero produces null, not a crash
@@ -1195,9 +1204,14 @@ Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. 
 Most languages crash or throw an exception on division by zero. Loft produces null instead, which behaves like false in conditions. This lets you handle missing or bad data gracefully with a simple '!'.
 
 ```rust
-    a = 2 * 2;
-    a -= 4;              // a is now 0
-    assert(!(12 / a), "Division by zero gives null");
+  a = 2 * 2;
+  a -= 4;
+```
+
+a is now 0
+
+```rust
+  assert(!(12 / a), "Division by zero gives null");
 ```
 
 === Compile-time warning for constant zero divisor
@@ -1207,13 +1221,13 @@ When the divisor is a literal 0 in source code, loft emits a compile-time warnin
 === Embedding integers in text
 
 ```rust
-    assert("a{12}b" == "a12b", "Integer in format string");
+  assert("a{12}b" == "a12b", "Integer in format string");
 ```
 
 A full expression can appear inside '{...}', not just a variable name.
 
 ```rust
-    assert("a{1 + 2 * 3}b" == "a7b", "Expression in format string");
+  assert("a{1 + 2 * 3}b" == "a7b", "Expression in format string");
 ```
 
 === Number format specifiers
@@ -1221,19 +1235,19 @@ A full expression can appear inside '{...}', not just a variable name.
 After a ':' inside '{...}' you can control how a number is displayed: \#x  — hexadecimal with '0x' prefix o   — octal b   — binary +   — always show a sign (+ or -) N   — minimum field width (space-padded on the left) 0N  — minimum field width (zero-padded on the left)
 
 ```rust
-    assert("a{1+2+32:#x}b" == "a0x23b", "Hex format with 0x prefix");
-    assert("{12:o}" == "14", "Octal");
-    assert("{12:+4}" == " +12", "Sign and width");
-    assert("{1:03}" == "001", "Zero-padded width");
-    assert("{42:b}" == "101010", "Binary");
+  assert("a{1+2+32:#x}b" == "a0x23b", "Hex format with 0x prefix");
+  assert("{12:o}" == "14", "Octal");
+  assert("{12:+4}" == " +12", "Sign and width");
+  assert("{1:03}" == "001", "Zero-padded width");
+  assert("{42:b}" == "101010", "Binary");
 ```
 
 Hexadecimal literals in source code accept both lower and upper case digits.
 
 ```rust
-    assert(0xff == 255, "Lowercase hex literal");
-    assert(0xFF == 255, "Uppercase hex literal");
-    assert(0x2A == 42,  "Uppercase hex digit");
+  assert(0xff == 255, "Lowercase hex literal");
+  assert(0xFF == 255, "Uppercase hex literal");
+  assert(0x2A == 42, "Uppercase hex digit");
 ```
 
 === The 'long' type for large numbers
@@ -1241,10 +1255,10 @@ Hexadecimal literals in source code accept both lower and upper case digits.
 'long' is a 64-bit signed integer — use it when values might exceed 2 billion. Write a long literal by appending 'l': '1l', '100000000000l'. Long values support the same arithmetic and format specifiers as integer. Convert a long back to an integer with 'as integer'.
 
 ```rust
-    big = 1000000000l * 5l;
-    assert(big == 5000000000l, "Long arithmetic");
-    assert("{1l + 1:+4}" == "  +2", "Long in format string");
-    assert(12l as integer == 12, "Long to integer conversion");
+  big = 1000000000l * 5l;
+  assert(big == 5000000000l, "Long arithmetic");
+  assert("{1l + 1:+4}" == "  +2", "Long in format string");
+  assert(12l as integer == 12, "Long to integer conversion");
 ```
 
 === Common pitfall: integer overflow
@@ -1269,8 +1283,8 @@ fn main() {
 A comparison produces a boolean result directly. '!' flips a boolean: true → false, false → true.
 
 ```rust
-    assert(!(3 > 2 + 4), "3 is not greater than 6");
-    assert(true as text == "true", "Convert boolean to text");
+  assert(!(3 > 2 + 4), "3 is not greater than 6");
+  assert(true as text == "true", "Convert boolean to text");
 ```
 
 === Logical operators: and / or
@@ -1278,10 +1292,10 @@ A comparison produces a boolean result directly. '!' flips a boolean: true → f
 'and' (also '&&') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both use short-circuit evaluation: the right side is only evaluated if the left side does not already determine the result. This matters when the right side could produce null or has a side effect.
 
 ```rust
-    assert(1 > 0 and 2 > 1, "Both conditions true");
-    assert(1 > 2 or 3 > 2,  "Second condition true");
-    assert(!(1 > 2 && 3 > 2), "First false → whole 'and' is false");
-    assert(!(1 > 2 || 3 > 4), "Both false → 'or' is false");
+  assert(1 > 0 and 2 > 1, "Both conditions true");
+  assert(1 > 2 or 3 > 2, "Second condition true");
+  assert(!(1 > 2 && 3 > 2), "First false → whole 'and' is false");
+  assert(!(1 > 2 || 3 > 4), "Both false → 'or' is false");
 ```
 
 === Null in boolean context
@@ -1289,9 +1303,9 @@ A comparison produces a boolean result directly. '!' flips a boolean: true → f
 Division by zero (and other failed operations) produce null. Null in a boolean context is treated as false, so '!' is true. This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... }
 
 ```rust
-    zero = 0;
-    assert(!(12 / zero), "null from division-by-zero is false-like");
-    assert(12 > 0,       "positive integer is true");
+  zero = 0;
+  assert(!(12 / zero), "null from division-by-zero is false-like");
+  assert(12 > 0, "positive integer is true");
 ```
 
 === Bitwise operators
@@ -1303,10 +1317,10 @@ While 'and'/'or' work on true/false values, bitwise operators work on the indivi
 Tip: '&' binds less tightly than comparison operators. Use parentheses when you mix bitwise and comparison expressions in the same condition.
 
 ```rust
-    assert((0x0f & 0xa8) == 8,   "Bitwise AND: keeps only bits in both");
-    assert((0xf0 | 0x0f) == 0xff,"Bitwise OR: combines bits from either");
-    assert(1 << 4 == 16,         "Left shift: 1 × 2^4 = 16");
-    assert(256 >> 3 == 32,       "Right shift: 256 ÷ 2^3 = 32");
+  assert((0x0f & 0xa8) == 8, "Bitwise AND: keeps only bits in both");
+  assert((0xf0 | 0x0f) == 0xff, "Bitwise OR: combines bits from either");
+  assert(1 << 4 == 16, "Left shift: 1 × 2^4 = 16");
+  assert(256 >> 3 == 32, "Right shift: 256 ÷ 2^3 = 32");
 ```
 
 === Negation
@@ -1314,8 +1328,8 @@ Tip: '&' binds less tightly than comparison operators. Use parentheses when you 
 '!' is the logical NOT operator. It flips any boolean expression.
 
 ```rust
-    assert(!false,      "not false is true");
-    assert(!(1 > 2),    "not false comparison is true");
+  assert(!false, "not false is true");
+  assert(!(1 > 2), "not false comparison is true");
 ```
 
 === Formatting booleans
@@ -1323,8 +1337,8 @@ Tip: '&' binds less tightly than comparison operators. Use parentheses when you 
 Booleans can be embedded in a format string like any other value. The '^' alignment specifier centres the value in a field of given width. '\<' aligns left, '\>' aligns right (right-alignment is the default).
 
 ```rust
-    assert("1{true:^7}2" == "1 true  2", "Centred boolean in field of width 7");
-    assert("{false}" == "false", "Plain boolean format");
+  assert("1{true:^7}2" == "1 true  2", "Centred boolean in field of width 7");
+  assert("{false}" == "false", "Plain boolean format");
 ```
 
 === Common pitfall: '&' vs 'and'
@@ -1332,9 +1346,19 @@ Booleans can be embedded in a format string like any other value. The '^' alignm
 '&' is bitwise AND on integers; 'and' (or '&&') is logical AND on booleans. Writing 'a & b' when you mean 'a and b' usually compiles but gives wrong results because it operates on the numeric representation of the booleans. Always use 'and' / '&&' for boolean logic.
 
 ```rust
-    flag_a = 3 > 1;   // true
-    flag_b = 4 > 2;   // true
-    assert(flag_a and flag_b, "Correct: logical AND on two booleans");
+  flag_a = 3 > 1;
+```
+
+true
+
+```rust
+  flag_b = 4 > 2;
+```
+
+true
+
+```rust
+  assert(flag_a and flag_b, "Correct: logical AND on two booleans");
 }
 ```
 
@@ -1350,24 +1374,24 @@ fn main() {
 Write a decimal point in a literal and Loft treats the whole expression as a float. The usual arithmetic operators (+, -, \*, /) all work the way you would expect.
 
 ```rust
-    assert(1.5 + 0.5 == 2.0, "Float addition");
-    assert(3.0 / 2.0 == 1.5, "Float division");
-    assert(2.0 * 1.5 == 3.0, "Float multiplication");
+  assert(1.5 + 0.5 == 2.0, "Float addition");
+  assert(3.0 / 2.0 == 1.5, "Float division");
+  assert(2.0 * 1.5 == 3.0, "Float multiplication");
 ```
 
 The 'f' suffix selects single-precision (32-bit) floats. Single-precision takes half the memory of a regular float and is common in graphics and audio code where exact decimal values matter less than speed or size.
 
 ```rust
-    x = 0.1f + 2 * 1.0f;
-    assert(x == 2.1f, "Single precision float");
+  x = 0.1f + 2 * 1.0f;
+  assert(x == 2.1f, "Single precision float");
 ```
 
 'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float' parses the text back to a number.
 
 ```rust
-    assert(3 as float == 3.0, "Integer to float");
-    assert("1.5" as float == 1.5, "Text to float");
-    assert("{1.5}" == "1.5", "Float formatted as text");
+  assert(3 as float == 3.0, "Integer to float");
+  assert("1.5" as float == 1.5, "Text to float");
+  assert("{1.5}" == "1.5", "Float formatted as text");
 ```
 
 === Formatting Floats
@@ -1375,9 +1399,9 @@ The 'f' suffix selects single-precision (32-bit) floats. Single-precision takes 
 Put a colon after the value inside '{...}' to control how it looks. '{value:width.precision}' — 'width' is the minimum number of characters printed (padded with spaces on the left); 'precision' fixes the number of decimal places. You can use either part on its own: '{value:.2}' just fixes decimal places, '{value:5}' just sets the minimum width.
 
 ```rust
-    assert("{1.2:4.2}" == "1.20", "Float with width and precision");
-    assert("{334.1:.2}" == "334.10", "Float with precision only");
-    assert("{1.4:5}" == "  1.4", "Float with width only");
+  assert("{1.2:4.2}" == "1.20", "Float with width and precision");
+  assert("{334.1:.2}" == "334.10", "Float with precision only");
+  assert("{1.4:5}" == "  1.4", "Float with width only");
 ```
 
 === Math Functions
@@ -1385,40 +1409,40 @@ Put a colon after the value inside '{...}' to control how it looks. '{value:widt
 'PI' is a built-in constant (approximately 3.14159265358979). Multiplying it by 1000 and rounding gives 3142, which confirms the value is correct.
 
 ```rust
-    assert(round(PI * 1000.0) == 3142.0, "PI constant");
+  assert(round(PI * 1000.0) == 3142.0, "PI constant");
 ```
 
 'pow(base, exponent)' raises a number to a power — this is exponentiation. Note: '^' in Loft is bitwise XOR, NOT exponentiation. Always use pow() for powers. 'log(value, base)' is the inverse: log(x, b) answers "b to the what power equals x?" Here: 4^5 = 1024, and log(1024, 2) = 10 because 2^10 = 1024.
 
 ```rust
-    assert(log(pow(4.0, 5), 2) == 10.0, "log base 2 of 4^5");
+  assert(log(pow(4.0, 5), 2) == 10.0, "log base 2 of 4^5");
 ```
 
 'sin' and 'cos' work in radians, not degrees. A full circle is 2\*PI radians; a half circle (180 degrees) is PI radians. sin(PI) is theoretically zero but floating-point gives a tiny rounding error, so we use ceil() to snap it up. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 \* 1000) lands at -1000.
 
 ```rust
-    assert(ceil(sin(PI) + cos(PI) * 1000) == -1000.0, "sin and cos");
+  assert(ceil(sin(PI) + cos(PI) * 1000) == -1000.0, "sin and cos");
 ```
 
 'abs()' returns the absolute value — the distance from zero, always non-negative. Useful any time you care about magnitude but not direction.
 
 ```rust
-    assert(abs(-2.5) == 2.5, "Absolute value of float");
+  assert(abs(-2.5) == 2.5, "Absolute value of float");
 ```
 
 'round()' picks the nearest whole number (0.5 rounds up). 'ceil()' always rounds up to the next whole number, even for 2.01. 'floor()' always rounds down to the previous whole number, even for 2.99. All three give back a float, not an integer — so 3.0, not 3.
 
 ```rust
-    assert(round(2.6) == 3.0, "round up");
-    assert(round(2.4) == 2.0, "round down");
-    assert(ceil(2.1) == 3.0, "ceil");
-    assert(floor(2.9) == 2.0, "floor");
+  assert(round(2.6) == 3.0, "round up");
+  assert(round(2.4) == 2.0, "round down");
+  assert(ceil(2.1) == 3.0, "ceil");
+  assert(floor(2.9) == 2.0, "floor");
 ```
 
 Single-precision floats work inside format strings just like regular floats.
 
 ```rust
-    assert("a{0.1f + 2 * 1.0f}b" == "a2.1b", "Single-precision format");
+  assert("a{0.1f + 2 * 1.0f}b" == "a2.1b", "Single-precision format");
 }
 ```
 
@@ -1433,7 +1457,7 @@ The keyword 'fn' starts a function definition. List parameters as 'name: type' s
 
 ```rust
 fn greet(name: text, greeting: text = "Hello") -> text {
-    greeting + ", " + name + "!"
+  greeting + ", " + name + "!"
 }
 ```
 
@@ -1442,8 +1466,8 @@ fn greet(name: text, greeting: text = "Hello") -> text {
 A function with no '-\> type' is called for its side effects, not its result. Adding '&' before a parameter type makes it a reference: the function receives a direct link to the caller's variable and can read or write it. Without '&', Loft copies the value in, so changes inside the function stay local. Default values (written '= value' after the type) are substituted when the caller omits that argument.
 
 ```rust
-fn add(a: &integer, b: integer, c: integer = 0) {
-    a += b + c;
+fn add(a:  & integer, b: integer, c: integer = 0) {
+  a += b + c;
 }
 ```
 
@@ -1453,9 +1477,13 @@ Use 'return value;' to exit a function before reaching the end. This is handy fo
 
 ```rust
 fn classify(n: integer) -> text {
-    if n < 0 { return "negative"; }
-    if n == 0 { return "zero"; }
-    "positive"
+  if n < 0 {
+    return "negative";
+  }
+  if n == 0 {
+    return "zero";
+  }
+  "positive"
 }
 ```
 
@@ -1465,7 +1493,7 @@ fn classify(n: integer) -> text {
 
 ```rust
 fn scale(a: const integer, factor: const integer) -> integer {
-    a * factor
+  a * factor
 }
 ```
 
@@ -1474,8 +1502,15 @@ fn scale(a: const integer, factor: const integer) -> integer {
 You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.
 
 ```rust
-fn describe_int(v: integer) -> text { "integer:{v}" }
-fn describe_text(v: text) -> text { "text:{v}" }
+fn describe_int(v: integer) -> text {
+  "integer:{v}"
+}
+```
+
+```rust
+fn describe_text(v: text) -> text {
+  "text:{v}"
+}
 ```
 
 === Function References
@@ -1489,10 +1524,20 @@ fn describe_text(v: text) -> text { "text:{v}" }
 The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.
 
 ```rust
-fn double_it(x: integer) -> integer { x * 2 }
-fn negate_it(x: integer) -> integer { -x }
-fn apply_fn(f: fn(integer) -> integer, x: integer) -> integer {
-    f(x)
+fn double_it(x: integer) -> integer {
+  x * 2
+}
+```
+
+```rust
+fn negate_it(x: integer) -> integer {
+  - x
+}
+```
+
+```rust
+fn apply_fn(f:  fn(integer) -> integer, x: integer) -> integer {
+  f(x)
 }
 ```
 
@@ -1503,57 +1548,67 @@ fn main() {
 Passing both arguments explicitly overrides the default.
 
 ```rust
-    assert(greet("World", "Hi") == "Hi, World!", "Explicit argument");
+  assert(greet("World", "Hi") == "Hi, World!", "Explicit argument");
 ```
 
 Leaving out the second argument causes Loft to use the default "Hello".
 
 ```rust
-    assert(greet("World") == "Hello, World!", "Default argument");
+  assert(greet("World") == "Hello, World!", "Default argument");
 ```
 
 'add' takes 'a' by reference, so every call updates the original variable 'v'. Watch how v accumulates: 1 -\> 3 -\> 8.
 
 ```rust
-    v = 1;
-    add(v, 2);       // v = 1 + 2 = 3
-    add(v, 4, 1);    // v = 3 + 4 + 1 = 8
-    assert(v == 8, "Reference parameter: {v}");
+  v = 1;
+  add(v, 2);
+```
+
+v = 1 + 2 = 3
+
+```rust
+  add(v, 4, 1);
+```
+
+v = 3 + 4 + 1 = 8
+
+```rust
+  assert(v == 8, "Reference parameter: {v}");
 ```
 
 'classify' uses early returns to handle each case separately.
 
 ```rust
-    assert(classify(-5) == "negative", "Classify negative");
-    assert(classify(0) == "zero", "Classify zero");
-    assert(classify(3) == "positive", "Classify positive");
+  assert(classify(-5) == "negative", "Classify negative");
+  assert(classify(0) == "zero", "Classify zero");
+  assert(classify(3) == "positive", "Classify positive");
 ```
 
 'scale' marks both parameters 'const', so the compiler verifies they are not changed.
 
 ```rust
-    assert(scale(3, 7) == 21, "scale(3,7)");
+  assert(scale(3, 7) == 21, "scale(3,7)");
 ```
 
 Loft selects the right function based on the type of the argument.
 
 ```rust
-    assert(describe_int(42) == "integer:42", "Integer describe");
-    assert(describe_text("hi") == "text:hi", "Text describe");
+  assert(describe_int(42) == "integer:42", "Integer describe");
+  assert(describe_text("hi") == "text:hi", "Text describe");
 ```
 
 A function reference is stored in a variable with type 'fn(...) -\> ...'. Calling it looks exactly like a regular function call.
 
 ```rust
-    f = fn double_it;
-    assert(f(5) == 10, "fn-ref stored and called: {f(5)}");
+  f = fn double_it;
+  assert(f(5) == 10, "fn-ref stored and called: {f(5)}");
 ```
 
 Pass function references as arguments to higher-order functions.
 
 ```rust
-    assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
-    assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
+  assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
+  assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
 }
 ```
 
@@ -1567,10 +1622,27 @@ A vector is an ordered list of values that can grow and shrink while your progra
 'map', 'filter', and 'reduce' let you transform or summarise a vector by passing a function reference — written 'fn \<name\>' — as the first argument. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — fold all elements into a single value
 
 ```rust
-fn triple(x: integer) -> integer { x * 3 }
-fn is_even_n(x: integer) -> boolean { x % 2 == 0 }
-fn sum_acc(acc: integer, x: integer) -> integer { acc + x }
-fn mul_acc(acc: integer, x: integer) -> integer { acc * x }
+fn triple(x: integer) -> integer {
+  x * 3
+}
+```
+
+```rust
+fn is_even_n(x: integer) -> boolean {
+  x % 2 == 0
+}
+```
+
+```rust
+fn sum_acc(acc: integer, x: integer) -> integer {
+  acc + x
+}
+```
+
+```rust
+fn mul_acc(acc: integer, x: integer) -> integer {
+  acc * x
+}
 ```
 
 ```rust
@@ -1580,25 +1652,25 @@ fn main() {
 Create a vector with a literal and loop over it with 'for'. Two special loop annotations help when you need to know where you are: 'v\#first'  is true only on the very first iteration — useful for skipping separators. 'v\#index'  holds the zero-based position of the current element.
 
 ```rust
-    x = [1, 3, 6, 9];
-    b = "";
-    for v in x {
-        if !v#first {
-            b += " ";
-        }
-        b += "{v#index}:{v}"
+  x =[1, 3, 6, 9];
+  b = "";
+  for v in x {
+    if !v#first {
+      b += " ";
     }
-    assert(b == "0:1 1:3 2:6 3:9", "result {b}");
+    b += "{v#index}:{v}"
+  }
+  assert(b == "0:1 1:3 2:6 3:9", "result {b}");
 ```
 
 '+=' appends another vector to the end of an existing one. You can filter and delete elements in a single pass: Add 'if condition' after 'in vector' to visit only matching elements. Write 'v\#remove' inside the loop body to delete the current element. Here we keep only multiples of 3 by removing everything else. Note: you cannot append to a vector (v += \[...\]) while iterating over it — that is a compile error because the loop would then visit the new elements too, which could loop forever.
 
 ```rust
-    x += [12, 14, 15];
-    for v in x if v % 3 != 0 {
-        v#remove;
-    }
-    assert("{x}" == "[3,6,9,12,15]", "result {x}");
+  x +=[12, 14, 15];
+  for v in x if v % 3 != 0 {
+    v#remove;
+  }
+  assert("{x}" == "[3,6,9,12,15]", "result {x}");
 ```
 
 === Slicing
@@ -1606,16 +1678,16 @@ Create a vector with a literal and loop over it with 'for'. Two special loop ann
 A slice gives you a window into part of a vector without copying it. 'v\[a..b\]' contains elements at positions a, a+1, ..., b-1 (b is excluded). 'v\[a..\]'  goes from position a to the very last element. 'v\[..b\]'  goes from the beginning up to (but not including) position b.
 
 ```rust
-    pows = [1, 2, 4, 8, 16];
-    assert("{pows[1..3]}" == "[2,4]", "Sub-vector");
-    assert("{pows[3..]}" == "[8,16]", "Open-ended sub-vector");
-    assert("{pows[..3]}" == "[1,2,4]", "Open-start sub-vector");
+  pows =[1, 2, 4, 8, 16];
+  assert("{pows[1..3]}" == "[2,4]", "Sub-vector");
+  assert("{pows[3..]}" == "[8,16]", "Open-ended sub-vector");
+  assert("{pows[..3]}" == "[1,2,4]", "Open-start sub-vector");
 ```
 
 Accessing an index that does not exist is safe: Loft returns null instead of crashing. You can check for null with '!' (logical not) because null is falsy.
 
 ```rust
-    assert(!pows[10], "Out-of-bounds access returns null");
+  assert(!pows[10], "Out-of-bounds access returns null");
 ```
 
 === Comprehensions
@@ -1623,16 +1695,20 @@ Accessing an index that does not exist is safe: Loft returns null instead of cra
 A comprehension is a concise way to build a new vector from a formula. Syntax: '\[for variable in range { expression }\]' Add 'if condition' to include only elements that satisfy the condition. This is much shorter than creating an empty vector and appending in a loop.
 
 ```rust
-    evens = [for n in 1..10 if n % 2 == 0 { n }];
-    assert("{evens}" == "[2,4,6,8]", "Filtered comprehension");
-    doubled = [for n in 1..6 { n * 2 }];
-    assert("{doubled}" == "[2,4,6,8,10]", "Doubled comprehension");
+  evens =[for n in 1..10 if n % 2 == 0 {
+    n
+  }];
+  assert("{evens}" == "[2,4,6,8]", "Filtered comprehension");
+  doubled =[for n in 1..6 {
+    n * 2
+  }];
+  assert("{doubled}" == "[2,4,6,8,10]", "Doubled comprehension");
 ```
 
 Embedding a for loop directly inside a format string '{...}' produces a formatted list. The format specifier after ':' is applied to every element in the result. ':02' means "at least 2 digits wide, padded with zeros on the left".
 
 ```rust
-    assert("{for n in 1..7 {n*2}:02}" == "[02,04,06,08,10,12]", "Formatted vector loop");
+  assert("{for n in 1..7 {n*2}:02}" == "[02,04,06,08,10,12]", "Formatted vector loop");
 ```
 
 === Reverse Iteration
@@ -1640,63 +1716,59 @@ Embedding a for loop directly inside a format string '{...}' produces a formatte
 Wrap a range in 'rev()' to step through elements from the last index to the first. 'rev(0..=3)' covers indices 0, 1, 2, 3 — the '=' makes the upper end inclusive. Here we visit pows\[3\]=8, pows\[2\]=4, pows\[1\]=2, pows\[0\]=1, building 8421 digit by digit.
 
 ```rust
-    c = 0;
-    for e in pows[rev(0..=3)] {
-        c = c * 10 + e;
-    }
-    assert(c == 8421, "Reverse sub-vector iteration");
+  c = 0;
+  for e in pows[rev(0..=3)] {
+    c = c * 10 + e;
+  }
+  assert(c == 8421, "Reverse sub-vector iteration");
 ```
 
-You can fill a vector with many copies of the same value using '; count' syntax: \[SomeStruct { field: value }; 16\] This creates 16 identical copies in one expression. See 08-struct.loft for examples.
-
-To append to a vector inside a function and have the caller see the change, mark the parameter with '&': fn append_one(v: &vector\<integer\>, x: integer) { v += \[x\]; } Without '&', appending is local to the function and the caller's vector stays the same. Mutations to existing elements (e.g. v\[0\] = 99) are always visible to the caller even without '&', because the vector's storage is shared.
+You can fill a vector with many copies of the same value using '; count' syntax: \[SomeStruct { field: value }; 16\] This creates 16 identical copies in one expression. See 08-struct.loft for examples. To append to a vector inside a function and have the caller see the change, mark the parameter with '&': fn append_one(v: &vector\<integer\>, x: integer) { v += \[x\]; } Without '&', appending is local to the function and the caller's vector stays the same. Mutations to existing elements (e.g. v\[0\] = 99) are always visible to the caller even without '&', because the vector's storage is shared.
 
 === Higher-order functions
 
 'map' applies a function to every element and returns a new vector.
 
 ```rust
-    nums = [1, 2, 3, 4, 5];
-    tripled = map(nums, fn triple);
-    assert("{tripled}" == "[3,6,9,12,15]", "map triple: {tripled}");
+  nums =[1, 2, 3, 4, 5];
+  tripled = map(nums,  fn triple);
+  assert("{tripled}" == "[3,6,9,12,15]", "map triple: {tripled}");
 ```
 
 'filter' keeps only elements for which the predicate returns true.
 
 ```rust
-    evens2 = filter(nums, fn is_even_n);
-    assert("{evens2}" == "[2,4]", "filter evens: {evens2}");
+  evens2 = filter(nums,  fn is_even_n);
+  assert("{evens2}" == "[2,4]", "filter evens: {evens2}");
 ```
 
 'reduce' folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial_value, fn combiner).
 
 ```rust
-    total = reduce(nums, 0, fn sum_acc);
-    assert(total == 15, "reduce sum: {total}");
-    product = reduce(nums, 1, fn mul_acc);
-    assert(product == 120, "reduce product: {product}");
+  total = reduce(nums, 0,  fn sum_acc);
+  assert(total == 15, "reduce sum: {total}");
+  product = reduce(nums, 1,  fn mul_acc);
+  assert(product == 120, "reduce product: {product}");
 ```
 
 You can chain these calls: filter first, then map, then reduce.
 
 ```rust
-    result = reduce(map(filter(nums, fn is_even_n), fn triple), 0, fn sum_acc);
-    assert(result == 18, "filter+map+reduce: {result}");
+  result = reduce(map(filter(nums,  fn is_even_n),  fn triple), 0,  fn sum_acc);
+  assert(result == 18, "filter+map+reduce: {result}");
 }
 ```
 
 
 = Structs
 
-A struct groups related values under one name. Instead of keeping a product's name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: 'product.price'.
-
-Here is a simple product record. All four fields are plain integers or text.
+A struct groups related values under one name. Instead of keeping a product's name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: 'product.price'. Here is a simple product record. All four fields are plain integers or text.
 
 ```rust
 struct Product {
-    name: text,
-    price: integer,
-    stock: integer
+  name: text,
+  price: integer,
+  stock: integer
 }
 ```
 
@@ -1706,9 +1778,9 @@ You can restrict what values a field may hold. 'limit(min, max)' rejects any val
 
 ```rust
 struct Colour {
-    r: integer limit(0, 255) not null,
-    g: integer limit(0, 255) not null,
-    b: integer limit(0, 255) not null
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
 }
 ```
 
@@ -1718,7 +1790,7 @@ A method is a function whose first parameter is named 'self'. Loft uses the type
 
 ```rust
 fn to_hex(self: Colour) -> integer {
-    self.r * 0x10000 + self.g * 0x100 + self.b
+  self.r * 0x10000 + self.g * 0x100 + self.b
 }
 ```
 
@@ -1726,7 +1798,7 @@ A method can also return a completely new struct value. Write '-\> StructName' a
 
 ```rust
 fn dimmed(self: Colour) -> Colour {
-    Colour { r: self.r / 2, g: self.g / 2, b: self.b / 2 }
+  Colour {r: self.r / 2, g: self.g / 2, b: self.b / 2 }
 }
 ```
 
@@ -1736,8 +1808,8 @@ A field can calculate its value from other fields in the same struct. Write '= e
 
 ```rust
 struct Item {
-    name: text,
-    name_length: integer = len($.name)
+  name: text,
+  name_length: integer = len($.name)
 }
 ```
 
@@ -1747,10 +1819,10 @@ struct Item {
 
 ```rust
 struct Area {
-    height: u16,
-    terrain: u8,
-    water: u8,
-    direction: u8
+  height: u16,
+  terrain: u8,
+  water: u8,
+  direction: u8
 }
 ```
 
@@ -1761,85 +1833,89 @@ fn main() {
 Constructing a struct: name the fields you want to set. Fields you leave out default to zero (or null for nullable fields).
 
 ```rust
-    apple = Product { name: "Apple", price: 120, stock: 50 };
-    assert(apple.price == 120, "price field: {apple.price}");
-    assert(apple.name == "Apple", "name field: {apple.name}");
+  apple = Product {name: "Apple", price: 120, stock: 50 };
+  assert(apple.price == 120, "price field: {apple.price}");
+  assert(apple.name == "Apple", "name field: {apple.name}");
 ```
 
 You can read and write individual fields after construction.
 
 ```rust
-    apple.stock -= 1;
-    assert(apple.stock == 49, "stock after one sale: {apple.stock}");
+  apple.stock -= 1;
+  assert(apple.stock == 49, "stock after one sale: {apple.stock}");
 ```
 
 A field omitted from the constructor gets zero as its default.
 
 ```rust
-    col = Colour { r: 128, b: 128 };
-    assert(col.g == 0, "omitted green channel defaults to zero");
+  col = Colour {r: 128, b: 128 };
+  assert(col.g == 0, "omitted green channel defaults to zero");
 ```
 
 Formatting a struct shows all fields compactly.
 
 ```rust
-    assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
+  assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
 ```
 
 ':j' produces JSON output.
 
 ```rust
-    assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
+  assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
 ```
 
 Call a method on a variable using dot notation.
 
 ```rust
-    purple = Colour { r: 128, b: 128 };
-    assert("{purple.to_hex():x}" == "800080", "hex method result");
+  purple = Colour {r: 128, b: 128 };
+  assert("{purple.to_hex():x}" == "800080", "hex method result");
 ```
 
 You can call a method directly on a constructor expression.
 
 ```rust
-    assert(Colour { r: 255, g: 0, b: 0 }.to_hex() == 0xff0000, "method on constructor");
+  assert(Colour {r: 255, g: 0, b: 0 }.to_hex() == 0xff0000, "method on constructor");
 ```
 
 'dimmed' returns a new Colour with each channel halved. The original variable is unchanged.
 
 ```rust
-    dark = purple.dimmed();
-    assert(dark.r == 64, "dimmed r: {dark.r}");
-    assert(dark.b == 64, "dimmed b: {dark.b}");
-    assert(dark.g == 0, "dimmed g: {dark.g}");
+  dark = purple.dimmed();
+  assert(dark.r == 64, "dimmed r: {dark.r}");
+  assert(dark.b == 64, "dimmed b: {dark.b}");
+  assert(dark.g == 0, "dimmed g: {dark.g}");
 ```
 
 Computed fields are filled automatically at construction time.
 
 ```rust
-    it = Item { name: "hello" };
-    assert(it.name_length == 5, "computed name_length: {it.name_length}");
+  it = Item {name: "hello" };
+  assert(it.name_length == 5, "computed name_length: {it.name_length}");
 ```
 
 Fill a vector with copies of the same struct using '; count' syntax. This creates 16 Area records, all with the same initial values.
 
 ```rust
-    map = [Area { height: 0, terrain: 1, water: 1, direction: 1 }; 16];
-    assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
-    map[3].height = 200;
-    assert(map[3].height == 200, "individual tile update");
+  map =[Area {height: 0, terrain: 1, water: 1, direction: 1 };
+  16];
+  assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
+  map[3].height = 200;
+  assert(map[3].height == 200, "individual tile update");
 }
 ```
 
 
 = Enums
 
-An enum defines a fixed set of named choices. Instead of using raw numbers like 0 = north, 1 = east — which nobody can read six months later — you give each option a name. The compiler then checks every comparison and conversion, so a typo becomes a compile error instead of a silent wrong answer.
-
-Plain enums are just names that can be compared, ordered, and converted to and from text. Their order matches their declaration order.
+An enum defines a fixed set of named choices. Instead of using raw numbers like 0 = north, 1 = east — which nobody can read six months later — you give each option a name. The compiler then checks every comparison and conversion, so a typo becomes a compile error instead of a silent wrong answer. Plain enums are just names that can be compared, ordered, and converted to and from text. Their order matches their declaration order.
 
 ```rust
-enum Direction { North, East, South, West }
+enum Direction {
+  North,
+  East,
+  South,
+  West
+}
 ```
 
 === Enums that carry data
@@ -1848,8 +1924,8 @@ Sometimes different choices have different shapes of data. A 'Circle' needs one 
 
 ```rust
 enum Shape {
-    Circle { radius: float },
-    Rect { width: float, height: float }
+  Circle {radius: float },
+  Rect {width: float, height: float }
 }
 ```
 
@@ -1859,13 +1935,13 @@ Write the same function name for each variant, each taking 'self' of that varian
 
 ```rust
 fn area(self: Circle) -> float {
-    PI * pow(self.radius, 2)
+  PI * pow(self.radius, 2)
 }
 ```
 
 ```rust
 fn area(self: Rect) -> float {
-    self.width * self.height
+  self.width * self.height
 }
 ```
 
@@ -1873,13 +1949,13 @@ Polymorphic methods can return text just as well as numbers. Each variant can pr
 
 ```rust
 fn describe(self: Circle) -> text {
-    "circle with radius {self.radius}"
+  "circle with radius {self.radius}"
 }
 ```
 
 ```rust
 fn describe(self: Rect) -> text {
-    "rect {self.width} by {self.height}"
+  "rect {self.width} by {self.height}"
 }
 ```
 
@@ -1889,10 +1965,15 @@ Plain enum variants can also have methods. The 'self' parameter carries the curr
 
 ```rust
 fn opposite(self: Direction) -> Direction {
-    if self == North { South }
-    else if self == South { North }
-    else if self == East { West }
-    else { East }
+  if self == North {
+    South
+  } else if self == South {
+    North
+  } else if self == East {
+    West
+  } else {
+    East
+  }
 }
 ```
 
@@ -1903,51 +1984,48 @@ fn main() {
 Plain enum values are ordered by declaration position. North comes first (smallest), West comes last (greatest).
 
 ```rust
-    d = East;
-    assert(d == East, "Enum equality");
-    assert(d != North, "Enum inequality");
-    assert(d > North, "East declared after North, so it is greater");
-    assert(West > South, "West declared last, so it is greatest");
+  d = East;
+  assert(d == East, "Enum equality");
+  assert(d != North, "Enum inequality");
+  assert(d > North, "East declared after North, so it is greater");
+  assert(West > South, "West declared last, so it is greatest");
 ```
 
 Convert between text and enum in both directions.
 
 ```rust
-    assert("{d}" == "East", "Format plain enum as text");
-    assert("West" as Direction == West, "Parse text to enum");
+  assert("{d}" == "East", "Format plain enum as text");
+  assert("West" as Direction == West, "Parse text to enum");
 ```
 
 Use a plain enum method like any other method.
 
 ```rust
-    assert(d.opposite() == West, "opposite of East is West");
-    assert(North.opposite() == South, "opposite of North is South");
+  assert(d.opposite() == West, "opposite of East is West");
+  assert(North.opposite() == South, "opposite of North is South");
 ```
 
 Struct enum variants are constructed exactly like regular structs.
 
 ```rust
-    c = Circle { radius: 1.0 };
-    assert(c.radius == 1.0, "Circle radius field");
-```
-
-```rust
-    r = Rect { width: 4.0, height: 5.0 };
-    assert(r.width * r.height == 20.0, "Rect manual area");
+  c = Circle {radius: 1.0 };
+  assert(c.radius == 1.0, "Circle radius field");
+  r = Rect {width: 4.0, height: 5.0 };
+  assert(r.width * r.height == 20.0, "Rect manual area");
 ```
 
 Calling area() on a Circle runs the Circle version; on a Rect it runs the Rect version — chosen automatically at runtime.
 
 ```rust
-    assert(round(c.area() * 1000) == round(PI * 1000), "Circle area = PI*r^2");
-    assert(r.area() == 20.0, "Rect area = width*height");
+  assert(round(c.area() * 1000) == round(PI * 1000), "Circle area = PI*r^2");
+  assert(r.area() == 20.0, "Rect area = width*height");
 ```
 
 describe() uses format strings with field access inside each variant's method.
 
 ```rust
-    assert(c.describe() == "circle with radius 1", "describe circle: {c.describe()}");
-    assert(r.describe() == "rect 4 by 5", "describe rect: {r.describe()}");
+  assert(c.describe() == "circle with radius 1", "describe circle: {c.describe()}");
+  assert(r.describe() == "rect 4 by 5", "describe rect: {r.describe()}");
 ```
 
 === Stubs for missing implementations
@@ -1964,8 +2042,16 @@ If a variant intentionally has no implementation of a method, the compiler emits
 A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
 
 ```rust
-struct Elm { key: text, value: integer }
-struct Db { map: sorted<Elm[-key]> }
+struct Elm {
+  key: text,
+  value: integer
+}
+```
+
+```rust
+struct Db {
+  map: sorted < Elm[-key] >
+}
 ```
 
 ```rust
@@ -1977,12 +2063,12 @@ fn main() {
 You initialise a sorted collection the same way as a vector. The elements are automatically placed in the right position as you add them.
 
 ```rust
-    db = Db { map: [
-        Elm { key: "One",   value: 1 },
-        Elm { key: "Two",   value: 2 },
-        Elm { key: "Three", value: 3 },
-        Elm { key: "Four",  value: 4 }
-    ]};
+  db = Db {map: [
+  Elm {key: "One", value: 1 },
+  Elm {key: "Two", value: 2 },
+  Elm {key: "Three", value: 3 },
+  Elm {key: "Four", value: 4 }
+  ] };
 ```
 
 === Looking Up by Key
@@ -1990,17 +2076,17 @@ You initialise a sorted collection the same way as a vector. The elements are au
 Use square brackets with the key value to find a record instantly. If the key is not present the result is null — you can check it with '!'.
 
 ```rust
-    assert(db.map["Two"].value == 2, "Key lookup: Two");
-    assert(db.map["Three"].value == 3, "Key lookup: Three");
-    assert(!db.map["Five"], "Missing key returns null");
-    assert(!db.map[null], "Null key returns null");
+  assert(db.map["Two"].value == 2, "Key lookup: Two");
+  assert(db.map["Three"].value == 3, "Key lookup: Three");
+  assert(!db.map["Five"], "Missing key returns null");
+  assert(!db.map[null], "Null key returns null");
 ```
 
 Append new elements with '+='; they are placed in the correct sorted position.
 
 ```rust
-    db.map += [Elm { key: "Zero", value: 0 }];
-    assert(db.map["Zero"].value == 0, "Newly added element");
+  db.map +=[Elm {key: "Zero", value: 0 }];
+  assert(db.map["Zero"].value == 0, "Newly added element");
 ```
 
 === Iterating in Order
@@ -2008,16 +2094,16 @@ Append new elements with '+='; they are placed in the correct sorted position.
 A 'for' loop over a sorted collection visits elements in key order. Here the key is '-key' (descending text), so the order is: Zero, Two, Three, One, Four.
 
 ```rust
-    sum = 0;
-    for v in db.map {
-        sum = sum * 10 + v.value;
-    }
+  sum = 0;
+  for v in db.map {
+    sum = sum * 10 + v.value;
+  }
 ```
 
 Zero(0), Two(2), Three(3), One(1), Four(4) → 0\*10+2=2, \*10+3=23, \*10+1=231, \*10+4=2314
 
 ```rust
-    assert(sum == 2314, "Sorted iteration total: {sum}");
+  assert(sum == 2314, "Sorted iteration total: {sum}");
 ```
 
 === Iterating in Reverse
@@ -2025,16 +2111,16 @@ Zero(0), Two(2), Three(3), One(1), Four(4) → 0\*10+2=2, \*10+3=23, \*10+1=231,
 Wrap the collection in rev() to visit elements from last to first key order. Here the collection is sorted by '-key' (descending text), so the stored order is Zero, Two, Three, One, Four.  rev() visits them in the opposite order.
 
 ```rust
-    rev_sum = 0;
-    for v in rev(db.map) {
-        rev_sum = rev_sum * 10 + v.value;
-    }
+  rev_sum = 0;
+  for v in rev(db.map) {
+    rev_sum = rev_sum * 10 + v.value;
+  }
 ```
 
 Four(4), One(1), Three(3), Two(2), Zero(0) → 4\*10+1=41, \*10+3=413, \*10+2=4132, \*10+0=41320
 
 ```rust
-    assert(rev_sum == 41320, "Reverse iteration total: {rev_sum}");
+  assert(rev_sum == 41320, "Reverse iteration total: {rev_sum}");
 ```
 
 === Loop Helpers: \#first, \#count, and \#remove
@@ -2042,31 +2128,37 @@ Four(4), One(1), Three(3), Two(2), Zero(0) → 4\*10+1=41, \*10+3=413, \*10+2=41
 'v\#first' is true for the very first element visited. 'v\#count' is a running index starting at 0. 'v\#remove' removes the current element while iterating.
 
 ```rust
-    first_key = "";
-    labels = "";
-    for v in db.map {
-        if v#first { first_key = v.key }
-        if !v#first { labels += "," }
-        labels += "{v#count}:{v.key}"
+  first_key = "";
+  labels = "";
+  for v in db.map {
+    if v#first {
+      first_key = v.key
     }
-    assert(first_key == "Zero", "First element: {first_key}");
-    assert(labels == "0:Zero,1:Two,2:Three,3:One,4:Four", "Labels: {labels}");
+    if !v#first {
+      labels += ","
+    }
+    labels += "{v#count}:{v.key}"
+  }
+  assert(first_key == "Zero", "First element: {first_key}");
+  assert(labels == "0:Zero,1:Two,2:Three,3:One,4:Four", "Labels: {labels}");
 ```
 
 Remove elements with value \> 2 while iterating.
 
 ```rust
-    for v in db.map if v.value > 2 {
-        v#remove
-    }
-    sum2 = 0;
-    for v in db.map { sum2 += v.value }
+  for v in db.map if v.value > 2 {
+    v#remove
+  }
+  sum2 = 0;
+  for v in db.map {
+    sum2 += v.value
+  }
 ```
 
 Remaining: Zero(0), Two(2), One(1) → sum = 3
 
 ```rust
-    assert(sum2 == 3, "Sum after remove: {sum2}");
+  assert(sum2 == 3, "Sum after remove: {sum2}");
 ```
 
 === Removing by Key
@@ -2074,19 +2166,26 @@ Remaining: Zero(0), Two(2), One(1) → sum = 3
 Assigning null to a sorted subscript removes the element with that key. Removing a key that is not present is a safe no-op.
 
 ```rust
-    db2 = Db { map: [
-        Elm { key: "A", value: 10 },
-        Elm { key: "B", value: 20 },
-        Elm { key: "C", value: 30 }
-    ]};
-    db2.map["B"] = null;
-    assert(!db2.map["B"],          "B was removed");
-    assert(db2.map["A"].value == 10, "A still present");
-    assert(db2.map["C"].value == 30, "C still present");
-    db2.map["missing"] = null;   // no-op; does not panic
-    sum3 = 0;
-    for v in db2.map { sum3 += v.value }
-    assert(sum3 == 40, "Sum after key removal: {sum3}");
+  db2 = Db {map: [
+  Elm {key: "A", value: 10 },
+  Elm {key: "B", value: 20 },
+  Elm {key: "C", value: 30 }
+  ] };
+  db2.map["B"] = null;
+  assert(!db2.map["B"], "B was removed");
+  assert(db2.map["A"].value == 10, "A still present");
+  assert(db2.map["C"].value == 30, "C still present");
+  db2.map["missing"] = null;
+```
+
+no-op; does not panic
+
+```rust
+  sum3 = 0;
+  for v in db2.map {
+    sum3 += v.value
+  }
+  assert(sum3 == 40, "Sum after key removal: {sum3}");
 ```
 
 Note: \#index is not available on sorted — use \#count for a sequential counter.
@@ -2103,8 +2202,17 @@ filling and finding values
 An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending. Note: each record can only belong to one index at a time.
 
 ```rust
-struct Elm { nr: integer, key: text, value: integer }
-struct Db { map: index<Elm[nr, -key]> }
+struct Elm {
+  nr: integer,
+  key: text,
+  value: integer
+}
+```
+
+```rust
+struct Db {
+  map: index < Elm[nr, -key] >
+}
 ```
 
 ```rust
@@ -2116,22 +2224,22 @@ fn main() {
 Fill the index just like a vector. Elements are automatically kept in key order. This index is sorted first by 'nr' (ascending), then by 'key' (descending) for ties.
 
 ```rust
-    db = Db { map: [
-        Elm { nr: 101, key: "One",   value: 1 },
-        Elm { nr: 92,  key: "Two",   value: 2 },
-        Elm { nr: 83,  key: "Three", value: 3 },
-        Elm { nr: 83,  key: "Four",  value: 4 },
-        Elm { nr: 83,  key: "Five",  value: 5 },
-        Elm { nr: 63,  key: "Six",   value: 6 },
-    ]};
+  db = Db {map: [
+  Elm {nr: 101, key: "One", value: 1 },
+  Elm {nr: 92, key: "Two", value: 2 },
+  Elm {nr: 83, key: "Three", value: 3 },
+  Elm {nr: 83, key: "Four", value: 4 },
+  Elm {nr: 83, key: "Five", value: 5 },
+  Elm {nr: 63, key: "Six", value: 6 }
+  ] };
 ```
 
 Provide all key fields together inside brackets to find a record. Supply fewer fields to match all records that share a prefix.
 
 ```rust
-    assert(db.map[101, "One"].value == 1, "Key lookup");
-    assert(!db.map[12, ""], "Missing key returns null");
-    assert(!db.map[83, "One"], "Wrong secondary key returns null");
+  assert(db.map[101, "One"].value == 1, "Key lookup");
+  assert(!db.map[12, ""], "Missing key returns null");
+  assert(!db.map[83, "One"], "Wrong secondary key returns null");
 ```
 
 === Iterating in Order
@@ -2139,11 +2247,11 @@ Provide all key fields together inside brackets to find a record. Supply fewer f
 A 'for' loop visits all elements in key order.
 
 ```rust
-    total = 0;
-    for r in db.map {
-        total += r.value;
-    }
-    assert(total == 21, "Sum of all values: {total}");
+  total = 0;
+  for r in db.map {
+    total += r.value;
+  }
+  assert(total == 21, "Sum of all values: {total}");
 ```
 
 === Range Queries
@@ -2151,16 +2259,16 @@ A 'for' loop visits all elements in key order.
 Provide a range in the first key position to visit only the matching slice. '\[83..92, "Two"\]' means: nr from 83 up to (not including) 92, and key from "Two" down (since the key is sorted descending, "Two" is the start of that descending segment).
 
 ```rust
-    sum = 0;
-    for v in db.map[83..92, "Two"] {
-        sum = sum * 10 + v.value;
-    }
+  sum = 0;
+  for v in db.map[83..92, "Two"] {
+    sum = sum * 10 + v.value;
+  }
 ```
 
 Elements matched: (83, Three, 3), (83, Four, 4), (83, Five, 5)
 
 ```rust
-    assert(sum == 345, "Range iteration result: {sum}");
+  assert(sum == 345, "Range iteration result: {sum}");
 ```
 
 === Loop Helpers: \#first and \#count
@@ -2168,14 +2276,16 @@ Elements matched: (83, Three, 3), (83, Four, 4), (83, Five, 5)
 'r\#first' is true for the very first element visited. 'r\#count' is a running counter starting at 0. Note: \#index is not meaningful on index collections — use \#count instead.
 
 ```rust
-    first_nr = 0;
-    count_total = 0;
-    for r in db.map {
-        if r#first { first_nr = r.nr }
-        count_total = r#count
+  first_nr = 0;
+  count_total = 0;
+  for r in db.map {
+    if r#first {
+      first_nr = r.nr
     }
-    assert(first_nr == 63, "First element by key: {first_nr}");
-    assert(count_total == 5, "Total elements: {count_total}");
+    count_total = r#count
+  }
+  assert(first_nr == 63, "First element by key: {first_nr}");
+  assert(count_total == 5, "Total elements: {count_total}");
 ```
 
 === Removing by Key
@@ -2183,13 +2293,20 @@ Elements matched: (83, Three, 3), (83, Four, 4), (83, Five, 5)
 Assigning null to an index subscript removes the element with that exact key combination. Removing a key that is not present is a safe no-op.
 
 ```rust
-    db.map[92, "Two"] = null;
-    assert(!db.map[92, "Two"],       "element (92, Two) was removed");
-    assert(db.map[101, "One"].value == 1, "element (101, One) still present");
-    db.map[999, "Z"] = null;   // no-op; does not panic
-    total2 = 0;
-    for r in db.map { total2 += r.value }
-    assert(total2 == 19, "Sum after key removal: {total2}");
+  db.map[92, "Two"] = null;
+  assert(!db.map[92, "Two"], "element (92, Two) was removed");
+  assert(db.map[101, "One"].value == 1, "element (101, One) still present");
+  db.map[999, "Z"] = null;
+```
+
+no-op; does not panic
+
+```rust
+  total2 = 0;
+  for r in db.map {
+    total2 += r.value
+  }
+  assert(total2 == 19, "Sum after key removal: {total2}");
 }
 ```
 
@@ -2199,8 +2316,15 @@ Assigning null to an index subscript removes the element with that exact key com
 A 'hash' lets you find a record by its key in constant time, regardless of how many records you have. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
 
 ```rust
-struct Keyword { name: text }
-struct Data { h: hash<Keyword[name]> }
+struct Keyword {
+  name: text
+}
+```
+
+```rust
+struct Data {
+  h: hash < Keyword[name] >
+}
 ```
 
 === Combining Hash and Vector
@@ -2208,21 +2332,27 @@ struct Data { h: hash<Keyword[name]> }
 Pairing a hash with a vector on the same record type gives you the best of both worlds: the hash for instant lookup by key, and the vector for iterating in insertion order.
 
 ```rust
-struct Count { t: text, v: integer }
+struct Count {
+  t: text,
+  v: integer
+}
+```
+
+```rust
 struct Counting {
-    entries: vector<Count>,
-    lookup:  hash<Count[t]>
+  entries: vector < Count >,
+  lookup: hash < Count[t] >
 }
 ```
 
 ```rust
 fn fill(c: Counting) {
-    c.entries = [
-        { t: "One",   v: 1 },
-        { t: "Two",   v: 2 },
-        { t: "Three", v: 3 },
-        { t: "Four",  v: 4 }
-    ]
+  c.entries =[
+ {t: "One", v: 1 },
+ {t: "Two", v: 2 },
+ {t: "Three", v: 3 },
+ {t: "Four", v: 4 }
+  ]
 }
 ```
 
@@ -2235,14 +2365,11 @@ fn main() {
 Fill a hash the same way you fill a vector. Look up by key with square brackets. A found record is truthy; a missing key returns null.
 
 ```rust
-    d = Data {};
-    d.h = [{ name: "one" }, { name: "two" }];
-    d.h += [{ name: "three" }, { name: "four" }];
-```
-
-```rust
-    assert(d.h["three"], "Key exists");
-    assert(!d.h["None"], "Missing key returns null");
+  d = Data { };
+  d.h =[ {name: "one" }, {name: "two" }];
+  d.h +=[ {name: "three" }, {name: "four" }];
+  assert(d.h["three"], "Key exists");
+  assert(!d.h["None"], "Missing key returns null");
 ```
 
 === Hash + Vector Together
@@ -2250,21 +2377,21 @@ Fill a hash the same way you fill a vector. Look up by key with square brackets.
 Here 'entries' is the vector (keeps insertion order) and 'lookup' is the hash (fast access). Both fields point to the same records — adding to one automatically updates the other.
 
 ```rust
-    c = Counting {};
-    fill(c);
-    assert(c.lookup["Three"].v == 3, "Hash lookup: Three");
-    assert(c.lookup["One"].v == 1, "Hash lookup: One");
-    assert(!c.lookup["Five"], "Missing key returns null");
+  c = Counting { };
+  fill(c);
+  assert(c.lookup["Three"].v == 3, "Hash lookup: Three");
+  assert(c.lookup["One"].v == 1, "Hash lookup: One");
+  assert(!c.lookup["Five"], "Missing key returns null");
 ```
 
 Iterate in insertion order via the vector; look up by name via the hash. The vector also supports \#first, \#count, and \#remove inside the loop.
 
 ```rust
-    add = 0;
-    for item in c.entries {
-        add += item.v;
-    }
-    assert(add == 10, "Sum via vector iteration: {add}");
+  add = 0;
+  for item in c.entries {
+    add += item.v;
+  }
+  assert(add == 10, "Sum via vector iteration: {add}");
 ```
 
 === Removing a Key
@@ -2272,11 +2399,13 @@ Iterate in insertion order via the vector; look up by name via the hash. The vec
 Assigning null to a hash subscript removes that element. Removing a key that is not present is a safe no-op.
 
 ```rust
-    d.h["three"] = null;
-    assert(!d.h["three"], "three was removed");
-    assert(d.h["one"],    "one still present");
-    d.h["missing"] = null;   // no-op; does not panic
+  d.h["three"] = null;
+  assert(!d.h["three"], "three was removed");
+  assert(d.h["one"], "one still present");
+  d.h["missing"] = null;
 ```
+
+no-op; does not panic
 
 === Why you cannot iterate a hash directly
 
@@ -2293,44 +2422,42 @@ A file handle lets you read and write files without worrying about when the OS o
 
 === Inspecting the File System
 
-`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there.
-
-Clean up any leftover files from a previous interrupted run.
+`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.
 
 ```rust
 fn cleanup() {
-    delete("test.bin");
-    delete("test2.bin");
-    delete("buffer.bin");
+  delete("test.bin");
+  delete("test2.bin");
+  delete("buffer.bin");
 }
 ```
 
 ```rust
 struct Buffer {
-   size: i32,
-   data: vector<single>
+  size: i32,
+  data: vector < single >
 }
 ```
 
 ```rust
 fn main() {
-    cleanup();
+  cleanup();
 ```
 
 Asking for the format of a directory path returns Directory, not a file format. `lines()` reads the named text file and splits it on newlines.
 
 ```rust
-    ex = file("tests/example");
-    assert(ex#format == Directory, "example is a directory");
-    c = file("tests/example/config/terrain.txt").lines();
-    assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
+  ex = file("tests/example");
+  assert(ex#format == Directory, "example is a directory");
+  c = file("tests/example/config/terrain.txt").lines();
+  assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
 ```
 
 `exists` and `delete` are safe to call when the file is absent. `delete` returns false rather than crashing when nothing is there.
 
 ```rust
-    assert(!exists("test.bin"), "File should not exist before the test.");
-    assert(!delete("nonexistent_xyz.bin"), "delete on missing file returns false");
+  assert(!exists("test.bin"), "File should not exist before the test.");
+  assert(!delete("nonexistent_xyz.bin"), "delete on missing file returns false");
 ```
 
 === Writing a Text or Binary File
@@ -2338,36 +2465,36 @@ Asking for the format of a directory path returns Directory, not a file format. 
 Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f\#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value (u8, u16, i32, long, single, float, or text).
 
 ```rust
-    { f = file("test.bin");
-      assert(f#format == NotExists, "File should not exist yet.");
-      f#format = BigEndian;
-      f += 0 as u8;
-      f += 1 as u8;
-      f += 0x203 as u16;
-      f += 0x4050607;
-      f += 0x8090a0b0c0d0e0fl;
+ {f = file("test.bin");
+  assert(f#format == NotExists, "File should not exist yet.");
+  f#format = BigEndian;
+  f += 0 as u8;
+  f += 1 as u8;
+  f += 0x203 as u16;
+  f += 0x4050607;
+  f += 0x8090a0b0c0d0e0fl;
 ```
 
 `f\#size` returns the total number of bytes written so far.
 
 ```rust
-      assert(f#size == 16l, "Should have written 16 bytes.");
+  assert(f#size == 16l, "Should have written 16 bytes.");
 ```
 
 Text is written as raw UTF-8 bytes with no length prefix.
 
 ```rust
-      f += "Hello world!";
-      assert(f#size == 28l, "Size should be 28 bytes (16 + 12).");
-    } // The file closes when the handle goes out of scope.
+  f += "Hello world!";
+  assert(f#size == 28l, "Size should be 28 bytes (16 + 12).");
+ }  // The file closes when the handle goes out of scope.
 ```
 
 `move(src, dst)` renames a file. It refuses if the destination already exists or if either path would leave the project directory.
 
 ```rust
-    assert(exists("test.bin"), "File should exist after writing.");
-    assert(!move("test.bin", "../test.bin"), "Should refuse to move outside the project.");
-    assert(move("test.bin", "test2.bin"), "Could not move the file.");
+  assert(exists("test.bin"), "File should exist after writing.");
+  assert(!move("test.bin", "../test.bin"), "Should refuse to move outside the project.");
+  assert(move("test.bin", "test2.bin"), "Could not move the file.");
 ```
 
 === Reading Back What You Wrote
@@ -2375,45 +2502,45 @@ Text is written as raw UTF-8 bytes with no length prefix.
 When you open an existing file the default format is TextFile. Set `f\#format` to match the format used when writing before you read any bytes. `f\#read(n) as T` reads exactly n bytes and interprets them as type T. `f\#index` is the byte offset where the last read started. `f\#next` is the current read position; assign to it to seek anywhere.
 
 ```rust
-    { f = file("test2.bin");
-      assert(f#format == TextFile, "The default format is TextFile.");
-      f#format = LittleEndian;
+ {f = file("test2.bin");
+  assert(f#format == TextFile, "The default format is TextFile.");
+  f#format = LittleEndian;
 ```
 
 The file was written as BigEndian, so reading the same 4 bytes as LittleEndian produces a byte-swapped value — that is intentional here and confirms that the bytes were stored in the order you chose.
 
 ```rust
-      v = f#read(4) as i32;
-      assert(v == 0x3020100, "BigEndian bytes 0..3 read as LittleEndian i32.");
-      assert(f#index == 0l, "Last read started at byte 0.");
-      assert(f#next == 4l, "Next read starts at byte 4.");
+  v = f#read(4) as i32;
+  assert(v == 0x3020100, "BigEndian bytes 0..3 read as LittleEndian i32.");
+  assert(f#index == 0l, "Last read started at byte 0.");
+  assert(f#next == 4l, "Next read starts at byte 4.");
 ```
 
 Seek to byte 16 to skip past the integers and read the text directly.
 
 ```rust
-      f#next = 16l;
-      s = f#read(5) as text;
-      assert(s == "Hello", "Partial text read from offset 16.");
-      assert(f#index == 16l, "Last read started at byte 16.");
-      assert(f#next == 21l, "Next position after 5-byte text read.");
+  f#next = 16l;
+  s = f#read(5) as text;
+  assert(s == "Hello", "Partial text read from offset 16.");
+  assert(f#index == 16l, "Last read started at byte 16.");
+  assert(f#next == 21l, "Next position after 5-byte text read.");
 ```
 
 Requesting more bytes than remain simply returns whatever is left.
 
 ```rust
-      rest = f#read(100) as text;
-      assert(rest == " world!", "Read continues to end of file.");
-      assert(f#next == f#size, "Position should be at end of file.");
+  rest = f#read(100) as text;
+  assert(rest == " world!", "Read continues to end of file.");
+  assert(f#next == f#size, "Position should be at end of file.");
 ```
 
 You can seek back to any position and re-read.
 
 ```rust
-      f#next = 0l;
-      assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
-    }
-    assert(delete("test2.bin"), "Could not remove the test file.");
+  f#next = 0l;
+  assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
+ }
+  assert(delete("test2.bin"), "Could not remove the test file.");
 ```
 
 === Working with Vectors and Struct Data
@@ -2421,45 +2548,45 @@ You can seek back to any position and re-read.
 `f += vector\<T\>` writes every element in sequence as raw bytes, which is the fastest way to dump a whole collection to disk. Setting `f\#size = n` truncates or zero-extends the file to exactly n bytes — useful for discarding the tail after you have finished writing.
 
 ```rust
-    { f = file("buffer.bin");
-      f#format = LittleEndian;
-      ints = [1, 2, 3, 4];
-      f += ints;
-      assert(f#size == 16l, "Four i32 values = 16 bytes");
+ {f = file("buffer.bin");
+  f#format = LittleEndian;
+  ints =[1, 2, 3, 4];
+  f += ints;
+  assert(f#size == 16l, "Four i32 values = 16 bytes");
 ```
 
 Truncate to the first two integers.
 
 ```rust
-      f#size = 8l;
-      assert(f#size == 8l, "Truncated to 8 bytes");
-    }
-    assert(delete("buffer.bin"), "Could not remove buffer.bin after vector write test.");
+  f#size = 8l;
+  assert(f#size == 8l, "Truncated to 8 bytes");
+ }
+  assert(delete("buffer.bin"), "Could not remove buffer.bin after vector write test.");
 ```
 
 Write a count followed by individual float values. `sizeof(T)` returns the byte width of a type, so you can compute the correct read length without hard-coding magic numbers.
 
 ```rust
-    { buf = file("buffer.bin");
-      buf#format = LittleEndian;
-      buf += 4 as i32;
-      buf += 1.1f;
-      buf += 1.2f;
-      buf += 2.1f;
-      buf += 2.2f;
-    }
+ {buf = file("buffer.bin");
+  buf#format = LittleEndian;
+  buf += 4 as i32;
+  buf += 1.1f;
+  buf += 1.2f;
+  buf += 2.1f;
+  buf += 2.2f;
+ }
 ```
 
 Read the count, then use it to read exactly that many floats directly into a struct field. This pattern lets you serialise and deserialise structs with variable-length data cleanly.
 
 ```rust
-    { b = Buffer {};
-      f = file("buffer.bin");
-      f#format = LittleEndian;
-      n = f#read(4) as i32;
-      b.data = f#read(n * sizeof(single));
-    }
-    assert(delete("buffer.bin"), "Could not remove buffer.bin.");
+ {b = Buffer { };
+  f = file("buffer.bin");
+  f#format = LittleEndian;
+  n = f#read(4) as i32;
+  b.data = f#read(n * sizeof(single));
+ }
+  assert(delete("buffer.bin"), "Could not remove buffer.bin.");
 }
 ```
 
@@ -2500,9 +2627,7 @@ bright_red = 0; for px in img { if px\#red \> 200 and px\#green \< 50 and px\#bl
 
 Here is how you would compute the average brightness of an image. Brightness is often approximated as (r + g + b) / 3, or the more perceptually accurate formula (0.299\*r + 0.587\*g + 0.114\*b).
 
-total = 0; count = 0; for px in img { total += px\#red + px\#green + px\#blue; count += 1; } if count \> 0 { avg = total / (count \* 3); println("average brightness: {avg} / 255") }
-
-Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.
+total = 0; count = 0; for px in img { total += px\#red + px\#green + px\#blue; count += 1; } if count \> 0 { avg = total / (count \* 3); println("average brightness: {avg} / 255") } Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.
 
 ```rust
 fn main() {
@@ -2520,13 +2645,10 @@ Create a `lexer::Lexer` and register your language's rules before you parse anyt
 
 ```rust
 use lexer;
-```
-
-```rust
 fn main() {
-    l = lexer::Lexer {};
-    l.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
-    l.set_keywords(["for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or"]);
+  l = lexer::Lexer { };
+  l.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
+  l.set_keywords(["for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or"]);
 ```
 
 === Reading Tokens
@@ -2536,19 +2658,19 @@ fn main() {
 `int()` consumes and returns the next integer token, or null if the current token is not an integer. `long_int()` does the same for integers suffixed with `l`. `matches(s)` consumes the next token only when it equals s and returns true; otherwise it leaves the token in place and returns false. `peek()` returns the next token as text without consuming it. `position()` returns the current location as `file:line:col`.
 
 ```rust
-    l.parse_string("Tokens", "12 += -2 * 3l >> 4");
-    assert(l.int() == 12, "Integer");
-    assert(!l.matches("+"), "Incorrect plus");
-    assert(l.peek() != "+", "Incorrect plus");
-    assert(l.matches("+="), "Incorrect plus_is");
-    assert(l.int() == -2, "Second integer");
-    assert(l.matches("*"), "Incorrect multiply");
-    assert(l.int() != 3, "Third number");
-    assert(l.long_int() == 3, "Incorrect long");
-    assert(l.position() == "Tokens:1:15", "Incorrect position {l.position()}");
-    assert(!l.matches(">"), "Incorrect higher");
-    assert(l.matches(">>"), "Incorrect logical shift");
-    assert(l.position() == "Tokens:1:18", "Incorrect position {l.position()}");
+  l.parse_string("Tokens", "12 += -2 * 3l >> 4");
+  assert(l.int() == 12, "Integer");
+  assert(!l.matches("+"), "Incorrect plus");
+  assert(l.peek() != "+", "Incorrect plus");
+  assert(l.matches("+="), "Incorrect plus_is");
+  assert(l.int() == -2, "Second integer");
+  assert(l.matches("*"), "Incorrect multiply");
+  assert(l.int() != 3, "Third number");
+  assert(l.long_int() == 3, "Incorrect long");
+  assert(l.position() == "Tokens:1:15", "Incorrect position {l.position()}");
+  assert(!l.matches(">"), "Incorrect higher");
+  assert(l.matches(">>"), "Incorrect logical shift");
+  assert(l.position() == "Tokens:1:18", "Incorrect position {l.position()}");
 ```
 
 === String Literals and Comments
@@ -2556,25 +2678,25 @@ fn main() {
 `constant_text()` reads a double-quoted string literal and unescapes any escape sequences inside it. `constant_character()` reads a single-quoted character literal and returns it as text.
 
 ```rust
-    l.parse_string("Texts", "\"123\" + '4'");
-    assert(l.constant_text() == "123", "Incorrect text literal");
-    assert(l.matches("+"), "Incorrect add");
-    assert(l.constant_character() == "123", "Incorrect text literal");
+  l.parse_string("Texts", "\"123\" + '4'");
+  assert(l.constant_text() == "123", "Incorrect text literal");
+  assert(l.matches("+"), "Incorrect add");
+  assert(l.constant_character() == "123", "Incorrect text literal");
 ```
 
 The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is_finished()` returns true once every token has been consumed.
 
 ```rust
-    l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
-    assert(!l.comment_behind(), "Initial comment not behind");
-    assert(l.last_comment() == "starting comments", "Initial comment");
-    assert(l.int() == 123, "Content integer");
-    assert(l.comment_behind(), "Second comment is behind");
-    assert(l.last_comment() == "same line comment\nextra comment", "Second comment");
-    assert(!l.is_finished(), "Not Ready");
-    assert(l.int() == 4, "Second integer");
-    assert(l.last_comment() == "", "No remaining comment");
-    assert(l.is_finished(), "Ready");
+  l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
+  assert(!l.comment_behind(), "Initial comment not behind");
+  assert(l.last_comment() == "starting comments", "Initial comment");
+  assert(l.int() == 123, "Content integer");
+  assert(l.comment_behind(), "Second comment is behind");
+  assert(l.last_comment() == "same line comment\nextra comment", "Second comment");
+  assert(!l.is_finished(), "Not Ready");
+  assert(l.int() == 4, "Second integer");
+  assert(l.last_comment() == "", "No remaining comment");
+  assert(l.is_finished(), "Ready");
 ```
 
 === Embedded Format Expressions
@@ -2582,17 +2704,17 @@ The lexer collects `//` comments automatically as it scans. You do not need to h
 Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant_text()` reaches a `{`, it returns the literal text before it and sets `is_formatting()` to true. At that point call `set_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set_formatting(true)` and consume the closing `}}`. Then `constant_text()` continues with the next segment of the string.
 
 ```rust
-    l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
-    assert(l.constant_text() == "abc", "Before formatting");
-    assert(l.is_formatting(), "Formatting");
-    l.set_formatting(false);
-    assert(l.int() == 12, "First integer");
-    assert(l.matches("+"), "Incorrect plus");
-    assert(l.int() == 34, "Second integer");
-    l.set_formatting(true);
-    assert(l.matches("}}"), "Incorrect closing brace");
-    assert(l.constant_text() == "def", "After formatting");
-    assert(!l.is_formatting(), "Formatting");
+  l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
+  assert(l.constant_text() == "abc", "Before formatting");
+  assert(l.is_formatting(), "Formatting");
+  l.set_formatting(false);
+  assert(l.int() == 12, "First integer");
+  assert(l.matches("+"), "Incorrect plus");
+  assert(l.int() == 34, "Second integer");
+  l.set_formatting(true);
+  assert(l.matches("}}"), "Incorrect closing brace");
+  assert(l.constant_text() == "def", "After formatting");
+  assert(!l.is_formatting(), "Formatting");
 }
 ```
 
@@ -2611,9 +2733,6 @@ The parser handles the complete Loft grammar: \* 'struct Name { field: type \[= 
 
 ```rust
 use parser;
-```
-
-```rust
 fn main() {
 ```
 
@@ -2622,7 +2741,7 @@ fn main() {
 The double braces '{{' and '}}' produce literal '{' and '}' inside a Loft format string — needed here because the source code itself contains braces.
 
 ```rust
-    parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}");
+  parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}");
 ```
 
 === Parsing a struct and function together
@@ -2630,7 +2749,7 @@ The double braces '{{' and '}}' produce literal '{' and '}' inside a Loft format
 The parser validates the entire source snippet as one unit. Both the struct definition and the function body are checked.
 
 ```rust
-    parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}");
+  parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}");
 ```
 
 === Parsing an enum
@@ -2638,7 +2757,7 @@ The parser validates the entire source snippet as one unit. Both the struct defi
 Both a plain variant and a struct variant (with fields) are recognised.
 
 ```rust
-    parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}");
+  parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}");
 ```
 
 === Parsing a for loop and arithmetic
@@ -2646,7 +2765,7 @@ Both a plain variant and a struct variant (with fields) are recognised.
 This exercises the expression parser and range syntax.
 
 ```rust
-    parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}");
+  parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}");
 ```
 
 === Practical use: validating user-supplied code
@@ -2658,16 +2777,14 @@ snippet = read_user_input(); parser::parse("user_code", snippet); // If parse() 
 Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate the whole grammar.
 
 ```rust
-    println("parser test passed");
+  println("parser test passed");
 }
 ```
 
 
 = Libraries
 
-A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. Everything in the library is always accessible — there is no private/public barrier.
-
-`use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
+A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. Everything in the library is always accessible — there is no private/public barrier. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
 
 ```rust
 use testlib;
@@ -2691,7 +2808,7 @@ You can add new methods to a library type from your own file. Write the `self` p
 
 ```rust
 fn shifted(self: testlib::Point, dx: float, dy: float) -> testlib::Point {
-    testlib::Point { x: self.x + dx, y: self.y + dy }
+  testlib::Point {x: self.x + dx, y: self.y + dy }
 }
 ```
 
@@ -2702,99 +2819,94 @@ fn main() {
 Constants from a library require the library prefix.
 
 ```rust
-    assert(testlib::MAX_SIZE == 100, "library constant MAX_SIZE");
-    assert(testlib::MIN_SIZE == 1, "library constant MIN_SIZE");
+  assert(testlib::MAX_SIZE == 100, "library constant MAX_SIZE");
+  assert(testlib::MIN_SIZE == 1, "library constant MIN_SIZE");
 ```
 
 Library enum variants: comparison and ordering work as normal.
 
 ```rust
-    s = testlib::Ok;
-    assert(s == testlib::Ok, "enum equality");
-    assert(s < testlib::Error, "enum ordering");
-    assert("{s}" == "Ok", "enum to text: {s}");
-    assert("Warning" as testlib::Status == testlib::Warning, "text to enum");
+  s = testlib::Ok;
+  assert(s == testlib::Ok, "enum equality");
+  assert(s < testlib::Error, "enum ordering");
+  assert("{s}" == "Ok", "enum to text: {s}");
+  assert("Warning" as testlib::Status == testlib::Warning, "text to enum");
 ```
 
 Library enum values can be passed to library free functions.
 
 ```rust
-    assert(testlib::status_text(testlib::Error) == "err", "free fn with enum arg");
+  assert(testlib::status_text(testlib::Error) == "err", "free fn with enum arg");
 ```
 
 Structs are constructed with namespace prefix and accessed by field.
 
 ```rust
-    p = testlib::Point { x: 3.0, y: 4.0 };
-    assert(p.x == 3.0, "field access: x={p.x}");
-    assert(p.y == 4.0, "field access: y={p.y}");
+  p = testlib::Point {x: 3.0, y: 4.0 };
+  assert(p.x == 3.0, "field access: x={p.x}");
+  assert(p.y == 4.0, "field access: y={p.y}");
 ```
 
 Methods defined in the library are called without a prefix.
 
 ```rust
-    dist = p.distance();
-    assert(round(dist) == 5.0, "method call: distance={dist}");
+  dist = p.distance();
+  assert(round(dist) == 5.0, "method call: distance={dist}");
 ```
 
 User-defined method on a library type (self: testlib::Point) works.
 
 ```rust
-    assert(p.shifted(1.0, 2.0).x == 4.0, "shifted x");
-    assert(p.shifted(0.0, 2.0).y == 6.0, "shifted y");
+  assert(p.shifted(1.0, 2.0).x == 4.0, "shifted x");
+  assert(p.shifted(0.0, 2.0).y == 6.0, "shifted y");
 ```
 
 Scalar fields can be mutated directly.
 
 ```rust
-    b = testlib::Bag { label: "test", count: 0 };
-    b.label = "updated";
-    assert(b.label == "updated", "direct scalar field mutation");
+  b = testlib::Bag {label: "test", count: 0 };
+  b.label = "updated";
+  assert(b.label == "updated", "direct scalar field mutation");
 ```
 
 Methods that mutate scalar fields work.
 
 ```rust
-    b.bump();
-    assert(b.count == 1, "method scalar mutation: count={b.count}");
-    b.bump();
-    assert(b.count == 2, "method scalar mutation: count={b.count}");
+  b.bump();
+  assert(b.count == 1, "method scalar mutation: count={b.count}");
+  b.bump();
+  assert(b.count == 2, "method scalar mutation: count={b.count}");
 ```
 
 Free functions: called with the library prefix.
 
 ```rust
-    assert(testlib::add(3, 4) == 7, "free function add");
-    assert(testlib::add(0, -5) == -5, "free function negative");
+  assert(testlib::add(3, 4) == 7, "free function add");
+  assert(testlib::add(0, -5) == -5, "free function negative");
 ```
 
-Library types work as function parameter types when written with their full namespace prefix in the function signature.
-
-A struct with a vector field can be initialised via a struct literal, including elements that are themselves library structs.
+Library types work as function parameter types when written with their full namespace prefix in the function signature. A struct with a vector field can be initialised via a struct literal, including elements that are themselves library structs.
 
 ```rust
-    bag2 = testlib::Bag { label: "full", count: 3, items: [
-        testlib::Point { x: 1.0, y: 0.0 },
-        testlib::Point { x: 0.0, y: 1.0 }
-    ]};
-    assert(len(bag2.items) == 2, "initialized vector field: {len(bag2.items)}");
-    assert(bag2.items[0].x == 1.0, "vector field element access");
+  bag2 = testlib::Bag {label: "full", count: 3, items: [
+  testlib::Point {x: 1.0, y: 0.0 },
+  testlib::Point {x: 0.0, y: 1.0 }
+  ] };
+  assert(len(bag2.items) == 2, "initialized vector field: {len(bag2.items)}");
+  assert(bag2.items[0].x == 1.0, "vector field element access");
 ```
 
 Appending a struct variable with `+= \[var\]` and a whole vector with `+= vec` both work.
 
 ```rust
-    extra = testlib::Point { x: 7.0, y: 8.0 };
-    bag2.items += [extra];
-    assert(len(bag2.items) == 3, "append via var: len={len(bag2.items)}");
-    assert(bag2.items[2].x == 7.0, "append via var: x={bag2.items[2].x}");
-```
-
-```rust
-    more_pts = [testlib::Point { x: 9.0, y: 10.0 }, testlib::Point { x: 11.0, y: 12.0 }];
-    bag2.items += more_pts;
-    assert(len(bag2.items) == 5, "append vector: len={len(bag2.items)}");
-    assert(bag2.items[3].x == 9.0, "append vector[3].x={bag2.items[3].x}");
+  extra = testlib::Point {x: 7.0, y: 8.0 };
+  bag2.items +=[extra];
+  assert(len(bag2.items) == 3, "append via var: len={len(bag2.items)}");
+  assert(bag2.items[2].x == 7.0, "append via var: x={bag2.items[2].x}");
+  more_pts =[testlib::Point {x: 9.0, y: 10.0 }, testlib::Point {x: 11.0, y: 12.0 }];
+  bag2.items += more_pts;
+  assert(len(bag2.items) == 5, "append vector: len={len(bag2.items)}");
+  assert(bag2.items[3].x == 9.0, "append vector[3].x={bag2.items[3].x}");
 ```
 
 Importing the same library twice is silently ignored. A library can itself import other libraries using `use`, so dependency chains work.
@@ -2817,15 +2929,7 @@ If the interpreter version is below the stated minimum, loading the library prod
 
 === Limitations
 
-These are the current rough edges to keep in mind.
-
-`use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error: fn foo() {} use testlib;   // ERROR: Syntax error
-
-All names from a library must be written with the `name::` prefix. Writing `Point {}`, `MAX_SIZE`, or `add(1, 2)` without the prefix causes a parse error or an unknown-name error.
-
-`pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers.
-
-No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
+These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error: fn foo() {} use testlib;   // ERROR: Syntax error All names from a library must be written with the `name::` prefix. Writing `Point {}`, `MAX_SIZE`, or `add(1, 2)` without the prefix causes a parse error or an unknown-name error. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
 
 ```rust
 }
@@ -2842,7 +2946,7 @@ Loft gives you two separate ways to protect a value from accidental changes:
 
 ```rust
 struct Counter {
-    value: integer
+  value: integer
 }
 ```
 
@@ -2852,7 +2956,7 @@ struct Counter {
 
 ```rust
 fn read_value(self: const Counter) -> integer {
-    self.value
+  self.value
 }
 ```
 
@@ -2860,7 +2964,7 @@ A non-const parameter leaves the store unlocked so the function can write.
 
 ```rust
 fn increment(self: Counter) {
-    self.value += 1
+  self.value += 1
 }
 ```
 
@@ -2875,21 +2979,21 @@ Declare a local variable with 'const' to signal that it will not change after it
 This is handy for configuration values or lookup tables that should never be overwritten by accident deep inside a long function.
 
 ```rust
-    const limit = 100;
-    assert(limit == 100, "const integer is readable");
+  const limit = 100;
+  assert(limit == 100, "const integer is readable");
 ```
 
 const also works for struct references.
 
 ```rust
-    const cfg = Counter { value: 42 };
-    assert(cfg.value == 42, "const reference is readable");
+  const cfg = Counter {value: 42 };
+  assert(cfg.value == 42, "const reference is readable");
 ```
 
 Passing a const reference to a const parameter is always allowed.
 
 ```rust
-    assert(read_value(cfg) == 42, "const passed to const param");
+  assert(read_value(cfg) == 42, "const passed to const param");
 ```
 
 === Calling methods on const references
@@ -2897,9 +3001,9 @@ Passing a const reference to a const parameter is always allowed.
 A non-const method can still be called on a non-const variable even after you have manually locked the store; the lock is a runtime check.
 
 ```rust
-    c = Counter { value: 10 };
-    increment(c);
-    assert(c.value == 11, "increment modified c");
+  c = Counter {value: 10 };
+  increment(c);
+  assert(c.value == 11, "increment modified c");
 ```
 
 === Runtime store locks with \#lock
@@ -2907,32 +3011,27 @@ A non-const method can still be called on a non-const variable even after you ha
 '\#lock' is an attribute on any reference variable. Setting it to true turns on a runtime guard: any write to that store will panic immediately, wherever it happens. A freshly created reference starts unlocked.
 
 ```rust
-    d = Counter { value: 5 };
-    assert(!d#lock, "new store starts unlocked");
-```
-
-```rust
-    d#lock = true;
-    assert(d#lock, "store is locked after assignment");
+  d = Counter {value: 5 };
+  assert(!d#lock, "new store starts unlocked");
+  d#lock = true;
+  assert(d#lock, "store is locked after assignment");
 ```
 
 You can still read from a locked store — only writes are blocked.
 
 ```rust
-    assert(read_value(d) == 5, "locked store is still readable");
+  assert(read_value(d) == 5, "locked store is still readable");
 ```
 
 === When to use each approach
 
-\* Use 'const' on parameters and locals to express your design intent and get compile-time safety at zero cost. \* Use '\#lock = true' when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to panic with a precise location rather than corrupt silently.
-
-get_store_lock() is the function form of the \#lock attribute. Both return the same boolean.
+\* Use 'const' on parameters and locals to express your design intent and get compile-time safety at zero cost. \* Use '\#lock = true' when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to panic with a precise location rather than corrupt silently. get_store_lock() is the function form of the \#lock attribute. Both return the same boolean.
 
 ```rust
-    e = Counter { value: 99 };
-    assert(get_store_lock(e) == e#lock, "function form matches attribute before lock");
-    e#lock = true;
-    assert(get_store_lock(e) == e#lock, "function form matches attribute after lock");
+  e = Counter {value: 99 };
+  assert(get_store_lock(e) == e#lock, "function form matches attribute before lock");
+  e#lock = true;
+  assert(get_store_lock(e) == e#lock, "function form matches attribute after lock");
 }
 ```
 
@@ -2947,53 +3046,88 @@ Two worker call forms are supported. Form 1 calls a global or user-defined funct
 
 Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }
 
-The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean).
-
-── Shared struct definitions ────────────────────────────────────────────────
+The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────
 
 ```rust
-struct Score { value: integer }
-struct ScoreList { items: vector<Score> }
+struct Score {
+  value: integer
+}
 ```
 
 ```rust
-struct Range { lo: integer, hi: integer }
-struct RangeList { items: vector<Range> }
+struct ScoreList {
+  items: vector < Score >
+}
 ```
 
-── Worker functions ─────────────────────────────────────────────────────────
-
-Global functions (Form 1)
+```rust
+struct Range {
+  lo: integer,
+  hi: integer
+}
+```
 
 ```rust
-fn double_score(r: const Score) -> integer { r.value * 2 }
-fn span(r: const Range) -> integer { r.hi - r.lo }
-fn score_as_float(r: const Score) -> float { r.value as float }
-fn score_positive(r: const Score) -> boolean { r.value > 0 }
+struct RangeList {
+  items: vector < Range >
+}
+```
+
+── Worker functions ───────────────────────────────────────────────────────── Global functions (Form 1)
+
+```rust
+fn double_score(r: const Score) -> integer {
+  r.value * 2
+}
+```
+
+```rust
+fn span(r: const Range) -> integer {
+  r.hi - r.lo
+}
+```
+
+```rust
+fn score_as_float(r: const Score) -> float {
+  r.value as float
+}
+```
+
+```rust
+fn score_positive(r: const Score) -> boolean {
+  r.value > 0
+}
 ```
 
 Methods on Score (Form 2)
 
 ```rust
-fn get_value(self: const Score) -> integer { self.value }
-fn is_positive(self: const Score) -> boolean { self.value > 0 }
+fn get_value(self: const Score) -> integer {
+  self.value
+}
+```
+
+```rust
+fn is_positive(self: const Score) -> boolean {
+  self.value > 0
+}
 ```
 
 ── Helpers ──────────────────────────────────────────────────────────────────
 
 ```rust
 fn make_scores() -> ScoreList {
-    q = ScoreList {};
-    q.items += [Score{value:10}, Score{value:20}, Score{value:30}];
-    q
+  q = ScoreList { };
+  q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
+  q
 }
 ```
 
 ```rust
 fn make_ranges() -> RangeList {
-    q = RangeList {};
-    q.items += [Range{lo:0, hi:10}, Range{lo:5, hi:12}, Range{lo:-3, hi:7}];
-    q
+  q = RangeList { };
+  q.items +=[Range {lo: 0, hi: 10 }, Range {lo: 5, hi: 12 }, Range {lo: -3, hi: 7 }];
+  q
 }
 ```
 
@@ -3006,67 +3140,69 @@ fn main() {
 Each Score's value is doubled by `double_score`. With 1 thread the work is sequential; with 4 threads it runs concurrently. Both must produce the same total because results are delivered in the original order.
 
 ```rust
-    q = make_scores();
-    sum = 0;
-    for a in q.items par(b=double_score(a), 1) {
-        sum += b;
-    }
-    assert(sum == 120, "form-1 integer (1 thread): sum == 120");
+  q = make_scores();
+  sum = 0;
+  for a in q.items par(b = double_score(a), 1) {
+    sum += b;
+  }
+  assert(sum == 120, "form-1 integer (1 thread): sum == 120");
 ```
 
 integer return, 4 threads
 
 ```rust
-    q2 = make_scores();
-    sum2 = 0;
-    for a in q2.items par(b=double_score(a), 4) {
-        sum2 += b;
-    }
-    assert(sum2 == 120, "form-1 integer (4 threads): sum == 120");
+  q2 = make_scores();
+  sum2 = 0;
+  for a in q2.items par(b = double_score(a), 4) {
+    sum2 += b;
+  }
+  assert(sum2 == 120, "form-1 integer (4 threads): sum == 120");
 ```
 
 `span` works on a two-field struct. The element size is inferred from the struct layout so you do not need to specify it.
 
 ```rust
-    r = make_ranges();
-    span_sum = 0;
-    for a in r.items par(b=span(a), 2) {
-        span_sum += b;
-    }
-    assert(span_sum == 27, "form-1 Range span: sum == 27");
+  r = make_ranges();
+  span_sum = 0;
+  for a in r.items par(b = span(a), 2) {
+    span_sum += b;
+  }
+  assert(span_sum == 27, "form-1 Range span: sum == 27");
 ```
 
 Workers can return float. Here we just count iterations to confirm every element was processed.
 
 ```rust
-    q3 = make_scores();
-    fcount = 0;
-    for a in q3.items par(b=score_as_float(a), 1) {
-        fcount += 1;
-    }
-    assert(fcount == 3, "form-1 float return: 3 elements processed");
+  q3 = make_scores();
+  fcount = 0;
+  for a in q3.items par(b = score_as_float(a), 1) {
+    fcount += 1;
+  }
+  assert(fcount == 3, "form-1 float return: 3 elements processed");
 ```
 
 Workers can return boolean. Use `if b` in the body to act on the result.
 
 ```rust
-    q4 = make_scores();
-    pos = 0;
-    for a in q4.items par(b=score_positive(a), 1) {
-        if b { pos += 1; }
+  q4 = make_scores();
+  pos = 0;
+  for a in q4.items par(b = score_positive(a), 1) {
+    if b {
+      pos += 1;
     }
-    assert(pos == 3, "form-1 boolean: all 3 positive");
+  }
+  assert(pos == 3, "form-1 boolean: all 3 positive");
 ```
 
 An empty vector is safe: the loop body simply never executes.
 
 ```rust
-    empty = ScoreList {};
-    empty_sum = 0;
-    for a in empty.items par(b=double_score(a), 1) {
-        empty_sum += b;
-    }
-    assert(empty_sum == 0, "form-1 empty: body executes 0 times");
+  empty = ScoreList { };
+  empty_sum = 0;
+  for a in empty.items par(b = double_score(a), 1) {
+    empty_sum += b;
+  }
+  assert(empty_sum == 0, "form-1 empty: body executes 0 times");
 ```
 
 === Running a Method in Parallel
@@ -3074,34 +3210,36 @@ An empty vector is safe: the loop body simply never executes.
 Form 2 calls the worker as a method on each element. The syntax `b=a.get_value()` tells the compiler to dispatch `get_value` on every element in parallel and bind each result to `b` in the loop body.
 
 ```rust
-    q5 = make_scores();
-    sum3 = 0;
-    for a in q5.items par(b=a.get_value(), 1) {
-        sum3 += b;
-    }
-    assert(sum3 == 60, "form-2 integer (1 thread): sum == 60");
+  q5 = make_scores();
+  sum3 = 0;
+  for a in q5.items par(b = a.get_value(), 1) {
+    sum3 += b;
+  }
+  assert(sum3 == 60, "form-2 integer (1 thread): sum == 60");
 ```
 
 integer return, 4 threads
 
 ```rust
-    q6 = make_scores();
-    sum4 = 0;
-    for a in q6.items par(b=a.get_value(), 4) {
-        sum4 += b;
-    }
-    assert(sum4 == 60, "form-2 integer (4 threads): sum == 60");
+  q6 = make_scores();
+  sum4 = 0;
+  for a in q6.items par(b = a.get_value(), 4) {
+    sum4 += b;
+  }
+  assert(sum4 == 60, "form-2 integer (4 threads): sum == 60");
 ```
 
 boolean return — count positives via method
 
 ```rust
-    q7 = make_scores();
-    pos2 = 0;
-    for a in q7.items par(b=a.is_positive(), 1) {
-        if b { pos2 += 1; }
+  q7 = make_scores();
+  pos2 = 0;
+  for a in q7.items par(b = a.is_positive(), 1) {
+    if b {
+      pos2 += 1;
     }
-    assert(pos2 == 3, "form-2 boolean: all 3 positive");
+  }
+  assert(pos2 == 3, "form-2 boolean: all 3 positive");
 }
 ```
 
@@ -3153,16 +3291,16 @@ fn main() {
 Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.
 
 ```rust
-    log_info("starting up");
-    log_warn("this is a warning");
-    log_error("something went wrong");
-    log_fatal("critical failure");
+  log_info("starting up");
+  log_warn("this is a warning");
+  log_error("something went wrong");
+  log_fatal("critical failure");
 ```
 
 A true assert never logs anything — it is only the false case that logs.
 
 ```rust
-    assert(true, "this should never fail");
+  assert(true, "this should never fail");
 ```
 
 === Typical usage pattern
@@ -3174,7 +3312,7 @@ fn process(item: Item) { log_info("processing item {item.id}"); result = do_work
 The log messages give you a record of exactly what the program did and where it went wrong, without cluttering the terminal during normal runs.
 
 ```rust
-    println("logging test passed");
+  println("logging test passed");
 }
 ```
 
@@ -3196,24 +3334,29 @@ fn main() {
 'rand(lo, hi)' returns a uniformly distributed integer in \[lo, hi\]. Call 'rand_seed' first to choose the sequence.
 
 ```rust
-    rand_seed(42);
-    r = rand(1, 6);       // simulated die roll: 1..6
-    assert(r >= 1 && r <= 6, "die roll out of range: {r}");
+  rand_seed(42);
+  r = rand(1, 6);
+```
+
+simulated die roll: 1..6
+
+```rust
+  assert(r >= 1 && r <= 6, "die roll out of range: {r}");
 ```
 
 The same seed always produces the same sequence.
 
 ```rust
-    rand_seed(0);
-    a = rand(0, 999);
-    rand_seed(0);
-    assert(rand(0, 999) == a, "seeded rand must be reproducible");
+  rand_seed(0);
+  a = rand(0, 999);
+  rand_seed(0);
+  assert(rand(0, 999) == a, "seeded rand must be reproducible");
 ```
 
 'rand' returns null when lo \> hi.
 
 ```rust
-    assert(!rand(10, 5), "invalid range returns null");
+  assert(!rand(10, 5), "invalid range returns null");
 ```
 
 === Random ordering: rand_indices
@@ -3221,22 +3364,28 @@ The same seed always produces the same sequence.
 'rand_indices(n)' returns a vector containing 0, 1, ..., n-1 in a random order.  Use the indices to visit another collection in random order without copying it.
 
 ```rust
-    rand_seed(7);
-    order = rand_indices(5);
-    assert(len(order) == 5, "size must be 5");
+  rand_seed(7);
+  order = rand_indices(5);
+  assert(len(order) == 5, "size must be 5");
 ```
 
 Every value 0..4 appears exactly once.
 
 ```rust
-    items = ["apple", "banana", "cherry", "date", "elderberry"];
-    seen = [for i in 0..5 { false }];
-    for idx in order {
-        seen[idx] = true;
+  items =["apple", "banana", "cherry", "date", "elderberry"];
+  seen =[for i in 0..5 {
+    false
+  }];
+  for idx in order {
+    seen[idx] = true;
+  }
+  all_seen = true;
+  for s in seen {
+    if !s {
+      all_seen = false
     }
-    all_seen = true;
-    for s in seen { if !s { all_seen = false } }
-    assert(all_seen, "rand_indices must cover all positions");
+  }
+  assert(all_seen, "rand_indices must cover all positions");
 ```
 
 === Sampling without replacement
@@ -3244,24 +3393,26 @@ Every value 0..4 appears exactly once.
 Pick k distinct items from a list by taking the first k indices.
 
 ```rust
-    rand_seed(1);
-    indices = rand_indices(len(items));
+  rand_seed(1);
+  indices = rand_indices(len(items));
 ```
 
 Take the first 3 items in random order.
 
 ```rust
-    picked = "";
-    for i in 0..3 {
-        if i > 0 { picked += ", " }
-        picked += items[indices[i]]
+  picked = "";
+  for i in 0..3 {
+    if i > 0 {
+      picked += ", "
     }
+    picked += items[indices[i]]
+  }
 ```
 
 'picked' now contains 3 distinct fruit names in a random order.
 
 ```rust
-    assert(len(picked) > 0, "should have picked some items: {picked}");
+  assert(len(picked) > 0, "should have picked some items: {picked}");
 }
 ```
 
@@ -3285,15 +3436,15 @@ fn main() {
 'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.
 
 ```rust
-    t = now();
-    assert(t > 0l, "now() must be positive");
+  t = now();
+  assert(t > 0l, "now() must be positive");
 ```
 
 Two successive calls return non-decreasing values.
 
 ```rust
-    t2 = now();
-    assert(t2 >= t, "now() must be non-decreasing");
+  t2 = now();
+  assert(t2 >= t, "now() must be non-decreasing");
 ```
 
 === Elapsed time: ticks()
@@ -3301,13 +3452,10 @@ Two successive calls return non-decreasing values.
 'ticks()' measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.
 
 ```rust
-    start = ticks();
-    assert(start >= 0l, "ticks() must be non-negative");
-```
-
-```rust
-    end = ticks();
-    assert(end >= start, "ticks() must be monotonically non-decreasing");
+  start = ticks();
+  assert(start >= 0l, "ticks() must be non-negative");
+  end = ticks();
+  assert(end >= start, "ticks() must be monotonically non-decreasing");
 ```
 
 === Measuring elapsed time
@@ -3319,13 +3467,15 @@ elapsed_us  = end_ticks - start_ticks elapsed_ms  = elapsed_us / 1000l
 Example: measure how long a loop takes.
 
 ```rust
-    t_before = ticks();
-    sum = 0;
-    for i in 0..1000 { sum += i }
-    t_after = ticks();
-    elapsed = t_after - t_before;
-    assert(elapsed >= 0l, "elapsed time must be non-negative: {elapsed}");
-    assert(sum == 499500, "loop produced wrong sum: {sum}");
+  t_before = ticks();
+  sum = 0;
+  for i in 0..1000 {
+    sum += i
+  }
+  t_after = ticks();
+  elapsed = t_after - t_before;
+  assert(elapsed >= 0l, "elapsed time must be non-negative: {elapsed}");
+  assert(sum == 499500, "loop produced wrong sum: {sum}");
 ```
 
 === Common patterns
@@ -3345,13 +3495,11 @@ Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - 
 
 == Types
 
-Primitive types built into lav.
-
 ```rust
 pub type boolean size(1)
 ```
 
-True or false value.
+Primitive types built into lav. True or false value.
 
 ```rust
 pub type integer size(4)
@@ -3390,38 +3538,38 @@ pub type character size(4)
 A single Unicode code point.
 
 ```rust
-pub type u8=integer limit(0, 255) size(1)
+pub type u8 = integer limit(0, 255) size(1)
 ```
 
 Integer subtypes for compact storage in struct fields. Behave as integer in expressions. 0 – 255, 1 byte.
 
 ```rust
-pub type i8=integer limit(-128, 127) size(1)
+pub type i8 = integer limit(-128, 127) size(1)
 ```
 
 -128 – 127, 1 byte.
 
 ```rust
-pub type u16=integer limit(0, 65535) size(2)
+pub type u16 = integer limit(0, 65535) size(2)
 ```
 
 0 – 65535, 2 bytes.
 
 ```rust
-pub type i16=integer limit(-32768, 32767) size(2)
+pub type i16 = integer limit(-32768, 32767) size(2)
 ```
 
 -32768 – 32767, 2 bytes.
 
 ```rust
-pub type i32=integer size(4)
+pub type i32 = integer size(4)
 ```
 
 Full 32-bit integer range, 4 bytes.
 
 == Math
 
-Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision.
+Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations
 
 ```rust
 pub fn abs(both: integer) -> integer
@@ -3451,55 +3599,37 @@ Cosine. Use for circular motion: x = r \* cos(angle).
 pub fn sin(both: single) -> single
 ```
 
-Sine. Use for circular motion: y = r \* sin(angle).
-
 ```rust
 pub fn tan(both: single) -> single
 ```
-
-Tangent. Use for slopes and perspective projection.
 
 ```rust
 pub fn acos(both: single) -> single
 ```
 
-Arc cosine. Returns the angle (in radians) whose cosine is v.
-
 ```rust
 pub fn asin(both: single) -> single
 ```
-
-Arc sine. Returns the angle whose sine is v.
 
 ```rust
 pub fn atan(both: single) -> single
 ```
 
-Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
-
 ```rust
 pub fn ceil(both: single) -> single
 ```
-
-Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.
 
 ```rust
 pub fn floor(both: single) -> single
 ```
 
-Round down to the nearest integer value. Use to convert a float position to a tile index.
-
 ```rust
 pub fn round(both: single) -> single
 ```
 
-Round to the nearest integer value (half rounds away from zero).
-
 ```rust
 pub fn sqrt(both: single) -> single
 ```
-
-Square root. Use for distances and normalization.
 
 ```rust
 pub fn atan2(both: single, v2: single) -> single
@@ -3510,8 +3640,6 @@ Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when yo
 ```rust
 pub fn log(both: single, v2: single) -> single
 ```
-
-Logarithm of v in the given base. Use for converting between scales (e.g., decibels).
 
 ```rust
 pub fn pow(both: single, v2: single) -> single
@@ -3547,55 +3675,37 @@ Cosine. Use for circular motion: x = r \* cos(angle).
 pub fn sin(both: float) -> float
 ```
 
-Sine. Use for circular motion: y = r \* sin(angle).
-
 ```rust
 pub fn tan(both: float) -> float
 ```
-
-Tangent. Use for slopes and perspective projection.
 
 ```rust
 pub fn acos(both: float) -> float
 ```
 
-Arc cosine. Returns the angle (in radians) whose cosine is v.
-
 ```rust
 pub fn asin(both: float) -> float
 ```
-
-Arc sine. Returns the angle whose sine is v.
 
 ```rust
 pub fn atan(both: float) -> float
 ```
 
-Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
-
 ```rust
 pub fn ceil(both: float) -> float
 ```
-
-Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.
 
 ```rust
 pub fn floor(both: float) -> float
 ```
 
-Round down to the nearest integer value. Use to convert a float position to a tile index.
-
 ```rust
 pub fn round(both: float) -> float
 ```
 
-Round to the nearest integer value (half rounds away from zero).
-
 ```rust
 pub fn sqrt(both: float) -> float
 ```
-
-Square root. Use for distances and normalization.
 
 ```rust
 pub fn atan2(both: float, v2: float) -> float
@@ -3607,8 +3717,6 @@ Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when yo
 pub fn log(both: float, v2: float) -> float
 ```
 
-Logarithm of v in the given base. Use for converting between scales (e.g., decibels).
-
 ```rust
 pub fn pow(both: float, v2: float) -> float
 ```
@@ -3617,125 +3725,95 @@ Raises base to the power exp. Use for exponential growth curves and scaling.
 
 == exp / ln / log2 / log10
 
+Raises E (2.71828…) to the power v. Use for exponential growth models.
+
 ```rust
 pub fn exp(both: single) -> single
 ```
 
-Raises E (2.71828…) to the power v. Use for exponential growth models.
-
 ```rust
-pub fn exp(both: float)  -> float
+pub fn exp(both: float) -> float
 ```
 
 ```rust
 pub fn ln(both: single) -> single
 ```
 
-Natural logarithm (base E). Use for growth rates and information entropy.
-
 ```rust
-pub fn ln(both: float)  -> float
+pub fn ln(both: float) -> float
 ```
 
 ```rust
 pub fn log2(both: single) -> single
 ```
 
-Base-2 logarithm. Use for bit-count calculations and information theory.
-
 ```rust
-pub fn log2(both: float)  -> float
+pub fn log2(both: float) -> float
 ```
 
 ```rust
 pub fn log10(both: single) -> single
 ```
 
-Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
-
 ```rust
-pub fn log10(both: float)  -> float
+pub fn log10(both: float) -> float
 ```
 
 == min / max / clamp
-
-Returns null if either argument is null (consistent with all binary arithmetic operations).
 
 ```rust
 pub fn min(both: integer, b: integer) -> integer
 ```
 
-Smallest of two integer values.
+Returns null if either argument is null (consistent with all binary arithmetic operations). Smallest of two integer values.
 
 ```rust
 pub fn max(both: integer, b: integer) -> integer
 ```
 
-Largest of two integer values.
-
 ```rust
 pub fn clamp(both: integer, lo: integer, hi: integer) -> integer
 ```
-
-Clamps v into the inclusive range \[lo, hi\]. Returns null if any argument is null.
 
 ```rust
 pub fn min(both: long, b: long) -> long
 ```
 
-Smallest of two long values.
-
 ```rust
 pub fn max(both: long, b: long) -> long
 ```
-
-Largest of two long values.
 
 ```rust
 pub fn clamp(both: long, lo: long, hi: long) -> long
 ```
 
-Clamps v into the inclusive range \[lo, hi\]. Returns null if any argument is null.
-
 ```rust
 pub fn min(both: single, b: single) -> single
 ```
-
-Smallest of two single-precision float values.
 
 ```rust
 pub fn max(both: single, b: single) -> single
 ```
 
-Largest of two single-precision float values.
-
 ```rust
 pub fn clamp(both: single, lo: single, hi: single) -> single
 ```
-
-Clamps v into the inclusive range \[lo, hi\]. Returns null if any argument is null.
 
 ```rust
 pub fn min(both: float, b: float) -> float
 ```
 
-Smallest of two double-precision float values.
-
 ```rust
 pub fn max(both: float, b: float) -> float
 ```
-
-Largest of two double-precision float values.
 
 ```rust
 pub fn clamp(both: float, lo: float, hi: float) -> float
 ```
 
-Clamps v into the inclusive range \[lo, hi\]. Returns null if any argument is null.
-
 == Text
 
-Functions for working with text (UTF-8 strings) and character values.
+Functions for working with text (UTF-8 strings) and character values. Read the value of a variable and put a reference to it on the stack
 
 ```rust
 pub fn len(both: text) -> integer
@@ -3749,19 +3827,17 @@ pub fn len(both: character) -> integer
 
 Byte length of the character's UTF-8 encoding (1–4).
 
-```rust
-pub fn split(self: text, separator: character) -> vector<text>
-```
-
 Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.
 
-Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point.
+```rust
+pub fn split(self: text, separator: character) -> vector < text >
+```
 
 ```rust
 pub fn starts_with(self: text, value: text) -> boolean
 ```
 
-Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
+Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
 
 ```rust
 pub fn ends_with(self: text, value: text) -> boolean
@@ -3896,20 +3972,26 @@ pub fn is_control(self: text) -> boolean
 True if all characters are control characters.
 
 ```rust
-pub fn join(parts: vector<text>, sep: text) -> text
+pub fn join(parts: vector < text >, sep: text) -> text
 ```
 
 Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.
 
 == Collections
 
-Operations on vector\<T\> — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index.
+Operations on vector\<T\> — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value
 
 ```rust
 pub fn len(both: vector) -> integer
 ```
 
 Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
+
+```rust
+pub fn clear(both: vector)
+```
+
+Remove all elements from the vector, setting its length to 0.
 
 == Output and Diagnostics
 
@@ -3953,68 +4035,63 @@ Writes v to standard output without a newline. Use for progress output and build
 pub fn println(v1: text)
 ```
 
-Writes v followed by a newline. The standard choice for line-oriented output.
-
 == Parallel
+
+Internal: run a loft function over every element of a vector in parallel. Not part of the public API — use the `par(b=worker(a), N)` for-loop clause instead.
 
 == File System
 
-Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference.
-
 ```rust
 pub struct EnvVariable {
-    name: text,
-    value: text
+  name: text,
+  value: text
 }
 ```
 
-An environment variable as a name/value pair.
+Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair.
 
 ```rust
 pub struct Pixel {
-    r: integer limit(0, 255) not null,
-    g: integer limit(0, 255) not null,
-    b: integer limit(0, 255) not null
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
 }
 ```
-
-Data per pixel of the png graph. Fields r, g, b hold red, green and blue intensity, each 0–255.
 
 ```rust
 pub struct Image {
-    name: text,
-    width: integer,
-    height: integer,
-    data: vector<Pixel>
+  name: text,
+  width: integer,
+  height: integer,
+  data: vector < Pixel >
 }
 ```
-
-Database structure with image data. The actual data is in height rows of width length.
 
 ```rust
 pub enum Format {
-    TextFile,
-    LittleEndian,
-    BigEndian,
-    Directory,
-    NotExists
+  TextFile,
+  LittleEndian,
+  BigEndian,
+  Directory,
+  NotExists
 }
 ```
-
-Describes how a file is opened. TextFile: read or write as UTF-8 text (default). LittleEndian: binary mode, least-significant byte first. BigEndian: binary mode, most-significant byte first. Directory: represents a directory path. NotExists: no file or directory exist.
 
 ```rust
 pub struct File {
-    path: text,
-    size: long,
-    format: Format,
-    ref: i32,
-    current: long,
-    next: long
+  path: text,
+
+  size: long,
+
+  format: Format,
+
+  ref: i32,
+
+  current: long,
+
+  next: long
 }
 ```
-
-A handle to a filesystem entry. Fields: path (full path), size (file size in bytes), format (open mode), current (byte position after last read), next (byte position to read next).
 
 ```rust
 pub fn value(self: Pixel) -> integer
@@ -4026,55 +4103,51 @@ Returns the pixel colour as a packed 24-bit integer (0xRRGGBB). Use for fast col
 pub fn content(self: File) -> text
 ```
 
-Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts.
-
 ```rust
-pub fn lines(self: File) -> vector<text>
+pub fn lines(self: File) -> vector < text >
 ```
 
-Reads the file and splits it into lines. Use when processing line-by-line (logs, CSV, etc.).
+Returns the platform path separator character: '\\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.
+
+```rust
+pub fn path_sep() -> character
+```
 
 ```rust
 pub fn file(path: text) -> File
 ```
 
-Use as the entry point for all file I/O. Paths outside the project directory are treated as NotExists without touching the filesystem.
-
 ```rust
 pub fn exists(path: text) -> boolean
 ```
-
-Use to check whether a path is accessible before reading or writing it. Paths outside the project directory are always absent.
 
 ```rust
 pub fn delete(path: text) -> boolean
 ```
 
-Use to remove a file after processing or as a cleanup step. Returns false when the file did not exist or is outside the project directory.
-
 ```rust
 pub fn move(from: text, to: text) -> boolean
 ```
 
-Use to rename or relocate a file within the project. Both paths must stay within the project directory; the destination must not already exist.
+```rust
+pub fn mkdir(path: text) -> boolean
+```
+
+```rust
+pub fn mkdir_all(path: text) -> boolean
+```
 
 ```rust
 pub fn set_file_size(self: File, size: long) -> boolean
 ```
 
-Truncate or extend the file to exactly `size` bytes. Truncating removes bytes beyond `size`; extending fills with null bytes. Returns false if the file is a directory, does not exist, or `size` is negative. Any open handle to the file is closed; reopen the file for further I/O.
-
 ```rust
-pub fn files(self: File) -> vector<File>
+pub fn files(self: File) -> vector < File >
 ```
-
-Returns the entries inside a directory. The File must have format == Format.Directory. Use to iterate over all files in a folder.
 
 ```rust
 pub fn write(self: File, v: text)
 ```
-
-Writes v as UTF-8 text to the file. Overwrites existing content.
 
 ```rust
 pub fn png(self: File) -> Image
@@ -4084,11 +4157,11 @@ Decodes a PNG file and returns an Image. Returns null if the file is not in text
 
 == Environment
 
-```rust
-pub fn env_variables() -> vector<EnvVariable>
-```
-
 Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.
+
+```rust
+pub fn env_variables() -> vector < EnvVariable >
+```
 
 ```rust
 pub fn env_variable(name: text) -> text
@@ -4096,28 +4169,26 @@ pub fn env_variable(name: text) -> text
 
 Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.
 
-Functions for interacting with the host operating system.
+Functions for interacting with the host operating system. Returns the command-line arguments passed to the program. The first element is typically the program name.
 
 ```rust
-pub fn arguments() -> vector<text>
+pub fn arguments() -> vector < text >
 ```
 
-Returns the command-line arguments passed to the program. The first element is typically the program name.
-
 ```rust
-pub fn directory(v: &text = "") -> text
+pub fn directory(v:  & text = "") -> text
 ```
 
 Returns the current working directory, optionally with v appended as a subpath. Use to construct absolute paths relative to where the program was launched.
 
 ```rust
-pub fn user_directory(v: &text = "") -> text
+pub fn user_directory(v:  & text = "") -> text
 ```
 
 Returns the current user's home directory, optionally with v appended. Use for storing user-specific data or configuration.
 
 ```rust
-pub fn program_directory(v: &text = "") -> text
+pub fn program_directory(v:  & text = "") -> text
 ```
 
 Returns the directory containing the running executable, optionally with v appended. Use to locate assets bundled alongside the program.
@@ -4137,7 +4208,7 @@ pub fn rand_seed(seed: long)
 Seeds the thread-local random number generator with the given value. Call this before rand() or rand\_indices() to get reproducible sequences.
 
 ```rust
-pub fn rand_indices(n: integer) -> vector<integer>
+pub fn rand_indices(n: integer) -> vector < integer >
 ```
 
 Returns a vector of n integers \[0, 1, ..., n-1\] in a random order. Useful for random iteration, shuffling, or sampling without replacement. Returns an empty vector when n is 0 or null.

@@ -17,28 +17,30 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="wall-clock-time-now">Wall-clock time: now()</h2>
 <p>'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.</p>
-<pre><code>    t = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">0l</span>, <span class="st">"now() must be positive"</span>);</code></pre>
+<pre><code>  t = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">0l</span>, <span class="st">"now() must be positive"</span>);</code></pre>
 <p>Two successive calls return non-decreasing values.</p>
-<pre><code>    t2 = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt;= t, <span class="st">"now() must be non-decreasing"</span>);</code></pre>
+<pre><code>  t2 = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt;= t, <span class="st">"now() must be non-decreasing"</span>);</code></pre>
 <h2 id="elapsed-time-ticks">Elapsed time: ticks()</h2>
 <p>'ticks()' measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.</p>
-<pre><code>    start = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(start &gt;= <span class="nm">0l</span>, <span class="st">"ticks() must be non-negative"</span>);</code></pre>
-<pre><code>    end = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(end &gt;= start, <span class="st">"ticks() must be monotonically non-decreasing"</span>);</code></pre>
+<pre><code>  start = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(start &gt;= <span class="nm">0l</span>, <span class="st">"ticks() must be non-negative"</span>);
+  end = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(end &gt;= start, <span class="st">"ticks() must be monotonically non-decreasing"</span>);</code></pre>
 <h2 id="measuring-elapsed-time">Measuring elapsed time</h2>
 <p>Subtract two 'ticks()' values to get the duration in microseconds. Divide by 1000 to convert to milliseconds.</p>
 <p>elapsed_us  = end_ticks - start_ticks elapsed_ms  = elapsed_us / 1000l</p>
 <p>Example: measure how long a loop takes.</p>
-<pre><code>    t_before = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
-    sum = <span class="nm">0</span>;
-    <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..1000</span> { sum += i }
-    t_after = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
-    elapsed = t_after - t_before;
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(elapsed &gt;= <span class="nm">0l</span>, <span class="st">"elapsed time must be non-negative: {elapsed}"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">499500</span>, <span class="st">"loop produced wrong sum: {sum}"</span>);</code></pre>
+<pre><code>  t_before = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
+  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..1000</span> {
+    sum += i
+  }
+  t_after = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
+  elapsed = t_after - t_before;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(elapsed &gt;= <span class="nm">0l</span>, <span class="st">"elapsed time must be non-negative: {elapsed}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">499500</span>, <span class="st">"loop produced wrong sum: {sum}"</span>);</code></pre>
 <h2 id="common-patterns">Common patterns</h2>
 <p>Timestamp a log entry (seconds since epoch): seconds = now() / 1000l</p>
 <p>Seed the random number generator with the current time: rand_seed(now() as integer)</p>

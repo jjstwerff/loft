@@ -14,98 +14,121 @@
 <p>The full syntax is: for a in &lt;vector&gt; par(b=&lt;worker_call&gt;, &lt;threads&gt;) { body }</p>
 <p>Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }</p>
 <p>Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }</p>
-<p>The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean).</p>
-<p>── Shared struct definitions ────────────────────────────────────────────────</p>
-<pre><code><span class="kw">struct</span> <span class="en">Score</span> { value: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
-<span class="kw">struct</span> <span class="en">ScoreList</span> { items: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt; }</code></pre>
-<pre><code><span class="kw">struct</span> <span class="en">Range</span> { lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
-<span class="kw">struct</span> <span class="en">RangeList</span> { items: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Range</span>&gt; }</code></pre>
-<p>── Worker functions ─────────────────────────────────────────────────────────</p>
-<p>Global functions (Form 1)</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">double_score</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { r.value * <span class="nm">2</span> }
-<span class="kw">fn</span> <span class="fn-call">span</span>(r: const <span class="en">Range</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { r.hi - r.lo }
-<span class="kw">fn</span> <span class="fn-call">score_as_float</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { r.value <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span> }
-<span class="kw">fn</span> <span class="fn-call">score_positive</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { r.value &gt; <span class="nm">0</span> }</code></pre>
+<p>The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
+<pre><code><span class="kw">struct</span> <span class="en">Score</span> {
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">ScoreList</span> {
+  items: <span class="ty"><a href="stdlib-collections.html">vector</a></span> &lt; <span class="en">Score</span> &gt;
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Range</span> {
+  lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">RangeList</span> {
+  items: <span class="ty"><a href="stdlib-collections.html">vector</a></span> &lt; <span class="en">Range</span> &gt;
+}</code></pre>
+<p>── Worker functions ───────────────────────────────────────────────────────── Global functions (Form 1)</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">double_score</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  r.value * <span class="nm">2</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">span</span>(r: const <span class="en">Range</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  r.hi - r.lo
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">score_as_float</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {
+  r.value <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">score_positive</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
+  r.value &gt; <span class="nm">0</span>
+}</code></pre>
 <p>Methods on Score (Form 2)</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">get_value</span>(self: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.value }
-<span class="kw">fn</span> <span class="fn-call">is_positive</span>(self: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.value &gt; <span class="nm">0</span> }</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">get_value</span>(self: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  self.value
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">is_positive</span>(self: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
+  self.value &gt; <span class="nm">0</span>
+}</code></pre>
 <p>── Helpers ──────────────────────────────────────────────────────────────────</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">make_scores</span>() -&gt; <span class="en">ScoreList</span> {
-    q = <span class="en">ScoreList</span> {};
-    q.items += [<span class="en">Score</span>{value:<span class="nm">10</span>}, <span class="en">Score</span>{value:<span class="nm">20</span>}, <span class="en">Score</span>{value:<span class="nm">30</span>}];
-    q
+  q = <span class="en">ScoreList</span> { };
+  q.items +=[<span class="en">Score</span> {value: <span class="nm">10</span> }, <span class="en">Score</span> {value: <span class="nm">20</span> }, <span class="en">Score</span> {value: <span class="nm">30</span> }];
+  q
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">make_ranges</span>() -&gt; <span class="en">RangeList</span> {
-    q = <span class="en">RangeList</span> {};
-    q.items += [<span class="en">Range</span>{lo:<span class="nm">0</span>, hi:<span class="nm">10</span>}, <span class="en">Range</span>{lo:<span class="nm">5</span>, hi:<span class="nm">12</span>}, <span class="en">Range</span>{lo:-<span class="nm">3</span>, hi:<span class="nm">7</span>}];
-    q
+  q = <span class="en">RangeList</span> { };
+  q.items +=[<span class="en">Range</span> {lo: <span class="nm">0</span>, hi: <span class="nm">10</span> }, <span class="en">Range</span> {lo: <span class="nm">5</span>, hi: <span class="nm">12</span> }, <span class="en">Range</span> {lo: -<span class="nm">3</span>, hi: <span class="nm">7</span> }];
+  q
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="running-a-global-function-in-parallel">Running a Global Function in Parallel</h2>
 <p>Each Score's value is doubled by `double_score`. With 1 thread the work is sequential; with 4 threads it runs concurrently. Both must produce the same total because results are delivered in the original order.</p>
-<pre><code>    q = <span class="fn-call">make_scores</span>();
-    sum = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q.items <span class="fn-call">par</span>(b=<span class="fn-call">double_score</span>(a), <span class="nm">1</span>) {
-        sum += b;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">120</span>, <span class="st">"form-1 integer (1 thread): sum == 120"</span>);</code></pre>
+<pre><code>  q = <span class="fn-call">make_scores</span>();
+  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q.items <span class="fn-call">par</span>(b = <span class="fn-call">double_score</span>(a), <span class="nm">1</span>) {
+    sum += b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">120</span>, <span class="st">"form-1 integer (1 thread): sum == 120"</span>);</code></pre>
 <p>integer return, 4 threads</p>
-<pre><code>    q2 = <span class="fn-call">make_scores</span>();
-    sum2 = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q2.items <span class="fn-call">par</span>(b=<span class="fn-call">double_score</span>(a), <span class="nm">4</span>) {
-        sum2 += b;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">120</span>, <span class="st">"form-1 integer (4 threads): sum == 120"</span>);</code></pre>
+<pre><code>  q2 = <span class="fn-call">make_scores</span>();
+  sum2 = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q2.items <span class="fn-call">par</span>(b = <span class="fn-call">double_score</span>(a), <span class="nm">4</span>) {
+    sum2 += b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">120</span>, <span class="st">"form-1 integer (4 threads): sum == 120"</span>);</code></pre>
 <p>`span` works on a two-field struct. The element size is inferred from the struct layout so you do not need to specify it.</p>
-<pre><code>    r = <span class="fn-call">make_ranges</span>();
-    span_sum = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> r.items <span class="fn-call">par</span>(b=<span class="fn-call">span</span>(a), <span class="nm">2</span>) {
-        span_sum += b;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(span_sum == <span class="nm">27</span>, <span class="st">"form-1 Range span: sum == 27"</span>);</code></pre>
+<pre><code>  r = <span class="fn-call">make_ranges</span>();
+  span_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> r.items <span class="fn-call">par</span>(b = <span class="fn-call">span</span>(a), <span class="nm">2</span>) {
+    span_sum += b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(span_sum == <span class="nm">27</span>, <span class="st">"form-1 Range span: sum == 27"</span>);</code></pre>
 <p>Workers can return float. Here we just count iterations to confirm every element was processed.</p>
-<pre><code>    q3 = <span class="fn-call">make_scores</span>();
-    fcount = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q3.items <span class="fn-call">par</span>(b=<span class="fn-call">score_as_float</span>(a), <span class="nm">1</span>) {
-        fcount += <span class="nm">1</span>;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fcount == <span class="nm">3</span>, <span class="st">"form-1 float return: 3 elements processed"</span>);</code></pre>
+<pre><code>  q3 = <span class="fn-call">make_scores</span>();
+  fcount = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q3.items <span class="fn-call">par</span>(b = <span class="fn-call">score_as_float</span>(a), <span class="nm">1</span>) {
+    fcount += <span class="nm">1</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fcount == <span class="nm">3</span>, <span class="st">"form-1 float return: 3 elements processed"</span>);</code></pre>
 <p>Workers can return boolean. Use `if b` in the body to act on the result.</p>
-<pre><code>    q4 = <span class="fn-call">make_scores</span>();
-    pos = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q4.items <span class="fn-call">par</span>(b=<span class="fn-call">score_positive</span>(a), <span class="nm">1</span>) {
-        <span class="kw">if</span> b { pos += <span class="nm">1</span>; }
+<pre><code>  q4 = <span class="fn-call">make_scores</span>();
+  pos = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q4.items <span class="fn-call">par</span>(b = <span class="fn-call">score_positive</span>(a), <span class="nm">1</span>) {
+    <span class="kw">if</span> b {
+      pos += <span class="nm">1</span>;
     }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pos == <span class="nm">3</span>, <span class="st">"form-1 boolean: all 3 positive"</span>);</code></pre>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pos == <span class="nm">3</span>, <span class="st">"form-1 boolean: all 3 positive"</span>);</code></pre>
 <p>An empty vector is safe: the loop body simply never executes.</p>
-<pre><code>    empty = <span class="en">ScoreList</span> {};
-    empty_sum = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> empty.items <span class="fn-call">par</span>(b=<span class="fn-call">double_score</span>(a), <span class="nm">1</span>) {
-        empty_sum += b;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty_sum == <span class="nm">0</span>, <span class="st">"form-1 empty: body executes 0 times"</span>);</code></pre>
+<pre><code>  empty = <span class="en">ScoreList</span> { };
+  empty_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> empty.items <span class="fn-call">par</span>(b = <span class="fn-call">double_score</span>(a), <span class="nm">1</span>) {
+    empty_sum += b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty_sum == <span class="nm">0</span>, <span class="st">"form-1 empty: body executes 0 times"</span>);</code></pre>
 <h2 id="running-a-method-in-parallel">Running a Method in Parallel</h2>
 <p>Form 2 calls the worker as a method on each element. The syntax `b=a.get_value()` tells the compiler to dispatch `get_value` on every element in parallel and bind each result to `b` in the loop body.</p>
-<pre><code>    q5 = <span class="fn-call">make_scores</span>();
-    sum3 = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q5.items <span class="fn-call">par</span>(b=a.<span class="fn-call">get_value</span>(), <span class="nm">1</span>) {
-        sum3 += b;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">60</span>, <span class="st">"form-2 integer (1 thread): sum == 60"</span>);</code></pre>
+<pre><code>  q5 = <span class="fn-call">make_scores</span>();
+  sum3 = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q5.items <span class="fn-call">par</span>(b = a.<span class="fn-call">get_value</span>(), <span class="nm">1</span>) {
+    sum3 += b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">60</span>, <span class="st">"form-2 integer (1 thread): sum == 60"</span>);</code></pre>
 <p>integer return, 4 threads</p>
-<pre><code>    q6 = <span class="fn-call">make_scores</span>();
-    sum4 = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q6.items <span class="fn-call">par</span>(b=a.<span class="fn-call">get_value</span>(), <span class="nm">4</span>) {
-        sum4 += b;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum4 == <span class="nm">60</span>, <span class="st">"form-2 integer (4 threads): sum == 60"</span>);</code></pre>
+<pre><code>  q6 = <span class="fn-call">make_scores</span>();
+  sum4 = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q6.items <span class="fn-call">par</span>(b = a.<span class="fn-call">get_value</span>(), <span class="nm">4</span>) {
+    sum4 += b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum4 == <span class="nm">60</span>, <span class="st">"form-2 integer (4 threads): sum == 60"</span>);</code></pre>
 <p>boolean return — count positives via method</p>
-<pre><code>    q7 = <span class="fn-call">make_scores</span>();
-    pos2 = <span class="nm">0</span>;
-    <span class="kw">for</span> a <span class="kw">in</span> q7.items <span class="fn-call">par</span>(b=a.<span class="fn-call">is_positive</span>(), <span class="nm">1</span>) {
-        <span class="kw">if</span> b { pos2 += <span class="nm">1</span>; }
+<pre><code>  q7 = <span class="fn-call">make_scores</span>();
+  pos2 = <span class="nm">0</span>;
+  <span class="kw">for</span> a <span class="kw">in</span> q7.items <span class="fn-call">par</span>(b = a.<span class="fn-call">is_positive</span>(), <span class="nm">1</span>) {
+    <span class="kw">if</span> b {
+      pos2 += <span class="nm">1</span>;
     }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pos2 == <span class="nm">3</span>, <span class="st">"form-2 boolean: all 3 positive"</span>);
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pos2 == <span class="nm">3</span>, <span class="st">"form-2 boolean: all 3 positive"</span>);
 }</code></pre>
 
   </article>

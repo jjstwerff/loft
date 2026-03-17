@@ -27,8 +27,7 @@
 <p>bright_red = 0; for px in img { if px#red &gt; 200 and px#green &lt; 50 and px#blue &lt; 50 { bright_red += 1; } } println("found {bright_red} bright-red pixels")</p>
 <h2 id="practical-example-average-brightness">Practical example: average brightness</h2>
 <p>Here is how you would compute the average brightness of an image. Brightness is often approximated as (r + g + b) / 3, or the more perceptually accurate formula (0.299*r + 0.587*g + 0.114*b).</p>
-<p>total = 0; count = 0; for px in img { total += px#red + px#green + px#blue; count += 1; } if count &gt; 0 { avg = total / (count * 3); println("average brightness: {avg} / 255") }</p>
-<p>Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.</p>
+<p>total = 0; count = 0; for px in img { total += px#red + px#green + px#blue; count += 1; } if count &gt; 0 { avg = total / (count * 3); println("average brightness: {avg} / 255") } Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
 }</code></pre>
 

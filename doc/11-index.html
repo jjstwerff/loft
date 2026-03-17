@@ -11,57 +11,68 @@
 <h1>Index</h1>
 <article>
 <p>An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending. Note: each record can only belong to one index at a time.</p>
-<pre><code><span class="kw">struct</span> <span class="en">Elm</span> { nr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>, value: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
-<span class="kw">struct</span> <span class="en">Db</span> { map: <span class="ty">index</span>&lt;<span class="en">Elm</span>[nr, -key]&gt; }</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
+  nr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Db</span> {
+  map: <span class="ty">index</span> &lt; <span class="en">Elm</span>[nr, -key] &gt;
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="adding-and-looking-up-records">Adding and Looking Up Records</h2>
 <p>Fill the index just like a vector. Elements are automatically kept in key order. This index is sorted first by 'nr' (ascending), then by 'key' (descending) for ties.</p>
-<pre><code>    db = <span class="en">Db</span> { map: [
-        <span class="en">Elm</span> { nr: <span class="nm">101</span>, key: <span class="st">"One"</span>,   value: <span class="nm">1</span> },
-        <span class="en">Elm</span> { nr: <span class="nm">92</span>,  key: <span class="st">"Two"</span>,   value: <span class="nm">2</span> },
-        <span class="en">Elm</span> { nr: <span class="nm">83</span>,  key: <span class="st">"Three"</span>, value: <span class="nm">3</span> },
-        <span class="en">Elm</span> { nr: <span class="nm">83</span>,  key: <span class="st">"Four"</span>,  value: <span class="nm">4</span> },
-        <span class="en">Elm</span> { nr: <span class="nm">83</span>,  key: <span class="st">"Five"</span>,  value: <span class="nm">5</span> },
-        <span class="en">Elm</span> { nr: <span class="nm">63</span>,  key: <span class="st">"Six"</span>,   value: <span class="nm">6</span> },
-    ]};</code></pre>
+<pre><code>  db = <span class="en">Db</span> {map: [
+  <span class="en">Elm</span> {nr: <span class="nm">101</span>, key: <span class="st">"One"</span>, value: <span class="nm">1</span> },
+  <span class="en">Elm</span> {nr: <span class="nm">92</span>, key: <span class="st">"Two"</span>, value: <span class="nm">2</span> },
+  <span class="en">Elm</span> {nr: <span class="nm">83</span>, key: <span class="st">"Three"</span>, value: <span class="nm">3</span> },
+  <span class="en">Elm</span> {nr: <span class="nm">83</span>, key: <span class="st">"Four"</span>, value: <span class="nm">4</span> },
+  <span class="en">Elm</span> {nr: <span class="nm">83</span>, key: <span class="st">"Five"</span>, value: <span class="nm">5</span> },
+  <span class="en">Elm</span> {nr: <span class="nm">63</span>, key: <span class="st">"Six"</span>, value: <span class="nm">6</span> }
+  ] };</code></pre>
 <p>Provide all key fields together inside brackets to find a record. Supply fewer fields to match all records that share a prefix.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"Key lookup"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">12</span>, <span class="st">""</span>], <span class="st">"Missing key returns null"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">83</span>, <span class="st">"One"</span>], <span class="st">"Wrong secondary key returns null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"Key lookup"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">12</span>, <span class="st">""</span>], <span class="st">"Missing key returns null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">83</span>, <span class="st">"One"</span>], <span class="st">"Wrong secondary key returns null"</span>);</code></pre>
 <h2 id="iterating-in-order">Iterating in Order</h2>
 <p>A 'for' loop visits all elements in key order.</p>
-<pre><code>    total = <span class="nm">0</span>;
-    <span class="kw">for</span> r <span class="kw">in</span> db.map {
-        total += r.value;
-    }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">21</span>, <span class="st">"Sum of all values: {total}"</span>);</code></pre>
+<pre><code>  total = <span class="nm">0</span>;
+  <span class="kw">for</span> r <span class="kw">in</span> db.map {
+    total += r.value;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">21</span>, <span class="st">"Sum of all values: {total}"</span>);</code></pre>
 <h2 id="range-queries">Range Queries</h2>
 <p>Provide a range in the first key position to visit only the matching slice. '[83..92, "Two"]' means: nr from 83 up to (not including) 92, and key from "Two" down (since the key is sorted descending, "Two" is the start of that descending segment).</p>
-<pre><code>    sum = <span class="nm">0</span>;
-    <span class="kw">for</span> v <span class="kw">in</span> db.map[<span class="nm">83..92</span>, <span class="st">"Two"</span>] {
-        sum = sum * <span class="nm">10</span> + v.value;
-    }</code></pre>
+<pre><code>  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map[<span class="nm">83..92</span>, <span class="st">"Two"</span>] {
+    sum = sum * <span class="nm">10</span> + v.value;
+  }</code></pre>
 <p>Elements matched: (83, Three, 3), (83, Four, 4), (83, Five, 5)</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">345</span>, <span class="st">"Range iteration result: {sum}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">345</span>, <span class="st">"Range iteration result: {sum}"</span>);</code></pre>
 <h2 id="loop-helpers-first-and-count">Loop Helpers: #first and #count</h2>
 <p>'r#first' is true for the very first element visited. 'r#count' is a running counter starting at 0. Note: #index is not meaningful on index collections — use #count instead.</p>
-<pre><code>    first_nr = <span class="nm">0</span>;
-    count_total = <span class="nm">0</span>;
-    <span class="kw">for</span> r <span class="kw">in</span> db.map {
-        <span class="kw">if</span> r#first { first_nr = r.nr }
-        count_total = r#count
+<pre><code>  first_nr = <span class="nm">0</span>;
+  count_total = <span class="nm">0</span>;
+  <span class="kw">for</span> r <span class="kw">in</span> db.map {
+    <span class="kw">if</span> r#first {
+      first_nr = r.nr
     }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_nr == <span class="nm">63</span>, <span class="st">"First element by key: {first_nr}"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(count_total == <span class="nm">5</span>, <span class="st">"Total elements: {count_total}"</span>);</code></pre>
+    count_total = r#count
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_nr == <span class="nm">63</span>, <span class="st">"First element by key: {first_nr}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(count_total == <span class="nm">5</span>, <span class="st">"Total elements: {count_total}"</span>);</code></pre>
 <h2 id="removing-by-key">Removing by Key</h2>
 <p>Assigning null to an index subscript removes the element with that exact key combination. Removing a key that is not present is a safe no-op.</p>
-<pre><code>    db.map[<span class="nm">92</span>, <span class="st">"Two"</span>] = <span class="kw">null</span>;
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">92</span>, <span class="st">"Two"</span>],       <span class="st">"element (92, Two) was removed"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"element (101, One) still present"</span>);
-    db.map[<span class="nm">999</span>, <span class="st">"Z"</span>] = <span class="kw">null</span>;   <span class="cm">// no-op; does not panic</span>
-    total2 = <span class="nm">0</span>;
-    <span class="kw">for</span> r <span class="kw">in</span> db.map { total2 += r.value }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total2 == <span class="nm">19</span>, <span class="st">"Sum after key removal: {total2}"</span>);
+<pre><code>  db.map[<span class="nm">92</span>, <span class="st">"Two"</span>] = <span class="kw">null</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">92</span>, <span class="st">"Two"</span>], <span class="st">"element (92, Two) was removed"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"element (101, One) still present"</span>);
+  db.map[<span class="nm">999</span>, <span class="st">"Z"</span>] = <span class="kw">null</span>;</code></pre>
+<p>no-op; does not panic</p>
+<pre><code>  total2 = <span class="nm">0</span>;
+  <span class="kw">for</span> r <span class="kw">in</span> db.map {
+    total2 += r.value
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total2 == <span class="nm">19</span>, <span class="st">"Sum after key removal: {total2}"</span>);
 }</code></pre>
 
   </article>

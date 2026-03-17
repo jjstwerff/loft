@@ -16,42 +16,51 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="basic-random-integers">Basic random integers</h2>
 <p>'rand(lo, hi)' returns a uniformly distributed integer in [lo, hi]. Call 'rand_seed' first to choose the sequence.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">42</span>);
-    r = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">1</span>, <span class="nm">6</span>);       <span class="cm">// simulated die roll: 1..6</span>
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r &gt;= <span class="nm">1</span> &amp;&amp; r &lt;= <span class="nm">6</span>, <span class="st">"die roll out of range: {r}"</span>);</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">42</span>);
+  r = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">1</span>, <span class="nm">6</span>);</code></pre>
+<p>simulated die roll: 1..6</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r &gt;= <span class="nm">1</span> &amp;&amp; r &lt;= <span class="nm">6</span>, <span class="st">"die roll out of range: {r}"</span>);</code></pre>
 <p>The same seed always produces the same sequence.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
-    a = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>);
-    <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>) == a, <span class="st">"seeded rand must be reproducible"</span>);</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
+  a = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>);
+  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>) == a, <span class="st">"seeded rand must be reproducible"</span>);</code></pre>
 <p>'rand' returns null when lo &gt; hi.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"invalid range returns null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"invalid range returns null"</span>);</code></pre>
 <h2 id="random-ordering-rand-indices">Random ordering: rand_indices</h2>
 <p>'rand_indices(n)' returns a vector containing 0, 1, ..., n-1 in a random order.  Use the indices to visit another collection in random order without copying it.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">7</span>);
-    order = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="nm">5</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(order) == <span class="nm">5</span>, <span class="st">"size must be 5"</span>);</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">7</span>);
+  order = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="nm">5</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(order) == <span class="nm">5</span>, <span class="st">"size must be 5"</span>);</code></pre>
 <p>Every value 0..4 appears exactly once.</p>
-<pre><code>    items = [<span class="st">"apple"</span>, <span class="st">"banana"</span>, <span class="st">"cherry"</span>, <span class="st">"date"</span>, <span class="st">"elderberry"</span>];
-    seen = [<span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..5</span> { <span class="kw">false</span> }];
-    <span class="kw">for</span> idx <span class="kw">in</span> order {
-        seen[idx] = <span class="kw">true</span>;
+<pre><code>  items =[<span class="st">"apple"</span>, <span class="st">"banana"</span>, <span class="st">"cherry"</span>, <span class="st">"date"</span>, <span class="st">"elderberry"</span>];
+  seen =[<span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..5</span> {
+    <span class="kw">false</span>
+  }];
+  <span class="kw">for</span> idx <span class="kw">in</span> order {
+    seen[idx] = <span class="kw">true</span>;
+  }
+  all_seen = <span class="kw">true</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> seen {
+    <span class="kw">if</span> !s {
+      all_seen = <span class="kw">false</span>
     }
-    all_seen = <span class="kw">true</span>;
-    <span class="kw">for</span> s <span class="kw">in</span> seen { <span class="kw">if</span> !s { all_seen = <span class="kw">false</span> } }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(all_seen, <span class="st">"rand_indices must cover all positions"</span>);</code></pre>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(all_seen, <span class="st">"rand_indices must cover all positions"</span>);</code></pre>
 <h2 id="sampling-without-replacement">Sampling without replacement</h2>
 <p>Pick k distinct items from a list by taking the first k indices.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">1</span>);
-    indices = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(items));</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">1</span>);
+  indices = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(items));</code></pre>
 <p>Take the first 3 items in random order.</p>
-<pre><code>    picked = <span class="st">""</span>;
-    <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..3</span> {
-        <span class="kw">if</span> i &gt; <span class="nm">0</span> { picked += <span class="st">", "</span> }
-        picked += items[indices[i]]
-    }</code></pre>
+<pre><code>  picked = <span class="st">""</span>;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..3</span> {
+    <span class="kw">if</span> i &gt; <span class="nm">0</span> {
+      picked += <span class="st">", "</span>
+    }
+    picked += items[indices[i]]
+  }</code></pre>
 <p>'picked' now contains 3 distinct fruit names in a random order.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(picked) &gt; <span class="nm">0</span>, <span class="st">"should have picked some items: {picked}"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(picked) &gt; <span class="nm">0</span>, <span class="st">"should have picked some items: {picked}"</span>);
 }</code></pre>
 
   </article>

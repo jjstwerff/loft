@@ -135,39 +135,6 @@ for x in items {    // Warning: loop variable 'x' shadows outer variable 'x'
 
 ---
 
-### T1-24  Document null sentinel values per type
-**Sources:** INCONSISTENCIES #10
-**Severity:** Medium — `i32::MIN` from legitimate arithmetic (e.g. `(-2147483648 / 1)`) is
-indistinguishable from null; similar edge cases exist for `u8` enums with 255 variants
-**Description:** Add a "Null Representation" section to [LOFT.md](LOFT.md) documenting:
-- The sentinel value for every type (`i32::MIN`, `i64::MIN`, `NaN`, `DbRef{rec:0}`, byte `255`, etc.)
-- The risk: arithmetic that produces exactly `i32::MIN` looks null to `!v` and `v == null`
-- Mitigation: use `long` when the full `i32` range is needed; use `not null` on struct fields
-  to reclaim the sentinel value for storage
-**Fix path:**
-1. Add the section to LOFT.md § Types → "Null representation".
-2. Add a note to the `integer` and `long` type descriptions mentioning the sentinel.
-**Effort:** Small (documentation only — LOFT.md)
-**Target:** 1.1
-
----
-
-### T1-25  `sizeof(u8)` should return packed field size, not stack size
-**Sources:** INCONSISTENCIES #23
-**Severity:** Low — `sizeof(u8)` returns 4 (stack slot), but `sizeof(Tiny)` where
-`Tiny { a: u8, b: u8 }` returns 2 (packed); the same type reports different sizes
-depending on context
-**Description:** `sizeof(TYPE_KEYWORD)` for range-constrained integers should return the
-byte-packed size (1 for `u8`/`i8`, 2 for `u16`/`i16`, 4 for `i32`/`integer`) matching
-what `sizeof(STRUCT)` reports for fields of that type.
-**Fix path:** In the `sizeof` handler (parser), when the argument is a type alias with a
-`limit(lo, hi)` range, compute the packed size from the range (same logic as struct field
-packing in `database.rs`) instead of returning the stack slot size.
-**Effort:** Small (parser — one branch in sizeof handling)
-**Target:** 1.1+
-
----
-
 ### T1-19  Nested patterns in field positions
 **Sources:** [MATCH.md](MATCH.md) — T1-19
 **Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
@@ -816,8 +783,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
-| T1-24 | Document null sentinel values per type                   | 1    | Small     | 1.1     |             | INCONSISTENCIES #10        |
-| T1-25 | `sizeof(u8)` returns packed size, not stack size         | 1    | Small     | 1.1+    |             | INCONSISTENCIES #23        |
 | P44   | Empty `[]` literal unusable as direct mutable vector arg | 1   | Medium    | 1.1     |             | PROBLEMS #44               |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
 | T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |

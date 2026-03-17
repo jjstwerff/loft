@@ -14,29 +14,37 @@
 <h2 id="declaring-functions">Declaring Functions</h2>
 <p>The keyword 'fn' starts a function definition. List parameters as 'name: type' separated by commas. '-&gt; type' declares what the function gives back. The last expression in the body is returned automatically — no 'return' needed there. Default values let callers skip optional arguments.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">greet</span>(name: <span class="ty"><a href="stdlib-types.html">text</a></span>, greeting: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"Hello"</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
-    greeting + <span class="st">", "</span> + name + <span class="st">"!"</span>
+  greeting + <span class="st">", "</span> + name + <span class="st">"!"</span>
 }</code></pre>
 <h2 id="reference-parameters-and-defaults">Reference Parameters and Defaults</h2>
 <p>A function with no '-&gt; type' is called for its side effects, not its result. Adding '&amp;' before a parameter type makes it a reference: the function receives a direct link to the caller's variable and can read or write it. Without '&amp;', Loft copies the value in, so changes inside the function stay local. Default values (written '= value' after the type) are substituted when the caller omits that argument.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a: &amp;<span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
-    a += b + c;
+<pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a:  &amp; <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
+  a += b + c;
 }</code></pre>
 <h2 id="early-return">Early Return</h2>
 <p>Use 'return value;' to exit a function before reaching the end. This is handy for guard clauses: handle the special cases first, then write the normal path without extra nesting.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">classify</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
-    <span class="kw">if</span> n &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="st">"negative"</span>; }
-    <span class="kw">if</span> n == <span class="nm">0</span> { <span class="kw">return</span> <span class="st">"zero"</span>; }
-    <span class="st">"positive"</span>
+  <span class="kw">if</span> n &lt; <span class="nm">0</span> {
+    <span class="kw">return</span> <span class="st">"negative"</span>;
+  }
+  <span class="kw">if</span> n == <span class="nm">0</span> {
+    <span class="kw">return</span> <span class="st">"zero"</span>;
+  }
+  <span class="st">"positive"</span>
 }</code></pre>
 <h2 id="const-and-reference-parameters">Const and Reference Parameters</h2>
 <p>'const' on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. '&amp;' is the opposite promise: "this function will modify this value." Declaring '&amp;' without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">scale</span>(a: const <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: const <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
-    a * factor
+  a * factor
 }</code></pre>
 <h2 id="type-based-dispatch">Type-Based Dispatch</h2>
 <p>You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">describe_int</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="st">"integer:{v}"</span> }
-<span class="kw">fn</span> <span class="fn-call">describe_text</span>(v: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="st">"text:{v}"</span> }</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">describe_int</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"integer:{v}"</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">describe_text</span>(v: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"text:{v}"</span>
+}</code></pre>
 <h2 id="function-references">Function References</h2>
 <p>'fn &lt;name&gt;' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
 <ul>
@@ -45,36 +53,42 @@
 <li>passed as a parameter to another function.</li>
 </ul>
 <p>The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> }
-<span class="kw">fn</span> <span class="fn-call">negate_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x }
-<span class="kw">fn</span> <span class="fn-call">apply_fn</span>(f: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
-    <span class="fn-call">f</span>(x)
+<pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  x * <span class="nm">2</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">negate_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  - x
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">apply_fn</span>(f:  <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="fn-call">f</span>(x)
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Passing both arguments explicitly overrides the default.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
 <p>Leaving out the second argument causes Loft to use the default "Hello".</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"Default argument"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"Default argument"</span>);</code></pre>
 <p>'add' takes 'a' by reference, so every call updates the original variable 'v'. Watch how v accumulates: 1 -&gt; 3 -&gt; 8.</p>
-<pre><code>    v = <span class="nm">1</span>;
-    <span class="fn-call">add</span>(v, <span class="nm">2</span>);       <span class="cm">// v = 1 + 2 = 3</span>
-    <span class="fn-call">add</span>(v, <span class="nm">4</span>, <span class="nm">1</span>);    <span class="cm">// v = 3 + 4 + 1 = 8</span>
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v == <span class="nm">8</span>, <span class="st">"Reference parameter: {v}"</span>);</code></pre>
+<pre><code>  v = <span class="nm">1</span>;
+  <span class="fn-call">add</span>(v, <span class="nm">2</span>);</code></pre>
+<p>v = 1 + 2 = 3</p>
+<pre><code>  <span class="fn-call">add</span>(v, <span class="nm">4</span>, <span class="nm">1</span>);</code></pre>
+<p>v = 3 + 4 + 1 = 8</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v == <span class="nm">8</span>, <span class="st">"Reference parameter: {v}"</span>);</code></pre>
 <p>'classify' uses early returns to handle each case separately.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(-<span class="nm">5</span>) == <span class="st">"negative"</span>, <span class="st">"Classify negative"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">0</span>) == <span class="st">"zero"</span>, <span class="st">"Classify zero"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">3</span>) == <span class="st">"positive"</span>, <span class="st">"Classify positive"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(-<span class="nm">5</span>) == <span class="st">"negative"</span>, <span class="st">"Classify negative"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">0</span>) == <span class="st">"zero"</span>, <span class="st">"Classify zero"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">3</span>) == <span class="st">"positive"</span>, <span class="st">"Classify positive"</span>);</code></pre>
 <p>'scale' marks both parameters 'const', so the compiler verifies they are not changed.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">scale</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">21</span>, <span class="st">"scale(3,7)"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">scale</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">21</span>, <span class="st">"scale(3,7)"</span>);</code></pre>
 <p>Loft selects the right function based on the type of the argument.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_int</span>(<span class="nm">42</span>) == <span class="st">"integer:42"</span>, <span class="st">"Integer describe"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_text</span>(<span class="st">"hi"</span>) == <span class="st">"text:hi"</span>, <span class="st">"Text describe"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_int</span>(<span class="nm">42</span>) == <span class="st">"integer:42"</span>, <span class="st">"Integer describe"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_text</span>(<span class="st">"hi"</span>) == <span class="st">"text:hi"</span>, <span class="st">"Text describe"</span>);</code></pre>
 <p>A function reference is stored in a variable with type 'fn(...) -&gt; ...'. Calling it looks exactly like a regular function call.</p>
-<pre><code>    f = <span class="kw">fn</span> double_it;
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"fn-ref stored and called: {f(5)}"</span>);</code></pre>
+<pre><code>  f = <span class="kw">fn</span> double_it;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"fn-ref stored and called: {f(5)}"</span>);</code></pre>
 <p>Pass function references as arguments to higher-order functions.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);
 }</code></pre>
 
   </article>

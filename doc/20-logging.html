@@ -31,17 +31,17 @@
 <p>Log messages are plain text, but you can embed any expression using the same '{...}' format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
-    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_warn</a></span>(<span class="st">"this is a warning"</span>);
-    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_error</a></span>(<span class="st">"something went wrong"</span>);
-    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_fatal</a></span>(<span class="st">"critical failure"</span>);</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_warn</a></span>(<span class="st">"this is a warning"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_error</a></span>(<span class="st">"something went wrong"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_fatal</a></span>(<span class="st">"critical failure"</span>);</code></pre>
 <p>A true assert never logs anything — it is only the false case that logs.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span>, <span class="st">"this should never fail"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span>, <span class="st">"this should never fail"</span>);</code></pre>
 <h2 id="typical-usage-pattern">Typical usage pattern</h2>
 <p>In a real program you would write something like:</p>
 <p>fn process(item: Item) { log_info("processing item {item.id}"); result = do_work(item); if !result { log_error("work failed for item {item.id}"); return; } log_info("finished item {item.id} successfully"); }</p>
 <p>The log messages give you a record of exactly what the program did and where it went wrong, without cluttering the terminal during normal runs.</p>
-<pre><code>    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"logging test passed"</span>);
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"logging test passed"</span>);
 }</code></pre>
 
   </article>

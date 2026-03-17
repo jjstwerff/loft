@@ -11,76 +11,90 @@
 <h1>Sorted</h1>
 <article>
 <p>A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.</p>
-<pre><code><span class="kw">struct</span> <span class="en">Elm</span> { key: <span class="ty"><a href="stdlib-types.html">text</a></span>, value: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
-<span class="kw">struct</span> <span class="en">Db</span> { map: <span class="ty"><a href="stdlib-collections.html">sorted</a></span>&lt;<span class="en">Elm</span>[-key]&gt; }</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
+  key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Db</span> {
+  map: <span class="ty"><a href="stdlib-collections.html">sorted</a></span> &lt; <span class="en">Elm</span>[-key] &gt;
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="adding-elements">Adding Elements</h2>
 <p>You initialise a sorted collection the same way as a vector. The elements are automatically placed in the right position as you add them.</p>
-<pre><code>    db = <span class="en">Db</span> { map: [
-        <span class="en">Elm</span> { key: <span class="st">"One"</span>,   value: <span class="nm">1</span> },
-        <span class="en">Elm</span> { key: <span class="st">"Two"</span>,   value: <span class="nm">2</span> },
-        <span class="en">Elm</span> { key: <span class="st">"Three"</span>, value: <span class="nm">3</span> },
-        <span class="en">Elm</span> { key: <span class="st">"Four"</span>,  value: <span class="nm">4</span> }
-    ]};</code></pre>
+<pre><code>  db = <span class="en">Db</span> {map: [
+  <span class="en">Elm</span> {key: <span class="st">"One"</span>, value: <span class="nm">1</span> },
+  <span class="en">Elm</span> {key: <span class="st">"Two"</span>, value: <span class="nm">2</span> },
+  <span class="en">Elm</span> {key: <span class="st">"Three"</span>, value: <span class="nm">3</span> },
+  <span class="en">Elm</span> {key: <span class="st">"Four"</span>, value: <span class="nm">4</span> }
+  ] };</code></pre>
 <h2 id="looking-up-by-key">Looking Up by Key</h2>
 <p>Use square brackets with the key value to find a record instantly. If the key is not present the result is null — you can check it with '!'.</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Two"</span>].value == <span class="nm">2</span>, <span class="st">"Key lookup: Two"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Three"</span>].value == <span class="nm">3</span>, <span class="st">"Key lookup: Three"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="st">"Five"</span>], <span class="st">"Missing key returns null"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="kw">null</span>], <span class="st">"Null key returns null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Two"</span>].value == <span class="nm">2</span>, <span class="st">"Key lookup: Two"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Three"</span>].value == <span class="nm">3</span>, <span class="st">"Key lookup: Three"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="st">"Five"</span>], <span class="st">"Missing key returns null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="kw">null</span>], <span class="st">"Null key returns null"</span>);</code></pre>
 <p>Append new elements with '+='; they are placed in the correct sorted position.</p>
-<pre><code>    db.map += [<span class="en">Elm</span> { key: <span class="st">"Zero"</span>, value: <span class="nm">0</span> }];
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Zero"</span>].value == <span class="nm">0</span>, <span class="st">"Newly added element"</span>);</code></pre>
+<pre><code>  db.map +=[<span class="en">Elm</span> {key: <span class="st">"Zero"</span>, value: <span class="nm">0</span> }];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Zero"</span>].value == <span class="nm">0</span>, <span class="st">"Newly added element"</span>);</code></pre>
 <h2 id="iterating-in-order">Iterating in Order</h2>
 <p>A 'for' loop over a sorted collection visits elements in key order. Here the key is '-key' (descending text), so the order is: Zero, Two, Three, One, Four.</p>
-<pre><code>    sum = <span class="nm">0</span>;
-    <span class="kw">for</span> v <span class="kw">in</span> db.map {
-        sum = sum * <span class="nm">10</span> + v.value;
-    }</code></pre>
+<pre><code>  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map {
+    sum = sum * <span class="nm">10</span> + v.value;
+  }</code></pre>
 <p>Zero(0), Two(2), Three(3), One(1), Four(4) → 0*10+2=2, *10+3=23, *10+1=231, *10+4=2314</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">2314</span>, <span class="st">"Sorted iteration total: {sum}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">2314</span>, <span class="st">"Sorted iteration total: {sum}"</span>);</code></pre>
 <h2 id="iterating-in-reverse">Iterating in Reverse</h2>
 <p>Wrap the collection in rev() to visit elements from last to first key order. Here the collection is sorted by '-key' (descending text), so the stored order is Zero, Two, Three, One, Four.  rev() visits them in the opposite order.</p>
-<pre><code>    rev_sum = <span class="nm">0</span>;
-    <span class="kw">for</span> v <span class="kw">in</span> <span class="bi">rev</span>(db.map) {
-        rev_sum = rev_sum * <span class="nm">10</span> + v.value;
-    }</code></pre>
+<pre><code>  rev_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> <span class="bi">rev</span>(db.map) {
+    rev_sum = rev_sum * <span class="nm">10</span> + v.value;
+  }</code></pre>
 <p>Four(4), One(1), Three(3), Two(2), Zero(0) → 4*10+1=41, *10+3=413, *10+2=4132, *10+0=41320</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(rev_sum == <span class="nm">41320</span>, <span class="st">"Reverse iteration total: {rev_sum}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(rev_sum == <span class="nm">41320</span>, <span class="st">"Reverse iteration total: {rev_sum}"</span>);</code></pre>
 <h2 id="loop-helpers-first-count-and-remove">Loop Helpers: #first, #count, and #remove</h2>
 <p>'v#first' is true for the very first element visited. 'v#count' is a running index starting at 0. 'v#remove' removes the current element while iterating.</p>
-<pre><code>    first_key = <span class="st">""</span>;
-    labels = <span class="st">""</span>;
-    <span class="kw">for</span> v <span class="kw">in</span> db.map {
-        <span class="kw">if</span> v#first { first_key = v.key }
-        <span class="kw">if</span> !v#first { labels += <span class="st">","</span> }
-        labels += <span class="st">"{v#count}:{v.key}"</span>
+<pre><code>  first_key = <span class="st">""</span>;
+  labels = <span class="st">""</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map {
+    <span class="kw">if</span> v#first {
+      first_key = v.key
     }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_key == <span class="st">"Zero"</span>, <span class="st">"First element: {first_key}"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"0:Zero,1:Two,2:Three,3:One,4:Four"</span>, <span class="st">"Labels: {labels}"</span>);</code></pre>
+    <span class="kw">if</span> !v#first {
+      labels += <span class="st">","</span>
+    }
+    labels += <span class="st">"{v#count}:{v.key}"</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_key == <span class="st">"Zero"</span>, <span class="st">"First element: {first_key}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"0:Zero,1:Two,2:Three,3:One,4:Four"</span>, <span class="st">"Labels: {labels}"</span>);</code></pre>
 <p>Remove elements with value &gt; 2 while iterating.</p>
-<pre><code>    <span class="kw">for</span> v <span class="kw">in</span> db.map <span class="kw">if</span> v.value &gt; <span class="nm">2</span> {
-        v#remove
-    }
-    sum2 = <span class="nm">0</span>;
-    <span class="kw">for</span> v <span class="kw">in</span> db.map { sum2 += v.value }</code></pre>
+<pre><code>  <span class="kw">for</span> v <span class="kw">in</span> db.map <span class="kw">if</span> v.value &gt; <span class="nm">2</span> {
+    v#remove
+  }
+  sum2 = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map {
+    sum2 += v.value
+  }</code></pre>
 <p>Remaining: Zero(0), Two(2), One(1) → sum = 3</p>
-<pre><code>    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">3</span>, <span class="st">"Sum after remove: {sum2}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">3</span>, <span class="st">"Sum after remove: {sum2}"</span>);</code></pre>
 <h2 id="removing-by-key">Removing by Key</h2>
 <p>Assigning null to a sorted subscript removes the element with that key. Removing a key that is not present is a safe no-op.</p>
-<pre><code>    db2 = <span class="en">Db</span> { map: [
-        <span class="en">Elm</span> { key: <span class="st">"A"</span>, value: <span class="nm">10</span> },
-        <span class="en">Elm</span> { key: <span class="st">"B"</span>, value: <span class="nm">20</span> },
-        <span class="en">Elm</span> { key: <span class="st">"C"</span>, value: <span class="nm">30</span> }
-    ]};
-    db2.map[<span class="st">"B"</span>] = <span class="kw">null</span>;
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db2.map[<span class="st">"B"</span>],          <span class="st">"B was removed"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"A"</span>].value == <span class="nm">10</span>, <span class="st">"A still present"</span>);
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"C"</span>].value == <span class="nm">30</span>, <span class="st">"C still present"</span>);
-    db2.map[<span class="st">"missing"</span>] = <span class="kw">null</span>;   <span class="cm">// no-op; does not panic</span>
-    sum3 = <span class="nm">0</span>;
-    <span class="kw">for</span> v <span class="kw">in</span> db2.map { sum3 += v.value }
-    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
+<pre><code>  db2 = <span class="en">Db</span> {map: [
+  <span class="en">Elm</span> {key: <span class="st">"A"</span>, value: <span class="nm">10</span> },
+  <span class="en">Elm</span> {key: <span class="st">"B"</span>, value: <span class="nm">20</span> },
+  <span class="en">Elm</span> {key: <span class="st">"C"</span>, value: <span class="nm">30</span> }
+  ] };
+  db2.map[<span class="st">"B"</span>] = <span class="kw">null</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db2.map[<span class="st">"B"</span>], <span class="st">"B was removed"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"A"</span>].value == <span class="nm">10</span>, <span class="st">"A still present"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"C"</span>].value == <span class="nm">30</span>, <span class="st">"C still present"</span>);
+  db2.map[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
+<p>no-op; does not panic</p>
+<pre><code>  sum3 = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db2.map {
+    sum3 += v.value
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
 <p>Note: #index is not available on sorted — use #count for a sequential counter.</p>
 <pre><code>}</code></pre>
 <p>filling and finding values</p>

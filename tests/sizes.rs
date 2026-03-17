@@ -38,6 +38,14 @@ fn get_size(v: Val) -> integer { sizeof(v) }"
 }
 
 #[test]
+fn sizeof_packed_integer_types() {
+    // u8 = integer limit(0,255) size(1) → packed size 1
+    // u16 = integer limit(0,65535) size(2) → packed size 2
+    // i32 = integer → packed size 4
+    expr!("sizeof(u8) + 10 * sizeof(u16) + 100 * sizeof(i32)").result(Value::Int(421));
+}
+
+#[test]
 fn expr_struct() {
     code!(
         "struct S {a: integer, b: long, c: En}
