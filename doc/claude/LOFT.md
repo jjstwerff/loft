@@ -20,6 +20,7 @@ and can emit Rust code for host integration.
 - [Structs and record initialization](#structs-and-record-initialization)
 - [Methods and function calls](#methods-and-function-calls)
 - [Assertions](#assertions)
+- [Sizeof](#sizeof)
 - [Polymorphism / dynamic dispatch](#polymorphism--dynamic-dispatch)
 - [File structure](#file-structure)
 - [External function annotations (`#rust`, `#iterator`)](#external-function-annotations-rust-iterator)
@@ -481,6 +482,49 @@ return           // for void functions
 
 The last expression in a block (without a trailing `;`) is automatically returned.
 
+### Match expressions
+
+Pattern matching dispatches on enum variants, scalar values, or struct types:
+
+```
+result = match direction {
+    North | South => "vertical",
+    East | West => "horizontal"
+}
+```
+
+**Enum match:** each arm names a variant. All variants must be covered or a `_` wildcard
+must be present. Or-patterns (`|`) combine variants into a single arm. Struct-enum arms
+can destructure fields:
+
+```
+match shape {
+    Circle { radius } if radius > 0.0 => PI * radius * radius,
+    Circle { radius }                 => 0.0,
+    Rect { width, height }            => width * height
+}
+```
+
+**Scalar match:** the subject is an integer, text, float, boolean, or character. Arms
+are literal values, ranges, `null`, or `_`:
+
+```
+match score {
+    null     => "absent",
+    90..=100 => "A",
+    80..90   => "B",
+    1 | 2 | 3 => "low",
+    _        => "other"
+}
+```
+
+**Guard clauses:** any arm may have an `if` guard after the pattern. The guard is
+evaluated when the pattern matches; if the guard is false, matching falls through to
+the next arm. Guarded arms do not count toward exhaustiveness.
+
+**Match is an expression:** it produces a value that can be assigned or returned. All
+arms must produce the same type (or void).
+
 ---
 
 ## Variables
@@ -593,6 +637,23 @@ assert(condition, "message")
 ```
 
 Panics at runtime if the condition is false.
+
+---
+
+## Sizeof
+
+```
+sizeof(integer)    // 4
+sizeof(u8)         // 1 (packed field size)
+sizeof(u16)        // 2
+sizeof(MyStruct)   // sum of packed field sizes
+sizeof(my_var)     // size of the variable's type
+```
+
+`sizeof(TYPE)` returns the packed byte size used when the type is stored as a struct
+field or vector element. For range-constrained integer types (`u8`, `u16`, etc.) this
+is the packed size (1 or 2 bytes), not the stack slot size. For polymorphic enums and
+references, the size is computed at runtime from the actual variant.
 
 ---
 
@@ -721,8 +782,11 @@ type_decl    ::= 'type' CamelIdent '=' type ';'
 constant     ::= UPPER_IDENT '=' expr ';'
 block        ::= '{' { stmt } '}'
 stmt         ::= expr [ ';' ]
-expr         ::= for_expr | 'continue' | 'break' | 'return' [ expr ]
+expr         ::= for_expr | match_expr | 'continue' | 'break' | 'return' [ expr ]
                | assignment
+match_expr   ::= 'match' expr '{' match_arm { ',' match_arm } '}'
+match_arm    ::= pattern { '|' pattern } [ 'if' expr ] '=>' expr
+pattern      ::= '_' | 'null' | literal | range | CamelIdent [ '{' field_bind '}' ]
 assignment   ::= operators [ ( '=' | '+=' | '-=' | '*=' | '/=' | '%=' ) operators ]
 operators    ::= single { '.' ident [ '(' args ')' ] | '[' index ']' | '#' ident }
                { op operators }
