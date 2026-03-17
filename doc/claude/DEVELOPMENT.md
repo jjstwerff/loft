@@ -117,59 +117,94 @@ necessary, or left for a separate cleanup task if they are pre-existing.
 
 ---
 
-## Choosing the Right Workflow
+## Commit Rules
 
-Use the item's **effort** rating from PLANNING.md to pick the workflow:
-
-| Effort | Workflow | Typical commits |
-|--------|----------|-----------------|
-| Trivial | [Simplified](#simplified-workflow--trivial--small-items) — single commit with code + tests | 1–2 |
-| Small | [Simplified](#simplified-workflow--trivial--small-items) — code+tests commit + docs commit | 2 |
-| Medium+ | [Full 5-step rebase](#rebase-into-a-clean-commit-history--medium-items) below | 3–5 |
-
-Items may also be **batched** when they touch the same file(s) and have no
-inter-dependencies.  Use a single branch for the batch (e.g. `n1-n3-template-fixes`)
-and mention all item IDs in commit messages.
-
----
-
-## Simplified Workflow — Trivial / Small Items
-
-For items rated **Trivial** or **Small** in PLANNING.md: skip the `#[ignore]` dance.
-Combine code changes and their tests in a single commit.
-
-```
-Commit 1 — Code + tests
-    {ID}: {summary}
-
-    Implementation and tests in a single commit. Tests pass immediately.
-
-Commit 2 — Documentation (if any docs need updating)
-    docs: {ID} — update CHANGELOG, PLANNING
-```
-
-**When to use:**
-- Pure search-and-replace (N1, N2, N3) — verification is `grep` + existing test suite
-- One-line fixes (N4) — no new tests needed
-- Adding a single warning (T1-23) — one test function + one parser change
-- Adding a simple stdlib function (T2-7) — function + test in one commit
-
-**Verification is still required:** `cargo test`, `cargo clippy -- -D warnings`,
-`cargo fmt -- --check` must all pass before pushing.
-
----
-
-## Rebase into a Clean Commit History — Medium+ Items
-
-Once all tests pass and CODE.md validation is complete, split the WIP commit into
-an ordered sequence of commits.  Use an interactive rebase:
+A branch may contain **any number of commits** as long as every commit satisfies:
 
 ```bash
-git rebase -i main
+cargo test                       # all tests pass
+cargo clippy -- -D warnings      # no warnings
+cargo fmt -- --check             # no formatting diff
 ```
 
-In the editor, mark the single WIP commit as `edit`, save, and then `git reset HEAD~`
-to unstage everything.  Then create the commits in the order below.
+Run all three before every `git commit`.  A commit that breaks any of these must
+be fixed or amended before pushing.
+
+### Commit structure
+
+Each commit should be a coherent, self-contained change.  Good splits:
+
+- Code change + its tests in one commit
+- Documentation updates in a separate commit
+- Refactors that don't change behaviour in their own commit
+
+Multiple PLANNING items may share a branch when they touch the same files
+(e.g. `n11-n14-runtime-fixes`).  Mention all item IDs in the commit message.
+
+### Commit message style
+
+```
+{scope}: {imperative summary}  (≤ 72 characters)
+
+{body: describe what the feature does in plain language.  Focus on the
+user-visible or developer-visible effect, not the implementation.
+Mention function or file names only when they clarify the scope.}
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+```
+
+**Scope** is one of: `T{tier}-{nr}` or `N{nr}` for planned items, `fix` for
+bug fixes, `docs` for documentation-only, `refactor` for behaviour-neutral changes.
+
+**Summary** starts with an imperative verb: *add*, *fix*, *implement*, *remove*,
+*enable*, *warn on* — never *added*, *adds*, *implementing*.
+
+**Body** explains what changed and why in clear sentences.  Avoid listing every
+file or function touched — the diff shows that.  Use a function name only when
+it is the thing being fixed or added (e.g. "fix `output_if` to emit typed nulls")
+rather than as implementation detail.
+
+**Good example:**
+```
+N15: emit typed nulls for missing else branches
+
+Generated if-expressions without an else branch now produce a
+type-appropriate null sentinel (i32::MIN, "", NaN, etc.) instead of
+unit `()`.  This fixes 20 compile failures where the true branch
+returned a value but the else emitted an incompatible type.
+```
+
+**Bad example:**
+```
+N15: fix output_if in src/generation.rs
+
+Changed output_if() at line 828 to call infer_if_type() which checks
+Value::Call and Value::Var and Value::Block result types. Added match
+on Type::Integer, Type::Long, Type::Float, Type::Single, Type::Boolean,
+Type::Text, Type::Reference, Type::Enum. Updated output_code_inner()
+line 747 to not emit "()" when the context requires a typed null.
+```
+
+### Documentation commit
+
+The **last commit** on a branch updates documentation:
+
+```
+docs: {ID} — update CHANGELOG, PLANNING
+
+- CHANGELOG: add feature/fix entry under Unreleased
+- PLANNING: remove completed item section and quick-reference row
+```
+
+Review every file in `doc/claude/` for references to the feature and update as needed.
+
+---
+
+## Optional: Structured Commit Sequence for Medium+ Items
+
+For larger features, the following commit order makes review easier.
+It is **not required** — the only requirement is that every commit passes
+the three checks above.
 
 ### Step 1 — Tests with `#[ignore]`
 
@@ -325,27 +360,6 @@ Do not merge until all three jobs are green on all platforms.  If a job fails:
   and push again.
 - **Format failure** — run `cargo fmt` locally, verify with `cargo fmt -- --check`,
   amend the relevant commit, and push again.
-
----
-
-## Commit Message Style
-
-Each commit message follows the pattern:
-
-```
-{scope}: {imperative summary}  (≤ 72 characters)
-
-{optional body: what changed and why, not how}
-```
-
-**Scope** is one of: `T{tier}-{nr}` for planned items, `fix` for bug fixes,
-`docs` for documentation-only, `refactor` for behaviour-neutral restructuring.
-
-**Imperative summary** starts with a verb: *add*, *implement*, *fix*, *remove*,
-*enable*, *split*, *update* — never *added*, *adds*, *implementing*.
-
-The body is optional but encouraged for non-obvious changes.  Explain why the
-change is structured this way; the diff already shows what changed.
 
 ---
 
