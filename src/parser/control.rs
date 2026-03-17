@@ -11,6 +11,15 @@ use super::{
     v_block, v_if, v_loop, v_set,
 };
 
+/// Collected match arm data for enum/struct-enum match expressions.
+struct EnumArm {
+    disc: Option<i32>,
+    code: Value,
+    tp: Type,
+    guard: Option<Value>,
+    bindings: Vec<Value>,
+}
+
 /// Returns true if the given AST value definitely returns on all code paths.
 /// A block definitely-returns if its last statement is a `return`, or if it is
 /// an `if` with an `else` where both branches definitely-return (recursive).
@@ -296,8 +305,7 @@ impl Parser {
 
         self.lexer.token("{");
 
-        // arms: (discriminant or None for wildcard, arm code, arm type)
-        let mut arms: Vec<(Option<i32>, Value, Type)> = Vec::new();
+        let mut arms: Vec<EnumArm> = Vec::new();
         let mut covered: HashSet<u32> = HashSet::new();
         let mut has_wildcard = false;
         let mut result_type = Type::Void;
@@ -319,7 +327,26 @@ impl Parser {
 
             if pattern_name == "_" {
                 // Wildcard arm — must be last.
-                has_wildcard = true;
+                // T1-16: parse optional guard clause.
+                let guard_opt = if self.lexer.has_token("if") {
+                    let mut guard_code = Value::Null;
+                    let guard_type = self.expression(&mut guard_code);
+                    if !self.first_pass && guard_type != Type::Boolean {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "guard must be boolean, got {}",
+                            guard_type.name(&self.data)
+                        );
+                    }
+                    Some(guard_code)
+                } else {
+                    None
+                };
+                // Only mark exhaustive if wildcard has no guard.
+                if guard_opt.is_none() {
+                    has_wildcard = true;
+                }
                 self.lexer.token("=>");
                 let mut arm_code = Value::Null;
                 let arm_type = if self.lexer.peek_token("{") {
@@ -341,8 +368,18 @@ impl Parser {
                         arm_type.name(&self.data)
                     );
                 }
-                arms.push((None, arm_code, arm_type));
+                arms.push(EnumArm {
+                    disc: None,
+                    code: arm_code,
+                    tp: arm_type,
+                    guard: guard_opt,
+                    bindings: Vec::new(),
+                });
                 self.lexer.has_token(","); // optional trailing comma
+                if !has_wildcard {
+                    // Guarded wildcard — continue parsing more arms.
+                    continue;
+                }
                 break;
             }
 
@@ -402,7 +439,13 @@ impl Parser {
                 if result_type == Type::Void {
                     result_type = arm_type;
                 }
-                arms.push((None, block, result_type.clone()));
+                arms.push(EnumArm {
+                    disc: None,
+                    code: block,
+                    tp: result_type.clone(),
+                    guard: None,
+                    bindings: Vec::new(),
+                });
                 has_wildcard = true; // plain struct arm always matches
                 break;
             }
@@ -434,20 +477,6 @@ impl Parser {
                 let mut arm_code = Value::Null;
                 self.expression(&mut arm_code);
                 continue;
-            }
-
-            // Duplicate arm detection.
-            if covered.contains(&variant_def_nr) {
-                if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Warning,
-                        "unreachable arm: {} already matched",
-                        pattern_name
-                    );
-                }
-            } else {
-                covered.insert(variant_def_nr);
             }
 
             // Get the discriminant integer for this variant.
@@ -530,6 +559,41 @@ impl Parser {
                 self.lexer.token("}");
             }
 
+            // T1-16: parse optional guard clause after pattern + field bindings.
+            // Field-bound variables are in scope for the guard expression.
+            let guard_opt = if self.lexer.has_token("if") {
+                let mut guard_code = Value::Null;
+                let guard_type = self.expression(&mut guard_code);
+                if !self.first_pass && guard_type != Type::Boolean {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "guard must be boolean, got {}",
+                        guard_type.name(&self.data)
+                    );
+                }
+                Some(guard_code)
+            } else {
+                None
+            };
+
+            // Duplicate arm detection.
+            // Guarded arms don't count as covering the variant for exhaustiveness.
+            if guard_opt.is_none() {
+                if covered.contains(&variant_def_nr) {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Warning,
+                            "unreachable arm: {} already matched",
+                            pattern_name
+                        );
+                    }
+                } else {
+                    covered.insert(variant_def_nr);
+                }
+            }
+
             self.lexer.token("=>");
 
             // Parse the arm body expression.
@@ -561,15 +625,28 @@ impl Parser {
                 );
             }
 
-            // Wrap field-reads + body into a block if there are field reads.
-            let arm_code = if arm_stmts.is_empty() {
-                arm_body
+            // When there is a guard, keep field bindings separate — they must
+            // be emitted before the guard check so bound variables are available.
+            // When there is no guard, wrap them into a block as before.
+            let (arm_code, binding_stmts) = if guard_opt.is_some() && !arm_stmts.is_empty() {
+                (arm_body, arm_stmts)
+            } else if arm_stmts.is_empty() {
+                (arm_body, Vec::new())
             } else {
                 arm_stmts.push(arm_body);
-                v_block(arm_stmts, arm_type.clone(), "match_arm")
+                (
+                    v_block(arm_stmts, arm_type.clone(), "match_arm"),
+                    Vec::new(),
+                )
             };
 
-            arms.push((Some(disc), arm_code, arm_type));
+            arms.push(EnumArm {
+                disc: Some(disc),
+                code: arm_code,
+                tp: arm_type,
+                guard: guard_opt,
+                bindings: binding_stmts,
+            });
             if self.lexer.peek_token("}") {
                 self.lexer.has_token(","); // optional trailing comma
             } else {
@@ -605,15 +682,36 @@ impl Parser {
         // Value::Null is the base case — reached only when no arm matches
         // (only possible if exhaustiveness fails, which is a compile error).
         let mut chain = Value::Null;
-        for (disc_opt, arm_code, _) in arms.iter().rev() {
-            match disc_opt {
+        for arm in arms.iter().rev() {
+            match arm.disc {
                 None => {
                     // Wildcard — always taken; becomes the else branch of the chain.
-                    chain = arm_code.clone();
+                    // T1-16: guarded wildcard wraps body in If(guard, body, chain_rest).
+                    chain = match &arm.guard {
+                        Some(guard) => v_if(guard.clone(), arm.code.clone(), chain),
+                        None => arm.code.clone(),
+                    };
                 }
                 Some(disc_nr) => {
-                    let cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(*disc_nr)]);
-                    chain = v_if(cmp, arm_code.clone(), chain);
+                    let cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(disc_nr)]);
+                    // T1-16: guarded arms nest the guard inside the pattern branch.
+                    // When there are field bindings, emit them BEFORE the guard so bound
+                    // variables are available in the guard expression:
+                    //   If(disc, Block([bindings..., If(guard, body, rest)]), rest)
+                    chain = match &arm.guard {
+                        Some(guard) => {
+                            let guarded = v_if(guard.clone(), arm.code.clone(), chain.clone());
+                            let inner = if arm.bindings.is_empty() {
+                                guarded
+                            } else {
+                                let mut stmts = arm.bindings.clone();
+                                stmts.push(guarded);
+                                v_block(stmts, arm.tp.clone(), "match_arm")
+                            };
+                            v_if(cmp, inner, chain)
+                        }
+                        None => v_if(cmp, arm.code.clone(), chain),
+                    };
                 }
             }
         }
@@ -709,8 +807,8 @@ impl Parser {
 
         self.lexer.token("{");
 
-        // Collect arms: (literal_value, arm_code, arm_type)
-        let mut arms: Vec<(Option<Value>, Value, Type)> = Vec::new();
+        // Collect arms: (literal_value, arm_code, arm_type, optional guard)
+        let mut arms: Vec<(Option<Value>, Value, Type, Option<Value>)> = Vec::new();
         let mut has_wildcard = false;
         let mut result_type = Type::Void;
 
@@ -721,11 +819,12 @@ impl Parser {
 
             // Parse pattern: literal, `true`, `false`, `_`, or string.
             let mut pattern_val: Option<Value> = None;
+            let mut is_wildcard = false;
 
             // Check for wildcard `_` — try identifier first.
             if let Some(id) = self.lexer.has_identifier() {
                 if id == "_" {
-                    has_wildcard = true;
+                    is_wildcard = true;
                 } else if !self.first_pass {
                     diagnostic!(
                         self.lexer,
@@ -738,6 +837,28 @@ impl Parser {
                 pattern_val = Some(pat);
             }
 
+            // T1-16: parse optional guard clause.
+            let guard_opt = if self.lexer.has_token("if") {
+                let mut guard_code = Value::Null;
+                let guard_type = self.expression(&mut guard_code);
+                if !self.first_pass && guard_type != Type::Boolean {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "guard must be boolean, got {}",
+                        guard_type.name(&self.data)
+                    );
+                }
+                Some(guard_code)
+            } else {
+                None
+            };
+
+            // Only mark exhaustive if wildcard has no guard.
+            if is_wildcard && guard_opt.is_none() {
+                has_wildcard = true;
+            }
+
             self.lexer.token("=>");
             let mut arm_code = Value::Null;
             let arm_type = if self.lexer.peek_token("{") {
@@ -748,7 +869,7 @@ impl Parser {
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
-            arms.push((pattern_val, arm_code, arm_type));
+            arms.push((pattern_val, arm_code, arm_type, guard_opt));
             if has_wildcard {
                 self.lexer.has_token(","); // optional trailing comma
                 break;
@@ -761,27 +882,47 @@ impl Parser {
         }
         self.lexer.token("}");
 
-        // Build if/else chain from last arm to first.
-        // The last arm without a pattern (wildcard) is the else fallback.
+        let chain = self.build_scalar_chain(v, subject_type, has_wildcard, &result_type, arms);
+        *code = v_block(
+            vec![v_set(v, subject), chain],
+            result_type.clone(),
+            "scalar_match",
+        );
+        result_type
+    }
+
+    /// Build the if-chain for a scalar match from collected arms.
+    fn build_scalar_chain(
+        &mut self,
+        v: u16,
+        subject_type: &Type,
+        has_wildcard: bool,
+        result_type: &Type,
+        mut arms: Vec<(Option<Value>, Value, Type, Option<Value>)>,
+    ) -> Value {
         let fallback = if has_wildcard {
-            let (_, arm_code, _) = arms.pop().unwrap();
+            let (_, arm_code, _, _) = arms.pop().unwrap();
             arm_code
         } else {
-            // No wildcard — result is nullable (null if no arm matches).
-            self.null(&result_type)
+            self.null(result_type)
         };
 
         let mut chain = fallback;
-        for (pattern_val, arm_code, _) in arms.into_iter().rev() {
+        for (pattern_val, arm_code, _, guard_opt) in arms.into_iter().rev() {
             if let Some(lit) = pattern_val {
                 // T1-17: range patterns are stored as Block with Boolean result.
-                // Use the condition directly instead of building an equality check.
                 if let Value::Block(ref bl) = lit
                     && bl.result == Type::Boolean
                     && bl.name == "range_pattern"
                 {
                     let range_cond = bl.operators[0].clone();
-                    chain = v_if(range_cond, arm_code, chain);
+                    chain = match guard_opt {
+                        Some(guard) => {
+                            let guarded = v_if(guard, arm_code, chain.clone());
+                            v_if(range_cond, guarded, chain)
+                        }
+                        None => v_if(range_cond, arm_code, chain),
+                    };
                     continue;
                 }
                 let mut cond = Value::Null;
@@ -794,19 +935,23 @@ impl Parser {
                 if cond_tp == Type::Null {
                     chain = arm_code;
                 } else {
-                    chain = v_if(cond, arm_code, chain);
+                    chain = match guard_opt {
+                        Some(guard) => {
+                            let guarded = v_if(guard, arm_code, chain.clone());
+                            v_if(cond, guarded, chain)
+                        }
+                        None => v_if(cond, arm_code, chain),
+                    };
                 }
             } else {
-                chain = arm_code;
+                // Wildcard or guarded wildcard (no pattern).
+                chain = match guard_opt {
+                    Some(guard) => v_if(guard, arm_code, chain),
+                    None => arm_code,
+                };
             }
         }
-
-        *code = v_block(
-            vec![v_set(v, subject), chain],
-            result_type.clone(),
-            "scalar_match",
-        );
-        result_type
+        chain
     }
 
     // <for> ::= <identifier> 'in' <expression> [ 'par' '(' <id> '=' <worker> ',' <threads> ')' ] '{' <block>
