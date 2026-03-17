@@ -138,6 +138,22 @@ Each commit should be a coherent, self-contained change.  Good splits:
 - Documentation updates in a separate commit
 - Refactors that don't change behaviour in their own commit
 
+### Document findings before committing
+
+When implementing a feature, you often discover things not in the planning:
+limitations, edge cases, incorrect assumptions, or new issues.  **Update the
+relevant documentation before including it in the commit:**
+
+- **PROBLEMS.md** — new bugs or limitations discovered during implementation
+- **PLANNING.md** — update the item description if scope changed, or add notes
+  about what was deferred (e.g. "insert and reverse remain" when only `clear`
+  was implemented for T2-8)
+- **NATIVE.md** — design corrections found during implementation
+- **INCONSISTENCIES.md** — new language quirks discovered
+
+Include these documentation updates in the docs commit at the end of the branch.
+Do not wait until later — findings are freshest immediately after implementation.
+
 Multiple PLANNING items may share a branch when they touch the same files
 (e.g. `n11-n14-runtime-fixes`).  Mention all item IDs in the commit message.
 
