@@ -85,6 +85,9 @@ fn OpMkdir(path: text) -> boolean;
 #rust"std::fs::create_dir(@path).is_ok()"
 fn OpMkdirAll(path: text) -> boolean;
 #rust"std::fs::create_dir_all(@path).is_ok()"
+// Clear the temporary string buffer used by native text functions.
+// Emitted at statement boundaries by the compiler; not callable from user code.
+fn OpClearScratch();
 // Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
 // Use for fast colour comparison or storage.
 pub fn value(self: Pixel) -> integer {

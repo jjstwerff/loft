@@ -171,6 +171,10 @@ impl State {
                 panic!("Should have rewritten {val:?}");
             }
             Value::Line(line) => {
+                // T3-9: clear the scratch buffer at statement boundaries so native
+                // text functions (replace, to_lowercase, to_uppercase) don't
+                // accumulate temporary strings for the entire program run.
+                stack.add_op("OpClearScratch", self);
                 self.line_numbers.insert(self.code_pos, *line);
                 Type::Void
             }

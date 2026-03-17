@@ -355,9 +355,8 @@ impl State {
             data: data_ptr,
         }));
 
-        // Drop all temporary strings from the previous execute call before starting a new one.
-        // After execute() returns, stack_pos is reset, so no Str pointer can still reference them.
-        self.database.scratch.clear();
+        // T3-9: scratch is now cleared per-statement by OpClearScratch; no need to
+        // clear it at execute() start — the first OpClearScratch in the program will do it.
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
         self.stack_pos = 4;
