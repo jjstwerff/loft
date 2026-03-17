@@ -2057,7 +2057,7 @@ If a variant intentionally has no implementation of a method, the compiler emits
 
 === Match expressions on enums
 
-Match dispatches on the active variant. All variants must be covered, or a wildcard `_` arm must be present.
+Match picks a code path based on the active variant. You must handle every variant, or include a `_` wildcard arm that catches the rest.
 
 ```rust
   axis = match d {
@@ -2067,7 +2067,7 @@ Match dispatches on the active variant. All variants must be covered, or a wildc
   assert(axis == "horizontal", "or-pattern: East matches East|West");
 ```
 
-Struct-enum match can destructure fields directly into the arm body.
+When a variant has fields, name them inside braces to use them in the arm body.
 
 ```rust
   label = match c {
@@ -2079,7 +2079,7 @@ Struct-enum match can destructure fields directly into the arm body.
 
 === Guard clauses
 
-An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Guarded arms do not count toward exhaustiveness, so a wildcard or unguarded arm is still needed.
+An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Because the guard can fail, a guarded arm alone does not prove the variant is handled — you still need a wildcard `_` or an unguarded arm for that variant.
 
 ```rust
   area = match c {
@@ -2112,7 +2112,7 @@ Or-patterns work on scalars too.
   assert(kind == "low", "scalar or-pattern");
 ```
 
-Null patterns match the null sentinel value.
+A `null` pattern matches when the value is absent (e.g. division by zero).
 
 ```rust
   zero = 0;
@@ -3755,11 +3755,11 @@ Using `if` as a value expression without an `else` clause silently returns null 
   assert(!maybe, "missing else: result is null, not an error");
 ```
 
-Match expressions, by contrast, require exhaustiveness or a wildcard. Mitigation: Always write an else clause when using if as a value.
+Match expressions, by contrast, require you to handle every case. Mitigation: Always write an else clause when using if as a value.
 
-=== Match guards do not count for exhaustiveness
+=== Match guards do not prove a variant is handled
 
-A guarded arm like `Red if cond =\> ...` does not mark the variant as covered. Even if every variant has a guarded arm, you still need a wildcard `_` or unguarded arm to satisfy the exhaustiveness check.
+A guarded arm like `Red if cond =\> ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `_` or an unguarded arm so the compiler knows every case is covered.
 
 === Ref-parameter semantics
 

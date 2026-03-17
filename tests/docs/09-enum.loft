@@ -97,15 +97,15 @@ fn main() {
   // A stub returns null at runtime and suppresses the warning.
 
   // ## Match expressions on enums
-  // Match dispatches on the active variant. All variants must be covered,
-  // or a wildcard `_` arm must be present.
+  // Match picks a code path based on the active variant. You must handle
+  // every variant, or include a `_` wildcard arm that catches the rest.
   axis = match d {
     North | South => "vertical",
     East | West => "horizontal"
   };
   assert(axis == "horizontal", "or-pattern: East matches East|West");
 
-  // Struct-enum match can destructure fields directly into the arm body.
+  // When a variant has fields, name them inside braces to use them in the arm body.
   label = match c {
     Circle { radius } => "r={radius}",
     Rect { width, height } => "{width}x{height}"
@@ -114,8 +114,9 @@ fn main() {
 
   // ## Guard clauses
   // An arm can have an `if` guard after the pattern. If the guard fails,
-  // matching falls through to the next arm. Guarded arms do not count
-  // toward exhaustiveness, so a wildcard or unguarded arm is still needed.
+  // matching falls through to the next arm. Because the guard can fail,
+  // a guarded arm alone does not prove the variant is handled — you still
+  // need a wildcard `_` or an unguarded arm for that variant.
   area = match c {
     Circle { radius } if radius > 0.0 => PI * radius * radius,
     _ => 0.0
@@ -139,7 +140,7 @@ fn main() {
   };
   assert(kind == "low", "scalar or-pattern");
 
-  // Null patterns match the null sentinel value.
+  // A `null` pattern matches when the value is absent (e.g. division by zero).
   zero = 0;
   check = match 1 / zero {
     null => "absent",

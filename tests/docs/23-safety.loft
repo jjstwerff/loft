@@ -146,13 +146,14 @@ fn main() {
   // returns null when the condition is false. No compile error is raised.
   maybe = if 1 > 10 { "yes" };
   assert(!maybe, "missing else: result is null, not an error");
-  // Match expressions, by contrast, require exhaustiveness or a wildcard.
+  // Match expressions, by contrast, require you to handle every case.
   // Mitigation: Always write an else clause when using if as a value.
 
-  // ## Match guards do not count for exhaustiveness
-  // A guarded arm like `Red if cond => ...` does not mark the variant as
-  // covered. Even if every variant has a guarded arm, you still need a
-  // wildcard `_` or unguarded arm to satisfy the exhaustiveness check.
+  // ## Match guards do not prove a variant is handled
+  // A guarded arm like `Red if cond => ...` does not count as handling
+  // the `Red` variant because the guard can fail at runtime. Even if
+  // every variant has a guarded arm, you still need a wildcard `_` or an
+  // unguarded arm so the compiler knows every case is covered.
 
   // ## Ref-parameter semantics
   // Without `&`, appending to a vector parameter is local — the caller's

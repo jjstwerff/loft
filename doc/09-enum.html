@@ -78,20 +78,20 @@
 <h2 id="stubs-for-missing-implementations">Stubs for missing implementations</h2>
 <p>If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } A stub returns null at runtime and suppresses the warning.</p>
 <h2 id="match-expressions-on-enums">Match expressions on enums</h2>
-<p>Match dispatches on the active variant. All variants must be covered, or a wildcard `_` arm must be present.</p>
+<p>Match picks a code path based on the active variant. You must handle every variant, or include a `_` wildcard arm that catches the rest.</p>
 <pre><code>  axis = match d {
     <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="st">"vertical"</span>,
     <span class="en">East</span> | <span class="en">West</span> =&gt; <span class="st">"horizontal"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(axis == <span class="st">"horizontal"</span>, <span class="st">"or-pattern: East matches East|West"</span>);</code></pre>
-<p>Struct-enum match can destructure fields directly into the arm body.</p>
+<p>When a variant has fields, name them inside braces to use them in the arm body.</p>
 <pre><code>  label = match c {
     <span class="en">Circle</span> { radius } =&gt; <span class="st">"r={radius}"</span>,
     <span class="en">Rect</span> { width, height } =&gt; <span class="st">"{width}x{height}"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"r=1"</span>, <span class="st">"field destructuring in match arm"</span>);</code></pre>
 <h2 id="guard-clauses">Guard clauses</h2>
-<p>An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Guarded arms do not count toward exhaustiveness, so a wildcard or unguarded arm is still needed.</p>
+<p>An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Because the guard can fail, a guarded arm alone does not prove the variant is handled — you still need a wildcard `_` or an unguarded arm for that variant.</p>
 <pre><code>  area = match c {
     <span class="en">Circle</span> { radius } <span class="kw">if</span> radius &gt; <span class="nm">0.0</span> =&gt; <span class="en"><a href="stdlib-math.html">PI</a></span> * radius * radius,
     _ =&gt; <span class="nm">0.0</span>
@@ -111,7 +111,7 @@
     _         =&gt; <span class="st">"high"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"low"</span>, <span class="st">"scalar or-pattern"</span>);</code></pre>
-<p>Null patterns match the null sentinel value.</p>
+<p>A `null` pattern matches when the value is absent (e.g. division by zero).</p>
 <pre><code>  zero = <span class="nm">0</span>;
   check = match <span class="nm">1</span> / zero {
     <span class="kw">null</span> =&gt; <span class="st">"absent"</span>,

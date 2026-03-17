@@ -98,9 +98,9 @@
 <p>Using `if` as a value expression without an `else` clause silently returns null when the condition is false. No compile error is raised.</p>
 <pre><code>  maybe = <span class="kw">if</span> <span class="nm">1</span> &gt; <span class="nm">10</span> { <span class="st">"yes"</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!maybe, <span class="st">"missing else: result is null, not an error"</span>);</code></pre>
-<p>Match expressions, by contrast, require exhaustiveness or a wildcard. Mitigation: Always write an else clause when using if as a value.</p>
-<h2 id="match-guards-do-not-count-for-exhaustiveness">Match guards do not count for exhaustiveness</h2>
-<p>A guarded arm like `Red if cond =&gt; ...` does not mark the variant as covered. Even if every variant has a guarded arm, you still need a wildcard `_` or unguarded arm to satisfy the exhaustiveness check.</p>
+<p>Match expressions, by contrast, require you to handle every case. Mitigation: Always write an else clause when using if as a value.</p>
+<h2 id="match-guards-do-not-prove-a-variant-is-handled">Match guards do not prove a variant is handled</h2>
+<p>A guarded arm like `Red if cond =&gt; ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `_` or an unguarded arm so the compiler knows every case is covered.</p>
 <h2 id="ref-parameter-semantics">Ref-parameter semantics</h2>
 <p>Without `&amp;`, appending to a vector parameter is local — the caller's vector does not grow. With `&amp;`, the caller sees the new elements. Field-level mutations (e.g. `v[i].field = x`) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use `&amp;vector&lt;T&gt;` when the function needs to grow the vector. Use plain `vector&lt;T&gt;` when the function only reads or modifies existing elements.</p>
 <h2 id="file-i-o-assumes-utf-8">File I/O assumes UTF-8</h2>
