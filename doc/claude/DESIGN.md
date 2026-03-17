@@ -636,7 +636,7 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 | 4 | Scope analysis | scopes.rs | ~486 | O(N+V) | No | Fair | Hard |
 | 5 | Live intervals | variables.rs | 1 166 | O(N+V²) | No | Good | Medium |
 | 6 | Stack tracker | stack.rs | 175 | O(1)/op | No | Good | Medium |
-| 7 | Bytecode generation | interpreter.rs → **src/state/** (5 modules) | 3 888 | O(N) | ~~**Yes**~~ **Done 2026-03-15** | Good | Medium |
+| 7 | Bytecode generation | compile.rs + **src/state/** (5 modules) | 3 888 | O(N) | No | Good | Medium |
 | 8 | Operator dispatch | fill.rs | 1 799 | O(I) | No (generated) | Good | Good |
 | 9 | Field layout | calc.rs | 78 | O(F²) | No | Good | Easy |
 | 10 | Heap allocator | store.rs | 1 126 | O(log F) claim | No | Good | Medium |

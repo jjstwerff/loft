@@ -509,3 +509,35 @@ fn if_statement_without_else_ok() {
 }"
     );
 }
+
+#[test]
+fn type_cycle_self() {
+    // Self-referential struct is a compile error.
+    code!("struct Node { val: integer, next: Node }\nfn test() { }")
+        .error("Struct 'Node' contains itself (directly or indirectly) — use reference<Node> to break the cycle at type_cycle_self:1:14");
+}
+
+#[test]
+fn type_cycle_indirect() {
+    // Mutually recursive structs are a compile error.
+    code!(
+        "struct A { val: integer, b: B }
+struct B { val: integer, a: A }
+fn test() { }"
+    )
+    .error("Struct 'A' contains itself (directly or indirectly) — use reference<A> to break the cycle at type_cycle_indirect:1:11")
+    .error("Struct 'B' contains itself (directly or indirectly) — use reference<B> to break the cycle at type_cycle_indirect:2:11");
+}
+
+#[test]
+fn non_cyclic_nested_struct_ok() {
+    // Non-cyclic struct nesting is fine.
+    code!(
+        "struct Inner { x: integer }
+struct Outer { i: Inner, y: integer }
+fn test() {
+    o = Outer { i: Inner { x: 1 }, y: 2 };
+    assert(o.i.x == 1, \"nested\");
+}"
+    );
+}

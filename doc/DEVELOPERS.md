@@ -459,9 +459,9 @@ byte offsets. Runs between the two parser passes.
 The new `Parts` variant must be registered here.
 
 **Caveats.**
-- Type cycles (struct A contains B contains A) currently panic. There is no clean
-  error. If a new feature can create type cycles, add a cycle-detection pass before
-  registering.
+- Type cycles (struct A contains B contains A) are detected by `has_value_cycle()`
+  in `fill_all()` and produce a compile error. Only value-typed struct fields are
+  checked; `reference<T>` fields (pointers) are fine and do not cause cycles.
 - `fill_all()` seals the schema — no types may be added after this point. The runtime
   assumes the schema is immutable once execution begins.
 
@@ -547,7 +547,7 @@ current operand stack depth. Ensures that `OpFreeStack` amounts are correct and 
 
 ---
 
-### 7. Bytecode Generation (`src/interpreter.rs` + `src/state/`)
+### 7. Bytecode Generation (`src/compile.rs` + `src/state/`)
 
 **What it does.** Compiles the `Value` IR tree for each function into a flat byte
 stream. Each IR node maps to one or more opcodes with inline operands.
@@ -556,7 +556,7 @@ stream. Each IR node maps to one or more opcodes with inline operands.
 
 | File | Responsibility |
 |------|----------------|
-| `src/interpreter.rs` | Iterates functions; calls `def_code` for each |
+| `src/compile.rs` | Iterates functions; calls `def_code` for each |
 | `src/state/codegen.rs` | Compiles one function's IR tree recursively (`value_code`) |
 | `src/state/mod.rs` | Stack frame primitives (`put_code`, `put_word`, `get_stack`, `patch`) |
 | `src/state/text.rs` | String/text formatting at runtime |
@@ -697,7 +697,7 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 |-----------|--------|------------|
 | Lexer | `\"` inside `{...}` format expression requires `in_format_expr` flag (fixed in 2026) | Fixed; test in `tests/format_strings.rs` |
 | Parser | `first_pass: bool` has no type safety — wrong-pass code is a silent bug | Always check `self.first_pass` at the top of IR-generating branches |
-| Type resolution | Type cycles panic instead of producing a diagnostic | Avoid recursive struct definitions for now |
+| Type resolution | Type cycles detected at compile time by `has_value_cycle()` | `reference<T>` fields break cycles; value-type fields are checked |
 | Scope analysis | Pre-init for refs in branches is handled but fragile | Test new owned types inside `if` branches; `find_first_ref_vars` + `deps_ready` gate |
 | Variable liveness | Global first_def/last_use is conservative; may flag false conflicts | Write a `tests/slot_assign.rs` test to verify |
 | Stack tracker | No runtime depth assertion; mismatches corrupt silently | Use `LOFT_LOG=minimal` and verify depth by hand |

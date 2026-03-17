@@ -1077,7 +1077,7 @@ impl Parser {
             &mut self.lexer,
             start_def,
         );
-        typedef::fill_all(&mut self.data, &mut self.database, start_def);
+        typedef::fill_all(&mut self.data, &mut self.database, &mut self.lexer, start_def);
         self.database.finish();
         self.enum_fn();
         let lvl = self.lexer.diagnostics().level();

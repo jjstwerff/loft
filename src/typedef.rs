@@ -121,7 +121,29 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
     }
 }
 
-pub fn fill_all(data: &mut Data, database: &mut Stores, start_def: u32) {
+pub fn fill_all(
+    data: &mut Data,
+    database: &mut Stores,
+    lexer: &mut Lexer,
+    start_def: u32,
+) {
+    // Detect type cycles before computing sizes.
+    for d_nr in start_def..data.definitions() {
+        if matches!(data.def_type(d_nr), DefType::Struct) {
+            let mut visiting = std::collections::HashSet::new();
+            if has_value_cycle(data, d_nr, &mut visiting) {
+                lexer.pos_diagnostic(
+                    Level::Error,
+                    &data.def(d_nr).position,
+                    &format!(
+                        "Error: Struct '{}' contains itself (directly or indirectly) — use reference<{}> to break the cycle",
+                        data.def(d_nr).name,
+                        data.def(d_nr).name,
+                    ),
+                );
+            }
+        }
+    }
     for d_nr in start_def..data.definitions() {
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
@@ -130,6 +152,29 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, start_def: u32) {
             fill_database(data, database, d_nr);
         }
     }
+}
+
+/// Check if struct `d_nr` contains itself as a value type (not reference) field,
+/// directly or through other structs.
+fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::HashSet<u32>) -> bool {
+    if !visiting.insert(d_nr) {
+        return true; // Already visiting this type — cycle found.
+    }
+    for a_nr in 0..data.attributes(d_nr) {
+        let a_type = data.attr_type(d_nr, a_nr);
+        // Only recurse into value-typed struct fields (Reference fields are pointers,
+        // not inline — they don't cause infinite-size cycles).
+        if let Type::Reference(child_nr, _) = &a_type {
+            if data.def_type(*child_nr) == DefType::Struct {
+                if has_value_cycle(data, *child_nr, visiting) {
+                    visiting.remove(&d_nr);
+                    return true;
+                }
+            }
+        }
+    }
+    visiting.remove(&d_nr);
+    false
 }
 
 fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
