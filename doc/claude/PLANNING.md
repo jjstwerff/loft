@@ -52,7 +52,7 @@ _(all completed)_
 _(all completed)_
 
 **Explicitly 1.1+**:
-T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-7, T2-8, T3-1..T3-5, T3-7, T3-8, N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
+T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-8, T3-1..T3-5, T3-7, T3-8, N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 
@@ -75,11 +75,13 @@ Items on the same line can be done in a single PR.
 2. ~~**N1** (template fixes)~~ done
 3. ~~**N2** + **N5**~~ done
 4. ~~**T1-17** (range patterns) and **T1-16** (guards)~~ done
-5. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
-6. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-7. **T2-8** (stdlib: vector ops) — reverse + insert remain
-8. **N4** (iterators) + **N6** (compile gate) — completes native codegen
-9. **T1-23 + T3-6** (shadowing + redundant const) — batch two Small warning items
+5. ~~**T1-15** (or-patterns) and **T1-20** (null/char patterns)~~ done
+6. **T0-8** (panic→diagnostic) + **T0-9** (UTF-8 crash) — eliminate remaining crashes
+7. **T1-26** (diagnostic positions) + **T1-27** (fix suggestions) — low-effort, high UX impact
+8. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
+9. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
+10. **T2-8** (stdlib: vector ops) — reverse + insert remain
+11. **N4** (iterators) + **N6** (compile gate) — completes native codegen
 
 Tier W (Web IDE) is an independent parallel track that can start any time after R6.
 
@@ -87,6 +89,41 @@ Tier W (Web IDE) is an independent parallel track that can start any time after 
 
 ## Tier 0 — Crashes / Silent Wrong Results
 
+### T0-8  Convert parser panics to diagnostics
+**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 1
+**Severity:** Medium — 7 `panic!`/`unreachable!` calls in the parser crash the compiler
+instead of producing a user-friendly error message
+**Description:** Each location should become a `diagnostic!` + early return:
+
+| File | Line | Trigger |
+|------|------|---------|
+| `parser/mod.rs` | 644 | Field access on unsupported type |
+| `parser/mod.rs` | 718 | Unexpected type in field resolution |
+| `parser/mod.rs` | 795 | Dynamic call on invalid function |
+| `parser/mod.rs` | 965 | Unexpected reference type in codegen |
+| `parser/expressions.rs` | 2268 | Malformed iterator in IR |
+| `parser/collections.rs` | 56 | Malformed iterator expression |
+| `parser/control.rs` | 1157 | Unexpected return type in ref_return |
+
+Most of these are internal-error paths triggered by malformed input, not
+normal user mistakes.  The fix for each is: emit `Level::Error` with context,
+return a fallback value (`Type::Void`, `Value::Null`), and let parsing continue.
+**Fix path:** One function at a time; each needs a test in `tests/parse_errors.rs`.
+**Effort:** Small (7 × ~5 lines each)
+**Target:** 1.1
+
+---
+
+### T0-9  Runtime file read panics on non-UTF-8 data
+**Sources:** PROBLEMS #48
+**Severity:** Medium — `read_to_string().unwrap()` in `state/io.rs:27` panics when a
+loft program reads a file that is not valid UTF-8
+**Fix path:** Replace `.unwrap()` with `.unwrap_or_default()` and emit a runtime
+warning, or return an empty string.
+**Effort:** Small (state/io.rs — one line)
+**Target:** 1.1
+
+---
 
 ## Tier 1 — Language Quality & Consistency
 
@@ -96,6 +133,66 @@ Tier W (Web IDE) is an independent parallel track that can start any time after 
 **Fix path:** In `parse_vector`, synthesise a temporary variable for empty `[]` in
 call context.  See PROBLEMS #44 for details.
 **Effort:** Medium (parser/expressions.rs)
+
+---
+
+### T1-26  Improve diagnostic positions
+**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic positioning"
+**Severity:** Low — 5 diagnostics point at a suboptimal source location
+**Description:** Save `lexer.at()` before the parser advances past the relevant token,
+restore with `lexer.to()` before emitting the diagnostic.  Specific targets:
+1. Operator errors in `call_op` / `validate_convert` — point at operator, not next token
+2. Division-by-zero warning — point at operator, not past the zero
+3. Match exhaustiveness error — point at `match` keyword, not closing `}`
+4. "Not all paths return" — point at `->` return-type annotation
+5. Unused-definition warning — use `pos_diagnostic()` instead of `{:?}` format
+**Fix path:** See DEVELOPERS.md for before/after code patterns.
+**Effort:** Small (5 × ~3 lines each; test position in `tests/parse_errors.rs`)
+**Target:** 1.1
+
+---
+
+### T1-27  Add fix suggestions to common error messages
+**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 4
+**Severity:** Low — errors say what is wrong but not how to fix it
+**Description:** Append `"; <suggestion>"` to 6 error messages:
+- `"Variable cannot change type"` → `"; use a new variable name or cast with 'as'"`
+- `"Cannot modify const"` → `"; remove 'const' or use a local copy"`
+- `"match not exhaustive"` → `"; add missing variants or a '_ =>' wildcard"`
+- `"Cannot add elements while iterating"` → `"; collect in a separate variable"`
+- `"loop variable type mismatch"` → `"; use a different name for the loop variable"`
+- `"Cannot iterate"` → `"; expected vector, sorted, index, text, or range"`
+**Effort:** Small (6 × 1-line message change)
+**Target:** 1.1
+
+---
+
+### T1-28  Error recovery after token failures
+**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 5
+**Severity:** Medium — a single missing `)` or `}` produces a flood of cascading errors
+**Description:** Add `Lexer::recover_to(tokens: &[&str])` that skips tokens until one
+of the given delimiters is found.  Call it after `token()` failures in contexts where
+cascading is likely: missing `)` skips to `)` or `{`; missing `}` skips to `}` at same
+brace depth; missing `=>` in match skips to `=>` or `,`.
+**Fix path:**
+1. Add `recover_to()` to `lexer.rs` — linear scan forward, stop at matching token or EOF.
+2. Modify `token()` to call `recover_to` with context-appropriate delimiters.
+3. Add tests that verify a single-error input produces at most 2 diagnostics.
+**Effort:** Medium (lexer.rs + parser call sites; needs per-construct recovery targets)
+**Target:** 1.1+
+
+---
+
+### T1-29  Downgrade over-aggressive Fatal diagnostics
+**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 2
+**Severity:** Low — 3 `Level::Fatal` diagnostics stop all further parsing when recovery
+is possible
+**Description:**
+- `"Syntax error"` (`parser/mod.rs:1071`) → `Level::Error` + include the unexpected token
+- `"use must appear before definitions"` (`parser/mod.rs:1067`) → `Level::Error`
+- `"Cannot redefine"` (`data.rs:1035`) → `Level::Error` (skip duplicate, continue)
+**Effort:** Small (3 × ~2 lines)
+**Target:** 1.1
 
 ---
 
@@ -222,10 +319,6 @@ A custom comparator variant (`sort(v, fn cmp)`) can follow in a later release.
 the vector storage, or copies to a `Vec<T>`, sorts, writes back.
 **Effort:** Medium (native Rust per type; ~50 lines per overload)
 **Target:** 1.1 — important but not blocking; implement after 1.0 is tagged
-
----
-
-
 
 ---
 
@@ -367,11 +460,18 @@ fn sum(v: const vector<integer>) -> integer {
 ```
 Note: this is the inverse of a const-violation (writing to a `const` param, which is
 already a debug-mode runtime error).  This warning targets unnecessary annotations.
+**Known issue (2026-03-17):** A naive `writes == 0` check produces false positives on
+`const` parameters used for documentation intent (e.g. `parallel_for` workers where
+`const` signals read-only access).  The warning needs a smarter heuristic: only warn
+when the function body is complex enough that `const` could plausibly guard something,
+or only for primitive types where `const` has no semantic value.
 **Fix path:**
 1. Add a `writes: u32` counter alongside `uses` in `Variable`; increment on every
    assignment to that variable during second-pass parsing.
 2. After parsing the function body, if `writes == 0` for a `const_param` variable, emit
    the warning at the parameter declaration site.
+3. Exempt compound types (`vector`, `reference`, struct types) where `const` serves as
+   read-only documentation even without write attempts.
 **Effort:** Small–Medium (variables.rs — write counter; warning after function body)
 **Target:** 1.1+
 
@@ -743,6 +843,12 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
+| T0-8  | Convert 7 parser panics to diagnostics                   | 0    | Small     | 1.1     |             | DEVELOPERS.md Step 1       |
+| T0-9  | Fix runtime file-read crash on non-UTF-8 data            | 0    | Small     | 1.1     |             | PROBLEMS #48               |
+| T1-26 | Improve 5 diagnostic positions                           | 1    | Small     | 1.1     |             | DEVELOPERS.md positioning  |
+| T1-27 | Add fix suggestions to 6 common error messages           | 1    | Small     | 1.1     |             | DEVELOPERS.md Step 4       |
+| T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
+| T1-29 | Downgrade 3 over-aggressive Fatal diagnostics            | 1    | Small     | 1.1     |             | DEVELOPERS.md Step 2       |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (binding `@`)                         | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
