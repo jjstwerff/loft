@@ -755,6 +755,7 @@ fn OpClearVector(r: vector);
 pub fn clear(both: vector) {
   OpClearVector(both)
 }
+
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
 #rust"vector::get_vector(&@r, ((@size) as u32), @index, &s.database.allocations)"

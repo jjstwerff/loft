@@ -446,3 +446,30 @@ fn implicit_return_not_null() {
 fn test() { assert(double(3) == 6, \"ok\"); }"
     );
 }
+
+#[test]
+fn shadow_different_type() {
+    // Error when a for-loop variable reuses a name with a different type.
+    code!(
+        "fn test() {
+    x = 1.5;
+    v = [1, 2, 3];
+    for x in v { }
+}"
+    )
+    .error("loop variable 'x' has type integer but was previously used as float at shadow_different_type:4:17")
+    .warning("Variable x is never read at shadow_different_type:2:8");
+}
+
+#[test]
+fn shadow_same_type_ok() {
+    // Same-type reuse (integer → integer loop var) is idiomatic; no error.
+    code!(
+        "fn test() {
+    x = 10;
+    v = [1, 2, 3];
+    for x in v { }
+    println(\"{x}\");
+}"
+    );
+}

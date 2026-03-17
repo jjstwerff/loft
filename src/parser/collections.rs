@@ -646,6 +646,23 @@ use #count instead"
             self.vars.defined(iv);
             (iv, None)
         };
+        // T1-23: error if the loop variable reuses a name with a different type.
+        // Same-type reuse is idiomatic in loft (flat variable scoping).
+        let existing_var = self.vars.var(id);
+        if !self.first_pass
+            && existing_var != u16::MAX
+            && self.vars.is_defined(existing_var)
+            && !self.vars.var_type(existing_var).is_same(&var_tp)
+            && !self.vars.var_type(existing_var).is_unknown()
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "loop variable '{id}' has type {} but was previously used as {}",
+                var_tp.name(&self.data),
+                self.vars.var_type(existing_var).name(&self.data)
+            );
+        }
         let for_var = self.create_var(id, &var_tp);
         self.vars.defined(for_var);
         let if_step = if self.lexer.has_token("if") {

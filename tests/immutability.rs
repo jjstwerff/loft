@@ -153,3 +153,4 @@ fn test() { const c = Counter { value: 7 }; c = Counter { value: 9 } }"
     )
     .error("Cannot modify const variable 'c' at const_local_ref_reassigned:2:71");
 }
+

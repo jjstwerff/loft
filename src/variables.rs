@@ -793,6 +793,10 @@ impl Function {
     pub fn set_type(&mut self, var_nr: u16, tp: Type) {
         self.variables[var_nr as usize].type_def = tp;
     }
+
+    pub fn var_type(&self, var_nr: u16) -> &Type {
+        &self.variables[var_nr as usize].type_def
+    }
 }
 
 pub fn size(tp: &Type, context: &Context) -> u16 {
