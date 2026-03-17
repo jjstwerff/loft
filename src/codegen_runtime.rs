@@ -143,3 +143,27 @@ pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i32 {
         i32::from(stores.size(tp))
     }
 }
+
+/// Parse a text representation into a database record.
+/// Bytecode equivalent: `State::db_from_text` in `src/state/io.rs:780`.
+#[must_use]
+pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: i32) -> DbRef {
+    let db_tp = db_tp as u16;
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 8,
+    };
+    stores.set_default_value(db_tp, &into);
+    let mut pos = 0;
+    if stores.parsing(val, &mut pos, db_tp, db_tp, u16::MAX, &into) {
+        into
+    } else {
+        DbRef {
+            store_nr: db.store_nr,
+            rec: 0,
+            pos: 0,
+        }
+    }
+}
