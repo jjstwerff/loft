@@ -362,8 +362,9 @@ extern crate loft;"
     fn output_function(&mut self, w: &mut dyn Write, def_nr: u32) -> std::io::Result<()> {
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
-        // Skip Op functions that are only used via inline #rust templates (no callable body needed).
-        if def.name.starts_with("Op") && def.code == Value::Null && !def.rust.is_empty() {
+        // Skip Op functions with no callable body — they are either inlined via #rust
+        // templates at call sites, or handled by codegen_runtime wrapper functions.
+        if def.name.starts_with("Op") && def.code == Value::Null {
             return Ok(());
         }
         write!(w, "fn {}(stores: &mut Stores", def.name)?;
@@ -684,6 +685,20 @@ extern crate loft;"
                     write!(w, ")")?;
                 }
             }
+            Value::Keys(keys) => {
+                write!(w, "&[")?;
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(
+                        w,
+                        "Key {{ type_nr: {}, position: {} }}",
+                        k.type_nr, k.position
+                    )?;
+                }
+                write!(w, "]")?;
+            }
             _ => write!(w, "{code:?}")?,
         }
         Ok(())
@@ -901,8 +916,37 @@ extern crate loft;"
             "OpAppendCharacter" | "OpAppendStackCharacter" => {
                 return self.append_character(w, vals);
             }
-            "OpClearStackText" => return self.clear_stack_text(w, vals),
-            "OpFreeText" | "OpCreateStack" => return Ok(()),
+            "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
+            "OpFreeText" | "OpCreateStack" | "OpNullRefSentinel" => return Ok(()),
+            "OpConvTextFromNull" => {
+                write!(w, "\"\"")?;
+                return Ok(());
+            }
+            "OpConvRefFromNull" => {
+                write!(w, "DbRef {{ store_nr: 0, rec: 0, pos: 0 }}")?;
+                return Ok(());
+            }
+            "OpGetTextSub" => {
+                // text[from..till] → &str slice
+                if let [ref text_val, ref from_val, ref till_val] = vals[..] {
+                    write!(w, "OpGetTextSub(")?;
+                    self.output_code_inner(w, text_val)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, from_val)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, till_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
+            "OpSizeofRef" => {
+                if let [ref val] = vals[..] {
+                    write!(w, "OpSizeofRef(stores, ")?;
+                    self.output_code_inner(w, val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             "OpDatabase" => {
                 // OpDatabase modifies its DbRef argument in-place; emit as reassignment.
                 if let [ref var_val, ref tp_val] = vals[..] {
