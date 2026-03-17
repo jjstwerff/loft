@@ -853,6 +853,7 @@ impl Parser {
 
     /// T1-14: parse a match expression over a scalar (integer, text, boolean, etc.).
     /// Builds an if/else chain: `if subject == lit1 { arm1 } else if subject == lit2 { arm2 } else { wildcard }`
+    #[allow(clippy::too_many_lines)] // match-arm dispatch with pattern/guard/binding logic
     fn parse_scalar_match(
         &mut self,
         subject: Value,
@@ -875,9 +876,10 @@ impl Parser {
                 break;
             }
 
-            // Parse pattern: literal, `true`, `false`, `_`, or string.
+            // Parse pattern: literal, `true`, `false`, `_`, `name @ pattern`, or string.
             let mut pattern_val: Option<Value> = None;
             let mut is_wildcard = false;
+            let mut arm_bindings: Vec<Value> = Vec::new();
 
             // T1-20: null pattern — matches when subject is null.
             if self.lexer.has_token("null") {
@@ -890,16 +892,25 @@ impl Parser {
                 );
                 // Wrap as a Block so build_scalar_chain recognizes it as a pre-built condition.
                 pattern_val = Some(v_block(vec![null_cond], Type::Boolean, "null_pattern"));
-            // Check for wildcard `_` — try identifier first.
+            // Check for wildcard `_` or binding `name @ pattern`.
             } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "_" {
                     is_wildcard = true;
-                } else if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "expected literal, range, or '_' in scalar match arm, got '{id}'"
-                    );
+                } else if self.lexer.has_token("@") {
+                    // T1-20: binding pattern `name @ pattern` — bind the subject to
+                    // a variable and continue parsing the sub-pattern.
+                    let bind_nr = self.vars.add_variable(&id, subject_type, &mut self.lexer);
+                    self.vars.defined(bind_nr);
+                    arm_bindings.push(v_set(bind_nr, Value::Var(v)));
+                    // Parse the sub-pattern after `@`.
+                    let (pat, _) = self.parse_match_pattern(subject_type, v);
+                    pattern_val = Some(pat);
+                } else {
+                    // Bare identifier without `@` — wildcard binding (binds subject to name).
+                    let bind_nr = self.vars.add_variable(&id, subject_type, &mut self.lexer);
+                    self.vars.defined(bind_nr);
+                    arm_bindings.push(v_set(bind_nr, Value::Var(v)));
+                    is_wildcard = true;
                 }
             } else {
                 let (pat, _) = self.parse_match_pattern(subject_type, v);
@@ -952,6 +963,12 @@ impl Parser {
             };
             if result_type == Type::Void {
                 result_type = arm_type.clone();
+            }
+            // T1-20: prepend any binding assignments (from `name @ pattern` or bare `name`)
+            // to the arm body so the variable is assigned before the body executes.
+            if !arm_bindings.is_empty() {
+                arm_bindings.push(arm_code);
+                arm_code = v_block(arm_bindings, arm_type.clone(), "binding_arm");
             }
             arms.push((pattern_val, arm_code, arm_type, guard_opt));
             if has_wildcard {
@@ -1329,6 +1346,15 @@ impl Parser {
         }
         if name == "reduce" {
             return self.parse_reduce(val, &list, &types);
+        }
+        if name == "sort" {
+            return self.parse_sort(val, &list, &types);
+        }
+        if name == "insert" {
+            return self.parse_insert(val, &list, &types);
+        }
+        if name == "reverse" {
+            return self.parse_reverse(val, &list, &types);
         }
         // If the name refers to a fn-ref variable, emit a dynamic call through it.
         if self.vars.name_exists(name) {

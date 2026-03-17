@@ -458,3 +458,112 @@ pub fn vector_step_rev(data: &DbRef, pos: &mut i32, stores: &[Store]) {
         *pos = i32::MAX; // Passed the beginning.
     }
 }
+
+/// Sort a vector of primitive elements in-place (ascending).
+/// `elem_size` is the byte size of each element (1, 2, 4, or 8).
+/// `is_float` must be true for floating-point types (f32 at size=4, f64 at size=8).
+pub fn sort_vector(db: &DbRef, elem_size: u16, is_float: bool, stores: &mut [Store]) {
+    let len = length_vector(db, stores) as usize;
+    if len < 2 {
+        return;
+    }
+    let store = keys::mut_store(db, stores);
+    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    if v_rec == 0 {
+        return;
+    }
+    match elem_size {
+        1 => {
+            let mut vals: Vec<i32> = (0..len)
+                .map(|i| store.get_byte(v_rec, 8 + (i as u32), 0))
+                .collect();
+            vals.sort_unstable();
+            for (i, &v) in vals.iter().enumerate() {
+                store.set_byte(v_rec, 8 + (i as u32), 0, v);
+            }
+        }
+        2 => {
+            let mut vals: Vec<i32> = (0..len)
+                .map(|i| store.get_short(v_rec, 8 + (i as u32) * 2, 0))
+                .collect();
+            vals.sort_unstable();
+            for (i, &v) in vals.iter().enumerate() {
+                store.set_short(v_rec, 8 + (i as u32) * 2, 0, v);
+            }
+        }
+        4 => {
+            if is_float {
+                let mut vals: Vec<f32> = (0..len)
+                    .map(|i| f32::from_bits(store.get_int(v_rec, 8 + (i as u32) * 4) as u32))
+                    .collect();
+                vals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Greater));
+                for (i, &v) in vals.iter().enumerate() {
+                    store.set_int(v_rec, 8 + (i as u32) * 4, v.to_bits() as i32);
+                }
+            } else {
+                let mut vals: Vec<i32> = (0..len)
+                    .map(|i| store.get_int(v_rec, 8 + (i as u32) * 4))
+                    .collect();
+                vals.sort_unstable();
+                for (i, &v) in vals.iter().enumerate() {
+                    store.set_int(v_rec, 8 + (i as u32) * 4, v);
+                }
+            }
+        }
+        8 => {
+            if is_float {
+                let mut vals: Vec<f64> = (0..len)
+                    .map(|i| store.get_float(v_rec, 8 + (i as u32) * 8))
+                    .collect();
+                vals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Greater));
+                for (i, &v) in vals.iter().enumerate() {
+                    store.set_float(v_rec, 8 + (i as u32) * 8, v);
+                }
+            } else {
+                let mut vals: Vec<i64> = (0..len)
+                    .map(|i| store.get_long(v_rec, 8 + (i as u32) * 8))
+                    .collect();
+                vals.sort_unstable();
+                for (i, &v) in vals.iter().enumerate() {
+                    store.set_long(v_rec, 8 + (i as u32) * 8, v);
+                }
+            }
+        }
+        _ => {} // unsupported element size — no-op
+    }
+}
+
+/// Reverse a vector in-place by swapping elements from the ends toward the middle.
+pub fn reverse_vector(db: &DbRef, elem_size: u32, stores: &mut [Store]) {
+    let len = length_vector(db, stores);
+    if len < 2 {
+        return;
+    }
+    let store = keys::mut_store(db, stores);
+    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    if v_rec == 0 {
+        return;
+    }
+    let mut buf = vec![0u8; elem_size as usize];
+    let mut lo = 0u32;
+    let mut hi = len - 1;
+    while lo < hi {
+        let lo_pos = 8 + lo * elem_size;
+        let hi_pos = 8 + hi * elem_size;
+        // Copy lo → buf
+        for i in 0..elem_size {
+            buf[i as usize] = store.get_byte(v_rec, lo_pos + i, 0) as u8;
+        }
+        // Copy hi → lo
+        for i in 0..elem_size {
+            let v = store.get_byte(v_rec, hi_pos + i, 0);
+            store.set_byte(v_rec, lo_pos + i, 0, v);
+        }
+        // Copy buf → hi
+        for i in 0..elem_size {
+            store.set_byte(v_rec, hi_pos + i, 0, i32::from(buf[i as usize]));
+        }
+        lo += 1;
+        hi -= 1;
+    }
+}

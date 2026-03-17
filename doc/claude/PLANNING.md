@@ -56,7 +56,7 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 - T1-28 (error recovery after token failures)
 
 **Deferred to 1.1+:**
-T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-8, T3-1..T3-5, T3-7, T3-8,
+T2-1 (lambdas), T2-2 (REPL), T2-4, T3-1..T3-5, T3-7, T3-8,
 N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
@@ -86,7 +86,7 @@ Items on the same line can be done in a single PR.
 8. **T1-28** (error recovery) — medium effort, high UX impact
 9. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
 11. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-12. **T2-8** (stdlib: vector ops) — reverse + insert remain
+12. ~~**T2-8** (stdlib: vector ops)~~ done
 13. **T2-14** (text `#index` semantics) — document or fix the byte-offset vs character-position gap
 14. **N4** (iterators) + **N6** (compile gate) — completes native codegen
 
@@ -228,42 +228,13 @@ ergonomic once available.
 
 ---
 
-### T2-5  In-place sort for primitive vectors
-**Sources:** Standard library audit 2026-03-15
-**Severity:** Medium — sorting an existing `vector<integer>` or `vector<text>` in-place is a
-fundamental operation with no current solution; `sorted<T>` is insertion-ordered, not a sort
-**Description:**
-```loft
-pub fn sort(v: &vector<integer>);           // ascending
-pub fn sort(v: &vector<text>);
-pub fn sort_desc(v: &vector<integer>);      // descending
-// + long, float, single, character variants
-```
-The `&` modifier makes the sort visible to the caller (modifies in-place).
-A custom comparator variant (`sort(v, fn cmp)`) can follow in a later release.
-**Fix path:** Native Rust implementation in `src/native.rs` per element type; declaration in
-`default/01_code.loft`.  Uses `Store::get_int` / `set_int` to swap elements directly in
-the vector storage, or copies to a `Vec<T>`, sorts, writes back.
-**Effort:** Medium (native Rust per type; ~50 lines per overload)
-**Target:** 1.1 — important but not blocking; implement after 1.0 is tagged
+### ~~T2-8  Expose hidden vector operations — `reverse`, `insert`, `clear`, `sort`~~ DONE 2026-03-17
 
----
-
-### T2-8  Expose hidden vector operations — `reverse`, `insert`
-**Sources:** Standard library audit 2026-03-15
-**Severity:** Low — `OpInsertVector` exists in the bytecode but has no
-public loft wrapper; `reverse` has no operator at all.  (`clear` done 2026-03-17.)
-**Description:**
-```loft
-pub fn insert(v: &vector<integer>, idx: integer, elem: integer);  // insert at position
-pub fn reverse(v: &vector<integer>);                // reverse in-place; O(n)
-// + typed overloads per element type for insert/reverse
-```
-**Fix path:**
-- `insert`: expose existing `OpInsertVector` via a public loft declaration.
-- `reverse`: native Rust for efficiency, or O(n) swap loop in loft for each type.
-**Effort:** Low–Medium (insert low; reverse medium per type)
-**Target:** 1.1
+All four operations implemented:
+- `clear(v)` — done 2026-03-17
+- `reverse(v)` — done 2026-03-17 via `OpReverseVector`
+- `sort(v)` — done 2026-03-17 via `OpSortVector` (integer, long, float, single)
+- `insert(v, idx, elem)` — done 2026-03-17, reuses existing `OpInsertVector` + `OpSet*`
 
 ---
 
@@ -813,8 +784,8 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | P44   | Empty `[]` literal unusable as direct mutable vector arg | 1   | Medium    | 1.1     |             | PROBLEMS #44               |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
 | T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
-| T2-5  | In-place sort for primitive vectors                      | 2    | Medium    | 1.1     |             | Stdlib audit 2026-03-15    |
-| T2-8  | Expose `reverse`, `clear`, `insert` on vectors          | 2    | Low–Med   | 1.1     |             | Stdlib audit 2026-03-15    |
+| ~~T2-5~~  | ~~In-place sort for primitive vectors~~              | 2    | ~~Medium~~    | ~~1.1~~     |             | **DONE** 2026-03-17    |
+| ~~T2-8~~  | ~~Expose `reverse`, `clear`, `insert` on vectors~~  | 2    | ~~Low–Med~~   | ~~1.1~~     |             | **DONE** 2026-03-17    |
 | T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
 | T2-14 | Text `#index` byte offset vs character position          | 2    | Small–Med | 1.1     |             | INCONSISTENCIES #3         |
 | T2-12 | Bytecode cache (`.loftc`) — deferred, superseded by Tier N | 2  | Medium    | deferred |            | BYTECODE_CACHE.md          |

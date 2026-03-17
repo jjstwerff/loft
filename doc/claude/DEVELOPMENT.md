@@ -14,6 +14,7 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
   - [Step 3 — Enable Tests](#step-3--enable-tests)
   - [Step 4 — Structural Refactors](#step-4--structural-refactors)
   - [Step 5 — Documentation](#step-5--documentation)
+- [Bytecode Economy](#bytecode-economy)
 - [CI Validation](#ci-validation)
 - [Commit Message Style](#commit-message-style)
 
@@ -256,7 +257,7 @@ boundaries:
 | Standard library | `src/native.rs`, `default/*.loft` |
 | Database / runtime state | `src/database/*.rs` |
 | Parser | `src/parser/*.rs`, `src/lexer.rs` |
-| Bytecode generation | `src/state/codegen.rs`, `src/fill.rs` |
+| Bytecode generation | `src/state/codegen.rs`, `src/fill.rs` — see [Bytecode Economy](#bytecode-economy) |
 | Scope and variable analysis | `src/scopes.rs`, `src/variables.rs` |
 
 Example split for T2-6 (two areas):
@@ -345,6 +346,27 @@ docs: T2-6 now()/ticks() — update CHANGELOG, PLANNING, STDLIB
 ```
 
 Verify: `cargo test` still passes (documentation changes are non-functional).
+
+---
+
+## Bytecode Economy
+
+**Never add a new opcode if the problem can be solved by composing existing
+opcodes.**  New opcodes increase the `OPERATORS` array size, the opcode
+dispatch surface, and the maintenance burden in `fill.rs`, `codegen.rs`, and
+`02_images.loft`.
+
+Before proposing a new opcode, check whether the compiler can emit a sequence
+of existing opcodes to achieve the same result.  For example, `insert(v, idx,
+elem)` reuses the existing `OpInsertVector` (creates space) followed by the
+appropriate `OpSetInt`/`OpSetLong`/`OpSetFloat`/`OpSetSingle` (writes the
+value) — no new opcode needed.
+
+Only add a new opcode when:
+- No existing opcode sequence can express the operation (e.g. a fundamentally
+  new runtime primitive like `OpSortVector` that cannot be decomposed).
+- Performance is critical and the overhead of multiple opcodes is measurable
+  and unacceptable (document the benchmark).
 
 ---
 

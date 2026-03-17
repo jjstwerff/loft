@@ -1313,4 +1313,137 @@ use #count instead"
             tp,
         )
     }
+
+    /// Compute the in-store byte size of a vector element type.
+    fn element_store_size(&self, elm: &Type) -> i32 {
+        let elm_td = self.data.type_elm(elm);
+        if elm_td != u32::MAX {
+            let known = self.data.def(elm_td).known_type;
+            let db_size = i32::from(self.database.size(known));
+            if db_size > 0 {
+                return db_size;
+            }
+        }
+        // Fallback for primitive types
+        match elm {
+            Type::Integer(_, _)
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Text(_) => 4,
+            Type::Long | Type::Float => 8,
+            _ => 12, // DbRef size for reference types
+        }
+    }
+
+    /// Compiler special-case for `sort(v: vector<T>)`.
+    /// Emits `OpSortVector(v, db_tp)` which sorts in-place at runtime, dispatching
+    /// on the database element type.
+    pub(crate) fn parse_sort(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
+        if self.first_pass {
+            return Type::Void;
+        }
+        if list.len() != 1 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "sort requires 1 argument: sort(vector)"
+            );
+            return Type::Void;
+        }
+        if let Type::Vector(elm, _) = &types[0] {
+            if !matches!(
+                elm.as_ref(),
+                Type::Integer(_, _) | Type::Long | Type::Float | Type::Single
+            ) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "sort is not supported for vector<{}>; use integer, long, float, or single",
+                    elm.name(&self.data)
+                );
+                return Type::Void;
+            }
+            *val = self.cl("OpSortVector", &[list[0].clone(), self.type_info(elm)]);
+        } else {
+            diagnostic!(self.lexer, Level::Error, "sort requires a vector argument");
+        }
+        Type::Void
+    }
+
+    /// Compiler special-case for `insert(v: vector<T>, idx: integer, elem: T)`.
+    /// Emits `OpInsertVector` to create space, then the appropriate `OpSet*` to write the value.
+    pub(crate) fn parse_insert(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
+        if self.first_pass {
+            return Type::Void;
+        }
+        if list.len() != 3 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "insert requires 3 arguments: insert(vector, index, element)"
+            );
+            return Type::Void;
+        }
+        let elm_tp = if let Type::Vector(elm, _) = &types[0] {
+            (**elm).clone()
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "insert requires a vector as first argument"
+            );
+            return Type::Void;
+        };
+        let elm_size = Value::Int(self.element_store_size(&elm_tp));
+        let db_tp = self.type_info(&elm_tp);
+        let ed_nr = self.data.type_def_nr(&elm_tp);
+        // Create a temp var with dependency on the vector to prevent premature free
+        let ref_tp = Type::Reference(ed_nr, types[0].depend());
+        let tmp = self.create_unique("ins", &ref_tp);
+        if let Value::Var(vec_var) = &list[0] {
+            self.vars.depend(tmp, *vec_var);
+        }
+        // tmp = OpInsertVector(v, elem_size, idx, db_tp)
+        let insert_call = self.cl(
+            "OpInsertVector",
+            &[list[0].clone(), elm_size, list[1].clone(), db_tp],
+        );
+        let set_val = self.set_field(ed_nr, usize::MAX, 0, Value::Var(tmp), list[2].clone());
+        *val = v_block(vec![v_set(tmp, insert_call), set_val], Type::Void, "insert");
+        Type::Void
+    }
+
+    /// Compiler special-case for `reverse(v: vector<T>)`.
+    /// Dispatches to `OpReverseVector` which works for any element type.
+    pub(crate) fn parse_reverse(
+        &mut self,
+        val: &mut Value,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
+        if self.first_pass {
+            return Type::Void;
+        }
+        if list.len() != 1 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reverse requires 1 argument: reverse(vector)"
+            );
+            return Type::Void;
+        }
+        let elm_size = if let Type::Vector(elm, _) = &types[0] {
+            self.element_store_size(elm)
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reverse requires a vector argument"
+            );
+            return Type::Void;
+        };
+        *val = self.cl("OpReverseVector", &[list[0].clone(), Value::Int(elm_size)]);
+        Type::Void
+    }
 }

@@ -286,3 +286,9 @@ pub fn now() -> long;
 // Returns microseconds elapsed since program start (monotonic clock).
 // Unaffected by system clock adjustments. Use for benchmarks and frame timing.
 pub fn ticks() -> long;
+
+// --- Vector operations (T2-8, T2-5) ---
+// reverse(v) and sort(v) are compiler special-cased in parse_call.
+fn OpReverseVector(r: vector, size: const u16);
+#rust"vector::reverse_vector(&@r, (@size) as u32, &mut s.database.allocations);"
+fn OpSortVector(r: vector, db_tp: const u16);

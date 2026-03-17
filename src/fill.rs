@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 237] = &[
+pub const OPERATORS: &[fn(&mut State); 239] = &[
     goto,
     goto_word,
     goto_false,
@@ -246,6 +246,8 @@ pub const OPERATORS: &[fn(&mut State); 237] = &[
     mkdir,
     mkdir_all,
     clear_scratch,
+    reverse_vector,
+    sort_vector,
 ];
 
 fn goto(s: &mut State) {
@@ -1828,4 +1830,19 @@ fn mkdir_all(s: &mut State) {
 
 fn clear_scratch(s: &mut State) {
     s.database.scratch.clear();
+}
+
+fn sort_vector(s: &mut State) {
+    let v_db_tp = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    let elem_size = s.database.size(v_db_tp);
+    // base types: 2 = single (f32), 3 = float (f64)
+    let is_float = v_db_tp == 2 || v_db_tp == 3;
+    vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
+}
+
+fn reverse_vector(s: &mut State) {
+    let v_size = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    vector::reverse_vector(&v_r, u32::from(v_size), &mut s.database.allocations);
 }
