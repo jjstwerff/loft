@@ -684,41 +684,6 @@ these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### N7  Fix remaining 40 generated-file compilation errors
-**Description:** The remaining failures fall into categories that require deeper
-`generation.rs` fixes:
-- `s.db_from_text(...)` — add to `codegen_runtime`
-- `t_4text_len` / `t_6vector_len` — stdlib method functions not emitted in per-test
-  files; either emit wrappers or inline the template
-- `if`/`else` type mismatches — `output_if` emits `()` for missing else branches
-  when the true branch returns a value
-- `Str` vs `&str` return type confusion — `output_function` wraps text returns in
-  `Str::new()` but some call sites expect `&str`
-- `OpFormatStackLong` / `OpIterate` / `OpStep` — additional codegen_runtime wrappers
-**Effort:** Medium–High (generation.rs — structural fixes to type handling)
-**Target:** 1.1
-
----
-
-### N7  Run loft test suite against generated native code
-**Description:** Verify that the generated Rust code produces identical output to
-the bytecode interpreter by compiling and executing each generated test file.
-**Fix path:**
-1. Extend `tests/testing.rs` so that each test with a result assertion:
-   a. Generates the `.rs` file (already done).
-   b. Compiles it with `rustc` (linking against the `loft` crate).
-   c. Runs the resulting test binary.
-   d. Asserts exit code 0 (the generated `#[test]` calls `n_assert` which panics
-      on mismatch).
-2. Gate behind a feature flag or environment variable (`LOFT_TEST_NATIVE=1`) so
-   normal `cargo test` is not slowed down by `rustc` invocations.
-3. Add a CI job that runs with `LOFT_TEST_NATIVE=1` after the normal test suite
-   passes.
-4. Track a "native pass rate" metric: how many of the 86 generated test files
-   compile AND pass.  Regressions in this count fail CI.
-**Effort:** Medium (testing.rs + CI config)
-**Target:** 1.1
-
 ---
 
 ### N8  Add `--native` CLI flag
@@ -886,8 +851,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9        | String arch review         |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
-| N7    | Run loft test suite against generated native code        | N    | Medium    | 1.1     |             | NATIVE.md                  |
-| N8    | `--native` CLI flag                                     | N    | Medium    | 1.1+    | N7          | NATIVE.md                  |
+| N8    | `--native` CLI flag                                     | N    | Medium    | 1.1+    |             | NATIVE.md                  |
 | R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
 | W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
