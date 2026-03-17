@@ -232,7 +232,7 @@ extern crate loft;"
     pub fn output_native_reachable(
         &mut self,
         w: &mut dyn Write,
-        from: u32,
+        _from: u32,
         till: u32,
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
@@ -260,10 +260,10 @@ extern crate loft;"
         writeln!(w, "use loft::vector;")?;
         writeln!(w, "use loft::codegen_runtime::*;\n")?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
-        self.output_init(w, from, till)?;
+        // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
+        self.output_init(w, 0, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
-        // Emit all reachable functions across the full definition range (0..till),
-        // not just from..till, so that stdlib dependencies are included.
+        // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))
     }
 
