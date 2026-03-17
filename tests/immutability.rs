@@ -52,7 +52,7 @@ fn const_param_mutated() {
         "fn bad(a: const integer) { a = 42 }
 fn test() {}"
     )
-    .error("Cannot modify const parameter 'a' at const_param_mutated:1:36")
+    .error("Cannot modify const parameter 'a'; remove 'const' or use a local copy at const_param_mutated:1:36")
     .warning("Parameter a is never read at const_param_mutated:1:27");
 }
 
@@ -63,7 +63,7 @@ fn const_ref_param_mutated() {
         "fn bad(a: & const integer) { a = 42 }
 fn test() {}"
     )
-    .error("Cannot modify const parameter 'a' at const_ref_param_mutated:1:38");
+    .error("Cannot modify const parameter 'a'; remove 'const' or use a local copy at const_ref_param_mutated:1:38");
 }
 
 /// A `&` parameter mutated through a called function is detected as modified (no error).
@@ -88,7 +88,7 @@ fn const_local_read_only() {
 #[test]
 fn const_local_int_reassigned() {
     code!("fn test() { const x = 5; x = 10 }")
-        .error("Cannot modify const variable 'x' at const_local_int_reassigned:1:34")
+        .error("Cannot modify const variable 'x'; remove 'const' or use a local copy at const_local_int_reassigned:1:34")
         .warning("Variable x is never read at const_local_int_reassigned:1:22");
 }
 
@@ -96,7 +96,7 @@ fn const_local_int_reassigned() {
 #[test]
 fn const_local_int_augmented() {
     code!("fn test() { const x = 5; x += 1 }")
-        .error("Cannot modify const variable 'x' at const_local_int_augmented:1:34")
+        .error("Cannot modify const variable 'x'; remove 'const' or use a local copy at const_local_int_augmented:1:34")
         .warning("Variable x is never read at const_local_int_augmented:1:22");
 }
 
@@ -104,14 +104,14 @@ fn const_local_int_augmented() {
 #[test]
 fn const_local_text_reassigned() {
     code!("fn test() { const t = \"hello\"; t = \"world\" }")
-        .error("Cannot modify const variable 't' at const_local_text_reassigned:1:45");
+        .error("Cannot modify const variable 't'; remove 'const' or use a local copy at const_local_text_reassigned:1:45");
 }
 
 /// A `const` local text with `+=`: compile error.
 #[test]
 fn const_local_text_appended() {
     code!("fn test() { const t = \"hello\"; t += \"!\" }")
-        .error("Cannot modify const variable 't' at const_local_text_appended:1:42");
+        .error("Cannot modify const variable 't'; remove 'const' or use a local copy at const_local_text_appended:1:42");
 }
 
 /// A `const` local vector that is read without modification: no error.
@@ -131,7 +131,7 @@ fn const_local_vector_appended() {
         "struct P { x: integer }
 fn test() { const v = [P { x: 1 }]; v += [P { x: 2 }] }"
     )
-    .error("Cannot modify const variable 'v' at const_local_vector_appended:2:56");
+    .error("Cannot modify const variable 'v'; remove 'const' or use a local copy at const_local_vector_appended:2:56");
 }
 
 /// A `const` local reference that is read without modification: no error.
@@ -151,5 +151,5 @@ fn const_local_ref_reassigned() {
         "struct Counter { value: integer }
 fn test() { const c = Counter { value: 7 }; c = Counter { value: 9 } }"
     )
-    .error("Cannot modify const variable 'c' at const_local_ref_reassigned:2:71");
+    .error("Cannot modify const variable 'c'; remove 'const' or use a local copy at const_local_ref_reassigned:2:71");
 }

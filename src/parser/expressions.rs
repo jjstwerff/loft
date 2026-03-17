@@ -405,7 +405,7 @@ use a separate collection or add after the loop"
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "Cannot modify {} '{}'",
+                "Cannot modify {} '{}'; remove 'const' or use a local copy",
                 self.vars.const_kind(var_nr),
                 self.vars.name(var_nr)
             );
@@ -465,7 +465,7 @@ use a separate collection or add after the loop"
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "Cannot modify {} '{}'",
+                "Cannot modify {} '{}'; remove 'const' or use a local copy",
                 self.vars.const_kind(var_nr),
                 self.vars.name(var_nr)
             );
@@ -611,7 +611,7 @@ use a separate collection or add after the loop"
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "Cannot modify {} '{}'",
+                "Cannot modify {} '{}'; remove 'const' or use a local copy",
                 self.vars.const_kind(var_nr),
                 self.vars.name(var_nr)
             );
@@ -663,7 +663,7 @@ use a separate collection or add after the loop"
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Cannot modify {} '{}'",
+                    "Cannot modify {} '{}'; remove 'const' or use a local copy",
                     self.vars.const_kind(var_nr),
                     self.vars.name(var_nr)
                 );
@@ -2437,7 +2437,11 @@ pair the hash with a vector to iterate in insertion order"
                 return;
             }
             _ => {
-                diagnostic!(self.lexer, Level::Error, "Cannot iterate");
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot iterate; expected vector, sorted, index, text, or range"
+                );
                 return;
             }
         }

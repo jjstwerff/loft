@@ -983,6 +983,7 @@ impl Parser {
     // ********************
 
     /// Parse data from the current lexer.
+    #[allow(clippy::too_many_lines)] // two-pass parser dispatch — splitting would lose context
     fn parse_file(&mut self) {
         let start_def = self.data.definitions();
         while self.lexer.has_token("use") {
@@ -1064,11 +1065,12 @@ impl Parser {
             if self.lexer.peek_token("use") {
                 diagnostic!(
                     self.lexer,
-                    Level::Fatal,
+                    Level::Error,
                     "use statements must appear before all definitions"
                 );
             } else {
-                diagnostic!(self.lexer, Level::Fatal, "Syntax error");
+                let token = format!("{:?}", res.has);
+                diagnostic!(self.lexer, Level::Error, "Syntax error: unexpected {token}");
             }
         }
         typedef::actual_types(
@@ -1077,7 +1079,12 @@ impl Parser {
             &mut self.lexer,
             start_def,
         );
-        typedef::fill_all(&mut self.data, &mut self.database, &mut self.lexer, start_def);
+        typedef::fill_all(
+            &mut self.data,
+            &mut self.database,
+            &mut self.lexer,
+            start_def,
+        );
         self.database.finish();
         self.enum_fn();
         let lvl = self.lexer.diagnostics().level();

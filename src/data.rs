@@ -1032,7 +1032,7 @@ impl Data {
         if d_nr != u32::MAX {
             diagnostic!(
                 lexer,
-                Level::Fatal,
+                Level::Error,
                 "Cannot redefine {:?} {fn_name}",
                 self.def_type(d_nr)
             );

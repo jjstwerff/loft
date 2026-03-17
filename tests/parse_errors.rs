@@ -92,7 +92,7 @@ fn wrong_if() {
 #[test]
 fn wrong_assign() {
     code!("enum EType { V1 }\nfn test() {a = 1; a = V1 }")
-        .error("Variable 'a' cannot change type from integer to EType at wrong_assign:2:27");
+        .error("Variable 'a' cannot change type from integer to EType; use a new variable name or cast with 'as' at wrong_assign:2:27");
 }
 
 #[test]

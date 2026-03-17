@@ -257,6 +257,7 @@ impl Lexer {
         self.position.pos = scope.1;
     }
 
+    #[allow(clippy::too_many_lines)] // large lexer dispatch — splitting would obscure control flow
     fn next(&mut self) -> Option<LexResult> {
         if self.link < self.memory.len() {
             let n = self.memory[self.link].clone();
@@ -270,13 +271,28 @@ impl Lexer {
                         break;
                     }
                     self.next_char();
-                } else if let Some(Ok(ln)) = self.lines.next() {
-                    if self.position.line == 0 && ln.starts_with("#!/") {
-                        continue;
+                } else if let Some(line_result) = self.lines.next() {
+                    match line_result {
+                        Ok(ln) => {
+                            if self.position.line == 0 && ln.starts_with("#!/") {
+                                continue;
+                            }
+                            self.iter = ln.chars().collect::<Vec<_>>().into_iter().peekable();
+                            self.position.line += 1;
+                            self.position.pos = 1;
+                        }
+                        Err(e) => {
+                            self.position.line += 1;
+                            self.err(
+                                Level::Fatal,
+                                &format!(
+                                    "Cannot read line {} — is the file valid UTF-8? ({})",
+                                    self.position.line, e
+                                ),
+                            );
+                            break;
+                        }
                     }
-                    self.iter = ln.chars().collect::<Vec<_>>().into_iter().peekable();
-                    self.position.line += 1;
-                    self.position.pos = 1;
                 } else {
                     break;
                 }
@@ -348,11 +364,26 @@ impl Lexer {
                     }
                 }
             })
-        } else if let Some(Ok(ln)) = self.lines.next() {
-            self.iter = ln.chars().collect::<Vec<_>>().into_iter().peekable();
-            self.position.line += 1;
-            self.position.pos = 1;
-            Some(LexResult::new(LexItem::None, self.position.clone()))
+        } else if let Some(line_result) = self.lines.next() {
+            match line_result {
+                Ok(ln) => {
+                    self.iter = ln.chars().collect::<Vec<_>>().into_iter().peekable();
+                    self.position.line += 1;
+                    self.position.pos = 1;
+                    Some(LexResult::new(LexItem::None, self.position.clone()))
+                }
+                Err(e) => {
+                    self.position.line += 1;
+                    self.err(
+                        Level::Fatal,
+                        &format!(
+                            "Cannot read line {} — is the file valid UTF-8? ({})",
+                            self.position.line, e
+                        ),
+                    );
+                    None
+                }
+            }
         } else {
             None
         }
