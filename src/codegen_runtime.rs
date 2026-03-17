@@ -120,3 +120,26 @@ pub fn OpGetRecord(
         stores.find(&data, db_tp as u16, key)
     }
 }
+
+/// Extract a substring from a text value.
+/// Bytecode equivalent: `OpGetTextSub` in `src/fill.rs`.
+#[must_use]
+pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
+    #![allow(clippy::cast_possible_wrap)]
+    let len = text.len() as i32;
+    let f = from.max(0).min(len) as usize;
+    let t = till.max(0).min(len) as usize;
+    if f >= t { "" } else { &text[f..t] }
+}
+
+/// Return the byte size of a database record's type.
+/// Bytecode equivalent: `OpSizeofRef` in `src/state/io.rs:290`.
+#[must_use]
+pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i32 {
+    if db.rec == 0 {
+        0
+    } else {
+        let tp = stores.store(&db).get_int(db.rec, 4) as u16;
+        i32::from(stores.size(tp))
+    }
+}

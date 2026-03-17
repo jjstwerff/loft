@@ -418,3 +418,56 @@ fn test() {
 }"
     );
 }
+
+/// N6: verify that a simple generated file compiles with rustc.
+/// This prevents regressions in the native code generation backend.
+#[test]
+fn generated_code_compiles() {
+    // First, generate the file by running a simple test.
+    expr!("1 + 2").tp(INTEGER).result(Value::Int(3));
+    let file = "tests/generated/expressions_expr_add_null.rs";
+    if !std::path::Path::new(file).exists() {
+        return; // Skip if generated files not present (e.g. release build)
+    }
+    let output = std::process::Command::new("rustc")
+        .args([
+            "--edition",
+            "2021",
+            "--crate-type",
+            "lib",
+            file,
+            "-L",
+            "target/debug/deps",
+            "--extern",
+            &format!("loft={}", find_loft_rlib()),
+        ])
+        .output()
+        .expect("failed to run rustc");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Generated file {file} failed to compile:\n{stderr}"
+    );
+}
+
+fn find_loft_rlib() -> String {
+    // Find the loft rlib in target/debug/deps or target/debug
+    for path in &[
+        "target/debug/libloft.rlib",
+        "target/debug/deps/libloft.rlib",
+    ] {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    // Fallback: search deps directory
+    if let Ok(entries) = std::fs::read_dir("target/debug/deps") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("libloft-") && name.ends_with(".rlib") {
+                return entry.path().to_string_lossy().to_string();
+            }
+        }
+    }
+    "target/debug/libloft.rlib".to_string()
+}
