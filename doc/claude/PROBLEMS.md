@@ -24,7 +24,7 @@ recommended fix path are described.
 |---|-------|----------|-------------|
 | 22 | Spatial index (spacial<T>) operations not implemented | Low | N/A |
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
-| 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
+| ~~44~~ | ~~Empty vector literal `[]` cannot be passed directly as a mutable vector argument~~ | ~~Low~~ | **FIXED** |
 | ~~20~~ | ~~`f#next = pos` seek before first open is a no-op~~ | ~~Low~~ | **FIXED** |
 | ~~45~~ | ~~`&vector` parameter triggers "never modified" for clear-like ops~~ | ~~Low~~ | **FIXED** |
 | ~~49~~ | ~~Integer arithmetic silently wraps on overflow~~ | ~~Medium~~ | **FIXED** (debug builds) |

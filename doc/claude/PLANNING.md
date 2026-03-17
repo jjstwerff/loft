@@ -21,6 +21,10 @@ The items below are ordered by tier: things that break programs come first, then
 and prototype-friction items, then architectural work.  See [RELEASE.md](RELEASE.md) for the full
 1.0 gate criteria, project structure changes, and release artifact checklist.
 
+**Completed items are removed entirely** — this document is strictly for future work.
+Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
+creates noise and makes the document harder to scan for remaining work.
+
 Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [BYTECODE_CACHE.md](BYTECODE_CACHE.md)
 
 ---
@@ -76,19 +80,10 @@ Not expected in the near term.
 Ordered by unblocking impact, batching efficiency, and value-to-effort ratio.
 Items on the same line can be done in a single PR.
 
-1. ~~**T1-14** (scalar match)~~ done
-2. ~~**N1** (template fixes)~~ done
-3. ~~**N2** + **N5**~~ done
-4. ~~**T1-17** (range patterns) and **T1-16** (guards)~~ done
-5. ~~**T1-15** (or-patterns) and **T1-20** (null/char patterns)~~ done
-6. ~~**T0-9** (UTF-8 crash) + **T0-10** (UTF-8 source truncation) + **T1-27** (fix suggestions) + **T1-29** (Fatal→Error) + **T1-30** (exhaustiveness docs)~~ done
-7. ~~**T0-8** (panic→diagnostic) + **T1-31** (checked arithmetic) + **T1-26** (diagnostic positions) + **P20** (file seek) + **P45** (`&vector` warning)~~ done
-8. **T1-28** (error recovery) — medium effort, high UX impact
-9. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
-11. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-12. ~~**T2-8** (stdlib: vector ops)~~ done
-13. **T2-14** (text `#index` semantics) — document or fix the byte-offset vs character-position gap
-14. **N4** (iterators) + **N6** (compile gate) — completes native codegen
+1. **T1-28** (error recovery) — medium effort, high UX impact
+2. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
+3. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
+4. **N4** (iterators) + **N6** (compile gate) — completes native codegen
 
 Tier W (Web IDE) is an independent parallel track that can start any time after R6.
 
@@ -97,15 +92,6 @@ Tier W (Web IDE) is an independent parallel track that can start any time after 
 ---
 
 ## Tier 1 — Language Quality & Consistency
-
-### P44  Empty `[]` literal unusable as a direct mutable vector argument
-**Sources:** PROBLEMS #44
-**Severity:** Low — `join([], "-")` fails; workaround: `v = []; join(v, "-")`
-**Fix path:** In `parse_vector`, synthesise a temporary variable for empty `[]` in
-call context.  See PROBLEMS #44 for details.
-**Effort:** Medium (parser/expressions.rs)
-
----
 
 ### T1-28  Error recovery after token failures
 **Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 5
@@ -135,49 +121,7 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 
 ---
 
-### T1-20  Remaining patterns (binding `@`)
-**Sources:** [MATCH.md](MATCH.md) — T1-20
-**Severity:** Low
-**Description:** Wildcard-binding (`x => body`); explicit `name @ pattern` binding.
-`null` and character patterns were completed 2026-03-17.
-**Fix path:** Wildcard binding: unrecognised identifier in scalar arm creates a variable.
-`@`: add `"@"` to TOKENS; parse `name @ pattern`.
-**Effort:** Small (parser/control.rs — a few new checks in arm parsing; one TOKENS addition)
-**Depends on:** T1-14
-**Target:** 1.1+
-
----
-
-### T1-21  Slice and vector patterns
-**Sources:** [MATCH.md](MATCH.md) — T1-21
-**Severity:** Low — vector/text structural dispatch requires manual length checks and element access today
-**Description:** `[first, ..] =>`, `[.., last] =>`, `[a, b] =>` and similar patterns for `vector<T>` and `text` subjects.  Binds elements by position; `..` skips the rest.  Rest binding (`rest..`) deferred to a follow-up.
-**Fix path:** See [MATCH.md#t1-21](MATCH.md#t1-21-slice-and-vector-patterns) for full design.
-Detect `has_token("[")` in arm; parse slice elements; emit `OpLengthVector` length test + `OpGetVector` element bindings.
-**Effort:** Medium (parser/control.rs — new `parse_slice_pattern` helper)
-**Depends on:** T1-14, T1-15
-**Target:** 1.1+
-
----
-
 ## Tier 2 — Prototype-Friendly Features
-
-### T2-13  Empty `[]` literal unusable as a direct mutable vector argument
-**Sources:** PROBLEMS #44
-**Severity:** Low — passing `[]` directly to a function that takes `&vector<T>` fails with
-a codegen assertion; the workaround is trivial but surprising
-**Description:** Writing `join([], "-")` when `join` expects a mutable vector triggers a
-debug-build assertion in `generate_call` ("expected 12B on stack but generate(Insert([Null])) pushed 0B") because `parse_vector` returns `Value::Insert([Null])` — zero stack bytes — when `[]` appears in call context with an unknown element type.  In assignment context (`v = []`) the second pass knows the type and works correctly.
-**Fix path:** In the `else` branch of `parse_vector` (the early-return path for empty `[]`
-when `is_var = false`), synthesise an anonymous temporary variable, call `vector_db` to emit
-the initialisation ops, and return `Value::Var(tmp)` wrapped in a `v_block` — exactly as the
-non-empty path does when `block = true`.  The catch: `assign_tp` is `Type::Unknown(0)` at
-this point, so `vector_db` must tolerate `Unknown` on the first pass and be called again on
-the second pass once the callee's parameter type is known.
-**Effort:** Medium (parser/expressions.rs — deferred type resolution for empty vector in call context)
-**Target:** 1.1
-
----
 
 ### T2-1  Lambda / anonymous function expressions
 **Sources:** Prototype-friendly goal; T1-1 (callable fn refs) already complete
@@ -228,16 +172,6 @@ ergonomic once available.
 
 ---
 
-### ~~T2-8  Expose hidden vector operations — `reverse`, `insert`, `clear`, `sort`~~ DONE 2026-03-17
-
-All four operations implemented:
-- `clear(v)` — done 2026-03-17
-- `reverse(v)` — done 2026-03-17 via `OpReverseVector`
-- `sort(v)` — done 2026-03-17 via `OpSortVector` (integer, long, float, single)
-- `insert(v, idx, elem)` — done 2026-03-17, reuses existing `OpInsertVector` + `OpSet*`
-
----
-
 ### T2-4  Vector aggregates — `sum`, `min_of`, `max_of`, `any`, `all`, `count_if`
 **Sources:** Standard library audit 2026-03-15
 **Severity:** Low–Medium — common operations currently require manual `reduce`/loop boilerplate;
@@ -264,23 +198,6 @@ Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with T1-
 special-case in `parse_call` for `any`/`all`/`count_if` (same tier of effort as T1-3).
 **Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
 **Target:** 1.1 — batch all variants; defer until after T2-1 (lambdas) makes them ergonomic
-
----
-
-### T2-14  Text `#index` returns byte offset instead of character position
-**Sources:** INCONSISTENCIES #3
-**Severity:** Medium — `c#index` in `for c in text` returns a UTF-8 byte offset, while
-`v#index` in `for v in vec` returns a 0-based element position; both use the name `#index`
-but the semantics differ
-**Description:** For ASCII text the byte offset equals the character position, so this
-only surprises users working with multi-byte characters. Options:
-1. Add a `c#char_index` attribute that counts characters (O(1) via a counter incremented
-   each iteration).
-2. Document the byte-offset semantics prominently and recommend `c#count` for character
-   counting.
-Option 2 is lower-risk; option 1 is more ergonomic. Both can coexist.
-**Effort:** Small (option 2: documentation) or Medium (option 1: parser + fill.rs)
-**Target:** 1.1
 
 ---
 
@@ -355,40 +272,6 @@ are not implemented.  The pre-gate (compile error) was added 2026-03-15.
 require the compiler to identify captured variables, allocate a closure record, and pass
 it as a hidden argument to the lambda body.  This is a significant IR and bytecode change.
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
-
----
-
-### T3-6  Redundant `const` parameter annotation
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Low — a `const`-annotated parameter that is never written to inside the
-function body does not benefit from the annotation; it is noise that implies a mutation
-risk that does not exist
-**Description:** After analysing a function body, if a `const_param` variable has no
-write operations, the `const` annotation is redundant:
-```loft
-fn sum(v: const vector<integer>) -> integer {
-    // v is never written to — 'const' annotation is redundant but harmless
-    total = 0
-    for x in v { total += x }
-    total
-}
-```
-Note: this is the inverse of a const-violation (writing to a `const` param, which is
-already a debug-mode runtime error).  This warning targets unnecessary annotations.
-**Known issue (2026-03-17):** A naive `writes == 0` check produces false positives on
-`const` parameters used for documentation intent (e.g. `parallel_for` workers where
-`const` signals read-only access).  The warning needs a smarter heuristic: only warn
-when the function body is complex enough that `const` could plausibly guard something,
-or only for primitive types where `const` has no semantic value.
-**Fix path:**
-1. Add a `writes: u32` counter alongside `uses` in `Variable`; increment on every
-   assignment to that variable during second-pass parsing.
-2. After parsing the function body, if `writes == 0` for a `const_param` variable, emit
-   the warning at the parameter declaration site.
-3. Exempt compound types (`vector`, `reference`, struct types) where `const` serves as
-   read-only documentation even without write attempts.
-**Effort:** Small–Medium (variables.rs — write counter; warning after function body)
-**Target:** 1.1+
 
 ---
 
@@ -779,22 +662,15 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
-| T1-20 | Remaining patterns (binding `@`)                         | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
-| T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
-| P44   | Empty `[]` literal unusable as direct mutable vector arg | 1   | Medium    | 1.1     |             | PROBLEMS #44               |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
 | T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
-| ~~T2-5~~  | ~~In-place sort for primitive vectors~~              | 2    | ~~Medium~~    | ~~1.1~~     |             | **DONE** 2026-03-17    |
-| ~~T2-8~~  | ~~Expose `reverse`, `clear`, `insert` on vectors~~  | 2    | ~~Low–Med~~   | ~~1.1~~     |             | **DONE** 2026-03-17    |
 | T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
-| T2-14 | Text `#index` byte offset vs character position          | 2    | Small–Med | 1.1     |             | INCONSISTENCIES #3         |
 | T2-12 | Bytecode cache (`.loftc`) — deferred, superseded by Tier N | 2  | Medium    | deferred |            | BYTECODE_CACHE.md          |
 | T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 1.1+    |             | THREADING deferred         |
 | T3-2  | Logger: production mode, source injection, hot-reload   | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
 | T3-3  | Optional Cargo features                                  | 3    | Medium    | 1.1+    |             | OPTIONAL_FEATURES.md       |
 | T3-4  | Spatial index operations (full implementation)           | 3    | High      | 1.1+    |             | PROBLEMS #22               |
 | T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
-| T3-6  | Redundant `const` parameter annotation                   | 3    | Small–Med | 1.1+    |             | Warnings audit 2026-03-15  |
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9 (done) | String arch review         |
 | T3-11 | Vector slice becomes independent copy on mutation        | 3    | Medium    | 1.1+    |             | TODO in vector.rs          |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
