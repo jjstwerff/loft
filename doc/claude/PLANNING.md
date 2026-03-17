@@ -54,8 +54,7 @@ release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 
 **Remaining items before 1.0:**
 - T0-8 (convert parser panics to diagnostics)
-- T0-9 (fix UTF-8 file-read crash)
-- T1-26..T1-29 (diagnostic quality improvements)
+- T1-26 (diagnostic positions), T1-28 (error recovery)
 
 **Deferred to 1.1+:**
 T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-8, T3-1..T3-5, T3-7, T3-8,
@@ -83,12 +82,15 @@ Items on the same line can be done in a single PR.
 3. ~~**N2** + **N5**~~ done
 4. ~~**T1-17** (range patterns) and **T1-16** (guards)~~ done
 5. ~~**T1-15** (or-patterns) and **T1-20** (null/char patterns)~~ done
-6. **T0-8** (panic→diagnostic) + **T0-9** (UTF-8 crash) — eliminate remaining crashes
-7. **T1-26** (diagnostic positions) + **T1-27** (fix suggestions) — low-effort, high UX impact
-8. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
-9. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-10. **T2-8** (stdlib: vector ops) — reverse + insert remain
-11. **N4** (iterators) + **N6** (compile gate) — completes native codegen
+6. ~~**T0-9** (UTF-8 crash) + **T0-10** (UTF-8 source truncation) + **T1-27** (fix suggestions) + **T1-29** (Fatal→Error) + **T1-30** (exhaustiveness docs)~~ done
+7. **T0-8** (panic→diagnostic) — eliminate remaining crashes
+8. **T1-26** (diagnostic positions) + **T1-28** (error recovery) — low-effort, high UX impact
+9. **P20** (file seek) + **P45** (`&vector` warning) — small fixes from open PROBLEMS
+10. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
+10. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
+11. **T2-8** (stdlib: vector ops) — reverse + insert remain
+12. **T2-14** (text `#index` semantics) — document or fix the byte-offset vs character-position gap
+13. **N4** (iterators) + **N6** (compile gate) — completes native codegen
 
 Tier W (Web IDE) is an independent parallel track that can start any time after R6.
 
@@ -121,15 +123,6 @@ return a fallback value (`Type::Void`, `Value::Null`), and let parsing continue.
 
 ---
 
-### T0-9  Runtime file read panics on non-UTF-8 data
-**Sources:** PROBLEMS #48
-**Severity:** Medium — `read_to_string().unwrap()` in `state/io.rs:27` panics when a
-loft program reads a file that is not valid UTF-8
-**Fix path:** Replace `.unwrap()` with `.unwrap_or_default()` and emit a runtime
-warning, or return an empty string.
-**Effort:** Small (state/io.rs — one line)
-**Target:** 1.1
-
 ---
 
 ## Tier 1 — Language Quality & Consistency
@@ -159,21 +152,6 @@ restore with `lexer.to()` before emitting the diagnostic.  Specific targets:
 
 ---
 
-### T1-27  Add fix suggestions to common error messages
-**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 4
-**Severity:** Low — errors say what is wrong but not how to fix it
-**Description:** Append `"; <suggestion>"` to 6 error messages:
-- `"Variable cannot change type"` → `"; use a new variable name or cast with 'as'"`
-- `"Cannot modify const"` → `"; remove 'const' or use a local copy"`
-- `"match not exhaustive"` → `"; add missing variants or a '_ =>' wildcard"`
-- `"Cannot add elements while iterating"` → `"; collect in a separate variable"`
-- `"loop variable type mismatch"` → `"; use a different name for the loop variable"`
-- `"Cannot iterate"` → `"; expected vector, sorted, index, text, or range"`
-**Effort:** Small (6 × 1-line message change)
-**Target:** 1.1
-
----
-
 ### T1-28  Error recovery after token failures
 **Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 5
 **Severity:** Medium — a single missing `)` or `}` produces a flood of cascading errors
@@ -190,16 +168,30 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 
 ---
 
-### T1-29  Downgrade over-aggressive Fatal diagnostics
-**Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 2
-**Severity:** Low — 3 `Level::Fatal` diagnostics stop all further parsing when recovery
-is possible
-**Description:**
-- `"Syntax error"` (`parser/mod.rs:1071`) → `Level::Error` + include the unexpected token
-- `"use must appear before definitions"` (`parser/mod.rs:1067`) → `Level::Error`
-- `"Cannot redefine"` (`data.rs:1035`) → `Level::Error` (skip duplicate, continue)
-**Effort:** Small (3 × ~2 lines)
+### P20  File seek before first open is a no-op
+**Sources:** PROBLEMS #20
+**Severity:** Low — `f#next = pos` before the first read or write is silently ignored;
+`f#next` stays at 0 and the next operation starts from the beginning
+**Fix path:** In the file handle struct, store a `pending_seek: i64` field (default −1 = no
+pending seek).  `OpSeekFile` writes to it when `file_ref == i32::MIN` (file not yet open).
+The first `OpReadFile` / `OpWriteFile` that opens the file applies the pending seek
+immediately after the `File::open` call.
+**Effort:** Small (state/io.rs — pending seek field + apply on first open)
 **Target:** 1.1
+
+---
+
+### P45  `&vector` parameter triggers "never modified" warning for clear-like ops
+**Sources:** PROBLEMS #45
+**Severity:** Low — `pub fn clear(both: &vector)` with `&` causes "Parameter 'both' has &
+but is never modified" because `OpClearVector` reads the DbRef without writing the variable
+itself
+**Workaround:** Declare without `&` — the operation still modifies the backing store.
+**Fix path:** Track mutation through DbRef-modifying operators (`OpClearVector`,
+`OpAppendVector`, `OpInsertVector`, `OpRemoveVector`) as writes to the `&` parameter in
+`find_written_vars`.
+**Effort:** Small (parser — extend `find_written_vars` to recognise DbRef-modifying ops)
+**Target:** 1.1+
 
 ---
 
@@ -376,6 +368,23 @@ special-case in `parse_call` for `any`/`all`/`count_if` (same tier of effort as 
 
 ---
 
+### T2-14  Text `#index` returns byte offset instead of character position
+**Sources:** INCONSISTENCIES #3
+**Severity:** Medium — `c#index` in `for c in text` returns a UTF-8 byte offset, while
+`v#index` in `for v in vec` returns a 0-based element position; both use the name `#index`
+but the semantics differ
+**Description:** For ASCII text the byte offset equals the character position, so this
+only surprises users working with multi-byte characters. Options:
+1. Add a `c#char_index` attribute that counts characters (O(1) via a counter incremented
+   each iteration).
+2. Document the byte-offset semantics prominently and recommend `c#count` for character
+   counting.
+Option 2 is lower-risk; option 1 is more ergonomic. Both can coexist.
+**Effort:** Small (option 2: documentation) or Medium (option 1: parser + fill.rs)
+**Target:** 1.1
+
+---
+
 ### T2-12  Bytecode cache (`.loftc`)
 **Sources:** [BYTECODE_CACHE.md](BYTECODE_CACHE.md)
 **Severity:** Medium — repeated runs of an unchanged script re-parse and re-compile every
@@ -499,6 +508,25 @@ removes a source of slot conflicts in long functions with many sequential variab
 2. Wire into `scopes::check` after `compute_intervals`.
 3. Remove `claim()` calls from `src/state/codegen.rs` once all tests pass.
 **Effort:** High (variables.rs, scopes.rs, state/codegen.rs)
+**Target:** 1.1+
+
+---
+
+### T3-11  Vector slice becomes independent copy on mutation
+**Sources:** TODO in `src/vector.rs:13`
+**Severity:** Low — currently a vector slice shares storage with the parent; mutating
+the slice can corrupt the parent vector's data
+**Description:** `v[a..b]` returns a lightweight slice (same store, different offset/length).
+If the slice is subsequently mutated (`slice += [x]`), the mutation writes into the parent's
+storage. The fix is copy-on-write: when a slice-derived vector is first mutated, copy its
+elements to a new allocation before applying the mutation.
+**Fix path:**
+1. Add a `is_slice: bool` flag (or `parent_ref: DbRef`) to the vector header.
+2. In every mutating vector operation (`OpAppendVector`, `OpInsertVector`, `OpClearVector`,
+   `OpRemoveVector`), check the flag and call `vector_copy_to_own(v)` before proceeding.
+3. `vector_copy_to_own` allocates a fresh vector, copies elements (with `copy_claims`),
+   and updates the DbRef.
+**Effort:** Medium (vector.rs, fill.rs — CoW flag + copy-on-first-write)
 **Target:** 1.1+
 
 ---
@@ -851,11 +879,10 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
 | T0-8  | Convert 7 parser panics to diagnostics                   | 0    | Small     | 1.1     |             | DEVELOPERS.md Step 1       |
-| T0-9  | Fix runtime file-read crash on non-UTF-8 data            | 0    | Small     | 1.1     |             | PROBLEMS #48               |
 | T1-26 | Improve 5 diagnostic positions                           | 1    | Small     | 1.1     |             | DEVELOPERS.md positioning  |
-| T1-27 | Add fix suggestions to 6 common error messages           | 1    | Small     | 1.1     |             | DEVELOPERS.md Step 4       |
 | T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
-| T1-29 | Downgrade 3 over-aggressive Fatal diagnostics            | 1    | Small     | 1.1     |             | DEVELOPERS.md Step 2       |
+| P20   | File seek before first open is a no-op                  | 1    | Small     | 1.1     |             | PROBLEMS #20               |
+| P45   | `&vector` "never modified" for DbRef-mutating ops       | 1    | Small     | 1.1+    |             | PROBLEMS #45               |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (binding `@`)                         | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
@@ -865,6 +892,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T2-5  | In-place sort for primitive vectors                      | 2    | Medium    | 1.1     |             | Stdlib audit 2026-03-15    |
 | T2-8  | Expose `reverse`, `clear`, `insert` on vectors          | 2    | Low–Med   | 1.1     |             | Stdlib audit 2026-03-15    |
 | T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
+| T2-14 | Text `#index` byte offset vs character position          | 2    | Small–Med | 1.1     |             | INCONSISTENCIES #3         |
 | T2-12 | Bytecode cache (`.loftc`) — deferred, superseded by Tier N | 2  | Medium    | deferred |            | BYTECODE_CACHE.md          |
 | T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 1.1+    |             | THREADING deferred         |
 | T3-2  | Logger: production mode, source injection, hot-reload   | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
@@ -873,6 +901,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
 | T3-6  | Redundant `const` parameter annotation                   | 3    | Small–Med | 1.1+    |             | Warnings audit 2026-03-15  |
 | T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9 (done) | String arch review         |
+| T3-11 | Vector slice becomes independent copy on mutation        | 3    | Medium    | 1.1+    |             | TODO in vector.rs          |
 | T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
 | N8    | `--native` CLI flag                                     | N    | Medium    | 1.1+    | N11–N19     | NATIVE.md                  |

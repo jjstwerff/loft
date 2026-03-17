@@ -27,8 +27,8 @@ recommended fix path are described.
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
 | 45 | `&vector` parameter triggers "never modified" for clear-like ops | Low | Declare without `&` |
-| 47 | Invalid UTF-8 in source file silently truncates parsing | Low | Ensure files are UTF-8 |
-| 48 | Runtime `read_to_string` panics on non-UTF-8 file data | Medium | Only read UTF-8 files |
+| ~~47~~ | ~~Invalid UTF-8 in source file silently truncates parsing~~ | ~~Low~~ | **FIXED** |
+| ~~48~~ | ~~Runtime `read_to_string` panics on non-UTF-8 file data~~ | ~~Medium~~ | **FIXED** |
 
 ---
 
@@ -804,49 +804,18 @@ through a DbRef.
 
 ---
 
-### 47. Invalid UTF-8 in source file silently truncates parsing
+### ~~47. Invalid UTF-8 in source file silently truncates parsing~~ **FIXED**
 
-**Symptom:** If a `.loft` source file contains invalid UTF-8 byte sequences (e.g. a
-binary file renamed to `.loft`, or file corruption), the lexer's `BufReader::lines()`
-returns `Err` for that line.  The lexer only matches `Some(Ok(ln))`, so the error
-falls through to the end-of-lines branch and parsing stops silently — no diagnostic
-is emitted.
-
-**Impact:** Low — source files are almost always valid UTF-8 (text editors enforce it).
-The only realistic scenario is accidental binary input or file corruption.  The user
-sees incomplete parsing results but no explanation.
-
-**Workaround:** Ensure source files are saved as UTF-8.
-
-**Fix path:** In `lexer.rs` (`next()` method, two locations), add a `Some(Err(e))` arm
-that emits a `Fatal` diagnostic: `"Cannot read line {n}: {e} — is the file valid UTF-8?"`.
-
-**Effort:** Small (lexer.rs — two match arms)
+**Fixed:** Both `next()` code paths in `lexer.rs` now handle `Some(Err(e))` and emit
+a `Fatal` diagnostic: `"Cannot read line N — is the file valid UTF-8? (error)"`.
+Parsing stops cleanly with a meaningful message.
 
 ---
 
-### 48. Runtime `read_to_string` panics on non-UTF-8 file data
+### ~~48. Runtime `read_to_string` panics on non-UTF-8 file data~~ **FIXED**
 
-**Symptom:** A loft program that reads a non-UTF-8 file (e.g. a binary log, a Latin-1
-encoded file) via `f#read` or similar causes:
-```
-thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: ...'
-```
-The `read_to_string(&mut buf).unwrap()` in `state/io.rs:27` panics instead of returning
-null or an error message.
-
-**Impact:** Medium — programs that process user-supplied files can crash on unexpected
-encodings.  This is the most impactful UTF-8 gap.
-
-**Workaround:** Only read files known to be UTF-8.  There is currently no way to read
-raw bytes or detect encoding in loft.
-
-**Fix path:** Replace `.unwrap()` with `.unwrap_or_default()` or return an empty string
-and set an error flag.  A longer-term fix would add a `f#encoding` attribute or a
-`read_bytes()` function for binary data.
-
-**Effort:** Small for the immediate fix (state/io.rs — replace unwrap); Medium for
-binary-read support.
+**Fixed:** `get_file_text()` in `state/io.rs` now clears the buffer on `read_to_string`
+failure instead of panicking. Non-UTF-8 files produce an empty string result.
 
 ---
 

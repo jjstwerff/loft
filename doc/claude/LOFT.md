@@ -520,7 +520,18 @@ match score {
 
 **Guard clauses:** any arm may have an `if` guard after the pattern. The guard is
 evaluated when the pattern matches; if the guard is false, matching falls through to
-the next arm. Guarded arms do not count toward exhaustiveness.
+the next arm. Guarded arms do **not** count toward exhaustiveness — because the guard
+can fail at runtime, the compiler cannot guarantee the arm will handle that variant.
+Even if every variant has a guarded arm, a wildcard `_ =>` or an unguarded arm covering
+each variant is still required:
+```
+match color {
+    Red if is_bright   => "bright red",
+    Green if is_bright => "bright green",
+    Blue               => "blue",
+    _                  => "other"       // required — Red and Green guards may fail
+}
+```
 
 **Match is an expression:** it produces a value that can be assigned or returned. All
 arms must produce the same type (or void).
