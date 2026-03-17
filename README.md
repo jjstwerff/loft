@@ -114,7 +114,7 @@ and a PDF at `doc/loft-reference.pdf`.
 
 ---
 
-## Known limitations (0.1.x)
+## Known limitations (0.8.x)
 
 - **No lambda expressions** — anonymous functions are planned for 1.1
 - **No REPL** — interactive mode is planned for 1.1

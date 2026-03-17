@@ -94,11 +94,8 @@
 <p>Hashes are lookup structures, not ordered collections. You cannot write `for item in my_hash { }`. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.</p>
 <h2 id="mutation-guard-blocks-appending-during-iteration">Mutation guard blocks appending during iteration</h2>
 <p>The compiler prevents `v += [x]` inside `for e in v`. This protects against infinite loops. The guard also catches field access: `for e in db.items { db.items += [x]; }` is blocked too. The only allowed mutation is `e#remove` inside a filtered loop.</p>
-<h2 id="if-expression-without-else-produces-null">If-expression without else produces null</h2>
-<p>Using `if` as a value expression without an `else` clause silently returns null when the condition is false. No compile error is raised.</p>
-<pre><code>  maybe = <span class="kw">if</span> <span class="nm">1</span> &gt; <span class="nm">10</span> { <span class="st">"yes"</span> };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!maybe, <span class="st">"missing else: result is null, not an error"</span>);</code></pre>
-<p>Match expressions, by contrast, require you to handle every case. Mitigation: Always write an else clause when using if as a value.</p>
+<h2 id="if-expression-requires-else-when-used-as-a-value">If-expression requires else when used as a value</h2>
+<p>Using `if` as a value expression without an `else` clause is a compile error. This prevents accidental null values from missing branches. If-statements (where the body has no value) do not need else. For example, `x = if cond { 1 }` is an error; write `x = if cond { 1 } else { 0 }`.</p>
 <h2 id="match-guards-do-not-prove-a-variant-is-handled">Match guards do not prove a variant is handled</h2>
 <p>A guarded arm like `Red if cond =&gt; ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `_` or an unguarded arm so the compiler knows every case is covered.</p>
 <h2 id="ref-parameter-semantics">Ref-parameter semantics</h2>

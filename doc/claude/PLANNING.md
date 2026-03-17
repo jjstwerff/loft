@@ -40,19 +40,26 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Version Milestones
 
+### Version 0.8.0 — Current release (2026-03-17)
+
+Match expressions (enum, scalar, or-patterns, guard clauses, range patterns, null/char
+patterns, struct destructuring), code formatter, wildcard imports, callable fn-refs,
+map/filter/reduce, vector.clear(), mkdir, time functions, logging, parallel execution,
+24+ bug fixes, comprehensive user documentation (24 pages + Safety guide + PDF).
+
 ### Version 1.0 — Language Stability
 
 1.0 is a **stability contract**: any program valid on 1.0 compiles and runs identically on any 1.x
 release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 
-**Hard gate items** (must be resolved before tagging 1.0):
-_(all completed)_
+**Remaining items before 1.0:**
+- T0-8 (convert parser panics to diagnostics)
+- T0-9 (fix UTF-8 file-read crash)
+- T1-26..T1-29 (diagnostic quality improvements)
 
-**1.0 target items** (include if time allows; 1.1 if not):
-_(all completed)_
-
-**Explicitly 1.1+**:
-T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-8, T3-1..T3-5, T3-7, T3-8, N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
+**Deferred to 1.1+:**
+T2-1 (lambdas), T2-2 (REPL), T2-4, T2-5, T2-8, T3-1..T3-5, T3-7, T3-8,
+N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
 
 ### Version 1.x — Minor releases (additive)
 

@@ -7,9 +7,26 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ---
 
-## [Unreleased — working toward 1.0]
+## [Unreleased]
 
-### Bug fixes (post-0.1.0)
+---
+
+## [0.8.0] — 2026-03-17
+
+### Bug fixes
+
+- **Shift by 0** — `x << 0` and `x >> 0` now correctly return `x` instead of null.
+  The `v2 != 0` guard in `ops.rs` was meant to catch null but also caught legitimate
+  zero shifts. Removed for all four shift functions (int/long × left/right). (2026-03-17)
+
+- **Float null comparisons** — `NaN != x` now returns `true` (was `false`). All float
+  and single comparison operators (==, !=, <, <=) now explicitly check `is_nan()`.
+  Also fixed `??` operator for floats: changed from `x != null` comparison to boolean
+  truthiness check. (2026-03-17)
+
+- **If-expression without else** — Using `if` as a value expression without an `else`
+  clause is now a compile error instead of silently producing null. If-statements
+  (void body) are unaffected. (2026-03-17)
 
 - **T0-1** — `null` literal in scalar field assignment emitted no bytecode, causing
   `OpSetInt` to misread the stack (`store_nr=60` crash). Fixed in `parse_assign_op`:
@@ -83,7 +100,7 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   zero-pad format sign order; XOR-null bug for `^`/`|`/`&`; missing polymorphic method
   compiler panic; `for c in enum_vector` infinite loop. (2026-03-13/14)
 
-### Features (post-0.1.0)
+### Features
 
 - **T1-15** — Or-patterns in match arms. `North | South => "vertical"` and
   `1 | 2 | 3 => "low"` now work for both enum and scalar match expressions.
