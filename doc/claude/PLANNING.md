@@ -99,42 +99,6 @@ call context.  See PROBLEMS #44 for details.
 
 ---
 
-### T1-15  Or-patterns (`|`) in `match` arms
-**Sources:** [MATCH.md](MATCH.md) — T1-15
-**Severity:** Low–Medium — disjunction over patterns requires duplicating arm bodies today
-**Description:** `North | South => "vertical"` — multiple patterns per arm, combined with `||`.  Works for enum variants, scalars, and ranges.
-**Fix path:** See [MATCH.md#t1-15](MATCH.md#t1-15-or-patterns) for full design.
-Refactor `arms` storage from `(Option<i32>, ...)` to `(Option<Value>, ...)` (pre-built condition); add `|`-loop in pattern parser.
-**Effort:** Medium (parser/control.rs — structural refactor of arms vec + pattern loop)
-**Depends on:** T1-14
-**Target:** 1.1
-
----
-
-### T1-23  Variable shadowing
-(Moved from Tier 2 — this is a language quality item.)
-**Sources:** Compiler warnings audit 2026-03-15
-**Severity:** Low — a variable in an inner scope silently shadows an outer-scope variable
-of the same name; the outer variable is unchanged, which is often surprising in loops
-**Description:** Before adding a new variable to a scope, check whether the same name exists
-in any enclosing scope.  If it does, emit a warning:
-```loft
-x = 10
-for x in items {    // Warning: loop variable 'x' shadows outer variable 'x'
-    ...
-}
-// outer x is still 10 — the loop variable was distinct
-```
-**Fix path:**
-1. In the variable creation path (`variables.rs:add_variable`), walk the enclosing scope
-   chain checking for a name collision before registering the new variable.
-2. Emit the warning at the inner declaration site, referencing both positions.
-3. `_`-prefixed names are exempt.
-**Effort:** Small (variables.rs + scopes.rs — scope-chain walk at variable creation)
-**Target:** 1.1+
-
----
-
 ### T1-19  Nested patterns in field positions
 **Sources:** [MATCH.md](MATCH.md) — T1-19
 **Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
@@ -147,12 +111,13 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 
 ---
 
-### T1-20  Remaining patterns (null, binding `@`)
+### T1-20  Remaining patterns (binding `@`)
 **Sources:** [MATCH.md](MATCH.md) — T1-20
 **Severity:** Low
-**Description:** `null` pattern; wildcard-binding (`x => body`); explicit `name @ pattern` binding; character literal patterns.
-**Fix path:** See [MATCH.md#t1-20](MATCH.md#t1-20-remaining-patterns-null-binding) for full design.
-`null`: detect `has_token("null")`; emit null-equality condition.  Wildcard binding: unrecognised identifier in scalar arm creates a variable.  `@`: add `"@"` to TOKENS; parse `name @ pattern`.
+**Description:** Wildcard-binding (`x => body`); explicit `name @ pattern` binding.
+`null` and character patterns were completed 2026-03-17.
+**Fix path:** Wildcard binding: unrecognised identifier in scalar arm creates a variable.
+`@`: add `"@"` to TOKENS; parse `name @ pattern`.
 **Effort:** Small (parser/control.rs — a few new checks in arm parsing; one TOKENS addition)
 **Depends on:** T1-14
 **Target:** 1.1+
@@ -778,10 +743,8 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
-| T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
-| T1-23 | Variable shadowing                                       | 1    | Small     | 1.1+    |             | Warnings audit 2026-03-15  |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
-| T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
+| T1-20 | Remaining patterns (binding `@`)                         | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
 | P44   | Empty `[]` literal unusable as direct mutable vector arg | 1   | Medium    | 1.1     |             | PROBLEMS #44               |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |

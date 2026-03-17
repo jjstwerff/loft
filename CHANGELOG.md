@@ -85,6 +85,20 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Features (post-0.1.0)
 
+- **T1-15** — Or-patterns in match arms. `North | South => "vertical"` and
+  `1 | 2 | 3 => "low"` now work for both enum and scalar match expressions.
+  Each variant in an or-pattern counts for exhaustiveness. EnumArm.disc
+  refactored to Vec<i32> for multi-discriminant support. (2026-03-17)
+
+- **T1-20** — Null and character patterns in match expressions. `null => "absent"`
+  matches null values in scalar match arms. Character literals `'a' => "vowel"`
+  are now recognized by the pattern parser. Wildcard binding (`@`) and
+  name-binding patterns remain for a follow-up. (2026-03-17)
+
+- **T1-23** — For-loop variable type mismatch error. Reusing a variable name in a
+  for-loop with a different type (e.g. `x = 1.5; for x in int_vec`) now produces
+  a compile error. Same-type reuse is idiomatic and not flagged. (2026-03-17)
+
 - **T1-25** — `sizeof(u8)` now returns 1 (packed field size) instead of 4 (stack slot
   size). Range-constrained integer types (`u8`, `i8`, `u16`, `i16`) report their packed
   byte size, consistent with `sizeof(Struct)` for structs containing those fields.
