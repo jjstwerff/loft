@@ -87,37 +87,8 @@ Tier W (Web IDE) is an independent parallel track that can start any time after 
 
 ## Tier 0 — Crashes / Silent Wrong Results
 
-### P46  Block expression `{ ... }` as match arm body causes segfault
-**Sources:** PROBLEMS #46 (found 2026-03-17)
-**Severity:** Low — match arms with block bodies crash; parenthesised expressions work
-**Workaround:** Use `(expr)` instead of `{ expr }` in match arm bodies
-**Fix path:** The expression parser sees `{` and starts a block, but the closing `}`
-is ambiguous with the match's `}`.  Fix in `parse_scalar_match` / `parse_match`:
-detect block-start `{` after `=>` and parse it as a scoped block rather than
-letting `expression()` consume it.
-**Effort:** Small (parser/control.rs)
-
----
 
 ## Tier 1 — Language Quality & Consistency
-
-### T1-24  Make commas between match arms mandatory
-**Sources:** Syntax consistency review 2026-03-17
-**Severity:** Low — commas are currently optional; making them mandatory is consistent
-with struct fields, enum variants, and function arguments which all require commas
-**Description:** Change `parse_match` and `parse_scalar_match` to require commas
-between arms (trailing comma before `}` stays optional).  Consistent with Rust.
-Match was added in T1-14 and is unreleased — no backward compatibility concern.
-**Fix path:**
-1. In `parse_match` (enum arms): change `has_token(",")` → `token(",")` after each
-   non-wildcard arm.
-2. In `parse_scalar_match` (scalar arms): same change after each non-wildcard arm.
-3. Update all match tests in `tests/match.rs` (~50 arms need commas).
-4. Update syntax examples in `doc/claude/MATCH.md`.
-**Effort:** Trivial (2 parser lines + bulk test update)
-**Target:** 1.1
-
----
 
 ### P44  Empty `[]` literal unusable as a direct mutable vector argument
 **Sources:** PROBLEMS #44
@@ -901,8 +872,6 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
-| P46   | Block `{ }` as match arm body segfault                  | 0    | Small     | 1.1     |             | PROBLEMS #46               |
-| T1-24 | Make commas between match arms mandatory                 | 1    | Trivial   | 1.1     |             | Syntax review 2026-03-17   |
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |

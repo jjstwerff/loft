@@ -320,8 +320,8 @@ fn dead_assignment_match_arms() {
 fn label(c: Color) -> integer {
     result = 0;
     match c {
-        Red => result = 1
-        Green => result = 2
+        Red => result = 1,
+        Green => result = 2,
         Blue => result = 3
     };
     result

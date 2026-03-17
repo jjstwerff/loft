@@ -27,7 +27,6 @@ recommended fix path are described.
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Low | Assign to a variable first: `v = []; fn(v, ...)` |
 | 45 | `&vector` parameter triggers "never modified" for clear-like ops | Low | Declare without `&` |
-| 46 | Block `{ ... }` as match arm body causes segfault | Low | Use parentheses instead |
 
 ---
 
@@ -759,9 +758,9 @@ second pass or this path must be deferred until the call-site type is known.
 
 ---
 
-### 46. Block expression `{ ... }` as match arm body causes segfault
+### ~~46. Block expression `{ ... }` as match arm body~~ **FIXED 2026-03-17**
 
-**Symptom:** Using a block expression as a match arm body crashes at runtime:
+**Symptom (fixed):** Using a block expression as a match arm body crashed at runtime:
 ```loft
 match x {
     1 => { 10 + 1 },   // segfault
