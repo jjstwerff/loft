@@ -503,10 +503,9 @@ extern crate loft;"
         if def.returned != Type::Void {
             write!(w, "-> {} ", rust_type(&def.returned, &Context::Result))?;
         }
-        let mut declared = HashSet::new();
         // Mark argument variables as already declared so Set won't re-declare them.
         for arg_nr in def.variables.arguments() {
-            declared.insert(arg_nr);
+            self.declared.insert(arg_nr);
         }
         let returns_text = matches!(def.returned, Type::Text(_));
         if let Value::Block(bl) = &def.code {
