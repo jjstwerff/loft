@@ -686,3 +686,35 @@ fn scalar_char_pattern() {
     .expr("describe('a')")
     .result(Value::Text("vowel a".to_string()));
 }
+
+/// T1-15: or-patterns in plain enum match.
+#[test]
+fn or_pattern_plain_enum() {
+    code!(
+        "enum Dir { North, South, East, West }
+fn axis(d: Dir) -> text {
+    match d {
+        North | South => \"vertical\",
+        East | West => \"horizontal\"
+    }
+}"
+    )
+    .expr("axis(South)")
+    .result(Value::Text("vertical".to_string()));
+}
+
+/// T1-15: or-patterns in scalar match.
+#[test]
+fn or_pattern_scalar() {
+    code!(
+        "fn classify(n: integer) -> text {
+    match n {
+        1 | 2 | 3 => \"low\",
+        10 | 20 => \"high\",
+        _ => \"other\"
+    }
+}"
+    )
+    .expr("classify(2)")
+    .result(Value::Text("low".to_string()));
+}

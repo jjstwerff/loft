@@ -13,7 +13,8 @@ use super::{
 
 /// Collected match arm data for enum/struct-enum match expressions.
 struct EnumArm {
-    disc: Option<i32>,
+    /// T1-15: discriminants for this arm — Vec allows or-patterns (multiple variants per arm).
+    discs: Vec<i32>,
     code: Value,
     tp: Type,
     guard: Option<Value>,
@@ -369,7 +370,7 @@ impl Parser {
                     );
                 }
                 arms.push(EnumArm {
-                    disc: None,
+                    discs: vec![],
                     code: arm_code,
                     tp: arm_type,
                     guard: guard_opt,
@@ -440,7 +441,7 @@ impl Parser {
                     result_type = arm_type;
                 }
                 arms.push(EnumArm {
-                    disc: None,
+                    discs: vec![],
                     code: block,
                     tp: result_type.clone(),
                     guard: None,
@@ -499,6 +500,55 @@ impl Parser {
                     0
                 }
             };
+
+            // T1-15: or-patterns — collect additional variants separated by `|`.
+            // Only for plain enum arms without field bindings.
+            let mut all_discs = vec![disc];
+            while self.lexer.has_token("|") {
+                let Some(next_name) = self.lexer.has_identifier() else {
+                    if !self.first_pass {
+                        diagnostic!(self.lexer, Level::Error, "expect variant name after '|'");
+                    }
+                    break;
+                };
+                let next_def_nr = self.data.def_nr(&next_name);
+                if !self.first_pass
+                    && (next_def_nr == u32::MAX
+                        || self.data.def_type(next_def_nr) != DefType::EnumValue
+                        || self.data.def(next_def_nr).parent != e_nr)
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not a variant of {}",
+                        next_name,
+                        self.data.def(e_nr).name
+                    );
+                } else {
+                    let next_disc = if is_struct {
+                        if let Value::Enum(nr, _) =
+                            self.data.def(next_def_nr).attributes[0].value
+                        {
+                            i32::from(nr)
+                        } else {
+                            0
+                        }
+                    } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&next_name) {
+                        if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                            i32::from(nr)
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    };
+                    all_discs.push(next_disc);
+                    // Each or-pattern variant counts for exhaustiveness.
+                    if !self.first_pass {
+                        covered.insert(next_def_nr);
+                    }
+                }
+            }
 
             // Parse optional field bindings for struct-enum arms: `{ field1, field2, ... }`.
             let mut arm_stmts: Vec<Value> = Vec::new();
@@ -641,7 +691,7 @@ impl Parser {
             };
 
             arms.push(EnumArm {
-                disc: Some(disc),
+                discs: all_discs,
                 code: arm_code,
                 tp: arm_type,
                 guard: guard_opt,
@@ -683,36 +733,38 @@ impl Parser {
         // (only possible if exhaustiveness fails, which is a compile error).
         let mut chain = Value::Null;
         for arm in arms.iter().rev() {
-            match arm.disc {
-                None => {
-                    // Wildcard — always taken; becomes the else branch of the chain.
-                    // T1-16: guarded wildcard wraps body in If(guard, body, chain_rest).
-                    chain = match &arm.guard {
-                        Some(guard) => v_if(guard.clone(), arm.code.clone(), chain),
-                        None => arm.code.clone(),
-                    };
+            if arm.discs.is_empty() {
+                // Wildcard — always taken; becomes the else branch of the chain.
+                // T1-16: guarded wildcard wraps body in If(guard, body, chain_rest).
+                chain = match &arm.guard {
+                    Some(guard) => v_if(guard.clone(), arm.code.clone(), chain),
+                    None => arm.code.clone(),
+                };
+            } else {
+                // T1-15: build OR'd comparison for all discriminants in this arm.
+                let mut cmp = self.cl(
+                    "OpEqInt",
+                    &[disc_expr.clone(), Value::Int(arm.discs[0])],
+                );
+                for &d in &arm.discs[1..] {
+                    let next = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(d)]);
+                    cmp = v_if(cmp, Value::Boolean(true), next);
                 }
-                Some(disc_nr) => {
-                    let cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(disc_nr)]);
-                    // T1-16: guarded arms nest the guard inside the pattern branch.
-                    // When there are field bindings, emit them BEFORE the guard so bound
-                    // variables are available in the guard expression:
-                    //   If(disc, Block([bindings..., If(guard, body, rest)]), rest)
-                    chain = match &arm.guard {
-                        Some(guard) => {
-                            let guarded = v_if(guard.clone(), arm.code.clone(), chain.clone());
-                            let inner = if arm.bindings.is_empty() {
-                                guarded
-                            } else {
-                                let mut stmts = arm.bindings.clone();
-                                stmts.push(guarded);
-                                v_block(stmts, arm.tp.clone(), "match_arm")
-                            };
-                            v_if(cmp, inner, chain)
-                        }
-                        None => v_if(cmp, arm.code.clone(), chain),
-                    };
-                }
+                // T1-16: guarded arms nest the guard inside the pattern branch.
+                chain = match &arm.guard {
+                    Some(guard) => {
+                        let guarded = v_if(guard.clone(), arm.code.clone(), chain.clone());
+                        let inner = if arm.bindings.is_empty() {
+                            guarded
+                        } else {
+                            let mut stmts = arm.bindings.clone();
+                            stmts.push(guarded);
+                            v_block(stmts, arm.tp.clone(), "match_arm")
+                        };
+                        v_if(cmp, inner, chain)
+                    }
+                    None => v_if(cmp, arm.code.clone(), chain),
+                };
             }
         }
 
@@ -855,6 +907,25 @@ impl Parser {
                 pattern_val = Some(pat);
             }
 
+            // T1-15: or-patterns in scalar match — `1 | 2 | 3 => ...`
+            while self.lexer.has_token("|") && !is_wildcard {
+                let (next_pat, _) = self.parse_match_pattern(subject_type, v);
+                if let Some(prev) = pattern_val.take() {
+                    // Combine: build equality condition for prev, equality for next,
+                    // then OR them: If(prev_eq, true, next_eq).
+                    let mut prev_cond = Value::Null;
+                    self.build_scalar_cond(&mut prev_cond, v, subject_type, prev);
+                    let mut next_cond = Value::Null;
+                    self.build_scalar_cond(&mut next_cond, v, subject_type, next_pat);
+                    let or_cond = v_if(prev_cond, Value::Boolean(true), next_cond);
+                    pattern_val = Some(v_block(
+                        vec![or_cond],
+                        Type::Boolean,
+                        "or_pattern",
+                    ));
+                }
+            }
+
             // T1-16: parse optional guard clause.
             let guard_opt = if self.lexer.has_token("if") {
                 let mut guard_code = Value::Null;
@@ -909,6 +980,32 @@ impl Parser {
         result_type
     }
 
+    /// T1-15: build a boolean condition for a single scalar pattern value.
+    fn build_scalar_cond(
+        &mut self,
+        cond: &mut Value,
+        v: u16,
+        subject_type: &Type,
+        pat: Value,
+    ) {
+        // Reuse the same logic as build_scalar_chain for special block patterns.
+        if let Value::Block(ref bl) = pat
+            && bl.result == Type::Boolean
+            && (bl.name == "range_pattern"
+                || bl.name == "null_pattern"
+                || bl.name == "or_pattern")
+        {
+            *cond = bl.operators[0].clone();
+            return;
+        }
+        self.call_op(
+            cond,
+            "==",
+            &[Value::Var(v), pat],
+            &[subject_type.clone(), subject_type.clone()],
+        );
+    }
+
     /// Build the if-chain for a scalar match from collected arms.
     fn build_scalar_chain(
         &mut self,
@@ -928,10 +1025,12 @@ impl Parser {
         let mut chain = fallback;
         for (pattern_val, arm_code, _, guard_opt) in arms.into_iter().rev() {
             if let Some(lit) = pattern_val {
-                // T1-17/T1-20: range/null patterns are stored as Block with Boolean result.
+                // T1-15/T1-17/T1-20: range/null/or patterns stored as Block with Boolean result.
                 if let Value::Block(ref bl) = lit
                     && bl.result == Type::Boolean
-                    && (bl.name == "range_pattern" || bl.name == "null_pattern")
+                    && (bl.name == "range_pattern"
+                        || bl.name == "null_pattern"
+                        || bl.name == "or_pattern")
                 {
                     let range_cond = bl.operators[0].clone();
                     chain = match guard_opt {
