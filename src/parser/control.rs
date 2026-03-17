@@ -241,20 +241,26 @@ impl Parser {
         let mut subject = Value::Null;
         let subject_type = self.expression(&mut subject);
 
-        // Resolve enum type info from the subject.
-        // A struct-enum variable is typed as Type::Reference(variant_d_nr) whose parent is
-        // the Enum definition, so we also handle that case.
-        let (e_nr, is_struct, valid_enum) = match &subject_type {
-            Type::Enum(nr, s, _) => (*nr, *s, true),
+        // Resolve type info from the subject.
+        // Accepts: plain enums, struct-enums, struct-enum variants, and plain structs (T1-18).
+        let (e_nr, is_struct, valid_enum, is_plain_struct) = match &subject_type {
+            Type::Enum(nr, s, _) => (*nr, *s, true, false),
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::EnumValue => {
                 let parent = self.data.def(*d_nr).parent;
-                (parent, true, true)
+                (parent, true, true, false)
+            }
+            Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Struct => {
+                (*d_nr, true, true, true)
             }
             _ => {
                 if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Error, "match requires an enum type");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "match requires an enum or struct type"
+                    );
                 }
-                (u32::MAX, false, false)
+                (u32::MAX, false, false, false)
             }
         };
 
@@ -327,6 +333,61 @@ impl Parser {
 
             // Look up the variant definition.
             let variant_def_nr = self.data.def_nr(&pattern_name);
+
+            // T1-18: for plain struct match, the pattern name must match the struct type.
+            // There is no discriminant — the arm always matches.
+            if is_plain_struct {
+                if variant_def_nr != e_nr && !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' does not match struct type {}",
+                        pattern_name,
+                        self.data.def(e_nr).name
+                    );
+                }
+                // Parse field bindings and arm body, emit as always-matching.
+                let mut arm_stmts: Vec<Value> = Vec::new();
+                if self.lexer.peek_token("{") {
+                    self.lexer.token("{");
+                    while !self.lexer.peek_token("}") {
+                        if let Some(field_name) = self.lexer.has_identifier() {
+                            let attr_idx = self.data.attr(e_nr, &field_name);
+                            if attr_idx != usize::MAX {
+                                let field_val = self.get_field(e_nr, attr_idx, subject_val.clone());
+                                let field_type = self.data.attr_type(e_nr, attr_idx);
+                                let v = self.create_var(&field_name, &field_type);
+                                self.vars.defined(v);
+                                arm_stmts.push(v_set(v, field_val));
+                            } else if !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "unknown field '{}' on struct {}",
+                                    field_name,
+                                    self.data.def(e_nr).name
+                                );
+                            }
+                        }
+                        if !self.lexer.has_token(",") {
+                            break;
+                        }
+                    }
+                    self.lexer.token("}");
+                }
+                self.lexer.token("=>");
+                let mut arm_code = Value::Null;
+                let arm_type = self.expression(&mut arm_code);
+                arm_stmts.push(arm_code);
+                let block = v_block(arm_stmts, arm_type.clone(), "struct_match");
+                if result_type == Type::Void {
+                    result_type = arm_type;
+                }
+                arms.push((None, block, result_type.clone()));
+                has_wildcard = true; // plain struct arm always matches
+                break;
+            }
+
             let bad_variant = e_nr == u32::MAX
                 || variant_def_nr == u32::MAX
                 || self.data.def_type(variant_def_nr) != DefType::EnumValue

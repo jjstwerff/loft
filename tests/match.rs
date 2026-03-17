@@ -290,7 +290,7 @@ fn match_non_enum() {
     }
 }"
     )
-    .error("match requires an enum type at match_non_enum:3:14");
+    .error("match requires an enum or struct type at match_non_enum:3:14");
 }
 
 /// Arms returning incompatible types — compile-time error.
@@ -326,4 +326,36 @@ fn test() {
 }"
     )
     .warning("unreachable arm: North already matched at match_duplicate_arm:7:17");
+}
+
+/// T1-18: match on a plain struct — bind fields.
+#[test]
+fn match_struct_destructure() {
+    code!(
+        "struct Point { x: float, y: float }
+
+fn test() {
+    p = Point { x: 3.0, y: 4.0 };
+    r = match p {
+        Point { x, y } => x + y
+    };
+    assert(r == 7.0, \"r: {r}\");
+}"
+    );
+}
+
+/// T1-18: match on a struct — no field bindings, just value.
+#[test]
+fn match_struct_no_fields() {
+    code!(
+        "struct Point { x: float, y: float }
+
+fn test() {
+    p = Point { x: 1.0, y: 2.0 };
+    r = match p {
+        Point => 42
+    };
+    assert(r == 42, \"r: {r}\");
+}"
+    );
 }
