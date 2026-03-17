@@ -87,8 +87,28 @@ Tier W (Web IDE) is an independent parallel track that can start any time after 
 
 ## Tier 0 — Crashes / Silent Wrong Results
 
+### P46  Block expression `{ ... }` as match arm body causes segfault
+**Sources:** PROBLEMS #46 (found 2026-03-17)
+**Severity:** Low — match arms with block bodies crash; parenthesised expressions work
+**Workaround:** Use `(expr)` instead of `{ expr }` in match arm bodies
+**Fix path:** The expression parser sees `{` and starts a block, but the closing `}`
+is ambiguous with the match's `}`.  Fix in `parse_scalar_match` / `parse_match`:
+detect block-start `{` after `=>` and parse it as a scoped block rather than
+letting `expression()` consume it.
+**Effort:** Small (parser/control.rs)
+
+---
 
 ## Tier 1 — Language Quality & Consistency
+
+### P44  Empty `[]` literal unusable as a direct mutable vector argument
+**Sources:** PROBLEMS #44
+**Severity:** Low — `join([], "-")` fails; workaround: `v = []; join(v, "-")`
+**Fix path:** In `parse_vector`, synthesise a temporary variable for empty `[]` in
+call context.  See PROBLEMS #44 for details.
+**Effort:** Medium (parser/expressions.rs)
+
+---
 
 ---
 
@@ -863,6 +883,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
+| P46   | Block `{ }` as match arm body segfault                  | 0    | Small     | 1.1     |             | PROBLEMS #46               |
 | T1-16 | Guard clauses (`if`) in `match` arms                     | 1    | Small–Med | 1.1     | T1-14       | MATCH.md T1-16             |
 | T1-15 | Or-patterns (`\|`) in `match` arms                       | 1    | Medium    | 1.1     | T1-14       | MATCH.md T1-15             |
 | T1-17 | Range patterns in `match` (`lo..=hi`)                    | 1    | Small     | 1.1     | T1-14       | MATCH.md T1-17             |
@@ -870,7 +891,7 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T1-20 | Remaining patterns (null, binding `@`)                   | 1    | Small     | 1.1+    | T1-14       | MATCH.md T1-20             |
 | T1-21 | Slice and vector patterns                                | 1    | Medium    | 1.1+    | T1-14,T1-15 | MATCH.md T1-21             |
-| T2-13 | Empty `[]` literal unusable as direct mutable vector arg | 2   | Medium    | 1.1     |             | PROBLEMS #44               |
+| P44   | Empty `[]` literal unusable as direct mutable vector arg | 1   | Medium    | 1.1     |             | PROBLEMS #44               |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
 | T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
 | T2-5  | In-place sort for primitive vectors                      | 2    | Medium    | 1.1     |             | Stdlib audit 2026-03-15    |
