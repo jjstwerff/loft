@@ -644,9 +644,10 @@ layouts and allocates memory via the word-addressed `Store` heap allocator.
 (`add`, `find`, `remove`, `iterate`, `copy`), and add corresponding opcodes.
 
 **Caveats.**
-- The `Store::claim` allocator is O(B/8) — a linear scan. For large data sets with
-  high allocation rates this will be a bottleneck. A segregated free list is planned
-  but not implemented.
+- The `Store::claim` allocator has a fast path (LLRB free-space tree, O(log F) where F
+  is the number of tracked free blocks) and a linear-scan fallback for tiny blocks or
+  first-time allocation. The tree tracks blocks with size >= 2 words; single-word free
+  blocks are found only by the scan.
 - `Stores::free()` decrements `max` without checking LIFO order (Issue 27 root
   cause analysis). Stores must be freed in exact reverse allocation order. Any
   feature that allocates stores conditionally or in non-LIFO order must enforce LIFO
@@ -702,7 +703,7 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 | Bytecode gen | Forward jumps must be manually patched; missing patch = garbage target | Always pair a `goto_false` emit with a `patch` call |
 | `fill.rs` | Generated file — direct edits are overwritten on next `make gtest` | Edit `src/generation.rs` only |
 | Opcode numbering | Insertion renumbers all later opcodes | Append only; never insert |
-| `Store` allocator | O(B/8) linear scan; no free list | Acceptable at current scale; do not add allocation-heavy features without profiling |
+| `Store` allocator | LLRB free tree O(log F); linear scan fallback for tiny blocks | Fast path covers most allocations; scan only for blocks < 2 words |
 | `Stores::free()` | Does not enforce LIFO order (root cause of Issue 27) | Always free stores in exact reverse allocation order |
 | Red-Black tree | Negative values encode back-links — easy to misread | Read the layout comment in `src/tree.rs` before modifying |
 | Hash table | 87.5% load threshold causes long probe chains under load | Do not rely on worst-case hash performance |

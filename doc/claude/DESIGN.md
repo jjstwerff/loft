@@ -312,16 +312,19 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 | `Store::get_str(rec, pos)` / `set_str()` | `src/store.rs` | String pointer+length accessors |
 | `Store::buffer(rec)` | `src/store.rs` | Raw mutable byte slice (for PNG decode) |
 
-**Complexity.** `claim`: O(B/8) worst case (scan entire store). `delete`: O(1) amortised (boundary check only). `resize`: O(B/8) if relocation needed. ~608 lines.
+**Complexity.** `claim`: O(log F) fast path via LLRB free-space tree (F = tracked free
+blocks), O(B) linear-scan fallback for tiny blocks (< 2 words) or first allocation.
+`delete`: O(log F) (tree insert). `resize`: O(B) if relocation needed.
 
-**Reducibility.** Moderate. First-fit is simple but can fragment. The doubling growth strategy is standard. The typed accessor pairs (`get_int`/`set_int` × 4 types) are repetitive — a macro would halve them (~40 lines). Otherwise the file is appropriately sized.
+**Reducibility.** Moderate. The LLRB tree + linear scan dual-path is appropriately sized.
+The doubling growth strategy is standard. The typed accessor pairs (`get_int`/`set_int`
+× 4 types) are repetitive — a macro would halve them (~40 lines).
 
-**Code quality.** Good. Clear header convention (positive = live, negative = free). The `validate()` debug function is valuable. The lack of a free-list index means `claim` is O(B/8) rather than O(1), which is the main quality concern.
+**Code quality.** Good. Clear header convention (positive = live, negative = free).
+LLRB free-space tree provides O(log F) allocation for most cases. `validate()` and
+`fl_validate()` debug functions catch corruption and tree invariant violations.
 
 **Debuggability.** Medium. Memory corruption in the store often manifests far from the allocation site. The `validate()` function helps catch corruption early. Adding a canary word at record boundaries would help detect overflows.
-
-**Enhancement opportunities.**
-- Add a segregated free list indexed by size class to make `claim` O(1) amortised.
 - Add boundary canaries (debug mode) for overflow detection.
 - Replace the typed accessor proliferation with a single generic `get::<T>` / `set::<T>` using Rust generics.
 - Add allocation statistics (total allocated, fragmentation ratio) for profiling.
@@ -346,7 +349,7 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 | `Stores::byte(min, nullable)` / `Stores::short(...)` | `src/database/types.rs` | Register compact integer types |
 | `Stores::read_data()` / `write_data()` | `src/database/io.rs` | Binary serialisation |
 
-**Complexity.** Schema registration: O(T·F) for T types with F fields each. Runtime allocation: delegates to `Store::claim` = O(B/8).
+**Complexity.** Schema registration: O(T·F) for T types with F fields each. Runtime allocation: delegates to `Store::claim` = O(log F) fast path.
 
 **Code quality.** Good. As of 2026-03-15 `database/` has been split into seven sub-modules: `mod.rs` (constructor + parse-key helpers), `types.rs` (type-building), `allocation.rs` (claim/free/clone), `search.rs` (find/iterate), `structures.rs` (record construction), `io.rs` (file I/O), `format.rs` (display). The `Parts` enum with 14 variants is the natural extension point for new collection types.
 
@@ -636,7 +639,7 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 | 7 | Bytecode generation | interpreter.rs → **src/state/** (5 modules) | 3 888 | O(N) | ~~**Yes**~~ **Done 2026-03-15** | Good | Medium |
 | 8 | Operator dispatch | fill.rs | 1 799 | O(I) | No (generated) | Good | Good |
 | 9 | Field layout | calc.rs | 78 | O(F²) | No | Good | Easy |
-| 10 | Heap allocator | store.rs | 608 | O(B/8) claim | No | Good | Medium |
+| 10 | Heap allocator | store.rs | 1 126 | O(log F) claim | No | Good | Medium |
 | 11 | Type schema + stores | ~~database.rs~~ → **src/database/** (7 modules) | 3 931 | O(T·F) | ~~**Yes**~~ **Done 2026-03-15** | Good | Medium |
 | 12 | Red-black tree | tree.rs | 680 | O(log N) | No | Fair | Hard |
 | 13 | Hash table | hash.rs | 190 | O(1) avg | No | Good | Medium |
