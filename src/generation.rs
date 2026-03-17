@@ -157,7 +157,8 @@ extern crate loft;"
         writeln!(w, "use loft::database::Stores;")?;
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
         writeln!(w, "use loft::ops;")?;
-        writeln!(w, "use loft::vector;\n")?;
+        writeln!(w, "use loft::vector;")?;
+        writeln!(w, "use loft::codegen_runtime::*;\n")?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
@@ -902,6 +903,39 @@ extern crate loft;"
             }
             "OpClearStackText" => return self.clear_stack_text(w, vals),
             "OpFreeText" | "OpCreateStack" => return Ok(()),
+            "OpDatabase" => {
+                // OpDatabase modifies its DbRef argument in-place; emit as reassignment.
+                if let [ref var_val, ref tp_val] = vals[..] {
+                    self.output_code_inner(w, var_val)?;
+                    write!(w, " = OpDatabase(stores, ")?;
+                    self.output_code_inner(w, var_val)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, tp_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
+            "OpFormatDatabase" | "OpFormatStackDatabase" => {
+                // OpFormatDatabase takes a &mut String as the output buffer.
+                if let [ref work_val, ref record_val, ref tp_val, ref fmt_val] = vals[..] {
+                    write!(w, "OpFormatDatabase(stores, &mut ")?;
+                    // work_val is Var(nr) — strip the leading & that output_code_inner adds
+                    if let Value::Var(nr) = work_val {
+                        let variables = &self.data.def(self.def_nr).variables;
+                        write!(w, "var_{}", sanitize(variables.name(*nr)))?;
+                    } else {
+                        self.output_code_inner(w, work_val)?;
+                    }
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, record_val)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, tp_val)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, fmt_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             _ => {}
         }
         if def_fn.rust.is_empty() {
