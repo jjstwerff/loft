@@ -90,42 +90,42 @@ fn OpCastSingleFromText(v1: text) -> single;
 fn OpCastFloatFromText(v1: text) -> float;
 #rust"@v1.parse().unwrap_or(f64::NAN)"
 fn OpAbsInt(v1: integer) -> integer;
-#rust"external::op_abs_int(@v1)"
+#rust"ops::op_abs_int(@v1)"
 // Absolute value. Removes the sign from a negative integer.
 pub fn abs(both: integer) -> integer {
   OpAbsInt(both)
 }
 
 fn OpMinSingleInt(v1: integer) -> integer;
-#rust"external::op_min_single_int(@v1)"
+#rust"ops::op_negate_int(@v1)"
 fn OpConvLongFromInt(v1: integer) -> long;
-#rust"external::op_conv_long_from_int(@v1)"
+#rust"ops::op_conv_long_from_int(@v1)"
 fn OpConvFloatFromInt(v1: integer) -> float;
-#rust"external::op_conv_float_from_int(@v1)"
+#rust"ops::op_conv_float_from_int(@v1)"
 fn OpConvSingleFromInt(v1: integer) -> single;
-#rust"external::op_conv_single_from_int(@v1)"
+#rust"ops::op_conv_single_from_int(@v1)"
 fn OpConvBoolFromInt(v1: integer) -> boolean;
-#rust"external::op_conv_bool_from_int(@v1)"
+#rust"ops::op_conv_bool_from_int(@v1)"
 fn OpAddInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_add_int(@v1, @v2)"
+#rust"ops::op_add_int(@v1, @v2)"
 fn OpMinInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_min_int(@v1, @v2)"
+#rust"ops::op_min_int(@v1, @v2)"
 fn OpMulInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_mul_int(@v1, @v2)"
+#rust"ops::op_mul_int(@v1, @v2)"
 fn OpDivInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_div_int(@v1, @v2)"
+#rust"ops::op_div_int(@v1, @v2)"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_rem_int(@v1, @v2)"
+#rust"ops::op_rem_int(@v1, @v2)"
 fn OpLandInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_logical_and_int(@v1, @v2)"
+#rust"ops::op_logical_and_int(@v1, @v2)"
 fn OpLorInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_logical_or_int(@v1, @v2)"
+#rust"ops::op_logical_or_int(@v1, @v2)"
 fn OpEorInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_exclusive_or_int(@v1, @v2)"
+#rust"ops::op_exclusive_or_int(@v1, @v2)"
 fn OpSLeftInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_shift_left_int(@v1, @v2)"
+#rust"ops::op_shift_left_int(@v1, @v2)"
 fn OpSRightInt(v1: integer, v2: integer) -> integer;
-#rust"external::op_shift_right_int(@v1, @v2)"
+#rust"ops::op_shift_right_int(@v1, @v2)"
 fn OpEqInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeInt(v1: integer, v2: integer) -> boolean;
@@ -144,40 +144,40 @@ fn OpPutLong(pos: const u16, value: long);
 fn OpConvLongFromNull() -> long;
 #rust"i64::MIN"
 fn OpAbsLong(v1: long) -> long;
-#rust"external::op_abs_long(@v1)"
+#rust"ops::op_abs_long(@v1)"
 // Absolute value for long integers.
 pub fn abs(both: long) -> long {
   OpAbsLong(both)
 }
 
 fn OpMinSingleLong(v1: long) -> long;
-#rust"external::op_min_single_long(@v1)"
+#rust"ops::op_negate_long(@v1)"
 fn OpCastIntFromLong(v1: long) -> integer;
-#rust"external::op_cast_int_from_long(@v1)"
+#rust"ops::op_cast_int_from_long(@v1)"
 fn OpConvFloatFromLong(v1: long) -> float;
-#rust"external::op_conv_float_from_long(@v1)"
+#rust"ops::op_conv_float_from_long(@v1)"
 fn OpConvBoolFromLong(v1: long) -> boolean;
-#rust"external::op_conv_bool_from_long(@v1)"
+#rust"ops::op_conv_bool_from_long(@v1)"
 fn OpAddLong(v1: long, v2: long) -> long;
-#rust"external::op_add_long(@v1, @v2)"
+#rust"ops::op_add_long(@v1, @v2)"
 fn OpMinLong(v1: long, v2: long) -> long;
-#rust"external::op_min_long(@v1, @v2)"
+#rust"ops::op_min_long(@v1, @v2)"
 fn OpMulLong(v1: long, v2: long) -> long;
-#rust"external::op_mul_long(@v1, @v2)"
+#rust"ops::op_mul_long(@v1, @v2)"
 fn OpDivLong(v1: long, v2: long) -> long;
-#rust"external::op_div_long(@v1, @v2)"
+#rust"ops::op_div_long(@v1, @v2)"
 fn OpRemLong(v1: long, v2: long) -> long;
-#rust"external::op_rem_long(@v1, @v2)"
+#rust"ops::op_rem_long(@v1, @v2)"
 fn OpLandLong(v1: long, v2: long) -> long;
-#rust"external::op_logical_and_long(@v1, @v2)"
+#rust"ops::op_logical_and_long(@v1, @v2)"
 fn OpLorLong(v1: long, v2: long) -> long;
-#rust"external::op_logical_or_long(@v1, @v2)"
+#rust"ops::op_logical_or_long(@v1, @v2)"
 fn OpEorLong(v1: long, v2: long) -> long;
-#rust"external::op_exclusive_or_long(@v1, @v2)"
+#rust"ops::op_exclusive_or_long(@v1, @v2)"
 fn OpSLeftLong(v1: long, v2: long) -> long;
-#rust"external::op_shift_left_long(@v1, @v2)"
+#rust"ops::op_shift_left_long(@v1, @v2)"
 fn OpSRightLong(v1: long, v2: long) -> long;
-#rust"external::op_shift_right_long(@v1, @v2)"
+#rust"ops::op_shift_right_long(@v1, @v2)"
 fn OpEqLong(v1: long, v2: long) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeLong(v1: long, v2: long) -> boolean;
@@ -208,9 +208,9 @@ pub fn abs(both: single) -> single {
 fn OpMinSingleSingle(v1: single) -> single;
 #rust"-@v1"
 fn OpCastIntFromSingle(v1: single) -> integer;
-#rust"external::op_cast_int_from_single(@v1)"
+#rust"ops::op_cast_int_from_single(@v1)"
 fn OpCastLongFromSingle(v1: single) -> long;
-#rust"external::op_cast_long_from_single(@v1)"
+#rust"ops::op_cast_long_from_single(@v1)"
 fn OpConvFloatFromSingle(v1: single) -> float;
 #rust"f64::from(@v1)"
 fn OpConvBoolFromSingle(v1: single) -> boolean;
@@ -450,9 +450,9 @@ fn OpMinSingleFloat(v1: float) -> float;
 fn OpCastSingleFromFloat(v1: float) -> single;
 #rust"@v1 as f32"
 fn OpCastIntFromFloat(v1: float) -> integer;
-#rust"external::op_cast_int_from_float(@v1)"
+#rust"ops::op_cast_int_from_float(@v1)"
 fn OpCastLongFromFloat(v1: float) -> long;
-#rust"external::op_cast_long_from_float(@v1)"
+#rust"ops::op_cast_long_from_float(@v1)"
 fn OpConvBoolFromFloat(v1: float) -> boolean;
 #rust"!@v1.is_nan()"
 fn OpAddFloat(v1: float, v2: float) -> float;
@@ -621,9 +621,9 @@ fn OpText();
 fn OpAppendText(pos: const u16, v1: text);
 fn OpGetTextSub(v1: text, from: integer, till: integer) -> text[v1];
 fn OpTextCharacter(v1: text, v2: integer) -> character;
-#rust"external::text_character(@v1, @v2)"
+#rust"ops::text_character(@v1, @v2)"
 fn OpConvBoolFromCharacter(v1: character) -> boolean;
-#rust"external::op_conv_bool_from_character(@v1)"
+#rust"ops::op_conv_bool_from_character(@v1)"
 fn OpClearText(pos: const u16);
 fn OpFreeText(pos: const u16);
 fn OpEqText(v1: text, v2: text) -> boolean;
@@ -687,51 +687,51 @@ fn OpNeRef(v1: reference, v2: reference) -> boolean;
 #rust"@v1 != @v2"
 // Can be used to get another record within the same database
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
-#rust"stores.get_ref(&@v1, u32::from(@fld))"
+#rust"stores.get_ref(&@v1, ((@fld) as u32))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val.rec as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + ((@fld) as u32), @val.rec as i32);}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
-#rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + u32::from(@fld)}}"
+#rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + ((@fld) as u32)}}"
 // Simple type value write and read, vector elements always have fld=0.
 // All these types are passed by value instead of by reference.
 fn OpGetInt(v1: reference, fld: const u16) -> integer;
-#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + ((@fld) as u32))}} }}"
 fn OpGetCharacter(v1: reference, fld: const u16) -> character;
-#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld)) as u32).unwrap_or(char::from(0)) }} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + ((@fld) as u32)) as u32).unwrap_or(char::from(0)) }} }}"
 fn OpGetLong(v1: reference, fld: const u16) -> long;
-#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
+#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + ((@fld) as u32))}}"
 fn OpGetSingle(v1: reference, fld: const u16) -> single;
-#rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + u32::from(@fld))}}"
+#rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + ((@fld) as u32))}}"
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
-#rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
+#rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + ((@fld) as u32))}}"
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
+#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + ((@fld) as u32), i32::from(@min))}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0) as u8}}"
+#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + ((@fld) as u32), 0) as u8}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + ((@fld) as u32), 0, i32::from(@val));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
+#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + ((@fld) as u32), i32::from(@min))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
+#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + ((@fld) as u32)) as u32))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + ((@fld) as u32), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + ((@fld) as u32), @val as i32);}}"
 fn OpSetLong(v1: reference, fld: const u16, val: long);
-#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + ((@fld) as u32), @val);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
-#rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + ((@fld) as u32), @val);}}"
 fn OpSetFloat(v1: reference, fld: const u16, val: float);
-#rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + ((@fld) as u32), @val);}}"
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + ((@fld) as u32), i32::from(@min), @val);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + ((@fld) as u32), i32::from(@min), @val);}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
-#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + u32::from(@fld), s_pos as i32);}}"
+#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + ((@fld) as u32), s_pos as i32);}}"
 // --- Collections ---
 // Operations on vector<T> — the primary ordered collection type.
 // Vectors are grown by appending with += and elements are accessed by index.
@@ -753,14 +753,14 @@ fn OpClearVector(r: vector);
 #rust"vector::clear_vector(&@r, &mut s.database.allocations);"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
-#rust"vector::get_vector(&@r, u32::from(@size), @index, &s.database.allocations)"
+#rust"vector::get_vector(&@r, ((@size) as u32), @index, &s.database.allocations)"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
 #rust"stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
 fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
 #rust"s.db_from_text(@val, @db_tp)"
 fn OpRemoveVector(r: vector, size: const u16, index: integer) -> boolean;
-#rust"vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
+#rust"vector::remove_vector(&@r, ((@size) as u32), @index, &mut s.database.allocations)"
 // Insert space into a vector, no data written
 fn OpInsertVector(r: vector, size: const u16, index: integer, db_tp: const u16) -> reference[r];
 // Claim space for a new record for the given structure

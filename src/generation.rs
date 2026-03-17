@@ -382,11 +382,23 @@ extern crate loft;"
         let returns_text = matches!(def.returned, Type::Text(_));
         if let Value::Block(bl) = &def.code {
             self.output_block(w, bl, returns_text)?;
+        } else if def.code == Value::Null {
+            // Native-only function with no loft body — emit a stub.
+            if def.name == "n_assert" {
+                writeln!(
+                    w,
+                    "{{\n  if !var_test {{ panic!(\"{{}}:{{}} {{}}\", var_file, var_line, var_message); }}"
+                )?;
+            } else {
+                writeln!(w, "{{")?;
+                if def.returned != Type::Void {
+                    writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                }
+            }
+            writeln!(w, "}}")?;
         } else {
             writeln!(w, "{{")?;
-            if def.code != Value::Null {
-                self.output_code_inner(w, &def.code)?;
-            }
+            self.output_code_inner(w, &def.code)?;
             writeln!(w, "\n}}")?;
         }
         writeln!(w, "\n")
@@ -1051,6 +1063,9 @@ extern crate loft;"
                 break;
             }
         }
+        // Templates use `s.database.` for bytecode interpreter (State.database).
+        // In generated native code, `stores` is the direct Stores reference.
+        res = res.replace("s.database.", "stores.");
         write!(w, "{res}")
     }
 }

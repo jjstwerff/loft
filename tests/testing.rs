@@ -233,6 +233,16 @@ impl Test {
             let w = &mut File::create(format!("tests/generated/{}_{}.rs", self.file, self.name))?;
             let def_nr = p.data.definitions();
             o.output_native(w, start, def_nr)?;
+            // Emit n_assert stub so generated test files compile standalone.
+            writeln!(
+                w,
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i32) {{"
+            )?;
+            writeln!(
+                w,
+                "  if !test {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
+            )?;
+            writeln!(w, "}}\n")?;
             writeln!(w, "#[test]\nfn code_{}() {{", self.name)?;
             writeln!(w, "    let mut stores = Stores::new();")?;
             writeln!(w, "    init(&mut stores);")?;
