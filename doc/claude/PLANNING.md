@@ -42,6 +42,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
 - [N — Native Codegen](#n--native-codegen)
+- [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
 - [Quick Reference](#quick-reference) → [ROADMAP.md](ROADMAP.md)
@@ -49,6 +50,91 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 ---
 
 ## Version Milestones
+
+### Version 0.8.2 — Stability, efficiency, and native codegen (planned)
+
+Goal: harden the interpreter, improve runtime efficiency, and ship working native code
+generation.  No new language syntax.  Most items are independent and can be developed
+in parallel.
+
+**Parser correctness:**
+- **L3** — Reserve compile-time intrinsic names (`sizeof`, `assert`, `panic`, `fields`,
+  `debug_assert`, `match`) as proper KEYWORDS so user code cannot accidentally shadow them.
+  Must land before 0.9.0 introduces `fields` and `debug_assert`.  See PROBLEMS #53.
+
+**Interpreter correctness:**
+- **A9** — Vector slice copy-on-write: mutating a slice must not corrupt the parent vector.
+- **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the
+  current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
+
+**Efficiency and packaging:**
+- **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
+  `replace`, `to_lowercase`, `to_uppercase` and format expressions.
+- **A3** — Optional Cargo features: gate `png`, `parallel`, `logging`, `mmap` behind `cfg`
+  features for a lean default binary; remove dead `rand_core`/`rand_pcg` dependencies.
+
+**Native code generation (Tier N):**
+- Fix the ~1500 compile errors in `src/generation.rs` incrementally (N2–N9) so that
+  `loft --native` produces correct compiled Rust output.  Each N step is small and
+  independent; they can run in parallel with other 0.8.2 work.  N1 (`--native` CLI flag)
+  lands last, after all N2–N9 fixes pass.
+
+---
+
+### Version 0.8.3 — Language syntax extensions (planned)
+
+Goal: add all new language syntax before the feature-complete 0.9.0 milestone so that
+syntax decisions can be validated and refined independently.  All items change the parser
+or type system; 0.8.2 correctness work is a prerequisite.
+
+**Lambda expressions (P1):**
+- **P1.1** — Parser: recognise `fn(params) -> type block` as a primary expression.
+- **P1.2** — Compilation: synthesise an anonymous `def`, emit a def-number at the call site.
+- **P1.3** — Integration: `map`, `filter`, `reduce` accept inline lambdas.
+- **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
+
+**Pattern extensions (L2):**
+- **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
+
+**Field iteration (A10):**
+- **A10.1** — `Field` + `FieldValue` enum types in `default/01_code.loft`.
+- **A10.2** — `fields()` special form → `Value::FieldsOf` + `Type::FieldsOf`.
+- **A10.3** — Loop unrolling in `parse_for` for `Type::FieldsOf` (compile-time expansion).
+- **A10.4** — Error messages, docs, and test coverage.
+
+---
+
+### Version 0.8.4 — HTTP client and JSON (planned)
+
+Goal: add blocking HTTP client access and automatic JSON mapping so loft programs can
+consume web services.  Builds on P1 lambdas (0.8.3): `Type.from_json` is a callable
+fn-ref that composes naturally with `map` and `filter`.  All items gated behind a new
+`http` Cargo feature so binaries that don't need networking stay lean.
+
+**JSON struct annotation (H1):**
+- **H1** — Parse `#json` before struct declarations; synthesise `to_json(self) -> text`
+  reusing the existing `:j` format flag.  No new runtime dependency.
+
+**JSON primitive stdlib (H2):**
+- **H2** — Add `serde_json`-backed extraction functions: `json_text`, `json_int`,
+  `json_long`, `json_float`, `json_bool`, `json_items`, `json_nested`.
+  Declared in `default/04_web.loft`; implemented in new `src/native_http.rs`.
+
+**JSON deserialization codegen — scalars (H3):**
+- **H3** — For each `#json` struct with primitive fields only, synthesise
+  `from_json(body: text) -> T` using the H2 primitives.  `Type.from_json` is now a
+  valid fn-ref passable to `map`.
+
+**HTTP client (H4):**
+- **H4** — `HttpResponse` struct (`status: integer`, `body: text`, `ok()` method) and
+  blocking HTTP functions (`http_get`, `http_post`, `http_put`, `http_delete`, plus
+  `_h` variants accepting `vector<text>` headers) via `ureq`.
+
+**Nested types and integration (H5):**
+- **H5** — Extend `from_json` codegen to nested `#json` struct fields, `vector<T>` array
+  fields, and plain enum fields.  Integration test suite against a mock HTTP server.
+
+---
 
 ### Version 0.8.1 — Stability patch (2026-03-18)
 
@@ -71,30 +157,21 @@ map/filter/reduce, vector.clear(), mkdir, time functions, logging, parallel exec
 
 ### Version 0.9.0 — Production-ready standalone executable (planned)
 
-Goal: an interpreter a developer can rely on for real programs.  Every planned language
-feature is present; no known crashes or silent wrong results; no obvious performance
-cliffs; the binary is lean and ships pre-built.
+Goal: every planned language feature is present and the interpreter ships pre-built.
+Interpreter correctness and native codegen are handled by 0.8.2; new syntax by 0.8.3;
+HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tooling.
 
 **Language completeness:**
 - **L1** — Error recovery: a single bad token must not cascade into dozens of spurious errors.
-- **P1** — Lambda expressions: inline `fn(x: T) -> U { ... }` without a top-level name.
-- **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
-- **L2** — Nested match patterns: field sub-patterns in struct arms.
-
-**Interpreter correctness and stability:**
-- **A9** — Vector slice copy-on-write: mutating a slice must not corrupt the parent vector.
-- **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
-
-**Efficiency and packaging:**
-- **A8** — Destination-passing for string natives: eliminates the double-copy overhead on `replace`, `to_lowercase`, `to_uppercase` and format expressions.
-- **A3** — Optional Cargo features: gate `png`, `parallel`, `logging`, `mmap` behind `cfg` features for a lean default binary.
-- **Tier N** — Native code generation: fix the ~1500 compile errors in `src/generation.rs` incrementally (N2–N9) so that `loft --native` produces correct compiled Rust output.  Each N step is a small, independent fix with its own test; they can interleave with other 0.9.0 work.  N1 (`--native` CLI flag) lands last, once all fixes pass.
+- **P2** — REPL / interactive mode: `loft` with no arguments enters a persistent session.
 
 **Parallel execution completeness:**
 - **A1** — Parallel workers with extra context arguments and text/reference return types.
 
+**Logging completeness:**
+- **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
+
 **Deferred from 0.9.0:**
-- P2 (REPL) — High effort; the browser IDE largely covers the interactive use case. Revisit after 1.0.0.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
 - A7 (native extension libraries) — Useful after the ecosystem exists; 1.1+.
 
@@ -125,14 +202,14 @@ Full gate criteria in [RELEASE.md](RELEASE.md).
 - Full documentation review; pre-built binaries for all four platforms; crates.io publish.
 
 **Deferred to 1.1+:**
-P2, A5, A7, Tier N (native codegen).
+A5, A7, Tier N (native codegen).
 
 ---
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible.  Candidates: P2 (REPL),
-A5 (closures), A7 (native extensions), Tier N (native codegen).
+New language features that are strictly backward-compatible.  Candidates: A5 (closures),
+A7 (native extensions), Tier N (native codegen).
 
 ---
 
@@ -165,24 +242,33 @@ it to "post-1.0" without a milestone risks it never shipping.  In 2026, "fully f
 for a scripting language includes browser-accessible tooling; shipping a 1.0 without it
 would require walking back that claim at 1.1.
 
-**Why include native codegen (Tier N) in 0.9.0?**
+**Why include native codegen (Tier N) in 0.8.2?**
 `src/generation.rs` already translates the loft IR to Rust source; the code exists but
 does not compile.  The N items are incremental bug fixes — each is Small or Medium effort,
-independent of the others, and each makes more generated tests pass.  Fixing them during
-0.9.0 turns an existing but broken feature into a working opt-in performance path for
-the first production release, at low marginal cost.  Leaving them for 1.1+ would mean
-shipping a 0.9.0 binary that silently generates uncompilable output.
+independent of each other and of the other 0.8.2 items — they can be interleaved freely.
+Fixing them in 0.8.2 means 0.9.0 ships a binary where `--native` actually works, at no
+extra milestone cost.  Deferring them would mean shipping a 0.9.0 that silently generates
+uncompilable output.
 
-**Why deprioritize REPL (P2)?**
-The Web IDE (W2 editor + W1 WASM runtime) covers the interactive "try a snippet"
-use case that motivates a REPL.  Building both duplicates effort.  P2 remains in
-the backlog for 1.1+ if users ask for a terminal-based interactive mode after 1.0.0.
+**Why include REPL (P2) in 0.9.0?**
+The Web IDE covers the browser-based interactive use case, but a terminal REPL is
+independently useful for development workflows where a browser is not available or
+convenient.  P2 is self-contained (new `src/repl.rs`, small changes to `main.rs`)
+and depends on L1 (error recovery) which is already in 0.9.0.  Including it rounds
+out the "prototype-friendly" goal without affecting the IDE track.
+
+**Why split syntax into 0.8.3?**
+Lambda expressions, nested patterns, and field iteration all touch the parser and type
+system simultaneously.  Grouping them in a dedicated milestone means syntax decisions can
+be reviewed and refined in isolation, before runtime infrastructure work in 0.9.0 begins.
+It also keeps each milestone small enough to be fully understood in a single pass.
 
 **The small-steps principle in practice:**
-Each milestone above is a strict subset of the next.  0.9.0 ships nothing from the IDE
-track; 1.0.0 adds exactly R1 + W1–W6 on top of a complete 0.9.0.  No item moves forward
-until the test suite for the previous item is green.  This prevents the "everything at
-once" failure mode where half-finished features interact and regressions are hard to pin.
+Each milestone is a strict subset of the next.  0.8.2 hardens correctness; 0.8.3 adds new
+syntax; 0.8.4 adds HTTP and JSON on top of lambdas; 0.9.0 completes runtime infrastructure
+and tooling; 1.0.0 adds exactly R1 + W1–W6 on top of a complete 0.9.0.  No item moves
+forward until the test suite for the previous item is green.  This prevents the "everything
+at once" failure mode where half-finished features interact and regressions are hard to pin.
 
 ---
 
@@ -191,15 +277,32 @@ once" failure mode where half-finished features interact and regressions are har
 Ordered by unblocking impact and the small-steps principle (each item leaves the codebase
 in a better state than it found it, with passing tests).
 
-**For 0.9.0:**
-1. **L1** — error recovery; standalone UX improvement, no dependencies
-2. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
-3. **P3** + **L2** — aggregates and nested patterns; depends on P1; batch together
-4. **A9** + **A6** — vector CoW + slot pre-pass; correctness; can share a branch
-5. **A8** + **A3** — string efficiency + optional features; packaging polish
-6. **N2–N9** — native codegen fixes; each is independent, interleave freely with other work
+**For 0.8.2:**
+1. **L3** — reserve keywords; Small, must be first (claims `fields` and `debug_assert` before 0.9.0 features land)
+2. **A9** — vector slice CoW; Medium, independent correctness fix
+3. **A6** — slot pre-pass; High, independent; can share a branch with A9
+4. **A8** — destination-passing; Med–High, independent efficiency win
+5. **A3** — optional Cargo features; Medium, packaging polish; independent
+6. **N2–N9** — native codegen fixes; each is independent and Small–Medium; interleave freely with items 2–5
 7. **N1** — `--native` CLI flag; lands after all N2–N9 fixes pass
-8. **A1** — parallel completeness; isolated change, touches parallel.rs only
+
+**For 0.8.3 (after 0.8.2 is tagged):**
+1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
+2. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1; batch together
+3. **A10** — field iteration; independent, medium; can land in parallel with P1–P3
+
+**For 0.8.4 (after 0.8.3 is tagged):**
+1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
+2. **H2** — JSON primitive stdlib; Medium, adds `serde_json`; test each extractor in isolation
+3. **H3** — `from_json` scalar codegen; Medium, depends on H1 + H2; verify `Type.from_json` as fn-ref
+4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
+5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
+
+**For 0.9.0 (after 0.8.4 is tagged):**
+1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
+2. **A2** — logger remaining work; independent, small-medium; can land any time
+3. **A1** — parallel completeness; isolated change, touches parallel.rs only
+4. **P2** — REPL; high effort; land after L1 (needed for P2.4 error recovery)
 
 **For 1.0.0 (after 0.9.0 is tagged):**
 7. **R1** — workspace split; small change, unblocks all Tier W
@@ -235,7 +338,28 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 **Fix path:** See [MATCH.md § L2](MATCH.md) for full design.
 Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
 **Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
-**Target:** 0.9.0
+**Target:** 0.8.3
+
+---
+
+### L3  Reserve compile-time intrinsic names as keywords
+**Sources:** [PROBLEMS.md](PROBLEMS.md) #53
+**Description:** Several names are special-cased in `parse_call` / `parse_single` but are
+not in the `KEYWORDS` array, so user code can define functions or variables with the same
+names.  The intrinsic always wins silently, making user definitions unreachable dead code.
+Two upcoming features introduce new intrinsic names — `fields` (A10) and `debug_assert`
+(A2.3) — that must be reserved *before* those features land or existing user code could
+break silently.
+**Fix path:**
+1. Add to `KEYWORDS` in `src/lexer.rs`: `match` (added in 0.8.0 but never put in KEYWORDS),
+   `sizeof`, `assert`, `panic`, `fields`, `debug_assert`.
+2. Update COMPILER.md KEYWORDS list.
+3. Add a parse-error test: `fn sizeof(...) { ... }` produces a single clear diagnostic.
+
+Names intentionally left as identifiers: `log_info/warn/error/fatal` (prefixed, low
+collision risk), `parallel_for` (highly specific), `rev` (likely future stdlib function).
+**Effort:** Small (`src/lexer.rs` + test)
+**Target:** 0.8.2
 
 ---
 
@@ -275,7 +399,7 @@ works.  No compiler changes expected — the def-nr representation is already co
 inline lambdas; nested lambdas (lambda passed to a lambda).
 
 **Effort:** Medium–High (parser.rs, compile.rs)
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
@@ -321,7 +445,7 @@ left at the last successful checkpoint.
 `x = 1` then succeeds and `x` holds `1`.
 
 **Effort:** High (main.rs, parser.rs, new repl.rs)
-**Target:** 1.1+ (browser IDE covers the interactive use case at 1.0.0)
+**Target:** 0.9.0
 
 ---
 
@@ -350,7 +474,7 @@ Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with the
 **Fix path:** Typed loft overloads using `reduce` for sum/min_of/max_of; compiler
 special-case in `parse_call` for `any`/`all`/`count_if` (same level of effort as similar compiler special-cases).
 **Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
-**Target:** 0.9.0 — batch all variants after P1 lands
+**Target:** 0.8.3 — batch all variants after P1 lands
 
 ---
 
@@ -404,31 +528,37 @@ string; the result vector contains correct, independent text values with no dang
 
 ---
 
-### A2  Logger: production mode, source injection, hot-reload
-**Sources:** [LOGGER.md](LOGGER.md)
-**Description:** Three independent improvements to the logging system.
+### A2  Logger: hot-reload, run-mode helpers, release + debug flags
+**Sources:** [LOGGER.md](LOGGER.md) § Remaining Work
+**Description:** Four independent improvements to the logging system.  The core framework
+(production mode, source-location injection, log file rotation, rate limiting) was shipped
+in 0.8.0.  These are the remaining pieces.
 **Fix path:**
 
-**Phase 1 — Structured production panic handler** (`src/logger.rs`, `src/state/mod.rs`):
-In production mode, replace the bare `panic!()` in the runtime error path with a call that
-writes a structured JSON log entry (level, file, line, message) and sets `had_fatal`.
-*Tests:* extend `production_mode_panic_sets_had_fatal` to verify the log file contains a
-parseable JSON entry with the correct message field.
+**A2.1 — Wire hot-reload** (`src/native.rs`):
+Call `lg.check_reload()` at the top of each `n_log_*`, `n_panic`, and `n_assert` body so
+the config file is re-read at most every 5 s.  `check_reload()` is already implemented.
+*Tests:* write a config file; change the level mid-run; verify subsequent calls respect the new level.
 
-**Phase 2 — Source-location injection** (`src/parser/control.rs`, `src/state/codegen.rs`):
-At compile time, `assert()` and `log_info/warn/error/fatal()` calls embed the source
-file path and line number as string literals in the emitted bytecode.  No runtime overhead.
-*Tests:* a runtime error message includes `file:line` in the expected format; the format
-is stable across compiler runs on the same source.
+**A2.2 — `is_production()` and `is_debug()` helpers** (`src/native.rs`, `default/01_code.loft`):
+Two new loft natives read `stores.run_mode`.  The `RunMode` enum replaces the current
+`production: bool` flag on `RuntimeLogConfig` so all runtime checks share one source of truth.
+*Tests:* a loft program calling `is_production()` returns `true` under `--production`/`--release`
+and `false` otherwise; `is_debug()` returns `true` only under `--debug`.
 
-**Phase 3 — Hot-reload of log-level config** (`src/logger.rs`):
-The logger polls the config file (or uses `inotify`/`kqueue`) and updates the active log
-level on change without restarting the interpreter.
-*Tests:* write a config file; run a loft program that logs at multiple levels; change the
-config file mid-run; verify subsequent log calls respect the new level.
+**A2.3 — `--release` flag with zero-overhead assert elision** (`src/parser/control.rs`, `src/main.rs`):
+`--release` implies `--production` AND strips `assert()` and `debug_assert()` from bytecode
+at parse time (replaced by `Value::Null`).  Adds `debug_assert(test, message)` as a
+companion to `assert()` that is also elided in release mode.
+*Tests:* a `--release` run skips assert; `--release` + failed assert does not log or panic.
 
-**Effort:** Medium–High (logger.rs, parser.rs, state.rs)
-**Target:** 1.1+
+**A2.4 — `--debug` flag with per-type runtime safety logging** (`src/fill.rs`, `src/native.rs`):
+When `stores.run_mode == Debug`, emit `warn` log entries for silent-null conditions:
+integer/long overflow, shift out-of-range, null field dereference, vector OOB.
+*Tests:* a deliberate overflow under `--debug` produces a `WARN` entry at the correct file:line.
+
+**Effort:** Medium (logger.rs, native.rs, fill.rs; see LOGGER.md for full design)
+**Target:** 0.9.0
 
 ---
 
@@ -438,7 +568,7 @@ config file mid-run; verify subsequent log calls respect the new level.
 (HTML documentation generation), `parallel` (threading), `logging` (logger), `mmap`
 (memory-mapped storage).  Remove `rand_core` / `rand_pcg` dead dependencies.
 **Effort:** Medium (Cargo.toml, conditional compilation in store.rs, native.rs, main.rs)
-**Target:** 0.9.0
+**Target:** 0.8.2
 
 ---
 
@@ -546,7 +676,7 @@ shadow assertions from Phase 2 become the permanent correctness check.
 *Tests:* full test suite passes with zero regressions; `cargo test` green on all platforms.
 
 **Effort:** High (variables.rs, scopes.rs, state/codegen.rs)
-**Target:** 0.9.0
+**Target:** 0.8.2
 
 ---
 
@@ -565,7 +695,7 @@ elements to a new allocation before applying the mutation.
 3. `vector_copy_to_own` allocates a fresh vector, copies elements (with `copy_claims`),
    and updates the DbRef.
 **Effort:** Medium (vector.rs, fill.rs — CoW flag + copy-on-first-write)
-**Target:** 0.9.0
+**Target:** 0.8.2
 
 ---
 
@@ -702,7 +832,165 @@ Stack after call:   [ ]   // result already written to dest
 
 **Effort:** Medium–High (compiler calling-convention change + 3 native rewrites + codegen)
 **Note:** scratch buffer removal (OpClearScratch) was completed 2026-03-17 and is a prerequisite; some conditionals in the Fix path above reference it as already done.
-**Target:** 0.9.0
+**Target:** 0.8.2
+
+---
+
+### A10  Field iteration — `for f in fields(s)`
+**Sources:** Design evaluation 2026-03-18
+**Description:** Allow iterating over the stored primitive fields of a struct value with
+`for f in fields(s)`.  The loop variable `f` has type `Field` (defined in
+`default/01_code.loft`) with `f.name: text` (the compile-time field name) and
+`f.value: FieldValue` (a struct-enum covering all primitive types).  Native type capture
+uses existing `match f.value { Float{v} => ... }` pattern syntax.
+
+The loop is a compile-time unroll: the parser expands `for f in fields(s)` into one
+sequential block per eligible field.  No runtime allocation is needed.  Fields whose
+type is a reference, collection, or nested struct are skipped in this version.
+
+```loft
+struct Config { host: text, port: integer not null, debug: boolean }
+c = Config{ host: "localhost", port: 8080, debug: true };
+
+for f in fields(c) {
+    match f.value {
+        Text { v } => log_info("{f.name} = '{v}'")
+        Int  { v } => log_info("{f.name} = {v}")
+        Bool { v } => log_info("{f.name} = {v}")
+        _          => {}
+    }
+}
+```
+
+**Fix path:**
+
+**Phase A10.1 — `Field` and `FieldValue` types** (`default/01_code.loft`):
+Define the two public types that form the loop variable contract.  No compiler changes in
+this phase.
+
+```loft
+pub enum FieldValue {
+    Bool   { v: boolean },
+    Int    { v: integer },
+    Long   { v: long },
+    Float  { v: float },
+    Single { v: single },
+    Char   { v: character },
+    Text   { v: text },
+    Enum   { name: text not null, ordinal: integer not null },
+}
+
+pub struct Field {
+    name:  text not null,
+    value: FieldValue,
+}
+```
+
+`Enum` carries both the variant name (for display) and the ordinal (for comparison).
+Reference, collection, and nested-struct fields are excluded from `FieldValue`; the
+compiler will skip those field types silently in Phase A10.3.
+*Tests:* `Field` and `FieldValue` are usable in normal loft code; a hand-constructed
+`Field{name: "x", value: FieldValue::Float{v: 1.0}}` round-trips through a match arm.
+
+**Phase A10.2 — `fields()` parse-time special form** (`src/parser/control.rs`,
+`src/data.rs`):
+In `parse_call`, detect `fields(expr)` where `expr` has a struct type (resolved on the
+second pass via `typedef::actual_type`).  Validate: non-struct arguments produce a clear
+compile error (`fields() requires a struct value, got <type>`).  Return a new IR node
+`Value::FieldsOf(struct_def_nr, Box<source_expr>)` with type `Type::FieldsOf(struct_def_nr)`.
+On the first pass (types not yet resolved), return a placeholder and defer validation.
+
+```
+// data.rs — add to Value enum
+FieldsOf(u32, Box<Value>),   // (struct def_nr, source expression)
+
+// data.rs — add to Type enum
+FieldsOf(u32),               // struct def_nr; erased after loop unrolling
+```
+
+*Tests:* `fields(my_point)` on a known struct type-checks without error; `fields(42)` and
+`fields(my_vector)` each produce one diagnostic naming the offending type.
+
+**Phase A10.3 — Loop unrolling** (`src/parser/collections.rs`):
+In `parse_for` (or the `parse_in_range` helper that determines iterator type), detect
+`Type::FieldsOf(struct_def_nr)` and take the unrolling path instead of the normal
+`v_loop` path.
+
+Algorithm:
+1. Declare loop variable `f` with type `Field` in the current variable scope.
+2. Parse the loop body once (first pass: types still unknown; second pass: body typed
+   against `Field`).
+3. For each field in `data.structs[struct_def_nr].fields` in declaration order:
+   a. Determine the `FieldValue` variant for the field's type:
+      - `boolean` → `Bool`, `integer` (all limit variants) → `Int`, `long` → `Long`,
+        `float` → `Float`, `single` → `Single`, `character` → `Char`,
+        `text` → `Text`, plain enum → `Enum`
+      - reference / collection / nested struct → **skip this field**
+   b. Build the Field constructor IR:
+      ```
+      Value::Call(field_ctor_nr, [
+          Value::Str(field_name),                         // f.name
+          Value::Call(fv_variant_ctor_nr, [               // f.value
+              <source_expr>.field_name,                   // actual field read
+          ]),
+      ])
+      ```
+      For plain enum fields the variant is `Enum{ name: format_enum(s.variant), ordinal: s.variant as integer }`.
+   c. Emit `v_block([v_set(f_var, field_constructor), body_copy])`.
+4. Wrap all N blocks in a single `v_block`.  The result replaces the normal loop IR.
+
+`break` and `continue` inside a `for f in fields(s)` body are a compile error in this
+version (emit: `break/continue not supported in field loops`).
+
+*Tests:*
+- Iterate over `struct Point { x: float not null, y: float not null, z: float not null }`:
+  verify three iterations; `f.name` values are `"x"`, `"y"`, `"z"`; `f.value` matches
+  `Float{v}` with the correct values.
+- Iterate over a mixed-type struct (`integer`, `text`, `boolean`, `float` fields): all four
+  `FieldValue` variants are matched correctly in the same loop body.
+- Null field value: a nullable text field holding `null` produces `Text{v: null}`; the match
+  arm `Text{v}` binds `v = null`.
+- Plain enum field: produces `Enum{name: "Red", ordinal: 0}` for a `Color::Red` value.
+- Struct with a reference field and a vector field: those fields are skipped; only the
+  primitive fields are visited.
+- `break` inside the body: compile error with message naming the field loop restriction.
+- `fields(42)`: single diagnostic, no crash.
+
+**Phase A10.4 — Error messages and documentation** (`src/parser/control.rs`,
+`doc/claude/LOFT.md`, `doc/claude/STDLIB.md`):
+Polish pass: verify error messages are clear and point to the right source location.
+Add `fields()` to LOFT.md § Control flow (alongside `for`) and to STDLIB.md § Structs.
+Document the skipped-field limitation and note the future `A10+` path for non-primitive
+fields.
+*Tests:* `fields(ref_val)` (reference type, not the struct it points to) gives a clear
+error distinguishing "you have a reference; dereference it first with `.field` access or
+pass a struct value" from the generic type-mismatch message.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `default/01_code.loft` | Add `FieldValue` (struct-enum, 8 variants) and `Field` (struct) |
+| `src/data.rs` | Add `Value::FieldsOf(u32, Box<Value>)` and `Type::FieldsOf(u32)` |
+| `src/parser/control.rs` | Special-case `fields(expr)` in `parse_call`; type-check on second pass |
+| `src/parser/collections.rs` | Detect `Type::FieldsOf` in `parse_for`; build unrolled block IR |
+| `src/typedef.rs` | Erase `Type::FieldsOf` after unrolling (it should not appear in bytecode) |
+| `tests/docs/21-field-iter.loft` | New — test coverage |
+| `tests/wrap.rs` | Add `field_iteration()` test |
+| `doc/claude/LOFT.md` | Document `for f in fields(s)` in the For-loop section |
+| `doc/claude/STDLIB.md` | Add `fields()` to the Structs section |
+
+**Limitations (initial version):**
+- Only primitive-typed fields are visited; reference, collection, and nested-struct fields
+  are silently skipped.
+- `break` and `continue` are not supported inside the loop body.
+- `fields(s)` is only valid as the source expression of a `for` loop, not as a standalone
+  expression producing a `vector<Field>`.  (A follow-on can implement that using an
+  actual runtime vector construction via the same boxing logic.)
+- `virtual` fields are included (they are read-only computed values, still primitive).
+
+**Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)
+**Target:** 0.8.3
 
 ---
 
@@ -815,6 +1103,291 @@ add CI check for drift, and introduce `#state_call` annotation for the 52
 delegation operators. Eliminates manual maintenance when adding new opcodes.
 **Effort:** Medium (create.rs + default/*.loft + CI)
 **Detail:** [NATIVE.md](NATIVE.md) § N20
+
+---
+
+## H — HTTP / Web Services
+
+Full design rationale and approach comparison: [WEB_SERVICES.md](WEB_SERVICES.md).
+
+The `#json` annotation is the key enabler: it synthesises `to_json` and `from_json` for a
+struct, making `Type.from_json` a first-class callable fn-ref that composes with `map` and
+`filter`.  The HTTP client is a thin blocking wrapper (via `ureq`) returning a plain
+`HttpResponse` struct — no thread-local state, parallel-safe.  All web functionality is
+gated behind an `http` Cargo feature.
+
+---
+
+### H1  `#json` annotation — parser and `to_json` synthesis
+**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, Phase 1
+**Description:** Extend the annotation parser to accept `#json` (no value) before a struct
+declaration.  For every annotated struct, the compiler synthesises a `to_json` method that
+reuses the existing `:j` JSON format flag.  No new Rust dependencies are needed.
+**Fix path:**
+
+**Step 1 — Parser** (`src/parser/parser.rs` or `src/parser/expressions.rs`):
+Extend the annotation-parsing path that currently handles `#rust "..."` to also accept
+bare `#json`.  Store a `json: bool` flag on the struct definition node (parallel to how
+`#rust` stores its string).  Emit a clear parse error if `#json` is placed on anything
+other than a struct.
+*Test:* `#json` before a struct compiles without error; `#json` before a `fn` produces a
+single clear diagnostic.
+
+**Step 2 — Synthesis** (`src/state/typedef.rs`):
+During type registration, for each struct with `json: true`, synthesise an implicit `pub fn`
+definition equivalent to:
+```loft
+pub fn to_json(self: T) -> text { "{self:j}" }
+```
+The synthesised def shares the struct's source location for error messages.
+*Test:* `"{user:j}"` and `user.to_json()` produce identical output for a `#json` struct.
+
+**Step 3 — Error for missing annotation** (`src/state/typedef.rs`):
+If `to_json` is called on a struct without `#json`, emit a compile error:
+`"to_json requires #json annotation on struct T"`.
+*Test:* Unannotated struct calling `.to_json()` produces a single clear diagnostic.
+
+**Effort:** Small (parser annotation extension + typedef synthesiser)
+**Target:** 0.8.4
+**Depends on:** —
+
+---
+
+### H2  JSON primitive extraction stdlib
+**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B
+**Description:** Add a new stdlib module `default/04_web.loft` with JSON field-extraction
+functions backed by `serde_json`.  Functions extract a single typed value from a JSON
+object body supplied as a `text` string.
+**Fix path:**
+
+**Step 1 — Cargo dependency** (`Cargo.toml`):
+Add `serde_json = "1"` (and `ureq` placeholder, used in H4) under a new `http` optional
+feature.  The feature is not enabled by default:
+```toml
+[features]
+http = ["serde_json", "ureq"]
+
+[dependencies]
+serde_json = { version = "1", optional = true }
+ureq       = { version = "2", optional = true }
+```
+
+**Step 2 — Loft declarations** (`default/04_web.loft`):
+```loft
+// Extract primitive values from a JSON object body.
+// Returns zero/empty if the key is absent or the type does not match.
+pub fn json_text(body: text, key: text) -> text;
+pub fn json_int(body: text, key: text) -> integer;
+pub fn json_long(body: text, key: text) -> long;
+pub fn json_float(body: text, key: text) -> float;
+pub fn json_bool(body: text, key: text) -> boolean;
+
+// Split a JSON array body into element bodies (each element as raw JSON text).
+pub fn json_items(array_body: text) -> vector<text>;
+
+// Extract a named field as raw JSON text (object, array, or primitive).
+// Use for nested structs and array fields: json_nested(body, "field").
+pub fn json_nested(body: text, key: text) -> text;
+```
+
+**Step 3 — Rust implementation** (new `src/native_http.rs`, registered in `src/native.rs`):
+Implement each function using `serde_json::from_str` to parse the body, then navigate to
+the key.  All functions return the zero value on any error (missing key, type mismatch,
+invalid JSON) — never panic.
+- `json_text`: `value.get(key)?.as_str()? .to_owned()`
+- `json_int`: `value.get(key)?.as_i64()? as i32`
+- `json_long`: `value.get(key)?.as_i64()?`
+- `json_float`: `value.get(key)?.as_f64()? as f32`
+- `json_bool`: `value.get(key)?.as_bool()?`
+- `json_items`: parse as array, `serde_json::to_string` each element
+- `json_nested`: `serde_json::to_string(value.get(key)?)`
+
+**Step 4 — Feature gate** (`src/native.rs` or `src/main.rs`):
+Register the H2 natives only when compiled with `--features http`.  Without the feature,
+calling any `json_*` function raises a compile-time error:
+`"json_text requires the 'http' Cargo feature"`.
+
+*Tests:*
+- Valid JSON object: each extractor returns the correct value.
+- Missing key: returns zero/empty without panic.
+- Invalid JSON body: returns zero/empty without panic.
+- `json_items` on a 3-element array returns a `vector<text>` of length 3.
+- `json_nested` on a nested object returns parseable JSON text.
+
+**Effort:** Medium (`serde_json` integration + 7 native functions)
+**Target:** 0.8.4
+**Depends on:** H1 (for the `http` feature gate pattern)
+
+---
+
+### H3  `from_json` codegen — scalar struct fields
+**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, Phase 2
+**Description:** For each `#json`-annotated struct whose fields are all primitive types
+(`text`, `integer`, `long`, `float`, `single`, `boolean`, `character`), the compiler
+synthesises a `from_json(body: text) -> T` function.  The result is a normal callable
+fn-ref: `User.from_json` can be passed to `map` without any special syntax.
+**Fix path:**
+
+**Step 1 — Synthesis** (`src/state/typedef.rs`):
+After H2 is in place, extend the `#json` synthesis pass (H1 Step 2) to also emit
+`from_json`.  For each field, select the extractor by type:
+
+| Loft type | Extractor call |
+|-----------|---------------|
+| `text` | `json_text(body, "field_name")` |
+| `integer` | `json_int(body, "field_name")` |
+| `long` | `json_long(body, "field_name")` |
+| `float` / `single` | `json_float(body, "field_name")` |
+| `boolean` | `json_bool(body, "field_name")` |
+| `character` | first char of `json_text(body, "field_name")` |
+
+The synthesised `from_json` body is a struct-literal expression using the above calls.
+Fields not in the table (nested structs, enums, vectors) are silently skipped in this
+phase (H5 adds them).
+
+**Step 2 — fn-ref validation** (`src/state/compile.rs` or `src/state/codegen.rs`):
+Verify that `Type.from_json` resolves as a callable fn-ref with type
+`fn(text) -> Type`, so it can be passed directly to `json_items(...).map(...)` and
+`json_items(...).filter(...)`.
+
+*Tests:*
+- `User.from_json(body)` returns a struct with all fields set from JSON.
+- `json_items(resp.body).map(User.from_json)` returns a `vector<User>`.
+- Absent JSON key sets the field to its zero value (0, "", false).
+- Struct with a nested `#json` struct field compiles without error (nested field gets zero value until H5).
+
+**Effort:** Medium (typedef synthesiser + fn-ref type check)
+**Target:** 0.8.4
+**Depends on:** H1, H2
+
+---
+
+### H4  HTTP client stdlib and `HttpResponse`
+**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, stdlib additions; PROBLEMS #55
+**Description:** Add blocking HTTP functions to `default/04_web.loft` backed by `ureq`.
+All functions return `HttpResponse` — a plain struct — so there is no thread-local status
+state and the API is parallel-safe (see PROBLEMS #55).
+**Fix path:**
+
+**Step 1 — `HttpResponse` struct** (`default/04_web.loft`):
+```loft
+pub struct HttpResponse {
+    status: integer
+    body:   text
+}
+
+pub fn ok(self: HttpResponse) -> boolean {
+    self.status >= 200 and self.status < 300
+}
+```
+No `#rust` needed; `ok()` is a plain loft method.
+
+**Step 2 — HTTP functions declaration** (`default/04_web.loft`):
+```loft
+// Body-less requests
+pub fn http_get(url: text) -> HttpResponse;
+pub fn http_delete(url: text) -> HttpResponse;
+
+// Body requests (body is a text string, typically to_json() output)
+pub fn http_post(url: text, body: text) -> HttpResponse;
+pub fn http_put(url: text, body: text) -> HttpResponse;
+pub fn http_patch(url: text, body: text) -> HttpResponse;
+
+// With explicit headers (each entry: "Name: Value")
+pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse;
+pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse;
+pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse;
+```
+
+**Step 3 — Rust implementation** (`src/native_http.rs`):
+Use `ureq::get(url).call()` / `.send_string(body)`.  Parse each `"Name: Value"` header
+entry by splitting at the first `:`.  On network error, connection refused, or timeout,
+return `HttpResponse { status: 0, body: "" }` — never panic.  Set a default timeout of
+30 seconds.
+```rust
+fn http_get(url: &str) -> HttpResponse {
+    match ureq::get(url).call() {
+        Ok(resp) => HttpResponse {
+            status: resp.status() as i32,
+            body:   resp.into_string().unwrap_or_default(),
+        },
+        Err(_) => HttpResponse { status: 0, body: String::new() },
+    }
+}
+```
+
+**Step 4 — Content-Type default**:
+`http_post` and `http_put` set `Content-Type: application/json` automatically when the
+body is non-empty (the common case).  Callers who need a different content type use the
+`_h` variants to supply their own `Content-Type` header.
+
+*Tests (run with a local mock server or httpbin.org):*
+- `http_get("https://httpbin.org/get").ok()` is `true`.
+- `http_get("https://httpbin.org/status/404").status` is `404`.
+- `http_post` with a JSON body returns the echoed body from `/post`.
+- Network failure (bad URL) returns `HttpResponse { status: 0, body: "" }`.
+- Header variants set the supplied headers (verify via httpbin.org `/headers`).
+
+**Effort:** Medium (`ureq` integration + 8 native functions)
+**Target:** 0.8.4
+**Depends on:** H2 (for the `http` Cargo feature; `ureq` added there)
+
+---
+
+### H5  Nested/array/enum `from_json` and integration tests
+**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, Phases 3–4
+**Description:** Extend the H3 `from_json` synthesiser to handle nested `#json` structs,
+`vector<T>` array fields, and plain enum fields.  Add an integration test suite that calls
+real HTTP endpoints and verifies the full round-trip.
+**Fix path:**
+
+**Step 1 — Nested `#json` struct fields** (`src/state/typedef.rs`):
+For a field `addr: Address` where `Address` is `#json`-annotated, emit:
+```loft
+addr: Address.from_json(json_nested(body, "addr"))
+```
+The compiler must verify that `Address` is `#json` at the point of synthesis; if not,
+emit: `"field 'addr' has type Address which is not annotated with #json"`.
+
+**Step 2 — `vector<T>` array fields** (`src/state/typedef.rs`):
+For a field `items: vector<Item>` where `Item` is `#json`, emit:
+```loft
+items: json_items(json_nested(body, "items")).map(Item.from_json)
+```
+This relies on `map` with fn-refs, which already works.  If `Item` is not `#json`, emit
+a compile error.
+
+**Step 3 — Plain enum fields** (`src/state/typedef.rs`):
+For a field `status: Status` where `Status` is a plain (non-struct) enum, emit a `match`
+on the string value:
+```loft
+status: match json_text(body, "status") {
+    "Active"   => Status::Active,
+    "Inactive" => Status::Inactive,
+    _          => Status::Active,   // first variant as default
+}
+```
+The default fallback uses the first variant; a compile-time warning notes it.
+Struct-enum variants in JSON (e.g. `{"type": "Paid", "amount": 42}`) are not supported
+in this phase — a compile error is emitted if a struct-enum field appears in a `#json` struct.
+
+**Step 4 — `not null` field validation** (`src/state/typedef.rs`):
+Fields declared `not null` whose JSON key is absent should emit a runtime warning (via the
+logger) and keep the zero value rather than panicking.  This matches loft's general approach
+of never crashing on bad data.
+
+**Step 5 — Integration test suite** (`tests/web/`):
+Write loft programs that call public stable APIs and assert on the response.  Tests should
+be skipped if the `http` feature is not compiled in or if the network is unavailable:
+- `GET https://httpbin.org/json` → parse known struct, assert fields.
+- `POST https://httpbin.org/post` with JSON body → assert echoed body round-trips.
+- `GET https://httpbin.org/status/500` → `resp.ok()` is `false`, `resp.status` is `500`.
+- Nested struct: `GET https://httpbin.org/json` contains a nested `slideshow` object.
+- Array field: `GET https://httpbin.org/json` contains a `slides` array.
+
+**Effort:** Medium–High (3 codegen extensions + integration test infrastructure)
+**Target:** 0.8.4
+**Depends on:** H3, H4
 
 ---
 

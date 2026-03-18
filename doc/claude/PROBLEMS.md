@@ -8,6 +8,7 @@ recommended fix path are described.
 - [Open Issues — Quick Reference](#open-issues--quick-reference)
 - [Runtime Crashes](#runtime-crashes)
 - [Parser / Lexer Bugs](#parser--lexer-bugs)
+- [Web Services Design Constraints](#web-services-design-constraints)
 - [Library System Limitations](#library-system-limitations)
 - [Unimplemented Features](#unimplemented-features)
 - [String Iteration Semantics](#string-iteration-semantics)
@@ -24,6 +25,9 @@ recommended fix path are described.
 |---|-------|----------|-------------|
 | 22 | Spatial index (spacial<T>) operations not implemented | Low | N/A |
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
+| 53 | Compile-time intrinsic names not reserved as keywords | Medium | Avoid naming fns `fields`, `debug_assert`, `sizeof`, `assert`, `panic` |
+| 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
+| 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | ~~44~~ | ~~Empty vector literal `[]` cannot be passed directly as a mutable vector argument~~ | ~~Low~~ | **FIXED** |
 | ~~20~~ | ~~`f#next = pos` seek before first open is a no-op~~ | ~~Low~~ | **FIXED** |
 | ~~45~~ | ~~`&vector` parameter triggers "never modified" for clear-like ops~~ | ~~Low~~ | **FIXED** |
@@ -200,6 +204,50 @@ but is sufficient in practice for the known test cases.
 ---
 
 ## Parser / Lexer Bugs
+
+### 53. Compile-time intrinsic names not reserved as keywords
+
+**Symptom:** The parser special-cases several function-shaped names in `parse_call`
+(`sizeof`, `assert`, `panic`, `log_info/warn/error/fatal`) and `parse_in_range` (`rev`).
+Because these names are not in the `KEYWORDS` array in `src/lexer.rs`, a user can define
+`fn sizeof(...)` or `fn assert(...)`.  The intrinsic handling in `parse_call` takes
+precedence over any user definition — so the user's function is never called through the
+normal call path and becomes unreachable dead code.  `match` was similarly not in
+KEYWORDS when it shipped in 0.8.0 (the documented list in COMPILER.md was never updated).
+
+**Forward-compatibility risk:** Two upcoming 0.9.0 features introduce new intrinsic names:
+- `fields` (A10 — field iteration): a common English word; user code written today could
+  easily define `fn fields(s: Config) -> vector<text>` and rely on it.  When A10 lands, that
+  call site silently stops dispatching to the user's function.
+- `debug_assert` (A2.3 — release mode): behaves identically to `assert` at the call site;
+  must be claimed before any user code adopts the name.
+
+**Severity:** Medium — no crash; but the intrinsic always silently wins, so the user's
+function becomes dead code with no diagnostic.  The forward-compatibility risk for `fields`
+and `debug_assert` is the primary concern.
+
+**Workaround:** Do not name functions or variables `sizeof`, `assert`, `panic`, `fields`,
+or `debug_assert`.
+
+**Fix path:**
+1. Add `match`, `sizeof`, `assert`, `panic`, `fields`, `debug_assert` to the `KEYWORDS`
+   array in `src/lexer.rs`.  These six names have parse-time semantics (file+line injection,
+   compile-time type resolution, loop unrolling, or assert elision) that cannot be expressed
+   by a regular function definition.
+2. Update the KEYWORDS list in `doc/claude/COMPILER.md` to reflect the full set.
+3. Add a parse-error test: `fn sizeof(x: integer) -> integer { x }` must produce a single
+   diagnostic naming `sizeof` as a reserved keyword.
+
+Names intentionally left as identifiers (not promoted to keywords): `log_info/warn/error/fatal`
+(prefixed, low collision risk), `parallel_for` (highly specific), `rev` (likely to become a
+genuine stdlib function for vector reversal).
+
+**Files:** `src/lexer.rs`, `doc/claude/COMPILER.md`
+**Effort:** Small
+**Target:** Before 0.9.0 — `fields` and `debug_assert` must be claimed before those
+features land; the rest closes a pre-existing gap.
+
+---
 
 ### 6. ~~Uppercase hex literals are rejected~~ **FIXED**
 
@@ -511,6 +559,36 @@ from an uninitialized region), the unchecked index caused a panic.
 - `v as usize - 1 >= vals.len()` → display `"?"` instead of panicking
 
 **Triggered by:** `wrap::file_debug` running `tests/docs/13-file.loft` in debug mode.
+
+---
+
+## Web Services Design Constraints
+
+### 54. `json_items` returns opaque `vector<text>` — no compile-time element type
+**Severity:** Low — accepted design limitation
+**Description:** `json_items(body)` parses a JSON array and returns the element bodies as
+`vector<text>`.  There is no way for the compiler to verify that the caller's parse function
+(e.g. `User.from_json`) receives a valid JSON object body rather than an arbitrary string.
+A parse error at runtime produces a partial zero-value struct, not a diagnostic.
+**Workaround:** Validate the HTTP response status before parsing (`if resp.ok()`).
+**Fix path:** Deferred.  A `JsonValue` enum (covering Object, Array, String, Number, Boolean,
+Null variants) would give compile-time structure, but the design cost is high.
+**Effort:** Very High (deferred)
+**Target:** 1.1+
+**See also:** [WEB_SERVICES.md](WEB_SERVICES.md)
+
+---
+
+### 55. Thread-local `http_status()` is not parallel-safe
+**Severity:** Medium — design trap; do not introduce this API
+**Description:** An `http_status()` function returning the status of the most recent HTTP
+call as a thread-local integer (the pattern used by C's `errno`) is tempting but incorrect
+in loft's parallel execution model.  A `parallel_for` worker calling `http_get` would
+corrupt the thread-local of the calling thread.
+**Fix path:** Return an `HttpResponse` struct directly from all HTTP functions.  The status
+is a field on the returned value, not global state.  See WEB_SERVICES.md Approach B.
+**Effort:** N/A — this is a design constraint, not a bug to fix.  Simply do not add `http_status()`.
+**Target:** Avoided by design
 
 ---
 
