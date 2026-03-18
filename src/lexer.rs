@@ -124,8 +124,28 @@ static TOKENS: &[&str] = &[
 ];
 
 static KEYWORDS: &[&str] = &[
-    "as", "if", "in", "else", "for", "continue", "break", "return", "true", "false", "null",
-    "struct", "fn", "type", "enum", "pub", "and", "or", "use", "match",
+    "as",
+    "if",
+    "in",
+    "else",
+    "for",
+    "continue",
+    "break",
+    "return",
+    "true",
+    "false",
+    "null",
+    "struct",
+    "fn",
+    "type",
+    "enum",
+    "pub",
+    "and",
+    "or",
+    "use",
+    "match",
+    "sizeof",
+    "debug_assert",
 ];
 
 #[derive(Debug)]

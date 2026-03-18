@@ -1231,6 +1231,9 @@ use a separate collection or add after the loop"
             self.parse_match(val)
         } else if self.lexer.has_token("fn") {
             self.parse_fn_ref(val)
+        } else if self.lexer.has_token("sizeof") {
+            self.lexer.token("(");
+            self.parse_size(val)
         } else if let Some(name) = self.lexer.has_identifier() {
             self.parse_var(val, &name, parent_tp)
         } else if self.lexer.has_token("$") {

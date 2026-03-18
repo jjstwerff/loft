@@ -543,22 +543,25 @@ fn test() {
 }
 
 #[test]
-#[ignore = "L3: intrinsic names not yet reserved as keywords"]
 fn keyword_sizeof_as_fn() {
     code!("fn sizeof() {}\nfn test() {}")
-        .error("Expect name in function definition at keyword_sizeof_as_fn:1:4");
+        .error("Expect name in function definition at keyword_sizeof_as_fn:1:10")
+        .error("Syntax error: unexpected Token(\"sizeof\") at keyword_sizeof_as_fn:1:10");
 }
 
 #[test]
-#[ignore = "L3: intrinsic names not yet reserved as keywords"]
-fn keyword_assert_as_fn() {
-    code!("fn assert() {}\nfn test() {}")
-        .error("Expect name in function definition at keyword_assert_as_fn:1:4");
+#[ignore = "L3: fields cannot be a keyword until A10 lands and all uses as field names are migrated"]
+fn keyword_fields_as_fn() {
+    code!("fn fields() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_fields_as_fn:1:10")
+        .error("Syntax error: unexpected Token(\"fields\") at keyword_fields_as_fn:1:10");
 }
 
 #[test]
-#[ignore = "L3: intrinsic names not yet reserved as keywords"]
-fn keyword_panic_as_fn() {
-    code!("fn panic() {}\nfn test() {}")
-        .error("Expect name in function definition at keyword_panic_as_fn:1:4");
+fn keyword_debug_assert_as_fn() {
+    code!("fn debug_assert() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_debug_assert_as_fn:1:16")
+        .error(
+            "Syntax error: unexpected Token(\"debug_assert\") at keyword_debug_assert_as_fn:1:16",
+        );
 }
