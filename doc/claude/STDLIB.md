@@ -60,84 +60,56 @@ Use the sized subtypes in struct fields to reduce memory usage. They behave as `
 ## Math
 
 Functions for numeric computation. All trigonometric functions work in radians.
-Both `single` and `float` variants exist for every function — choose `single` for speed, `float` for precision.
+
+In the tables below, **N** = `integer | long | single | float` for general functions, and **F** = `single | float` for float-only functions. Use `single` for speed, `float` for precision.
 
 ### Constants
 
 | Name | Value | Description |
 |------|-------|-------------|
-| `PI` | 3.14159… | The ratio of a circle's circumference to its diameter. |
-| `E`  | 2.71828… | Euler's number, the base of natural logarithms. |
+| `PI` | 3.14159… | Ratio of a circle's circumference to its diameter. |
+| `E`  | 2.71828… | Euler's number, base of natural logarithms. |
 
-### General
-
-| Function | Description |
-|----------|-------------|
-| `abs(v: integer) -> integer` | Absolute value. Removes the sign from a negative integer. |
-| `abs(v: long) -> long` | Absolute value for long integers. |
-| `abs(v: single) -> single` | Absolute value for single-precision floats. |
-| `abs(v: float) -> float` | Absolute value for double-precision floats. |
-| `min(a: integer, b: integer) -> integer` | Smallest of two values. Returns null if either is null. |
-| `min(a: long, b: long) -> long` | Long variant. |
-| `min(a: single, b: single) -> single` | Single-precision variant. |
-| `min(a: float, b: float) -> float` | Double-precision variant. |
-| `max(a: integer, b: integer) -> integer` | Largest of two values. Returns null if either is null. |
-| `max(a: long, b: long) -> long` | Long variant. |
-| `max(a: single, b: single) -> single` | Single-precision variant. |
-| `max(a: float, b: float) -> float` | Double-precision variant. |
-| `clamp(v: integer, lo: integer, hi: integer) -> integer` | Clamps `v` to `[lo, hi]`. Returns null if any argument is null. |
-| `clamp(v: long, lo: long, hi: long) -> long` | Long variant. |
-| `clamp(v: single, lo: single, hi: single) -> single` | Single-precision variant. |
-| `clamp(v: float, lo: float, hi: float) -> float` | Double-precision variant. |
-
-### Rounding
+### General (N = integer | long | single | float)
 
 | Function | Description |
 |----------|-------------|
-| `floor(v: single) -> single` | Round down to the nearest integer value. |
-| `floor(v: float) -> float` | Double-precision floor. |
-| `ceil(v: single) -> single` | Round up to the nearest integer value. |
-| `ceil(v: float) -> float` | Double-precision ceil. |
-| `round(v: single) -> single` | Round to the nearest integer value (half rounds away from zero). |
-| `round(v: float) -> float` | Double-precision round. |
-| `sqrt(v: single) -> single` | Square root. |
-| `sqrt(v: float) -> float` | Double-precision square root. |
+| `abs(v: N) -> N` | Absolute value. |
+| `min(a: N, b: N) -> N` | Smaller of two values. Returns null if either is null. |
+| `max(a: N, b: N) -> N` | Larger of two values. Returns null if either is null. |
+| `clamp(v: N, lo: N, hi: N) -> N` | Clamps `v` to `[lo, hi]`. Returns null if any arg is null. |
 
-### Power and Logarithm
+### Rounding and roots (F = single | float)
 
 | Function | Description |
 |----------|-------------|
-| `pow(base: single, exp: single) -> single` | Raises `base` to the power `exp`. |
-| `pow(base: float, exp: float) -> float` | Double-precision power. |
-| `log(v: single, base: single) -> single` | Logarithm of `v` in the given `base`. |
-| `log(v: float, base: float) -> float` | Double-precision logarithm. |
-| `exp(v: single) -> single` | Raises E to the power `v` (single-precision). |
-| `exp(v: float) -> float` | Double-precision natural exponential. |
-| `ln(v: single) -> single` | Natural logarithm (single-precision). |
-| `ln(v: float) -> float` | Double-precision natural logarithm. |
-| `log2(v: single) -> single` | Base-2 logarithm (single-precision). |
-| `log2(v: float) -> float` | Double-precision base-2 logarithm. |
-| `log10(v: single) -> single` | Base-10 logarithm (single-precision). |
-| `log10(v: float) -> float` | Double-precision base-10 logarithm. |
+| `floor(v: F) -> F` | Round down to nearest integer value. |
+| `ceil(v: F) -> F` | Round up to nearest integer value. |
+| `round(v: F) -> F` | Round to nearest (half rounds away from zero). |
+| `sqrt(v: F) -> F` | Square root. |
 
-### Trigonometry
+### Power and Logarithm (F = single | float)
 
 | Function | Description |
 |----------|-------------|
-| `cos(angle: single) -> single` | Cosine. |
-| `cos(angle: float) -> float` | Double-precision cosine. |
-| `sin(angle: single) -> single` | Sine. |
-| `sin(angle: float) -> float` | Double-precision sine. |
-| `tan(angle: single) -> single` | Tangent. |
-| `tan(angle: float) -> float` | Double-precision tangent. |
-| `acos(v: single) -> single` | Arc cosine. Returns angle (radians) whose cosine is `v`. |
-| `acos(v: float) -> float` | Double-precision arc cosine. |
-| `asin(v: single) -> single` | Arc sine. Returns angle whose sine is `v`. |
-| `asin(v: float) -> float` | Double-precision arc sine. |
-| `atan(v: single) -> single` | Arc tangent. Returns angle in (-PI/2, PI/2). |
-| `atan(v: float) -> float` | Double-precision arc tangent. |
-| `atan2(y: single, x: single) -> single` | Arc tangent of `y/x`, preserving the correct quadrant. |
-| `atan2(y: float, x: float) -> float` | Double-precision atan2. |
+| `pow(base: F, exp: F) -> F` | Raises `base` to the power `exp`. |
+| `exp(v: F) -> F` | Raises E to the power `v`. |
+| `ln(v: F) -> F` | Natural logarithm. |
+| `log(v: F, base: F) -> F` | Logarithm in the given `base`. |
+| `log2(v: F) -> F` | Base-2 logarithm. |
+| `log10(v: F) -> F` | Base-10 logarithm. |
+
+### Trigonometry (F = single | float, angles in radians)
+
+| Function | Description |
+|----------|-------------|
+| `cos(angle: F) -> F` | Cosine. |
+| `sin(angle: F) -> F` | Sine. |
+| `tan(angle: F) -> F` | Tangent. |
+| `acos(v: F) -> F` | Arc cosine — returns angle whose cosine is `v`. |
+| `asin(v: F) -> F` | Arc sine — returns angle whose sine is `v`. |
+| `atan(v: F) -> F` | Arc tangent — returns angle in (-PI/2, PI/2). |
+| `atan2(y: F, x: F) -> F` | Arc tangent of `y/x`, preserving quadrant. |
 
 ---
 

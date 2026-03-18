@@ -4,6 +4,8 @@ Loft is a statically-typed, imperative scripting language with null safety and b
 Source files use the `.loft` extension. The language compiles to an internal bytecode representation
 and can emit Rust code for host integration.
 
+**Quick reference with common patterns and gotchas:** see [QUICK_START.md § Common loft patterns](QUICK_START.md#common-loft-patterns--quick-reference).
+
 ---
 
 ## Contents

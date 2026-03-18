@@ -23,14 +23,17 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
 
 ## Branch Naming
 
-A branch covers one or more PLANNING.md items.  Branch names list all item IDs,
-lowercased, with a short suffix that identifies the overall theme:
+A branch covers one or more PLANNING.md items (or phases of a single item).
+Branch names list all item IDs, lowercased, with a short suffix:
 
 ```
-t{tier}-{nr}-{short-name}
-t{tier}-{nr}-t{tier}-{nr}-{short-name}        # two items
-t{tier}-{nr}-t{tier}-{nr}-t{tier}-{nr}-{short-name}   # three items
+{id}-{short-name}
+{id}-{id}-{short-name}        # two items or phases
+{id}-{id}-{id}-{short-name}   # three items or phases
 ```
+
+IDs use the single-letter prefix scheme: `l1`, `p1`, `p1-1`, `a6`, `n2`, `r1`, `w1`.
+Phase sub-steps use the dot notation lowercased: `p1-1`, `p1-2`, `a6-3`.
 
 Group items in one branch only when they **touch overlapping files** — otherwise
 keep them separate to make review straightforward.
@@ -39,10 +42,10 @@ Examples:
 
 | Planning item(s) | Branch name |
 |---|---|
-| T1-2 — Wildcard imports | `t1-2-wildcard-imports` |
-| T2-6 — `now()` and `ticks()` | `t2-6-time-functions` |
-| T2-11 — `loft.toml` package layout | `t2-11-package-layout` |
-| T0-11 + T0-12 + T1-32 — 0.8.1 stability | `t0-11-t0-12-t1-32-stability-081` |
+| L2 — Nested match patterns | `l2-nested-match-patterns` |
+| P1.1 + P1.2 + P1.3 — Lambda expressions (all 3 phases) | `p1-1-p1-2-p1-3-lambda-expressions` |
+| A6.1 — Stack slot assign_slots standalone | `a6-1-assign-slots-standalone` |
+| N2 + N3 + N4 — output_init/output_set/format fixes | `n2-n3-n4-output-fixes` |
 
 Create the branch from the tip of `main`.  **Always start from a clean, up-to-date
 `main`** — if you are on a different branch, check for uncommitted documentation
@@ -60,7 +63,7 @@ git checkout main
 git pull
 
 # 4. Create the new feature branch
-git checkout -b t2-6-time-functions
+git checkout -b p1-1-lambda-parser
 
 # 5. Restore the documentation changes into the new branch
 git stash pop
@@ -82,7 +85,7 @@ changes and their tests in one place so they can be reviewed and debugged togeth
 ```bash
 # Stage all changed files (code + tests together)
 git add -p          # or: git add <specific files>
-git commit -m "WIP: T2-6 now() and ticks()"
+git commit -m "WIP: P1.1 parser — lambda primary expression"
 ```
 
 As work progresses, amend the WIP commit rather than stacking new ones:
@@ -163,10 +166,11 @@ relevant documentation before including it in the commit:**
 Include these documentation updates in the docs commit at the end of the branch.
 Do not wait until later — findings are freshest immediately after implementation.
 
-When multiple PLANNING items share a branch, **each item gets its own separate
-commit sequence** — do not collapse them into one big commit.  A reader bisecting
-the history must be able to pin the change to a single item.  Mention the item ID
-in every commit message that belongs to it (e.g. `fix: T0-11 …`, `fix: T0-12 …`).
+When multiple PLANNING items share a branch — **including the individual phases of a
+multi-phase item** — **each item or phase gets its own separate commit sequence**.
+Do not collapse them into one big commit.  A reader bisecting the history must be
+able to pin the change to a single item or phase.  Mention the item ID in every
+commit message that belongs to it (e.g. `P1.1: …`, `P1.2: …`, `N2: …`).
 
 ### Commit message style
 
@@ -180,8 +184,11 @@ Mention function or file names only when they clarify the scope.}
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ```
 
-**Scope** is one of: `T{tier}-{nr}` or `N{nr}` for planned items, `fix` for
-bug fixes, `docs` for documentation-only, `refactor` for behaviour-neutral changes.
+**Scope** is one of:
+- `L1`, `P1`, `P1.1`, `A6`, `A6.2`, `N2`, `W1` etc. — planned item or phase
+- `fix` — bug fix not tied to a planned item
+- `docs` — documentation-only change
+- `refactor` — behaviour-neutral code change
 
 **Summary** starts with an imperative verb: *add*, *fix*, *implement*, *remove*,
 *enable*, *warn on* — never *added*, *adds*, *implementing*.
@@ -193,23 +200,22 @@ rather than as implementation detail.
 
 **Good example:**
 ```
-N15: emit typed nulls for missing else branches
+N6.1: implement vector iteration in codegen_runtime
 
-Generated if-expressions without an else branch now produce a
-type-appropriate null sentinel (i32::MIN, "", NaN, etc.) instead of
-unit `()`.  This fixes 20 compile failures where the true branch
-returned a value but the else emitted an incompatible type.
+Vector `for` loops now emit an index-based loop using a dedicated
+`_iter` counter variable rather than relying on the interpreter's
+generic iterate path.  This is the first of three N6 phases; sorted
+and reverse iteration follow in N6.2 and N6.3.
 ```
 
 **Bad example:**
 ```
-N15: fix output_if in src/generation.rs
+N6.1: fix codegen_runtime.rs vector loop
 
-Changed output_if() at line 828 to call infer_if_type() which checks
-Value::Call and Value::Var and Value::Block result types. Added match
-on Type::Integer, Type::Long, Type::Float, Type::Single, Type::Boolean,
-Type::Text, Type::Reference, Type::Enum. Updated output_code_inner()
-line 747 to not emit "()" when the context requires a typed null.
+Changed emit_for_vector() at line 412 to add _iter variable and emit
+OpGetInt/OpSetInt for the counter. Added match on IterKind::Vector in
+three places. Updated output_step() at line 531 to check _iter against
+vec_len. Added OpBranchFalse at end of loop body.
 ```
 
 ### Documentation commit
@@ -246,7 +252,7 @@ Look for **natural seams** in the planned work.  Good split boundaries:
 | Seam | Example |
 |---|---|
 | Independent areas of the codebase | Parser change + runtime change → two commits |
-| Phases of a larger design | T3-10 destination-passing: Phase 1 compiler, Phase 2 native rewrites |
+| Phases of a larger design | A8 destination-passing: Phase 1 compiler, Phase 2 native rewrites |
 | Feature flags / opt-in paths | Implement behind a `#[cfg(test)]` stub, then wire it in |
 | Layers of correctness | Guard first (panic on bad input), full fix second |
 | Subset of cases | Handle the common case first, edge cases in follow-up commits |
@@ -264,7 +270,7 @@ PLANNING.md to list the sub-steps explicitly before the first commit lands.  Thi
 - Forces a check that each sub-step is independently testable — if you cannot write a
   test for a sub-step, the split boundary is wrong.
 
-Example: T3-10 (destination-passing for string natives) was already split into four
+Example: A8 (destination-passing for text-returning natives) was already split into
 phases (compiler, native rewrites, format expressions, scratch buffer removal) in
 PLANNING.md before implementation began.  Each phase is independently testable because
 existing string tests catch regressions and new tests verify the new calling convention.
@@ -283,18 +289,23 @@ For each item (or each independent area of a single item) follow the commit orde
 below.  It is **not required for trivial one-file fixes** — the only hard
 requirement is that every commit passes the three checks above.
 
-When a branch contains multiple items, repeat the sequence once per item before
-writing the shared documentation commit at the end:
+When a branch contains multiple items **or multiple phases of one item**, repeat
+the sequence once per item/phase before writing the shared documentation commit
+at the end.  Each phase is treated as an independent item: it has its own test
+commit, code commit, and enable-tests commit.
 
 ```
-[Item A — Step 1] tests with #[ignore]
-[Item A — Step 2] code change
-[Item A — Step 3] enable tests
-[Item B — Step 1] tests with #[ignore]
-[Item B — Step 2] code change
-[Item B — Step 3] enable tests
-[Steps 4] any refactors (shared or per-item)
-[Step 5]  docs: update PLANNING, PROBLEMS, CHANGELOG for all items
+[P1.1 — Step 1] tests with #[ignore]
+[P1.1 — Step 2] code change
+[P1.1 — Step 3] enable tests
+[P1.2 — Step 1] tests with #[ignore]
+[P1.2 — Step 2] code change
+[P1.2 — Step 3] enable tests
+[P1.3 — Step 1] tests with #[ignore]
+[P1.3 — Step 2] code change
+[P1.3 — Step 3] enable tests
+[Step 4] any refactors (shared or per-phase)
+[Step 5] docs: update PLANNING, PROBLEMS, CHANGELOG for all phases
 ```
 
 ### Step 1 — Tests with `#[ignore]`
@@ -305,17 +316,17 @@ lands, while making the intent of the tests clear from the first commit.
 
 ```rust
 #[test]
-#[ignore = "T2-6: not yet implemented"]
-fn now_is_positive() { ... }
+#[ignore = "P1.1: parser for lambda expressions not yet implemented"]
+fn lambda_basic_parse() { ... }
 ```
 
 Commit message:
 
 ```
-T2-6: add time-function tests (initially ignored)
+P1.1: add lambda parser tests (initially ignored)
 
-now_is_positive, now_is_not_null, ticks_is_non_negative, ticks_is_monotonic.
-All marked #[ignore] until the native functions are implemented.
+lambda_basic_parse, lambda_with_return_type, lambda_in_map_call.
+All marked #[ignore] until the parser extension lands.
 ```
 
 Verify: `cargo test` must pass with the new tests reported as ignored, not failed.
@@ -334,24 +345,23 @@ boundaries:
 | Bytecode generation | `src/state/codegen.rs`, `src/fill.rs` — see [Bytecode Economy](#bytecode-economy) |
 | Scope and variable analysis | `src/scopes.rs`, `src/variables.rs` |
 
-Example split for T2-6 (two areas):
+Example split for P1.2 (two areas):
 
-**Commit 2a** — database field:
+**Commit 2a** — IR synthesis:
 ```
-T2-6: add start_time field to Stores
+P1.2: synthesise anonymous def for lambda in compile.rs
 
-Initialised at Stores::new(); cloned into worker Stores by
-clone_for_worker() so all parallel threads share the same
-program-start reference point.
+Lambda expressions are lowered to a `Value::Def` with a generated
+name. compile.rs emits the def-nr as an integer constant at the
+call site. No codegen changes yet.
 ```
 
-**Commit 2b** — native functions and stdlib declaration:
+**Commit 2b** — codegen emission:
 ```
-T2-6: implement now() and ticks() native functions
+P1.2: emit def-nr for lambda in codegen.rs
 
-n_now: milliseconds since Unix epoch via SystemTime::UNIX_EPOCH.
-n_ticks: microseconds since program start via stores.start_time.
-Declared in default/02_images.loft under a new // --- Time --- section.
+codegen.rs recognises `Value::Lambda` and emits `OpPushInt` with the
+def-nr, completing the compile-to-bytecode path for inline lambdas.
 ```
 
 When there is only a single area, one commit is fine.
@@ -364,9 +374,9 @@ Remove the `#[ignore]` annotations from all tests added in Step 1.  No other
 changes.
 
 ```
-T2-6: enable time-function tests
+P1.1: enable lambda parser tests
 
-All four tests now pass. Removes the #[ignore] markers added in the
+All three tests now pass. Removes the #[ignore] markers added in the
 initial test commit.
 ```
 
@@ -384,8 +394,8 @@ unchanged after this commit.
 ```
 Refactor: split parse_binary_operator — extract check_constant_zero helper
 
-parse_binary_operator now exceeded 55 lines after the T1-11 constant-zero
-check. Extract the new check into its own function per CODE.md § Functions.
+parse_binary_operator exceeded 55 lines after the L3 constant-zero check.
+Extract the new check into its own function per CODE.md § Functions.
 ```
 
 Verify: `cargo test` unchanged; `cargo clippy -- -D warnings` clean.
@@ -412,11 +422,12 @@ behaviour and update them as needed.  Common files to check:
 Stage all files that required a change:
 
 ```
-docs: T2-6 now()/ticks() — update CHANGELOG, PLANNING, STDLIB
+docs: P1 lambda expressions — update CHANGELOG, PLANNING, LOFT, STDLIB
 
-- CHANGELOG: add T2-6 feature entry under Unreleased
-- PLANNING: remove T2-6 section and quick-reference row; update 1.0 target list
-- STDLIB.md: document now() and ticks() in the Time section
+- CHANGELOG: add P1 feature entry under Unreleased
+- PLANNING: remove P1 section (all three phases complete)
+- LOFT.md: document lambda syntax in the Declarations section
+- STDLIB.md: document map/filter/reduce accepting lambda arguments
 ```
 
 Verify: `cargo test` still passes (documentation changes are non-functional).
@@ -449,9 +460,9 @@ Only add a new opcode when:
 Push the branch and open a pull request against `main`:
 
 ```bash
-git push -u origin t2-6-time-functions
-gh pr create --title "T2-6: add now() and ticks() time functions" \
-             --body "Implements wall-clock now() and monotonic ticks()."
+git push -u origin p1-1-p1-2-p1-3-lambda-expressions
+gh pr create --title "P1: lambda expressions (all 3 phases)" \
+             --body "Implements fn(params)->type block inline lambdas with map/filter/reduce integration."
 ```
 
 The CI pipeline (`.github/workflows/ci.yml`) runs three jobs in parallel:
@@ -478,7 +489,7 @@ Do not merge until all three jobs are green on all platforms.  If a job fails:
 ## Renaming a Branch After Completion
 
 When a branch ends up implementing different items than originally planned (e.g.
-you started with `t1-17-range-patterns` but ended up doing `p46-t124-match-fixes`
+you started with `l2-nested-patterns` but ended up doing `l2-p3-nested-patterns-aggregates`
 instead), rename the branch before pushing the PR so the name reflects the actual
 work:
 
