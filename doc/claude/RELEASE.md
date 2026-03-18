@@ -147,6 +147,19 @@ ide/                        (web IDE — added at W1)
 
 ---
 
+## No Automated Releases
+
+**Releases must never be created or triggered automatically.**  Every release
+requires a human validation phase (the checklist below) that cannot be scripted:
+hands-on testing of pre-built binaries on each platform, review of the CHANGELOG,
+and a deliberate decision to tag and publish.
+
+Do not push release tags, trigger release workflows, draft GitHub Releases, or
+run `cargo publish` programmatically.  Always wait for the owner to do this
+manually after completing the validation checklist below.
+
+---
+
 ## Pre-Release Documentation Review
 
 Run these steps before tagging a release.  They are manual; treat each as a gate item.
