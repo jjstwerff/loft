@@ -1026,3 +1026,46 @@ fn add(r: &Data = null, val: integer) {
         }
     }
 }
+
+/// N3: assigning a reference to another reference must emit OpCopyRecord for deep copy.
+/// Without it, both variables alias the same heap record; mutating through one changes the other.
+#[test]
+fn n3_reference_assignment_emits_copy_record() {
+    // Bytecode interpreter correctly deep-copies references already; test confirms behaviour.
+    code!("struct T { name: text }")
+        .expr(
+            "a = T { name: \"hello\" };
+b = a;
+b.name += \" world\";
+a.name",
+        )
+        .result(Value::str("hello"));
+    let src =
+        std::fs::read_to_string("tests/generated/issues_n3_reference_assignment_emits_copy_record.rs")
+            .expect("generated file not found");
+    assert!(
+        src.contains("OpCopyRecord(stores,"),
+        "generated code missing OpCopyRecord after reference assignment"
+    );
+}
+
+/// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
+/// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
+#[test]
+fn n7_format_ops_generate_correct_rust() {
+    // Float formatting
+    code!("struct Flt { v: float }")
+        .expr("f = Flt { v: 3.14 }; \"{f.v}\"")
+        .result(Value::str("3.14"));
+    let src =
+        std::fs::read_to_string("tests/generated/issues_n7_format_ops_generate_correct_rust.rs")
+            .expect("generated file not found");
+    assert!(
+        !src.contains("OpFormatFloat("),
+        "generated code still contains bare OpFormatFloat call"
+    );
+    assert!(
+        src.contains("ops::format_float("),
+        "generated code missing ops::format_float call"
+    );
+}
