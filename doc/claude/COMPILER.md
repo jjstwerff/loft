@@ -93,7 +93,12 @@ Defined as static slices at the top of the file:
   `:`, `::`, `.`, `..`, `,`, `{`, `}`, `(`, `)`, `[`, `]`, `;`, `!`, `!=`, `+`, `+=`, `-`, `-=`, `*`, `*=`, `/`, `/=`, `%`, `%=`, `=`, `==`, `<`, `<=`, `>`, `>=`, `&`, `&&`, `|`, `||`, `->`, `=>`, `^`, `<<`, `>>`, `$`, `//`, `#`
 
 - **KEYWORDS** — reserved words that are emitted as `Token`, not `Identifier`:
-  `as`, `if`, `in`, `else`, `for`, `continue`, `break`, `return`, `true`, `false`, `null`, `struct`, `fn`, `type`, `enum`, `pub`, `and`, `or`, `use`
+  `as`, `if`, `in`, `else`, `for`, `continue`, `break`, `return`, `true`, `false`, `null`, `struct`, `fn`, `type`, `enum`, `pub`, `and`, `or`, `use`, `match`
+
+  The following compile-time intrinsic names are special-cased in `parse_call` / `parse_single` and **must also be in KEYWORDS** to prevent user code from shadowing them (see PROBLEMS #53):
+  `sizeof`, `assert`, `panic`, `fields`, `debug_assert`
+
+  Names recognized by name in `parse_call` but left as identifiers (lower collision risk): `log_info`, `log_warn`, `log_error`, `log_fatal`, `parallel_for`.
 
 The lexer tries two-character tokens first (e.g. `!=` before `!`). Keywords are detected after the identifier is collected.
 
