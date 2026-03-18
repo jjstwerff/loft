@@ -199,8 +199,7 @@ pub fn OpInsertVector(
     index: i32,
     db_tp: i32,
 ) -> DbRef {
-    let new_value =
-        vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
+    let new_value = vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
     stores.set_default_value(db_tp as u16, &new_value);
     new_value
 }
