@@ -44,7 +44,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [N — Native Codegen](#n--native-codegen)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
-- [Quick Reference](#quick-reference)
+- [Quick Reference](#quick-reference) → [ROADMAP.md](ROADMAP.md)
 
 ---
 
@@ -945,78 +945,12 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 ## Quick Reference
 
-| ID         | Title                                                       | Effort    | Target  | Depends on  | Source                     |
-|------------|-------------------------------------------------------------|-----------|---------|-------------|----------------------------|
-| L1      | Error recovery after token failures                         | Medium    | 0.9.0   |             | DEVELOPERS.md Step 5       |
-| L2      | Nested patterns in field positions                          | Medium    | 0.9.0   | T1-14,T1-18 | MATCH.md L2             |
-| P1       | **Lambda expressions** *(3 phases)*                         | Med–High  | 0.9.0   | T1-1 (done) | Prototype goal             |
-| P1.1   | ↳ Parser — `fn(params) -> type block` primary expression    | Small     | 0.9.0   |             | expressions.rs             |
-| P1.2   | ↳ Compilation — synthesise anon def, emit def-nr            | Medium    | 0.9.0   | P1.1    | codegen.rs, compile.rs     |
-| P1.3   | ↳ Integration — map/filter/reduce with inline lambdas       | Small     | 0.9.0   | P1.2    | tests only                 |
-| P2       | **REPL / interactive mode** *(4 phases)*                    | High      | 1.1+    |             | Prototype goal             |
-| P2.1   | ↳ Input completeness detection (`is_complete`)              | Small     | 1.1+    |             | new repl.rs                |
-| P2.2   | ↳ Single-statement execution in persistent `State`          | Medium    | 1.1+    | P2.1    | main.rs, repl.rs           |
-| P2.3   | ↳ Automatic value output for non-void results               | Small     | 1.1+    | P2.2    | repl.rs                    |
-| P2.4   | ↳ Error recovery — session continues after diagnostics      | Medium    | 1.1+    | P2.2    | repl.rs, parser.rs         |
-| P3       | Vector aggregates (sum, min_of, any, all, count_if)         | Low–Med   | 0.9.0   | P1        | Stdlib audit 2026-03-15    |
-| P4      | Bytecode cache (`.loftc`) — deferred, superseded by Tier N  | Medium    | deferred|             | BYTECODE_CACHE.md          |
-| A1       | **Parallel workers: extra args + text/ref returns** *(2 ph)*| High      | 0.9.0   |             | THREADING deferred         |
-| A1.1   | ↳ Extra context arguments (compile-time wrapper synthesis)  | Medium    | 0.9.0   |             | collections.rs, parallel.rs|
-| A1.2   | ↳ Text/reference return types (merge worker-local stores)   | Medium    | 0.9.0   | A1.1    | parallel.rs, store.rs      |
-| A2       | **Logger: production mode, source injection, hot-reload** *(3 ph)* | Med–High | 1.1+ |            | LOGGER.md                  |
-| A2.1   | ↳ Structured panic handler → JSON log entry                 | Small     | 1.1+    |             | logger.rs, state/mod.rs    |
-| A2.2   | ↳ Source-location injection at compile time                 | Medium    | 1.1+    | A2.1    | control.rs, codegen.rs     |
-| A2.3   | ↳ Hot-reload log-level config (inotify/kqueue)              | Medium    | 1.1+    | A2.1    | logger.rs                  |
-| A3       | Optional Cargo features                                     | Medium    | 0.9.0   |             | OPTIONAL_FEATURES.md       |
-| A4       | **Spatial index operations** *(4 phases)*                   | High      | 1.1+    |             | PROBLEMS #22               |
-| A4.1   | ↳ Insert + exact lookup; remove pre-gate for these ops      | Medium    | 1.1+    |             | database.rs, fill.rs       |
-| A4.2   | ↳ Bounding-box range query `spacial[x1..x2, y1..y2]`       | Medium    | 1.1+    | A4.1    | database.rs, collections.rs|
-| A4.3   | ↳ Removal (`spacial[key] = null`, remove in iterator)       | Small     | 1.1+    | A4.1    | database.rs                |
-| A4.4   | ↳ Full iteration; remove remaining pre-gate                 | Small     | 1.1+    | A4.2,3  | database.rs, io.rs         |
-| A5       | **Closure capture for lambdas** *(5 phases)*                | Very High | 1.1+    | P1        | Depends on P1            |
-| A5.1   | ↳ Capture analysis — identify free variables                | Small     | 1.1+    | P1        | scopes.rs, expressions.rs  |
-| A5.2   | ↳ Closure record layout — synthesise anon struct type       | Small     | 1.1+    | A5.1    | data.rs, typedef.rs        |
-| A5.3   | ↳ Capture at call site — alloc record, copy captured vars   | Medium    | 1.1+    | A5.2    | codegen.rs                 |
-| A5.4   | ↳ Closure body reads — redirect to closure record arg       | Medium    | 1.1+    | A5.3    | codegen.rs, fill.rs        |
-| A5.5   | ↳ Lifetime + cleanup — `OpFreeRef` at end of enclosing scope| Small     | 1.1+    | A5.4    | scopes.rs                  |
-| A6       | **Stack slot `assign_slots` pre-pass** *(3 phases)*         | High      | 0.9.0   |             | ASSIGNMENT.md Steps 3+4    |
-| A6.1   | ↳ Standalone `assign_slots()` — not wired in               | Medium    | 0.9.0   |             | variables.rs               |
-| A6.2   | ↳ Shadow mode — assert agrees with `claim()`; log mismatches| Medium    | 0.9.0   | A6.1    | scopes.rs                  |
-| A6.3   | ↳ Replace `claim()` — `assign_slots` becomes sole mechanism | Small     | 0.9.0   | A6.2    | codegen.rs                 |
-| A7       | **Native extension libraries (`cdylib` + `#native`)** *(3 ph)* | High    | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
-| A7.1   | ↳ `#native` annotation + symbol registration               | Medium    | 1.1+    |             | parser.rs, compiler, state |
-| A7.2   | ↳ `cdylib` loader (`libloading`, optional feature)          | Medium    | 1.1+    | A7.1    | state.rs, Cargo.toml       |
-| A7.3   | ↳ Package layout + `loft-plugin-api` crate                  | Medium    | 1.1+    | A7.2    | new workspace member       |
-| A8      | Destination-passing for text-returning natives              | Med–High  | 0.9.0   | T3-9 (done) | String arch review         |
-| A9      | Vector slice becomes independent copy on mutation           | Medium    | 0.9.0   |             | TODO in vector.rs          |
-| N1         | `--native` CLI flag                                        | Medium    | 1.1+    | N2–N8     | NATIVE.md                  |
-| N2        | Fix `output_init` intermediate type registration            | Medium    | 1.1+    |             | NATIVE.md N10a             |
-| N3        | Fix `output_set` DbRef deep copy                           | Small     | 1.1+    |             | NATIVE.md N10b             |
-| N4        | Fix `OpFormatDatabase` for struct-enum variants             | Small     | 1.1+    |             | NATIVE.md N10c             |
-| N5        | Fix null DbRef in vector operations                        | Small     | 1.1+    |             | NATIVE.md N10d             |
-| N6        | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(3 ph)* | High   | 1.1+    |             | NATIVE.md N10e-2           |
-| N6.1    | ↳ Vector iteration — index-based loop with `_iter` counter  | Medium    | 1.1+    |             | codegen_runtime.rs         |
-| N6.2    | ↳ `sorted` + `index` iteration via existing helpers         | Medium    | 1.1+    | N6.1     | codegen_runtime.rs         |
-| N6.3    | ↳ Reverse iteration + range sub-expressions                 | Medium    | 1.1+    | N6.2     | generation.rs              |
-| N7        | Add `OpFormatFloat`/`OpFormatStackLong` handlers            | Small     | 1.1+    |             | NATIVE.md N10e-3           |
-| N8        | Fix empty pre-eval and prefix issues                       | Small     | 1.1+    |             | NATIVE.md N10e-5           |
-| N9        | Repair fill.rs auto-generation                             | Medium    | 1.1+    |             | NATIVE.md N20              |
-| R1         | Workspace split (prerequisite for W1)                      | Small     | 1.0.0   | repo (done) | Extraction plan            |
-| W1         | WASM foundation (Rust feature + wasm-bridge.js)            | Medium    | 1.0.0   | R1          | WEB_IDE.md M1              |
-| W2         | Editor shell (CodeMirror 6 + Loft grammar)                 | Medium    | 1.0.0   | W1          | WEB_IDE.md M2              |
-| W3         | Symbol navigation (go-to-def, find-usages)                 | Medium    | 1.0.0   | W1, W2      | WEB_IDE.md M3              |
-| W4         | Multi-file projects (IndexedDB)                            | Medium    | 1.0.0   | W2          | WEB_IDE.md M4              |
-| W5         | Docs & examples browser                                    | Small–Med | 1.0.0   | W2          | WEB_IDE.md M5              |
-| W6         | Export/import ZIP + PWA offline                            | Small–Med | 1.0.0   | W4          | WEB_IDE.md M6              |
-
-**Target key:** **0.9.0** = standalone executable milestone · **1.0.0** = IDE + stability contract · **1.1+** = post-1.0 additive · **deferred** = explicitly not planned
-
-_Note: T1-3 requires compiler special-casing (not loft-only) — loft has no generic type parameters._
-_Note: W2 and W4 can be developed in parallel once W1 is complete; W3 and W5 can follow independently._
+See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by milestone.
 
 ---
 
 ## See also
+- [ROADMAP.md](ROADMAP.md) — All items in implementation order, grouped by milestone
 - [../../CHANGELOG.md](../../CHANGELOG.md) — Completed work history (all fixed bugs and shipped features)
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs and workarounds
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design asymmetries and surprises
