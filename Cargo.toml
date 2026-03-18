@@ -31,3 +31,25 @@ dirs = "5"
 
 [dev-dependencies]
 stdext = "0.3"
+
+[package.metadata.deb]
+maintainer = "Jurjen Stellingwerff <j.stellingwerff@gmail.com>"
+copyright = " 2026, Jurjen Stellingwerff <j.stellingwerff@gmail.com>"
+extended-description = """A simple to use scripting language with rust-like syntax"""
+license-file = ["LICENSE"]
+assets = [
+    ["target/release/loft", "usr/bin/", "755"],
+]
+depends = "$auto"
+section = "development"
+priority = "optional"
+
+[package.metadata.rpm]
+name = "loft"
+version = "$version"
+license = "LGPL-3.0-or-later"
+requires = ["libc"]
+assets = [
+    ["target/release/your_app_name", "/usr/bin/your_app_name", "755"]
+]
+
