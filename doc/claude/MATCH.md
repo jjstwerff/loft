@@ -30,7 +30,7 @@ compiler-checked exhaustiveness.
 - [T1-16 Guard clauses (`if`)](#t1-16--guard-clauses-if)
 - [T1-17 Range patterns](#t1-17--range-patterns)
 - [T1-18 Plain struct destructuring](#t1-18--plain-struct-destructuring)
-- [T1-19 Nested patterns in field positions](#t1-19--nested-patterns-in-field-positions)
+- [L2 Nested patterns in field positions](#t1-19--nested-patterns-in-field-positions)
 - [T1-20 Remaining patterns (null, binding)](#t1-20--remaining-patterns-null-binding)
 - [T1-21 Slice and vector patterns](#t1-21--slice-and-vector-patterns)
 
@@ -291,7 +291,7 @@ implemented.
 - [T1-16 Guard clauses (`if`)](#t1-16--guard-clauses-if)
 - [T1-17 Range patterns](#t1-17--range-patterns)
 - [T1-18 Plain struct destructuring](#t1-18--plain-struct-destructuring)
-- [T1-19 Nested patterns in field positions](#t1-19--nested-patterns-in-field-positions)
+- [L2 Nested patterns in field positions](#t1-19--nested-patterns-in-field-positions)
 - [T1-20 Remaining patterns (null, binding)](#t1-20--remaining-patterns-null-binding)
 - [T1-21 Slice and vector patterns](#t1-21--slice-and-vector-patterns)
 
@@ -481,7 +481,7 @@ is added to the coverage set individually.
 **Guards** (T1-16) apply to the whole disjunction — a guard after
 `|`-patterns must pass for any of them to fire.
 
-**Or-patterns in field positions** (T1-19): allowed for sub-patterns,
+**Or-patterns in field positions** (L2): allowed for sub-patterns,
 e.g. `{ status: Paid | Refunded }`.
 
 #### IR Lowering
@@ -834,7 +834,7 @@ struct-pattern ::= TypeName '{' field-binding-list '}'
                  | TypeName
 field-binding-list ::= field-binding { ',' field-binding }
 field-binding      ::= Identifier                        // bind field to same-name var
-                     | Identifier ':' pattern             // (T1-19: sub-pattern)
+                     | Identifier ':' pattern             // (L2: sub-pattern)
 ```
 
 ```loft
@@ -846,7 +846,7 @@ match shape {
     Circle { center, radius }                 => 0.0
 }
 
-// Field rename not planned — use binding sub-patterns (T1-19) instead.
+// Field rename not planned — use binding sub-patterns (L2) instead.
 ```
 
 #### Semantics
@@ -940,7 +940,7 @@ directly (same rule as struct-enum in T1-4).
 
 ---
 
-### T1-19  Nested patterns in field positions
+### L2  Nested patterns in field positions
 
 > **Status: planned**
 > **Depends on:** T1-14 (scalar), T1-18 (struct), T1-4 (struct-enum)

@@ -398,7 +398,7 @@ positive = filter(nums, fn is_pos);      // only positive elements
 total    = reduce(nums, 0, fn add);      // sum of all elements
 ```
 
-All three require a compile-time function reference (`fn <name>`). The function reference must be a named top-level function — lambda expressions are not yet supported (T2-1).
+All three require a compile-time function reference (`fn <name>`). The function reference must be a named top-level function — lambda expressions are not yet supported (P1).
 
 ---
 
