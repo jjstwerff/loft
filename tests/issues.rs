@@ -10,6 +10,7 @@ extern crate loft;
 mod testing;
 
 use loft::compile::byte_code;
+use loft::data::Value;
 use loft::logger::{Logger, RuntimeLogConfig};
 use loft::parser::Parser;
 use loft::scopes;
@@ -970,4 +971,61 @@ fn file_write_error_does_not_panic() {
     assert(true, \"should not panic\");
 }"
     );
+}
+
+// ── N8 ───────────────────────────────────────────────────────────────────────
+// Fix empty pre-eval bindings and `_pre{n}` → `_pre_{n}` naming in generation.rs.
+// Root cause: (1) `generate_expr_buf` returns "" for some void/null expressions,
+// causing `let _pre5 = ;` (invalid Rust) and corrupt substitution; (2) Rust
+// edition 2021+ parses `_pre14` as a prefix token (like `b"…"`), producing
+// parse errors in generated code.
+
+/// N8-naming: generated code must use `_pre_N` names, not bare `_preN`.
+/// A nested user-defined function call is enough to trigger pre-eval hoisting.
+#[test]
+#[ignore = "N8: _pre{n} naming not yet fixed — needs _pre_{n} separator"]
+fn n8_pre_eval_uses_underscore_separator() {
+    // Two nested user-fn calls: the inner call is pre-eval-hoisted by generation.rs.
+    code!("fn inc(v: integer) -> integer { v + 1 }")
+        .expr("inc(inc(0))")
+        .result(Value::Int(2));
+    let src =
+        std::fs::read_to_string("tests/generated/issues_n8_pre_eval_uses_underscore_separator.rs")
+            .expect("generated file not found");
+    // Every `let _pre…` line must use `_pre_N` (digit after underscore), not `_preN`.
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("let _pre") {
+            assert!(
+                rest.starts_with('_'),
+                "Found bare `_preN` binding (should be `_pre_N`): {line}"
+            );
+        }
+    }
+}
+
+/// N8-empty: generated code must not emit `let _preN = ;` (empty right-hand side).
+/// The mutable-reference pattern (user fn with `&T = null` default) triggers this.
+#[test]
+#[ignore = "N8: empty pre-eval binding `let _preN = ;` not yet suppressed"]
+fn n8_no_empty_pre_eval_binding() {
+    code!(
+        "struct Data { num: integer, values: vector<integer> }
+fn add(r: &Data = null, val: integer) {
+    if !r { r = Data { num: 0 }; }
+    r.num += val;
+    r.values += [val];
+}"
+    )
+    .expr("v = Data { num: 1 }; add(v, 2); add(v, 3); \"{v}\"")
+    .result(Value::str("{num:6,values:[2,3]}"));
+    let src =
+        std::fs::read_to_string("tests/generated/issues_n8_no_empty_pre_eval_binding.rs")
+            .expect("generated file not found");
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("let _pre") && trimmed.trim_end().ends_with("= ;") {
+            panic!("Found empty pre-eval binding: {line}");
+        }
+    }
 }
