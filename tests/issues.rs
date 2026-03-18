@@ -1050,6 +1050,65 @@ a.name",
     );
 }
 
+/// N5: vector::clear_vector must not be called when the DbRef is null (rec == 0).
+/// A function that initialises and returns a vector was panicking with
+/// "Unknown record 2147483648" because clear_vector ran on stores.null() before allocation.
+#[test]
+fn n5_null_dbref_clear_vector_guard() {
+    code!(
+        "pub fn fill() -> vector<text> {
+    result = [];
+    result += [\"aa\", \"bb\"];
+    result
+}"
+    )
+    .expr("t = fill(); \"{t}\"")
+    .result(Value::str("[\"aa\",\"bb\"]"));
+    let src = std::fs::read_to_string("tests/generated/issues_n5_null_dbref_clear_vector_guard.rs")
+        .expect("generated file not found");
+    assert!(
+        src.contains(".rec != 0"),
+        "generated code missing null check before clear_vector"
+    );
+}
+
+/// N4: struct-enum variants must show all fields when formatted with OpFormatDatabase.
+/// The init function was registering every enum value with u16::MAX as the struct type,
+/// so ShowDb could not dispatch to variant fields and only showed the variant name.
+#[test]
+fn n4_format_struct_enum_variant_shows_fields() {
+    code!(
+        "enum Op {
+    Nop,
+    Add { left: integer, right: integer }
+}"
+    )
+    .expr("v = \"Add {{ left: 1, right: 2 }}\" as Op; \"{v}\"")
+    .result(Value::str("Add {left:1,right:2}"));
+    let src = std::fs::read_to_string(
+        "tests/generated/issues_n4_format_struct_enum_variant_shows_fields.rs",
+    )
+    .expect("generated file not found");
+    // The generated init must register the Add variant with its actual struct type (not u16::MAX).
+    assert!(
+        !src.contains("db.value(e, \"Add\", u16::MAX)"),
+        "generated init still registers struct-enum variant Add with u16::MAX"
+    );
+}
+
+/// N9a: the auto-generated tests/generated/fill.rs must contain `use crate::ops;`
+/// so it can be compiled as a crate-internal file and eventually replace src/fill.rs.
+#[test]
+fn n9a_generated_fill_has_ops_import() {
+    // generate_code() runs on every test via the testing harness — fill.rs exists.
+    let src = std::fs::read_to_string("tests/generated/fill.rs")
+        .expect("tests/generated/fill.rs not found — run any loft test first");
+    assert!(
+        src.contains("use crate::ops;"),
+        "generated fill.rs missing `use crate::ops;`"
+    );
+}
+
 /// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
 /// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
 #[test]
