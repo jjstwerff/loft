@@ -14,7 +14,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| L3    | Reserve compile-time intrinsic names as keywords             | Small     |                 | PROBLEMS #53                |
 | A9    | Vector slice becomes independent copy on mutation            | Medium    |                 | TODO in vector.rs           |
 | A6    | **Stack slot `assign_slots` pre-pass** *(3 phases)*          | High      |                 | ASSIGNMENT.md Steps 3+4     |
 | A6.1  | ↳ Standalone `assign_slots()` — not wired in                 | Medium    |                 | variables.rs                |
@@ -27,13 +26,12 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | N4    | Fix `OpFormatDatabase` for struct-enum variants              | Small     |                 | NATIVE.md N10c              |
 | N5    | Fix null DbRef in vector operations                          | Small     |                 | NATIVE.md N10d              |
 | N7    | Add `OpFormatFloat`/`OpFormatStackLong` handlers             | Small     |                 | NATIVE.md N10e-3            |
-| N8    | Fix empty pre-eval and prefix issues                         | Small     |                 | NATIVE.md N10e-5            |
 | N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(3 ph)* | High   |                 | NATIVE.md N10e-2            |
 | N6.1  | ↳ Vector iteration — index-based loop with `_iter` counter   | Medium    |                 | codegen_runtime.rs          |
 | N6.2  | ↳ `sorted` + `index` iteration via existing helpers          | Medium    | N6.1            | codegen_runtime.rs          |
 | N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    | N6.2            | generation.rs               |
 | N9    | Repair fill.rs auto-generation                               | Medium    |                 | NATIVE.md N20               |
-| N1    | `--native` CLI flag                                          | Medium    | N2–N8           | NATIVE.md                   |
+| N1    | `--native` CLI flag                                          | Medium    | N2–N7, N9       | NATIVE.md                   |
 
 ---
 

@@ -445,6 +445,44 @@ pub fn index_find() {
     );
 }
 
+#[test]
+pub fn hash_load_factor_threshold() {
+    // The initial hash has room=9, elms=16.
+    // Old threshold: rehash at length=10 (≈62.5% of elms).
+    // New threshold: rehash at length=12 (75% of elms).
+    // This test adds 12 items and verifies the table stays valid throughout,
+    // exercising the range between old and new thresholds.
+    let mut stores = Stores::new();
+    let s = stores.structure("Item", 0);
+    stores.field(s, "key", stores.name("integer"));
+    stores.field(s, "val", stores.name("text"));
+    let h = stores.hash(s, &["key".to_string()]);
+    let m = stores.structure("Container", 0);
+    stores.field(m, "data", h);
+    stores.finish();
+    let into = stores.database(8);
+    stores.set_default_value(h, &into);
+    let hash_ref = DbRef {
+        store_nr: into.store_nr,
+        rec: into.rec,
+        pos: 4,
+    };
+    // Build and insert 12 items one at a time, validating after each batch
+    let data: String = (1..=12)
+        .map(|i| format!("{{key:{i},val:\"item{i}\"}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    stores.parse(&format!("[{data}]"), h, &hash_ref);
+    hash::validate(&hash_ref, &stores.allocations, stores.keys(h));
+    // Verify every item is findable
+    let keys_list = stores.keys(h).to_vec();
+    for i in 1i64..=12 {
+        let key = [Content::Long(i)];
+        let rec = hash::find(&hash_ref, &stores.allocations, &keys_list, &key);
+        assert_ne!(rec.rec, 0, "item {i} not found after load-factor rehash");
+    }
+}
+
 fn find_rec(key: u8, before: bool, s: u16, v: u16, data: &DbRef, stores: &Stores) -> String {
     let rec = DbRef {
         store_nr: data.store_nr,

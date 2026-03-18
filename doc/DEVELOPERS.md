@@ -656,9 +656,8 @@ layouts and allocates memory via the word-addressed `Store` heap allocator.
 - The Red-Black tree uses negative values to encode back-links (parent pointers).
   This is a non-obvious encoding documented in `src/tree.rs`. Do not mistake a
   negative left-child for a null or error.
-- The hash table load threshold is 87.5% — higher than typical (75%). At high load
-  factor, probe chains grow and cache behaviour degrades. Consider lowering it for
-  new hash-dependent features.
+- The hash table load threshold is 75% (`(length * 2 / 3) + 1 >= room`). Beyond
+  this point probe chains grow and cache behaviour degrades.
 
 ---
 
@@ -707,7 +706,7 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 | `Store` allocator | LLRB free tree O(log F); linear scan fallback for tiny blocks | Fast path covers most allocations; scan only for blocks < 2 words |
 | `Stores::free()` | Does not enforce LIFO order (root cause of Issue 27) | Always free stores in exact reverse allocation order |
 | Red-Black tree | Negative values encode back-links — easy to misread | Read the layout comment in `src/tree.rs` before modifying |
-| Hash table | 87.5% load threshold causes long probe chains under load | Do not rely on worst-case hash performance |
+| Hash table | Open-addressing with 75% load threshold | Rehash doubles capacity; probe chains stay short |
 | `spacial<T>` | Radix tree iteration and removal are stubs | Do not use; emits a compile-time error |
 | Library imports | `use lib::*` and `use lib::Name` are supported (T1-2) | — |
 
