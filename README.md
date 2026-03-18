@@ -95,7 +95,8 @@ and a printable reference at [doc/loft-reference.pdf](doc/loft-reference.pdf).
 
 | Page | Topic |
 |------|-------|
-| [Loft Language](doc/00-general.html) | First program, core concepts |
+| [vs Python](doc/00-vs-python.html) | Loft compared to Python |
+| [vs Rust](doc/00-vs-rust.html) | Loft compared to Rust |
 | [Keywords](doc/01-keywords.html) | Control flow: if, for, break, continue |
 | [Texts](doc/02-text.html) | Strings, slicing, iteration |
 | [Integers](doc/03-integer.html) | Arithmetic, bitwise, null |
