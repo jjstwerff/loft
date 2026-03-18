@@ -196,7 +196,7 @@ match c {
 ```
 
 A guarded arm (`pattern if guard => body`) does not count as covering that variant for
-exhaustiveness checking (`control.rs:582`). This is correct — the guard might fail at
+exhaustiveness checking (`control.rs:642`). This is correct — the guard might fail at
 runtime — but it means a programmer who writes guards on every variant still needs a
 wildcard arm or will get a non-exhaustive error. The interaction between guards and
 exhaustiveness is not obvious from the syntax.
