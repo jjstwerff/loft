@@ -1080,15 +1080,6 @@ Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
 
 ---
 
-### N8  Fix empty pre-eval and prefix issues
-**Description:** Skip pre-eval bindings when expression is empty; change `_pre{n}`
-naming to `_pre_{n}` to avoid Rust prefix parsing; fix `OpGetRecord` argument count.
-**Effort:** Small (generation.rs)
-**Fixes:** 3 compile failures
-**Detail:** [NATIVE.md](NATIVE.md) § N10e-5
-
----
-
 ### N1  Add `--native` CLI flag
 **Description:** Add `--native <file.loft>` to `src/main.rs`: parse, generate Rust
 source via `Output::output_native()`, compile with `rustc`, run the binary.
