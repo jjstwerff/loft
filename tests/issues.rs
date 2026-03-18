@@ -971,3 +971,15 @@ fn file_write_error_does_not_panic() {
 }"
     );
 }
+
+#[test]
+#[ignore = "L3: assert not yet a keyword; Option A not yet implemented"]
+fn assert_call_works_as_keyword() {
+    code!("fn test() { assert(1 == 1, \"ok\"); }");
+}
+
+#[test]
+#[ignore = "L3: panic not yet a keyword; Option A not yet implemented"]
+fn panic_call_works_as_keyword() {
+    code!("fn test() { if false { panic(\"should not happen\"); } }");
+}
