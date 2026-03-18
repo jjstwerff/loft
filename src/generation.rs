@@ -1369,6 +1369,16 @@ extern crate loft;"
                     res = res.replace(&name, &format!("({with})"));
                     continue;
                 }
+                // For character-typed parameters, a variable holding an i32 char needs
+                // ops::to_char() because the template expects a `char`, not `i32`.
+                if matches!(a.typedef, Type::Character)
+                    && let Value::Var(n) = vals[a_nr]
+                    && matches!(self.data.def(self.def_nr).variables.tp(n), Type::Character)
+                {
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    continue;
+                }
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
                 // Integer parameter receiving a char value needs explicit cast.
                 if matches!(a.typedef, Type::Integer(_, _)) {
@@ -1399,7 +1409,13 @@ extern crate loft;"
         res = res.replace("s.database.", "stores.");
         res = res.replace("s.db_from_text(", "db_from_text(stores, ");
         res = res.replace("crate::state::", "loft::state::");
-        write!(w, "{res}")
+        // loft represents `character` as `i32`; template functions that return `char`
+        // (like `ops::text_character`) need an explicit cast at the call site.
+        if matches!(def_fn.returned, Type::Character) {
+            write!(w, "({res}) as u32 as i32")
+        } else {
+            write!(w, "{res}")
+        }
     }
 }
 

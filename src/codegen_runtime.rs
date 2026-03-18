@@ -18,6 +18,8 @@
 
 use crate::database::{ShowDb, Stores};
 use crate::keys::DbRef;
+use crate::ops;
+use crate::vector;
 
 /// Allocate a database root record for the given type.
 /// The generated code calls this as `OpDatabase(stores, var, tp)` where `var` is
@@ -176,4 +178,42 @@ pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
     let size = u32::from(stores.size(tp));
     stores.copy_block(&data, &to, size);
     stores.copy_claims(&data, &to, tp);
+}
+
+/// Sort a vector in-place using the element type's natural ordering.
+/// Bytecode equivalent: `sort_vector` in `src/fill.rs:1835`.
+pub fn OpSortVector(stores: &mut Stores, data: DbRef, db_tp: i32) {
+    let db_tp = db_tp as u16;
+    let elem_size = stores.size(db_tp);
+    let is_float = db_tp == 2 || db_tp == 3;
+    vector::sort_vector(&data, elem_size, is_float, &mut stores.allocations);
+}
+
+/// Insert a new default-valued element at `index` in a vector, shifting later elements right.
+/// Returns a `DbRef` pointing to the newly inserted element.
+/// Bytecode equivalent: `State::insert_vector` in `src/state/io.rs:819`.
+pub fn OpInsertVector(
+    stores: &mut Stores,
+    data: DbRef,
+    size: i32,
+    index: i32,
+    db_tp: i32,
+) -> DbRef {
+    let new_value =
+        vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
+    stores.set_default_value(db_tp as u16, &new_value);
+    new_value
+}
+
+/// Return the UTF-8 byte length of a character (encoded as `i32` in loft).
+/// Returns 0 for the null character sentinel.
+/// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.
+#[must_use]
+pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i32 {
+    let ch = ops::to_char(c);
+    if ch == '\0' {
+        0
+    } else {
+        i32::try_from(ch.len_utf8()).unwrap_or(0)
+    }
 }
