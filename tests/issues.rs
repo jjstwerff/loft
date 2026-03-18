@@ -983,7 +983,6 @@ fn file_write_error_does_not_panic() {
 /// N8-naming: generated code must use `_pre_N` names, not bare `_preN`.
 /// A nested user-defined function call is enough to trigger pre-eval hoisting.
 #[test]
-#[ignore = "N8: _pre{n} naming not yet fixed — needs _pre_{n} separator"]
 fn n8_pre_eval_uses_underscore_separator() {
     // Two nested user-fn calls: the inner call is pre-eval-hoisted by generation.rs.
     code!("fn inc(v: integer) -> integer { v + 1 }")
@@ -1007,7 +1006,6 @@ fn n8_pre_eval_uses_underscore_separator() {
 /// N8-empty: generated code must not emit `let _preN = ;` (empty right-hand side).
 /// The mutable-reference pattern (user fn with `&T = null` default) triggers this.
 #[test]
-#[ignore = "N8: empty pre-eval binding `let _preN = ;` not yet suppressed"]
 fn n8_no_empty_pre_eval_binding() {
     code!(
         "struct Data { num: integer, values: vector<integer> }
