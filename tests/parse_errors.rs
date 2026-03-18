@@ -1,4 +1,4 @@
-// Copyright (c) 2022-2025 Jurjen Stellingwerff
+// Copyright (c) 2022-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 extern crate loft;
@@ -540,4 +540,42 @@ fn test() {
     assert(o.i.x == 1, \"nested\");
 }"
     );
+}
+
+#[test]
+fn keyword_sizeof_as_fn() {
+    code!("fn sizeof() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_sizeof_as_fn:1:10")
+        .error("Syntax error: unexpected Token(\"sizeof\") at keyword_sizeof_as_fn:1:10");
+}
+
+#[test]
+#[ignore = "L3: fields cannot be a keyword until A10 lands and all uses as field names are migrated"]
+fn keyword_fields_as_fn() {
+    code!("fn fields() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_fields_as_fn:1:10")
+        .error("Syntax error: unexpected Token(\"fields\") at keyword_fields_as_fn:1:10");
+}
+
+#[test]
+fn keyword_debug_assert_as_fn() {
+    code!("fn debug_assert() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_debug_assert_as_fn:1:16")
+        .error(
+            "Syntax error: unexpected Token(\"debug_assert\") at keyword_debug_assert_as_fn:1:16",
+        );
+}
+
+#[test]
+fn keyword_assert_as_fn() {
+    code!("fn assert() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_assert_as_fn:1:10")
+        .error("Syntax error: unexpected Token(\"assert\") at keyword_assert_as_fn:1:10");
+}
+
+#[test]
+fn keyword_panic_as_fn() {
+    code!("fn panic() {}\nfn test() {}")
+        .error("Expect name in function definition at keyword_panic_as_fn:1:9")
+        .error("Syntax error: unexpected Token(\"panic\") at keyword_panic_as_fn:1:9");
 }
