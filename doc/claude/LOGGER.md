@@ -451,11 +451,192 @@ After parsing:
 
 ---
 
+## Implementation Status
+
+The following pieces from the Architecture section are **implemented**:
+- `--production` CLI flag (main.rs)
+- `n_panic` / `n_assert` with production-mode branching (native.rs)
+- `n_log_info/warn/error/fatal` (native.rs)
+- Source-location injection for all six functions (parser/control.rs)
+- `check_reload()` defined in logger.rs (but not yet called — see T3-2.1 below)
+- `production = true/false` in log.conf (logger.rs)
+
+## Remaining Work (T3-2)
+
+See [PLANNING.md](PLANNING.md) § T3-2 for the phased breakdown.
+
+---
+
+### CLI Mode Flags
+
+Four modes form a strict superset chain:
+
+```
+(no flag)     Default — assert() panics; log_* write to log.conf target.
+--debug       Default + extra runtime null/overflow warnings per type (see §Type Safety Rules).
+--production  assert()/panic() log instead of abort; bytecode unchanged.
+--release     Implies --production; also elides assert() and debug_assert() from bytecode.
+```
+
+`--debug` and `--production`/`--release` are mutually exclusive (debug mode implies less
+trust in the program; release mode implies more trust).
+
+---
+
+### RunMode — Shared State
+
+A new `RunMode` enum is stored on `Stores` (replacing the current implicit production flag):
+
+```rust
+// src/database/mod.rs  (or a new src/run_mode.rs)
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunMode {
+    #[default]
+    Default,     // current behaviour
+    Debug,       // extra null/overflow logging
+    Production,  // panic/assert → log
+    Release,     // implies Production; assert/debug_assert absent from bytecode
+}
+
+// Add to Stores:
+pub run_mode: RunMode,
+```
+
+`main.rs` sets `state.database.run_mode` after parsing flags.
+`Logger.config.production` is set when `run_mode` is `Production` or `Release`.
+All runtime checks read `stores.run_mode` instead of locking the logger to check the flag
+(cheaper: no mutex, just an enum comparison).
+
+---
+
+### T3-2.1 — Wire hot-reload (trivial)
+
+Call `lg.check_reload()` at the top of each `n_log_*`, `n_panic`, and `n_assert` body in
+`native.rs`, before the main logic.  The throttle in `check_reload()` ensures a `stat()`
+syscall happens at most once per 5 s.
+
+```rust
+// In n_log_info (and the other five functions):
+if let Ok(mut lg) = logger.lock() {
+    lg.check_reload();   // ← add this line
+    lg.log(Severity::Info, v_file.str(), v_line as u32, v_message.str());
+}
+```
+
+Files: `src/native.rs` (6 lines added).
+
+---
+
+### T3-2.2 — `is_production()` and `is_debug()` (small)
+
+Two new natives read `stores.run_mode`:
+
+```rust
+fn n_is_production(stores: &mut Stores, _stack: &mut DbRef) -> bool {
+    matches!(stores.run_mode, RunMode::Production | RunMode::Release)
+}
+
+fn n_is_debug(stores: &mut Stores, _stack: &mut DbRef) -> bool {
+    stores.run_mode == RunMode::Debug
+}
+```
+
+Declarations in `default/01_code.loft`:
+
+```loft
+// Returns true when running with --production or --release.
+pub fn is_production() -> boolean;
+// Returns true when running with --debug.
+pub fn is_debug() -> boolean;
+```
+
+Files: `src/native.rs` (+2 fns), `default/01_code.loft` (+2 declarations).
+
+---
+
+### T3-2.3 — `--release` flag with zero-overhead assert elision (small–medium)
+
+`--release` implies `--production` AND strips `assert()` and `debug_assert()` from the
+bytecode at parse time, so they produce zero instructions.
+
+New `debug_assert(test: boolean, message: text)` mirrors `assert()` but is only ever
+emitted in default and debug mode — it is the loft equivalent of Rust's `debug_assert!`.
+
+```
+Mode          assert()         debug_assert()
+──────────    ─────────────    ──────────────
+Default       native call      native call
+Debug         native call      native call
+Production    native call      native call (logs instead of panics)
+Release       elided (Null)    elided (Null)
+```
+
+Parser change in `parse_call_diagnostic`:
+
+```rust
+if name == "assert" || name == "debug_assert" {
+    if self.release_mode {
+        *val = Value::Null;
+        return Type::Void;
+    }
+    // ... existing n_assert emit
+}
+```
+
+Changes:
+| File | Change |
+|---|---|
+| `src/parser/mod.rs` | Add `pub release_mode: bool` to `Parser` |
+| `src/parser/control.rs` | `parse_call_diagnostic`: early `Value::Null` when `release_mode`; handle `debug_assert` |
+| `src/main.rs` | Parse `--release`; set `run_mode = Release`, `p.release_mode = true`, `production = true`; update help text |
+| `default/01_code.loft` | Add `debug_assert(test: boolean, message: text)` declaration |
+
+---
+
+### T3-2.4 — `--debug` flag with per-type runtime safety logging (medium)
+
+When `stores.run_mode == RunMode::Debug`, the runtime logs warnings for conditions that
+are currently silent (null propagation, overflow, OOB returns).
+
+#### Type Safety Rules by Mode
+
+| Type | Condition | Default | Debug | Production | Release |
+|---|---|---|---|---|---|
+| `integer` | arithmetic overflow | null (silent) | `warn` log | null (silent) | null (silent) |
+| `integer` | shift out of [0,32) | null (silent) | `warn` log | null (silent) | null (silent) |
+| `long` | arithmetic overflow | null (silent) | `warn` log | null (silent) | null (silent) |
+| `float` | NaN result from non-NaN inputs | NaN (silent) | `warn` log | NaN (silent) | NaN (silent) |
+| reference | field access on null ref | null (silent) | `warn` log | null (silent) | null (silent) |
+| `vector<T>` | index OOB on non-empty vector | null (silent) | `warn` log | null (silent) | null (silent) |
+| `text` | slice OOB on non-empty text | `""` (silent) | `warn` log | `""` (silent) | `""` (silent) |
+| `assert()` | test fails | panic | panic | error log | elided |
+| `debug_assert()` | test fails | panic | panic | error log | elided |
+| `panic()` | called | panic | panic | fatal log | fatal log |
+
+All debug-mode warnings carry the current bytecode position, translated to a loft file+line
+via the line-number table in `State` (same mechanism that produces error messages).
+
+#### Implementation sketch
+
+The cheapest implementation avoids putting a mode check in every opcode:
+
+1. Add `debug_null_warn(stores, op_name, file, line)` helper in `native.rs`.
+2. The operations that can silently null (`op_add_int`, vector index, etc.) are called via
+   wrappers in `fill.rs` that check `run_mode == Debug` before calling the helper.  The
+   `run_mode` check is a single enum comparison; it is predicted-not-taken in default/release
+   mode so branch misprediction cost is negligible.
+3. Source location: `State` already has a line-number lookup (`debug_line`); pass
+   `state.code_pos` to the helper to resolve file+line.
+
+Files: `src/fill.rs` (wrappers for overflow/null paths), `src/native.rs` (helper),
+`src/database/mod.rs` (add `run_mode` field).
+
+---
+
 ## Deferred
 
 - **Async / non-blocking writes**: the current design writes synchronously in the worker thread holding the mutex.  For high-throughput use a channel-based background writer thread.
 - **Structured (JSON) output**: the plain-text format is sufficient for now.  JSON is a future option for log-aggregation pipelines.
-- **Log levels below `info`**: a `debug` severity could be added for development use, filtered out by default.
 - **Syslog / journald**: forward to system log daemons on Linux (future).
 - **`log_warn(msg)` call-site-free form**: a version without the parse special-case (no injected location) could be useful for library code that builds messages dynamically and doesn't want source pinning.
 
@@ -473,4 +654,4 @@ After parsing:
 ## See also
 - [STDLIB.md](STDLIB.md) — `log_info`, `log_warn`, `log_error`, `log_fatal` user-facing API
 - [INTERNALS.md](INTERNALS.md) — `src/logger.rs` implementation details
-- [PLANNING.md](PLANNING.md) — T3-3 (production mode, source injection, hot-reload)
+- [PLANNING.md](PLANNING.md) — T3-2 (remaining work: hot-reload wiring, is_production(), --release)
