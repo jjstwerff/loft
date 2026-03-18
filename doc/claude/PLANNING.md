@@ -1011,15 +1011,6 @@ plain enum values, byte/short field types), causing type ID misalignment at runt
 
 ---
 
-### N3  Fix `output_set` for DbRef deep copy
-**Description:** `Set(var_b, Var(var_a))` for reference types emits a pointer copy.
-Add `OpCopyRecord` call after assignment when both sides are same-type references.
-**Effort:** Small (generation.rs `output_set`)
-**Fixes:** `objects_independent_strings` (1 runtime failure)
-**Detail:** [NATIVE.md](NATIVE.md) § N10b
-
----
-
 ### N4  Fix `OpFormatDatabase` for struct-enum variants
 **Description:** Formatting outputs only the enum name, not the full struct fields.
 Verify `db_tp` argument is the parent enum type so `ShowDb` can dispatch to variant.
@@ -1061,15 +1052,6 @@ Handle `Value::Iter` in `output_code_inner` by emitting a loop with these functi
 Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
 **Effort:** High (codegen_runtime.rs + generation.rs)
 **Fixes:** 3 compile failures (iterator tests)
-
----
-
-### N7  Add `OpFormatFloat`/`OpFormatStackLong` handlers
-**Description:** Add `output_call` special cases that emit direct calls to
-`ops::format_float` / `ops::format_long` with the correct `&mut String` argument.
-**Effort:** Small (generation.rs `output_call`)
-**Fixes:** 2 compile failures
-**Detail:** [NATIVE.md](NATIVE.md) § N10e-3
 
 ---
 

@@ -1032,6 +1032,16 @@ extern crate loft;"
         }
         let needs_to_string = matches!(variables.tp(var), Type::Text(_));
         let name = sanitize(variables.name(var));
+        // When assigning a reference to a reference variable, a pointer copy is not
+        // sufficient — emit an OpCopyRecord call after the assignment for a deep copy.
+        let copy_record: Option<(String, u32)> = match (variables.tp(var), to) {
+            (Type::Reference(d_nr, _), Value::Var(src))
+                if matches!(variables.tp(*src), Type::Reference(_, _)) =>
+            {
+                Some((sanitize(variables.name(*src)), *d_nr))
+            }
+            _ => None,
+        };
         // For text/reference block assignments, pre-declare the variable so that
         // any drop(@var) inside the block (e.g., on break) can reference it.
         if !self.declared.contains(&var) && matches!(to, Value::Block(_)) {
@@ -1063,6 +1073,15 @@ extern crate loft;"
                 write!(w, ".to_string()")?;
             }
         }
+        if let Some((src_name, d_nr)) = copy_record {
+            let tp_nr = self.data.def(d_nr).known_type;
+            writeln!(w, ";")?;
+            self.indent(w)?;
+            write!(
+                w,
+                "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"
+            )?;
+        }
         Ok(())
     }
 
@@ -1078,7 +1097,12 @@ extern crate loft;"
         let def_fn = self.data.def(def_nr);
         let name: &str = &def_fn.name;
         match name {
-            "OpFormatLong" => return self.format_long(w, vals),
+            "OpFormatLong" | "OpFormatStackLong" => {
+                return self.format_long(w, vals, name == "OpFormatStackLong");
+            }
+            "OpFormatFloat" | "OpFormatStackFloat" => {
+                return self.format_float(w, vals, name == "OpFormatStackFloat");
+            }
             "OpFormatText" => return self.format_text(w, vals),
             "OpAppendText" => return self.append_text(w, vals),
             "OpAppendStackText" => {
@@ -1233,7 +1257,12 @@ extern crate loft;"
     }
 
     /// Use this to emit `OpFormatLong` as a call to `ops::format_long`.
-    fn format_long(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
+    fn format_long(
+        &mut self,
+        w: &mut dyn Write,
+        vals: &[Value],
+        stack: bool,
+    ) -> std::io::Result<()> {
         if let [
             Value::Var(nr),
             val,
@@ -1247,9 +1276,31 @@ extern crate loft;"
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
+            let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_long(&mut var_{s_nr}, {val_expr}, {radix} as u8, {width_expr}, {token} as u8, {plus}, {note})"
+                "ops::format_long({prefix}var_{s_nr}, {val_expr}, {radix} as u8, {width_expr}, {token} as u8, {plus}, {note})"
+            )?;
+            return Ok(());
+        }
+        panic!("Could not parse {vals:?}");
+    }
+
+    fn format_float(
+        &mut self,
+        w: &mut dyn Write,
+        vals: &[Value],
+        stack: bool,
+    ) -> std::io::Result<()> {
+        if let [Value::Var(nr), val, width, prec] = vals {
+            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let val_expr = self.generate_expr_buf(val)?;
+            let width_expr = self.generate_expr_buf(width)?;
+            let prec_expr = self.generate_expr_buf(prec)?;
+            let prefix = if stack { "" } else { "&mut " };
+            write!(
+                w,
+                "ops::format_float({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr})"
             )?;
             return Ok(());
         }

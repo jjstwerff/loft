@@ -460,13 +460,14 @@ pub fn hash_load_factor_threshold() {
     let m = stores.structure("Container", 0);
     stores.field(m, "data", h);
     stores.finish();
-    let into = stores.database(8);
-    stores.set_default_value(h, &into);
+    let db = stores.database(8);
+    // "data: hash" is the first user field at byte offset 4 (after the 4-byte type header).
     let hash_ref = DbRef {
-        store_nr: into.store_nr,
-        rec: into.rec,
+        store_nr: db.store_nr,
+        rec: db.rec,
         pos: 4,
     };
+    stores.set_default_value(h, &hash_ref);
     // Build and insert 12 items one at a time, validating after each batch
     let data: String = (1..=12)
         .map(|i| format!("{{key:{i},val:\"item{i}\"}}"))

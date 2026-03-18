@@ -9,6 +9,18 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ## [Unreleased]
 
+### Native codegen fixes
+
+- **N3** — `output_set` now emits `OpCopyRecord` after a reference-to-reference
+  assignment so generated code performs a deep copy instead of an aliasing pointer copy.
+  (`src/generation.rs` `output_set`)
+
+- **N7** — `output_call` now intercepts `OpFormatFloat`, `OpFormatStackFloat`, and
+  `OpFormatStackLong` and emits direct calls to `ops::format_float` /
+  `ops::format_long` with the correct `(&mut) String` argument instead of falling
+  through to the template handler which produced broken `OpFormatFloat(stores, …)` code.
+  (`src/generation.rs` `output_call` + new `format_float` helper)
+
 ### Improvements
 
 - **A11** — Hash table load-factor threshold corrected from ~57% to 75%
