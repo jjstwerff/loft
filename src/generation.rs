@@ -1113,18 +1113,7 @@ extern crate loft;"
                 return self.append_character(w, vals);
             }
             "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
-            "OpClearVector" => {
-                // Guard clear_vector with a null check: stores.null() returns a DbRef with
-                // rec==0 but a real store_nr, which causes clear_vector to panic.
-                if let [Value::Var(nr)] = vals {
-                    let v_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
-                    write!(
-                        w,
-                        "if var_{v_nr}.rec != 0 {{ vector::clear_vector(&var_{v_nr}, &mut stores.allocations); }}"
-                    )?;
-                }
-                return Ok(());
-            }
+            "OpClearVector" => return self.clear_vector(w, vals),
             "OpFreeText" | "OpCreateStack" | "OpNullRefSentinel" => return Ok(()),
             "OpCopyRecord" => {
                 // Deep copy: copy_block + copy_claims
@@ -1208,6 +1197,22 @@ extern crate loft;"
         } else {
             self.output_call_template(w, def_fn, vals)
         }
+    }
+
+    /// Use this to emit `OpClearVector` with a null-record guard.
+    /// `stores.null()` returns a `DbRef` whose `store_nr` is valid but `rec == 0`;
+    /// calling `vector::clear_vector` on it panics.  The guard skips the call when
+    /// the vector has not yet been allocated.
+    fn clear_vector(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
+        if let [Value::Var(nr)] = vals {
+            let v_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            write!(
+                w,
+                "if var_{v_nr}.rec != 0 {{ vector::clear_vector(&var_{v_nr}, &mut stores.allocations); }}"
+            )?;
+            return Ok(());
+        }
+        panic!("Could not parse {vals:?}");
     }
 
     /// Use this to emit `OpClearStackText` as a `.clear()` call on the target string variable.
