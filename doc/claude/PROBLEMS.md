@@ -28,8 +28,8 @@ recommended fix path are described.
 | 53 | Compile-time intrinsic names not reserved as keywords | Medium | Avoid naming fns `fields`, `debug_assert`, `sizeof`, `assert`, `panic` |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
-| 56 | Native codegen: `OpSortVector`, `OpInsertVector`, `OpRemoveVector`, `OpLengthCharacter` unimplemented in codegen_runtime.rs — 9 generated files fail to compile | Medium (native only) | N/A |
-| 57 | Native codegen: character variable type is `i32` in generated Rust; direct `.is_alphanumeric()` call fails — `strings_string_parse` does not compile | Low (native only) | N/A |
+| ~~56~~ | ~~Native codegen: `OpSortVector`, `OpInsertVector`, `OpLengthCharacter` unimplemented in codegen_runtime.rs — generated files fail to compile~~ | ~~Medium (native only)~~ | **FIXED** (0.8.2) |
+| ~~57~~ | ~~Native codegen: character variable type is `i32` in generated Rust; `.is_alphanumeric()` call requires `char`~~ | ~~Low (native only)~~ | **FIXED** (0.8.2) |
 | ~~44~~ | ~~Empty vector literal `[]` cannot be passed directly as a mutable vector argument~~ | ~~Low~~ | **FIXED** |
 | ~~20~~ | ~~`f#next = pos` seek before first open is a no-op~~ | ~~Low~~ | **FIXED** |
 | ~~45~~ | ~~`&vector` parameter triggers "never modified" for clear-like ops~~ | ~~Low~~ | **FIXED** |

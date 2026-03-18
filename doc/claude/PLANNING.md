@@ -1003,15 +1003,6 @@ See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
 
 ---
 
-### N2  Fix `output_init` to register all intermediate types
-**Description:** `output_init` skips intermediate types (vectors inside structs,
-plain enum values, byte/short field types), causing type ID misalignment at runtime.
-**Effort:** Medium (generation.rs `output_init`)
-**Fixes:** `enums_types`, `enums_enum_field` (2 runtime failures)
-**Detail:** [NATIVE.md](NATIVE.md) § N10a
-
----
-
 ### N6  Implement `OpIterate`/`OpStep` in codegen_runtime
 **Description:** Add iterate/step state machine for sorted/index/vector collections.
 Handle `Value::Iter` in `output_code_inner` by emitting a loop with these functions.
@@ -1041,7 +1032,7 @@ Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
 **Description:** Add `--native <file.loft>` to `src/main.rs`: parse, generate Rust
 source via `Output::output_native()`, compile with `rustc`, run the binary.
 **Effort:** Medium
-**Depends on:** N2, N6, N9
+**Depends on:** N6, N9
 
 ---
 
@@ -1052,37 +1043,6 @@ Remaining: fix formatting (N20b), replace src/fill.rs (N20c), add `#state_call`
 annotation for the 52 delegation operators (N20d).
 **Effort:** Medium (create.rs + default/*.loft + CI)
 **Detail:** [NATIVE.md](NATIVE.md) § N20
-
----
-
-### N8  Implement missing `codegen_runtime` vector operations
-**Description:** 9 generated test files fail because `codegen_runtime.rs` has no
-implementation for:
-- `OpSortVector` — used by 5 sort tests (`vectors_sort_*`)
-- `OpInsertVector` — used by 5 insert tests (`vectors_insert_*`)
-- `OpRemoveVector` / `OpRemove` — used by `vectors_index_loop_remove_small`
-- `OpLengthCharacter` — character byte-length, used by `vectors_fill_fn`
-
-Each op is declared in `default/01_code.loft` with a `#rust` template that references
-`s.database.allocations` / `s.` prefixes, so the template just needs the same
-`s.database.` → `stores.` substitution already applied to other ops.
-**Effort:** Small–Medium (codegen_runtime.rs, one function per op)
-**Fixes:** 9 compile failures
-**Detail:** [NATIVE.md](NATIVE.md) § Critical Files
-
----
-
-### N10  Fix character-typed variable in method dispatch
-**Description:** `strings_string_parse` fails because the character variable `l` has type
-`i32` in generated Rust (loft represents `character` as `i32` internally), but the
-generated call is `(var_l).is_alphanumeric()` which requires `char`, not `i32`.
-The native method `t_9character_is_alphanumeric` is generated as a `todo!()` stub;
-the generated call site bypasses the stub and calls the method directly.
-**Fix:** Either generate `ops::to_char(var_l).is_alphanumeric()` at the call site, or
-emit the stub body as `char::from_u32(var_self as u32).unwrap_or('\0').is_alphanumeric()`
-in the native function registry.
-**Effort:** Small (generation.rs or native.rs)
-**Fixes:** `strings_string_parse` compile failure
 
 ---
 
