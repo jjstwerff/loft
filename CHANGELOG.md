@@ -32,6 +32,25 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   fields; the `u16::MAX` sentinel caused it to only output the variant name, omitting
   all struct fields.  (`src/generation.rs` `output_enum`)
 
+- **N8** — `codegen_runtime.rs` now provides `OpSortVector`, `OpInsertVector`, and
+  `OpLengthCharacter`.  Generated sort/insert/character-length operations had no
+  link target, causing ~12 native test files to fail to compile.
+  (`src/codegen_runtime.rs`)
+
+- **N10** — `output_call_template` in `generation.rs` now wraps character-typed
+  variables with `ops::to_char(…)` when the call template expects `char`, and appends
+  `as u32 as i32` when a function returning `char` is assigned to an `i32` variable.
+  Fixes char/i32 type mismatches in generated code for character method calls.
+  (`src/generation.rs` `output_call_template`)
+
+- **N2** — `output_init` now emits type definitions in dependency order (topological
+  sort) so content types are always registered before the container structs that
+  reference them.  Also fixes a cycle-detection gap in `finish_type`: mutually
+  recursive type graphs (e.g. enum → struct → sorted<T> → T → enum) no longer cause
+  infinite recursion in `Stores::finish()`.
+  (`src/generation.rs` `output_init` + `emit_def_ordered`;
+   `src/database/types.rs` `finish_type`)
+
 - **N9a** — `create.rs::generate_code()` now emits `use crate::ops;` in the generated
   `tests/generated/fill.rs` header so the file can be compiled as a crate module
   without unresolved `ops::` references.  (`src/create.rs`)

@@ -1109,6 +1109,73 @@ fn n9a_generated_fill_has_ops_import() {
     );
 }
 
+/// N8: OpSortVector, OpInsertVector, and OpLengthCharacter must exist in codegen_runtime.
+/// Generated sort/insert/fill tests fail to compile because these functions are absent.
+#[test]
+fn n8_codegen_runtime_vector_ops_exist() {
+    // Sorting a vector of integers must work in native-codegen mode.
+    code!("fn sort_it() -> vector<integer> { v = [3, 1, 2]; sort(v); v }")
+        .expr("\"{sort_it()}\"")
+        .result(Value::str("[1,2,3]"));
+    let src =
+        std::fs::read_to_string("tests/generated/issues_n8_codegen_runtime_vector_ops_exist.rs")
+            .expect("generated file not found");
+    assert!(
+        src.contains("OpSortVector("),
+        "generated code missing OpSortVector call"
+    );
+}
+
+/// N10: ops::text_character returns char but loft represents character as i32.
+/// Generated code assigns the char to an i32 variable without a cast, causing a compile error.
+/// Also, i32 character variables used in method dispatch (is_alphanumeric etc.) need wrapping
+/// with ops::to_char(...) since the method requires char, not i32.
+#[test]
+fn n10_char_cast_in_generated_code() {
+    code!(
+        "fn count_alpha(s: text) -> integer {
+    n = 0;
+    for c in s { if c.is_alphanumeric() { n += 1; } }
+    n
+}"
+    )
+    .expr("count_alpha(\"a1!\")")
+    .result(Value::Int(2));
+    let src = std::fs::read_to_string("tests/generated/issues_n10_char_cast_in_generated_code.rs")
+        .expect("generated file not found");
+    assert!(
+        src.contains("as u32 as i32") || src.contains("ops::to_char("),
+        "generated code missing char<->i32 cast"
+    );
+}
+
+/// N2: output_init must register content types before the structs that reference them in
+/// sorted/index/hash fields.  When a struct has a sorted<Foo> field and Foo has a higher
+/// type-ID than the struct, the init function panicked because db.sorted(foo_type_id, ...)
+/// was called before Foo was registered.
+#[test]
+fn n2_sorted_field_content_type_registered_first() {
+    code!(
+        "struct Sort { nr: integer }
+struct Container { data: sorted<Sort[nr]> }"
+    )
+    .expr("c = Container {}; \"{c}\"")
+    .result(Value::str("{data:[]}"));
+    let src = std::fs::read_to_string(
+        "tests/generated/issues_n2_sorted_field_content_type_registered_first.rs",
+    )
+    .expect("generated file not found");
+    // Sort must appear in the init before Container (which contains the sorted<Sort> field).
+    let sort_pos = src.find("\"Sort\"").expect("Sort not found in init");
+    let container_pos = src
+        .find("\"Container\"")
+        .expect("Container not found in init");
+    assert!(
+        sort_pos < container_pos,
+        "Sort (content type) must be registered before Container in generated init"
+    );
+}
+
 /// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
 /// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
 #[test]

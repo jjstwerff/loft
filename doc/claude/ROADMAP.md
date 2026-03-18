@@ -21,15 +21,12 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | A6.3  | ↳ Replace `claim()` — `assign_slots` becomes sole mechanism  | Small     | A6.2            | codegen.rs                  |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | A3    | Optional Cargo features                                      | Medium    |                 | OPTIONAL_FEATURES.md        |
-| N2    | Fix `output_init` intermediate type registration             | Medium    |                 | NATIVE.md N10a              |
 | N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(3 ph)* | High   |                 | NATIVE.md N10e-2            |
 | N6.1  | ↳ Vector iteration — index-based loop with `_iter` counter   | Medium    |                 | codegen_runtime.rs          |
 | N6.2  | ↳ `sorted` + `index` iteration via existing helpers          | Medium    | N6.1            | codegen_runtime.rs          |
 | N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    | N6.2            | generation.rs               |
-| N8    | Implement missing codegen_runtime vector ops                 | Small–Med |                 | PLANNING.md N8              |
-| N10   | Fix character-typed variable in method dispatch              | Small     |                 | PLANNING.md N10             |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
-| N1    | `--native` CLI flag                                          | Medium    | N2, N6, N8–N10  | NATIVE.md                   |
+| N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
 
 ---
 
