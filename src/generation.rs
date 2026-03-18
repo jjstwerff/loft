@@ -1077,7 +1077,10 @@ extern crate loft;"
             let tp_nr = self.data.def(d_nr).known_type;
             writeln!(w, ";")?;
             self.indent(w)?;
-            write!(w, "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)")?;
+            write!(
+                w,
+                "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"
+            )?;
         }
         Ok(())
     }

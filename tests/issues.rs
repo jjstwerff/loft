@@ -1040,9 +1040,10 @@ b.name += \" world\";
 a.name",
         )
         .result(Value::str("hello"));
-    let src =
-        std::fs::read_to_string("tests/generated/issues_n3_reference_assignment_emits_copy_record.rs")
-            .expect("generated file not found");
+    let src = std::fs::read_to_string(
+        "tests/generated/issues_n3_reference_assignment_emits_copy_record.rs",
+    )
+    .expect("generated file not found");
     assert!(
         src.contains("OpCopyRecord(stores,"),
         "generated code missing OpCopyRecord after reference assignment"
