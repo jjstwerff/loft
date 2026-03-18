@@ -14,6 +14,7 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
   - [Step 3 — Enable Tests](#step-3--enable-tests)
   - [Step 4 — Structural Refactors](#step-4--structural-refactors)
   - [Step 5 — Documentation](#step-5--documentation)
+- [Splitting High-Effort Items](#splitting-high-effort-items)
 - [Bytecode Economy](#bytecode-economy)
 - [CI Validation](#ci-validation)
 - [Commit Message Style](#commit-message-style)
@@ -223,6 +224,56 @@ docs: {ID} — update CHANGELOG, PLANNING
 ```
 
 Review every file in `doc/claude/` for references to the feature and update as needed.
+
+---
+
+## Splitting High-Effort Items
+
+Any item rated **Medium–High or higher** in PLANNING.md must be split into
+sub-steps before work begins.  A sub-step is a change that:
+
+1. **Passes all three CI checks on its own** (`cargo test`, `cargo clippy -- -D warnings`,
+   `cargo fmt -- --check`).
+2. **Has at least one test** that was written before the implementation (Step 1 of the
+   structured sequence) and enabled immediately after (Step 3).
+3. **Leaves the codebase in a better or equal state** — no sub-step may introduce a
+   regression, a dead code path, or a half-working feature visible to loft programs.
+
+### How to split
+
+Look for **natural seams** in the planned work.  Good split boundaries:
+
+| Seam | Example |
+|---|---|
+| Independent areas of the codebase | Parser change + runtime change → two commits |
+| Phases of a larger design | T3-10 destination-passing: Phase 1 compiler, Phase 2 native rewrites |
+| Feature flags / opt-in paths | Implement behind a `#[cfg(test)]` stub, then wire it in |
+| Layers of correctness | Guard first (panic on bad input), full fix second |
+| Subset of cases | Handle the common case first, edge cases in follow-up commits |
+
+If no natural seam exists and the item genuinely cannot be split, document why in the
+PLANNING.md item before starting.  This is the exception, not the rule.
+
+### Update PLANNING.md before starting
+
+When splitting a High or Very High item, **rewrite its Fix path section** in
+PLANNING.md to list the sub-steps explicitly before the first commit lands.  This:
+
+- Makes the plan reviewable before any code is written.
+- Gives future sessions enough context to resume mid-item without re-deriving the plan.
+- Forces a check that each sub-step is independently testable — if you cannot write a
+  test for a sub-step, the split boundary is wrong.
+
+Example: T3-10 (destination-passing for string natives) was already split into four
+phases (compiler, native rewrites, format expressions, scratch buffer removal) in
+PLANNING.md before implementation began.  Each phase is independently testable because
+existing string tests catch regressions and new tests verify the new calling convention.
+
+### Size budget
+
+A single commit should rarely exceed **~200 lines of non-test Rust**.  If a sub-step
+exceeds this, look for a smaller seam.  Large diffs are hard to review, hard to bisect,
+and statistically more likely to contain regressions.
 
 ---
 
