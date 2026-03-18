@@ -22,20 +22,26 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
 
 ## Branch Naming
 
-One branch per PLANNING.md item.  Branch names mirror the item ID, lowercased,
-with a short suffix that identifies the feature:
+A branch covers one or more PLANNING.md items.  Branch names list all item IDs,
+lowercased, with a short suffix that identifies the overall theme:
 
 ```
 t{tier}-{nr}-{short-name}
+t{tier}-{nr}-t{tier}-{nr}-{short-name}        # two items
+t{tier}-{nr}-t{tier}-{nr}-t{tier}-{nr}-{short-name}   # three items
 ```
+
+Group items in one branch only when they **touch overlapping files** — otherwise
+keep them separate to make review straightforward.
 
 Examples:
 
-| Planning item | Branch name |
+| Planning item(s) | Branch name |
 |---|---|
 | T1-2 — Wildcard imports | `t1-2-wildcard-imports` |
 | T2-6 — `now()` and `ticks()` | `t2-6-time-functions` |
 | T2-11 — `loft.toml` package layout | `t2-11-package-layout` |
+| T0-11 + T0-12 + T1-32 — 0.8.1 stability | `t0-11-t0-12-t1-32-stability-081` |
 
 Create the branch from the tip of `main`.  **Always start from a clean, up-to-date
 `main`** — if you are on a different branch, check for uncommitted documentation
@@ -156,8 +162,10 @@ relevant documentation before including it in the commit:**
 Include these documentation updates in the docs commit at the end of the branch.
 Do not wait until later — findings are freshest immediately after implementation.
 
-Multiple PLANNING items may share a branch when they touch the same files
-(e.g. `n11-n14-runtime-fixes`).  Mention all item IDs in the commit message.
+When multiple PLANNING items share a branch, **each item gets its own separate
+commit sequence** — do not collapse them into one big commit.  A reader bisecting
+the history must be able to pin the change to a single item.  Mention the item ID
+in every commit message that belongs to it (e.g. `fix: T0-11 …`, `fix: T0-12 …`).
 
 ### Commit message style
 
@@ -218,11 +226,25 @@ Review every file in `doc/claude/` for references to the feature and update as n
 
 ---
 
-## Optional: Structured Commit Sequence for Medium+ Items
+## Structured Commit Sequence
 
-For larger features, the following commit order makes review easier.
-It is **not required** — the only requirement is that every commit passes
-the three checks above.
+For each item (or each independent area of a single item) follow the commit order
+below.  It is **not required for trivial one-file fixes** — the only hard
+requirement is that every commit passes the three checks above.
+
+When a branch contains multiple items, repeat the sequence once per item before
+writing the shared documentation commit at the end:
+
+```
+[Item A — Step 1] tests with #[ignore]
+[Item A — Step 2] code change
+[Item A — Step 3] enable tests
+[Item B — Step 1] tests with #[ignore]
+[Item B — Step 2] code change
+[Item B — Step 3] enable tests
+[Steps 4] any refactors (shared or per-item)
+[Step 5]  docs: update PLANNING, PROBLEMS, CHANGELOG for all items
+```
 
 ### Step 1 — Tests with `#[ignore]`
 
