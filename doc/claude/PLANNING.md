@@ -597,6 +597,7 @@ protocol (sorted/index/vector).  Remove the remaining pre-gate.
 *Tests:* insert N points, iterate all, count matches N; reverse iteration produces correct order.
 
 **Effort:** High (new index type in database.rs and vector.rs)
+**Target:** 1.1+
 
 ---
 
@@ -1000,9 +1001,9 @@ pass a struct value" from the generic type-mismatch message.
 (`tests/generated/*.rs`), but none compile (~1500 errors).  The steps below fix
 these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
-**Target: 0.9.0** — the generator already exists; N items are incremental fixes that turn
+**Target: 0.8.2** — the generator already exists; N items are incremental fixes that turn
 broken generated output into correct compiled Rust.  Each fix is small and independent.
-See the 0.9.0 milestone in [PLANNING.md](PLANNING.md#version-090) for rationale.
+See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
 
 ---
 
@@ -1413,6 +1414,7 @@ This change is a **prerequisite for W1** and should happen at the same time, not
 For 1.0 the single-crate layout is correct and should not be changed early.
 **Effort:** Small (Cargo workspace wiring; no logic changes)
 **Depends on:** repo creation (done); gates W1
+**Target:** 1.0.0
 
 ---
 
@@ -1440,7 +1442,8 @@ Requires four bounded Rust changes, all behind `#[cfg(feature="wasm")]`:
 JS deliverable: `ide/src/wasm-bridge.js` with `initWasm()` + `compileAndRun()`.
 JS tests (4): hello-world, compile-error with position, multi-file `use`, runtime output capture.
 **Effort:** Medium (Rust changes bounded; most risk is in virtual-FS wiring)
-**Depends on:** —
+**Depends on:** R1
+**Target:** 1.0.0
 
 ---
 
@@ -1455,6 +1458,7 @@ JS tests (4): hello-world, compile-error with position, multi-file `use`, runtim
 JS tests (5): keyword token, string interpolation span, line comment, type names, number literal.
 **Effort:** Medium (CodeMirror 6 setup + Loft grammar)
 **Depends on:** W1
+**Target:** 1.0.0
 
 ---
 
@@ -1470,6 +1474,7 @@ JS tests (5): keyword token, string interpolation span, line comment, type names
 JS tests (3): find function definition, format usage list, no-match returns null.
 **Effort:** Medium (Rust symbol walk + JS index)
 **Depends on:** W1, W2
+**Target:** 1.0.0
 
 ---
 
@@ -1483,6 +1488,7 @@ JS tests (3): find function definition, format usage list, no-match returns null
 JS tests (4): save/load roundtrip, list all projects, delete removes entry, auto-save updates timestamp.
 **Effort:** Medium (IndexedDB wrapper + UI wiring)
 **Depends on:** W2
+**Target:** 1.0.0
 
 ---
 
@@ -1498,6 +1504,7 @@ JS tests (4): save/load roundtrip, list all projects, delete removes entry, auto
 Run the bundler automatically from `build.sh` after `cargo run --bin gendoc`.
 **Effort:** Small–Medium (bundler script + panel UI)
 **Depends on:** W2
+**Target:** 1.0.0
 
 ---
 
@@ -1514,6 +1521,7 @@ Run the bundler automatically from `build.sh` after `cargo run --bin gendoc`.
 JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roundtrip preserves content, URL encode/decode.
 **Effort:** Small–Medium (JSZip + service worker)
 **Depends on:** W4
+**Target:** 1.0.0
 
 ---
 
