@@ -3,7 +3,7 @@
 
 use crate::data::{Block, Context, Data, DefType, Definition, Type, Value};
 use crate::database::Stores;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 
 /// Walk the Value IR tree and collect all function definition numbers
@@ -288,31 +288,101 @@ extern crate loft;"
             }
         }
         type_defs.sort_by_key(|(type_id, _)| *type_id);
-        for (_, dnr) in &type_defs {
-            let dnr = *dnr;
+
+        // Build a map from known_type → dnr for dependency resolution.
+        let type_id_to_dnr: HashMap<u16, u32> =
+            type_defs.iter().map(|&(tid, dnr)| (tid, dnr)).collect();
+
+        // For each struct / enum-value, collect the content type IDs of its
+        // sorted / index / hash / vector fields so we can emit them first.
+        let mut deps: HashMap<u16, Vec<u16>> = HashMap::new();
+        for &(type_id, dnr) in &type_defs {
             let def = self.data.def(dnr);
-            if matches!(def.def_type, DefType::Struct) {
-                self.output_struct(w, dnr, 0)?;
-            } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
-                // Determine the 1-based position in the parent enum's attributes
-                let parent_nr = def.parent;
-                let parent = self.data.def(parent_nr);
-                let enum_value = parent
-                    .attributes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, a)| a.name == def.name)
-                    .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
-                self.output_struct(w, dnr, enum_value)?;
-            } else if def.def_type == DefType::Enum {
-                output_enum(w, dnr, self.data)?;
-            } else if def.def_type == DefType::Vector {
-                writeln!(
-                    w,
-                    "    db.vector({});",
-                    self.data.def(def.parent).known_type
-                )?;
+            let is_container = matches!(def.def_type, DefType::Struct)
+                || (def.def_type == DefType::EnumValue && !def.attributes.is_empty());
+            if !is_container {
+                continue;
             }
+            let mut d: Vec<u16> = Vec::new();
+            for a in &def.attributes.clone() {
+                let c_nr = match &a.typedef {
+                    Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
+                        Some(*c_nr)
+                    }
+                    Type::Vector(c_type, _) => {
+                        let n = self.data.type_def_nr(c_type);
+                        (n != u32::MAX).then_some(n)
+                    }
+                    _ => None,
+                };
+                if let Some(c_nr) = c_nr {
+                    let c_tp = self.data.def(c_nr).known_type;
+                    if c_tp != u16::MAX && type_id_to_dnr.contains_key(&c_tp) {
+                        d.push(c_tp);
+                    }
+                }
+            }
+            if !d.is_empty() {
+                deps.insert(type_id, d);
+            }
+        }
+
+        // Emit type definitions in topological order: dependencies first.
+        let mut emitted: HashSet<u16> = HashSet::new();
+        for &(type_id, dnr) in &type_defs {
+            self.emit_def_ordered(w, type_id, dnr, &type_id_to_dnr, &deps, &mut emitted)?;
+        }
+        Ok(())
+    }
+
+    /// Recursively emit `type_id` (def `dnr`) and its content-type dependencies
+    /// before emitting the type itself, so that `db.sorted(c_tp, ...)` etc. always
+    /// find the content type already registered.
+    fn emit_def_ordered(
+        &mut self,
+        w: &mut dyn Write,
+        type_id: u16,
+        dnr: u32,
+        type_id_to_dnr: &HashMap<u16, u32>,
+        deps: &HashMap<u16, Vec<u16>>,
+        emitted: &mut HashSet<u16>,
+    ) -> std::io::Result<()> {
+        if emitted.contains(&type_id) {
+            return Ok(());
+        }
+        // Emit all content-type dependencies first.
+        if let Some(d) = deps.get(&type_id) {
+            for &dep_tp in d {
+                if let (false, Some(&dep_dnr)) =
+                    (emitted.contains(&dep_tp), type_id_to_dnr.get(&dep_tp))
+                {
+                    self.emit_def_ordered(w, dep_tp, dep_dnr, type_id_to_dnr, deps, emitted)?;
+                }
+            }
+        }
+        emitted.insert(type_id);
+        let def = self.data.def(dnr);
+        if matches!(def.def_type, DefType::Struct) {
+            self.output_struct(w, dnr, 0)?;
+        } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
+            // Determine the 1-based position in the parent enum's attributes.
+            let parent_nr = def.parent;
+            let parent = self.data.def(parent_nr);
+            let enum_value = parent
+                .attributes
+                .iter()
+                .enumerate()
+                .find(|(_, a)| a.name == def.name)
+                .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
+            self.output_struct(w, dnr, enum_value)?;
+        } else if def.def_type == DefType::Enum {
+            output_enum(w, dnr, self.data)?;
+        } else if def.def_type == DefType::Vector {
+            writeln!(
+                w,
+                "    db.vector({});",
+                self.data.def(def.parent).known_type
+            )?;
         }
         Ok(())
     }
