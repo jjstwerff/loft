@@ -1234,6 +1234,12 @@ use a separate collection or add after the loop"
         } else if self.lexer.has_token("sizeof") {
             self.lexer.token("(");
             self.parse_size(val)
+        } else if self.lexer.has_token("assert") {
+            self.lexer.token("(");
+            self.parse_intrinsic_call(val, "assert")
+        } else if self.lexer.has_token("panic") {
+            self.lexer.token("(");
+            self.parse_intrinsic_call(val, "panic")
         } else if let Some(name) = self.lexer.has_identifier() {
             self.parse_var(val, &name, parent_tp)
         } else if self.lexer.has_token("$") {

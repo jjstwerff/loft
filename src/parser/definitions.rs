@@ -407,16 +407,34 @@ impl Parser {
         }
     }
 
+    /// Read the function name after `fn`.  In user code only identifiers are accepted.
+    /// In the default library, `assert` and `panic` are also allowed even though they are
+    /// keywords — they remain real functions with call-site file/line injection.
+    fn parse_fn_name(&mut self) -> Option<String> {
+        if let Some(name) = self.lexer.has_identifier() {
+            return Some(name);
+        }
+        if self.default {
+            if self.lexer.has_token("assert") {
+                return Some("assert".to_string());
+            }
+            if self.lexer.has_token("panic") {
+                return Some("panic".to_string());
+            }
+        }
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "Expect name in function definition"
+        );
+        None
+    }
+
     pub(crate) fn parse_function(&mut self) -> bool {
         if !self.lexer.has_token("fn") {
             return false;
         }
-        let Some(fn_name) = self.lexer.has_identifier() else {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Expect name in function definition"
-            );
+        let Some(fn_name) = self.parse_fn_name() else {
             return false;
         };
         self.vars = Function::new(&fn_name, &self.lexer.pos().file);

@@ -146,6 +146,8 @@ static KEYWORDS: &[&str] = &[
     "match",
     "sizeof",
     "debug_assert",
+    "assert",
+    "panic",
 ];
 
 #[derive(Debug)]
