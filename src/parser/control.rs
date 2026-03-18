@@ -1407,6 +1407,27 @@ impl Parser {
         *val = Value::Return(Box::new(v));
     }
 
+    /// Parse an assert or panic keyword call: `assert(expr, msg)` / `panic(msg)`.
+    /// The opening `(` is consumed by the caller; this function parses args and `)`.
+    pub(crate) fn parse_intrinsic_call(&mut self, val: &mut Value, name: &str) -> Type {
+        let call_pos = self.lexer.pos().clone();
+        let mut list = Vec::new();
+        let mut types = Vec::new();
+        if !self.lexer.has_token(")") {
+            loop {
+                let mut p = Value::Null;
+                let t = self.expression(&mut p);
+                types.push(t);
+                list.push(p);
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token(")");
+        }
+        self.parse_call_diagnostic(val, name, &list, &types, &call_pos)
+    }
+
     // <call> ::= [ <expression> { ',' <expression> } ] ')'
     pub(crate) fn parse_call_diagnostic(
         &mut self,

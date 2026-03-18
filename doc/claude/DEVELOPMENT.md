@@ -457,10 +457,10 @@ Only add a new opcode when:
 
 ## GitHub Issues and Releases — Hard Limits
 
-**Never create GitHub issues automatically.**  Issue creation requires human
-judgement: prioritisation, duplicate detection, scope assessment, and wording
-that is clear to external contributors.  Always propose issue text to the user
-and let them create the issue manually.
+**Never create or update GitHub issues.**  All planning, status, and design
+information lives in the committed documentation (`doc/claude/`).  Interested
+contributors can read it there.  Duplicating it into GitHub issues creates a
+second source of truth that drifts from the real one.
 
 **Never trigger or automate a release.**  Every release requires a manual
 validation phase (see [RELEASE.md](RELEASE.md)) that cannot be automated:

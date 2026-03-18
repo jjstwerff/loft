@@ -971,3 +971,13 @@ fn file_write_error_does_not_panic() {
 }"
     );
 }
+
+#[test]
+fn assert_call_works_as_keyword() {
+    code!("fn test() { assert(1 == 1, \"ok\"); }");
+}
+
+#[test]
+fn panic_call_works_as_keyword() {
+    code!("fn test() { if false { panic(\"should not happen\"); } }");
+}
