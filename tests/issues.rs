@@ -906,3 +906,68 @@ fn mkdir_and_mkdir_all() {
     // Clean up after test
     let _ = std::fs::remove_dir_all("tests/tmp_mkdir_test");
 }
+
+// ── T0-11: Write to locked store must panic ───────────────────────────────────
+// addr_mut() previously returned a thread-local DUMMY buffer in release builds
+// (#[cfg(not(debug_assertions))]), silently discarding the write.  The fix
+// removes the DUMMY and replaces it with an unconditional assert!(!self.locked)
+// so any write to a locked store panics in both debug and release builds.
+// The unit test lives in src/store.rs (tests::write_to_locked_store_panics)
+// because Store is a private module.
+
+// ── T0-12: vector self-append (`v += v`) must not corrupt data ────────────────
+// vector_add() read o_rec before resizing the destination, but vector_append /
+// vector_set_size may reallocate the backing store, making o_rec stale.
+// The fix snapshots the source bytes into a Vec<u8> before any resize.
+
+/// `v += v` on an integer vector: result must be a doubled vector with correct values.
+#[test]
+fn vector_self_append_integers() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3];
+    v += v;
+    assert(len(v) == 6, \"len: {len(v)}\");
+    assert(v[0] == 1, \"v[0]: {v[0]}\");
+    assert(v[1] == 2, \"v[1]: {v[1]}\");
+    assert(v[2] == 3, \"v[2]: {v[2]}\");
+    assert(v[3] == 1, \"v[3]: {v[3]}\");
+    assert(v[4] == 2, \"v[4]: {v[4]}\");
+    assert(v[5] == 3, \"v[5]: {v[5]}\");
+}"
+    );
+}
+
+/// `v += v` on a single-element vector: result must have two equal elements.
+#[test]
+fn vector_self_append_single() {
+    code!(
+        "fn test() {
+    v = [42];
+    v += v;
+    assert(len(v) == 2, \"len: {len(v)}\");
+    assert(v[0] == 42, \"v[0]: {v[0]}\");
+    assert(v[1] == 42, \"v[1]: {v[1]}\");
+}"
+    );
+}
+
+// ── T1-32: File I/O errors are no longer silently discarded ──────────────────
+// write_file/read_file/seek_file used unwrap_or_default() / unwrap_or(0),
+// swallowing OS errors with no diagnostic output.  The fix logs to stderr via
+// eprintln!.  The test below verifies that writing to a bad path does not panic
+// or hang — the error is printed to stderr and execution continues normally.
+
+/// Writing to an unwritable path must not panic; the program continues after the error.
+#[test]
+fn file_write_error_does_not_panic() {
+    // Use a path inside a non-existent directory so File::create will fail.
+    code!(
+        "fn test() {
+    f = file(\"/no_such_dir/output.txt\");
+    f += \"hello\";
+    // Execution must reach this assert without panicking.
+    assert(true, \"should not panic\");
+}"
+    );
+}

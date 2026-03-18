@@ -329,12 +329,40 @@ impl Stores {
             // The other vector has no data
             return;
         }
+        // Snapshot the source record number BEFORE any resize: if `db` and `o_db` share the
+        // same backing store the resize inside `vector_append` / `vector_set_size` may
+        // reallocate the vector and invalidate `o_rec`.  Reading it after the resize would
+        // reference freed memory, silently producing corrupt data.
         let o_rec = keys::store(o_db, &self.allocations).get_int(o_db.rec, o_db.pos) as u32;
         let size = u32::from(self.size(known));
+        // If source and destination share the same backing vector record, copy source elements
+        // to a local buffer first so the resize cannot invalidate the source pointer.
+        let same_vec = db.store_nr == o_db.store_nr && o_rec != 0 && {
+            let dest_rec = keys::store(db, &self.allocations).get_int(db.rec, db.pos) as u32;
+            dest_rec == o_rec
+        };
+        let snapshot: Vec<u8> = if same_vec {
+            let store = keys::store(o_db, &self.allocations);
+            let byte_len = o_length as usize * size as usize;
+            (0..byte_len)
+                .map(|i| *store.addr::<u8>(o_rec, 8 + i as u32))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let new_db = vector::vector_append(db, size, &mut self.allocations);
         // Claim more than 1 record if needed for the actual copy.
         self.vector_set_size(db, o_length, size);
-        if db.store_nr == o_db.store_nr {
+        if same_vec {
+            // Write from the pre-resize snapshot; `new_db.rec` is already the correct
+            // (possibly reallocated) destination record after `vector_set_size`.
+            let store = keys::mut_store(db, &mut self.allocations);
+            for (i, &byte) in snapshot.iter().enumerate() {
+                *store.addr_mut::<u8>(new_db.rec, new_db.pos + i as u32) = byte;
+            }
+        } else if db.store_nr == o_db.store_nr {
+            // Re-read o_rec after resize in case it moved (non-self-append same-store case).
+            let o_rec = keys::store(o_db, &self.allocations).get_int(o_db.rec, o_db.pos) as u32;
             keys::mut_store(db, &mut self.allocations).copy_block(
                 o_rec,
                 8,

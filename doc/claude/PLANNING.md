@@ -44,6 +44,18 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Version Milestones
 
+### Version 0.8.1 — Stability patch (planned)
+
+Fix the three remaining pre-1.0 blockers — no new language features.
+
+1. **T0-11** — Eliminate the unsound DUMMY buffer in release-mode locked stores.
+2. **T0-12** — Guard vector slice mutation so it cannot corrupt the parent vector.
+3. **T1-32** — Surface file I/O errors instead of silently discarding them.
+
+Pre-release: run the documentation review checklist from [RELEASE.md](RELEASE.md) §§ 1–9.
+
+---
+
 ### Version 0.8.0 — Current release (2026-03-17)
 
 Match expressions (enum, scalar, or-patterns, guard clauses, range patterns, null/char
@@ -56,8 +68,7 @@ map/filter/reduce, vector.clear(), mkdir, time functions, logging, parallel exec
 1.0 is a **stability contract**: any program valid on 1.0 compiles and runs identically on any 1.x
 release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
 
-**Remaining items before 1.0:**
-- T1-28 (error recovery after token failures)
+**Remaining items before 1.0:** T1-28 (error recovery).  T0-11, T0-12, T1-32 ship in 0.8.1.
 
 **Deferred to 1.1+:**
 T2-1 (lambdas), T2-2 (REPL), T2-4, T3-1..T3-5, T3-7, T3-8,
@@ -91,6 +102,41 @@ Tier W (Web IDE) is an independent parallel track that can start any time after 
 
 ---
 
+## Tier 0 — Crashes / Silent Wrong Results
+
+### T0-11  Unsound DUMMY buffer in release-mode locked stores
+**Sources:** store lifecycle; `const` store-lock implementation
+**Severity:** High — in release builds, `const`-locked stores reference a DUMMY
+sentinel buffer; any write through the lock silently corrupts adjacent heap memory
+or produces wrong results instead of failing cleanly.
+**Fix path:**
+1. Locate the `DUMMY` / sentinel buffer allocated in `allocation.rs` for locked stores.
+2. In release builds, replace writes to a locked store with a runtime error or
+   `debug_assert!` + safe no-op instead of writing through the dummy.
+3. Add a test that verifies locked-store writes produce a clear error in debug builds
+   and are safe (no corruption) in release builds.
+**Effort:** Small–Medium (allocation.rs; affects const-param code paths)
+**Target:** 0.8.1
+
+---
+
+### T0-12  Vector slice mutation corrupts parent vector
+**Sources:** T3-11; `src/vector.rs:13` TODO
+**Severity:** High — `v[a..b]` returns a slice sharing storage with the parent;
+any mutation of that slice (`slice += [x]`, `clear`, `remove`) writes into the
+parent's backing store, silently corrupting it.
+**Fix path (minimal — runtime guard):**
+1. Add an `is_slice: bool` flag to the vector header in `vector.rs`.
+2. In every mutating vector op (`OpAppendVector`, `OpInsertVector`,
+   `OpClearVector`, `OpRemoveVector`), assert `!is_slice` in debug builds and emit
+   a runtime error in release builds.
+**Fix path (full CoW — see T3-11):** copy the slice elements to a new allocation on
+first mutation.  Prefer the guard for 0.8.1; promote to full CoW (T3-11) in 1.1.
+**Effort:** Small for guard; Medium for full CoW (see T3-11)
+**Target:** 0.8.1
+
+---
+
 ## Tier 1 — Language Quality & Consistency
 
 ### T1-28  Error recovery after token failures
@@ -118,6 +164,25 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 **Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
 **Depends on:** T1-14, T1-18
 **Target:** 1.1+
+
+---
+
+### T1-32  File I/O errors are silently discarded
+**Sources:** `src/state/io.rs`; pre-1.0 gate item
+**Severity:** Medium — `read`, `write`, and related file operations that fail
+(permission denied, disk full, path not found) return a default/empty value with
+no diagnostic; programs cannot distinguish a successful empty read from a failure.
+**Fix path:**
+1. Audit every `?`-eliding `unwrap_or` / `unwrap_or_default` in `state/io.rs`
+   and `fill.rs` file ops.
+2. On failure, push a diagnostic via `lexer.diagnostic()` (level `Error`) and
+   return the appropriate null sentinel so the calling loft code can test for null.
+3. Expose a `f#error` boolean attribute (analogous to `f#exists`) that loft code
+   can query after a read/write.
+4. Add tests covering: read non-existent file, write to read-only path, read
+   binary file as text — each should produce a null result and a diagnostic.
+**Effort:** Medium (io.rs + parser file_op + new attribute)
+**Target:** 0.8.1
 
 ---
 
@@ -660,6 +725,9 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
+| T0-11 | DUMMY buffer unsound in release-mode locked stores       | 0    | Sm–Med    | 0.8.1   |             | Store lifecycle            |
+| T0-12 | Vector slice mutation corrupts parent                    | 0    | Small     | 0.8.1   |             | vector.rs TODO             |
+| T1-32 | File I/O errors silently discarded                      | 1    | Medium    | 0.8.1   |             | state/io.rs                |
 | T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
 | T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
 | T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |

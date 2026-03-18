@@ -70,7 +70,10 @@ impl State {
                     self.database.files.push(Some(f));
                     f_nr
                 }
-                Err(_) => return,
+                Err(e) => {
+                    eprintln!("file create error for {file_name:?}: {e}");
+                    return;
+                }
             }
         } else {
             file_ref
@@ -118,8 +121,10 @@ impl State {
                 .read_data(&val, db_tp, little_endian, &mut data);
         }
         let written = data.len();
-        if let Some(f) = &mut self.database.files[file_ref as usize] {
-            f.write_all(&data).unwrap_or_default();
+        if let Some(f) = &mut self.database.files[file_ref as usize]
+            && let Err(e) = f.write_all(&data)
+        {
+            eprintln!("file write error: {e}");
         }
         // Update #next to reflect the end of this write.
         self.database
@@ -165,7 +170,10 @@ impl State {
         let mut data = vec![0u8; n];
         let actual = if let Some(f) = &mut self.database.files[file_ref as usize] {
             if is_text {
-                f.read(&mut data).unwrap_or(0)
+                f.read(&mut data).unwrap_or_else(|e| {
+                    eprintln!("file read error: {e}");
+                    0
+                })
             } else if f.read_exact(&mut data).is_ok() {
                 n
             } else {
@@ -205,8 +213,10 @@ impl State {
             self.database
                 .store_mut(&file)
                 .set_long(file.rec, file.pos + 16, pos);
-        } else if let Some(f) = &mut self.database.files[file_ref as usize] {
-            f.seek(SeekFrom::Start(pos as u64)).unwrap_or_default();
+        } else if let Some(f) = &mut self.database.files[file_ref as usize]
+            && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
+        {
+            eprintln!("file seek error: {e}");
         }
     }
 
