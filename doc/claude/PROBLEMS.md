@@ -813,6 +813,64 @@ retain the fast unchecked path. The underlying sentinel design is unchanged — 
 
 ---
 
+## Store Safety
+
+### ~~50. `addr_mut()` on a locked store returned a thread-local DUMMY buffer in release builds~~ **FIXED 2026-03-18 (T0-11)**
+
+**Symptom (fixed):** In release builds (`#[cfg(not(debug_assertions))]`), `Store::addr_mut()`
+returned a pointer into a 256-byte thread-local buffer when called on a locked store, silently
+discarding any write instead of panicking. Debug builds already panicked. This meant that loft
+code running in release mode could silently produce wrong results when a code path accidentally
+wrote to a `const`-locked store.
+
+**Fix:** Removed the DUMMY buffer entirely. `addr_mut()` now calls
+`assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}")` unconditionally in both
+debug and release builds. The `Store::lock()` doc comment and the `unsafe impl Send` safety comment
+were updated to reflect the new invariant.
+
+**Tests:** `src/store.rs` (unit test `write_to_locked_store_panics`, `#[should_panic]`).
+
+---
+
+## Vector Self-Append
+
+### ~~51. `v += v` (vector self-append) silently corrupted data~~ **FIXED 2026-03-18 (T0-12)**
+
+**Symptom (fixed):** `Stores::vector_add()` read `o_rec` (the source vector's backing record
+pointer) before calling `vector_append` / `vector_set_size`. Those two functions may reallocate
+the backing store, making the old `o_rec` value stale. On self-append (`v += v`, where `db` and
+`o_db` share the same backing record) the stale pointer was then used to copy bytes from freed
+(or reused) memory, silently producing corrupt data.
+
+**Fix:** `vector_add()` now detects self-append by comparing `db.store_nr == o_db.store_nr &&
+dest_rec == o_rec` before any resize. When a self-append is detected, the source bytes are
+snapshotted into a `Vec<u8>` first; the snapshot is written to the destination after resize.
+For the same-store, non-self-append case, `o_rec` is re-read from the store after resize.
+
+**Tests:** `vector_self_append_integers`, `vector_self_append_single` in `tests/issues.rs`.
+
+---
+
+## File I/O Error Surfacing
+
+### ~~52. File I/O errors were silently discarded~~ **FIXED 2026-03-18 (T1-32)**
+
+**Symptom (fixed):** `write_file()`, `read_file()`, and `seek_file()` in `src/state/io.rs`
+used `unwrap_or_default()` / `unwrap_or(0)`, swallowing all OS-level I/O errors (permission
+denied, disk full, invalid seek position) with no diagnostic output. Programs could not
+distinguish a successful empty read from a failure.
+
+**Fix:** The three error-swallowing call sites are replaced with `eprintln!` logging:
+- `File::create` failure: logs path and OS error to stderr, then returns early.
+- `f.write_all` failure: logs `"file write error: {e}"` to stderr.
+- `f.read` failure: logs `"file read error: {e}"` and returns 0 bytes.
+- `f.seek` failure: logs `"file seek error: {e}"` to stderr.
+
+**Tests:** `file_write_error_does_not_panic` in `tests/issues.rs` verifies that a write to a
+non-existent path does not panic and execution continues normally.
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries

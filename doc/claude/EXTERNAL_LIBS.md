@@ -149,9 +149,9 @@ entry — the same path used by `native::init()` today.
 4. `<base_dir>/lib/<id>.loft` (when inside `tests/`)
 5. `<cur_script_stem>/<id>.loft`
 6–7. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags), single-file
-7c. **[T2-11]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `lib_dirs` — packaged layout
+7c. **[pure-loft layout, shipped 2026-03-16]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `lib_dirs` — packaged layout
 7b. Each directory in `LOFT_LIB` (env-var, cross-platform split), single-file
-7d. **[T2-11]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `LOFT_LIB`
+7d. **[pure-loft layout, shipped 2026-03-16]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `LOFT_LIB`
 8–9. `<cur_dir>/<id>.loft` / `<base_dir>/<id>.loft`
 
 The helper `lib_path_manifest(dir, id) -> Option<String>` checks that `<dir>/<id>` is a
@@ -501,7 +501,7 @@ registry exists to make hash distribution meaningful.
 
 ## Phased Rollout
 
-### Phase 1 — Pure-Loft Package Layout ✓ shipped (2026-03-16, T2-11)
+### Phase 1 — Pure-Loft Package Layout ✓ shipped (2026-03-16)
 
 **Goal:** A developer can ship a multi-file loft library in a directory with `loft.toml`,
 place it in `LOFT_LIB`, and use it with `use mylib;`.

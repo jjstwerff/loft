@@ -1,14 +1,23 @@
 # Release Planning
 
-## What "1.0" means
+## What "0.9.0" and "1.0.0" mean
 
-1.0 is a **stability contract**, not a completeness contract.  It means:
-- Programs valid on 1.0 will compile and run identically on any 1.x release.
-- The core language surface (syntax, type system, documented stdlib API, CLI flags) is frozen; new features are additive only.
-- The interpreter does not panic or silently produce wrong results on any program that passes the type-checker.
-- A user can write and ship a real program using the documented features.
+**0.9.0 — Production-ready standalone executable.**
+The interpreter is complete, stable, and efficient enough to rely on for real programs.
+All planned language features (lambdas, aggregates, nested patterns, full parallel support)
+are present.  No known crashes or silent wrong results.  Pre-built binaries ship for all
+four platforms.
 
-The feature-completeness interpretation (every planned feature ships in 1.0) is wrong for a single-developer project; chasing it risks never shipping.  Items like match expressions (T1-4), REPL (T2-2), and the Web IDE (Tier W) are valuable but do not prevent a user from writing correct programs today.
+**1.0.0 — Stable language + fully working IDE.**
+1.0.0 is the **stability contract**: any program valid on 1.0.0 compiles and runs
+identically on any 1.0.x or 1.x.0 release.  The contract covers:
+- The core language surface (syntax, type system, documented stdlib API, CLI flags).
+- The public IDE API (WASM `compileAndRun` / `getSymbols` JS interface).
+- The interpreter does not panic or silently produce wrong results.
+- A user can write, run, and share a real program — from the terminal or the browser.
+
+The Web IDE (W1–W6) is part of 1.0.0, not post-1.0.  See [PLANNING.md § Milestone
+Reevaluation](PLANNING.md#milestone-reevaluation) for the full reasoning.
 
 ---
 
@@ -16,22 +25,14 @@ The feature-completeness interpretation (every planned feature ships in 1.0) is 
 
 These block a 1.0 release because they cause panics on valid programs, ship incorrect public identity, or leave public keywords in a permanently-broken state.
 
+Completed gate items (T0-1, T1-5, PROBLEMS #10, A4 pre-gate, Cargo.toml, README, CHANGELOG, CI pipeline, T0-7, R1) are recorded in CHANGELOG.md.
+
 | Item | Why it blocks 1.0 |
 |---|---|
-| ~~**T0-1** — `null` literal in scalar field assignment crashes `set_int`~~ | **FIXED 2026-03-15** — `parse_assign_op` now calls `convert()` to substitute the typed-null constant; `debug_assert` boundary check added in `generate_call`; five regression tests in `tests/issues.rs`. Introduced T0-3 regression (type-guarded separately). |
 | **T0-2** — LIFO store-free panic (PROBLEMS #37) | Panics at runtime whenever a function has 2+ owned refs in the same scope; 9+ tests fail including `structs`, `enums`, `vectors`, `collections`, `threading`. Fix: one-line `res.reverse()` in `scopes.rs::variables()`. |
 | **T0-3** — T0-1 regression: `sorted`/`hash`/`index` key-null removal silently broken (PROBLEMS #38) | `collection[key] = null` does nothing; collection retains all elements. Fix: guard `convert()` call to scalar types only in `parse_assign_op`. |
 | **T0-4** — `v += other_vec` shallow copy: text fields in appended struct elements become dangling (PROBLEMS #39) | Panics "Unknown record N" at runtime for any `vector<S>` append where S has text/ref fields. Fix: call `copy_claims` per element in `vector_add`. |
 | **T0-5** — `index<T>` struct field: `OpCopyRecord`/`OpClear` panic (PROBLEMS #40) | `copy_claims`/`remove_claims` in `allocation.rs` have no `Parts::Index` arm. Fix: add Index arms to both functions. |
-| ~~**T1-5** — validate_slots false-positive panics~~ | **FIXED 2026-03-13** — `find_conflict` exempts same-name/same-slot pairs; P1 pre-init handles ref-typed vars across sequential blocks. |
-| ~~**PROBLEMS #10** — garbage format-slot crash~~ | **FIXED 2026-03-15** — `vars.defined` moved inside `has_token("=")` guard. |
-| ~~**T3-4 pre-gate** — `spacial<T>` keyword unimplemented~~ | **FIXED 2026-03-15** — emits compile error `"spacial<T> is not yet implemented"`; `spacial_not_implemented` test added. |
-| ~~**Cargo.toml identity**~~ | **FIXED 2026-03-15** — crate renamed `loft`; `description`, `homepage`, `repository`, `keywords`, `categories` all set correctly. |
-| ~~**README.md rewrite**~~ | **DONE 2026-03-15** — README.md created: one-liner, features, hello-world, install options, known limitations, license. |
-| ~~**CHANGELOG.md**~~ | **DONE 2026-03-15** — CHANGELOG.md created: 0.1.0 entry with full language feature list, stdlib summary, known limitations, and unreleased section tracking open T0 items. |
-| ~~**GitHub Actions CI + release pipeline**~~ | **DONE 2026-03-15** — `.github/workflows/ci.yml` (test on ubuntu/macos/windows, clippy -D warnings, fmt check) + `release.yml` (4-platform binaries, gh-pages, crates.io). Zero clippy warnings; all tests pass. |
-| ~~**T0-7** — `16-parser.loft` `generate_call` size mismatch (PROBLEMS #42)~~ | **FIXED 2026-03-16** — Root cause was `Code.define()` in `lib/code.loft` storing `res: i32` into `hash<Definition[name]>`. Fixed: store a full Definition; fix `get_type()` to use `definitions[nr].typedef`; fix `structure()` to restore `cur_def` after `type_def()`; fix `object()` inverted loop condition; use integer null-check to avoid `ConvRefFromNull` store leak. All 28 wrap tests pass; `16-parser.loft` removed from `SUITE_SKIP`. |
-| **R1** — create standalone `loft` GitHub repository | New public repo with correct identity; current repo contains game-engine history. |
 
 ---
 
@@ -52,18 +53,44 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 
 ---
 
-## Explicitly 1.1+
+## Items by milestone
+
+### 0.9.0 gate items
 
 | Item | Notes |
 |---|---|
-| T2-1 lambda expressions | Depends on T1-1 (done); natural 1.1 item |
-| T2-2 REPL | High effort; not blocking basic usability |
-| T3-1 parallel workers extra args / text returns | Deferred in THREADING.md |
-| T3-2 logger production mode | Low user impact until logger widely used |
-| T3-3 optional Cargo features | Architectural cleanup; no user-visible gap |
-| T3-4 spacial<T> full implementation | 1.1+ after pre-gate removal in 1.0 |
-| T3-5 closure capture | Very high effort; depends on T2-1 |
-| Tier W web IDE | Parallel independent track; no 1.0 dependency |
+| L1 error recovery | Cascading errors after one bad token; high UX impact |
+| P1 lambda expressions | Core language completeness; unblocks P3 and A5 |
+| P3 vector aggregates | Stdlib completeness; depends on P1 |
+| L2 nested match patterns | Language completeness |
+| A9 vector slice CoW | Correctness: mutating a slice must not corrupt parent |
+| A6 stack slot pre-pass | Architectural: eliminates slot-conflict category of bugs |
+| A8 destination-passing for strings | Efficiency: eliminates double-copy in format expressions |
+| A3 optional Cargo features | Lean binary; clean dependency management |
+| Tier N (N2–N9, N1) native codegen fixes | Efficiency: turn existing but broken generator into working `--native` path |
+| A1 parallel workers full | Feature completeness for existing parallel construct |
+
+### 1.0.0 gate items (on top of 0.9.0)
+
+| Item | Notes |
+|---|---|
+| R1 workspace split | Prerequisite for WASM target |
+| W1 WASM foundation | Enables all other IDE work |
+| W2 editor shell | Visible IDE |
+| W3 symbol navigation | Go-to-definition, find-usages |
+| W4 multi-file projects | IndexedDB persistence |
+| W5 docs/examples browser | Integrated documentation |
+| W6 export/import + PWA | Offline support; closes the loop |
+
+### Explicitly 1.1+
+
+| Item | Notes |
+|---|---|
+| P2 REPL | Browser IDE covers the interactive use case; revisit if needed |
+| A2 logger production mode | Low user impact until logger is widely used |
+| A4 spacial<T> full implementation | After pre-gate added in 0.8.0 |
+| A5 closure capture | Very high effort; depends on P1 |
+| A7 native extension libraries | Useful after ecosystem exists |
 
 ---
 
@@ -218,12 +245,12 @@ Verify that `gendoc` completes without warnings and that the generated HTML file
 
 ---
 
-## Post-1.0 Versioning Policy
+## Post-1.0.0 Versioning Policy
 
 **Semantic versioning with a roughly monthly release cadence:**
 
-- **1.0.x patch** — bug fixes only; no new language features; no behaviour changes; always backward-compatible.  Example: fix a crash found after 1.0 ships.
-- **1.x.0 minor** — new language features that are strictly additive (new syntax, new stdlib functions, new CLI flags).  Any program valid on 1.0 must compile and run identically on 1.x.  Examples: match expressions (T1-4), wildcard imports (T1-2), formatter (T2-0), lambdas (T2-1), REPL (T2-2).
+- **1.0.x patch** — bug fixes only; no new language features; no behaviour changes; always backward-compatible.  Example: fix a crash found after 1.0.0 ships.
+- **1.x.0 minor** — new language features that are strictly additive (new syntax, new stdlib functions, new CLI flags, new IDE capabilities).  Any program valid on 1.0.0 must compile and run identically on 1.x.0.  Candidates: P2 (REPL), A5 (closures), A7 (native extensions), Tier N (native codegen).
 - **2.0** — reserved for breaking language changes.  Not expected in the near term.
 
-The stability guarantee applies to the **loft language surface** (syntax, type system, documented stdlib, CLI flags).  The Rust library API (`lib.rs`) is not a public stable API until explicitly stabilised.
+The stability guarantee applies to the **loft language surface** (syntax, type system, documented stdlib, CLI flags) and the **public IDE API** (`compileAndRun` / `getSymbols` JS interface).  The Rust library API (`lib.rs`) is not a public stable API until explicitly stabilised.

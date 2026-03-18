@@ -57,3 +57,4 @@ Rules for all Rust and loft code in this project.
 ## See also
 - [TESTING.md](TESTING.md) — Test framework, LogConfig debug-logging presets, suite files
 - [COMPILER.md](COMPILER.md) — Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Contribution workflow and validation against CODE.md

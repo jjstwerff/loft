@@ -352,8 +352,7 @@ impl Store {
         self.size = size;
     }
 
-    /// Lock this store against writes. In debug builds any subsequent write panics.
-    /// In release builds writes are silently discarded.
+    /// Lock this store against writes. Any subsequent call to `addr_mut` panics.
     pub fn lock(&mut self) {
         self.locked = true;
     }
@@ -750,16 +749,7 @@ impl Store {
             std::mem::size_of::<T>(),
             self.size * 8,
         );
-        #[cfg(not(debug_assertions))]
-        if self.locked {
-            // In release builds silently discard the write by returning a thread-local dummy.
-            thread_local! {
-                static DUMMY: std::cell::UnsafeCell<[u8; 256]> =
-                    const { std::cell::UnsafeCell::new([0u8; 256]) };
-            }
-            return DUMMY
-                .with(|d| unsafe { ((*d.get()).as_mut_ptr() as *mut T).as_mut().expect("dummy") });
-        }
+        assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}");
         unsafe {
             let off = self.ptr.offset(rec as isize * 8 + fld as isize).cast::<T>();
             off.as_mut().expect("Reference")
@@ -1122,5 +1112,20 @@ impl Store {
 }
 
 // Safety: worker threads only call `addr()` (read-only) on locked stores.
-// `addr_mut()` on a locked store panics in debug and discards in release.
+// `addr_mut()` on a locked store always panics.
 unsafe impl Send for Store {}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+
+    /// T0-11: addr_mut on a locked store must panic (not silently discard the write).
+    #[test]
+    #[should_panic(expected = "Write to locked store")]
+    fn write_to_locked_store_panics() {
+        let mut store = Store::new(64);
+        let rec = store.claim(8);
+        store.lock();
+        let _: &mut u8 = store.addr_mut::<u8>(rec, 4);
+    }
+}

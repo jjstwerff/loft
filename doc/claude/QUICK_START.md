@@ -82,6 +82,102 @@ src/main.rs              CLI entry; loads default/ then user file
 
 ---
 
+## Common loft patterns — quick reference
+
+### Variables and types
+```loft
+x = 5;                              // integer (inferred)
+y: float = 3.14;                    // explicit type annotation
+z: text = null;                     // nullable by default
+```
+Naming rules enforced by the parser: `lower_case` for functions/variables, `CamelCase` for types/enums/variants, `UPPER_CASE` for constants.
+
+### Functions
+```loft
+fn add(a: integer, b: integer) -> integer { a + b }
+fn greet(name: text) { say("hello {name}"); }
+fn fill(v: &vector<Item>) { v += [Item{x: 1}]; }  // & needed to propagate append
+```
+
+### Structs and enums
+```loft
+struct Point { x: float not null, y: float not null }
+p = Point{x: 1.0, y: 2.0};
+p.x = 3.0;
+
+enum Color { Red, Green, Blue }                        // plain enum — no methods
+enum Shape { Circle{radius: float}, Rect{w: float, h: float} }  // struct-enum
+fn area(self: Circle) -> float { PI * self.radius * self.radius }
+fn area(self: Rect)   -> float { self.w * self.h }     // polymorphic dispatch
+```
+
+### Format strings — ⚠ CRITICAL
+```loft
+say("hello {name}");               // basic interpolation
+say("val={x:.2}");                 // 2 decimal places
+say("json={o:j}");                 // JSON format
+say("{{literal braces}}");         // escape { } by doubling
+// WRONG:  assert("{p}" == "{r:128,g:0,b:64}")  — r/g/b parsed as variables!
+// CORRECT: assert("{p}" == "{{r:128,g:0,b:64}}")
+```
+
+### Control flow
+```loft
+if x > 0 { } else if x < 0 { } else { }
+for i in 0..10 { }                 // 0..9 exclusive
+for i in 0..=10 { }               // 0..10 inclusive
+for item in my_vector { }
+for c in some_text { }            // character iteration; c#index, c#next available
+for kv in my_hash { }             // kv.key, kv.value (field names of the value type)
+for rev(i in 0..n) { }            // reverse iteration
+```
+
+### Match
+```loft
+match color {
+    Red => say("red"),
+    Green | Blue => say("cool"),
+    _ => say("other"),
+}
+match shape {
+    Circle{radius} => say("r={radius}"),
+    Rect{w, h} if w == h => say("square"),
+    _ => {},
+}
+```
+
+### Collections
+```loft
+v: vector<integer> = [];
+v += [1, 2, 3];
+len(v);  v[0];
+
+h: hash<Value[name]>;             // hash keyed by .name field
+h["key"] = Value{name: "key", count: 0};
+h["key"].count += 1;
+h["key"] = null;                  // removes entry
+
+s: sorted<Item[priority]>;        // sorted by priority field
+idx: index<Item[id]>;             // unique index by id field
+```
+
+### Null checks
+```loft
+if !x { }                         // x is null (or false for boolean)
+if x != null { }                  // explicit null check
+x = if !fallback { default_val } else { fallback };
+```
+
+### Key gotchas
+- **Format strings**: every `{...}` in a string literal is interpolation — escape literal braces as `{{` / `}}`
+- **Field uniqueness**: field names must be unique across all structs in a single file; duplicate names at different offsets cause "Unknown field" errors in collections
+- **Vector append ref**: `v += [item]` inside a function only propagates to the caller if the param is `&vector<T>`; without `&`, append is local
+- **Integer null sentinel**: `i32::MIN` is `null` — arithmetic that produces that exact value becomes null; use `long` or `not null` fields for full 32-bit range
+- **`use` ordering**: all `use` declarations must appear before any other top-level declaration in a file
+- **Plain enum methods**: plain enums (`enum Color { Red }`) cannot have methods — use struct-enum variants for dispatch
+
+---
+
 ## Default library load order
 
 ```
@@ -115,7 +211,13 @@ default/03_text.loft    — text utilities
 | [INCONSISTENCIES.md](INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [OPTIMISATIONS.md](OPTIMISATIONS.md) | Planned and implemented runtime/compiler optimisations |
 | [PLANNING.md](PLANNING.md) | Priority-ordered enhancement backlog |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Contribution workflow — branch → WIP → rebase → 4-commit clean history |
+| [ROADMAP.md](ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
+| [MATCH.md](MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
+| [NATIVE.md](NATIVE.md) | Native code generation (`src/generation.rs`) design and fix plans |
+| [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
+| [BYTECODE_CACHE.md](BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
+| [DEBUG.md](DEBUG.md) | Debugging utilities and tools |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Contribution workflow — branch → phases → structured commit sequence |
 | [RELEASE.md](RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](WEB_IDE.md) | Web IDE integration design notes |
 | [../PROMPTS.md](../PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |

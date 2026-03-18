@@ -654,7 +654,7 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 **Highest-value remaining improvements** (splits done 2026-03-15):
 1. ~~Split `parser.rs` / `state.rs` / `database.rs`~~ **Done** — `src/parser/` (6), `src/state/` (5), `src/database/` (7) modules.
 2. Complete radix tree (`rtree_next`, `rtree_remove`) and finish borrowed-ref pre-init in `scopes.rs`.
-3. `assign_slots()` compile-time pass in `variables.rs` (T3-7) — eliminates runtime `claim()` and removes slot conflicts in long functions.
+3. `assign_slots()` compile-time pass in `variables.rs` (A6) — eliminates runtime `claim()` and removes slot conflicts in long functions.
 
 ---
 

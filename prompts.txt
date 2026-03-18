@@ -1,3 +1,7 @@
+***** design *****
+create a PLANNING.nl for version 0.8.1 in concise steps towards stability
+reevaluate the planning for a 0.9.0 release with a stand alone, fully featured, efficient and stable loft executable and a 1.0.0 with a fully working and friendly IDE both with maximal stability. Make the careful reevaluation of these goals part of this planning.
+
 ***** start *****
 remember to always start with reading doc/claude/QUICK_START.md
 remember to always update the doc/claude/ documentation after resolving any issue
@@ -8,6 +12,7 @@ Optimize the doc/claude documentation files for discoverability and efficiency. 
 
 
 ** Session **
+Implement the 0.8.1 issues from PLANNING.md as a single branch. Follow DEVELOPMENT.md.
 Implement N1+N2+N2 from PLANNING.md as a single branch. Follow DEVELOPMENT.md.
 Continue with one issue for the 1.0 release, state what you chose and why, check against DEVELOPMENT.md.
 Evaluate if better temporary logging, an optional internal analysis tool or boundary checking would help by investigating this issue.
