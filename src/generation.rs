@@ -305,7 +305,7 @@ extern crate loft;"
                     .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
                 self.output_struct(w, dnr, enum_value)?;
             } else if def.def_type == DefType::Enum {
-                output_enum(w, dnr, &self.data)?;
+                output_enum(w, dnr, self.data)?;
             } else if def.def_type == DefType::Vector {
                 writeln!(
                     w,
@@ -1430,8 +1430,7 @@ fn output_enum(w: &mut dyn Write, d_nr: u32, data: &Data) -> std::io::Result<()>
                         && v_def.parent == d_nr
                         && v_def.name == a.name
                 })
-                .map(|v| data.def(v).known_type)
-                .unwrap_or(u16::MAX)
+                .map_or(u16::MAX, |v| data.def(v).known_type)
         } else {
             u16::MAX
         };
