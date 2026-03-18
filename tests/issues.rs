@@ -1149,6 +1149,33 @@ fn n10_char_cast_in_generated_code() {
     );
 }
 
+/// N2: output_init must register content types before the structs that reference them in
+/// sorted/index/hash fields.  When a struct has a sorted<Foo> field and Foo has a higher
+/// type-ID than the struct, the init function panicked because db.sorted(foo_type_id, ...)
+/// was called before Foo was registered.
+#[test]
+#[ignore = "N2: output_init emits container structs before their sorted/index content types"]
+fn n2_sorted_field_content_type_registered_first() {
+    code!(
+        "struct Sort { nr: integer }
+enum Value { S { data: sorted<Sort[nr]> }, Plain }
+struct Container { v: Value }"
+    )
+    .expr("c = Container { v: Plain }; \"{c}\"")
+    .result(Value::str("Container {v:Plain}"));
+    let src = std::fs::read_to_string(
+        "tests/generated/issues_n2_sorted_field_content_type_registered_first.rs",
+    )
+    .expect("generated file not found");
+    // Sort must appear in the init before S (which contains the sorted<Sort> field).
+    let sort_pos = src.find("\"Sort\"").expect("Sort not found in init");
+    let s_pos = src.find("\"S\"").expect("S not found in init");
+    assert!(
+        sort_pos < s_pos,
+        "Sort (content type) must be registered before S (container) in generated init"
+    );
+}
+
 /// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
 /// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
 #[test]
