@@ -21,6 +21,21 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   through to the template handler which produced broken `OpFormatFloat(stores, …)` code.
   (`src/generation.rs` `output_call` + new `format_float` helper)
 
+- **N5** — `output_call` now emits `if var.rec != 0 { vector::clear_vector(…) }` for
+  `OpClearVector` instead of an unconditional call.  `stores.null()` returns a DbRef
+  with a real `store_nr` but `rec == 0`; the bare call caused a panic
+  ("Unknown record 2147483648") when a vector-returning function initialised its result
+  from null.  (`src/generation.rs` `output_call`)
+
+- **N4** — `output_enum` now registers struct-enum variants with their actual struct
+  `known_type` instead of `u16::MAX`.  `ShowDb` uses this type to dispatch to variant
+  fields; the `u16::MAX` sentinel caused it to only output the variant name, omitting
+  all struct fields.  (`src/generation.rs` `output_enum`)
+
+- **N9a** — `create.rs::generate_code()` now emits `use crate::ops;` in the generated
+  `tests/generated/fill.rs` header so the file can be compiled as a crate module
+  without unresolved `ops::` references.  (`src/create.rs`)
+
 ### Improvements
 
 - **A11** — Hash table load-factor threshold corrected from ~57% to 75%

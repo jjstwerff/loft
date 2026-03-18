@@ -305,7 +305,7 @@ extern crate loft;"
                     .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
                 self.output_struct(w, dnr, enum_value)?;
             } else if def.def_type == DefType::Enum {
-                output_enum(w, def)?;
+                output_enum(w, dnr, self.data)?;
             } else if def.def_type == DefType::Vector {
                 writeln!(
                     w,
@@ -1113,6 +1113,7 @@ extern crate loft;"
                 return self.append_character(w, vals);
             }
             "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
+            "OpClearVector" => return self.clear_vector(w, vals),
             "OpFreeText" | "OpCreateStack" | "OpNullRefSentinel" => return Ok(()),
             "OpCopyRecord" => {
                 // Deep copy: copy_block + copy_claims
@@ -1196,6 +1197,22 @@ extern crate loft;"
         } else {
             self.output_call_template(w, def_fn, vals)
         }
+    }
+
+    /// Use this to emit `OpClearVector` with a null-record guard.
+    /// `stores.null()` returns a `DbRef` whose `store_nr` is valid but `rec == 0`;
+    /// calling `vector::clear_vector` on it panics.  The guard skips the call when
+    /// the vector has not yet been allocated.
+    fn clear_vector(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
+        if let [Value::Var(nr)] = vals {
+            let v_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            write!(
+                w,
+                "if var_{v_nr}.rec != 0 {{ vector::clear_vector(&var_{v_nr}, &mut stores.allocations); }}"
+            )?;
+            return Ok(());
+        }
+        panic!("Could not parse {vals:?}");
     }
 
     /// Use this to emit `OpClearStackText` as a `.clear()` call on the target string variable.
@@ -1402,12 +1419,31 @@ fn emit_db_field(
     Ok(())
 }
 
-/// Use this to register a plain tag enum (no struct fields per variant) in the runtime database.
-/// Enum values that carry struct fields are handled by `output_struct` with a non-zero variant index.
-fn output_enum(w: &mut dyn Write, def: &Definition) -> std::io::Result<()> {
+/// Use this to register an enum in the runtime database.
+/// Plain tag variants are registered with `u16::MAX`; struct-enum variants use the variant
+/// struct's `known_type` so that `ShowDb` can dispatch to the variant's fields.
+fn output_enum(w: &mut dyn Write, d_nr: u32, data: &Data) -> std::io::Result<()> {
+    let def = data.def(d_nr);
     writeln!(w, "    let e = db.enumerate(\"{}\");", def.name)?;
     for a in &def.attributes {
-        writeln!(w, "    db.value(e, \"{}\", u16::MAX);", a.name)?;
+        let variant_type = if matches!(a.typedef, Type::Enum(_, true, _)) {
+            // Find the EnumValue definition whose parent is this enum and name matches.
+            (0..data.definitions())
+                .find(|&v| {
+                    let v_def = data.def(v);
+                    v_def.def_type == DefType::EnumValue
+                        && v_def.parent == d_nr
+                        && v_def.name == a.name
+                })
+                .map_or(u16::MAX, |v| data.def(v).known_type)
+        } else {
+            u16::MAX
+        };
+        if variant_type == u16::MAX {
+            writeln!(w, "    db.value(e, \"{}\", u16::MAX);", a.name)?;
+        } else {
+            writeln!(w, "    db.value(e, \"{}\", {variant_type}_u16);", a.name)?;
+        }
     }
     Ok(())
 }

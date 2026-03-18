@@ -993,8 +993,9 @@ pass a struct value" from the generic type-mismatch message.
 ## N — Native Codegen
 
 `src/generation.rs` already translates the loft IR tree into Rust source files
-(`tests/generated/*.rs`), but none compile (~1500 errors).  The steps below fix
-these incrementally.  Full design in [NATIVE.md](NATIVE.md).
+(`tests/generated/*.rs`).  As of 2026-03-18, **76 of 115 files compile and pass**
+(66%).  The remaining 39 failures fall into the categories tracked by the items
+below.  Full design in [NATIVE.md](NATIVE.md).
 
 **Target: 0.8.2** — the generator already exists; N items are incremental fixes that turn
 broken generated output into correct compiled Rust.  Each fix is small and independent.
@@ -1008,27 +1009,6 @@ plain enum values, byte/short field types), causing type ID misalignment at runt
 **Effort:** Medium (generation.rs `output_init`)
 **Fixes:** `enums_types`, `enums_enum_field` (2 runtime failures)
 **Detail:** [NATIVE.md](NATIVE.md) § N10a
-
----
-
-### N4  Fix `OpFormatDatabase` for struct-enum variants
-**Description:** Formatting outputs only the enum name, not the full struct fields.
-Verify `db_tp` argument is the parent enum type so `ShowDb` can dispatch to variant.
-**Effort:** Small (codegen_runtime.rs or generation.rs)
-**Fixes:** `enums_define_enum`, `enums_general_json` (2 runtime failures)
-**Detail:** [NATIVE.md](NATIVE.md) § N10c
-
----
-
-### N5  Fix null DbRef handling in vector operations
-**Description:** Guard `clear_vector` calls with a null check (`rec != 0`) in
-generated code.  `stores.null()` returns a DbRef with a valid `store_nr` that
-causes panics when passed to vector operations.
-**Effort:** Small (generation.rs `output_call` for `OpClearVector`)
-**Fixes:** `vectors_fill_result` (1 runtime failure)
-**Detail:** [NATIVE.md](NATIVE.md) § N10d
-
----
 
 ---
 
@@ -1061,17 +1041,48 @@ Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
 **Description:** Add `--native <file.loft>` to `src/main.rs`: parse, generate Rust
 source via `Output::output_native()`, compile with `rustc`, run the binary.
 **Effort:** Medium
-**Depends on:** N2–N8
+**Depends on:** N2, N6, N9
 
 ---
 
 ### N9  Repair fill.rs auto-generation
 **Description:** Make `create.rs::generate_code()` produce a `fill.rs` that can
-replace the hand-maintained `src/fill.rs`. Add `ops` import, fix formatting,
-add CI check for drift, and introduce `#state_call` annotation for the 52
-delegation operators. Eliminates manual maintenance when adding new opcodes.
+replace the hand-maintained `src/fill.rs`. N20a (`use crate::ops;` import) is done.
+Remaining: fix formatting (N20b), replace src/fill.rs (N20c), add `#state_call`
+annotation for the 52 delegation operators (N20d).
 **Effort:** Medium (create.rs + default/*.loft + CI)
 **Detail:** [NATIVE.md](NATIVE.md) § N20
+
+---
+
+### N8  Implement missing `codegen_runtime` vector operations
+**Description:** 9 generated test files fail because `codegen_runtime.rs` has no
+implementation for:
+- `OpSortVector` — used by 5 sort tests (`vectors_sort_*`)
+- `OpInsertVector` — used by 5 insert tests (`vectors_insert_*`)
+- `OpRemoveVector` / `OpRemove` — used by `vectors_index_loop_remove_small`
+- `OpLengthCharacter` — character byte-length, used by `vectors_fill_fn`
+
+Each op is declared in `default/01_code.loft` with a `#rust` template that references
+`s.database.allocations` / `s.` prefixes, so the template just needs the same
+`s.database.` → `stores.` substitution already applied to other ops.
+**Effort:** Small–Medium (codegen_runtime.rs, one function per op)
+**Fixes:** 9 compile failures
+**Detail:** [NATIVE.md](NATIVE.md) § Critical Files
+
+---
+
+### N10  Fix character-typed variable in method dispatch
+**Description:** `strings_string_parse` fails because the character variable `l` has type
+`i32` in generated Rust (loft represents `character` as `i32` internally), but the
+generated call is `(var_l).is_alphanumeric()` which requires `char`, not `i32`.
+The native method `t_9character_is_alphanumeric` is generated as a `todo!()` stub;
+the generated call site bypasses the stub and calls the method directly.
+**Fix:** Either generate `ops::to_char(var_l).is_alphanumeric()` at the call site, or
+emit the stub body as `char::from_u32(var_self as u32).unwrap_or('\0').is_alphanumeric()`
+in the native function registry.
+**Effort:** Small (generation.rs or native.rs)
+**Fixes:** `strings_string_parse` compile failure
 
 ---
 

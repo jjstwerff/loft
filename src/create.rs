@@ -123,6 +123,7 @@ pub fn generate_code(data: &Data) -> std::io::Result<()> {
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::keys::{{DbRef, Str}};
+use crate::ops;
 use crate::state::State;
 use crate::vector;
 
