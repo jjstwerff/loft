@@ -57,11 +57,6 @@ Goal: harden the interpreter, improve runtime efficiency, and ship working nativ
 generation.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
-**Parser correctness:**
-- **L3** — Reserve compile-time intrinsic names (`sizeof`, `assert`, `panic`, `fields`,
-  `debug_assert`, `match`) as proper KEYWORDS so user code cannot accidentally shadow them.
-  Must land before 0.9.0 introduces `fields` and `debug_assert`.  See PROBLEMS #53.
-
 **Interpreter correctness:**
 - **A9** — Vector slice copy-on-write: mutating a slice must not corrupt the parent vector.
 - **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the
