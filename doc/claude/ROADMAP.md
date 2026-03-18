@@ -15,7 +15,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | L1    | Error recovery after token failures                          | Medium    |                 | DEVELOPERS.md Step 5        |
-| P1    | **Lambda expressions** *(3 phases)*                          | Med–High  | T1-1 (done)     | Prototype goal              |
+| P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |
 | P1.1  | ↳ Parser — `fn(params) -> type block` primary expression     | Small     |                 | expressions.rs              |
 | P1.2  | ↳ Compilation — synthesise anon def, emit def-nr             | Medium    | P1.1            | codegen.rs, compile.rs      |
 | P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
@@ -26,7 +26,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | A6.1  | ↳ Standalone `assign_slots()` — not wired in                 | Medium    |                 | variables.rs                |
 | A6.2  | ↳ Shadow mode — assert agrees with `claim()`; log mismatches | Medium    | A6.1            | scopes.rs                   |
 | A6.3  | ↳ Replace `claim()` — `assign_slots` becomes sole mechanism  | Small     | A6.2            | codegen.rs                  |
-| A8    | Destination-passing for text-returning natives               | Med–High  | T3-9 (done)     | String arch review          |
+| A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | A3    | Optional Cargo features                                      | Medium    |                 | OPTIONAL_FEATURES.md        |
 | N2    | Fix `output_init` intermediate type registration             | Medium    |                 | NATIVE.md N10a              |
 | N3    | Fix `output_set` DbRef deep copy                             | Small     |                 | NATIVE.md N10b              |
@@ -50,7 +50,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| R1    | Workspace split (prerequisite for W1)                        | Small     | repo (done)     | Extraction plan             |
+| R1    | Workspace split (prerequisite for W1)                        | Small     |                 | Extraction plan             |
 | W1    | WASM foundation (Rust feature + wasm-bridge.js)              | Medium    | R1              | WEB_IDE.md M1               |
 | W2    | Editor shell (CodeMirror 6 + Loft grammar)                   | Medium    | W1              | WEB_IDE.md M2               |
 | W4    | Multi-file projects (IndexedDB)                              | Medium    | W2              | WEB_IDE.md M4               |
