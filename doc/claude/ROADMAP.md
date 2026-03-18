@@ -20,7 +20,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | P1.2  | ↳ Compilation — synthesise anon def, emit def-nr             | Medium    | P1.1            | codegen.rs, compile.rs      |
 | P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
-| L2    | Nested patterns in field positions                           | Medium    | T1-14,T1-18     | MATCH.md L2                 |
+| L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
 | A9    | Vector slice becomes independent copy on mutation            | Medium    |                 | TODO in vector.rs           |
 | A6    | **Stack slot `assign_slots` pre-pass** *(3 phases)*          | High      |                 | ASSIGNMENT.md Steps 3+4     |
 | A6.1  | ↳ Standalone `assign_slots()` — not wired in                 | Medium    |                 | variables.rs                |

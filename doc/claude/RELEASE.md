@@ -25,22 +25,14 @@ Reevaluation](PLANNING.md#milestone-reevaluation) for the full reasoning.
 
 These block a 1.0 release because they cause panics on valid programs, ship incorrect public identity, or leave public keywords in a permanently-broken state.
 
+Completed gate items (T0-1, T1-5, PROBLEMS #10, A4 pre-gate, Cargo.toml, README, CHANGELOG, CI pipeline, T0-7, R1) are recorded in CHANGELOG.md.
+
 | Item | Why it blocks 1.0 |
 |---|---|
-| ~~**T0-1** — `null` literal in scalar field assignment crashes `set_int`~~ | **FIXED 2026-03-15** — `parse_assign_op` now calls `convert()` to substitute the typed-null constant; `debug_assert` boundary check added in `generate_call`; five regression tests in `tests/issues.rs`. Introduced T0-3 regression (type-guarded separately). |
 | **T0-2** — LIFO store-free panic (PROBLEMS #37) | Panics at runtime whenever a function has 2+ owned refs in the same scope; 9+ tests fail including `structs`, `enums`, `vectors`, `collections`, `threading`. Fix: one-line `res.reverse()` in `scopes.rs::variables()`. |
 | **T0-3** — T0-1 regression: `sorted`/`hash`/`index` key-null removal silently broken (PROBLEMS #38) | `collection[key] = null` does nothing; collection retains all elements. Fix: guard `convert()` call to scalar types only in `parse_assign_op`. |
 | **T0-4** — `v += other_vec` shallow copy: text fields in appended struct elements become dangling (PROBLEMS #39) | Panics "Unknown record N" at runtime for any `vector<S>` append where S has text/ref fields. Fix: call `copy_claims` per element in `vector_add`. |
 | **T0-5** — `index<T>` struct field: `OpCopyRecord`/`OpClear` panic (PROBLEMS #40) | `copy_claims`/`remove_claims` in `allocation.rs` have no `Parts::Index` arm. Fix: add Index arms to both functions. |
-| ~~**T1-5** — validate_slots false-positive panics~~ | **FIXED 2026-03-13** — `find_conflict` exempts same-name/same-slot pairs; P1 pre-init handles ref-typed vars across sequential blocks. |
-| ~~**PROBLEMS #10** — garbage format-slot crash~~ | **FIXED 2026-03-15** — `vars.defined` moved inside `has_token("=")` guard. |
-| ~~**A4 pre-gate** — `spacial<T>` keyword unimplemented~~ | **FIXED 2026-03-15** — emits compile error `"spacial<T> is not yet implemented"`; `spacial_not_implemented` test added. |
-| ~~**Cargo.toml identity**~~ | **FIXED 2026-03-15** — crate renamed `loft`; `description`, `homepage`, `repository`, `keywords`, `categories` all set correctly. |
-| ~~**README.md rewrite**~~ | **DONE 2026-03-15** — README.md created: one-liner, features, hello-world, install options, known limitations, license. |
-| ~~**CHANGELOG.md**~~ | **DONE 2026-03-15** — CHANGELOG.md created: 0.1.0 entry with full language feature list, stdlib summary, known limitations, and unreleased section tracking open T0 items. |
-| ~~**GitHub Actions CI + release pipeline**~~ | **DONE 2026-03-15** — `.github/workflows/ci.yml` (test on ubuntu/macos/windows, clippy -D warnings, fmt check) + `release.yml` (4-platform binaries, gh-pages, crates.io). Zero clippy warnings; all tests pass. |
-| ~~**T0-7** — `16-parser.loft` `generate_call` size mismatch (PROBLEMS #42)~~ | **FIXED 2026-03-16** — Root cause was `Code.define()` in `lib/code.loft` storing `res: i32` into `hash<Definition[name]>`. Fixed: store a full Definition; fix `get_type()` to use `definitions[nr].typedef`; fix `structure()` to restore `cur_def` after `type_def()`; fix `object()` inverted loop condition; use integer null-check to avoid `ConvRefFromNull` store leak. All 28 wrap tests pass; `16-parser.loft` removed from `SUITE_SKIP`. |
-| ~~**R1** — create standalone `loft` GitHub repository~~ | **DONE 2026-03-16** — standalone `jjstwerff/loft` repo created with correct identity. |
 
 ---
 

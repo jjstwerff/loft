@@ -4,7 +4,8 @@
 - [Resolved Issues](#resolved-issues)
 - [Open Issues](#open-issues)
 - [Resolved Bugs](#resolved-bugs)
-- [Proposals](#proposals)
+- [P1 — Scope-analysis pre-init (complete)](#p1--scope-analysis-pre-init-option-a-sub-3)
+- [P2 — Full slot assignment pass (planned as A6)](#p2--full-slot-assignment-pass-option-a)
 - [Current status (2026-03-11)](#current-status-2026-03-11)
 
 ---
@@ -41,13 +42,6 @@ implemented.  The current pre-init approach (P1) is a targeted fix; P2 is the co
 long-term architecture.
 
 **Solved by:** P2
-
----
-
-### ~~Issue 4 — Dead Option-B helpers in `variables.rs`~~ **FIXED**
-
-`first_def(var_nr)` and `min_safe_claim_pos(check_seq)` no longer exist in `variables.rs`.
-`first_def` is now a struct field on `Variable`, not a standalone function.
 
 ---
 
@@ -175,7 +169,7 @@ cargo test --test wrap -- last dir                  # FAILS (Issue 2, separate b
 
 **Solves:** Issue 3 (long-term correct architecture)
 
-**Status:** Planned; Steps 1 and 2 done, Steps 3–5 not yet implemented.
+**Status:** Planned; Steps 1 and 2 done, Steps 3–5 not yet implemented. Tracked as **A6** in PLANNING.md / ROADMAP.md.
 
 #### Core idea
 
@@ -291,14 +285,6 @@ intervals and can share or not share slots based on the interval check.
 
 ---
 
-### P3 — Live-interval guard in `generate_set` (ABANDONED)
-
-**Status:** Attempted 2026-03-11, reverted.  **Do not implement.**
-
-The idea was to advance `stack.position` past all live variables before `claim()` to avoid slot collisions. It fails due to the **bridging invariant**: every `VarRef` offset is computed as `stack.position − var.stack_pos` at compile time and read as `State::stack_pos − encoded_pos` at runtime — these are equal only when `stack.position == State::stack_pos` at every bytecode position. Advancing compile-time `stack.position` without emitting bytecode that also advances the runtime `stack_pos` silently corrupts all subsequent variable addresses (crashes with SIGSEGV). P1 and P2 are the only correct fixes.
-
----
-
 ## Current status (2026-03-11)
 
 | Step | Status |
@@ -319,5 +305,6 @@ The idea was to advance `stack.position` past all live variables before `claim()
 ---
 
 ## See also
+- [PLANNING.md § A6](PLANNING.md) — A6 backlog item: `assign_slots` pre-pass (Steps 3–5 of P2)
 - [COMPILER.md](COMPILER.md) — Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode
 - [INTERMEDIATE.md](INTERMEDIATE.md) — Value/Type enums in detail; 233 bytecode operators; State layout

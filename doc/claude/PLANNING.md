@@ -232,10 +232,9 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 **Sources:** [MATCH.md](MATCH.md) — L2
 **Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
 **Description:** `Order { status: Paid, amount } => charge(amount)` — a field may carry a sub-pattern (`:` separator) instead of (or in addition to) a binding variable.  Sub-patterns generate additional `&&` conditions on the arm.
-**Fix path:** See [MATCH.md#t1-19](MATCH.md#t1-19-nested-patterns-in-field-positions) for full design.
+**Fix path:** See [MATCH.md § L2](MATCH.md) for full design.
 Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
 **Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
-**Depends on:** T1-14, T1-18
 **Target:** 0.9.0
 
 ---
@@ -243,7 +242,7 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 ## P — Prototype Features
 
 ### P1  Lambda / anonymous function expressions
-**Sources:** Prototype-friendly goal; T1-1 (callable fn refs) already complete
+**Sources:** Prototype-friendly goal; callable fn refs already complete (landed in 0.8.0)
 **Severity:** Medium — without lambdas, `map` / `filter` require a named top-level function
 for every single-use transform, which is verbose for prototyping
 **Description:** Allow inline function literals at the expression level:
@@ -347,9 +346,9 @@ pub fn count_if(v: vector<integer>, pred: fn(integer)->boolean) -> integer { ...
 ```
 `sum`/`min_of`/`max_of` are straightforward reduce wrappers; `any`/`all`/`count_if`
 are short-circuit loops that need a named helper or compiler special-casing.
-Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with T1-7.
+Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with the built-in `min`/`max` stdlib functions.
 **Fix path:** Typed loft overloads using `reduce` for sum/min_of/max_of; compiler
-special-case in `parse_call` for `any`/`all`/`count_if` (same tier of effort as T1-3).
+special-case in `parse_call` for `any`/`all`/`count_if` (same level of effort as similar compiler special-cases).
 **Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
 **Target:** 0.9.0 — batch all variants after P1 lands
 
@@ -516,7 +515,7 @@ when multiple closures are live simultaneously.
 ---
 
 ### A6  Stack slot `assign_slots` pre-pass
-**Sources:** [ASSIGNMENT.md](ASSIGNMENT.md) Steps 3+4; formerly T1-5 arch
+**Sources:** [ASSIGNMENT.md](ASSIGNMENT.md) Steps 3+4
 **Severity:** Low — `claim()` at code-generation time is O(n) and couples slot layout to
 runtime behaviour; no user-visible correctness impact (the correctness fix was completed
 2026-03-13); purely architectural debt
@@ -658,8 +657,7 @@ Stack after call:   [ ]   // result already written to dest
    to `&mut String`, and `push_str()` into it.
 5. Remove `stores.scratch.push(...)` and the `Str` return.  These functions now return
    nothing (void on the stack).
-6. If T3-9 was implemented first, remove `OpClearScratch` emission since scratch is no
-   longer used.
+6. Remove `OpClearScratch` emission since scratch is no longer used.
 
 **Phase 3 — Extend to format expressions (`parser/expressions.rs`):**
 7. In `parse_append_text` (`expressions.rs:1070-1119`), the `__work_N` variable is
@@ -680,7 +678,7 @@ Stack after call:   [ ]   // result already written to dest
 **Phase 4 — Remove scratch buffer:**
 9. Once all three natives use destination-passing, remove `Stores.scratch` field
    (`database/mod.rs:118`) and the `scratch.clear()` call (`database/mod.rs:360`).
-10. Remove T3-9's `OpClearScratch` if it was added.
+10. Remove `OpClearScratch` from `fill.rs` if it was added.
 
 **Files changed:**
 | File | Change |
@@ -690,7 +688,7 @@ Stack after call:   [ ]   // result already written to dest
 | `src/parser/expressions.rs` | Pass destination through `parse_append_text`; skip `OpAppendText` for `TextDest` calls |
 | `src/native.rs` | Rewrite 3 functions to pop destination and write directly |
 | `src/database/mod.rs` | Remove `scratch` field |
-| `src/fill.rs` | Remove `clear_scratch` handler (if T3-9 was done first) |
+| `src/fill.rs` | Remove `clear_scratch` handler (scratch buffer removal already complete) |
 
 **Edge cases:**
 - **Chained calls** (`text.replace("a","b").replace("c","d")`): the first `replace` writes
@@ -703,7 +701,7 @@ Stack after call:   [ ]   // result already written to dest
   returning text should use `TextDest` from the start.
 
 **Effort:** Medium–High (compiler calling-convention change + 3 native rewrites + codegen)
-**Depends on:** T3-9 (done 2026-03-17)
+**Note:** scratch buffer removal (OpClearScratch) was completed 2026-03-17 and is a prerequisite; some conditionals in the Fix path above reference it as already done.
 **Target:** 0.9.0
 
 ---
@@ -806,7 +804,7 @@ naming to `_pre_{n}` to avoid Rust prefix parsing; fix `OpGetRecord` argument co
 **Description:** Add `--native <file.loft>` to `src/main.rs`: parse, generate Rust
 source via `Output::output_native()`, compile with `rustc`, run the binary.
 **Effort:** Medium
-**Depends on:** N7
+**Depends on:** N2–N8
 
 ---
 
@@ -963,7 +961,7 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process, quality gates, scope rules, and backwards compatibility
 - [THREADING.md](THREADING.md) — Parallel for-loop design (A1 detail)
 - [LOGGER.md](LOGGER.md) — Logger design (A2 detail)
-- [FORMATTER.md](FORMATTER.md) — Code formatter design (T2-0 detail)
+- [FORMATTER.md](FORMATTER.md) — Code formatter design (backlog item)
 - [NATIVE.md](NATIVE.md) — Native Rust code generation: root cause analysis, step details, verification (Tier N detail)
 - [WEB_IDE.md](WEB_IDE.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
 - [RELEASE.md](RELEASE.md) — 1.0 gate items, project structure changes, release artifacts checklist, post-1.0 versioning policy

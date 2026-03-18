@@ -516,3 +516,4 @@ The `LOFT_IR` gate additionally checks the `logging` flag on the function defini
 - [COMPILER.md](COMPILER.md) — Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode
 - [DATABASE.md](DATABASE.md) — Store allocator, Stores schema, DbRef, vector/tree/hash implementations
 - [INTERNALS.md](INTERNALS.md) — calc.rs, stack.rs, create.rs, native.rs, ops.rs, parallel.rs
+- [DESIGN.md](DESIGN.md) — Algorithm catalog including bytecode dispatch, store layout, and collection complexity

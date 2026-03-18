@@ -242,4 +242,4 @@ The validation infrastructure is already in place (`n_extra == n_worker_extra` c
 ## See also
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
 - [STDLIB.md](STDLIB.md) — `par(...)` parallel for-loop user-facing API
-- [PLANNING.md](PLANNING.md) — T2-1 (bytecode sharing), T3-1 (extra args + text/ref returns)
+- [PLANNING.md](PLANNING.md) — A1 (parallel workers: extra args + text/ref returns)
