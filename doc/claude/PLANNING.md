@@ -88,13 +88,13 @@ cliffs; the binary is lean and ships pre-built.
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on `replace`, `to_lowercase`, `to_uppercase` and format expressions.
 - **A3** — Optional Cargo features: gate `png`, `parallel`, `logging`, `mmap` behind `cfg` features for a lean default binary.
+- **Tier N** — Native code generation: fix the ~1500 compile errors in `src/generation.rs` incrementally (N2–N9) so that `loft --native` produces correct compiled Rust output.  Each N step is a small, independent fix with its own test; they can interleave with other 0.9.0 work.  N1 (`--native` CLI flag) lands last, once all fixes pass.
 
 **Parallel execution completeness:**
 - **A1** — Parallel workers with extra context arguments and text/reference return types.
 
 **Deferred from 0.9.0:**
 - P2 (REPL) — High effort; the browser IDE largely covers the interactive use case. Revisit after 1.0.0.
-- Tier N (native Rust codegen) — A separate compiler track; the interpreter is efficient enough for 0.9.0. Tier N is 1.1+ work.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
 - A7 (native extension libraries) — Useful after the ecosystem exists; 1.1+.
 
@@ -165,12 +165,13 @@ it to "post-1.0" without a milestone risks it never shipping.  In 2026, "fully f
 for a scripting language includes browser-accessible tooling; shipping a 1.0 without it
 would require walking back that claim at 1.1.
 
-**Why keep native codegen (Tier N) in 1.1+?**
-Tier N generates Rust source code from loft programs — a separate compiler track, not an
-interpreter improvement.  Including it in 0.9.0 or 1.0.0 would expand scope significantly
-without making the interpreter more correct or the IDE more usable.  The interpreter is
-already fast enough for the programs loft is designed to express.  Tier N delivers the
-most value after the language is stable, as an opt-in performance path.
+**Why include native codegen (Tier N) in 0.9.0?**
+`src/generation.rs` already translates the loft IR to Rust source; the code exists but
+does not compile.  The N items are incremental bug fixes — each is Small or Medium effort,
+independent of the others, and each makes more generated tests pass.  Fixing them during
+0.9.0 turns an existing but broken feature into a working opt-in performance path for
+the first production release, at low marginal cost.  Leaving them for 1.1+ would mean
+shipping a 0.9.0 binary that silently generates uncompilable output.
 
 **Why deprioritize REPL (P2)?**
 The Web IDE (W2 editor + W1 WASM runtime) covers the interactive "try a snippet"
@@ -196,7 +197,9 @@ in a better state than it found it, with passing tests).
 3. **P3** + **L2** — aggregates and nested patterns; depends on P1; batch together
 4. **A9** + **A6** — vector CoW + slot pre-pass; correctness; can share a branch
 5. **A8** + **A3** — string efficiency + optional features; packaging polish
-6. **A1** — parallel completeness; isolated change, touches parallel.rs only
+6. **N2–N9** — native codegen fixes; each is independent, interleave freely with other work
+7. **N1** — `--native` CLI flag; lands after all N2–N9 fixes pass
+8. **A1** — parallel completeness; isolated change, touches parallel.rs only
 
 **For 1.0.0 (after 0.9.0 is tagged):**
 7. **R1** — workspace split; small change, unblocks all Tier W
@@ -711,9 +714,9 @@ Stack after call:   [ ]   // result already written to dest
 (`tests/generated/*.rs`), but none compile (~1500 errors).  The steps below fix
 these incrementally.  Full design in [NATIVE.md](NATIVE.md).
 
-**Target: 1.1+** — native codegen is a separate compiler track, not an interpreter
-improvement.  The interpreter is efficient enough for 0.9.0 and 1.0.0.  Tier N delivers
-the most value after the language surface is stable, as an opt-in performance path.
+**Target: 0.9.0** — the generator already exists; N items are incremental fixes that turn
+broken generated output into correct compiled Rust.  Each fix is small and independent.
+See the 0.9.0 milestone in [PLANNING.md](PLANNING.md#version-090) for rationale.
 
 ---
 

@@ -75,6 +75,7 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 | A6 stack slot pre-pass | Architectural: eliminates slot-conflict category of bugs |
 | A8 destination-passing for strings | Efficiency: eliminates double-copy in format expressions |
 | A3 optional Cargo features | Lean binary; clean dependency management |
+| Tier N (N2–N9, N1) native codegen fixes | Efficiency: turn existing but broken generator into working `--native` path |
 | A1 parallel workers full | Feature completeness for existing parallel construct |
 
 ### 1.0.0 gate items (on top of 0.9.0)
@@ -98,7 +99,6 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 | A4 spacial<T> full implementation | After pre-gate added in 0.8.0 |
 | A5 closure capture | Very high effort; depends on P1 |
 | A7 native extension libraries | Useful after ecosystem exists |
-| Tier N native codegen | Separate compiler track; interpreter is efficient enough for 1.0.0 |
 
 ---
 

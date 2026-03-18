@@ -28,6 +28,18 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | A6.3  | ↳ Replace `claim()` — `assign_slots` becomes sole mechanism  | Small     | A6.2            | codegen.rs                  |
 | A8    | Destination-passing for text-returning natives               | Med–High  | T3-9 (done)     | String arch review          |
 | A3    | Optional Cargo features                                      | Medium    |                 | OPTIONAL_FEATURES.md        |
+| N2    | Fix `output_init` intermediate type registration             | Medium    |                 | NATIVE.md N10a              |
+| N3    | Fix `output_set` DbRef deep copy                             | Small     |                 | NATIVE.md N10b              |
+| N4    | Fix `OpFormatDatabase` for struct-enum variants              | Small     |                 | NATIVE.md N10c              |
+| N5    | Fix null DbRef in vector operations                          | Small     |                 | NATIVE.md N10d              |
+| N7    | Add `OpFormatFloat`/`OpFormatStackLong` handlers             | Small     |                 | NATIVE.md N10e-3            |
+| N8    | Fix empty pre-eval and prefix issues                         | Small     |                 | NATIVE.md N10e-5            |
+| N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(3 ph)* | High   |                 | NATIVE.md N10e-2            |
+| N6.1  | ↳ Vector iteration — index-based loop with `_iter` counter   | Medium    |                 | codegen_runtime.rs          |
+| N6.2  | ↳ `sorted` + `index` iteration via existing helpers          | Medium    | N6.1            | codegen_runtime.rs          |
+| N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    | N6.2            | generation.rs               |
+| N9    | Repair fill.rs auto-generation                               | Medium    |                 | NATIVE.md N20               |
+| N1    | `--native` CLI flag                                          | Medium    | N2–N8           | NATIVE.md                   |
 | A1    | **Parallel workers: extra args + text/ref returns** *(2 ph)* | High      |                 | THREADING deferred          |
 | A1.1  | ↳ Extra context arguments (compile-time wrapper synthesis)   | Medium    |                 | collections.rs, parallel.rs |
 | A1.2  | ↳ Text/reference return types (merge worker-local stores)    | Medium    | A1.1            | parallel.rs, store.rs       |
@@ -78,18 +90,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A7.1  | ↳ `#native` annotation + symbol registration                 | Medium    |                 | parser.rs, compiler, state  |
 | A7.2  | ↳ `cdylib` loader (`libloading`, optional feature)           | Medium    | A7.1            | state.rs, Cargo.toml        |
 | A7.3  | ↳ Package layout + `loft-plugin-api` crate                   | Medium    | A7.2            | new workspace member        |
-| N2    | Fix `output_init` intermediate type registration             | Medium    |                 | NATIVE.md N10a              |
-| N3    | Fix `output_set` DbRef deep copy                             | Small     |                 | NATIVE.md N10b              |
-| N4    | Fix `OpFormatDatabase` for struct-enum variants              | Small     |                 | NATIVE.md N10c              |
-| N5    | Fix null DbRef in vector operations                          | Small     |                 | NATIVE.md N10d              |
-| N7    | Add `OpFormatFloat`/`OpFormatStackLong` handlers             | Small     |                 | NATIVE.md N10e-3            |
-| N8    | Fix empty pre-eval and prefix issues                         | Small     |                 | NATIVE.md N10e-5            |
-| N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(3 ph)* | High   |                 | NATIVE.md N10e-2            |
-| N6.1  | ↳ Vector iteration — index-based loop with `_iter` counter   | Medium    |                 | codegen_runtime.rs          |
-| N6.2  | ↳ `sorted` + `index` iteration via existing helpers          | Medium    | N6.1            | codegen_runtime.rs          |
-| N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    | N6.2            | generation.rs               |
-| N9    | Repair fill.rs auto-generation                               | Medium    |                 | NATIVE.md N20               |
-| N1    | `--native` CLI flag                                          | Medium    | N2–N8           | NATIVE.md                   |
 
 ---
 
