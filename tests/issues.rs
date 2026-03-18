@@ -1017,9 +1017,8 @@ fn add(r: &Data = null, val: integer) {
     )
     .expr("v = Data { num: 1 }; add(v, 2); add(v, 3); \"{v}\"")
     .result(Value::str("{num:6,values:[2,3]}"));
-    let src =
-        std::fs::read_to_string("tests/generated/issues_n8_no_empty_pre_eval_binding.rs")
-            .expect("generated file not found");
+    let src = std::fs::read_to_string("tests/generated/issues_n8_no_empty_pre_eval_binding.rs")
+        .expect("generated file not found");
     for line in src.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("let _pre") && trimmed.trim_end().ends_with("= ;") {
