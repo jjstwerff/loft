@@ -1,14 +1,23 @@
 # Release Planning
 
-## What "1.0" means
+## What "0.9.0" and "1.0.0" mean
 
-1.0 is a **stability contract**, not a completeness contract.  It means:
-- Programs valid on 1.0 will compile and run identically on any 1.x release.
-- The core language surface (syntax, type system, documented stdlib API, CLI flags) is frozen; new features are additive only.
-- The interpreter does not panic or silently produce wrong results on any program that passes the type-checker.
-- A user can write and ship a real program using the documented features.
+**0.9.0 — Production-ready standalone executable.**
+The interpreter is complete, stable, and efficient enough to rely on for real programs.
+All planned language features (lambdas, aggregates, nested patterns, full parallel support)
+are present.  No known crashes or silent wrong results.  Pre-built binaries ship for all
+four platforms.
 
-The feature-completeness interpretation (every planned feature ships in 1.0) is wrong for a single-developer project; chasing it risks never shipping.  Items like match expressions (T1-4), REPL (T2-2), and the Web IDE (Tier W) are valuable but do not prevent a user from writing correct programs today.
+**1.0.0 — Stable language + fully working IDE.**
+1.0.0 is the **stability contract**: any program valid on 1.0.0 compiles and runs
+identically on any 1.0.x or 1.x.0 release.  The contract covers:
+- The core language surface (syntax, type system, documented stdlib API, CLI flags).
+- The public IDE API (WASM `compileAndRun` / `getSymbols` JS interface).
+- The interpreter does not panic or silently produce wrong results.
+- A user can write, run, and share a real program — from the terminal or the browser.
+
+The Web IDE (W1–W6) is part of 1.0.0, not post-1.0.  See [PLANNING.md § Milestone
+Reevaluation](PLANNING.md#milestone-reevaluation) for the full reasoning.
 
 ---
 
@@ -52,18 +61,44 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 
 ---
 
-## Explicitly 1.1+
+## Items by milestone
+
+### 0.9.0 gate items
 
 | Item | Notes |
 |---|---|
-| T2-1 lambda expressions | Depends on T1-1 (done); natural 1.1 item |
-| T2-2 REPL | High effort; not blocking basic usability |
-| T3-1 parallel workers extra args / text returns | Deferred in THREADING.md |
-| T3-2 logger production mode | Low user impact until logger widely used |
-| T3-3 optional Cargo features | Architectural cleanup; no user-visible gap |
-| T3-4 spacial<T> full implementation | 1.1+ after pre-gate removal in 1.0 |
+| T1-28 error recovery | Cascading errors after one bad token; high UX impact |
+| T2-1 lambda expressions | Core language completeness; unblocks T2-4 and T3-5 |
+| T2-4 vector aggregates | Stdlib completeness; depends on T2-1 |
+| T1-19 nested match patterns | Language completeness |
+| T3-11 vector slice CoW | Correctness: mutating a slice must not corrupt parent |
+| T3-7 stack slot pre-pass | Architectural: eliminates slot-conflict category of bugs |
+| T3-10 destination-passing for strings | Efficiency: eliminates double-copy in format expressions |
+| T3-3 optional Cargo features | Lean binary; clean dependency management |
+| T3-1 parallel workers full | Feature completeness for existing parallel construct |
+
+### 1.0.0 gate items (on top of 0.9.0)
+
+| Item | Notes |
+|---|---|
+| R6 workspace split | Prerequisite for WASM target |
+| W1 WASM foundation | Enables all other IDE work |
+| W2 editor shell | Visible IDE |
+| W3 symbol navigation | Go-to-definition, find-usages |
+| W4 multi-file projects | IndexedDB persistence |
+| W5 docs/examples browser | Integrated documentation |
+| W6 export/import + PWA | Offline support; closes the loop |
+
+### Explicitly 1.1+
+
+| Item | Notes |
+|---|---|
+| T2-2 REPL | Browser IDE covers the interactive use case; revisit if needed |
+| T3-2 logger production mode | Low user impact until logger is widely used |
+| T3-4 spacial<T> full implementation | After pre-gate added in 0.8.0 |
 | T3-5 closure capture | Very high effort; depends on T2-1 |
-| Tier W web IDE | Parallel independent track; no 1.0 dependency |
+| T3-8 native extension libraries | Useful after ecosystem exists |
+| Tier N native codegen | Separate compiler track; interpreter is efficient enough for 1.0.0 |
 
 ---
 
@@ -218,12 +253,12 @@ Verify that `gendoc` completes without warnings and that the generated HTML file
 
 ---
 
-## Post-1.0 Versioning Policy
+## Post-1.0.0 Versioning Policy
 
 **Semantic versioning with a roughly monthly release cadence:**
 
-- **1.0.x patch** — bug fixes only; no new language features; no behaviour changes; always backward-compatible.  Example: fix a crash found after 1.0 ships.
-- **1.x.0 minor** — new language features that are strictly additive (new syntax, new stdlib functions, new CLI flags).  Any program valid on 1.0 must compile and run identically on 1.x.  Examples: match expressions (T1-4), wildcard imports (T1-2), formatter (T2-0), lambdas (T2-1), REPL (T2-2).
+- **1.0.x patch** — bug fixes only; no new language features; no behaviour changes; always backward-compatible.  Example: fix a crash found after 1.0.0 ships.
+- **1.x.0 minor** — new language features that are strictly additive (new syntax, new stdlib functions, new CLI flags, new IDE capabilities).  Any program valid on 1.0.0 must compile and run identically on 1.x.0.  Candidates: T2-2 (REPL), T3-5 (closures), T3-8 (native extensions), Tier N (native codegen).
 - **2.0** — reserved for breaking language changes.  Not expected in the near term.
 
-The stability guarantee applies to the **loft language surface** (syntax, type system, documented stdlib, CLI flags).  The Rust library API (`lib.rs`) is not a public stable API until explicitly stabilised.
+The stability guarantee applies to the **loft language surface** (syntax, type system, documented stdlib, CLI flags) and the **public IDE API** (`compileAndRun` / `getSymbols` JS interface).  The Rust library API (`lib.rs`) is not a public stable API until explicitly stabilised.

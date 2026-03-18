@@ -16,10 +16,15 @@ Loft aims to be:
    efficient as data grows.
 4. **Architecturally clean** — the compiler and interpreter internals should be free of technical
    debt that makes future features hard to add.
+5. **Developed in small, verified steps** — each feature is complete and tested before the next
+   begins.  No half-implementations are shipped.  No feature is added "just in case".  Every
+   release must be smaller and better than its estimate, never larger.  This is the primary
+   defence against regressions and against the codebase growing beyond one person's ability to
+   understand it fully.
 
 The items below are ordered by tier: things that break programs come first, then language-quality
 and prototype-friction items, then architectural work.  See [RELEASE.md](RELEASE.md) for the full
-1.0 gate criteria, project structure changes, and release artifact checklist.
+release gate criteria, project structure changes, and release artifact checklist.
 
 **Completed items are removed entirely** — this document is strictly for future work.
 Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
@@ -31,6 +36,8 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Contents
 - [Version Milestones](#version-milestones)
+  - [Milestone Reevaluation](#milestone-reevaluation)
+  - [Recommended Implementation Order](#recommended-implementation-order)
 - [Tier 1 — Language Quality & Consistency](#tier-1--language-quality--consistency)
 - [Tier 2 — Prototype-Friendly Features](#tier-2--prototype-friendly-features)
 - [Tier 3 — Architectural / Future Work](#tier-3--architectural--future-work)
@@ -45,7 +52,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ### Version 0.8.1 — Stability patch (2026-03-18)
 
-Three pre-1.0 blockers fixed — no new language features.
+Three correctness fixes — no new language features.
 
 - **T0-11** — `addr_mut()` on a locked store now panics (replaced the silent DUMMY buffer).
 - **T0-12** — `vector_add()` snapshots source bytes before resize; `v += v` is now correct.
@@ -60,42 +67,143 @@ patterns, struct destructuring), code formatter, wildcard imports, callable fn-r
 map/filter/reduce, vector.clear(), mkdir, time functions, logging, parallel execution,
 24+ bug fixes, comprehensive user documentation (24 pages + Safety guide + PDF).
 
-### Version 1.0 — Language Stability
+---
 
-1.0 is a **stability contract**: any program valid on 1.0 compiles and runs identically on any 1.x
-release.  Full criteria and release checklist in [RELEASE.md](RELEASE.md).
+### Version 0.9.0 — Production-ready standalone executable (planned)
 
-**Remaining items before 1.0:** T1-28 (error recovery).
+Goal: an interpreter a developer can rely on for real programs.  Every planned language
+feature is present; no known crashes or silent wrong results; no obvious performance
+cliffs; the binary is lean and ships pre-built.
+
+**Language completeness:**
+- **T1-28** — Error recovery: a single bad token must not cascade into dozens of spurious errors.
+- **T2-1** — Lambda expressions: inline `fn(x: T) -> U { ... }` without a top-level name.
+- **T2-4** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on T2-1).
+- **T1-19** — Nested match patterns: field sub-patterns in struct arms.
+
+**Interpreter correctness and stability:**
+- **T3-11** — Vector slice copy-on-write: mutating a slice must not corrupt the parent vector.
+- **T3-7** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
+
+**Efficiency and packaging:**
+- **T3-10** — Destination-passing for string natives: eliminates the double-copy overhead on `replace`, `to_lowercase`, `to_uppercase` and format expressions.
+- **T3-3** — Optional Cargo features: gate `png`, `parallel`, `logging`, `mmap` behind `cfg` features for a lean default binary.
+
+**Parallel execution completeness:**
+- **T3-1** — Parallel workers with extra context arguments and text/reference return types.
+
+**Deferred from 0.9.0:**
+- T2-2 (REPL) — High effort; the browser IDE largely covers the interactive use case. Revisit after 1.0.0.
+- Tier N (native Rust codegen) — A separate compiler track; the interpreter is efficient enough for 0.9.0. Tier N is 1.1+ work.
+- T3-5 (closure capture) — Depends on T2-1; very high effort; 1.1+.
+- T3-8 (native extension libraries) — Useful after the ecosystem exists; 1.1+.
+
+---
+
+### Version 1.0.0 — Complete IDE + stability contract (planned)
+
+Goal: a fully working, friendly IDE that lets users write and run loft programs in a
+browser without installing anything, paired with a stable, feature-complete interpreter.
+
+The **stability contract** — any program valid on 1.0.0 compiles and runs identically on
+any 1.0.x or 1.x.0 release — covers both the language surface and the public IDE API.
+Full gate criteria in [RELEASE.md](RELEASE.md).
+
+**Prerequisites:**
+- **R6** — Workspace split into `loft-core` + `loft-cli` + `loft-gendoc` (enables the `cdylib` WASM target without affecting the CLI binary).
+
+**Web IDE (W1–W6):**
+- **W1** — WASM foundation: compile interpreter to WASM, expose typed JS API.
+- **W2** — Editor shell: CodeMirror 6 with Loft grammar, diagnostics, toolbar.
+- **W3** — Symbol navigation: go-to-definition, find-usages, outline panel.
+- **W4** — Multi-file projects: IndexedDB persistence, tab bar, `use` auto-complete.
+- **W5** — Documentation and examples browser: embedded HTML docs + one-click example projects.
+- **W6** — Export/import ZIP + PWA: offline support, URL sharing, drag-and-drop import.
+
+**Stability gate (same as RELEASE.md §§ 1–9):**
+- All INCONSISTENCIES.md entries addressed or documented as accepted behaviour.
+- Full documentation review; pre-built binaries for all four platforms; crates.io publish.
 
 **Deferred to 1.1+:**
-T2-1 (lambdas), T2-2 (REPL), T2-4, T3-1..T3-5, T3-7, T3-8,
-N1..N7 (native codegen), W1..W6 (Web IDE; starts after R6)
+T2-2, T3-5, T3-8, Tier N (native codegen).
+
+---
 
 ### Version 1.x — Minor releases (additive)
 
-New language features that are strictly backward-compatible: T2-1, T2-2.
-Roughly monthly cadence.  Web IDE (Tier W) is a parallel track independent of interpreter versions.
+New language features that are strictly backward-compatible.  Candidates: T2-2 (REPL),
+T3-5 (closures), T3-8 (native extensions), Tier N (native codegen).
+
+---
 
 ### Version 2.0 — Breaking changes only
 
-Reserved for language-level breaking changes (syntax removal, sentinel redesign).
+Reserved for language-level breaking changes (sentinel redesign, syntax removal).
 Not expected in the near term.
+
+---
+
+### Milestone Reevaluation
+
+The previous plan had 1.0 as a language-stability contract for the interpreter alone,
+with the Web IDE deferred indefinitely to "post-1.0".  This reevaluation changes both
+milestones and adds the small-steps goal.  The reasoning:
+
+**Why introduce 0.9.0?**
+The old plan reached the current state (0.8.1) and declared "T1-28 is the last blocker
+before 1.0", but that understated what "fully featured" actually requires.  Several items
+(T2-1 lambdas, T3-11 vector CoW, T3-7 slot pre-pass, T3-10 string efficiency, T3-1
+parallel completeness) are not optional polish — they close correctness and usability
+gaps that a production-ready interpreter must not have.  A 0.9.0 milestone gives these
+items a home without inflating the 1.0 scope.
+
+**Why include the IDE in 1.0.0?**
+A standalone interpreter 1.0 that is later extended with a breaking IDE integration
+produces two separate stability contracts to maintain.  The Web IDE (W1–W6) is already
+concretely designed in [WEB_IDE.md](WEB_IDE.md) and is bounded, testable work.  Deferring
+it to "post-1.0" without a milestone risks it never shipping.  In 2026, "fully featured"
+for a scripting language includes browser-accessible tooling; shipping a 1.0 without it
+would require walking back that claim at 1.1.
+
+**Why keep native codegen (Tier N) in 1.1+?**
+Tier N generates Rust source code from loft programs — a separate compiler track, not an
+interpreter improvement.  Including it in 0.9.0 or 1.0.0 would expand scope significantly
+without making the interpreter more correct or the IDE more usable.  The interpreter is
+already fast enough for the programs loft is designed to express.  Tier N delivers the
+most value after the language is stable, as an opt-in performance path.
+
+**Why deprioritize REPL (T2-2)?**
+The Web IDE (W2 editor + W1 WASM runtime) covers the interactive "try a snippet"
+use case that motivates a REPL.  Building both duplicates effort.  T2-2 remains in
+the backlog for 1.1+ if users ask for a terminal-based interactive mode after 1.0.0.
+
+**The small-steps principle in practice:**
+Each milestone above is a strict subset of the next.  0.9.0 ships nothing from the IDE
+track; 1.0.0 adds exactly R6 + W1–W6 on top of a complete 0.9.0.  No item moves forward
+until the test suite for the previous item is green.  This prevents the "everything at
+once" failure mode where half-finished features interact and regressions are hard to pin.
 
 ---
 
 ### Recommended Implementation Order
 
-Ordered by unblocking impact, batching efficiency, and value-to-effort ratio.
-Items on the same line can be done in a single PR.
+Ordered by unblocking impact and the small-steps principle (each item leaves the codebase
+in a better state than it found it, with passing tests).
 
-1. **T1-28** (error recovery) — medium effort, high UX impact
-2. **N3** (codegen_runtime) — largest Tier N piece, enables most generated files
-3. **T2-1** (lambdas) — unblocks T2-4 and T3-5; makes the language feel modern
-4. **N4** (iterators) + **N6** (compile gate) — completes native codegen
+**For 0.9.0:**
+1. **T1-28** — error recovery; standalone UX improvement, no dependencies
+2. **T2-1** — lambdas; unblocks T2-4, T3-5; makes the language feel complete
+3. **T2-4** + **T1-19** — aggregates and nested patterns; depends on T2-1; batch together
+4. **T3-11** + **T3-7** — vector CoW + slot pre-pass; correctness; can share a branch
+5. **T3-10** + **T3-3** — string efficiency + optional features; packaging polish
+6. **T3-1** — parallel completeness; isolated change, touches parallel.rs only
 
-Tier W (Web IDE) is an independent parallel track that can start any time after R6.
-
----
+**For 1.0.0 (after 0.9.0 is tagged):**
+7. **R6** — workspace split; small change, unblocks all Tier W
+8. **W1** — WASM foundation; highest risk in the IDE track; do first
+9. **W2** + **W4** — editor shell + multi-file projects; can develop in parallel after W1
+10. **W3** + **W5** — symbol navigation + docs browser; can follow independently
+11. **W6** — export/import + PWA; closes the loop
 
 ---
 
@@ -113,7 +221,7 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 2. Modify `token()` to call `recover_to` with context-appropriate delimiters.
 3. Add tests that verify a single-error input produces at most 2 diagnostics.
 **Effort:** Medium (lexer.rs + parser call sites; needs per-construct recovery targets)
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -125,7 +233,7 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
 **Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
 **Depends on:** T1-14, T1-18
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -148,6 +256,7 @@ can be added in a follow-up, see T3-2).
 2. Compilation: synthesise a unique def-nr, compile the body as a top-level function.
 3. Runtime: the resulting value is the def-nr — identical to a named `fn <name>` ref.
 **Effort:** Medium–High (parser.rs, state.rs)
+**Target:** 0.9.0
 
 ---
 
@@ -177,6 +286,7 @@ ergonomic once available.
 3. Print expression results automatically (non-void expressions print their value).
 4. On parse error, discard the failed line and continue the session.
 **Effort:** High (main.rs, parser.rs, new repl.rs)
+**Target:** 1.1+ (browser IDE covers the interactive use case at 1.0.0)
 
 ---
 
@@ -205,7 +315,7 @@ Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with T1-
 **Fix path:** Typed loft overloads using `reduce` for sum/min_of/max_of; compiler
 special-case in `parse_call` for `any`/`all`/`count_if` (same tier of effort as T1-3).
 **Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
-**Target:** 1.1 — batch all variants; defer until after T2-1 (lambdas) makes them ergonomic
+**Target:** 0.9.0 — batch all variants after T2-1 lands
 
 ---
 
@@ -244,6 +354,7 @@ returning text or references is unsupported.
 2. Text/reference returns: merge worker-local stores back into the main `Stores` after all
    threads join.
 **Effort:** High (parser.rs, parallel.rs, store.rs)
+**Target:** 0.9.0
 
 ---
 
@@ -254,6 +365,7 @@ returning text or references is unsupported.
 - Source-location metadata injected at compile time into assert/log calls.
 - Hot-reload of log-level config without restarting the interpreter.
 **Effort:** Medium–High (logger.rs, parser.rs, state.rs)
+**Target:** 1.1+
 
 ---
 
@@ -263,6 +375,7 @@ returning text or references is unsupported.
 (HTML documentation generation), `parallel` (threading), `logging` (logger), `mmap`
 (memory-mapped storage).  Remove `rand_core` / `rand_pcg` dead dependencies.
 **Effort:** Medium (Cargo.toml, conditional compilation in store.rs, native.rs, main.rs)
+**Target:** 0.9.0
 
 ---
 
@@ -280,6 +393,7 @@ are not implemented.  The pre-gate (compile error) was added 2026-03-15.
 require the compiler to identify captured variables, allocate a closure record, and pass
 it as a hidden argument to the lambda body.  This is a significant IR and bytecode change.
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
+**Target:** 1.1+
 
 ---
 
@@ -298,7 +412,7 @@ removes a source of slot conflicts in long functions with many sequential variab
 2. Wire into `scopes::check` after `compute_intervals`.
 3. Remove `claim()` calls from `src/state/codegen.rs` once all tests pass.
 **Effort:** High (variables.rs, scopes.rs, state/codegen.rs)
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -317,7 +431,7 @@ elements to a new allocation before applying the mutation.
 3. `vector_copy_to_own` allocates a fresh vector, copies elements (with `copy_claims`),
    and updates the DbRef.
 **Effort:** Medium (vector.rs, fill.rs — CoW flag + copy-on-first-write)
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -336,7 +450,7 @@ Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl
 optional dependency; new `plugin-api` workspace member).
 **Effort:** High (parser, compiler, extensions loader, plugin API crate)
 **Depends on:** —
-**Target:** 1.1+
+**Target:** 1.1+ (useful after the ecosystem exists; not needed for 1.0.0)
 
 ---
 
@@ -440,7 +554,7 @@ Stack after call:   [ ]   // result already written to dest
 
 **Effort:** Medium–High (compiler calling-convention change + 3 native rewrites + codegen)
 **Depends on:** T3-9 (done 2026-03-17)
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -449,6 +563,10 @@ Stack after call:   [ ]   // result already written to dest
 `src/generation.rs` already translates the loft IR tree into Rust source files
 (`tests/generated/*.rs`), but none compile (~1500 errors).  The steps below fix
 these incrementally.  Full design in [NATIVE.md](NATIVE.md).
+
+**Target: 1.1+** — native codegen is a separate compiler track, not an interpreter
+improvement.  The interpreter is efficient enough for 0.9.0 and 1.0.0.  Tier N delivers
+the most value after the language surface is stable, as an opt-in performance path.
 
 ---
 
@@ -668,39 +786,39 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 | ID   | Title                                                       | Tier | Effort    | Target  | Depends on  | Source                     |
 |------|-------------------------------------------------------------|------|-----------|---------|-------------|----------------------------|
-| T1-28 | Error recovery after token failures                      | 1    | Medium    | 1.1+    |             | DEVELOPERS.md Step 5       |
-| T1-19 | Nested patterns in field positions                       | 1    | Medium    | 1.1+    | T1-14,T1-18 | MATCH.md T1-19             |
-| T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 1.1     | T1-1        | Prototype goal             |
-| T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1     |             | Prototype goal             |
-| T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 1.1     | T2-1        | Stdlib audit 2026-03-15    |
+| T1-28 | Error recovery after token failures                      | 1    | Medium    | 0.9.0   |             | DEVELOPERS.md Step 5       |
+| T1-19 | Nested patterns in field positions                       | 1    | Medium    | 0.9.0   | T1-14,T1-18 | MATCH.md T1-19             |
+| T2-1  | Lambda / anonymous function expressions                  | 2    | Med–High  | 0.9.0   | T1-1 (done) | Prototype goal             |
+| T2-2  | REPL / interactive mode                                  | 2    | High      | 1.1+    |             | Prototype goal             |
+| T2-4  | Vector aggregates (sum, min_of, any, all, count_if)      | 2    | Low–Med   | 0.9.0   | T2-1        | Stdlib audit 2026-03-15    |
 | T2-12 | Bytecode cache (`.loftc`) — deferred, superseded by Tier N | 2  | Medium    | deferred |            | BYTECODE_CACHE.md          |
-| T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 1.1+    |             | THREADING deferred         |
+| T3-1  | Parallel workers: extra args + text/ref returns          | 3    | High      | 0.9.0   |             | THREADING deferred         |
 | T3-2  | Logger: production mode, source injection, hot-reload   | 3    | Med–High  | 1.1+    |             | LOGGER.md                  |
-| T3-3  | Optional Cargo features                                  | 3    | Medium    | 1.1+    |             | OPTIONAL_FEATURES.md       |
+| T3-3  | Optional Cargo features                                  | 3    | Medium    | 0.9.0   |             | OPTIONAL_FEATURES.md       |
 | T3-4  | Spatial index operations (full implementation)           | 3    | High      | 1.1+    |             | PROBLEMS #22               |
-| T3-5  | Closure capture for lambdas                              | 3    | Very High | 2.0     | T2-1        | Depends on T2-1            |
-| T3-10 | Destination-passing for text-returning natives            | 3    | Med–High  | 1.1+    | T3-9 (done) | String arch review         |
-| T3-11 | Vector slice becomes independent copy on mutation        | 3    | Medium    | 1.1+    |             | TODO in vector.rs          |
-| T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 1.1+    |             | ASSIGNMENT.md Steps 3+4    |
+| T3-5  | Closure capture for lambdas                              | 3    | Very High | 1.1+    | T2-1        | Depends on T2-1            |
+| T3-7  | Stack slot `assign_slots` pre-pass (arch cleanup)        | 3    | High      | 0.9.0   |             | ASSIGNMENT.md Steps 3+4    |
 | T3-8  | Native extension libraries (`cdylib` + `#native`)        | 3    | High      | 1.1+    | —           | EXTERNAL_LIBS.md Ph2       |
+| T3-10 | Destination-passing for text-returning natives           | 3    | Med–High  | 0.9.0   | T3-9 (done) | String arch review         |
+| T3-11 | Vector slice becomes independent copy on mutation        | 3    | Medium    | 0.9.0   |             | TODO in vector.rs          |
 | N8    | `--native` CLI flag                                     | N    | Medium    | 1.1+    | N11–N19     | NATIVE.md                  |
-| N11   | Fix `output_init` intermediate type registration         | N    | Medium    | 1.1     |             | NATIVE.md N10a             |
-| N12   | Fix `output_set` DbRef deep copy                        | N    | Small     | 1.1     |             | NATIVE.md N10b             |
-| N13   | Fix `OpFormatDatabase` for struct-enum variants          | N    | Small     | 1.1     |             | NATIVE.md N10c             |
-| N14   | Fix null DbRef in vector operations                     | N    | Small     | 1.1     |             | NATIVE.md N10d             |
-| N16   | Implement `OpIterate`/`OpStep` in codegen_runtime        | N    | High      | 1.1     |             | NATIVE.md N10e-2           |
-| N17   | Add `OpFormatFloat`/`OpFormatStackLong` handlers         | N    | Small     | 1.1     |             | NATIVE.md N10e-3           |
-| N19   | Fix empty pre-eval and prefix issues                    | N    | Small     | 1.1     |             | NATIVE.md N10e-5           |
-| N20   | Repair fill.rs auto-generation                          | N    | Medium    | 1.1     |             | NATIVE.md N20              |
-| R6    | Workspace split (prerequisite for W1 only)              | R    | Small     | pre-W1  | R1 (done)   | Extraction plan            |
-| W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | post-1.0 | R6         | WEB_IDE.md M1              |
-| W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | post-1.0 | W1         | WEB_IDE.md M2              |
-| W3    | Symbol navigation (go-to-def, find-usages)              | W    | Medium    | post-1.0 | W1, W2     | WEB_IDE.md M3              |
-| W4    | Multi-file projects (IndexedDB)                         | W    | Medium    | post-1.0 | W2         | WEB_IDE.md M4              |
-| W5    | Docs & examples browser                                 | W    | Small–Med | post-1.0 | W2         | WEB_IDE.md M5              |
-| W6    | Export/import ZIP + PWA offline                         | W    | Small–Med | post-1.0 | W4         | WEB_IDE.md M6              |
+| N11   | Fix `output_init` intermediate type registration         | N    | Medium    | 1.1+    |             | NATIVE.md N10a             |
+| N12   | Fix `output_set` DbRef deep copy                        | N    | Small     | 1.1+    |             | NATIVE.md N10b             |
+| N13   | Fix `OpFormatDatabase` for struct-enum variants          | N    | Small     | 1.1+    |             | NATIVE.md N10c             |
+| N14   | Fix null DbRef in vector operations                     | N    | Small     | 1.1+    |             | NATIVE.md N10d             |
+| N16   | Implement `OpIterate`/`OpStep` in codegen_runtime        | N    | High      | 1.1+    |             | NATIVE.md N10e-2           |
+| N17   | Add `OpFormatFloat`/`OpFormatStackLong` handlers         | N    | Small     | 1.1+    |             | NATIVE.md N10e-3           |
+| N19   | Fix empty pre-eval and prefix issues                    | N    | Small     | 1.1+    |             | NATIVE.md N10e-5           |
+| N20   | Repair fill.rs auto-generation                          | N    | Medium    | 1.1+    |             | NATIVE.md N20              |
+| R6    | Workspace split (prerequisite for W1)                   | R    | Small     | 1.0.0   | R1 (done)   | Extraction plan            |
+| W1    | WASM foundation (Rust feature + wasm-bridge.js)         | W    | Medium    | 1.0.0   | R6          | WEB_IDE.md M1              |
+| W2    | Editor shell (CodeMirror 6 + Loft grammar)              | W    | Medium    | 1.0.0   | W1          | WEB_IDE.md M2              |
+| W3    | Symbol navigation (go-to-def, find-usages)              | W    | Medium    | 1.0.0   | W1, W2      | WEB_IDE.md M3              |
+| W4    | Multi-file projects (IndexedDB)                         | W    | Medium    | 1.0.0   | W2          | WEB_IDE.md M4              |
+| W5    | Docs & examples browser                                 | W    | Small–Med | 1.0.0   | W2          | WEB_IDE.md M5              |
+| W6    | Export/import ZIP + PWA offline                         | W    | Small–Med | 1.0.0   | W4          | WEB_IDE.md M6              |
 
-**Target key:** **1.1** = first post-1.0 minor · **1.1+** = later minor · **post-1.0** = independent track · **pre-W1** = must precede W1
+**Target key:** **0.9.0** = standalone executable milestone · **1.0.0** = IDE + stability contract · **1.1+** = post-1.0 additive · **deferred** = explicitly not planned
 
 _Note: T1-3 requires compiler special-casing (not loft-only) — loft has no generic type parameters._
 _Note: W2 and W4 can be developed in parallel once W1 is complete; W3 and W5 can follow independently._
