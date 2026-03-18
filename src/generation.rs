@@ -612,7 +612,7 @@ extern crate loft;"
                     let needs_pre = self.create_stack_var(arg).is_none()
                         && (matches!(arg, Value::Block(_)) || self.needs_pre_eval(arg));
                     if needs_pre {
-                        let name = format!("_pre{}", self.counter);
+                        let name = format!("_pre_{}", self.counter);
                         self.counter += 1;
                         self.rewrite_code(result, arg, name)?;
                     } else {
@@ -637,7 +637,7 @@ extern crate loft;"
                         let is_multi_user_fn = user_fn_count > 1 && self.needs_pre_eval(arg);
                         let is_stores_conflict = template_uses_stores && self.needs_pre_eval(arg);
                         if is_block || is_multi_user_fn || is_stores_conflict {
-                            let name = format!("_pre{}", self.counter);
+                            let name = format!("_pre_{}", self.counter);
                             self.counter += 1;
                             self.rewrite_code(result, arg, name)?;
                         } else {
@@ -678,7 +678,9 @@ extern crate loft;"
             }
             s
         };
-        result.push((name, substituted));
+        if !substituted.is_empty() && substituted != "()" {
+            result.push((name, substituted));
+        }
         self.declared = decl_clone;
         Ok(())
     }
