@@ -350,6 +350,8 @@ extern crate loft;"
         if emitted.contains(&type_id) {
             return Ok(());
         }
+        // Mark as emitted before recursing to prevent infinite loops on cycles.
+        emitted.insert(type_id);
         // Emit all content-type dependencies first.
         if let Some(d) = deps.get(&type_id) {
             for &dep_tp in d {
@@ -360,7 +362,6 @@ extern crate loft;"
                 }
             }
         }
-        emitted.insert(type_id);
         let def = self.data.def(dnr);
         if matches!(def.def_type, DefType::Struct) {
             self.output_struct(w, dnr, 0)?;

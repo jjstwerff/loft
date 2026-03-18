@@ -184,28 +184,36 @@ impl Stores {
                 vectors.insert(*v);
             }
         }
+        let mut in_progress = HashSet::new();
         for t_nr in 0..self.types.len() {
-            self.finish_type(&linked, t_nr);
+            self.finish_type(&linked, t_nr, &mut in_progress);
         }
         self.determine_keys();
         // self.dump_types();
     }
 
-    pub(super) fn finish_type(&mut self, linked: &HashSet<u16>, t_nr: usize) {
+    pub(super) fn finish_type(
+        &mut self,
+        linked: &HashSet<u16>,
+        t_nr: usize,
+        in_progress: &mut HashSet<usize>,
+    ) {
         if !matches!(
             self.types[t_nr].parts,
             Parts::Struct(_) | Parts::Enum(_) | Parts::EnumValue(_, _)
         ) || self.types[t_nr].size != u16::MAX
+            || in_progress.contains(&t_nr)
         {
             return;
         }
+        in_progress.insert(t_nr);
         let mut sizes = Vec::new();
         if let Parts::Enum(values) = self.types[t_nr].parts.clone() {
             let mut size = 1;
             let mut align = 1;
             for value in values {
                 if value.0 != u16::MAX {
-                    self.finish_type(linked, value.0 as usize);
+                    self.finish_type(linked, value.0 as usize, in_progress);
                     if size < self.types[value.0 as usize].size {
                         size = self.types[value.0 as usize].size;
                     }
@@ -222,7 +230,7 @@ impl Stores {
             for f in fields {
                 let c_nr = f.content as usize;
                 if self.types[c_nr].size == u16::MAX && c_nr != t_nr {
-                    self.finish_type(linked, c_nr);
+                    self.finish_type(linked, c_nr, in_progress);
                 }
                 sizes.push((self.types[c_nr].size, self.types[c_nr].align));
                 if let Parts::Vector(c) = self.types[c_nr].parts
