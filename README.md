@@ -87,31 +87,33 @@ parses and executes `<file.loft>`. The entry point is `fn main()`.
 
 ## Documentation
 
-The user documentation is generated HTML — run `cargo run --bin gendoc` to build it,
-then open `doc/index.html` in a browser. A single-page version is at `doc/print.html`
-and a printable reference at [doc/loft-reference.pdf](doc/loft-reference.pdf).
+The user documentation is hosted at **<https://jjstwerff.github.io/loft/>**.
+A single-page version is at [print.html](https://jjstwerff.github.io/loft/print.html)
+and a printable reference at [loft-reference.pdf](https://jjstwerff.github.io/loft/loft-reference.pdf).
+
+To build locally: run `cargo run --bin gendoc`, then open `doc/index.html`.
 
 **Language tutorial** (each page is also a live test):
 
 | Page | Topic |
 |------|-------|
-| [vs Python](doc/00-vs-python.html) | Loft compared to Python |
-| [vs Rust](doc/00-vs-rust.html) | Loft compared to Rust |
-| [Keywords](doc/01-keywords.html) | Control flow: if, for, break, continue |
-| [Texts](doc/02-text.html) | Strings, slicing, iteration |
-| [Integers](doc/03-integer.html) | Arithmetic, bitwise, null |
-| [Functions](doc/06-function.html) | Parameters, return, fn-refs, map/filter/reduce |
-| [Vectors](doc/07-vector.html) | Dynamic arrays, comprehensions, clear |
-| [Structs](doc/08-struct.html) | Fields, methods, sizeof |
-| [Enums](doc/09-enum.html) | Variants, polymorphism, match expressions |
-| [Collections](doc/10-sorted.html) | Sorted, [Index](doc/11-index.html), [Hash](doc/12-hash.html) |
-| [Libraries](doc/17-libraries.html) | Imports, wildcard imports, extending types |
-| [Parallel](doc/19-threading.html) | par(...) for-loop parallelism |
-| [Safety](doc/23-safety.html) | Language traps and how to avoid them |
+| [vs Python](https://jjstwerff.github.io/loft/00-vs-python.html) | Loft compared to Python |
+| [vs Rust](https://jjstwerff.github.io/loft/00-vs-rust.html) | Loft compared to Rust |
+| [Keywords](https://jjstwerff.github.io/loft/01-keywords.html) | Control flow: if, for, break, continue |
+| [Texts](https://jjstwerff.github.io/loft/02-text.html) | Strings, slicing, iteration |
+| [Integers](https://jjstwerff.github.io/loft/03-integer.html) | Arithmetic, bitwise, null |
+| [Functions](https://jjstwerff.github.io/loft/06-function.html) | Parameters, return, fn-refs, map/filter/reduce |
+| [Vectors](https://jjstwerff.github.io/loft/07-vector.html) | Dynamic arrays, comprehensions, clear |
+| [Structs](https://jjstwerff.github.io/loft/08-struct.html) | Fields, methods, sizeof |
+| [Enums](https://jjstwerff.github.io/loft/09-enum.html) | Variants, polymorphism, match expressions |
+| [Collections](https://jjstwerff.github.io/loft/10-sorted.html) | Sorted, [Index](https://jjstwerff.github.io/loft/11-index.html), [Hash](https://jjstwerff.github.io/loft/12-hash.html) |
+| [Libraries](https://jjstwerff.github.io/loft/17-libraries.html) | Imports, wildcard imports, extending types |
+| [Parallel](https://jjstwerff.github.io/loft/19-threading.html) | par(...) for-loop parallelism |
+| [Safety](https://jjstwerff.github.io/loft/23-safety.html) | Language traps and how to avoid them |
 
-**Standard library API:** [doc/stdlib.html](doc/stdlib.html)
+**Standard library API:** [stdlib.html](https://jjstwerff.github.io/loft/stdlib.html)
 
-**For contributors:** [doc/DEVELOPERS.md](doc/DEVELOPERS.md) — feature proposals, quality gates, diagnostic guide
+**For contributors:** [DEVELOPERS.md](https://jjstwerff.github.io/loft/DEVELOPERS.md) — feature proposals, quality gates, diagnostic guide
 
 ---
 
