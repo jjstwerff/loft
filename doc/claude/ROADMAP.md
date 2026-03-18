@@ -14,7 +14,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| A11   | Fix hash table load-factor threshold (57% → 75%)             | Trivial   |                 | Code review 2026-03-18      |
 | A9    | Vector slice becomes independent copy on mutation            | Medium    |                 | TODO in vector.rs           |
 | A6    | **Stack slot `assign_slots` pre-pass** *(3 phases)*          | High      |                 | ASSIGNMENT.md Steps 3+4     |
 | A6.1  | ↳ Standalone `assign_slots()` — not wired in                 | Medium    |                 | variables.rs                |

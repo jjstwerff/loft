@@ -990,23 +990,6 @@ pass a struct value" from the generic type-mismatch message.
 
 ---
 
-### A11  Fix hash table load-factor threshold
-**Sources:** Code review 2026-03-18
-**Severity:** Low — current threshold triggers rehash at ~57% load; intended threshold is
-75% (standard for open-addressing with linear probing); DEVELOPERS.md comment incorrectly
-stated 87.5%
-**Description:** `src/hash.rs:25` contains `(length * 14 / 16) + 1 >= room`.  Because
-`elms = (room - 1) * 2`, the effective load fraction at rehash is not `14/16 = 87.5%`
-but `(14/16) × (1/2) ≈ 4/7 ≈ 57%`.  The fix is `(length * 2 / 3) + 1 >= room`, which
-gives the standard 75% threshold at all table sizes.  Update DEVELOPERS.md accordingly.
-**Fix path:**
-1. `src/hash.rs:25`: `(length * 14 / 16) + 1` → `(length * 2 / 3) + 1`
-2. `doc/DEVELOPERS.md`: update load-factor description from "87.5%" to "75%"
-**Effort:** Trivial (one arithmetic expression + one doc line)
-**Target:** 0.8.2
-
----
-
 ## N — Native Codegen
 
 `src/generation.rs` already translates the loft IR tree into Rust source files

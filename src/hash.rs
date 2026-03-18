@@ -22,7 +22,7 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
     };
     let room = *keys::store(hash, stores).addr::<i32>(claim, 0) as u32;
     let elms = (room - 1) * 2;
-    if (length * 14 / 16) + 1 >= room {
+    if (length * 2 / 3) + 1 >= room {
         // rehash
         let mut move_rec = DbRef {
             store_nr: hash.store_nr,

@@ -9,6 +9,13 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ## [Unreleased]
 
+### Improvements
+
+- **A11** — Hash table load-factor threshold corrected from ~57% to 75%
+  (`src/hash.rs`: `length * 14 / 16` → `length * 2 / 3`). The previous formula
+  rehashed prematurely due to the `elms = (room-1) * 2` geometry. DEVELOPERS.md
+  updated accordingly.
+
 ### Bug fixes
 
 - **T0-8** — Seven `panic!`/`unreachable!` calls in the parser converted to `diagnostic!`
