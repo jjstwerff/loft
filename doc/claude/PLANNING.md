@@ -58,6 +58,10 @@ generation.  No new language syntax.  Most items are independent and can be deve
 in parallel.
 
 **Interpreter correctness:**
+- **F57** — Compile-time guard for `read_file`/`write_file` on structs with collection
+  fields (`sorted<T>`, `index<T>`, `hash<T>`): currently panics at runtime with no
+  diagnostic.  Fix: add a `has_collection_field` check in `native.rs` and emit a
+  compile-time error.  See [PROBLEMS.md #57](PROBLEMS.md).
 - **A9** — Vector slice copy-on-write: mutating a slice must not corrupt the parent vector.
 - **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the
   current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
@@ -274,12 +278,13 @@ Ordered by unblocking impact and the small-steps principle (each item leaves the
 in a better state than it found it, with passing tests).
 
 **For 0.8.2:**
-1. **A9** — vector slice CoW; Medium, independent correctness fix
-2. **A6** — slot pre-pass; High, independent; can share a branch with A9
+1. **F57** — compile-time guard for file I/O on collection fields; Small, independent safety fix
+2. **A9** — vector slice CoW; Medium, independent correctness fix
+3. **A6** — slot pre-pass; High, independent; can share a branch with A9
 4. **A8** — destination-passing; Med–High, independent efficiency win
 5. **A3** — optional Cargo features; Medium, packaging polish; independent
-6. **N2–N9** — native codegen fixes; each is independent and Small–Medium; interleave freely with items 2–5
-7. **N1** — `--native` CLI flag; lands after all N2–N9 fixes pass
+6. **N6.3** + **N9** — native codegen remaining fixes; independent; interleave freely with items 2–5
+7. **N1** — `--native` CLI flag; lands after N6.3 and N9
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete

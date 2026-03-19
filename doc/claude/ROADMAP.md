@@ -14,6 +14,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
+| F57   | Compile-time guard: `read_file`/`write_file` on collection fields | Small |            | PROBLEMS.md #57             |
 | A9    | Vector slice becomes independent copy on mutation            | Medium    |                 | TODO in vector.rs           |
 | A6    | **Stack slot `assign_slots` pre-pass** *(2 phases remain)*   | High      |                 | ASSIGNMENT.md Steps 3+4     |
 | A6.2  | ↳ Shadow mode — assert agrees with `claim()`; log mismatches | Medium    |                 | scopes.rs                   |
