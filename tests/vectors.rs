@@ -569,7 +569,6 @@ fn reverse_empty() {
 /// N6.3a: reverse sorted iteration emits the reverse bit (64) in OpIterate; native
 /// codegen must compile and produce the same element order as the interpreter.
 #[test]
-#[ignore = "N6.3a: native reverse sorted iteration not yet confirmed"]
 fn n6_sorted_reverse_native() {
     code!(
         "struct Elm { key: integer, val: integer }
@@ -587,7 +586,6 @@ fn test() {
 /// N6.3b: range-bounded iteration on an index collection (`for x in idx[lo..hi]`)
 /// emits non-zero from/till counts in OpIterate; native codegen compiles correctly.
 #[test]
-#[ignore = "N6.3b: range-bounded index iteration not yet implemented"]
 fn n6_index_range_iteration() {
     code!(
         "struct Elm { key: integer, val: integer }
