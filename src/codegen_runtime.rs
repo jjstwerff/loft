@@ -267,8 +267,7 @@ pub fn OpIterate(
             // sorted vector: arg = element size in bytes
             let size = arg as u16;
             if reverse {
-                let s = vector::sorted_find(&data, ex, size, all, keys, till).0
-                    + u32::from(!ex);
+                let s = vector::sorted_find(&data, ex, size, all, keys, till).0 + u32::from(!ex);
                 let f = vector::sorted_find(&data, ex, size, all, keys, from).0 + 1;
                 pack_iter(s, f)
             } else {
@@ -330,7 +329,11 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
         2 => {
             // sorted vector: arg = element size
             let arg_i = arg as i32;
-            let mut pos = if cur == u32::MAX { i32::MAX } else { cur as i32 };
+            let mut pos = if cur == u32::MAX {
+                i32::MAX
+            } else {
+                cur as i32
+            };
             if reverse {
                 vector::vector_step_rev(&data, &mut pos, all);
                 if pos == i32::MAX {

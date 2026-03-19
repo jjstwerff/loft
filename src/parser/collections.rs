@@ -119,9 +119,7 @@ impl Parser {
                     let elem_type = match is_type {
                         Type::Sorted(dnr, _, dep)
                         | Type::Index(dnr, _, dep)
-                        | Type::Spacial(dnr, _, dep) => {
-                            Type::Reference(*dnr, dep.clone())
-                        }
+                        | Type::Spacial(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
                         _ => Type::Null,
                     };
                     // Create a separate Long variable to hold the packed i64 iterator
@@ -147,8 +145,7 @@ impl Parser {
                     // also picks up the bit (fill_iter does not reset it itself).
                     self.reverse_iterator = false;
                     let next_expr = self.cl("OpStep", &ls);
-                    let incr =
-                        self.op("Add", Value::Var(iter_var), Value::Int(1), I32.clone());
+                    let incr = self.op("Add", Value::Var(iter_var), Value::Int(1), I32.clone());
                     let iter_next = v_block(
                         vec![v_set(iter_var, incr), next_expr],
                         elem_type,

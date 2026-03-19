@@ -1355,8 +1355,7 @@ extern crate loft;"
                 if vals.len() == 4 {
                     write!(w, "OpStep(stores, &mut ")?;
                     if let Value::Var(v) = &vals[0] {
-                        let name =
-                            sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{name}")?;
                     } else {
                         self.output_code_inner(w, &vals[0])?;
@@ -1400,12 +1399,7 @@ extern crate loft;"
     /// `type_nr` is from a `Key` struct; sign indicates sort direction (ignored here),
     /// absolute value indicates the data type:
     /// 1 = integer, 2 = long, 3 = f32, 4 = f64, 5 = bool, 6 = text, 7 = byte.
-    fn emit_content(
-        &mut self,
-        w: &mut dyn Write,
-        v: &Value,
-        type_nr: i8,
-    ) -> std::io::Result<()> {
+    fn emit_content(&mut self, w: &mut dyn Write, v: &Value, type_nr: i8) -> std::io::Result<()> {
         let expr = self.generate_expr_buf(v)?;
         match type_nr.unsigned_abs() {
             1 | 5 | 7 => write!(w, "Content::Long({expr} as i64)"),
