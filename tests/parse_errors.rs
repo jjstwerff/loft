@@ -550,7 +550,6 @@ fn keyword_sizeof_as_fn() {
 }
 
 #[test]
-#[ignore = "L3: fields cannot be a keyword until A10 lands and all uses as field names are migrated"]
 fn keyword_fields_as_fn() {
     code!("fn fields() {}\nfn test() {}")
         .error("Expect name in function definition at keyword_fields_as_fn:1:10")

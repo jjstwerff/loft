@@ -496,7 +496,7 @@ fn parameter(self: Parser) {
 fn type_def(self: Parser, define: boolean) -> u16 {
   id = self.lexer.identifier();
   parameters =[];
-  fields =[];
+  flds =[];
   if self.lexer.matches("<") {
     id += "<";
     for parameter in 0..256 {
@@ -513,7 +513,7 @@ fn type_def(self: Parser, define: boolean) -> u16 {
           }
           f += self.lexer.identifier();
           id += f;
-          fields +=[f];
+          flds +=[f];
           if !self.lexer.matches(",") {
             field# break;
           }
@@ -547,7 +547,7 @@ fn type_def(self: Parser, define: boolean) -> u16 {
     for p in parameters {
       self.code.field(null, p);
     }
-    for f in fields {
+    for f in flds {
       self.code.field(f, 65535);
     }
     self.code.finish_define();

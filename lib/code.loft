@@ -9,7 +9,7 @@ struct Type {
   parent: u16,
   content: u16,
   definition: i32,
-  fields: vector < Field >,
+  type_fields: vector < Field >,
   size: u16
 }
 
@@ -128,7 +128,7 @@ pub fn finish_define(self: Code) {
 
 pub fn field(self: Code, name: text, tp: u16) {
   in_type = self.definitions[self.cur_def].typedef;
-  self.types[in_type].fields +=[Field {name: name, typedef: tp }];
+  self.types[in_type].type_fields +=[Field {name: name, typedef: tp }];
 }
 
 pub fn argument(self: Code, name: text, tp: u16) {

@@ -82,7 +82,7 @@ enum Value {
     Boolean { b_value: boolean },
     Float { f_value: float },
     Text { t_value: text },
-    Object { fields: vector<Pair> },
+    Object { items: vector<Pair> },
     Array { content: vector<Value> }
 }
 
