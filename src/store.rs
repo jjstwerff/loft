@@ -1119,7 +1119,7 @@ unsafe impl Send for Store {}
 mod tests {
     use super::Store;
 
-    /// T0-11: addr_mut on a locked store must panic (not silently discard the write).
+    /// T0-11: `addr_mut` on a locked store must panic (not silently discard the write).
     #[test]
     #[should_panic(expected = "Write to locked store")]
     fn write_to_locked_store_panics() {

@@ -1422,7 +1422,7 @@ mod tests {
 
     // ── assign_slots unit tests ───────────────────────────────────────────────
 
-    /// Two sequential variables: assign_slots should place the second at the same slot
+    /// Two sequential variables: `assign_slots` should place the second at the same slot
     /// as the first because their intervals don't overlap.
     #[test]
 
@@ -1461,7 +1461,7 @@ mod tests {
         assert!(find_conflict(&f.variables).is_none());
     }
 
-    /// A DbRef variable is 12 bytes; the slot after it must start at offset 12,
+    /// A `DbRef` variable is 12 bytes; the slot after it must start at offset 12,
     /// not at offset 4 (the size of an integer).
     #[test]
 
@@ -1483,7 +1483,7 @@ mod tests {
         assert!(find_conflict(&f.variables).is_none());
     }
 
-    /// Variables that were never defined (first_def == u32::MAX) must be skipped.
+    /// Variables that were never defined (`first_def` == `u32::MAX`) must be skipped.
     #[test]
 
     fn assign_slots_skips_never_defined() {

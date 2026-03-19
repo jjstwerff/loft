@@ -1159,6 +1159,7 @@ extern crate loft;"
     /// Use this to dispatch a `Value::Call` to either the user-function or template emitter.
     /// Certain built-in text operations are intercepted here because their generated Rust
     /// differs structurally from both a regular call and a template substitution.
+    #[allow(clippy::too_many_lines)] // large opcode dispatch — splitting would lose context
     fn output_call(
         &mut self,
         w: &mut dyn Write,
@@ -1292,7 +1293,9 @@ extern crate loft;"
             "OpIterate" => {
                 // vals: [data, on, arg, Keys(keys), from_count, from_vals…, till_count, till_vals…]
                 // Emit: OpIterate(stores, data, on, arg, &[Key{…}], &[Content::…], &[Content::…])
-                if vals.len() >= 4 && let Value::Keys(keys) = &vals[3] {
+                if vals.len() >= 4
+                    && let Value::Keys(keys) = &vals[3]
+                {
                     let keys = keys.clone();
                     let rest = &vals[4..];
                     let from_count = if let Some(Value::Int(n)) = rest.first() {

@@ -40,6 +40,7 @@ impl Parser {
         v_block(next, Type::Character, "for text next")
     }
 
+    #[allow(clippy::too_many_lines)] // sorted/index/spacial iterator setup — splitting would lose context
     pub(crate) fn iterator(
         &mut self,
         code: &mut Value,
@@ -327,6 +328,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // iterator operation dispatch — splitting would lose context
     pub(crate) fn iter_op(&mut self, code: &mut Value, name: &str, t: &mut Type, index_var: u16) {
         // File variables handle their own # operations before iterator operations.
         if self.is_file_var(index_var) {
