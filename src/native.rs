@@ -18,6 +18,7 @@
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
+#[cfg(feature = "random")]
 use crate::ops;
 use crate::parallel::{WorkerProgram, run_parallel_int, run_parallel_raw};
 use crate::platform::sep;
@@ -71,8 +72,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_get_long", n_parallel_get_long),
     ("n_parallel_get_float", n_parallel_get_float),
     ("n_parallel_get_bool", n_parallel_get_bool),
+    #[cfg(feature = "random")]
     ("n_rand", n_rand),
+    #[cfg(feature = "random")]
     ("n_rand_seed", n_rand_seed),
+    #[cfg(feature = "random")]
     ("n_rand_indices", n_rand_indices),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
@@ -720,6 +724,7 @@ fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// Return a random integer in [lo, hi] (inclusive); null (`i32::MIN`) if lo > hi.
+#[cfg(feature = "random")]
 fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
     let v_hi = *stores.get::<i32>(stack);
     let v_lo = *stores.get::<i32>(stack);
@@ -727,6 +732,7 @@ fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// Seed the thread-local PCG RNG so subsequent `rand()` calls are reproducible.
+#[cfg(feature = "random")]
 fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
     let v_seed = *stores.get::<i64>(stack);
     ops::rand_seed(v_seed);
@@ -734,6 +740,7 @@ fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector when `n <= 0` or `n` is null.
+#[cfg(feature = "random")]
 fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
     let v_n = *stores.get::<i32>(stack);
     let n = if v_n == i32::MIN || v_n <= 0 {

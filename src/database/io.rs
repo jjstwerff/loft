@@ -300,6 +300,7 @@ impl Stores {
     # Panics
     On file system problems
     */
+    #[cfg(feature = "png")]
     pub fn get_png(&mut self, file_path: &str, result: &DbRef) -> bool {
         let store = self.store_mut(result);
         if let Ok((img, width, height)) = crate::png_store::read(file_path, store) {
@@ -316,6 +317,11 @@ impl Stores {
         } else {
             false
         }
+    }
+
+    #[cfg(not(feature = "png"))]
+    pub fn get_png(&mut self, _file_path: &str, _result: &DbRef) -> bool {
+        false
     }
 
     pub fn write_file(&mut self, file: &DbRef, v: &str) {
