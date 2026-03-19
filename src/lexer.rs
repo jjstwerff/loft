@@ -148,6 +148,7 @@ static KEYWORDS: &[&str] = &[
     "debug_assert",
     "assert",
     "panic",
+    "fields",
 ];
 
 #[derive(Debug)]

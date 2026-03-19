@@ -17,8 +17,9 @@
 #![allow(clippy::doc_markdown)]
 
 use crate::database::{ShowDb, Stores};
-use crate::keys::DbRef;
+use crate::keys::{Content, DbRef, Key};
 use crate::ops;
+use crate::tree;
 use crate::vector;
 
 /// Allocate a database root record for the given type.
@@ -215,4 +216,177 @@ pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i32 {
     } else {
         i32::try_from(ch.len_utf8()).unwrap_or(0)
     }
+}
+
+/// Pack a (current-position, finish) pair into a single i64 iterator state.
+/// High 32 bits = finish; low 32 bits = cur.
+/// `finish == u32::MAX` signals that iteration is complete.
+fn pack_iter(cur: u32, finish: u32) -> i64 {
+    ((u64::from(finish) << 32) | u64::from(cur)).cast_signed()
+}
+
+/// Build a minimal DbRef pointing at record `rec` with field offset `pos`.
+fn iter_ref(data: &DbRef, rec: u32, pos: u16) -> DbRef {
+    DbRef {
+        store_nr: data.store_nr,
+        rec,
+        pos: u32::from(pos),
+    }
+}
+
+/// Initialize a sorted/index iterator state and return it as a packed `i64`.
+///
+/// `on` encodes collection type and flags:
+/// - bits 0–5: collection type (1 = red-black tree / index, 2 = sorted vector)
+/// - bit 6: reverse iteration
+/// - bit 7: inclusive end (if clear, end is exclusive)
+///
+/// `arg` is the element size in bytes (sorted) or the tree-fields offset (index).
+/// `keys` describes the key fields in the collection type.
+/// `from` / `till` are the from/till key values; empty slices mean start/end of collection.
+///
+/// The returned `i64` is consumed by [`OpStep`].
+/// Bytecode equivalent: `State::iterate` in `src/state/io.rs`.
+#[must_use]
+pub fn OpIterate(
+    stores: &Stores,
+    data: DbRef,
+    on: i32,
+    arg: i32,
+    keys: &[Key],
+    from: &[Content],
+    till: &[Content],
+) -> i64 {
+    if data.rec == 0 {
+        return pack_iter(u32::MAX, u32::MAX);
+    }
+    let reverse = (on & 64) != 0;
+    let ex = (on & 128) == 0;
+    let all = &stores.allocations;
+    match on & 63 {
+        2 => {
+            // sorted vector: arg = element size in bytes
+            let size = arg as u16;
+            if reverse {
+                let s = vector::sorted_find(&data, ex, size, all, keys, till).0 + u32::from(!ex);
+                let f = vector::sorted_find(&data, ex, size, all, keys, from).0 + 1;
+                pack_iter(s, f)
+            } else {
+                let s = vector::sorted_find(&data, true, size, all, keys, from).0;
+                let start = if s == 0 { u32::MAX } else { s - 1 };
+                let (t, cmp) = vector::sorted_find(&data, ex, size, all, keys, till);
+                let finish = if ex || cmp { t } else { t + 1 };
+                pack_iter(start, finish)
+            }
+        }
+        1 => {
+            // red-black tree / index: arg = fields offset
+            let fields = arg as u16;
+            let store = crate::keys::store(&data, all);
+            if reverse {
+                let t = tree::find(&data, ex, fields, all, keys, till);
+                let start = if ex {
+                    t
+                } else {
+                    tree::next(store, &iter_ref(&data, t, fields))
+                };
+                let f = tree::find(&data, ex, fields, all, keys, from);
+                let finish = tree::next(store, &iter_ref(&data, f, fields));
+                pack_iter(start, finish)
+            } else {
+                let start = tree::find(&data, true, fields, all, keys, from);
+                let t = tree::find(&data, ex, fields, all, keys, till);
+                let finish = if ex {
+                    t
+                } else {
+                    tree::previous(store, &iter_ref(&data, t, fields))
+                };
+                pack_iter(start, finish)
+            }
+        }
+        _ => pack_iter(u32::MAX, u32::MAX),
+    }
+}
+
+/// Advance the iterator to the next element and return a `DbRef` pointing to it.
+/// Returns a `DbRef` with `rec == 0` when iteration is complete.
+///
+/// `iter` is the mutable `i64` state returned by [`OpIterate`]; it is updated in place.
+/// `on` and `arg` must match the corresponding `OpIterate` call.
+///
+/// Bytecode equivalent: `State::step` in `src/state/io.rs`.
+pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -> DbRef {
+    let mut cur = (*iter as u64) as u32;
+    let mut finish = ((*iter as u64) >> 32) as u32;
+
+    if data.rec == 0 || finish == u32::MAX {
+        return stores.element_reference(&data, i32::MAX);
+    }
+
+    let reverse = (on & 64) != 0;
+    let all = &stores.allocations;
+
+    let result = match on & 63 {
+        2 => {
+            // sorted vector: arg = element size
+            let mut pos = if cur == u32::MAX {
+                i32::MAX
+            } else {
+                #[allow(clippy::cast_possible_wrap)]
+                {
+                    cur as i32
+                }
+            };
+            if reverse {
+                vector::vector_step_rev(&data, &mut pos, all);
+                if pos == i32::MAX {
+                    finish = u32::MAX;
+                }
+            } else {
+                vector::vector_step(&data, &mut pos, all);
+                if pos as u32 >= finish {
+                    pos = i32::MAX;
+                }
+            }
+            cur = pos as u32;
+            let byte_pos = if pos == i32::MAX {
+                i32::MAX
+            } else {
+                8 + pos * arg
+            };
+            if pos == i32::MAX {
+                finish = u32::MAX;
+            }
+            stores.element_reference(&data, byte_pos)
+        }
+        1 => {
+            // red-black tree / index: arg = fields offset
+            let fields = arg as u16;
+            let store = crate::keys::store(&data, all);
+            let next_rec = if cur == 0 {
+                if reverse {
+                    tree::last(&data, fields, all).rec
+                } else {
+                    tree::first(&data, fields, all).rec
+                }
+            } else if reverse {
+                tree::previous(store, &iter_ref(&data, cur, fields))
+            } else {
+                tree::next(store, &iter_ref(&data, cur, fields))
+            };
+            if next_rec == finish {
+                finish = u32::MAX;
+            }
+            cur = next_rec;
+            DbRef {
+                store_nr: data.store_nr,
+                rec: next_rec,
+                pos: 8,
+            }
+        }
+        _ => stores.element_reference(&data, i32::MAX),
+    };
+
+    *iter = pack_iter(cur, finish);
+    result
 }

@@ -15,16 +15,13 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | A9    | Vector slice becomes independent copy on mutation            | Medium    |                 | TODO in vector.rs           |
-| A6    | **Stack slot `assign_slots` pre-pass** *(3 phases)*          | High      |                 | ASSIGNMENT.md Steps 3+4     |
-| A6.1  | ↳ Standalone `assign_slots()` — not wired in                 | Medium    |                 | variables.rs                |
-| A6.2  | ↳ Shadow mode — assert agrees with `claim()`; log mismatches | Medium    | A6.1            | scopes.rs                   |
+| A6    | **Stack slot `assign_slots` pre-pass** *(2 phases remain)*   | High      |                 | ASSIGNMENT.md Steps 3+4     |
+| A6.2  | ↳ Shadow mode — assert agrees with `claim()`; log mismatches | Medium    |                 | scopes.rs                   |
 | A6.3  | ↳ Replace `claim()` — `assign_slots` becomes sole mechanism  | Small     | A6.2            | codegen.rs                  |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | A3    | Optional Cargo features                                      | Medium    |                 | OPTIONAL_FEATURES.md        |
-| N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(3 ph)* | High   |                 | NATIVE.md N10e-2            |
-| N6.1  | ↳ Vector iteration — index-based loop with `_iter` counter   | Medium    |                 | codegen_runtime.rs          |
-| N6.2  | ↳ `sorted` + `index` iteration via existing helpers          | Medium    | N6.1            | codegen_runtime.rs          |
-| N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    | N6.2            | generation.rs               |
+| N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(1 ph remain)* | Medium |           | NATIVE.md N10e-2            |
+| N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    |                 | generation.rs               |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
 | N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
 

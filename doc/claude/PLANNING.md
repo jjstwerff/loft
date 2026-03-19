@@ -273,9 +273,8 @@ Ordered by unblocking impact and the small-steps principle (each item leaves the
 in a better state than it found it, with passing tests).
 
 **For 0.8.2:**
-1. **L3** — reserve keywords; Small, must be first (claims `fields` and `debug_assert` before 0.9.0 features land)
-2. **A9** — vector slice CoW; Medium, independent correctness fix
-3. **A6** — slot pre-pass; High, independent; can share a branch with A9
+1. **A9** — vector slice CoW; Medium, independent correctness fix
+2. **A6** — slot pre-pass; High, independent; can share a branch with A9
 4. **A8** — destination-passing; Med–High, independent efficiency win
 5. **A3** — optional Cargo features; Medium, packaging polish; independent
 6. **N2–N9** — native codegen fixes; each is independent and Small–Medium; interleave freely with items 2–5
@@ -334,27 +333,6 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
 **Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
 **Target:** 0.8.3
-
----
-
-### L3  Reserve compile-time intrinsic names as keywords
-**Sources:** [PROBLEMS.md](PROBLEMS.md) #53
-**Description:** Several names are special-cased in `parse_call` / `parse_single` but are
-not in the `KEYWORDS` array, so user code can define functions or variables with the same
-names.  The intrinsic always wins silently, making user definitions unreachable dead code.
-Two upcoming features introduce new intrinsic names — `fields` (A10) and `debug_assert`
-(A2.3) — that must be reserved *before* those features land or existing user code could
-break silently.
-**Fix path:**
-1. Add to `KEYWORDS` in `src/lexer.rs`: `match` (added in 0.8.0 but never put in KEYWORDS),
-   `sizeof`, `assert`, `panic`, `fields`, `debug_assert`.
-2. Update COMPILER.md KEYWORDS list.
-3. Add a parse-error test: `fn sizeof(...) { ... }` produces a single clear diagnostic.
-
-Names intentionally left as identifiers: `log_info/warn/error/fatal` (prefixed, low
-collision risk), `parallel_for` (highly specific), `rev` (likely future stdlib function).
-**Effort:** Small (`src/lexer.rs` + test)
-**Target:** 0.8.2
 
 ---
 
@@ -650,14 +628,6 @@ runtime behaviour; no user-visible correctness impact (the correctness fix was c
 to assign stack slots by greedy interval-graph colouring.  Makes slot layout auditable and
 removes a source of slot conflicts in long functions with many sequential variable reuses.
 **Fix path:**
-
-**Phase 1 — Standalone implementation** (`src/variables.rs`):
-Add `assign_slots()` as a standalone function: sort variables by `first_def`, assign each
-to the lowest slot not occupied by a live variable of incompatible type.  Do **not** wire
-it into the main pipeline yet — `claim()` remains the active mechanism.
-*Tests:* unit tests in `variables.rs` verify the greedy colouring produces the correct
-slot assignments for a representative set of live-interval patterns; all existing tests
-pass unchanged.
 
 **Phase 2 — Shadow mode** (`src/scopes.rs`):
 Call `assign_slots()` from `scopes::check` after `compute_intervals`, then assert that its
@@ -1007,22 +977,14 @@ See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
 **Description:** Add iterate/step state machine for sorted/index/vector collections.
 Handle `Value::Iter` in `output_code_inner` by emitting a loop with these functions.
 **Fix path:**
-- **Phase 1 — vector iteration** (`codegen_runtime.rs`, `generation.rs`):
-  Implement `OpIterate`/`OpStep` for `vector<T>`.  Emit an index-based loop: `_iter`
-  holds the current index as `i64`; `OpStep` increments and checks bounds.  Test: for-loop
-  over a vector literal produces correct values in native-codegen mode.
-- **Phase 2 — sorted + index iteration** (`codegen_runtime.rs`):
-  Extend `OpIterate`/`OpStep` to `sorted<T>` and `index<K,V>`.  Use the existing
-  `iterate()`/`step()` interpreter helpers as the model.  Test: for-loop over a populated
-  `sorted` and an `index` each produce all entries in order.
 - **Phase 3 — reverse iteration + range sub-expressions** (`generation.rs`):
   Support `for x in vec.reversed()` and `for x in vec[a..b]` by recognising the
   sub-expression shape in `output_code_inner` and emitting appropriate start/end/step
   values.  Test: reversed vector and slice loops produce correct sequences.
 
 Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
-**Effort:** High (codegen_runtime.rs + generation.rs)
-**Fixes:** 3 compile failures (iterator tests)
+**Effort:** Medium (generation.rs)
+**Fixes:** remaining iterator compile failures
 
 ---
 

@@ -1106,10 +1106,77 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
     writeln!(f)
 }
 
+/// Assign stack slot positions to all variables in `function` using greedy
+/// interval-graph colouring ordered by `first_def`.
+///
+/// Variables are sorted by `first_def` (ascending).  Each variable is placed
+/// at the lowest-offset slot not currently occupied by a simultaneously-live
+/// variable of the same or overlapping byte range.  Variables with
+/// `first_def == u32::MAX` (never written) are skipped and keep
+/// `stack_pos == u16::MAX`.
+///
+/// The pipeline is **not** changed: `claim()` remains the active mechanism.
+/// This function exists only to produce an independently-auditable slot layout
+/// (A6.1 of ASSIGNMENT.md).
+pub fn assign_slots(function: &mut Function) {
+    // Collect indices of variables that have a known live interval.
+    let mut order: Vec<usize> = (0..function.variables.len())
+        .filter(|&i| function.variables[i].first_def != u32::MAX)
+        .collect();
+    // Sort by first_def to process variables in definition order.
+    order.sort_by_key(|&i| function.variables[i].first_def);
+
+    // Reset all slots for variables we will assign.
+    for &i in &order {
+        function.variables[i].stack_pos = u16::MAX;
+    }
+
+    for &i in &order {
+        let first_def = function.variables[i].first_def;
+        let last_use = function.variables[i].last_use;
+        let var_size = size(&function.variables[i].type_def, &Context::Variable);
+        if var_size == 0 {
+            function.variables[i].stack_pos = 0;
+            continue;
+        }
+        // Find the lowest slot offset that doesn't conflict with any already-assigned
+        // variable whose live interval overlaps [first_def, last_use].
+        let mut candidate: u16 = 0;
+        'retry: loop {
+            let end = candidate.saturating_add(var_size);
+            for &j in &order {
+                if j == i {
+                    continue;
+                }
+                let js = function.variables[j].stack_pos;
+                if js == u16::MAX {
+                    continue;
+                }
+                let j_size = size(&function.variables[j].type_def, &Context::Variable);
+                let j_end = js.saturating_add(j_size);
+                // Check byte-range overlap.
+                if candidate < j_end && end > js {
+                    // Check live-interval overlap.
+                    let jf = function.variables[j].first_def;
+                    let jl = function.variables[j].last_use;
+                    if first_def <= jl && last_use >= jf {
+                        // Conflict — try next available slot after this variable's range.
+                        candidate = j_end;
+                        continue 'retry;
+                    }
+                }
+            }
+            break;
+        }
+        function.variables[i].stack_pos = candidate;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::Block;
+    use std::mem::size_of;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -1350,6 +1417,87 @@ mod tests {
         assert!(
             find_conflict(&f.variables).is_some(),
             "overlapping intervals at the same slot must be a conflict"
+        );
+    }
+
+    // ── assign_slots unit tests ───────────────────────────────────────────────
+
+    /// Two sequential variables: `assign_slots` should place the second at the same slot
+    /// as the first because their intervals don't overlap.
+    #[test]
+
+    fn assign_slots_sequential_reuse() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &INT, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 10;
+        let v2 = f.add_unique("v2", &INT, 0);
+        f.variables[v2 as usize].first_def = 11;
+        f.variables[v2 as usize].last_use = 20;
+        assign_slots(&mut f);
+        assert_eq!(
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
+            "non-overlapping variables should share a slot"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    /// Two concurrent variables must get distinct slots.
+    #[test]
+
+    fn assign_slots_concurrent_get_separate_slots() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &INT, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 20;
+        let v2 = f.add_unique("v2", &INT, 0);
+        f.variables[v2 as usize].first_def = 0;
+        f.variables[v2 as usize].last_use = 20;
+        assign_slots(&mut f);
+        assert_ne!(
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
+            "simultaneously-live variables must not share a slot"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    /// A `DbRef` variable is 12 bytes; the slot after it must start at offset 12,
+    /// not at offset 4 (the size of an integer).
+    #[test]
+
+    fn assign_slots_respects_variable_size() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &ref_tp, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 5;
+        let v2 = f.add_unique("v2", &INT, 0);
+        f.variables[v2 as usize].first_def = 0;
+        f.variables[v2 as usize].last_use = 5;
+        assign_slots(&mut f);
+        let s1 = f.variables[v1 as usize].stack_pos;
+        let s2 = f.variables[v2 as usize].stack_pos;
+        let dbref_size = size_of::<DbRef>() as u16;
+        let no_overlap = s2 >= s1 + dbref_size || s1 >= s2 + 4;
+        assert!(no_overlap, "DbRef slot must not overlap integer slot");
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    /// Variables that were never defined (`first_def` == `u32::MAX`) must be skipped.
+    #[test]
+
+    fn assign_slots_skips_never_defined() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &INT, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 10;
+        let v2 = f.add_unique("v2", &INT, 0);
+        // v2 is never defined — first_def stays u32::MAX
+        assign_slots(&mut f);
+        assert_eq!(
+            f.variables[v2 as usize].stack_pos,
+            u16::MAX,
+            "never-defined variable must keep stack_pos == u16::MAX"
         );
     }
 }
