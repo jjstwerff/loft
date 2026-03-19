@@ -18,9 +18,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | A6.2  | ↳ Shadow mode — assert agrees with `claim()`; log mismatches | Medium    |                 | scopes.rs                   |
 | A6.3  | ↳ Replace `claim()` — `assign_slots` becomes sole mechanism  | Small     | A6.2            | codegen.rs                  |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
-| A3    | Optional Cargo features                                      | Medium    |                 | OPTIONAL_FEATURES.md        |
-| N6    | **Implement `OpIterate`/`OpStep` in codegen_runtime** *(1 ph remain)* | Medium |           | NATIVE.md N10e-2            |
-| N6.3  | ↳ Reverse iteration + range sub-expressions                  | Medium    |                 | generation.rs               |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
 | N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
 

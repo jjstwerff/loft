@@ -64,14 +64,11 @@ in parallel.
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
   `replace`, `to_lowercase`, `to_uppercase` and format expressions.
-- **A3** — Optional Cargo features: gate `png`, `parallel`, `logging`, `mmap` behind `cfg`
-  features for a lean default binary; remove dead `rand_core`/`rand_pcg` dependencies.
 
 **Native code generation (Tier N):**
-- N2–N9 (runtime fixes, codegen fixes, fill.rs auto-generation) completed in 0.8.2
-  (merged PR #36, 2026-03-18).  Remaining: **N6.3** (reverse iteration + range
-  sub-expressions), **N9** (fill.rs auto-generation N20b–N20d), and **N1** (`--native`
-  CLI flag) which lands last.
+- N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
+  range-bounded iteration) completed in 0.8.2.  Remaining: **N9** (fill.rs auto-generation
+  N20b–N20d), and **N1** (`--native` CLI flag) which lands last.
 
 ---
 
@@ -275,9 +272,8 @@ in a better state than it found it, with passing tests).
 **For 0.8.2:**
 1. **A6** — slot pre-pass; High, independent
 4. **A8** — destination-passing; Med–High, independent efficiency win
-5. **A3** — optional Cargo features; Medium, packaging polish; independent
-6. **N6.3** + **N9** — native codegen remaining fixes; independent; interleave freely with items 2–5
-7. **N1** — `--native` CLI flag; lands after N6.3 and N9
+5. **N9** — native codegen fill.rs auto-generation remaining; independent; interleave freely with items 2–4
+6. **N1** — `--native` CLI flag; lands after N9
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
@@ -685,100 +681,6 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 **Target:** 0.9.0
 
 ---
-
-### A3  Optional Cargo features
-**Sources:** OPTIONAL_FEATURES.md
-**Description:** Gate subsystems behind `cfg` features so that users who do not need
-image support, memory-mapped stores, or parallelism do not pay for those dependencies.
-Currently all five dependencies are unconditional; a minimal `loft` binary still links
-`png` and `mmap-storage` even if the program never loads an image or opens a file-backed
-store.
-
-**Current unconditional dependencies (`Cargo.toml`):**
-```toml
-rand_core = "0.9"      # used only in src/ops.rs (rand_int, rand_seed)
-rand_pcg  = "0.9"      # used only in src/ops.rs
-png       = "0.17"     # used only in src/png_store.rs
-mmap-storage = "0.10"  # used only in src/store.rs (Store::open)
-dirs      = "5"        # used in main.rs (config path); keep unconditional
-```
-
-**Fix path:**
-
-**Step 1 — Define features in `Cargo.toml`:**
-```toml
-[features]
-default  = ["png", "mmap", "random"]
-png      = ["dep:png"]
-mmap     = ["dep:mmap-storage"]
-random   = ["dep:rand_core", "dep:rand_pcg"]
-
-[dependencies]
-rand_core    = { version = "0.9", optional = true }
-rand_pcg     = { version = "0.9", optional = true }
-png          = { version = "0.17", optional = true }
-mmap-storage = { version = "0.10", optional = true }
-dirs         = "5"
-```
-`gendoc` and `logging` are already separate binaries/entry-points rather than
-conditional feature gates; keep them as-is for now.
-
-**Step 2 — Gate `png` (`src/png_store.rs`, `src/lib.rs`):**
-Wrap the module with `#[cfg(feature = "png")]`:
-```rust
-// src/lib.rs
-#[cfg(feature = "png")]
-mod png_store;
-```
-In `src/native.rs` (or wherever `get_png` is called), add `#[cfg(feature = "png")]` to
-the dispatch arm.  Callers that reach `get_png` at runtime when the feature is disabled
-should produce a loft runtime error, not a compile error.
-*Tests:* `cargo build --no-default-features` compiles without error; a separate
-`cargo test --features png` run exercises the PNG loading path.
-
-**Step 3 — Gate `mmap` (`src/store.rs`):**
-```rust
-#[cfg(feature = "mmap")]
-use mmap_storage::file::Storage as MmapStorage;
-
-// Store::open becomes conditional:
-#[cfg(feature = "mmap")]
-pub fn open(path: &str) -> Store { /* existing implementation */ }
-#[cfg(not(feature = "mmap"))]
-pub fn open(_path: &str) -> Store { panic!("mmap feature not compiled in") }
-```
-*Tests:* `cargo build --no-default-features` compiles; mmap tests only run with
-`--features mmap`.
-
-**Step 4 — Gate `random` (`src/ops.rs`):**
-```rust
-#[cfg(feature = "random")]
-use rand_core::{RngCore, SeedableRng};
-#[cfg(feature = "random")]
-use rand_pcg::Pcg64;
-```
-Wrap `rand_int` and `rand_seed` functions with `#[cfg(feature = "random")]`; provide
-stub panicking implementations for `#[cfg(not(feature = "random"))]`.
-*Tests:* `cargo build --no-default-features` compiles; random tests only run with
-`--features random`.
-
-**Step 5 — CI check:**
-Add `cargo build --no-default-features` to the CI matrix to prevent accidental re-adds
-of unconditional feature use.
-
-**Files changed:**
-
-| File | Change |
-|---|---|
-| `Cargo.toml` | Mark four deps `optional = true`; add `[features]` table |
-| `src/lib.rs` | Wrap `mod png_store;` with `#[cfg(feature = "png")]` |
-| `src/png_store.rs` | Add `#[cfg(feature = "png")]` at module level |
-| `src/store.rs` | Conditional `use mmap_storage`; stub `Store::open` for no-mmap |
-| `src/ops.rs` | Conditional `use rand_*`; stub random functions for no-random |
-| `src/native.rs` | Gate PNG dispatch arm with `#[cfg(feature = "png")]` |
-
-**Effort:** Medium (Cargo.toml + 5 source files; no logic changes)
-**Target:** 0.8.2
 
 ---
 
@@ -1233,98 +1135,6 @@ below.  Full design in [NATIVE.md](NATIVE.md).
 **Target: 0.8.2** — the generator already exists; N items are incremental fixes that turn
 broken generated output into correct compiled Rust.  Each fix is small and independent.
 See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
-
----
-
-### N6  Implement `OpIterate`/`OpStep` in codegen_runtime
-**Description:** Add iterate/step state machine for sorted/index/vector collections.
-Phases 1 and 2 (basic `OpIterate`/`OpStep` in `codegen_runtime.rs` and
-`output_call` in `generation.rs`) are done.  Phase 3 adds reverse and range-bounded
-iteration.
-**Fix path:**
-
-**Phase 3 — Reverse iteration + range-bounded iteration** (`generation.rs`,
-`src/parser/expressions.rs`):
-
-*Background:*
-- `fill_iter` in `expressions.rs` assembles the `OpIterate` argument list:
-  `[data, on, arg, Keys([...]), from_count, from_vals..., till_count, till_vals...]`.
-  Currently `from_count` and `till_count` are always `Value::Int(0)` (empty slices).
-  The `on` byte includes bit 64 for reverse (set via `self.reverse_iterator`) and bit 128
-  for inclusive end.
-- `output_call` in `generation.rs` already correctly handles non-zero `from_count`/
-  `till_count` values — the loop that reads and emits `Content::…` variants is already
-  implemented.
-- `OpIterate` in `codegen_runtime.rs` already handles bit 64 (reverse) and non-empty
-  from/till slices in its runtime logic.
-
-*What is missing:*
-
-**3a — Confirm reverse sorted/index iteration works end-to-end** (`tests/`):
-`for x in rev(sorted_coll)` sets `self.reverse_iterator = true` → `fill_iter` adds 64
-to `on` → `OpIterate` packs the correct start/finish → `OpStep` walks backwards.
-The `output_call` emitter already passes `on` from `vals[1]`, so the generated code
-already includes the reverse bit.  Write a test to confirm:
-```loft
-// tests/docs/20-native-iterator.loft
-sorted_coll = sorted<Person by name>{ ... };
-names = [];
-for p in rev(sorted_coll) { names += [p.name] }
-assert(names == ["Zoe", "Alice"], "reverse sorted");
-```
-*Expected:* test passes without any `generation.rs` changes.  If it fails, the gap is
-in `fill_iter` not writing the reverse bit for the second `OpStep` call — fix by
-ensuring `self.reverse_iterator` is read before the reset in `iterator()`.
-
-**3b — Range-bounded sorted/index iteration** (`src/parser/expressions.rs`,
-`src/parser/collections.rs`):
-Currently `for x in sorted_coll[key1..key2]` is not parsed as a range-bounded
-iteration — the `[key1..key2]` subscript on a sorted collection falls through to the
-hash/sorted lookup path rather than producing from/till bounds for `OpIterate`.
-
-To implement:
-1. In `parse_in_range` (after reading the source expression), detect
-   `Type::Sorted(..)|Type::Index(..)` followed by `[`.  Parse the subscript as
-   `key_expr [ .. ['='] key_expr ]`.
-2. Store from-key and till-key as `Vec<Value>` alongside the collection expression.
-3. In `fill_iter`, emit the actual key values as `Content::…` constructors in the
-   from/till slots instead of the current `Value::Int(0), Value::Int(0)` placeholders.
-
-```
-// fill_iter currently appends:
-ls.push(Value::Int(0));  // from_count (placeholder)
-ls.push(Value::Int(0));  // till_count (placeholder)
-
-// After 3b, when from/till keys are known:
-ls.push(Value::Int(from_key_count as i32));
-for kv in &from_keys { ls.push(kv.clone()); }
-ls.push(Value::Int(till_key_count as i32));
-for kv in &till_keys { ls.push(kv.clone()); }
-```
-
-The `output_call` emitter for `OpIterate` in `generation.rs` already handles the
-non-zero counts correctly — no generation changes needed.
-
-*Tests:*
-```loft
-for p in sorted_coll["B".."M"] { names += [p.name] }
-assert(names == ["Charlie", "Diana", "Eve"], "range-bounded sorted");
-for p in rev(sorted_coll["B".."M"]) { names += [p.name] }
-assert(names == ["Eve", "Diana", "Charlie"], "reverse range-bounded sorted");
-```
-
-**Files changed:**
-
-| File | Change |
-|---|---|
-| `src/parser/expressions.rs` | `fill_iter`: emit actual from/till key values |
-| `src/parser/expressions.rs` | `parse_in_range`: detect `sorted[key..key]` subscript |
-| `tests/docs/20-native-iterator.loft` | Add reverse + range test cases |
-| `tests/generated/vectors_sorted_iterator.rs` | Update expected output |
-
-Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
-**Effort:** Medium (generation.rs + 1 parser file)
-**Fixes:** reverse iteration tests; range-bounded sorted/index loops
 
 ---
 
