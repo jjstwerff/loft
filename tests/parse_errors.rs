@@ -388,6 +388,39 @@ fn spacial_not_implemented() {
         .error("spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
 }
 
+/// F57: write_file on a struct with a collection-type field must produce a compile error.
+#[test]
+#[ignore = "F57: compile-time guard for file I/O on collection fields not yet implemented"]
+fn write_file_collection_field() {
+    code!(
+        "struct Item { x: integer }\n\
+         struct Record { items: sorted<Item[x]> }\n\
+         fn test() {\n\
+           f = file(\"out.bin\");\n\
+           f#format = LittleEndian;\n\
+           r = Record{};\n\
+           f += r;\n\
+         }"
+    )
+    .error("write_file: 'Record' has collection field 'items'; use a plain struct for serialisation at write_file_collection_field:7:14");
+}
+
+/// F57: read_file with `as T` where T has a collection-type field must produce a compile error.
+#[test]
+#[ignore = "F57: compile-time guard for file I/O on collection fields not yet implemented"]
+fn read_file_collection_field() {
+    code!(
+        "struct Item { x: integer }\n\
+         struct Record { items: sorted<Item[x]> }\n\
+         fn test() {\n\
+           f = file(\"out.bin\");\n\
+           f#format = LittleEndian;\n\
+           _ = f#read(8) as Record;\n\
+         }"
+    )
+    .error("read_file: 'Record' has collection field 'items'; use a plain struct for serialisation at read_file_collection_field:6:25");
+}
+
 /// T1-22: function with `not null` return type that may fall through warns.
 #[test]
 fn missing_return_not_null() {
