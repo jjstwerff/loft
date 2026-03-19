@@ -538,10 +538,96 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 
 ### A3  Optional Cargo features
 **Sources:** OPTIONAL_FEATURES.md
-**Description:** Gate subsystems behind `cfg` features: `png` (image support), `gendoc`
-(HTML documentation generation), `parallel` (threading), `logging` (logger), `mmap`
-(memory-mapped storage).  Remove `rand_core` / `rand_pcg` dead dependencies.
-**Effort:** Medium (Cargo.toml, conditional compilation in store.rs, native.rs, main.rs)
+**Description:** Gate subsystems behind `cfg` features so that users who do not need
+image support, memory-mapped stores, or parallelism do not pay for those dependencies.
+Currently all five dependencies are unconditional; a minimal `loft` binary still links
+`png` and `mmap-storage` even if the program never loads an image or opens a file-backed
+store.
+
+**Current unconditional dependencies (`Cargo.toml`):**
+```toml
+rand_core = "0.9"      # used only in src/ops.rs (rand_int, rand_seed)
+rand_pcg  = "0.9"      # used only in src/ops.rs
+png       = "0.17"     # used only in src/png_store.rs
+mmap-storage = "0.10"  # used only in src/store.rs (Store::open)
+dirs      = "5"        # used in main.rs (config path); keep unconditional
+```
+
+**Fix path:**
+
+**Step 1 — Define features in `Cargo.toml`:**
+```toml
+[features]
+default  = ["png", "mmap", "random"]
+png      = ["dep:png"]
+mmap     = ["dep:mmap-storage"]
+random   = ["dep:rand_core", "dep:rand_pcg"]
+
+[dependencies]
+rand_core    = { version = "0.9", optional = true }
+rand_pcg     = { version = "0.9", optional = true }
+png          = { version = "0.17", optional = true }
+mmap-storage = { version = "0.10", optional = true }
+dirs         = "5"
+```
+`gendoc` and `logging` are already separate binaries/entry-points rather than
+conditional feature gates; keep them as-is for now.
+
+**Step 2 — Gate `png` (`src/png_store.rs`, `src/lib.rs`):**
+Wrap the module with `#[cfg(feature = "png")]`:
+```rust
+// src/lib.rs
+#[cfg(feature = "png")]
+mod png_store;
+```
+In `src/native.rs` (or wherever `get_png` is called), add `#[cfg(feature = "png")]` to
+the dispatch arm.  Callers that reach `get_png` at runtime when the feature is disabled
+should produce a loft runtime error, not a compile error.
+*Tests:* `cargo build --no-default-features` compiles without error; a separate
+`cargo test --features png` run exercises the PNG loading path.
+
+**Step 3 — Gate `mmap` (`src/store.rs`):**
+```rust
+#[cfg(feature = "mmap")]
+use mmap_storage::file::Storage as MmapStorage;
+
+// Store::open becomes conditional:
+#[cfg(feature = "mmap")]
+pub fn open(path: &str) -> Store { /* existing implementation */ }
+#[cfg(not(feature = "mmap"))]
+pub fn open(_path: &str) -> Store { panic!("mmap feature not compiled in") }
+```
+*Tests:* `cargo build --no-default-features` compiles; mmap tests only run with
+`--features mmap`.
+
+**Step 4 — Gate `random` (`src/ops.rs`):**
+```rust
+#[cfg(feature = "random")]
+use rand_core::{RngCore, SeedableRng};
+#[cfg(feature = "random")]
+use rand_pcg::Pcg64;
+```
+Wrap `rand_int` and `rand_seed` functions with `#[cfg(feature = "random")]`; provide
+stub panicking implementations for `#[cfg(not(feature = "random"))]`.
+*Tests:* `cargo build --no-default-features` compiles; random tests only run with
+`--features random`.
+
+**Step 5 — CI check:**
+Add `cargo build --no-default-features` to the CI matrix to prevent accidental re-adds
+of unconditional feature use.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `Cargo.toml` | Mark four deps `optional = true`; add `[features]` table |
+| `src/lib.rs` | Wrap `mod png_store;` with `#[cfg(feature = "png")]` |
+| `src/png_store.rs` | Add `#[cfg(feature = "png")]` at module level |
+| `src/store.rs` | Conditional `use mmap_storage`; stub `Store::open` for no-mmap |
+| `src/ops.rs` | Conditional `use rand_*`; stub random functions for no-random |
+| `src/native.rs` | Gate PNG dispatch arm with `#[cfg(feature = "png")]` |
+
+**Effort:** Medium (Cargo.toml + 5 source files; no logic changes)
 **Target:** 0.8.2
 
 ---
@@ -631,16 +717,45 @@ removes a source of slot conflicts in long functions with many sequential variab
 **Fix path:**
 
 **Phase 2 — Shadow mode** (`src/scopes.rs`):
-Call `assign_slots()` from `scopes::check` after `compute_intervals`, then assert that its
-output agrees with the slots `claim()` produces during code generation.  Mismatches log a
-warning but do not abort, making divergences visible without breaking anything.
-*Tests:* the full test suite passes; any mismatch is surfaced as a test warning so it can
-be investigated before Phase 3.
+After `compute_intervals(fn)` runs in `scopes::check`, call `assign_slots(fn)` and compare
+its `stack_pos` assignments against the slots that `claim()` will later assign during
+`byte_code()`.  Because `byte_code()` hasn't run yet at this point, the comparison is
+deferred: store the `assign_slots()` result in a temporary `Vec<u16>` (one entry per
+variable), then after `byte_code()` completes, iterate variables and warn on any mismatch.
+
+Mismatch log format (to `eprintln!` or `log::warn!`):
+```
+assign_slots mismatch in fn '<name>':
+  var '<v_name>' (slot [first_def, last_use)): assign_slots=<N>, claim=<M>
+```
+Abort the test run (`panic!`) if any mismatch is found while running under `cargo test`,
+so divergences block CI without breaking production.
+
+Implementation detail: `scopes::check` already holds a mutable `Function`; calling
+`assign_slots` a second time (after the first in A6.1) is safe because `assign_slots`
+is idempotent given the same intervals.  The comparison needs to happen after the
+`byte_code()` pass fills in `stack_pos` via `claim()`.
+
+*Tests:* full test suite passes with zero warnings; the unit tests in `variables.rs`
+(added in A6.1) pass; any future divergence between `assign_slots` and `claim` is caught
+immediately.
 
 **Phase 3 — Replace `claim()`** (`src/state/codegen.rs`):
-Remove `claim()` calls; `assign_slots()` is now the sole slot-layout mechanism.  The
-shadow assertions from Phase 2 become the permanent correctness check.
-*Tests:* full test suite passes with zero regressions; `cargo test` green on all platforms.
+Remove `claim()` calls from `byte_code()`.  Before this removal, `assign_slots(fn)` must
+already be running and its `stack_pos` values must be pre-populated on every variable.
+The `byte_code()` code that currently calls `fn.variables.claim(var_nr, size)` should
+instead read `fn.variables[var_nr].stack_pos` directly (already set by `assign_slots`).
+
+Checklist:
+1. Locate all `claim()` call sites in `src/state/codegen.rs`.
+2. Replace each with a read of `variables[v].stack_pos`.
+3. Delete the `claim()` function from `src/variables.rs` (or keep it under `#[cfg(test)]`
+   for the shadow-mode comparison in case future debugging needs it).
+4. Remove the shadow-mode comparison code from Phase 2 (or leave it behind a
+   `#[cfg(debug_assertions)]` guard).
+
+*Tests:* full test suite passes with zero regressions; `cargo test` green on all
+platforms; `cargo test -- --test-threads=1` confirms no slot-conflict panics.
 
 **Effort:** High (variables.rs, scopes.rs, state/codegen.rs)
 **Target:** 0.8.2
@@ -651,16 +766,92 @@ shadow assertions from Phase 2 become the permanent correctness check.
 **Sources:** TODO in `src/vector.rs:13`
 **Severity:** Low — currently a vector slice shares storage with the parent; mutating
 the slice can corrupt the parent vector's data
-**Description:** `v[a..b]` returns a lightweight slice (same store, different offset/length).
-If the slice is subsequently mutated (`slice += [x]`), the mutation writes into the parent's
-storage. The fix is copy-on-write: when a slice-derived vector is first mutated, copy its
-elements to a new allocation before applying the mutation.
+**Description:** `v[a..b]` returns a lightweight slice: the same underlying allocation as
+`v` but with a different `pos` offset.  Any mutation of the slice (`slice += [x]`,
+`slice[0] = val`) writes directly into `v`'s storage.  The fix is copy-on-write: the
+first mutation on a slice-derived vector allocates a fresh independent copy.
+
+**Vector memory layout (`src/vector.rs`):**
+```
+db.rec  = record id of the record containing the vector field
+db.pos  = byte offset of the u32 pointer field within that record
+           → dereferences to vec_rec (the actual vector allocation)
+vec_rec offset 4  = element count (i32)
+vec_rec offset 8+ = raw element data (size * count bytes)
+```
+A slice from `get_vector(db, size, from, stores)` returns:
+```
+DbRef { store_nr, rec: vec_rec, pos: 8 + size * from }
+```
+The slice's `rec` points directly to the vector allocation (not to the containing
+record), and `pos` is an element byte offset rather than a pointer-field offset.
+This means the slice DbRef cannot be passed to `insert_vector` or other mutation
+functions without first materialising it as an independent allocation.
+
 **Fix path:**
-1. Add a `is_slice: bool` flag (or `parent_ref: DbRef`) to the vector header.
-2. In every mutating vector operation (`OpAppendVector`, `OpInsertVector`, `OpClearVector`,
-   `OpRemoveVector`), check the flag and call `vector_copy_to_own(v)` before proceeding.
-3. `vector_copy_to_own` allocates a fresh vector, copies elements (with `copy_claims`),
-   and updates the DbRef.
+
+**Step 1 — Detect slice DbRef (`src/vector.rs`):**
+A normal vector DbRef has `db.rec` = containing record, `db.pos` = field offset of the
+pointer; dereferencing gives `vec_rec = store.get_int(db.rec, db.pos)`.
+A slice DbRef has `db.rec` = vec_rec, `db.pos` = element byte offset ≥ 8.
+
+Add a helper `is_slice(db: &DbRef, stores: &[Store]) -> bool`:
+```rust
+pub fn is_slice(db: &DbRef, stores: &[Store]) -> bool {
+    // A vector field pointer is always stored at a 4-byte-aligned offset in the
+    // record; the value it holds is a record number, also 4-byte-aligned.
+    // A slice DbRef has db.rec == vec_rec and db.pos >= 8 (element data region).
+    // Distinguish by checking whether get_int(db.rec, db.pos) would return
+    // something that looks like a valid record id vs element data.
+    // Simplest approach: use a sentinel bit in the vector header.
+    let store = keys::store(db, stores);
+    db.rec != 0 && store.get_int(db.rec, 0) < 0  // sign bit = is_slice flag
+}
+```
+Alternatively, store the is_slice flag at `vec_rec offset 0` (currently unused):
+`store.set_int(vec_rec, 0, -1)` for slices, `0` for owned vectors.
+
+**Step 2 — Mark slices at creation (`src/vector.rs` `get_vector`):**
+When `get_vector` returns a slice DbRef, set the flag in the vector record header:
+```rust
+store.set_int(vec_rec, 0, -1);  // mark as shared; mut ops must copy first
+```
+
+**Step 3 — Add `vector_copy_to_own` (`src/vector.rs`):**
+```rust
+pub fn vector_copy_to_own(db: &DbRef, elem_size: u16, stores: &mut [Store]) -> DbRef {
+    // Allocate a fresh vector, copy elements, return new owning DbRef.
+    // The returned DbRef has rec = containing_rec, pos = field_offset (normal form).
+    // Caller must update the parent field pointer to the new vec_rec.
+}
+```
+Use `stores.copy_claims` (as in `OpCopyRecord`) to duplicate owned sub-structures
+(nested text fields, nested vectors).
+
+**Step 4 — Guard every mutating operation (`src/fill.rs`, `src/vector.rs`):**
+In `insert_vector`, `vector_append`/`vector_finish`, `remove_vector`, and the clear
+path, check the is_slice flag before proceeding:
+```rust
+if is_slice(db, stores) {
+    // materialise independent copy; update the field pointer in the parent record
+    let owned = vector_copy_to_own(db, elem_size, stores);
+    // continue mutation on `owned`
+}
+```
+The four loft operations that invoke these: `OpAppendVector` (append),
+`OpInsertVector` (insert at index), `OpRemoveVector` (remove at index),
+`OpClearVector` (remove all).
+
+**Step 5 — Clear the flag for owned vectors:**
+In `vector_append` (first append on a brand-new allocation), set offset 0 = 0 to mark
+the vector as owned.  Existing owned vectors already have 0 (default allocation).
+
+*Tests:*
+- `s = v[1..3]; s += [9]` — `v` is unchanged; `s` has the new element.
+- `s = v[1..3]; s[0] = 99` — `v[1]` is unchanged; `s[0]` is 99.
+- `s = v[1..3]; t = s` (no mutation) — no copy allocated; `s` and `v` share storage.
+- Slice of a slice: `t = v[1..4]; s = t[0..2]; s += [7]` — only `s` changes.
+
 **Effort:** Medium (vector.rs, fill.rs — CoW flag + copy-on-first-write)
 **Target:** 0.8.2
 
@@ -992,36 +1183,250 @@ See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
 
 ### N6  Implement `OpIterate`/`OpStep` in codegen_runtime
 **Description:** Add iterate/step state machine for sorted/index/vector collections.
-Handle `Value::Iter` in `output_code_inner` by emitting a loop with these functions.
+Phases 1 and 2 (basic `OpIterate`/`OpStep` in `codegen_runtime.rs` and
+`output_call` in `generation.rs`) are done.  Phase 3 adds reverse and range-bounded
+iteration.
 **Fix path:**
-- **Phase 3 — reverse iteration + range sub-expressions** (`generation.rs`):
-  Support `for x in vec.reversed()` and `for x in vec[a..b]` by recognising the
-  sub-expression shape in `output_code_inner` and emitting appropriate start/end/step
-  values.  Test: reversed vector and slice loops produce correct sequences.
+
+**Phase 3 — Reverse iteration + range-bounded iteration** (`generation.rs`,
+`src/parser/expressions.rs`):
+
+*Background:*
+- `fill_iter` in `expressions.rs` assembles the `OpIterate` argument list:
+  `[data, on, arg, Keys([...]), from_count, from_vals..., till_count, till_vals...]`.
+  Currently `from_count` and `till_count` are always `Value::Int(0)` (empty slices).
+  The `on` byte includes bit 64 for reverse (set via `self.reverse_iterator`) and bit 128
+  for inclusive end.
+- `output_call` in `generation.rs` already correctly handles non-zero `from_count`/
+  `till_count` values — the loop that reads and emits `Content::…` variants is already
+  implemented.
+- `OpIterate` in `codegen_runtime.rs` already handles bit 64 (reverse) and non-empty
+  from/till slices in its runtime logic.
+
+*What is missing:*
+
+**3a — Confirm reverse sorted/index iteration works end-to-end** (`tests/`):
+`for x in rev(sorted_coll)` sets `self.reverse_iterator = true` → `fill_iter` adds 64
+to `on` → `OpIterate` packs the correct start/finish → `OpStep` walks backwards.
+The `output_call` emitter already passes `on` from `vals[1]`, so the generated code
+already includes the reverse bit.  Write a test to confirm:
+```loft
+// tests/docs/20-native-iterator.loft
+sorted_coll = sorted<Person by name>{ ... };
+names = [];
+for p in rev(sorted_coll) { names += [p.name] }
+assert(names == ["Zoe", "Alice"], "reverse sorted");
+```
+*Expected:* test passes without any `generation.rs` changes.  If it fails, the gap is
+in `fill_iter` not writing the reverse bit for the second `OpStep` call — fix by
+ensuring `self.reverse_iterator` is read before the reset in `iterator()`.
+
+**3b — Range-bounded sorted/index iteration** (`src/parser/expressions.rs`,
+`src/parser/collections.rs`):
+Currently `for x in sorted_coll[key1..key2]` is not parsed as a range-bounded
+iteration — the `[key1..key2]` subscript on a sorted collection falls through to the
+hash/sorted lookup path rather than producing from/till bounds for `OpIterate`.
+
+To implement:
+1. In `parse_in_range` (after reading the source expression), detect
+   `Type::Sorted(..)|Type::Index(..)` followed by `[`.  Parse the subscript as
+   `key_expr [ .. ['='] key_expr ]`.
+2. Store from-key and till-key as `Vec<Value>` alongside the collection expression.
+3. In `fill_iter`, emit the actual key values as `Content::…` constructors in the
+   from/till slots instead of the current `Value::Int(0), Value::Int(0)` placeholders.
+
+```
+// fill_iter currently appends:
+ls.push(Value::Int(0));  // from_count (placeholder)
+ls.push(Value::Int(0));  // till_count (placeholder)
+
+// After 3b, when from/till keys are known:
+ls.push(Value::Int(from_key_count as i32));
+for kv in &from_keys { ls.push(kv.clone()); }
+ls.push(Value::Int(till_key_count as i32));
+for kv in &till_keys { ls.push(kv.clone()); }
+```
+
+The `output_call` emitter for `OpIterate` in `generation.rs` already handles the
+non-zero counts correctly — no generation changes needed.
+
+*Tests:*
+```loft
+for p in sorted_coll["B".."M"] { names += [p.name] }
+assert(names == ["Charlie", "Diana", "Eve"], "range-bounded sorted");
+for p in rev(sorted_coll["B".."M"]) { names += [p.name] }
+assert(names == ["Eve", "Diana", "Charlie"], "reverse range-bounded sorted");
+```
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `src/parser/expressions.rs` | `fill_iter`: emit actual from/till key values |
+| `src/parser/expressions.rs` | `parse_in_range`: detect `sorted[key..key]` subscript |
+| `tests/docs/20-native-iterator.loft` | Add reverse + range test cases |
+| `tests/generated/vectors_sorted_iterator.rs` | Update expected output |
 
 Full detail in [NATIVE.md](NATIVE.md) § N10e-2.
-**Effort:** Medium (generation.rs)
-**Fixes:** remaining iterator compile failures
+**Effort:** Medium (generation.rs + 1 parser file)
+**Fixes:** reverse iteration tests; range-bounded sorted/index loops
 
 ---
 
 ---
 
 ### N1  Add `--native` CLI flag
-**Description:** Add `--native <file.loft>` to `src/main.rs`: parse, generate Rust
-source via `Output::output_native()`, compile with `rustc`, run the binary.
-**Effort:** Medium
+**Description:** Add `--native` mode to `src/main.rs`: parse a `.loft` file, emit a
+self-contained Rust source file via `Output::output_native()`, compile it with `rustc`,
+and run the resulting binary.  This is the end-to-end native codegen path.
 **Depends on:** N6, N9
+
+**Fix path:**
+
+**Step 1 — CLI argument** (`src/main.rs`):
+Extend the argument-parsing loop to recognise `--native`:
+```rust
+"--native" => { native_mode = true; }
+```
+When `native_mode` is set, run the native pipeline instead of the interpreter pipeline.
+
+**Step 2 — Parse and compile** (`src/main.rs`):
+Re-use the existing interpreter pipeline up through `byte_code()`:
+```rust
+let mut p = Parser::new();
+p.parse(&file_content, &file_name)?;
+let start_def = compile::byte_code(&mut p.data, &mut p.database)?;
+```
+`start_def` is the first definition index of the user program (after the stdlib
+definitions).
+
+**Step 3 — Emit Rust source** (`src/main.rs`, `src/generation.rs`):
+Write to a temporary file in `std::env::temp_dir()`:
+```rust
+let tmp = std::env::temp_dir().join("loft_native.rs");
+let mut f = File::create(&tmp)?;
+let mut out = Output { data: &p.data, stores: &p.database, counter: 0,
+                       indent: 0, def_nr: 0, declared: Default::default() };
+out.output_native(&mut f, 0, start_def)?;
+```
+
+**Step 4 — Compile and run** (`src/main.rs`):
+```rust
+let binary = std::env::temp_dir().join("loft_native_bin");
+let status = std::process::Command::new("rustc")
+    .args(["--edition=2024", "-o", binary.to_str().unwrap(),
+           tmp.to_str().unwrap()])
+    .status()?;
+if !status.success() {
+    eprintln!("loft: native compilation failed");
+    std::process::exit(1);
+}
+std::process::Command::new(&binary)
+    .args(std::env::args().skip_while(|a| a != "--native").skip(2))
+    .status()?;
+```
+The `rustc` invocation needs `--edition=2024` (the project uses Rust 2024 features
+including `let` chains).  Linking against the `loft` crate is not needed for
+self-contained generated code — `output_native` already emits all required `use` paths
+from `codegen_runtime`.
+
+**Step 5 — Error handling:**
+- If `rustc` is not in `PATH`: print a clear error (`loft: rustc not found; install
+  the Rust toolchain to use --native mode`) and exit 1.
+- If the generated source has compile errors (indicates a codegen bug): print the
+  `rustc` stderr and suggest `--debug` flag to dump the generated source.
+- If the binary exits non-zero: propagate the exit code.
+
+**Step 6 — `--native-emit` flag (optional, for debugging):**
+Add `--native-emit <out.rs>` to emit the Rust source to a named file without
+compiling.  Useful for inspecting codegen output.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `src/main.rs` | Add `--native` / `--native-emit` flag; native pipeline |
+| `tests/native.rs` | Integration test: compile + run a trivial loft program via `--native` |
+
+**Effort:** Medium
+**Target:** 0.8.2
 
 ---
 
 ### N9  Repair fill.rs auto-generation
-**Description:** Make `create.rs::generate_code()` produce a `fill.rs` that can
-replace the hand-maintained `src/fill.rs`. N20a (`use crate::ops;` import) is done.
-Remaining: fix formatting (N20b), replace src/fill.rs (N20c), add `#state_call`
-annotation for the 52 delegation operators (N20d).
-**Effort:** Medium (create.rs + default/*.loft + CI)
+**Description:** Make `create.rs::generate_code()` produce a `fill.rs` that byte-for-byte
+replaces the hand-maintained `src/fill.rs`.  N20a (`use crate::ops;` import) is done.
+Remaining phases: N20b (formatting), N20c (replace src/fill.rs), N20d (`#state_call`
+annotation for 52 delegation operators).
 **Detail:** [NATIVE.md](NATIVE.md) § N20
+
+**Fix path:**
+
+**Phase N20b — Emit properly formatted code** (`src/create.rs`):
+`generate_code()` currently emits single-line bodies (`if x { y }`) but `src/fill.rs`
+uses expanded form (`if x {\n    y\n}`).  Two approaches:
+
+*Option A — emit expanded form directly in `create.rs`:*
+Replace `writeln!(into, "if {} {{ {} }}", ...)` patterns with multi-line equivalents.
+This is preferred — it avoids a subprocess dependency.
+
+*Option B — run `rustfmt` on the output file:*
+```rust
+std::process::Command::new("rustfmt").arg("tests/generated/fill.rs").status()?;
+```
+Can be called from the test setup in `tests/testing.rs` after `generate_code()`.
+
+After this phase, `diff tests/generated/fill.rs src/fill.rs` should produce no output
+(modulo header comment differences).
+*Tests:* `cargo test n9_generated_fill_matches_src` passes.
+
+**Phase N20c — Replace `src/fill.rs` with generated version** (`tests/testing.rs`,
+CI):
+Add a CI check that:
+1. Runs the test that calls `generate_code()` (already happens in debug test runs).
+2. Compares `tests/generated/fill.rs` against `src/fill.rs`.
+3. Fails the test with a diff excerpt if they differ.
+
+Once this CI check is green on the first run (after N20b produces an identical file),
+copy `tests/generated/fill.rs` → `src/fill.rs` and add a note at the top of
+`src/fill.rs`: `// Auto-generated by create.rs. Do not edit manually.`
+
+From this point, any new opcode added to `default/*.loft` with a `#rust` template is
+automatically included in `src/fill.rs`.
+
+*Tests:* `cargo test n9_fill_is_generated` fails if `src/fill.rs` drifts from
+`tests/generated/fill.rs`.
+
+**Phase N20d — Add `#state_call` annotation** (`default/*.loft`, `src/create.rs`):
+Currently 52 operators delegate to `State` methods (e.g., `s.iterate()`) but have no
+`#rust` template.  `generate_code()` silently skips them.  Add a new loft annotation:
+```loft
+fn OpIterate(...);
+#state_call"iterate"
+```
+In `create.rs::generate_code()`, recognise `#state_call"method_name"` and emit:
+```rust
+fn n_op_iterate(s: &mut State) {
+    s.iterate();
+}
+```
+The 52 delegation operators are listed in [NATIVE.md](NATIVE.md) § N20d.  Adding them
+one by one eliminates the remaining hand-maintained entries in `src/fill.rs`.
+
+*Tests:* after adding `#state_call` for all 52, `n9_fill_is_generated` still passes;
+no hand-maintained entries remain in `src/fill.rs`.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `src/create.rs` | Emit expanded-form Rust in `generate_code()`; handle `#state_call` |
+| `default/*.loft` | Add `#state_call"..."` for 52 delegation operators |
+| `src/fill.rs` | Replace with auto-generated version after N20c |
+| `tests/testing.rs` | Add CI diff check (`n9_fill_is_generated`) |
+
+**Effort:** Medium
+**Target:** 0.8.2
 
 ---
 
