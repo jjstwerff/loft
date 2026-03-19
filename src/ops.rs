@@ -18,11 +18,15 @@
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(dead_code)]
+#[cfg(feature = "random")]
 use rand_core::{RngCore, SeedableRng};
+#[cfg(feature = "random")]
 use rand_pcg::Pcg64;
+#[cfg(feature = "random")]
 use std::cell::RefCell;
 use std::cmp::Ordering;
 
+#[cfg(feature = "random")]
 thread_local! {
     static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::seed_from_u64(12345));
 }
@@ -103,6 +107,7 @@ macro_rules! sentinel_long {
 
 /// Return a random integer in `[lo, hi]` (inclusive).
 /// Returns `i32::MIN` (null) if `lo > hi` or if either bound is null.
+#[cfg(feature = "random")]
 #[must_use]
 pub fn rand_int(lo: i32, hi: i32) -> i32 {
     if lo == i32::MIN || hi == i32::MIN || lo > hi {
@@ -114,11 +119,13 @@ pub fn rand_int(lo: i32, hi: i32) -> i32 {
 }
 
 /// Reseed the thread-local RNG.
+#[cfg(feature = "random")]
 pub fn rand_seed(seed: i64) {
     RNG.with(|rng| *rng.borrow_mut() = Pcg64::seed_from_u64(seed as u64));
 }
 
 /// Fisher-Yates shuffle of a mutable slice of `i32`.
+#[cfg(feature = "random")]
 pub fn shuffle_ints(v: &mut [i32]) {
     let n = v.len();
     for i in (1..n).rev() {

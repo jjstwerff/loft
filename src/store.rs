@@ -10,6 +10,7 @@
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 
+#[cfg(feature = "mmap")]
 use mmap_storage::file::Storage as MmapStorage;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cmp::Ordering;
@@ -37,6 +38,7 @@ pub struct Store {
     pub ptr: *mut u8,
     claims: HashSet<u32>,
     size: u32,
+    #[cfg(feature = "mmap")]
     file: Option<MmapStorage>,
     pub(crate) free: bool,
     /// When `true`, all writes to this store are illegal.
@@ -62,10 +64,12 @@ impl PartialEq for Store {
 
 impl Drop for Store {
     fn drop(&mut self) {
-        if self.file.is_none() {
-            let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
-            unsafe { A.dealloc(self.ptr, l) };
+        #[cfg(feature = "mmap")]
+        if self.file.is_some() {
+            return;
         }
+        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+        unsafe { A.dealloc(self.ptr, l) };
     }
 }
 
@@ -84,6 +88,7 @@ impl Store {
             ptr,
             size,
             claims: HashSet::new(),
+            #[cfg(feature = "mmap")]
             file: None,
             free: true,
             locked: false,
@@ -93,6 +98,14 @@ impl Store {
         store
     }
 
+    #[cfg(not(feature = "mmap"))]
+    pub fn open(_path: &str) -> Store {
+        panic!(
+            "mmap feature is not compiled in; enable the `mmap` Cargo feature to use file-backed stores"
+        )
+    }
+
+    #[cfg(feature = "mmap")]
     pub fn open(path: &str) -> Store {
         let mut file = MmapStorage::open(path).expect("Opening file");
         let size = (file.capacity() / 8) as u32;
@@ -340,6 +353,7 @@ impl Store {
         }
         let inc = self.size * 7 / 3;
         let size = if to_size > inc { to_size } else { inc };
+        #[cfg(feature = "mmap")]
         if let Some(f) = &mut self.file {
             f.resize(size as usize * 8).expect("Resize");
             self.ptr = std::ptr::addr_of!(f.as_slice()[0]).cast_mut();
@@ -379,6 +393,7 @@ impl Store {
             ptr,
             size: self.size,
             claims: self.claims.clone(),
+            #[cfg(feature = "mmap")]
             file: None,
             free: self.free,
             locked: true,

@@ -57,6 +57,24 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **A3** — `png`, `mmap-storage`, `rand_core`, and `rand_pcg` are now optional
+  Cargo features (`png`, `mmap`, `random`).  The default feature set keeps all
+  three enabled so existing builds are unaffected.  Building with
+  `--no-default-features` produces a minimal binary with no image loading,
+  file-mapped stores, or RNG.  `Store::open` panics at runtime when invoked
+  without the `mmap` feature; `Database::get_png` returns `false`; the `rand`,
+  `rand_seed`, and `rand_indices` functions are not registered.  CI matrix now
+  includes a `cargo build --no-default-features` step to prevent regressions.
+  (`Cargo.toml`, `src/lib.rs`, `src/main.rs`, `src/store.rs`, `src/ops.rs`,
+  `src/native.rs`, `src/database/io.rs`, `.github/workflows/ci.yml`)
+
+- **N6.3** — Reverse and range-bounded iteration on sorted/index collections is
+  fully implemented in native codegen.  `codegen_runtime.rs` handles the reverse
+  bit (64) in `OpIterate` and non-zero `from`/`till` key counts for range bounds;
+  no code changes were required — this was discovered to already be complete.
+  Tests `n6_sorted_reverse_native` and `n6_index_range_iteration` confirm both
+  paths.  (`tests/vectors.rs`)
+
 - **A11** — Hash table load-factor threshold corrected from ~57% to 75%
   (`src/hash.rs`: `length * 14 / 16` → `length * 2 / 3`). The previous formula
   rehashed prematurely due to the `elms = (room-1) * 2` geometry. DEVELOPERS.md

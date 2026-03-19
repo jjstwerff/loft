@@ -21,6 +21,7 @@ mod ops;
 mod parallel;
 mod parser;
 mod platform;
+#[cfg(feature = "png")]
 mod png_store;
 mod scopes;
 mod stack;

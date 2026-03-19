@@ -38,6 +38,9 @@ jobs:
       - name: Build
         run: cargo build --all-targets
 
+      - name: Build (no default features)
+        run: cargo build --no-default-features
+
       - name: Test
         run: cargo test
 
