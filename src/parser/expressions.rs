@@ -2621,6 +2621,18 @@ pair the hash with a vector to iterate in insertion order"
                     let tp = self
                         .parse_type(u32::MAX, &type_name, false)
                         .unwrap_or(Type::Text(vec![]));
+                    if let Type::Reference(d_nr, _) = &tp
+                        && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
+                    {
+                        let tname = self.data.def(*d_nr).name.clone();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "read_file: '{}' has collection field '{}'; use a plain struct for serialisation",
+                            tname,
+                            field
+                        );
+                    }
                     self.ensure_io_type(&tp.clone());
                     let id = self.get_type(&tp);
                     (tp, id)
@@ -2688,7 +2700,35 @@ pair the hash with a vector to iterate in insertion order"
         }
     }
 
+    /// Return the name of the first collection-type field in `d_nr`, or `None`.
+    /// Collection fields (sorted/index/hash/spacial) cannot be serialised by the binary
+    /// file I/O routines; callers should emit a compile-time error when this returns `Some`.
+    fn first_collection_field(d_nr: u32, data: &super::Data) -> Option<String> {
+        for a in &data.def(d_nr).attributes {
+            if matches!(
+                a.typedef,
+                Type::Sorted(..) | Type::Index(..) | Type::Hash(..) | Type::Spacial(..)
+            ) {
+                return Some(a.name.clone());
+            }
+        }
+        None
+    }
+
     pub(crate) fn write_to_file(&mut self, file_var: u16, val: Value, val_type: &Type) -> Value {
+        if let Type::Reference(d_nr, _) = val_type
+            && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
+        {
+            let type_name = self.data.def(*d_nr).name.clone();
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "write_file: '{}' has collection field '{}'; use a plain struct for serialisation",
+                type_name,
+                field
+            );
+            return Value::Null;
+        }
         let val_type_clone = val_type.clone();
         self.ensure_io_type(&val_type_clone);
         let db_tp = self.get_type(val_type);
