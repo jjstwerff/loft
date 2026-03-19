@@ -25,7 +25,7 @@ recommended fix path are described.
 |---|-------|----------|-------------|
 | 22 | Spatial index (spacial<T>) operations not implemented | Low | N/A |
 | 24 | Compile-time slot assignment incomplete | Low | No user impact yet |
-| 53 | Compile-time intrinsic names not reserved as keywords | Medium | Avoid naming fns `fields`, `debug_assert`, `sizeof`, `assert`, `panic` |
+| ~~53~~ | ~~Compile-time intrinsic names not reserved as keywords~~ | ~~Medium~~ | **FIXED** (0.8.2) |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | ~~56~~ | ~~Native codegen: `OpSortVector`, `OpInsertVector`, `OpLengthCharacter` unimplemented in codegen_runtime.rs — generated files fail to compile~~ | ~~Medium (native only)~~ | **FIXED** (0.8.2) |
@@ -207,7 +207,7 @@ but is sufficient in practice for the known test cases.
 
 ## Parser / Lexer Bugs
 
-### 53. Compile-time intrinsic names not reserved as keywords
+### ~~53. Compile-time intrinsic names not reserved as keywords~~ **FIXED**
 
 **Symptom:** The parser special-cases several function-shaped names in `parse_call`
 (`sizeof`, `assert`, `panic`, `log_info/warn/error/fatal`) and `parse_in_range` (`rev`).
