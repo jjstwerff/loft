@@ -1261,6 +1261,116 @@ extern crate loft;"
                 }
                 return Ok(());
             }
+            "OpGetRecord" => {
+                // vals: [data, db_tp, count, key1, key2, …]
+                // Emit: OpGetRecord(stores, data, db_tp, &[Content::…, …])
+                if vals.len() >= 3 {
+                    if let (Value::Int(db_tp), Value::Int(_count)) = (&vals[1], &vals[2]) {
+                        let db_tp = *db_tp;
+                        let key_types: Vec<i8> = self
+                            .stores
+                            .types
+                            .get(db_tp as usize)
+                            .map(|t| t.keys.iter().map(|k| k.type_nr).collect())
+                            .unwrap_or_default();
+                        let key_vals = &vals[3..];
+                        write!(w, "OpGetRecord(stores, ")?;
+                        self.output_code_inner(w, &vals[0])?;
+                        write!(w, ", {db_tp}_i32, &[")?;
+                        for (i, key_val) in key_vals.iter().enumerate() {
+                            if i > 0 {
+                                write!(w, ", ")?;
+                            }
+                            let type_nr = key_types.get(i).copied().unwrap_or(1);
+                            self.emit_content(w, key_val, type_nr)?;
+                        }
+                        write!(w, "])")?;
+                        return Ok(());
+                    }
+                }
+            }
+            "OpIterate" => {
+                // vals: [data, on, arg, Keys(keys), from_count, from_vals…, till_count, till_vals…]
+                // Emit: OpIterate(stores, data, on, arg, &[Key{…}], &[Content::…], &[Content::…])
+                if vals.len() >= 4 {
+                    if let Value::Keys(keys) = &vals[3] {
+                        let keys = keys.clone();
+                        let rest = &vals[4..];
+                        let from_count = if let Some(Value::Int(n)) = rest.first() {
+                            *n as usize
+                        } else {
+                            0
+                        };
+                        let till_start = 1 + from_count;
+                        let till_count = if let Some(Value::Int(n)) = rest.get(till_start) {
+                            *n as usize
+                        } else {
+                            0
+                        };
+                        let from_vals = rest.get(1..till_start).unwrap_or(&[]);
+                        let till_vals = rest
+                            .get(till_start + 1..till_start + 1 + till_count)
+                            .unwrap_or(&[]);
+                        write!(w, "OpIterate(stores, ")?;
+                        self.output_code_inner(w, &vals[0])?;
+                        write!(w, ", ")?;
+                        self.output_code_inner(w, &vals[1])?;
+                        write!(w, ", ")?;
+                        self.output_code_inner(w, &vals[2])?;
+                        write!(w, ", &[")?;
+                        for (i, k) in keys.iter().enumerate() {
+                            if i > 0 {
+                                write!(w, ", ")?;
+                            }
+                            write!(
+                                w,
+                                "Key {{ type_nr: {}, position: {} }}",
+                                k.type_nr, k.position
+                            )?;
+                        }
+                        write!(w, "], &[")?;
+                        for (i, v) in from_vals.iter().enumerate() {
+                            if i > 0 {
+                                write!(w, ", ")?;
+                            }
+                            let type_nr = keys.get(i).map_or(1, |k| k.type_nr);
+                            self.emit_content(w, v, type_nr)?;
+                        }
+                        write!(w, "], &[")?;
+                        for (i, v) in till_vals.iter().enumerate() {
+                            if i > 0 {
+                                write!(w, ", ")?;
+                            }
+                            let type_nr = keys.get(i).map_or(1, |k| k.type_nr);
+                            self.emit_content(w, v, type_nr)?;
+                        }
+                        write!(w, "])")?;
+                        return Ok(());
+                    }
+                }
+            }
+            "OpStep" => {
+                // vals: [iter_var, data, on, arg]
+                // Emit: OpStep(stores, &mut var_iter, data, on, arg)
+                if vals.len() == 4 {
+                    write!(w, "OpStep(stores, &mut ")?;
+                    if let Value::Var(v) = &vals[0] {
+                        let name =
+                            sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        write!(w, "var_{name}")?;
+                    } else {
+                        self.output_code_inner(w, &vals[0])?;
+                    }
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, &vals[1])?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, &vals[2])?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, &vals[3])?;
+                    write!(w, ")")?;
+                    return Ok(());
+                }
+            }
             _ => {}
         }
         if def_fn.rust.is_empty() {
@@ -1284,6 +1394,27 @@ extern crate loft;"
             return Ok(());
         }
         panic!("Could not parse {vals:?}");
+    }
+
+    /// Use this to emit a single key value as a typed `Content::…` constructor.
+    /// `type_nr` is from a `Key` struct; sign indicates sort direction (ignored here),
+    /// absolute value indicates the data type:
+    /// 1 = integer, 2 = long, 3 = f32, 4 = f64, 5 = bool, 6 = text, 7 = byte.
+    fn emit_content(
+        &mut self,
+        w: &mut dyn Write,
+        v: &Value,
+        type_nr: i8,
+    ) -> std::io::Result<()> {
+        let expr = self.generate_expr_buf(v)?;
+        match type_nr.unsigned_abs() {
+            1 | 5 | 7 => write!(w, "Content::Long({expr} as i64)"),
+            2 => write!(w, "Content::Long({expr})"),
+            3 => write!(w, "Content::Single({expr})"),
+            4 => write!(w, "Content::Float({expr})"),
+            6 => write!(w, "Content::Str(Str::new({expr}))"),
+            _ => write!(w, "Content::Long(0)"),
+        }
     }
 
     /// Use this to emit `OpClearStackText` as a `.clear()` call on the target string variable.

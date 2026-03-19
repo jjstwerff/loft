@@ -115,19 +115,53 @@ impl Parser {
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Spacial(_, _, _) => {
+                    // Derive element type for the block result annotation.
+                    let elem_type = match is_type {
+                        Type::Sorted(dnr, _, dep)
+                        | Type::Index(dnr, _, dep)
+                        | Type::Spacial(dnr, _, dep) => {
+                            Type::Reference(*dnr, dep.clone())
+                        }
+                        _ => Type::Null,
+                    };
+                    // Create a separate Long variable to hold the packed i64 iterator
+                    // state (cur << 32 | finish).  iter_var ({id}#index) remains I32
+                    // as the user-visible sequential loop counter.
+                    // The state var is named "{loop_name}#iter_state" so that iter_op()
+                    // can find it by name when generating #remove.
+                    let iter_base = self.vars.name(iter_var);
+                    let iter_state_name = format!(
+                        "{}#iter_state",
+                        iter_base.strip_suffix("#index").unwrap_or(iter_base)
+                    );
+                    let state_var = self.create_var(&iter_state_name, &Type::Long);
+                    self.vars.defined(state_var);
                     let mut ls = Vec::new();
                     self.fill_iter(&mut ls, code, is_type, true, true);
                     ls.push(Value::Int(0));
                     ls.push(Value::Int(0));
                     let iter_expr = self.cl("OpIterate", &ls);
-                    let mut ls = vec![Value::Var(iter_var)];
+                    let mut ls = vec![Value::Var(state_var)];
                     self.fill_iter(&mut ls, code, is_type, false, true);
                     // Reset the reverse flag after both fill_iter calls so the second call
                     // also picks up the bit (fill_iter does not reset it itself).
                     self.reverse_iterator = false;
                     let next_expr = self.cl("OpStep", &ls);
-                    *code = v_set(iter_var, iter_expr);
-                    return next_expr;
+                    let incr =
+                        self.op("Add", Value::Var(iter_var), Value::Int(1), I32.clone());
+                    let iter_next = v_block(
+                        vec![v_set(iter_var, incr), next_expr],
+                        elem_type,
+                        "sorted iter next",
+                    );
+                    // Use Insert (not v_block+Void) so that state_var and iter_var are
+                    // claimed at the outer For-block scope and their stack slots persist
+                    // for the duration of the loop.  A Void block would free them on exit.
+                    *code = Value::Insert(vec![
+                        v_set(state_var, iter_expr),
+                        v_set(iter_var, Value::Int(-1)),
+                    ]);
+                    return iter_next;
                 }
                 _ => {
                     if self.first_pass {
@@ -362,12 +396,25 @@ use #count instead"
         } else if self.lexer.has_keyword("first") {
             self.iter_op_count_or_first(code, name, t, true);
         } else if self.lexer.has_keyword("remove") {
+            // For sorted/index/spacial loops the packed i64 state is in {name}#iter_state;
+            // for other loops (vector) the state is the plain i32 {name}#index.
+            let on = self.vars.loop_on(index_var);
+            let state_name = if on & 63 >= 1 && on & 63 <= 3 {
+                let state_key = format!("{name}#iter_state");
+                if self.vars.name_exists(&state_key) {
+                    state_key
+                } else {
+                    format!("{name}#index")
+                }
+            } else {
+                format!("{name}#index")
+            };
             *code = self.cl(
                 "OpRemove",
                 &[
-                    Value::Var(self.vars.var(&format!("{name}#index"))),
+                    Value::Var(self.vars.var(&state_name)),
                     self.vars.loop_value(index_var).clone(),
-                    Value::Int(i32::from(self.vars.loop_on(index_var))),
+                    Value::Int(i32::from(on)),
                     Value::Int(i32::from(self.vars.loop_db_tp(index_var))),
                 ],
             );
