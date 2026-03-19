@@ -152,7 +152,6 @@ fn test() {
 /// comparison logs the mismatch but must not panic — the function must still execute
 /// correctly.
 #[test]
-#[ignore = "A6.2: shadow comparison infrastructure not yet implemented"]
 fn shadow_comparison_sequential_dead_primitives() {
     code!(
         "fn add_chain() -> integer {
@@ -171,7 +170,6 @@ fn test() {
 /// A function with both alive-across-call integer accumulators and text variables.
 /// Verifies assign_slots' shadow result is conflict-free (validate_slots does not panic).
 #[test]
-#[ignore = "A6.2: shadow comparison infrastructure not yet implemented"]
 fn shadow_comparison_text_and_integer_mixed() {
     code!(
         "fn greet(name: text) -> text {
