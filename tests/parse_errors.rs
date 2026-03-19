@@ -390,7 +390,6 @@ fn spacial_not_implemented() {
 
 /// F57: write_file on a struct with a collection-type field must produce a compile error.
 #[test]
-#[ignore = "F57: compile-time guard for file I/O on collection fields not yet implemented"]
 fn write_file_collection_field() {
     code!(
         "struct Item { x: integer }\n\
@@ -402,12 +401,11 @@ fn write_file_collection_field() {
            f += r;\n\
          }"
     )
-    .error("write_file: 'Record' has collection field 'items'; use a plain struct for serialisation at write_file_collection_field:7:14");
+    .error("write_file: 'Record' has collection field 'items'; use a plain struct for serialisation at write_file_collection_field:7:8");
 }
 
 /// F57: read_file with `as T` where T has a collection-type field must produce a compile error.
 #[test]
-#[ignore = "F57: compile-time guard for file I/O on collection fields not yet implemented"]
 fn read_file_collection_field() {
     code!(
         "struct Item { x: integer }\n\
