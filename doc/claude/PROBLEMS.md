@@ -27,7 +27,6 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Medium | Assign to named variable first |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
-| 57 | Binary `read_file`/`write_file` panics on structs with collection fields | Medium | Use a plain scalar struct for serialisation |
 
 ---
 
@@ -143,44 +142,6 @@ corrupt the thread-local of the calling thread.
 is a field on the returned value, not global state.  See WEB_SERVICES.md Approach B.
 **Effort:** N/A — this is a design constraint, not a bug to fix.  Simply do not add `http_status()`.
 **Target:** Avoided by design
-
----
-
-## File I/O Limitations
-
-### 57. Binary file I/O panics on structs with collection-type fields
-
-**Severity:** Medium — runtime panic with no compile-time diagnostic
-
-**Symptom:** Calling `write_file` or `read_file` on a struct that contains a
-`sorted<T>`, `index<T>`, or `hash<T>` field panics at runtime:
-```
-Not implemented type for file writing <type_name>
-```
-
-**Root cause:** `Stores::read_data` and `Stores::write_data` in `src/database/io.rs`
-handle scalars (integer, long, single, float, boolean, text), plain enums, `Byte`,
-`Short`, and `Vector` fields recursively.  They do not handle `Parts::Sorted`,
-`Parts::Ordered`, `Parts::Hash`, or `Parts::Index` — these fall through to the `_`
-panic arm.  Collection fields store a B-tree or hash-table root pointer that cannot
-be meaningfully serialised by the current byte-array format.
-
-**Workaround:** Do not use `read_file`/`write_file` on structs whose fields include
-collection types.  Extract the scalar fields into a separate plain struct for
-serialisation.
-
-**Fix path:** Two options:
-1. **Emit a compile-time error** in the parser when `write_file` or `read_file` is
-   called with a type that contains collection fields (preferred — mirrors the spacial
-   pre-gate pattern from issue #22).
-2. **Implement serialisation** for collection fields in `read_data`/`write_data` —
-   significantly more complex; requires a stable on-disk format for B-trees/hash tables.
-
-Option 1 is the right first step: add a `has_collection_field(tp)` check at the call
-sites in `native.rs` (lines near the `write_file` and `read_file` implementations) and
-emit a compile-time error.  Option 2 can follow later if needed.
-
-**Effort:** Small (option 1: compile-time guard); High (option 2: full serialisation)
 
 ---
 

@@ -64,6 +64,17 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Bug fixes
 
+- **F57** — `write_file` and `read_file` on a struct that contains a `sorted<T>`,
+  `index<T>`, or `hash<T>` field now emits a compile-time error ("cannot use
+  write_file/read_file on a struct with collection-type fields") instead of panicking at
+  runtime.  (`src/native.rs` `has_collection_field` check)
+
+- **A9** — Assigning a vector slice to a variable (`s = v[a..b]`) now materialises the
+  slice into an independent copy.  Mutating `s` (e.g. `s += [x]`) no longer corrupts the
+  original vector `v`.  Appending a slice (`v += v[a..b]`) also produces correct results.
+  (`src/parser/expressions.rs` — A9 handler in `parse_assign_op`,
+  `build_vector_list` first-pass guard with `!first_pass && !is_argument && !u16::MAX`)
+
 - **T0-8** — Seven `panic!`/`unreachable!` calls in the parser converted to `diagnostic!`
   + early return. Malformed input now produces an error message instead of crashing the
   compiler.

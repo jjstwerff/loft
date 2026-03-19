@@ -333,6 +333,72 @@ use a separate collection or add after the loop"
         if var_nr == u16::MAX {
             self.validate_write(to, &parent_tp);
         }
+        // A9: materialise an iterator (e.g. v[a..b] slice) into a vector variable.
+        // Promotes the LHS variable to Vector<elm_tp> and builds a loop that appends
+        // each element in-place; without this Value::Iter reaches codegen and panics.
+        if matches!(&s_type, Type::Iterator(_, _))
+            && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
+            && var_nr != u16::MAX
+            && matches!(op, "=" | "+=")
+        {
+            let Type::Iterator(elm_tp, _) = s_type.clone() else {
+                unreachable!()
+            };
+            let elm_tp = *elm_tp;
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            self.change_var(to, &vec_tp);
+            if !self.first_pass
+                && let Value::Iter(_, init, next, _) = code.clone()
+                && matches!(*next, Value::Block(_))
+            {
+                let ed_nr = self.data.type_def_nr(&elm_tp);
+                let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
+                    0
+                } else {
+                    self.database.vector(self.data.def(ed_nr).known_type)
+                };
+                let known = Value::Int(i32::from(known_db));
+                let fld = Value::Int(i32::from(u16::MAX));
+                // elm_var holds the DbRef returned by OpNewRecord; must be Reference-typed.
+                let elm_var = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
+                let for_var = self.create_unique("slice_elm", &elm_tp);
+                let comp_var = self.create_unique("comp", &elm_tp);
+                let for_next = v_set(for_var, *next);
+                let mut lp = vec![for_next];
+                lp.push(v_set(comp_var, Value::Var(for_var)));
+                lp.push(v_set(
+                    elm_var,
+                    self.cl(
+                        "OpNewRecord",
+                        &[Value::Var(var_nr), known.clone(), fld.clone()],
+                    ),
+                ));
+                lp.push(self.set_field(
+                    ed_nr,
+                    usize::MAX,
+                    0,
+                    Value::Var(elm_var),
+                    Value::Var(comp_var),
+                ));
+                lp.push(self.cl(
+                    "OpFinishRecord",
+                    &[Value::Var(var_nr), Value::Var(elm_var), known, fld],
+                ));
+                let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
+                let mut stmts = Vec::new();
+                if op == "=" && !needs_db {
+                    stmts.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                }
+                stmts.push(*init);
+                stmts.push(v_loop(lp, "Slice materialise"));
+                if needs_db {
+                    let db = self.insert_new(var_nr, elm_var, &elm_tp, &mut stmts);
+                    self.vars.depend(var_nr, db);
+                }
+                *code = Value::Insert(stmts);
+            }
+            return Type::Void;
+        }
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
             self.assign_text(code, &s_type, to, op, var_nr);
@@ -1646,7 +1712,11 @@ use a separate collection or add after the loop"
             ls.extend(self.vector_db(in_t, vec));
         }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
-        if self.vector_needs_db(vec, in_t, is_var) {
+        if !self.first_pass
+            && vec != u16::MAX
+            && !self.vars.is_argument(vec)
+            && self.vector_needs_db(vec, in_t, is_var)
+        {
             let db = self.insert_new(vec, elm, in_t, &mut ls);
             self.vars.depend(vec, db);
             tp = tp.depending(db);
@@ -2621,6 +2691,18 @@ pair the hash with a vector to iterate in insertion order"
                     let tp = self
                         .parse_type(u32::MAX, &type_name, false)
                         .unwrap_or(Type::Text(vec![]));
+                    if let Type::Reference(d_nr, _) = &tp
+                        && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
+                    {
+                        let tname = self.data.def(*d_nr).name.clone();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "read_file: '{}' has collection field '{}'; use a plain struct for serialisation",
+                            tname,
+                            field
+                        );
+                    }
                     self.ensure_io_type(&tp.clone());
                     let id = self.get_type(&tp);
                     (tp, id)
@@ -2688,7 +2770,35 @@ pair the hash with a vector to iterate in insertion order"
         }
     }
 
+    /// Return the name of the first collection-type field in `d_nr`, or `None`.
+    /// Collection fields (sorted/index/hash/spacial) cannot be serialised by the binary
+    /// file I/O routines; callers should emit a compile-time error when this returns `Some`.
+    fn first_collection_field(d_nr: u32, data: &super::Data) -> Option<String> {
+        for a in &data.def(d_nr).attributes {
+            if matches!(
+                a.typedef,
+                Type::Sorted(..) | Type::Index(..) | Type::Hash(..) | Type::Spacial(..)
+            ) {
+                return Some(a.name.clone());
+            }
+        }
+        None
+    }
+
     pub(crate) fn write_to_file(&mut self, file_var: u16, val: Value, val_type: &Type) -> Value {
+        if let Type::Reference(d_nr, _) = val_type
+            && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
+        {
+            let type_name = self.data.def(*d_nr).name.clone();
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "write_file: '{}' has collection field '{}'; use a plain struct for serialisation",
+                type_name,
+                field
+            );
+            return Value::Null;
+        }
         let val_type_clone = val_type.clone();
         self.ensure_io_type(&val_type_clone);
         let db_tp = self.get_type(val_type);

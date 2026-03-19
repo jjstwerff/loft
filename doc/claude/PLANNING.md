@@ -58,11 +58,6 @@ generation.  No new language syntax.  Most items are independent and can be deve
 in parallel.
 
 **Interpreter correctness:**
-- **F57** — Compile-time guard for `read_file`/`write_file` on structs with collection
-  fields (`sorted<T>`, `index<T>`, `hash<T>`): currently panics at runtime with no
-  diagnostic.  Fix: add a `has_collection_field` check in `native.rs` and emit a
-  compile-time error.  See [PROBLEMS.md #57](PROBLEMS.md).
-- **A9** — Vector slice copy-on-write: mutating a slice must not corrupt the parent vector.
 - **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the
   current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
 
@@ -278,9 +273,7 @@ Ordered by unblocking impact and the small-steps principle (each item leaves the
 in a better state than it found it, with passing tests).
 
 **For 0.8.2:**
-1. **F57** — compile-time guard for file I/O on collection fields; Small, independent safety fix
-2. **A9** — vector slice CoW; Medium, independent correctness fix
-3. **A6** — slot pre-pass; High, independent; can share a branch with A9
+1. **A6** — slot pre-pass; High, independent
 4. **A8** — destination-passing; Med–High, independent efficiency win
 5. **A3** — optional Cargo features; Medium, packaging polish; independent
 6. **N6.3** + **N9** — native codegen remaining fixes; independent; interleave freely with items 2–5
@@ -915,101 +908,6 @@ Checklist:
 platforms; `cargo test -- --test-threads=1` confirms no slot-conflict panics.
 
 **Effort:** High (variables.rs, scopes.rs, state/codegen.rs)
-**Target:** 0.8.2
-
----
-
-### A9  Vector slice becomes independent copy on mutation
-**Sources:** TODO in `src/vector.rs:13`
-**Severity:** Low — currently a vector slice shares storage with the parent; mutating
-the slice can corrupt the parent vector's data
-**Description:** `v[a..b]` returns a lightweight slice: the same underlying allocation as
-`v` but with a different `pos` offset.  Any mutation of the slice (`slice += [x]`,
-`slice[0] = val`) writes directly into `v`'s storage.  The fix is copy-on-write: the
-first mutation on a slice-derived vector allocates a fresh independent copy.
-
-**Vector memory layout (`src/vector.rs`):**
-```
-db.rec  = record id of the record containing the vector field
-db.pos  = byte offset of the u32 pointer field within that record
-           → dereferences to vec_rec (the actual vector allocation)
-vec_rec offset 4  = element count (i32)
-vec_rec offset 8+ = raw element data (size * count bytes)
-```
-A slice from `get_vector(db, size, from, stores)` returns:
-```
-DbRef { store_nr, rec: vec_rec, pos: 8 + size * from }
-```
-The slice's `rec` points directly to the vector allocation (not to the containing
-record), and `pos` is an element byte offset rather than a pointer-field offset.
-This means the slice DbRef cannot be passed to `insert_vector` or other mutation
-functions without first materialising it as an independent allocation.
-
-**Fix path:**
-
-**Step 1 — Detect slice DbRef (`src/vector.rs`):**
-A normal vector DbRef has `db.rec` = containing record, `db.pos` = field offset of the
-pointer; dereferencing gives `vec_rec = store.get_int(db.rec, db.pos)`.
-A slice DbRef has `db.rec` = vec_rec, `db.pos` = element byte offset ≥ 8.
-
-Add a helper `is_slice(db: &DbRef, stores: &[Store]) -> bool`:
-```rust
-pub fn is_slice(db: &DbRef, stores: &[Store]) -> bool {
-    // A vector field pointer is always stored at a 4-byte-aligned offset in the
-    // record; the value it holds is a record number, also 4-byte-aligned.
-    // A slice DbRef has db.rec == vec_rec and db.pos >= 8 (element data region).
-    // Distinguish by checking whether get_int(db.rec, db.pos) would return
-    // something that looks like a valid record id vs element data.
-    // Simplest approach: use a sentinel bit in the vector header.
-    let store = keys::store(db, stores);
-    db.rec != 0 && store.get_int(db.rec, 0) < 0  // sign bit = is_slice flag
-}
-```
-Alternatively, store the is_slice flag at `vec_rec offset 0` (currently unused):
-`store.set_int(vec_rec, 0, -1)` for slices, `0` for owned vectors.
-
-**Step 2 — Mark slices at creation (`src/vector.rs` `get_vector`):**
-When `get_vector` returns a slice DbRef, set the flag in the vector record header:
-```rust
-store.set_int(vec_rec, 0, -1);  // mark as shared; mut ops must copy first
-```
-
-**Step 3 — Add `vector_copy_to_own` (`src/vector.rs`):**
-```rust
-pub fn vector_copy_to_own(db: &DbRef, elem_size: u16, stores: &mut [Store]) -> DbRef {
-    // Allocate a fresh vector, copy elements, return new owning DbRef.
-    // The returned DbRef has rec = containing_rec, pos = field_offset (normal form).
-    // Caller must update the parent field pointer to the new vec_rec.
-}
-```
-Use `stores.copy_claims` (as in `OpCopyRecord`) to duplicate owned sub-structures
-(nested text fields, nested vectors).
-
-**Step 4 — Guard every mutating operation (`src/fill.rs`, `src/vector.rs`):**
-In `insert_vector`, `vector_append`/`vector_finish`, `remove_vector`, and the clear
-path, check the is_slice flag before proceeding:
-```rust
-if is_slice(db, stores) {
-    // materialise independent copy; update the field pointer in the parent record
-    let owned = vector_copy_to_own(db, elem_size, stores);
-    // continue mutation on `owned`
-}
-```
-The four loft operations that invoke these: `OpAppendVector` (append),
-`OpInsertVector` (insert at index), `OpRemoveVector` (remove at index),
-`OpClearVector` (remove all).
-
-**Step 5 — Clear the flag for owned vectors:**
-In `vector_append` (first append on a brand-new allocation), set offset 0 = 0 to mark
-the vector as owned.  Existing owned vectors already have 0 (default allocation).
-
-*Tests:*
-- `s = v[1..3]; s += [9]` — `v` is unchanged; `s` has the new element.
-- `s = v[1..3]; s[0] = 99` — `v[1]` is unchanged; `s[0]` is 99.
-- `s = v[1..3]; t = s` (no mutation) — no copy allocated; `s` and `v` share storage.
-- Slice of a slice: `t = v[1..4]; s = t[0..2]; s += [7]` — only `s` changes.
-
-**Effort:** Medium (vector.rs, fill.rs — CoW flag + copy-on-first-write)
 **Target:** 0.8.2
 
 ---
