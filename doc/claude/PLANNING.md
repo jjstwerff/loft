@@ -92,8 +92,9 @@ or type system; 0.8.2 correctness work is a prerequisite.
 - **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
 
 **Field iteration (A10):**
+- **A10.0** — Remove `fields` from `KEYWORDS` (revert L3 code change; keep identifier renames).
 - **A10.1** — `Field` + `FieldValue` enum types in `default/01_code.loft`.
-- **A10.2** — `fields()` special form → `Value::FieldsOf` + `Type::FieldsOf`.
+- **A10.2** — `ident#fields` detection in `parse_for` → `Value::FieldsOf` + `Type::FieldsOf`.
 - **A10.3** — Loop unrolling in `parse_for` for `Type::FieldsOf` (compile-time expansion).
 - **A10.4** — Error messages, docs, and test coverage.
 
@@ -802,23 +803,31 @@ Stack after call:   [ ]   // result already written to dest
 
 ---
 
-### A10  Field iteration — `for f in fields(s)`
-**Sources:** Design evaluation 2026-03-18
+### A10  Field iteration — `for f in s#fields`
+**Sources:** Design evaluation 2026-03-18; syntax decision 2026-03-19
 **Description:** Allow iterating over the stored primitive fields of a struct value with
-`for f in fields(s)`.  The loop variable `f` has type `Field` (defined in
+`for f in s#fields`.  The loop variable `f` has type `Field` (defined in
 `default/01_code.loft`) with `f.name: text` (the compile-time field name) and
 `f.value: FieldValue` (a struct-enum covering all primitive types).  Native type capture
 uses existing `match f.value { Float{v} => ... }` pattern syntax.
 
-The loop is a compile-time unroll: the parser expands `for f in fields(s)` into one
+The loop is a compile-time unroll: the parser expands `for f in s#fields` into one
 sequential block per eligible field.  No runtime allocation is needed.  Fields whose
 type is a reference, collection, or nested struct are skipped in this version.
+
+**Syntax choice — `s#fields` vs `fields(s)`:**
+`s#fields` was chosen over `fields(s)` to avoid reserving `fields` as a keyword.
+`fields` is a common English word (it was already used as an identifier in 3 stdlib files
+and had to be renamed when L3 added it to KEYWORDS).  The `#` postfix pattern already
+avoids keyword reservation for `count`, `first`, `index`, `remove`, etc., and the same
+mechanism works here.  Constraint: the source `s` must be a plain identifier; for complex
+expressions, assign a temporary first (`let cfg = get_config(); for f in cfg#fields`).
 
 ```loft
 struct Config { host: text, port: integer not null, debug: boolean }
 c = Config{ host: "localhost", port: 8080, debug: true };
 
-for f in fields(c) {
+for f in c#fields {
     match f.value {
         Text { v } => log_info("{f.name} = '{v}'")
         Int  { v } => log_info("{f.name} = {v}")
@@ -829,6 +838,13 @@ for f in fields(c) {
 ```
 
 **Fix path:**
+
+**Phase A10.0 — Remove `fields` from `KEYWORDS`** (`src/lexer.rs`):
+Delete `"fields"` from the `KEYWORDS` static array (reverting the L3 code change).
+The identifier renames made during L3 (`type_fields`, `flds`, `items`) can remain as
+they are improvements in their own right.
+*Tests:* existing tests pass; `fields` is legal as a variable, function, and field name
+in user code again.
 
 **Phase A10.1 — `Field` and `FieldValue` types** (`default/01_code.loft`):
 Define the two public types that form the loop variable contract.  No compiler changes in
@@ -858,13 +874,13 @@ compiler will skip those field types silently in Phase A10.3.
 *Tests:* `Field` and `FieldValue` are usable in normal loft code; a hand-constructed
 `Field{name: "x", value: FieldValue::Float{v: 1.0}}` round-trips through a match arm.
 
-**Phase A10.2 — `fields()` parse-time special form** (`src/parser/control.rs`,
+**Phase A10.2 — `ident#fields` detection in `parse_for`** (`src/parser/collections.rs`,
 `src/data.rs`):
-In `parse_call`, detect `fields(expr)` where `expr` has a struct type (resolved on the
-second pass via `typedef::actual_type`).  Validate: non-struct arguments produce a clear
-compile error (`fields() requires a struct value, got <type>`).  Return a new IR node
-`Value::FieldsOf(struct_def_nr, Box<source_expr>)` with type `Type::FieldsOf(struct_def_nr)`.
-On the first pass (types not yet resolved), return a placeholder and defer validation.
+In `parse_for`, after reading the source identifier, check `lexer.has_token("#")` followed
+by `lexer.has_keyword("fields")`.  If matched, resolve the identifier's type; validate it
+is a struct (non-struct → clear compile error: `#fields requires a struct variable, got
+<type>`).  Return a new IR node `Value::FieldsOf(struct_def_nr, Box<source_expr>)` with
+type `Type::FieldsOf(struct_def_nr)`.
 
 ```
 // data.rs — add to Value enum
@@ -874,8 +890,8 @@ FieldsOf(u32, Box<Value>),   // (struct def_nr, source expression)
 FieldsOf(u32),               // struct def_nr; erased after loop unrolling
 ```
 
-*Tests:* `fields(my_point)` on a known struct type-checks without error; `fields(42)` and
-`fields(my_vector)` each produce one diagnostic naming the offending type.
+*Tests:* `for f in point#fields` on a known struct type-checks without error; `for f in
+n#fields` where `n: integer` produces one diagnostic naming the offending type.
 
 **Phase A10.3 — Loop unrolling** (`src/parser/collections.rs`):
 In `parse_for` (or the `parse_in_range` helper that determines iterator type), detect
@@ -905,7 +921,7 @@ Algorithm:
    c. Emit `v_block([v_set(f_var, field_constructor), body_copy])`.
 4. Wrap all N blocks in a single `v_block`.  The result replaces the normal loop IR.
 
-`break` and `continue` inside a `for f in fields(s)` body are a compile error in this
+`break` and `continue` inside a `for f in s#fields` body are a compile error in this
 version (emit: `break/continue not supported in field loops`).
 
 *Tests:*
@@ -920,39 +936,40 @@ version (emit: `break/continue not supported in field loops`).
 - Struct with a reference field and a vector field: those fields are skipped; only the
   primitive fields are visited.
 - `break` inside the body: compile error with message naming the field loop restriction.
-- `fields(42)`: single diagnostic, no crash.
+- Non-struct `n#fields` where `n: integer`: single diagnostic, no crash.
 
-**Phase A10.4 — Error messages and documentation** (`src/parser/control.rs`,
-`doc/claude/LOFT.md`, `doc/claude/STDLIB.md`):
+**Phase A10.4 — Error messages and documentation** (`doc/claude/LOFT.md`,
+`doc/claude/STDLIB.md`):
 Polish pass: verify error messages are clear and point to the right source location.
-Add `fields()` to LOFT.md § Control flow (alongside `for`) and to STDLIB.md § Structs.
-Document the skipped-field limitation and note the future `A10+` path for non-primitive
-fields.
-*Tests:* `fields(ref_val)` (reference type, not the struct it points to) gives a clear
-error distinguishing "you have a reference; dereference it first with `.field` access or
-pass a struct value" from the generic type-mismatch message.
+Add `s#fields` to LOFT.md § Control flow (alongside `for`) and to STDLIB.md § Structs.
+Document the skipped-field limitation, the identifier-only constraint, and the future
+`A10+` path for non-primitive fields.
+*Tests:* `ref_val#fields` (reference type, not the struct it points to) gives a clear
+error distinguishing "you have a reference; use a struct variable, not a reference" from
+the generic type-mismatch message.
 
 **Files changed:**
 
 | File | Change |
 |---|---|
+| `src/lexer.rs` | Remove `"fields"` from `KEYWORDS` (A10.0) |
 | `default/01_code.loft` | Add `FieldValue` (struct-enum, 8 variants) and `Field` (struct) |
 | `src/data.rs` | Add `Value::FieldsOf(u32, Box<Value>)` and `Type::FieldsOf(u32)` |
-| `src/parser/control.rs` | Special-case `fields(expr)` in `parse_call`; type-check on second pass |
-| `src/parser/collections.rs` | Detect `Type::FieldsOf` in `parse_for`; build unrolled block IR |
+| `src/parser/collections.rs` | Detect `ident#fields` in `parse_for`; build unrolled block IR |
 | `src/typedef.rs` | Erase `Type::FieldsOf` after unrolling (it should not appear in bytecode) |
 | `tests/docs/21-field-iter.loft` | New — test coverage |
 | `tests/wrap.rs` | Add `field_iteration()` test |
-| `doc/claude/LOFT.md` | Document `for f in fields(s)` in the For-loop section |
-| `doc/claude/STDLIB.md` | Add `fields()` to the Structs section |
+| `doc/claude/LOFT.md` | Document `for f in s#fields` in the For-loop section |
+| `doc/claude/STDLIB.md` | Add `s#fields` to the Structs section |
 
 **Limitations (initial version):**
 - Only primitive-typed fields are visited; reference, collection, and nested-struct fields
   are silently skipped.
 - `break` and `continue` are not supported inside the loop body.
-- `fields(s)` is only valid as the source expression of a `for` loop, not as a standalone
-  expression producing a `vector<Field>`.  (A follow-on can implement that using an
-  actual runtime vector construction via the same boxing logic.)
+- The source must be a plain identifier, not an arbitrary expression.  Use a temporary:
+  `let cfg = get_config(); for f in cfg#fields { ... }`.
+- `s#fields` is only valid as the source expression of a `for` loop, not as a standalone
+  expression producing a `vector<Field>`.
 - `virtual` fields are included (they are read-only computed values, still primitive).
 
 **Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)

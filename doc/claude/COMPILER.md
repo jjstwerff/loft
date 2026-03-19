@@ -93,15 +93,18 @@ Defined as static slices at the top of the file:
   `:`, `::`, `.`, `..`, `,`, `{`, `}`, `(`, `)`, `[`, `]`, `;`, `!`, `!=`, `+`, `+=`, `-`, `-=`, `*`, `*=`, `/`, `/=`, `%`, `%=`, `=`, `==`, `<`, `<=`, `>`, `>=`, `&`, `&&`, `|`, `||`, `->`, `=>`, `^`, `<<`, `>>`, `$`, `//`, `#`
 
 - **KEYWORDS** — reserved words that are emitted as `Token`, not `Identifier`:
-  `as`, `if`, `in`, `else`, `for`, `continue`, `break`, `return`, `true`, `false`, `null`, `struct`, `fn`, `type`, `enum`, `pub`, `and`, `or`, `use`, `match`, `sizeof`, `debug_assert`, `assert`, `panic`, `fields`
+  `as`, `if`, `in`, `else`, `for`, `continue`, `break`, `return`, `true`, `false`, `null`, `struct`, `fn`, `type`, `enum`, `pub`, `and`, `or`, `use`, `match`, `sizeof`, `debug_assert`, `assert`, `panic`
+
+  Note: `fields` was temporarily in KEYWORDS (L3) but is removed in A10.0.  A10 uses
+  `s#fields` postfix syntax, so no keyword reservation is needed.
 
   **Intrinsic keyword handling:**
   - `sizeof` — handled in `parse_single` via `has_token("sizeof")` → `parse_size`.
   - `assert` / `panic` — handled in `parse_single` via `has_token` → `parse_intrinsic_call`, which parses arguments and delegates to `parse_call_diagnostic` for file/line injection. These names are also defined as `pub fn` in `default/01_code.loft`; `parse_fn_name()` in `definitions.rs` allows keyword tokens as function names when `self.default` is true so that the default library can register their signatures.
   - `debug_assert` — reserved for A2.3; currently produces a parse error if used in user code.
-  - `fields` — reserved for A10 (`for f in fields(s)`); currently produces a parse error if used as a user identifier.
+  - `s#fields` — A10 field iteration; `fields` is recognized contextually after `#` in `parse_for`, not as a pre-reserved keyword.
 
-  Names recognized by name in `parse_call` but intentionally left as identifiers (lower collision risk): `log_info`, `log_warn`, `log_error`, `log_fatal`, `parallel_for`.
+  Names recognized by name in `parse_call` but intentionally left as identifiers (lower collision risk): `log_info`, `log_warn`, `log_error`, `log_fatal`, `parallel_for`, `fields`.
 
 The lexer tries two-character tokens first (e.g. `!=` before `!`). Keywords are detected after the identifier is collected.
 

@@ -217,37 +217,38 @@ precedence over any user definition — so the user's function is never called t
 normal call path and becomes unreachable dead code.  `match` was similarly not in
 KEYWORDS when it shipped in 0.8.0 (the documented list in COMPILER.md was never updated).
 
-**Forward-compatibility risk:** Two upcoming 0.9.0 features introduce new intrinsic names:
-- `fields` (A10 — field iteration): a common English word; user code written today could
-  easily define `fn fields(s: Config) -> vector<text>` and rely on it.  When A10 lands, that
-  call site silently stops dispatching to the user's function.
+**Forward-compatibility risk:** One upcoming feature introduces a new intrinsic name:
 - `debug_assert` (A2.3 — release mode): behaves identically to `assert` at the call site;
   must be claimed before any user code adopts the name.
 
-**Severity:** Medium — no crash; but the intrinsic always silently wins, so the user's
-function becomes dead code with no diagnostic.  The forward-compatibility risk for `fields`
-and `debug_assert` is the primary concern.
+`fields` (A10 — field iteration) was initially a concern here but was **resolved by design**:
+A10 uses `s#fields` postfix syntax instead of `fields(s)`, so `fields` does not need to be
+a keyword and remains a legal identifier, function name, and field name.  `fields` was
+temporarily added to KEYWORDS during L3 and will be removed as part of A10.0.
 
-**Workaround:** Do not name functions or variables `sizeof`, `assert`, `panic`, `fields`,
-or `debug_assert`.
+**Severity:** Medium — no crash; but the intrinsic always silently wins, so the user's
+function becomes dead code with no diagnostic.  The forward-compatibility risk for
+`debug_assert` is the remaining concern.
+
+**Workaround:** Do not name functions or variables `sizeof`, `assert`, `panic`, or
+`debug_assert`.
 
 **Fix path:**
-1. Add `match`, `sizeof`, `assert`, `panic`, `fields`, `debug_assert` to the `KEYWORDS`
-   array in `src/lexer.rs`.  These six names have parse-time semantics (file+line injection,
-   compile-time type resolution, loop unrolling, or assert elision) that cannot be expressed
-   by a regular function definition.
+1. Add `match`, `sizeof`, `assert`, `panic`, `debug_assert` to the `KEYWORDS`
+   array in `src/lexer.rs`.  These five names have parse-time semantics (file+line injection,
+   compile-time type resolution, or assert elision) that cannot be expressed by a regular
+   function definition.
 2. Update the KEYWORDS list in `doc/claude/COMPILER.md` to reflect the full set.
 3. Add a parse-error test: `fn sizeof(x: integer) -> integer { x }` must produce a single
    diagnostic naming `sizeof` as a reserved keyword.
 
 Names intentionally left as identifiers (not promoted to keywords): `log_info/warn/error/fatal`
 (prefixed, low collision risk), `parallel_for` (highly specific), `rev` (likely to become a
-genuine stdlib function for vector reversal).
+genuine stdlib function for vector reversal), `fields` (A10 uses `s#fields` postfix syntax).
 
 **Files:** `src/lexer.rs`, `doc/claude/COMPILER.md`
 **Effort:** Small
-**Target:** Before 0.9.0 — `fields` and `debug_assert` must be claimed before those
-features land; the rest closes a pre-existing gap.
+**Target:** Before 0.9.0 — `debug_assert` must be claimed before A2.3 lands.
 
 ---
 

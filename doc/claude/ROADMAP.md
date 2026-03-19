@@ -37,9 +37,10 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
 | L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
-| A10   | **Field iteration — `for f in fields(s)`** *(4 ph)*          | Medium    |                 | Design eval 2026-03-18      |
-| A10.1 | ↳ `Field` + `FieldValue` types in `default/01_code.loft`    | Small     |                 | 01_code.loft                |
-| A10.2 | ↳ `fields()` special form → `Value::FieldsOf` + `Type::FieldsOf` | Small  | A10.1           | control.rs, data.rs         |
+| A10   | **Field iteration — `for f in s#fields`** *(5 ph)*           | Medium    |                 | Design eval 2026-03-18      |
+| A10.0 | ↳ Remove `fields` from `KEYWORDS` (revert L3 code change)   | Small     |                 | lexer.rs                    |
+| A10.1 | ↳ `Field` + `FieldValue` types in `default/01_code.loft`    | Small     | A10.0           | 01_code.loft                |
+| A10.2 | ↳ `ident#fields` in `parse_for` → `Value::FieldsOf`         | Small     | A10.1           | collections.rs, data.rs     |
 | A10.3 | ↳ Loop unrolling in `parse_for` for `Type::FieldsOf`         | Medium    | A10.2           | collections.rs, typedef.rs  |
 | A10.4 | ↳ Error messages, docs, test coverage                        | Small     | A10.3           | LOFT.md, STDLIB.md, tests/  |
 
