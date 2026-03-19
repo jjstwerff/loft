@@ -563,3 +563,44 @@ fn reverse_single_element() {
 fn reverse_empty() {
     expr!("v = [1]; clear(v); reverse(v); \"{v}\"").result(Value::str("[]"));
 }
+
+// --- N6.3: reverse and range-bounded sorted/index iteration in native codegen ---
+
+/// N6.3a: reverse sorted iteration emits the reverse bit (64) in OpIterate; native
+/// codegen must compile and produce the same element order as the interpreter.
+#[test]
+#[ignore = "N6.3a: native reverse sorted iteration not yet confirmed"]
+fn n6_sorted_reverse_native() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+struct Db { s: sorted<Elm[key]> }
+fn test() {
+    db = Db { s: [Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}] };
+    acc = 0;
+    for e in rev(db.s) { acc = acc * 10 + e.key }
+    assert(acc == 321, \"reverse got {acc}\")
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// N6.3b: range-bounded iteration on an index collection (`for x in idx[lo..hi]`)
+/// emits non-zero from/till counts in OpIterate; native codegen compiles correctly.
+#[test]
+#[ignore = "N6.3b: range-bounded index iteration not yet implemented"]
+fn n6_index_range_iteration() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+struct Db { idx: index<Elm[key]> }
+fn test() {
+    db = Db { idx: [
+        Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30},
+        Elm{key:4,val:40}, Elm{key:5,val:50}
+    ] };
+    acc = 0;
+    for e in db.idx[2..=4] { acc = acc * 10 + e.key }
+    assert(acc == 234, \"range got {acc}\")
+}"
+    )
+    .result(loft::data::Value::Null);
+}
