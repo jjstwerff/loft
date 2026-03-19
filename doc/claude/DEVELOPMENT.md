@@ -16,7 +16,7 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
   - [Step 5 — Documentation](#step-5--documentation)
 - [Splitting High-Effort Items](#splitting-high-effort-items)
 - [Bytecode Economy](#bytecode-economy)
-- [CI Validation](#ci-validation)
+- [CI Validation](#ci-validation) — local gate (before every commit) + remote CI (after push)
 - [Commit Message Style](#commit-message-style)
 
 ---
@@ -130,16 +130,16 @@ necessary, or left for a separate cleanup task if they are pre-existing.
 
 ## Commit Rules
 
-A branch may contain **any number of commits** as long as every commit satisfies:
+A branch may contain **any number of commits** as long as every commit satisfies the
+local CI gate — see [CI Validation](#ci-validation) for the exact commands.  In short:
 
 ```bash
-cargo test                       # all tests pass
-cargo clippy -- -D warnings      # no warnings
-cargo fmt -- --check             # no formatting diff
+cargo test && cargo clippy --tests && cargo fmt -- --check
 ```
 
-Run all three before every `git commit`.  A commit that breaks any of these must
-be fixed or amended before pushing.
+Run all three **before every `git commit`** (including amends).  A commit that breaks
+any of these must be fixed before the session ends.  Never rely on the remote CI to
+catch failures that could have been caught locally.
 
 ### Commit structure
 
@@ -472,7 +472,37 @@ trigger release workflows, or draft GitHub Releases programmatically.
 
 ## CI Validation
 
-Push the branch and open a pull request against `main`:
+CI validation has two distinct phases: a **mandatory local gate** that must pass before
+every commit, and the **remote CI** that GitHub runs after a push.  Most failures happen
+because the local gate is skipped.
+
+### Local CI gate (mandatory before every commit)
+
+Run all three checks and confirm they are clean **before** `git commit`.  Never commit
+when any check fails — fix first, then commit.
+
+```bash
+cargo test                        # all tests pass
+cargo clippy --tests              # zero warnings (includes test code)
+cargo fmt -- --check              # no formatting diff; run `cargo fmt` to fix
+```
+
+These are the same checks the remote CI runs.  Running them locally catches errors that
+would otherwise only surface after a push, which cannot be taken back.
+
+**When to run:**
+- Before every `git commit` (including amends)
+- Before reporting a branch as done
+- After any stash pop or cherry-pick that brings in new code
+
+If `cargo clippy --tests` reports warnings that were already present on `main` and in
+code you did not write, suppress them with `#[allow(...)]` on the specific function —
+see [Validation Against CODE.md](#validation-against-codemd) for the exception policy.
+
+### Remote CI / Pull Request
+
+Once the local gate is clean and the user asks to push, open a pull request against `main`.
+Do **not** push automatically — wait for an explicit instruction:
 
 ```bash
 git push -u origin p1-1-p1-2-p1-3-lambda-expressions
