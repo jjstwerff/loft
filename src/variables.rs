@@ -1425,7 +1425,7 @@ mod tests {
     /// Two sequential variables: assign_slots should place the second at the same slot
     /// as the first because their intervals don't overlap.
     #[test]
-    #[ignore = "A6.1: assign_slots not yet implemented"]
+
     fn assign_slots_sequential_reuse() {
         let mut f = Function::new("f", "test");
         let v1 = f.add_unique("v1", &INT, 0);
@@ -1444,7 +1444,7 @@ mod tests {
 
     /// Two concurrent variables must get distinct slots.
     #[test]
-    #[ignore = "A6.1: assign_slots not yet implemented"]
+
     fn assign_slots_concurrent_get_separate_slots() {
         let mut f = Function::new("f", "test");
         let v1 = f.add_unique("v1", &INT, 0);
@@ -1464,7 +1464,7 @@ mod tests {
     /// A DbRef variable is 12 bytes; the slot after it must start at offset 12,
     /// not at offset 4 (the size of an integer).
     #[test]
-    #[ignore = "A6.1: assign_slots not yet implemented"]
+
     fn assign_slots_respects_variable_size() {
         let ref_tp = Type::Reference(0, vec![]);
         let mut f = Function::new("f", "test");
@@ -1485,7 +1485,7 @@ mod tests {
 
     /// Variables that were never defined (first_def == u32::MAX) must be skipped.
     #[test]
-    #[ignore = "A6.1: assign_slots not yet implemented"]
+
     fn assign_slots_skips_never_defined() {
         let mut f = Function::new("f", "test");
         let v1 = f.add_unique("v1", &INT, 0);
