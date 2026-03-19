@@ -47,13 +47,27 @@ fn loop_variables() {
     expr!("\"{for x in 0..10 if x != 0 && x % 3 == 0 {if x#first { x } else {x * 2}}}\"")
         .result(Value::str("[3,12,18]"));
 }
-/*
+/// A9: assigning a slice to a vector variable copies the slice elements.
 #[test]
-fn store_iterator() {
-    expr!("v=[1, 2, 3]; v += v[1..2]; v += [for x in v {x*2}]; \"{v}\"")
-        .result(Value::Text("[1, 2, 3, 2, 3, 2, 4, 6, 4, 6]".to_string()));
+#[ignore = "A9: iterator-to-vector assignment not yet implemented"]
+fn slice_vec_assign() {
+    expr!("v=[1,2,4,8]; s=v[1..3]; \"{s}\"").result(Value::str("[2,4]"));
 }
-*/
+
+/// A9: appending a slice to a vector copies the elements; the original is unchanged.
+#[test]
+#[ignore = "A9: iterator-to-vector assignment not yet implemented"]
+fn slice_vec_append() {
+    expr!("v=[1,2,3]; v+=v[1..3]; \"{v}\"").result(Value::str("[1,2,3,2,3]"));
+}
+
+/// A9: mutating the assigned slice does not affect the original vector.
+#[test]
+#[ignore = "A9: iterator-to-vector assignment not yet implemented"]
+fn slice_no_mutation_parent() {
+    expr!("v=[10,20,30]; s=v[0..2]; s+=[-1]; \"{v} {s}\"")
+        .result(Value::str("[10,20,30] [10,20,-1]"));
+}
 #[test]
 fn format_object() {
     code!("struct Elm {a:integer, b:integer}")
