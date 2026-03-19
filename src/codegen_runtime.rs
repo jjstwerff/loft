@@ -222,7 +222,7 @@ pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i32 {
 /// High 32 bits = finish; low 32 bits = cur.
 /// `finish == u32::MAX` signals that iteration is complete.
 fn pack_iter(cur: u32, finish: u32) -> i64 {
-    (((finish as u64) << 32) | (cur as u64)) as i64
+    ((u64::from(finish) << 32) | u64::from(cur)).cast_signed()
 }
 
 /// Build a minimal DbRef pointing at record `rec` with field offset `pos`.
@@ -247,6 +247,7 @@ fn iter_ref(data: &DbRef, rec: u32, pos: u16) -> DbRef {
 ///
 /// The returned `i64` is consumed by [`OpStep`].
 /// Bytecode equivalent: `State::iterate` in `src/state/io.rs`.
+#[must_use]
 pub fn OpIterate(
     stores: &Stores,
     data: DbRef,
@@ -328,11 +329,11 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
     let result = match on & 63 {
         2 => {
             // sorted vector: arg = element size
-            let arg_i = arg as i32;
             let mut pos = if cur == u32::MAX {
                 i32::MAX
             } else {
-                cur as i32
+                #[allow(clippy::cast_possible_wrap)]
+                { cur as i32 }
             };
             if reverse {
                 vector::vector_step_rev(&data, &mut pos, all);
@@ -349,7 +350,7 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
             let byte_pos = if pos == i32::MAX {
                 i32::MAX
             } else {
-                8 + pos * arg_i
+                8 + pos * arg
             };
             if pos == i32::MAX {
                 finish = u32::MAX;
