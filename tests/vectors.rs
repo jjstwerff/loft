@@ -49,21 +49,18 @@ fn loop_variables() {
 }
 /// A9: assigning a slice to a vector variable copies the slice elements.
 #[test]
-#[ignore = "A9: iterator-to-vector assignment not yet implemented"]
 fn slice_vec_assign() {
     expr!("v=[1,2,4,8]; s=v[1..3]; \"{s}\"").result(Value::str("[2,4]"));
 }
 
 /// A9: appending a slice to a vector copies the elements; the original is unchanged.
 #[test]
-#[ignore = "A9: iterator-to-vector assignment not yet implemented"]
 fn slice_vec_append() {
     expr!("v=[1,2,3]; v+=v[1..3]; \"{v}\"").result(Value::str("[1,2,3,2,3]"));
 }
 
 /// A9: mutating the assigned slice does not affect the original vector.
 #[test]
-#[ignore = "A9: iterator-to-vector assignment not yet implemented"]
 fn slice_no_mutation_parent() {
     expr!("v=[10,20,30]; s=v[0..2]; s+=[-1]; \"{v} {s}\"")
         .result(Value::str("[10,20,30] [10,20,-1]"));
