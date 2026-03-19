@@ -69,10 +69,10 @@ in parallel.
   features for a lean default binary; remove dead `rand_core`/`rand_pcg` dependencies.
 
 **Native code generation (Tier N):**
-- Fix the ~1500 compile errors in `src/generation.rs` incrementally (N2–N9) so that
-  `loft --native` produces correct compiled Rust output.  Each N step is small and
-  independent; they can run in parallel with other 0.8.2 work.  N1 (`--native` CLI flag)
-  lands last, after all N2–N9 fixes pass.
+- N2–N9 (runtime fixes, codegen fixes, fill.rs auto-generation) completed in 0.8.2
+  (merged PR #36, 2026-03-18).  Remaining: **N6.3** (reverse iteration + range
+  sub-expressions), **N9** (fill.rs auto-generation N20b–N20d), and **N1** (`--native`
+  CLI flag) which lands last.
 
 ---
 

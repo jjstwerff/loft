@@ -2,13 +2,15 @@
 
 Step-by-step process for taking a PLANNING.md item from backlog to merged.
 
+**Session start:** Read [QUICK_START.md](QUICK_START.md) before beginning any implementation work.
+
 ---
 
 ## Contents
 - [Branch Naming](#branch-naming)
 - [Development Phase — Single WIP Commit](#development-phase--single-wip-commit)
 - [Validation Against CODE.md](#validation-against-codemd)
-- [Rebase into a Clean Commit History](#rebase-into-a-clean-commit-history)
+- [Structured Commit Sequence](#structured-commit-sequence)
   - [Step 1 — Tests with `#[ignore]`](#step-1--tests-with-ignore)
   - [Step 2 — Code Changes](#step-2--code-changes)
   - [Step 3 — Enable Tests](#step-3--enable-tests)
@@ -77,48 +79,37 @@ Never create a feature branch from another feature branch.
 
 ---
 
-## Development Phase — Single WIP Commit
+## Development Phase
 
-Work in a single "work-in-progress" commit until all tests pass.  Combine code
-changes and their tests in one place so they can be reviewed and debugged together.
+For **trivial one-file fixes** (e.g. a single clippy suppression, a doc typo),
+work directly without a structured commit sequence — just run the local CI gate
+before committing.
 
-```bash
-# Stage all changed files (code + tests together)
-git add -p          # or: git add <specific files>
-git commit -m "WIP: P1.1 parser — lambda primary expression"
-```
+For **all planned items** (anything in PLANNING.md with an ID), follow the
+[Structured Commit Sequence](#structured-commit-sequence) below.  Do not collapse
+a planned item into a single amending WIP commit; bisectability and item-traceability
+require separate commits for tests, implementation, and docs.
 
-As work progresses, amend the WIP commit rather than stacking new ones:
-
-```bash
-git add <changed files>
-git commit --amend --no-edit
-```
-
-Verify locally at any point:
+Verify locally at any point using the full CI gate:
 
 ```bash
-cargo build --all-targets        # must succeed
-cargo test                       # all tests must pass (ignoring any that were
-                                 # already ignored on main)
-cargo clippy -- -D warnings      # must be clean — same flags CI uses; the
-                                 # Makefile's clippy target uses -W (warn only)
-                                 # and will not catch errors that fail CI
-cargo fmt -- --check             # must produce no diff; run `cargo fmt` to fix
+cargo test                              # all tests pass
+cargo clippy --tests -- -D warnings     # zero warnings, including test code
+cargo fmt -- --check                    # no formatting diff; run `cargo fmt` to fix
 ```
 
 ---
 
 ## Validation Against CODE.md
 
-Before rebasing, check new code against every rule in [CODE.md](CODE.md):
+Before committing, check new code against every rule in [CODE.md](CODE.md):
 
 | Check | Command | Exception |
 |---|---|---|
-| No clippy warnings | `cargo clippy -- -D warnings` | Skip pre-existing `too_many_lines` and `cognitive_complexity` violations in functions you did not write — fixing them would disrupt unrelated code and obscure the feature diff |
+| No clippy warnings | `cargo clippy --tests -- -D warnings` | Skip pre-existing `too_many_lines` and `cognitive_complexity` violations in functions you did not write — fixing them would disrupt unrelated code and obscure the feature diff |
 | Formatted | `cargo fmt -- --check` | None |
 | Naming conventions | Manual review | `n_<name>` for global natives; `t_<LEN><Type>_<method>` for methods |
-| Function length | `cargo clippy` | If **new** code you wrote triggers `too_many_lines`, move the refactor to Step 4 of the rebase rather than mixing it with the functional change |
+| Function length | `cargo clippy` | If **new** code you wrote triggers `too_many_lines`, move the refactor to Step 4 of the commit sequence rather than mixing it with the functional change |
 | Null sentinels | Manual review | Any new numeric function returning null must use `i32::MIN` / `i64::MIN` / `f64::NAN`, never `0` |
 
 The line-count and complexity exceptions exist because fixing these in files
@@ -134,7 +125,7 @@ A branch may contain **any number of commits** as long as every commit satisfies
 local CI gate — see [CI Validation](#ci-validation) for the exact commands.  In short:
 
 ```bash
-cargo test && cargo clippy --tests && cargo fmt -- --check
+cargo test && cargo clippy --tests -- -D warnings && cargo fmt -- --check
 ```
 
 Run all three **before every `git commit`** (including amends).  A commit that breaks
@@ -181,7 +172,7 @@ commit message that belongs to it (e.g. `P1.1: …`, `P1.2: …`, `N2: …`).
 user-visible or developer-visible effect, not the implementation.
 Mention function or file names only when they clarify the scope.}
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
 **Scope** is one of:
@@ -238,7 +229,7 @@ Review every file in `doc/claude/` for references to the feature and update as n
 Any item rated **Medium–High or higher** in PLANNING.md must be split into
 sub-steps before work begins.  A sub-step is a change that:
 
-1. **Passes all three CI checks on its own** (`cargo test`, `cargo clippy -- -D warnings`,
+1. **Passes all three CI checks on its own** (`cargo test`, `cargo clippy --tests -- -D warnings`,
    `cargo fmt -- --check`).
 2. **Has at least one test** that was written before the implementation (Step 1 of the
    structured sequence) and enabled immediately after (Step 3).
@@ -366,7 +357,7 @@ def-nr, completing the compile-to-bytecode path for inline lambdas.
 
 When there is only a single area, one commit is fine.
 
-Verify after each commit: `cargo build --all-targets` must succeed.
+Verify after each commit: run the full local CI gate (`cargo test`, `cargo clippy --tests -- -D warnings`, `cargo fmt -- --check`) — all three must pass.
 
 ### Step 3 — Enable Tests
 
@@ -398,7 +389,7 @@ parse_binary_operator exceeded 55 lines after the L3 constant-zero check.
 Extract the new check into its own function per CODE.md § Functions.
 ```
 
-Verify: `cargo test` unchanged; `cargo clippy -- -D warnings` clean.
+Verify: `cargo test` unchanged; `cargo clippy --tests -- -D warnings` clean.
 
 ### Step 5 — Documentation
 
@@ -412,6 +403,7 @@ behaviour and update them as needed.  Common files to check:
 |---|---|
 | `CHANGELOG.md` | Always — add a feature or bug-fix entry under Unreleased |
 | `PLANNING.md` | Always — remove the item section and Quick Reference row |
+| `ROADMAP.md` | Always — remove or update the row(s) for the completed item(s) |
 | `RELEASE.md` | Gate criteria or release checklist changed |
 | `PROBLEMS.md` | A known bug was fixed or a new one was discovered |
 | `STDLIB.md` | A standard-library function was added or changed |
@@ -482,9 +474,9 @@ Run all three checks and confirm they are clean **before** `git commit`.  Never 
 when any check fails — fix first, then commit.
 
 ```bash
-cargo test                        # all tests pass
-cargo clippy --tests              # zero warnings (includes test code)
-cargo fmt -- --check              # no formatting diff; run `cargo fmt` to fix
+cargo test                              # all tests pass
+cargo clippy --tests -- -D warnings     # zero warnings, including test code; warnings are errors
+cargo fmt -- --check                    # no formatting diff; run `cargo fmt` to fix
 ```
 
 These are the same checks the remote CI runs.  Running them locally catches errors that
@@ -495,7 +487,7 @@ would otherwise only surface after a push, which cannot be taken back.
 - Before reporting a branch as done
 - After any stash pop or cherry-pick that brings in new code
 
-If `cargo clippy --tests` reports warnings that were already present on `main` and in
+If `cargo clippy --tests -- -D warnings` reports errors for violations that were already present on `main` and in
 code you did not write, suppress them with `#[allow(...)]` on the specific function —
 see [Validation Against CODE.md](#validation-against-codemd) for the exception policy.
 
@@ -515,17 +507,17 @@ The CI pipeline (`.github/workflows/ci.yml`) runs three jobs in parallel:
 | Job | Command | Must pass |
 |---|---|---|
 | Test (ubuntu, macOS, windows) | `cargo test` | All platforms |
-| Clippy | `cargo clippy -- -D warnings` | Zero warnings |
+| Clippy | `cargo clippy --tests -- -D warnings` | Zero warnings |
 | Format | `cargo fmt -- --check` | No diff |
 
 Do not merge until all three jobs are green on all platforms.  If a job fails:
 
 - **Test failure on one platform only** — usually a path-separator or timing
   issue; reproduce with `cargo test` locally in a container or VM.
-- **Clippy failure** — a lint that is a warning locally becomes an error under
-  `-D warnings`.  The Makefile's `make test` uses `-W` (warn only) so it will
-  not catch these.  Run `cargo clippy -- -D warnings` locally, fix all errors,
-  and push again.
+- **Clippy failure** — a lint that passes locally may become an error under
+  `-D warnings` if it was suppressed or not triggered.  The Makefile's `make test`
+  uses `-W` (warn only) and will not catch these.  Run
+  `cargo clippy --tests -- -D warnings` locally, fix all errors, and push again.
 - **Format failure** — run `cargo fmt` locally, verify with `cargo fmt -- --check`,
   amend the relevant commit, and push again.
 
@@ -541,8 +533,13 @@ work:
 ```bash
 # Rename the local branch
 git branch -m old-name new-name
+```
 
-# If already pushed under the old name, delete the old remote and push the new one
+If the branch was already pushed under the old name, the remote must be updated —
+but only when the user explicitly instructs a push:
+
+```bash
+# Only on explicit user instruction:
 git push origin --delete old-name
 git push -u origin new-name
 ```

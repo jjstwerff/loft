@@ -43,29 +43,25 @@ plan must leave it fully functional.**  Concretely:
 
 ### Verification checklist (run after every N-step)
 ```bash
-cargo test                       # all interpreter tests pass
-cargo clippy -- -D warnings      # no new warnings
-cargo fmt -- --check             # formatted
+cargo test                              # all interpreter tests pass
+cargo clippy --tests -- -D warnings     # no new warnings, including test code
+cargo fmt -- --check                    # formatted
 ```
 
 ---
 
 ## Current State
 
-`src/generation.rs` already translates the loft IR tree into Rust source files. The test
-framework (`tests/testing.rs`) writes 87 files to `tests/generated/` on every test run.
-**None of these files currently compile** — there are ~1500 errors across 6 root causes.
+**Updated 2026-03-18 — N2–N9 planning items completed (PR #36).**
 
-### Error Breakdown
+`src/generation.rs` translates the loft IR tree into Rust source files.  The original 6
+root-cause error categories (totalling ~1500 errors) are resolved by the completed N-steps.
+The `codegen_runtime.rs` module is in place; templates are corrected; stdlib inclusion works.
 
-| # | Root Cause | Errors | Affected Files |
-|---|-----------|--------|----------------|
-| 1 | `external::op_*` in `#rust` templates — module doesn't exist in generated code | ~490 | 41 |
-| 2 | `u32::from(i32)` — const params emitted as `i32` but templates wrap in `u32::from()` | ~476 | 50+ |
-| 3 | `n_assert` and stdlib functions not in scope — test files only get user definitions | ~92 | 40+ |
-| 4 | `s.database.*` leaked from bytecode templates — no `s` variable in generated code | ~53 | 10 |
-| 5 | Database ops (`OpNewRecord`, `OpDatabase`, `OpFreeRef`, etc.) have no `#rust` body | ~260 | 41 |
-| 6 | `Value::Iter` / `Value::Keys` not handled in `output_code_inner()` | ~11 | 5 |
+**Remaining work (PLANNING.md items):**
+- **N6.3** — Reverse iteration and range-bounded sub-expressions in `fill_iter` / `generation.rs`
+- **N9** — `fill.rs` auto-generation: N20b (multi-line format options), N20c (CI diff check), N20d (`#state_call` annotation)
+- **N1** — `--native` CLI flag (last step; depends on N6.3 and N9)
 
 ### Architecture
 
@@ -785,6 +781,22 @@ After each step:
    done | grep "^error\[" | wc -l
    ```
 3. After N6: CI gate prevents regressions
+
+---
+
+## Historical Context — Error Categories Resolved in 0.8.2
+
+These 6 root causes accounted for ~1500 compile errors in `tests/generated/*.rs`
+before the N2–N9 planning items were completed (PR #36, 2026-03-18).
+
+| # | Root Cause | Errors | Resolved by |
+|---|-----------|--------|-------------|
+| 1 | `external::op_*` in `#rust` templates — module doesn't exist in generated code | ~490 | N8 |
+| 2 | `u32::from(i32)` — const params emitted as `i32` but templates wrap in `u32::from()` | ~476 | N8 |
+| 3 | `n_assert` and stdlib functions not in scope — test files only get user definitions | ~92 | N10 |
+| 4 | `s.database.*` leaked from bytecode templates — no `s` variable in generated code | ~53 | N8 |
+| 5 | Database ops (`OpNewRecord`, `OpDatabase`, `OpFreeRef`, etc.) have no `#rust` body | ~260 | N2/N3 |
+| 6 | `Value::Iter` / `Value::Keys` not handled in `output_code_inner()` | ~11 | N6.1/N6.2 |
 
 ---
 
