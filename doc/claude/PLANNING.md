@@ -342,6 +342,158 @@ Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(fie
 
 ---
 
+### L3  `FileResult` enum — replace filesystem boolean returns
+
+**Sources:** User request 2026-03-19; [PROBLEMS.md](PROBLEMS.md)
+**Severity:** Low — file I/O failures (permission denied, wrong path type) are silently
+collapsed into `false`, making error handling impossible without a second `file()` call
+**Description:** All filesystem-mutating ops currently return `boolean`.  A failed
+`delete()` returns `false` whether the file was absent, the path outside the project, or
+a permission was denied.  Expanding this to an enum lets callers distinguish error causes
+without extra queries.
+
+**Design — `FileResult` enum** (variant index matches the stored byte):
+
+```loft
+pub enum FileResult {
+  Ok,               // 0 — succeeded
+  NotFound,         // 1 — path does not exist (also: path outside project)
+  PermissionDenied, // 2 — OS permission denied
+  IsDirectory,      // 3 — expected a file, got a directory
+  NotDirectory,     // 4 — expected a directory, got a file
+  Other             // 5 — any other OS error (incl. bad arguments, invalid PNG, etc.)
+}
+```
+
+`AlreadyExists` was dropped: it cannot be returned by any current public API function
+(`move` pre-checks with `exists(to)`, the others never create files that could conflict).
+Adding an unreachable variant would mislead callers matching on the result.
+
+**Design — Rust helper** (placed in `src/database/io.rs`, used everywhere):
+
+```rust
+fn io_result<T>(r: std::io::Result<T>) -> u8 {
+    match r {
+        Ok(_) => 0,
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound         => 1,
+            std::io::ErrorKind::PermissionDenied => 2,
+            std::io::ErrorKind::IsADirectory     => 3,
+            std::io::ErrorKind::NotADirectory    => 4,
+            _                                    => 5,
+        },
+    }
+}
+```
+
+**Ops changed** (`default/02_images.loft`):
+
+`OpGetFile`, `OpGetDir`, and `OpGetPngImage` are **excluded from scope** — their return
+value is always discarded by the loft wrappers (`file()`, `files()`, `png()`), so
+changing them adds Rust complexity with no benefit to callers.  They remain `boolean`.
+
+| Op | Old return | New return | `#rust` body change |
+|---|---|---|---|
+| `OpGetFile` | `boolean` | unchanged | — |
+| `OpGetDir` | `boolean` | unchanged | — |
+| `OpGetPngImage` | `boolean` | unchanged | — |
+| `OpDelete` | `boolean` | `FileResult` | `io_result(std::fs::remove_file(@path))` |
+| `OpMoveFile` | `boolean` | `FileResult` | `io_result(std::fs::rename(@from, @to))` |
+| `OpTruncateFile` | `boolean` | `FileResult` | — (no `#rust`) |
+| `OpMkdir` | `boolean` | `FileResult` | `io_result(std::fs::create_dir(@path))` |
+| `OpMkdirAll` | `boolean` | `FileResult` | `io_result(std::fs::create_dir_all(@path))` |
+
+**Public API changed** (`default/02_images.loft`):
+
+| Function | Old | New | Notes |
+|---|---|---|---|
+| `delete(path)` | `-> boolean` | `-> FileResult` | `valid_path` guard → `NotFound` |
+| `move(from, to)` | `-> boolean` | `-> FileResult` | `valid_path` guards → `NotFound` |
+| `mkdir(path)` | `-> boolean` | `-> FileResult` | `valid_path` guard → `NotFound` |
+| `mkdir_all(path)` | `-> boolean` | `-> FileResult` | `valid_path` guard → `NotFound` |
+| `set_file_size(self, n)` | `-> boolean` | `-> FileResult` | bad format/negative size → `Other` |
+| `exists(path)` | `-> boolean` | unchanged | Boolean question; unaffected |
+| `file(path)` | `-> File` | unchanged | `format` field already encodes state |
+| `FileResult.ok()` | — | `-> boolean` | New — `self == FileResult.Ok`; preserves boolean idiom |
+
+**`valid_path` boundary:** A path that fails `valid_path()` is inaccessible from within
+the project namespace — from the caller's perspective, it does not exist.  The guard
+returns `FileResult.NotFound`.  This avoids the false implication that a `chmod` or
+ownership change would help.
+
+**`set_file_size` note:** Pre-condition violations (negative size, wrong file format) are
+caller errors, not OS errors, but they share the `Other` variant with unusual OS
+conditions.  This is acceptable: `set_file_size` is called on a `File` value the caller
+already has, so the format check is a defensive guard rather than a user-facing branch.
+If distinguishing these ever matters, a dedicated `InvalidInput` variant can be added
+without renumbering.
+
+**`truncate_file` change** (`src/state/io.rs`): `put_stack(bool)` → `put_stack(u8)`;
+open + set-len error mapped via `io_result`.
+
+**Boolean conversion — `ok()` method:**
+`FileResult` exposes `ok() -> boolean` so existing call sites need only append `.ok()`
+rather than rewriting to an enum comparison:
+
+```loft
+pub fn ok(self: FileResult) -> boolean {
+  self == FileResult.Ok
+}
+```
+
+This keeps the migration mechanical and preserves the boolean idiom for callers that only
+care about success vs. failure.  Callers that need the specific error reason use the enum
+value directly.
+
+**Breaking change:** Minimal.  Every existing boolean use of `delete`, `move`, `mkdir`,
+`mkdir_all`, or `set_file_size` appends `.ok()`.  Tests in `11-files.loft` and
+`13-file.loft` are updated as part of L3.3.
+
+**Test migration pattern:**
+```loft
+// Before
+assert(delete(f), "removed");
+assert(!delete(f), "not there");
+// After — success/failure only
+assert(delete(f).ok(), "removed");
+assert(!delete(f).ok(), "not there");
+// After — specific error reason
+assert(delete(f) == FileResult.NotFound, "not there");
+```
+
+**Fix path:**
+
+**Phase 1 — Enum definition** (`default/02_images.loft`, `src/database/io.rs`):
+Add `FileResult` enum immediately after the existing `Format` enum in
+`02_images.loft`. Add `io_result<T>(r: std::io::Result<T>) -> u8` as a private
+function in `src/database/io.rs`. No other changes yet; verify the project compiles.
+
+**Phase 2 — Op signatures and Rust internals:**
+- Change the five in-scope `Op*` return types (`OpDelete`, `OpMoveFile`, `OpTruncateFile`,
+  `OpMkdir`, `OpMkdirAll`) from `boolean` to `FileResult` in `default/02_images.loft`.
+- Update `#rust` bodies for the four annotated ops (OpDelete, OpMoveFile, OpMkdir,
+  OpMkdirAll) to call `io_result(...)`.
+- `src/database/io.rs`: add `io_result` helper; no changes to `fill_file`, `get_file`,
+  `get_dir`, or `get_png` (those ops remain `boolean`).
+- `src/state/io.rs`: change `truncate_file` to `put_stack(u8)` using `io_result`.
+- `src/fill.rs`: update `delete`, `move_file`, `mkdir`, `mkdir_all` to `put_stack(u8)`
+  via `io_result`.  Leave `get_file`, `get_dir`, `get_png_image` unchanged.
+
+**Phase 3 — Public API wrappers and tests:**
+- Add `ok() -> boolean` method to `FileResult` in `default/02_images.loft`.
+- Rewrite `delete`, `move`, `mkdir`, `mkdir_all`, `set_file_size` in
+  `default/02_images.loft` to return `FileResult`, replacing `&&`-chains with
+  explicit `if` guards.
+- Update all assertions in `tests/scripts/11-files.loft` and
+  `tests/docs/13-file.loft`: simple success/failure checks become `.ok()` / `!.ok()`;
+  checks that verify a specific failure reason use `== FileResult.<Variant>`.
+- Run full test suite; verify no regressions.
+
+**Effort:** Small (3 phases; no parser changes; all changes are mechanical)
+**Target:** 0.8.3
+
+---
+
 ## P — Prototype Features
 
 ### P1  Lambda / anonymous function expressions
@@ -1608,8 +1760,25 @@ pub struct HttpResponse {
 pub fn ok(self: HttpResponse) -> boolean {
     self.status >= 200 and self.status < 300
 }
+// Mirror the File read interface so HTTP sources are interchangeable with
+// file sources in any function that processes text.
+pub fn content(self: HttpResponse) -> text {
+    self.body
+}
+pub fn lines(self: HttpResponse) -> vector<text> {
+    self.body.split('\n')  // strips \r so CRLF bodies match LF bodies
+}
 ```
-No `#rust` needed; `ok()` is a plain loft method.
+No `#rust` needed; all three methods are plain loft.  `lines()` uses the same
+CRLF-stripping logic as `File.lines()` — HTTP/1.1 bodies frequently use CRLF.
+
+**Optical similarity with `File`:** the shared method names let processing
+functions accept either source without modification:
+```loft
+fn process(rows: vector<text>) { ... }
+process(file("local/data.txt").lines());
+process(http_get("https://example.com/data").lines());
+```
 
 **Step 2 — HTTP functions declaration** (`default/04_web.loft`):
 ```loft

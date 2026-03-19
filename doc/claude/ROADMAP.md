@@ -38,6 +38,10 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
 | L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
+| L3    | **`FileResult` enum** — mutating fs ops return enum + `.ok()` *(3 ph)* | Small |        | User request 2026-03-19     |
+| L3.1  | ↳ `FileResult` enum + `io_result` Rust helper               | Small     |                 | 02_images.loft, database/io.rs |
+| L3.2  | ↳ Op signatures + all Rust impls (fill.rs, io.rs)           | Small     | L3.1            | fill.rs, state/io.rs, database/io.rs |
+| L3.3  | ↳ `ok()` method + public API wrappers + test migration       | Small     | L3.2            | 02_images.loft, tests/      |
 | A10   | **Field iteration — `for f in s#fields`** *(5 ph)*           | Medium    |                 | Design eval 2026-03-18      |
 | A10.0 | ↳ Remove `fields` from `KEYWORDS` (revert L3 code change)   | Small     |                 | lexer.rs                    |
 | A10.1 | ↳ `Field` + `FieldValue` types in `default/01_code.loft`    | Small     | A10.0           | 01_code.loft                |
