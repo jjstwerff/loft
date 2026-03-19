@@ -37,6 +37,7 @@ struct Iterator {
 
 // This is created for every variable instance, even if those are of the same name.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Variable {
     name: String,
     type_def: Type,
@@ -49,6 +50,10 @@ pub struct Variable {
     argument: bool,
     defined: bool,
     const_param: bool,
+    /// Whether this variable's stack storage has been initialised by codegen.
+    /// Set to `true` when the first-allocation init opcodes are emitted (A6.3).
+    /// Arguments are pre-allocated by the caller, so they start as `true`.
+    pub stack_allocated: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
     pub first_def: u32,
     /// Sequence number of the last `Value::Var` (or implicit `OpFreeText`/`OpFreeRef`) for this variable.
@@ -80,6 +85,11 @@ pub struct Function {
     names: HashMap<String, u16>,
     pub done: bool,
     pub logging: bool,
+    /// Shadow slot assignments saved by `scopes::check` after running `assign_slots`.
+    /// Populated in debug builds only; used by `check_shadow_slots` to verify that
+    /// `assign_slots` produces no conflicts after `byte_code` assigns via `claim()`.
+    #[cfg(debug_assertions)]
+    pub shadow_slots: Vec<u16>,
 }
 
 impl Display for Function {
@@ -109,6 +119,8 @@ impl Function {
             names: HashMap::new(),
             logging: false,
             done: false,
+            #[cfg(debug_assertions)]
+            shadow_slots: Vec::new(),
         }
     }
 
@@ -152,6 +164,8 @@ impl Function {
             names: other.names.clone(),
             logging: other.logging,
             done: other.done,
+            #[cfg(debug_assertions)]
+            shadow_slots: other.shadow_slots.clone(),
         }
     }
 
@@ -557,6 +571,7 @@ impl Function {
             argument: false,
             defined: self.variables[var as usize].defined,
             const_param: self.variables[var as usize].const_param,
+            stack_allocated: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -580,6 +595,7 @@ impl Function {
             argument: false,
             defined: false,
             const_param: false,
+            stack_allocated: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -600,6 +616,7 @@ impl Function {
             argument: false,
             defined: true,
             const_param: false,
+            stack_allocated: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -660,6 +677,7 @@ impl Function {
     pub fn become_argument(&mut self, var_nr: u16) {
         self.variables[var_nr as usize].argument = true;
         self.variables[var_nr as usize].defined = true;
+        self.variables[var_nr as usize].stack_allocated = true;
     }
 
     pub fn is_argument(&self, var_nr: u16) -> bool {
@@ -796,6 +814,43 @@ impl Function {
 
     pub fn var_type(&self, var_nr: u16) -> &Type {
         &self.variables[var_nr as usize].type_def
+    }
+
+    /// Returns `true` when codegen has already emitted the first-allocation init opcodes
+    /// for this variable (e.g. `OpText`, `OpConvRefFromNull`).  Used by A6.3 to replace
+    /// the `stack_pos == u16::MAX` first-assignment guard in `generate_set`.
+    pub fn is_stack_allocated(&self, var_nr: u16) -> bool {
+        self.variables[var_nr as usize].stack_allocated
+    }
+
+    /// Mark `var_nr` as having been allocated on the stack (call once per variable,
+    /// when the first-allocation init opcodes are emitted in `generate_set`).
+    pub fn set_stack_allocated(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].stack_allocated = true;
+    }
+
+    /// Save the current `stack_pos` of every local (non-argument) variable as the
+    /// shadow result of `assign_slots`.  Called from `scopes::check` right after
+    /// `assign_slots` runs so the pre-computed layout can be compared against
+    /// `claim()` after `byte_code` completes.  Debug builds only.
+    #[cfg(debug_assertions)]
+    pub fn save_shadow_slots(&mut self) {
+        self.shadow_slots = self
+            .variables
+            .iter()
+            .map(|v| if v.argument { u16::MAX } else { v.stack_pos })
+            .collect();
+    }
+
+    /// Reset `stack_pos` to `u16::MAX` for every local (non-argument) variable.
+    /// Called after `save_shadow_slots` so that `claim()` during `byte_code` can
+    /// assign slots from scratch (A6.2 shadow mode).
+    pub fn reset_local_slots(&mut self) {
+        for v in &mut self.variables {
+            if !v.argument {
+                v.stack_pos = u16::MAX;
+            }
+        }
     }
 }
 
@@ -1063,6 +1118,67 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
     );
 }
 
+/// Compare the shadow slots saved by `scopes::check` against the slots assigned by
+/// `claim()` during `byte_code`.  Logs any per-variable difference (informational — slot
+/// reuse by `assign_slots` is valid and expected) and validates that the shadow
+/// assignments themselves contain no conflicts.  Debug builds only.
+///
+/// A difference of `assign_slots=N, claim=M` where `N != M` means `assign_slots` reused
+/// an expired slot for a primitive; this is correct behaviour and not a bug.  A conflict
+/// (two variables with overlapping live intervals sharing a slot) would have already been
+/// caught by `validate_slots` on the claim-assigned slots.
+#[cfg(debug_assertions)]
+pub fn check_shadow_slots(function: &Function, def_nr: u32) {
+    if function.shadow_slots.is_empty() {
+        return;
+    }
+    // Build a temporary Function copy with shadow_slots as the active stack positions so
+    // we can run find_conflict on them.
+    let mut shadow_fn = Function::copy(function);
+    for (i, &shadow) in function.shadow_slots.iter().enumerate() {
+        if i < shadow_fn.variables.len() && shadow != u16::MAX {
+            shadow_fn.variables[i].stack_pos = shadow;
+        }
+    }
+    // Validate the shadow layout for conflicts.
+    if let Some((li, le, ri, re)) = find_conflict(&shadow_fn.variables) {
+        let lv = &shadow_fn.variables[li];
+        let rv = &shadow_fn.variables[ri];
+        panic!(
+            "assign_slots conflict in fn '{}' (def {}): '{}' slot [{},{}), live [{},{}]) \
+             and '{}' (slot [{},{}), live [{},{}])",
+            function.name,
+            def_nr,
+            lv.name,
+            lv.stack_pos,
+            le,
+            lv.first_def,
+            lv.last_use,
+            rv.name,
+            rv.stack_pos,
+            re,
+            rv.first_def,
+            rv.last_use,
+        );
+    }
+    // Log any differences between shadow and claim-assigned slots (informational).
+    for (i, &shadow) in function.shadow_slots.iter().enumerate() {
+        if shadow == u16::MAX {
+            continue; // argument or never-defined — not compared
+        }
+        let actual = function.variables[i].stack_pos;
+        if actual == u16::MAX {
+            continue; // variable was never claimed — nothing to compare
+        }
+        if shadow != actual {
+            eprintln!(
+                "assign_slots info fn '{}' var '{}': assign_slots={shadow}, claim={actual}",
+                function.name, function.variables[i].name,
+            );
+        }
+    }
+}
+
 /// Write the variable table for `function` to `f`.
 ///
 /// Columns: index, argument flag, name, short type, scope, stack slot range, live interval.
@@ -1118,10 +1234,21 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
 /// The pipeline is **not** changed: `claim()` remains the active mechanism.
 /// This function exists only to produce an independently-auditable slot layout
 /// (A6.1 of ASSIGNMENT.md).
-pub fn assign_slots(function: &mut Function) {
-    // Collect indices of variables that have a known live interval.
+/// Assign stack slots to all local (non-argument) variables using greedy interval
+/// colouring sorted by `first_def`.  `local_start` is the first free byte offset
+/// after the argument area and the 4-byte return-address slot; it equals
+/// `sum_of_argument_sizes + 4`.
+///
+/// Variables with `argument == true` or `first_def == u32::MAX` are skipped.
+/// Primitive types (`size <= 4 bytes`) may share a slot with an earlier dead variable;
+/// reference and text types (`size > 4 bytes`) always receive a fresh slot.
+pub fn assign_slots(function: &mut Function, local_start: u16) {
+    // Collect indices of local variables that have a known live interval.
     let mut order: Vec<usize> = (0..function.variables.len())
-        .filter(|&i| function.variables[i].first_def != u32::MAX)
+        .filter(|&i| {
+            let v = &function.variables[i];
+            !v.argument && v.first_def != u32::MAX
+        })
         .collect();
     // Sort by first_def to process variables in definition order.
     order.sort_by_key(|&i| function.variables[i].first_def);
@@ -1139,9 +1266,11 @@ pub fn assign_slots(function: &mut Function) {
             function.variables[i].stack_pos = 0;
             continue;
         }
-        // Find the lowest slot offset that doesn't conflict with any already-assigned
-        // variable whose live interval overlaps [first_def, last_use].
-        let mut candidate: u16 = 0;
+        // Find the lowest slot offset (>= local_start) that doesn't conflict with any
+        // already-assigned variable whose live interval overlaps [first_def, last_use].
+        // For large types (ref/text, size > 4) we never reuse a slot; for primitives we do.
+        let can_reuse = var_size <= 4;
+        let mut candidate: u16 = local_start;
         'retry: loop {
             let end = candidate.saturating_add(var_size);
             for &j in &order {
@@ -1161,6 +1290,12 @@ pub fn assign_slots(function: &mut Function) {
                     let jl = function.variables[j].last_use;
                     if first_def <= jl && last_use >= jf {
                         // Conflict — try next available slot after this variable's range.
+                        candidate = j_end;
+                        continue 'retry;
+                    }
+                    // For large types, even expired slots must not be reused (avoids
+                    // complications with init opcodes that write at stack.position).
+                    if !can_reuse {
                         candidate = j_end;
                         continue 'retry;
                     }
@@ -1434,7 +1569,7 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 11;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "non-overlapping variables should share a slot"
@@ -1453,7 +1588,7 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 0;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         assert_ne!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "simultaneously-live variables must not share a slot"
@@ -1474,7 +1609,7 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 0;
         f.variables[v2 as usize].last_use = 5;
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         let s1 = f.variables[v1 as usize].stack_pos;
         let s2 = f.variables[v2 as usize].stack_pos;
         let dbref_size = size_of::<DbRef>() as u16;
@@ -1493,7 +1628,7 @@ mod tests {
         f.variables[v1 as usize].last_use = 10;
         let v2 = f.add_unique("v2", &INT, 0);
         // v2 is never defined — first_def stays u32::MAX
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v2 as usize].stack_pos,
             u16::MAX,

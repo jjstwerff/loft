@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-use crate::data::{Block, Data, DefType, Type, Value, v_set};
-use crate::variables::{Function, compute_intervals};
+use crate::data::{Block, Context, Data, DefType, Type, Value, v_set};
+use crate::variables::{Function, assign_slots, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 struct Scopes {
@@ -66,6 +66,27 @@ pub fn check(data: &mut Data) {
             free_ref_nr,
             &mut seq,
         );
+        // Run assign_slots in shadow mode: pre-compute slots, save them, then reset so
+        // claim() continues to drive codegen as before (A6.2).  The saved layout is
+        // validated by check_shadow_slots after byte_code completes.
+        let local_start: u16 = {
+            let vars = &data.definitions[d_nr as usize].variables;
+            let arg_size: u16 = vars
+                .arguments()
+                .iter()
+                .map(|&a| size(vars.var_type(a), &Context::Argument))
+                .sum();
+            arg_size + 4 // 4 bytes for the return-address slot
+        };
+        assign_slots(&mut data.definitions[d_nr as usize].variables, local_start);
+        #[cfg(debug_assertions)]
+        data.definitions[d_nr as usize]
+            .variables
+            .save_shadow_slots();
+        // Reset local-variable slots so claim() in byte_code can proceed normally (A6.2).
+        data.definitions[d_nr as usize]
+            .variables
+            .reset_local_slots();
     }
 }
 

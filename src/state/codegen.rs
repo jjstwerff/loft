@@ -92,6 +92,8 @@ impl State {
             data,
             def_nr,
         );
+        #[cfg(debug_assertions)]
+        crate::variables::check_shadow_slots(&data.definitions[def_nr as usize].variables, def_nr);
     }
 
     /**
