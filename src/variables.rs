@@ -1705,7 +1705,6 @@ mod tests {
     /// Two sequential Long (8-byte) variables must share a slot after A13.
     /// Before A13 `can_reuse = var_size <= 4` prevented Long/Float from reusing dead slots.
     #[test]
-    #[ignore = "A13: Long/Float slot reuse not yet enabled (can_reuse <= 4)"]
     fn assign_slots_sequential_long_reuse() {
         let mut f = Function::new("f", "test");
         let v1 = f.add_unique("v1", &Type::Long, 0);
@@ -1726,7 +1725,6 @@ mod tests {
     /// Two concurrent Long variables must still get distinct slots — the reuse
     /// guard must not fire when intervals overlap.
     #[test]
-    #[ignore = "A13: needs Long slot-reuse enabled first"]
     fn assign_slots_concurrent_long_separate_slots() {
         let mut f = Function::new("f", "test");
         let v1 = f.add_unique("v1", &Type::Long, 0);
@@ -1750,19 +1748,18 @@ mod tests {
     /// and must NOT mutate their `type_def`.  Before A14 it set the type to
     /// `Type::Reference(0, vec![0])` to suppress the `OpFreeRef` emit — a type-mutation
     /// hack that confused downstream code.
-    ///
-    /// This test uses `var` by name because `work_refs` (which needs a real Lexer) is not
-    /// needed — we simulate the naming convention directly with `add_variable_raw`.
     #[test]
-    #[ignore = "A14: skip_free field not yet added to Variable"]
     fn clean_work_refs_sets_flag_not_type() {
+        use crate::lexer::Lexer;
         let ref_tp = Type::Reference(1, vec![]);
         let mut f = Function::new("f", "test");
-        // Manually register a __ref_1 variable to simulate what work_refs() would create.
-        let v_nr = f.add_unique("__ref_1", &ref_tp, 0);
-        // Simulate clean_work_refs(0): mark the range [0, 1) as skip_free.
-        // After A14 this sets skip_free=true; before A14 it mutates type_def.
-        f.clean_work_refs(0);
+        let mut lexer = Lexer::from_str("", "test");
+        // Allocate a real work-ref variable via work_refs() so the naming matches.
+        let baseline = f.work_ref();
+        let v_nr = f.work_refs(&ref_tp, &mut lexer);
+        assert_eq!(f.work_ref(), baseline + 1, "work_ref counter should have incremented");
+        // Mark the range [baseline, work_ref) as skip_free.
+        f.clean_work_refs(baseline);
         // The variable's type must be unchanged — not mutated to Reference(0, [0]).
         assert!(
             !matches!(f.tp(v_nr), Type::Reference(0, dep) if dep == &[0u16]),
