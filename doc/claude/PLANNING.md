@@ -39,6 +39,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [Milestone Reevaluation](#milestone-reevaluation)
   - [Recommended Implementation Order](#recommended-implementation-order)
 - [L — Language Quality](#l--language-quality)
+  - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
 - [N — Native Codegen](#n--native-codegen)
@@ -480,6 +481,34 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 
 **Effort:** Small (3 phases; no parser changes; all changes are mechanical)
 **Target:** 0.8.3
+
+---
+
+### L4  Fix empty vector literal `[]` as mutable vector argument
+**Sources:** [PROBLEMS.md](PROBLEMS.md) #44
+**Severity:** Medium — passing `[]` directly as a mutable `vector<T>` argument panics in
+debug builds; workaround is to assign to a named variable first
+**Description:** `parse_vector` returns `Value::Insert([Null])` for an empty `[]` literal
+when the parse context has `Type::Unknown(0)` as the target type (which is always the case
+for call-site arguments).  No temporary variable is created and no `vector_db` init opcodes
+are emitted.  The mutable-argument handler in `generate_call` expects a 12-byte `DbRef` on
+the stack but finds 0 bytes.
+
+**Fix path:** In `parse_vector` (`src/parser/expressions.rs`), when `[]` is parsed with an
+unknown element type and `is_var = false`:
+
+1. Create a unique temporary variable with `Type::Unknown(0)` as a placeholder.
+2. Emit the `vector_db` initialisation block — same as the non-empty path does when
+   `block = true`.  The element type will be inferred on the second pass from the
+   call-site context.
+3. Return `Value::Var(vec)` wrapped in `v_block`, matching the non-empty path.
+
+The second pass already resolves the element type correctly for assignment targets
+(`my_vec = []`); the fix extends this to call-site arguments by ensuring a temporary
+variable and init block are always emitted for empty `[]` literals.
+
+**Effort:** Medium (parser change; careful handling of `Type::Unknown` on second pass)
+**Target:** 0.8.2
 
 ---
 
