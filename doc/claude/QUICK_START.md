@@ -204,9 +204,9 @@ default/03_text.loft    — text utilities
 | [TESTING.md](TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
 | [DOC.md](DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
 | [DESIGN.md](DESIGN.md) | Algorithm catalog with complexity analysis and enhancement priorities |
-| [CODE.md](CODE.md) | Code quality rules (naming, functions, doc comments, clippy) |
+| [CODE.md](CODE.md) | Code quality rules (naming, functions, doc comments, clippy, dependency policy) |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
-| [ASSIGNMENT.md](ASSIGNMENT.md) | Stack slot assignment algorithm — status and design decisions |
+| [SLOTS.md](SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
 | [PROBLEMS.md](PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
 | [FORMATTER.md](FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
