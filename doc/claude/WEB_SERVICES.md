@@ -371,10 +371,58 @@ Fields declared without `not null` default to the zero value when the JSON key i
 ## Dependency on Rust crates
 
 HTTP requires a blocking HTTP client.  Recommended: **`ureq`** (no async, pure Rust,
-~100 KB compiled, no OpenSSL dependency).  JSON field extraction can use `serde_json`
-or a minimal hand-written extractor (field extraction by key is ~50 lines of Rust).
+~100 KB compiled, no OpenSSL dependency).  Gate it behind an `http` Cargo feature.
 
-Both should be gated behind an `http` Cargo feature (extends A3's optional features list).
+JSON field extraction does **not** require `serde_json`.  The existing parsing
+primitives in `src/database/structures.rs` (`match_text`, `match_integer`, `match_float`,
+`match_boolean`, `skip_float`) already handle every JSON value type.  A new
+`src/database/json.rs` module (~80 lines, no new dependency) adds three `pub(crate)`
+functions on top of those primitives:
+
+- `json_get_raw<'a>(text: &'a str, key: &str) -> Option<&'a str>` — find a key in
+  a JSON object and return the raw value slice.
+- `json_array_items(text: &str) -> Vec<String>` — return each element of a JSON array
+  as a raw JSON string.
+- `as_text / as_int / as_long / as_float / as_bool` — parse a raw JSON value slice into
+  a Rust primitive.
+
+The H2 native functions in `src/native_http.rs` call these helpers directly.  No
+`serde_json` dependency is added.  See H2 in PLANNING.md for the full implementation
+plan.
+
+### `src/database/json.rs` — design sketch
+
+```rust
+// Skip whitespace.
+fn skip_ws(text: &str, pos: &mut usize) { ... }
+
+// Skip a complete JSON value (object, array, string, number, literal).
+// Returns false if text is malformed.
+fn skip_value(text: &str, pos: &mut usize) -> bool { ... }
+
+// Extract and unescape a quoted JSON string.
+fn extract_string(text: &str, pos: &mut usize) -> Option<String> { ... }
+
+// Find `key` in a top-level JSON object; return the raw value slice.
+pub(crate) fn json_get_raw<'a>(text: &'a str, key: &str) -> Option<&'a str> { ... }
+
+// Return raw JSON text for each element of a top-level JSON array.
+pub(crate) fn json_array_items(text: &str) -> Vec<String> { ... }
+
+// Conversion helpers (return loft null sentinels on failure):
+pub(crate) fn as_text(raw: &str) -> String { ... }  // strips quotes + unescapes
+pub(crate) fn as_int(raw: &str) -> i32 { ... }      // i32::MIN on failure
+pub(crate) fn as_long(raw: &str) -> i64 { ... }     // i64::MIN on failure
+pub(crate) fn as_float(raw: &str) -> f64 { ... }    // f64::NAN on failure
+pub(crate) fn as_bool(raw: &str) -> bool { ... }    // false on failure
+```
+
+`skip_value` handles nesting depth through recursion on `{`/`[` tokens, and handles
+`\"` inside strings.  It mirrors the existing `parsing()` flow in `structures.rs` but
+operates schema-free: no `Stores`, no `DbRef`, no type lookup needed.
+
+The `ureq` dependency is still required for the HTTP client and remains gated behind
+the `http` Cargo feature.
 
 ---
 
