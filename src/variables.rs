@@ -1724,4 +1724,41 @@ mod tests {
             "index variable's first_def must be set"
         );
     }
+
+    // ── A6.3b: Bug C part 2 — write-only variable last_use ───────────────────
+
+    /// A variable that is only ever WRITTEN (never read via `Value::Var`) must still
+    /// have its `last_use` updated so that `assign_slots` does not treat it as dead.
+    /// Without this, the slot is reused by later variables while the write is still
+    /// live, corrupting adjacent stack data at runtime.
+    #[test]
+    fn compute_intervals_write_only_var_gets_last_use() {
+        let mut f = Function::new("f", "test");
+        // acc: written at seq 0, then written again at seq 4 (inside a block simulating a loop
+        // body); never read via Var.  Its last_use must be >= 4 so assign_slots sees it as live.
+        let acc = f.add_unique("acc", &INT, 0);
+        let other = f.add_unique("other", &INT, 0);
+        // Simulate: Set(acc, 0), Set(other, 1), Set(acc, other+1)
+        let block = Value::Block(Box::new(crate::data::Block {
+            name: "",
+            operators: vec![
+                Value::Set(acc, Box::new(Value::Int(0))),
+                Value::Set(other, Box::new(Value::Int(1))),
+                Value::Set(
+                    acc,
+                    Box::new(Value::Call(0, vec![Value::Var(other), Value::Int(1)])),
+                ),
+            ],
+            result: Type::Void,
+            scope: 0,
+        }));
+        let mut seq = 0u32;
+        compute_intervals(&block, &mut f, u32::MAX, u32::MAX, &mut seq);
+        // acc is written twice; last_use must reflect the second write.
+        assert!(
+            f.variables[acc as usize].last_use > f.variables[other as usize].first_def,
+            "write-only acc must outlive other to prevent slot aliasing"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
 }
