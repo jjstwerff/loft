@@ -502,174 +502,6 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 
 ---
 
-### L4  Fix empty vector literal `[]` as mutable vector argument
-**Sources:** [PROBLEMS.md](PROBLEMS.md) #44
-**Severity:** Medium — passing `[]` directly as a mutable `vector<T>` argument panics in
-debug builds; workaround is to assign to a named variable first.
-
-**Root cause:** `parse_vector` (`src/parser/expressions.rs`) has an early-return for `[]`
-(immediate `]`) that branches on `is_var` / `is_field`.  The `else` branch — reached when
-`[]` appears as a call-site expression, not as an existing variable or struct field — emits
-`Value::Insert([val.clone()])` with no temporary variable and no `vector_db` init opcodes.
-`generate_call` then fires a debug assertion: it expects a 12-byte `DbRef` for the mutable
-`vector<T>` parameter but finds 0 bytes on the stack.
-
-**Fix path:**
-
-*Location:* `parse_vector` else branch (~line 1607), currently:
-```rust
-} else {
-    *val = Value::Insert(vec![val.clone()]);
-    var_tp.clone()
-};
-```
-
-*Replacement:*
-```rust
-} else {
-    // Empty [] at a call site — create a temporary so generate_call gets a real DbRef.
-    let vec = self.create_unique(
-        "vec",
-        &Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend()),
-    );
-    let mut ls = if assign_tp != Type::Unknown(0) {
-        // Second pass with known element type: emit the backing-store init.
-        let struct_tp = Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend());
-        self.vars.change_var_type(vec, &struct_tp, &self.data, &mut self.lexer);
-        self.data.vector_def(&mut self.lexer, &assign_tp);
-        self.vector_db(&assign_tp, vec)
-    } else {
-        // First pass (element type unknown) or still-unresolved context:
-        // vector_db already returns empty on first_pass; just create the temp var.
-        Vec::new()
-    };
-    ls.push(Value::Var(vec));
-    let tp = Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend());
-    *val = v_block(ls, tp.clone(), "empty vector");
-    tp
-};
-```
-
-*Two-pass semantics:*
-- **First pass** (`self.first_pass = true`): `vector_db` returns `Vec::new()` for the
-  first-pass guard it already has; the temp var is created with `Type::Unknown(0)`.
-- **Second pass** with known element type: on the second pass, `var_tp` is the call-site
-  expected type (the function's parameter type has been resolved), so `assign_tp =
-  var_tp.content()` is the concrete element type.  `vector_db` emits the three init ops
-  (`OpDatabase`, field-read `Set(vec, get_field(...))`, zero-write `set_field(...)`).
-
-*Why `var_tp` is known on the second pass:* In loft's two-pass design the first pass
-determines all function parameter types.  When parsing `join([], "-")` on the second pass,
-the call argument loop passes the expected parameter type as the context for each argument;
-`parse_vector` receives `var_tp = Type::Vector(Text, ...)`, so `assign_tp = Type::Text`.
-If `assign_tp` is still Unknown (edge case: function itself not yet resolved), the guard
-prevents calling `vector_db` with an Unknown element type — a second-pass resolution error
-will be reported elsewhere.
-
-*Tests:*
-- Re-enable `ref_param_append_bug` guard: the L4 assertion `join([], ...)` in
-  `tests/issues.rs` should pass.
-- Add test in `tests/vectors.rs`: `assert(join([], "-") == "", ...)`.
-
-**Effort:** Medium (parser change; two-pass type-inference interaction)
-**Target:** 0.8.2
-
----
-
-### L5  Fix `v += extra` via `&vector` ref-param
-**Sources:** [PROBLEMS.md](PROBLEMS.md) #56; `tests/issues.rs::ref_param_append_bug`
-**Severity:** High — panics in debug builds; silently does nothing in release builds.
-
-**Root cause — two interacting issues:**
-
-*Issue A — wrong bytecode for the mutable arg:*
-`parse_append_vector` (`src/parser/expressions.rs:1148–1152`) detects `RefVar(Vector)` and
-returns `orig_var` as `var_nr`, then the loop emits
-`Call("OpAppendVector", [Var(orig_var), extra, rec_tp])`.  In `generate_call`, the mutable
-first argument of `OpAppendVector` hits the RefVar-to-RefVar shortcut (codegen.rs:502–509):
-```rust
-if matches!(a.typedef, Type::RefVar(_))
-    && let Value::Var(v) = &parameters[a_nr]
-    && matches!(stack.function.tp(*v), Type::RefVar(_))
-{
-    let var_pos = stack.position - stack.function.stack(*v);
-    stack.add_op("OpVarRef", self);
-    self.code_add(var_pos);   // ← pushes raw stack OFFSET, not the vector DbRef
-```
-`OpVarRef var_pos` pushes a 4-byte displacement integer.  `vector_append` in fill.rs then
-reads a DbRef from that offset on the CURRENT function's stack, which points to the
-CALLER's stack frame record — absent from the current function's store claims.
-
-*Issue B — no write-back:*
-Even if the dereference were correct, `vector_append` may reallocate the backing record and
-return an updated DbRef.  Without a write-back through the ref-param, the caller's vector
-variable would hold a stale record handle after the append.
-
-**Fix path — parser change in `parse_append_vector`:**
-
-Replace the single RefVar(Vector) branch with a three-op sequence that explicitly
-dereferences, appends, and writes back:
-
-```rust
-// BEFORE (parse_append_vector ~line 1148):
-} else if matches!(self.vars.tp(orig_var), Type::RefVar(t) if matches!(**t, Type::Vector(_, _))) {
-    // RefVar(Vector): append directly without an identity Set(v, Var(v)).
-    orig_var
-
-// AFTER — early return that builds the full deref/append/writeback sequence:
-} else if let Type::RefVar(inner) = self.vars.tp(orig_var).clone()
-    && matches!(*inner, Type::Vector(_, _))
-{
-    // 1. Create a temporary local variable to hold the dereferenced DbRef.
-    let tmp = self.create_unique("vec_ref_tmp", &inner);
-    // 2. Load the actual vector DbRef from the ref-param into tmp.
-    //    generate_var(orig_var: RefVar(Vector)) emits OpVarRef + OpGetStackRef,
-    //    so Set(tmp, Var(orig_var)) copies the caller's DbRef into our local slot.
-    ls.push(v_set(tmp, Value::Var(orig_var)));
-    // 3. Append to the local copy.  tmp is now a plain Vector, so generate_call
-    //    emits OpVarVector (not OpVarRef), and vector_append gets the correct DbRef.
-    for (val, _) in parts {
-        ls.push(self.cl(
-            "OpAppendVector",
-            &[Value::Var(tmp), val.clone(), Value::Int(rec_tp)],
-        ));
-    }
-    // 4. Write the (possibly reallocated) DbRef back to the ref-param.
-    //    set_var(orig_var: RefVar(Vector), Var(tmp)) emits OpVarRef + generate(tmp) + OpSetStackRef.
-    ls.push(v_set(orig_var, Value::Var(tmp)));
-    *code = Value::Insert(ls);
-    return Type::Rewritten(Box::new(tp.clone()));
-```
-
-*Why this works:*
-- `Set(tmp, Var(orig_var))`: first allocation of `tmp` at TOS; `generate_var(orig_var:
-  RefVar(Vector))` emits `OpVarRef displacement` → `OpGetStackRef 0` → loads the 12-byte
-  caller DbRef onto the stack and into `tmp`'s slot.
-- `OpAppendVector([Var(tmp), ...])`: `tmp` has type `Vector` (not `RefVar`), so the
-  RefVar-to-RefVar shortcut does not fire.  `generate_var(tmp)` emits `OpVarVector
-  displacement` — passes the displacement to `tmp`'s slot so `vector_append` finds the
-  correct DbRef and updates it in-place if reallocation occurs.
-- `Set(orig_var, Var(tmp))`: reassignment (`stack_allocated = true`); `set_var(orig_var:
-  RefVar(Vector))` emits `OpVarRef displacement_to_orig` → `generate(Var(tmp))` →
-  `OpSetStackRef 0` — writes the updated DbRef from `tmp`'s slot back through the
-  ref-param pointer to the caller's variable.
-
-*Audit — other collection-mutating ops on RefVar:*
-The same bug pattern applies to any `Call(op, [Var(refvar_vec), ...])` where op is a
-collection-mutating opcode and `refvar_vec: RefVar(Vector)`.  Search `parse_append_vector`
-and any other `+= / insert / remove` compilation sites for similar `RefVar` paths and apply
-the same three-op deref/operate/writeback pattern.
-
-*Tests:*
-- `ref_param_append_bug` in `tests/issues.rs` — remove `#[ignore]`, must pass.
-- Add a test for `v += [single_item]` via a ref-param.
-- Add a test for the release build (no `debug_assert` elision): run with `--release`.
-
-**Effort:** Medium (parser change in `parse_append_vector`; audit of other collection ops)
-**Target:** 0.8.2
-
----
-
 ## P — Prototype Features
 
 ### P1  Lambda / anonymous function expressions
@@ -1277,66 +1109,60 @@ Rename `inline_ref_set_in` to `first_set_in` (or add it as a general helper).  N
 changes — the function already recurses into all relevant `Value` variants and works
 correctly for both text and ref work variables.
 
-*Step 2 — Unify the three insertion loops in `parse_code`*:
+*Step 2 — Extend insertion loop in `parse_code` to work texts*:
 
-Replace the three separate loops that insert null-inits at function start:
+Replace the eager-insert loop for work texts with a lazy-insert using `first_set_in`.
+Non-inline work references remain eagerly inserted at position 0 (see blocker below).
+Inline-ref variables continue to use the same lazy path as before.
 
 ```rust
-// BEFORE (lines 50–97, three separate loops):
+// BEFORE: for wt in work_texts() { ls.insert(0, v_set(wt, Text(""))) }
+// AFTER: find the first top-level statement containing a Set to wt, insert before it.
+let mut insertions: Vec<(usize, u16, Value)> = Vec::new();
 for wt in self.vars.work_texts() {
-    ls.insert(0, v_set(wt, Value::Text(String::new())));  // always at index 0
+    let pos = ls.iter().position(|stmt| first_set_in(stmt, wt, 0)).unwrap_or(fallback);
+    insertions.push((pos, wt, Value::Text(String::new())));
 }
+// work_references: still position 0 (blocker: Issue 68)
 for r in self.vars.work_references() {
     if !is_argument && depend.is_empty() && !is_inline_ref {
-        ls.insert(0, v_set(r, Value::Null));              // always at index 0
+        insertions.push((0, r, Value::Null));
     }
 }
-// inline_refs loop: already uses first_set_in (correct)
-
-// AFTER (one unified loop over all work variables):
-let all_work: Vec<(u16, Value)> = self
-    .vars.work_texts().into_iter().map(|v| (v, Value::Text(String::new())))
-    .chain(self.vars.work_references().into_iter()
-        .filter(|&r| !self.vars.is_argument(r) && self.vars.tp(r).depend().is_empty())
-        .map(|r| (r, Value::Null)))
-    .collect();
-let mut insertions: Vec<(usize, u16, Value)> = Vec::new();
-for (r, init) in all_work {
-    let pos = ls.iter().position(|stmt| first_set_in(stmt, r))
-        .unwrap_or_else(|| { debug_assert!(false, ...); fallback });
-    insertions.push((pos, r, init));
-}
-// Sort by descending position to avoid index invalidation; same-position: higher var_nr first
+for r in self.vars.inline_ref_references() { ... lazy as before ... }
 insertions.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-for (pos, r, init) in insertions {
-    ls.insert(pos, v_set(r, init));
-}
+for (pos, r, init) in insertions { ls.insert(pos, v_set(r, init)); }
 ```
 
-*Step 3 — Remove `inline_ref_vars` distinction if possible*:
+**Known blockers (found during 2026-03-20 implementation):**
 
-After Step 2, inline-refs use the same insertion path as all other work variables.  The
-`inline_ref_vars` `BTreeSet` on `Function` and `mark_inline_ref` / `is_inline_ref` /
-`inline_ref_references` can be removed if the LIFO ordering behaviour is identical — verify
-that the unified loop produces the same `var_order` for currently tested functions before
-removing.
+- **Issue 68** — `first_set_in` does not descend into `Block`/`Loop` nodes.  Work
+  references used only inside a nested block cannot be found; the fallback position lands
+  *after* the block, giving `first_def > last_use`.  Fix: add `Block` and `Loop` arms to
+  `first_set_in`.  Until then, non-inline work references stay at position 0.
 
-*Interval effect:* `first_def` for a work text variable that appears in the third statement
-of a five-statement function is now `seq(stmt3)` rather than 0.  Two sequential text
-operations — `__work_1` used in stmt 2 and `__work_2` used in stmt 4 — can now share a
-single 24-byte slot since their intervals no longer overlap.
+- **Issue 69** — Extending `can_reuse` in `assign_slots` to `Type::Text` causes slot
+  conflicts: two smaller variables can independently claim the first bytes of the same
+  dead 24-byte text slot.  The `assign_slots_sequential_text_reuse` unit test passes in
+  isolation (with explicit non-overlapping intervals) but the integration suite fails.
+  Full text slot sharing also requires OpFreeText to be placed after each variable's last
+  use (not at function end), otherwise sequential work texts still have overlapping live
+  intervals.  Both issues must be resolved before `can_reuse` is extended.
 
-*Safety:* `first_set_in` finds the outermost top-level statement in `ls` that contains the
-work variable's Set, even if that Set is inside a nested if/loop/block.  The null-init is
-therefore inserted before that statement.  At runtime the null-init fires before any
-conditional path that might use and then free the variable — the same guarantee as the
-current function-start approach, but narrowed to the first-use statement.
+- **Issue 70** — Adding `Type::Text` to the `pos < TOS` bump-to-TOS override in
+  `generate_set` causes SIGSEGV in `append_fn`.  This override was added to handle
+  "uninitialized memory if lazy init places a text var below current TOS", but that
+  scenario only arises when text slots are reused (Issue 69), which is disabled.  The
+  override must be reverted until text slot reuse is safe.
 
-**Tests:** Add a unit test for `assign_slots`: two sequential `Type::Text` variables with
-non-overlapping intervals receive the same slot (size = 24).  Verify existing test suite
-still passes.
-**Effort:** Small–Medium (parser change; mostly refactoring the three loops into one)
-**Target:** 0.8.2
+*Interval effect (partial):* `first_def` for work texts is now accurate.  Slot sharing
+requires resolving Issues 69 and 70 and moving OpFreeText to after each variable's last
+use.
+
+**Tests:** `assign_slots_sequential_text_reuse` in `src/variables.rs` (currently
+`#[ignore]` — pending Issue 69 fix).
+**Effort:** Medium (three inter-related blockers; Issues 68–70)
+**Target:** 0.8.3
 
 ---
 

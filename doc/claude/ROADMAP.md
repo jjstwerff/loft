@@ -14,9 +14,9 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| L4    | Fix empty `[]` literal as mutable vector argument            | Medium    |                 | PROBLEMS.md #44             |
-| L5    | Fix `v += extra` via `&vector` ref-param (panic / silent nop) | Medium  |                 | PROBLEMS.md #56             |
-| A12   | Lazy work-variable initialization (accurate intervals)        | Small–Med |                 | PLANNING.md A12             |
+| ~~L4~~ | ~~Fix empty `[]` literal as mutable vector argument~~      | ✓ done    |                 | PROBLEMS.md #44             |
+| ~~L5~~ | ~~Fix `v += extra` via `&vector` ref-param~~               | ✓ done    |                 | PROBLEMS.md #56             |
+| A12   | Lazy work-variable init — blocked (Issues 68–70)             | Medium    |                 | PLANNING.md A12             |
 | S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |

@@ -55,6 +55,27 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   `tests/generated/fill.rs` header so the file can be compiled as a crate module
   without unresolved `ops::` references.  (`src/create.rs`)
 
+### Bug fixes
+
+- **L4** — Passing an empty vector literal `[]` directly as a mutable `vector<T>`
+  function argument no longer panics in debug builds.  `parse_vector` now creates a
+  named temporary in the else branch (call-site `[]` with no surrounding variable or
+  field context) and emits the `vector_db` initialisation ops for that temporary on the
+  second pass, giving `generate_call` a real 12-byte `DbRef` to pass as the mutable
+  argument.  (`src/parser/expressions.rs` `parse_vector`)
+
+- **L5** — `v += extra` through a `&vector<T>` ref-param now correctly appends to the
+  caller's vector.  Two root causes were fixed: (A) the `RefVar(Vector)` path in
+  `parse_append_vector` was emitting a raw stack-offset displacement instead of a proper
+  dereferenced `DbRef`, so `vector_append` read from the wrong address; (B) there was no
+  write-back of the updated `DbRef` after a potential reallocation.  The fix creates a
+  local temporary, emits an explicit deref via `OpGetStackRef`, calls `OpAppendVector` on
+  the temporary, and writes back via `OpSetStackRef`.  A second fix in `codegen.rs`
+  corrects a slot-collision when a `&vector<T>` ref-param precedes a block argument: the
+  block's scratch space was overwriting the ref-param's stack slot.
+  (`src/parser/expressions.rs` `parse_append_vector`;
+   `src/state/codegen.rs` generate-call ref-param path)
+
 ### Improvements
 
 - **A13** — Float (`f64`, 8 B) and Long (`i64`, 8 B) variables now reuse dead stack

@@ -314,6 +314,107 @@ appropriate as long as the limit is large enough to never be reached in normal u
 
 ---
 
+### 68. `first_set_in` does not descend into `Block` nodes — work-ref lazy init places null after first use
+
+**Severity:** High — causes `add_const` overflow (subtract with overflow panic) or wrong
+slot computation for reference variables whose first use is inside a nested block.
+
+**Location:** `src/parser/expressions.rs` — `first_set_in` helper; `parse_code` insertion
+loop for `work_references()`.
+
+**Symptom (A12 investigation, 2026-03-20):** When the unified lazy-insertion loop was
+applied to non-inline work references (`__ref_N`), references whose first assignment is
+inside a `Value::Block` could not be found by `first_set_in` (which does not match the
+`Block` variant).  The fallback position placed the null-init *after* the block that
+uses the reference.  This produced `first_def > last_use`, giving `assign_slots` a
+corrupt live interval that placed the reference's shadow slot above the current stack
+top.  At codegen time `add_const` computed `before_stack − stack(ref)` and panicked
+with "attempt to subtract with overflow".  Repro: `cargo test --test enums polymorph`.
+
+**Root cause:** `first_set_in` handles `Set`, `Call`, `Insert`, `If`, `Return`, `Drop`,
+and `Triple` but has no arm for `Block(Box<Block>)` or `Loop(Box<Block>)`.  A statement
+like `result = { __ref_N = null; … }` is `Set(result, Block(…))`; the recursive call on
+the `Block` falls through to `_ => false`.
+
+**Workaround (applied):** Non-inline work references are kept at eager position 0 (the
+pre-A12 behaviour).  Only work texts and inline-ref variables use lazy insertion.
+
+**Full fix path:** Add `Block` and `Loop` arms to `first_set_in` that iterate the block's
+`operators` list and recurse.  Then work references can also be lazily inserted.  Verify
+that the `polymorph` test and all vector tests pass after the change.
+
+**Effort:** Small (two `match` arms + tests)
+
+---
+
+### 69. `can_reuse` extension to `Type::Text` in `assign_slots` causes slot conflicts
+
+**Severity:** High — multiple variables assigned to overlapping regions of a dead 24-byte
+text slot; debug assertion fires; release builds produce undefined behaviour.
+
+**Location:** `src/variables.rs` — `assign_slots`, `can_reuse` predicate.
+
+**Symptom (A12 investigation, 2026-03-20):** Extending `can_reuse` from `var_size <= 8`
+to also include `Type::Text` allowed two smaller variables (e.g., a 4-byte `total` and
+an 8-byte `e#iter_state`) to each reuse the first bytes of the same dead 24-byte text
+slot independently.  Both received `stack_pos = 52`; their live intervals overlap;
+`find_conflict` fires.  Repro: multiple `vectors` integration tests (`sorted_remove`,
+`growing_vector`, etc.).
+
+**Root cause:** `assign_slots` reuses a dead variable's *slot position* (its
+`stack_pos`).  When a 24-byte text slot is reused by a 4-byte variable, the remaining
+20 bytes look free to another variable.  There is no mechanism to mark the whole dead
+text slot as consumed once part of it is reused.
+
+**Fix path:** Text slot reuse requires one of:
+1. Reuse only when the reusing variable is also 24 bytes (same-size restriction).
+2. Mark the entire dead slot's byte range as consumed after the first reuse.
+3. Implement size-aware reuse: track (position, size) pairs for dead slots and only
+   reuse when the reusing variable fits exactly or is the same size.
+
+Approach 1 is the simplest (add `&& var_size == dead_size` guard when the dead type is
+`Text`).  Approach 3 is the most general but requires restructuring `assign_slots`.
+
+**Workaround (applied):** The `can_reuse` extension has been reverted; text slot reuse
+remains disabled.  The unit test `assign_slots_sequential_text_reuse` stays `#[ignore]`.
+
+**Effort:** Small for approach 1; Medium for approach 3.
+
+---
+
+### 70. `Type::Text` in `generate_set` pos-override causes SIGSEGV (`append_fn`)
+
+**Severity:** High — runtime SIGSEGV in tests that use functions returning text.
+
+**Location:** `src/state/codegen.rs` — `generate_set`, `pos < stack.position` branch.
+
+**Symptom (A12 investigation, 2026-03-20):** Adding `Type::Text(_)` to the large-type
+override (the `pos < stack.position` bump-to-TOS path in `generate_set`) causes
+`tests/expressions.rs::append_fn` to crash with SIGSEGV.  The function under test is
+`fn append(ch: character) -> text { "abc_de" + ch }`.
+
+**Root cause (preliminary):** When a text variable's pre-assigned slot is at or above the
+current TOS and gets bumped to TOS by the override, `set_stack_allocated` records the new
+position.  A later `OpFreeText` reads the variable's original slot (from
+`stack.function.stack(v)`) to compute the relative offset, but that slot was reassigned
+to TOS.  If TOS has since grown past the original slot, `string_mut` accesses an
+incorrect address — likely an uninitialised or already-freed `String`, causing SIGSEGV.
+Full root-cause analysis pending.
+
+**Workaround (applied):** `Type::Text` was added to the override to fix an
+"uninitialized memory" concern with lazy init, but that concern only arises if Text slots
+can be reused (Issue 69), which is currently disabled.  Removing `Type::Text` from the
+override restores original behaviour without risk, since there are no reused text slots
+to worry about.
+
+**Fix path:** Revert the `Type::Text` arm in `generate_set`.  If text slot reuse (Issue
+69) is later enabled, revisit whether a TOS override is still needed and whether
+`OpFreeText` correctly uses the updated slot position.
+
+**Effort:** Trivial revert; investigation of the SIGSEGV root cause is Small.
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries
