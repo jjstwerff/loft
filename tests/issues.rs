@@ -176,7 +176,6 @@ fn empty_vector_as_mutable_arg() {
 /// Bug: `v += extra` via ref-param leaves the caller's vector unchanged.
 /// Tracked as Issue 56 in doc/claude/PROBLEMS.md.
 #[test]
-#[ignore = "L5: parse_append_vector RefVar path not yet fixed"]
 fn ref_param_append_bug() {
     code!(
         "struct Item { name: text, value: integer }
