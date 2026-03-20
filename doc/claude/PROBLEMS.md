@@ -111,38 +111,6 @@ sub-record types that were deferred; implement analogously to the primary record
 
 ## Parser / Compiler Bugs
 
-### 58. Silent `Type::Unknown(0)` variable creation on unresolved names
-
-**Severity:** High — silently masks typos; produces confusing downstream type errors.
-
-**Location:** `src/parser/expressions.rs:2641`
-
-**Symptom:** When a name lookup fails (not a local variable, not an attribute, not an
-enum member), the parser silently creates a new `Type::Unknown(0)` variable with that
-name instead of emitting a diagnostic:
-```rust
-} else {
-    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-    t = Type::Unknown(0);
-}
-```
-A typo in a variable name (e.g. `totla` instead of `total`) creates a fresh variable
-with unknown type.  The error surface is the subsequent type-mismatch downstream, not
-the unresolved name.
-
-**Root cause:** The two-pass parser uses unknown-type variables as placeholders for
-names that will be resolved on the second pass (forward references within a function,
-cross-function references resolved in the type-pass).  The silent creation is intentional
-for first-pass, but the same code path runs on the second pass where the name really
-should be resolved.
-
-**Fix path:** On the second pass (`self.pass == Pass::Second`), emit a "undefined
-variable" diagnostic instead of creating a new unknown-type var.  Requires confirming
-that all legitimate forward-reference cases are resolved before the second pass begins.
-
-**Effort:** Medium (requires understanding the two-pass resolution protocol)
-
----
 
 ### 44. Empty vector literal `[]` cannot be passed directly as a mutable vector argument
 
@@ -262,27 +230,6 @@ is a field on the returned value, not global state.  See WEB_SERVICES.md Approac
 
 ## Interpreter Robustness
 
-### 60. No recursion depth limit in codegen and parser traversals
-
-**Severity:** Medium — adversarially or pathologically deep ASTs cause stack overflow.
-
-**Location:** `generate` (`src/state/codegen.rs`), `inline_ref_set_in`
-(`src/scopes.rs`), `compute_intervals` (`src/variables.rs`), `scan` (expressions)
-
-**Symptom:** A deeply nested Loft expression (e.g., `1+(1+(1+(1+...)))` with thousands
-of levels) causes a Rust stack overflow (SIGSEGV / `thread stack exhausted`).
-
-**Root cause:** All four traversal functions are directly recursive with no depth counter.
-Normal Loft programs stay well within the default stack; only adversarial or machine-
-generated code can reach the limit.
-
-**Fix path:** Add a `depth: usize` parameter and return an error (or panic with a helpful
-message) beyond a configurable threshold (e.g. 1000).  Alternatively, convert the most
-critical path (`generate`) to an iterative design using an explicit stack.
-
-**Effort:** Small per function; changing the `generate` signature is the most invasive part.
-
----
 
 ### 61. Native codegen IR parsing panics on unhandled patterns
 
@@ -326,24 +273,6 @@ for the nested record's fields)
 
 ---
 
-### 64. Overflow risk in store offset arithmetic
-
-**Severity:** Medium — only affects records larger than ~2 GB; silent wrap in release.
-
-**Location:** `src/store.rs` — offset arithmetic using `i32`/`usize` casts
-
-**Symptom:** Store byte-offset computations cast between `i32` and `usize` without
-overflow checks.  Extremely large records (exceeding `i32::MAX` bytes) would wrap
-silently in release builds.
-
-**Fix path:** Replace unchecked casts with checked arithmetic (`checked_add`, `try_into`)
-and return an error or panic with a clear message rather than wrapping.  Long-term, the
-store's index type should consistently be `u32` or `usize` throughout to eliminate the
-cast surface.
-
-**Effort:** Small per site; Medium for a consistent audit of all cast points in `store.rs`.
-
----
 
 ### 65. Type index out-of-bounds access in `data.rs`
 
@@ -364,23 +293,6 @@ calls with `self.get_type(tp)`.
 
 ---
 
-### 66. Integer cast truncation in vector index/size computations
-
-**Severity:** Medium — silent truncation on very large vectors (>2^31 elements for i32,
->2^16 for u16 casts).
-
-**Location:** Vector ops in `src/state/codegen.rs` and `src/database/database.rs` —
-`as i32`, `as u16` casts on element counts
-
-**Symptom:** A very large vector (element count exceeding the cast target width) silently
-produces a truncated index or size, leading to incorrect iteration or OOB access.
-
-**Fix path:** Add `debug_assert!(count <= MAX)` guards before the narrowing casts, or
-use `try_into().expect(...)` to make truncation a panic in both debug and release.
-
-**Effort:** Small per site; Small–Medium for a full audit of all narrowing casts.
-
----
 
 ### 67. Silent early-return on store resize limit
 
