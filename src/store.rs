@@ -236,11 +236,18 @@ impl Store {
     /// new free block (either the extended last block or a fresh one).
     fn claim_grow(&mut self, size: u32, last: u32, last_claim: i32) -> u32 {
         let cur = self.size;
-        self.resize_store(if last_claim < 0 {
+        let new_size = if last_claim < 0 {
             (self.size as i32 + size as i32 + last_claim) as u32
         } else {
-            self.size + size
-        });
+            self.size.checked_add(size).unwrap_or_else(|| {
+                panic!(
+                    "store size limit exceeded: {} words ({} bytes)",
+                    u64::from(self.size) + u64::from(size),
+                    (u64::from(self.size) + u64::from(size)) * 8
+                )
+            })
+        };
+        self.resize_store(new_size);
         let increase = (self.size - cur) as i32;
         if last_claim < 0 {
             *self.addr_mut(last, 0) = last_claim - increase;
@@ -348,10 +355,11 @@ impl Store {
 
     /// Change the store size, do not mutate content
     fn resize_store(&mut self, to_size: u32) {
-        if to_size < self.size {
+        if to_size <= self.size {
             return;
         }
-        let inc = self.size * 7 / 3;
+        // saturating_mul prevents u32 overflow when the store is very large
+        let inc = self.size.saturating_mul(7) / 3;
         let size = if to_size > inc { to_size } else { inc };
         #[cfg(feature = "mmap")]
         if let Some(f) = &mut self.file {
@@ -1133,6 +1141,18 @@ unsafe impl Send for Store {}
 #[cfg(test)]
 mod tests {
     use super::Store;
+
+    /// S6-67: growing the store through many claims must not wrap or silently fail.
+    #[test]
+    fn store_grows_without_overflow() {
+        let mut store = Store::new(4);
+        store.free = false; // mark as in-use so validate() does not reject it
+        for _ in 0..200 {
+            store.claim(1);
+        }
+        // Store must have grown to hold 200 single-word claims (≥200 * 8 bytes).
+        assert!(store.byte_capacity() >= 200 * 8);
+    }
 
     /// T0-11: `addr_mut` on a locked store must panic (not silently discard the write).
     #[test]

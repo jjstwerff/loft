@@ -221,7 +221,16 @@ impl Stores {
             Parts::Index(rec_nr, _, left_field) => {
                 self.find_index(data, *rec_nr, *left_field, db, key)
             }
-            _ => panic!("Incorrect search"),
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::Spacial(_, _) => panic!(
+                "find called on non-collection type: {} (db={})",
+                self.types[db as usize].name, db
+            ),
         }
     }
 
@@ -398,7 +407,17 @@ impl Stores {
                 rec.pos = 8;
                 rec
             }
-            _ => panic!("Undefined iterate on '{}'", self.types[db as usize].name),
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::Hash(_, _)
+            | Parts::Spacial(_, _) => panic!(
+                "Undefined iterate on non-collection type: {} (db={})",
+                self.types[db as usize].name, db
+            ),
         }
     }
 
@@ -452,7 +471,16 @@ impl Stores {
                 let keys = self.keys(db).to_vec();
                 tree::remove(data, rec, left, &mut self.allocations, &keys);
             }
-            _ => panic!("Incorrect search"),
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::Spacial(_, _) => panic!(
+                "remove called on non-collection type: {} (db={})",
+                self.types[db as usize].name, db
+            ),
         }
     }
 
@@ -512,5 +540,43 @@ impl Stores {
             }
         }
         Ordering::Equal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Stores;
+    use crate::keys::{Content, DbRef};
+
+    /// S3: find() with a non-collection type must panic with a diagnostic message.
+    #[test]
+    #[should_panic(expected = "find called on non-collection type")]
+    fn find_non_collection_panics() {
+        let stores = Stores::new();
+        let data = DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        };
+        stores.find(&data, 0, &[Content::Long(0)]);
+    }
+
+    /// S3: remove() with a non-collection type must panic with a diagnostic message.
+    #[test]
+    #[should_panic(expected = "remove called on non-collection type")]
+    fn remove_non_collection_panics() {
+        let mut stores = Stores::new();
+        let data = DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        };
+        let rec = DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        };
+        stores.remove(&data, &rec, 0);
     }
 }

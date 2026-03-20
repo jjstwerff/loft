@@ -73,10 +73,28 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   variant without updating this function is now a compile error rather than a silent
   incorrect null-init placement.  (`src/parser/expressions.rs`)
 
+- **S3** — `find()`, `next()`, and `remove()` in `search.rs`, and the inner
+  `Parts` dispatch in `read_data()`/`write_data()` in `io.rs`, now use exhaustive
+  match arms listing every known `Parts` variant explicitly instead of a `_ =>` catch-all.
+  Adding a new `Parts` variant without updating these dispatch sites is now a compile
+  error rather than a silent fall-through to a misleading panic.
+  (`src/database/search.rs`, `src/database/io.rs`)
+
 - **S5** — `copy_claims_index_body` (database) replaces `unreachable!()` with an
   explicit `panic!` that names the type index and the unexpected `Parts` variant,
   giving a diagnostic instead of an opaque crash if called incorrectly.
   (`src/database/allocation.rs`)
+
+- **S6-65** — `Stores::get_type(nr)` helper added to `database/mod.rs`; it panics with
+  `"type index N out of range (total: M)"` instead of a generic bounds-check message,
+  making schema-corruption diagnostics actionable.  (`src/database/mod.rs`)
+
+- **S6-67** — `resize_store` now uses `saturating_mul(7)` for the growth-factor
+  calculation, preventing u32 overflow when the store is very large.  `claim_grow`
+  uses `checked_add` for the new-size arithmetic and panics with
+  `"store size limit exceeded"` instead of wrapping silently to a smaller value that
+  caused `resize_store` to return early, leaving the store under-allocated.
+  (`src/store.rs`)
 
 - **A6.4** — `claim()` and `assign_slots_safe` removed; `LOFT_DEBUG_SLOTS` debug blocks
   deleted from both `variables.rs` and `codegen.rs`.  `claim()` is replaced by

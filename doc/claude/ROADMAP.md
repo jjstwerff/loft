@@ -19,9 +19,8 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | A12   | Lazy work-variable initialization (accurate intervals)        | Small–Med |                 | PLANNING.md A12             |
 | S1    | Undefined-name diagnostic (Issue 58)                         | Medium    |                 | PROBLEMS.md #58             |
 | S2    | Recursion depth limit in codegen/parser (Issue 60)           | Medium    |                 | PROBLEMS.md #60             |
-| S3    | Database dispatch exhaustiveness (Issue 57)                  | Small–Med |                 | PROBLEMS.md #57             |
 | S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
-| S6    | Store overflow guards (Issues 64–67)                         | Small–Med |                 | PROBLEMS.md #64–67          |
+| S6    | Store overflow guards remaining (Issues 64, 66)              | Small–Med |                 | PROBLEMS.md #64, #66        |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |
 | P1.1  | ↳ Parser — `fn(params) -> type block` primary expression     | Small     |                 | expressions.rs              |
