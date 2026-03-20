@@ -12,8 +12,15 @@ use super::{
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
+/// Returns true if `val` contains a `Set(r, _)` node at any depth.
+/// Used to find which block statement first assigns an inline-ref temporary.
+///
+/// The match is exhaustive over all current `Value` variants so that adding a new
+/// compound variant without updating this function is a **compile error** rather than
+/// a silent miss that would insert the null-init at the wrong position (A15).
 fn inline_ref_set_in(val: &Value, r: u16) -> bool {
     match val {
+        // Compound variants — recurse into sub-expressions.
         Value::Set(v, inner) => *v == r || inline_ref_set_in(inner, r),
         Value::Call(_, args) | Value::CallRef(_, args) => {
             args.iter().any(|a| inline_ref_set_in(a, r))
@@ -29,7 +36,20 @@ fn inline_ref_set_in(val: &Value, r: u16) -> bool {
         Value::Iter(_, a, b, c) => {
             inline_ref_set_in(a, r) || inline_ref_set_in(b, r) || inline_ref_set_in(c, r)
         }
-        _ => false,
+        // Leaf variants — cannot contain a Set node.
+        Value::Null
+        | Value::Int(_)
+        | Value::Enum(_, _)
+        | Value::Boolean(_)
+        | Value::Float(_)
+        | Value::Long(_)
+        | Value::Single(_)
+        | Value::Text(_)
+        | Value::Var(_)
+        | Value::Line(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_) => false,
     }
 }
 
