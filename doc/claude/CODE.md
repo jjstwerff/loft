@@ -54,6 +54,42 @@ Rules for all Rust and loft code in this project.
 
 ---
 
+## Dependencies
+
+Prefer the standard library and existing project code over adding new Cargo dependencies.
+
+### Decision rule
+
+Before adding a dependency:
+1. **Check if existing code covers it.** Loft already has JSON text parsing (`src/database/structures.rs`) and JSON serialisation (`src/database/format.rs`). New JSON functionality belongs in `src/database/json.rs`, not `serde_json`.
+2. **Estimate the implementation size.** If the needed functionality is ≤ ~100 lines of straightforward Rust, write it. If it requires thousands of lines of platform APIs (TLS stacks, image codecs, memory-mapped I/O), a dependency is justified.
+3. **Feature-gate optional dependencies.** Any dependency that adds compile weight or is unused for core interpreter work must be behind a Cargo feature (following the `png`, `mmap`, `random`, and planned `http` pattern).
+4. **Prefer crates with minimal transitive dependencies.** `ureq` and `png` have no required transitive deps. Avoid crates that pull in async runtimes, proc-macro infrastructure, or heavy frameworks.
+5. **Never add a dependency to replace < 100 lines of existing-style code.** Adding `serde_json` for seven JSON field-extraction functions that fit in ~80 lines is the wrong trade-off.
+
+### Approved dependencies
+
+| Crate | Feature | Justification |
+|---|---|---|
+| `png` | `png` | PNG codec; ~5 000 lines of DEFLATE + filter logic; not worth writing |
+| `mmap-storage` | `mmap` | Memory-mapped file I/O; OS-specific unsafe APIs per platform; not worth writing |
+| `rand_core` + `rand_pcg` | `random` | PCG PRNG; cryptographic-quality randomness in ~300 lines; acceptable scope |
+| `dirs` | (always) | Platform home-dir lookup; 3 lines of OS APIs per platform; worth the abstraction |
+| `stdext` | dev-only | Test utilities; zero production footprint |
+| `ureq` | `http` (planned H4) | Blocking HTTP client + TLS; ~3 000 lines of platform APIs; not worth writing |
+
+### Not approved
+
+| Crate | Reason |
+|---|---|
+| `serde` / `serde_json` | JSON parsing covered by `src/database/` parser; see H2 in PLANNING.md |
+| `serde` / `serde-wasm-bindgen` | WASM bridge — pass plain JSON text strings; no derive macros needed |
+| `tokio` / async runtimes | Loft is synchronous; no async use case exists |
+| `clap` | CLI arg parsing; 10 lines of `std::env::args()` suffices |
+| `log` / `tracing` | Loft has its own `logger.rs` tailored to the runtime model |
+
+---
+
 ## See also
 - [TESTING.md](TESTING.md) — Test framework, LogConfig debug-logging presets, suite files
 - [COMPILER.md](COMPILER.md) — Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode
