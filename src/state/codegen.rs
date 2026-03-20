@@ -101,6 +101,18 @@ impl State {
     On not implemented Value constructions
     */
     pub(super) fn generate(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
+        self.generate_depth += 1;
+        assert!(
+            self.generate_depth <= 1000,
+            "expression nesting limit exceeded at depth {}",
+            self.generate_depth
+        );
+        let result = self.generate_inner(val, stack, top);
+        self.generate_depth -= 1;
+        result
+    }
+
+    fn generate_inner(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
         match val {
             Value::Int(value) => {
                 stack.add_op("OpConstInt", self);
@@ -188,10 +200,20 @@ impl State {
             self.code_add_str(value);
         } else {
             let tc = Arc::make_mut(&mut self.text_code);
+            debug_assert!(
+                i32::try_from(tc.len()).is_ok(),
+                "text_code offset overflow: {}",
+                tc.len()
+            );
             let start = tc.len() as i32;
             tc.extend_from_slice(value.as_bytes());
             stack.add_op("OpConstLongText", self);
             self.code_add(start);
+            debug_assert!(
+                i32::try_from(value.len()).is_ok(),
+                "long-text length overflow: {}",
+                value.len()
+            );
             self.code_add(value.len() as i32);
         }
         Type::Text(Vec::new())

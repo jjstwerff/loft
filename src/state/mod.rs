@@ -49,6 +49,8 @@ pub struct State {
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: HashMap<u32, u32>,
     pub(crate) fn_positions: Vec<u32>,
+    /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
+    pub(crate) generate_depth: usize,
 }
 
 pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
@@ -86,6 +88,7 @@ impl State {
             text_positions: BTreeSet::new(),
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
+            generate_depth: 0,
         }
     }
 
@@ -423,6 +426,7 @@ impl State {
             text_positions: BTreeSet::new(),
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
+            generate_depth: 0,
         }
     }
 

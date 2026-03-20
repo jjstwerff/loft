@@ -18,8 +18,10 @@ use super::{
 /// The match is exhaustive over all current `Value` variants so that adding a new
 /// compound variant without updating this function is a **compile error** rather than
 /// a silent miss that would insert the null-init at the wrong position (A15).
-#[allow(clippy::only_used_in_recursion)] // depth used in all recursive calls; check logic added in S2
 fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
+    if depth > 1000 {
+        return false;
+    }
     match val {
         // Compound variants — recurse into sub-expressions.
         Value::Set(v, inner) => *v == r || inline_ref_set_in(inner, r, depth + 1),
@@ -2663,6 +2665,9 @@ pair the hash with a vector to iterate in insertion order"
         {
             *code = self.data.attr_value(*enr, *a_nr);
             t = parent_tp.clone();
+        } else if !self.first_pass {
+            diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+            t = Type::Unknown(0);
         } else {
             *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
             t = Type::Unknown(0);

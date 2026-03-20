@@ -876,7 +876,6 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
 /// `free_text_nr` / `free_ref_nr` are the definition numbers of `OpFreeText` / `OpFreeRef`
 /// (pass `u32::MAX` if the definition is not yet registered).
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::only_used_in_recursion)] // depth used in all recursive calls; check logic added in S2
 pub fn compute_intervals(
     val: &Value,
     function: &mut Function,
@@ -885,6 +884,10 @@ pub fn compute_intervals(
     seq: &mut u32,
     depth: usize,
 ) {
+    assert!(
+        depth <= 1000,
+        "expression nesting limit exceeded at depth {depth}"
+    );
     match val {
         Value::Var(v) => {
             let v = *v as usize;

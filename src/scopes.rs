@@ -24,6 +24,8 @@ struct Scopes {
     var_mapping: HashMap<u16, u16>,
     /// The scopes of the currently traversed loops.
     loops: Vec<u16>,
+    /// Recursion depth counter for `scan`; reset to 0 when scope analysis starts.
+    scan_depth: usize,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -41,6 +43,7 @@ pub fn check(data: &mut Data) {
             var_order: Vec::new(),
             var_mapping: HashMap::new(),
             loops: vec![],
+            scan_depth: 0,
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
@@ -101,6 +104,18 @@ impl Scopes {
     }
 
     fn scan(&mut self, val: &Value, function: &mut Function, data: &Data) -> Value {
+        self.scan_depth += 1;
+        assert!(
+            self.scan_depth <= 1000,
+            "expression nesting limit exceeded at depth {}",
+            self.scan_depth
+        );
+        let result = self.scan_inner(val, function, data);
+        self.scan_depth -= 1;
+        result
+    }
+
+    fn scan_inner(&mut self, val: &Value, function: &mut Function, data: &Data) -> Value {
         match val {
             Value::Var(ov) => Value::Var(*self.var_mapping.get(ov).unwrap_or(ov)),
             Value::Set(ov, value) => self.scan_set(*ov, value, function, data),

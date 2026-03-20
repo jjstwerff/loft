@@ -22,7 +22,6 @@ static A: System = System;
 const SIGNATURE: u32 = 0x53_74_6f_31;
 pub const PRIMARY: u32 = 1;
 /// Maximum store size in words; offsets are stored as `i32` so this is the limit.
-#[allow(dead_code)] // guard in resize_store added in S6-64
 pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 
 /// Minimum free-block size (words) to register in the LLRB free-space tree.
@@ -361,6 +360,13 @@ impl Store {
         if to_size <= self.size {
             return;
         }
+        assert!(
+            to_size <= MAX_STORE_WORDS,
+            "store offset overflow: requested {} words exceeds limit of {} ({} bytes)",
+            to_size,
+            MAX_STORE_WORDS,
+            u64::from(MAX_STORE_WORDS) * 8
+        );
         // saturating_mul prevents u32 overflow when the store is very large
         let inc = self.size.saturating_mul(7) / 3;
         let size = if to_size > inc { to_size } else { inc };
