@@ -161,7 +161,6 @@ fn test() {
 /// Bug: passing `[]` directly as a mutable `vector<text>` argument panics in debug builds.
 /// Tracked as Issue 44 in doc/claude/PROBLEMS.md.
 #[test]
-#[ignore = "L4: empty [] as mutable vector argument not yet fixed"]
 fn empty_vector_as_mutable_arg() {
     code!(
         "fn test() {
