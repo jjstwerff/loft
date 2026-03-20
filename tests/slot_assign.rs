@@ -187,10 +187,9 @@ fn test() {
 
 // ── A6.3 claim-free codegen tests ────────────────────────────────────────────
 
-/// With claim() removed, sequential primitives must still be placed at correct
-/// pre-assigned slots and produce correct results.
+/// Sequential primitives must be placed at correct slots and produce correct results
+/// with the new `is_stack_allocated` gate replacing the old `pos == u16::MAX` check.
 #[test]
-#[ignore = "A6.3: claim()-free codegen not yet implemented"]
 fn claim_free_sequential_primitives() {
     code!(
         "fn compute() -> integer {
@@ -206,10 +205,9 @@ fn test() {
     );
 }
 
-/// With claim() removed, text-variable first allocation via the `stack_allocated` flag
-/// must correctly emit `OpText` exactly once and allow subsequent appends.
+/// Text-variable first allocation via the `stack_allocated` flag must emit `OpText`
+/// exactly once and allow subsequent appends.
 #[test]
-#[ignore = "A6.3: claim()-free codegen not yet implemented"]
 fn claim_free_text_variable_first_alloc() {
     code!(
         "fn build(prefix: text, n: integer) -> text {
