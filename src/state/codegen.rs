@@ -423,10 +423,22 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
-            if pos > stack.position {
-                // Pre-assigned slot is above current TOS (can happen after if-else
-                // restores stack.position).  Override slot to TOS so direct placement
-                // fires correctly — the runtime stack has no bytes at pos yet.
+            if pos > stack.position
+                || (pos < stack.position
+                    && matches!(
+                        stack.function.tp(v),
+                        Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+                    ))
+            {
+                // Override slot to TOS in two cases:
+                // 1. pos > TOS: pre-assigned slot is above current TOS (after if-else restores
+                //    stack.position).  Runtime stack has no bytes at pos yet.
+                // 2. pos < TOS for a large type (Reference/Vector/struct-enum, 12 B):
+                //    assign_slots never reuses dead slots for large types (see variables.rs
+                //    `can_reuse` = size <= 8), so pos < TOS only arises when an earlier mutable
+                //    call argument was already pushed to the eval stack before this block runs.
+                //    The pre-assigned slot coincides with an already-live arg value (e.g. the
+                //    OpCreateStack DbRef for a &vector<T> param), so bump the slot to TOS.
                 stack.function.set_stack_pos(v, stack.position);
             }
             let pos = stack.function.stack(v);
