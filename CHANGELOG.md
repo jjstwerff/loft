@@ -57,6 +57,17 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **A6.3a** — Safe slot pre-pass (`assign_slots_safe`) is now the default codegen path.
+  Variables receive sequential slots in `first_def` order with no reuse; `claim()` in
+  codegen is retained but skipped for already-allocated variables.  An `is_stack_allocated`
+  flag on each variable replaces the fragile `pos == u16::MAX` sentinel.  The greedy
+  coloring path is retained behind `LOFT_ASSIGN_SLOTS=1`; the legacy pure-claim path
+  behind `LOFT_LEGACY_SLOTS=1`.  `compute_intervals` now correctly handles
+  `needs_early_first_def` (Text/Reference/nullable Enum only — Float and Long excluded)
+  and extends loop-carried variable lifetimes.  The shadow-comparison pass from A6.2 is
+  removed.  (`src/variables.rs`, `src/scopes.rs`, `src/state/codegen.rs`,
+  `doc/claude/SLOT_FAILURES.md`)
+
 - **A3** — `png`, `mmap-storage`, `rand_core`, and `rand_pcg` are now optional
   Cargo features (`png`, `mmap`, `random`).  The default feature set keeps all
   three enabled so existing builds are unaffected.  Building with

@@ -144,3 +144,81 @@ fn test() {
 }"
     );
 }
+
+// ── A6.2 shadow-comparison tests ─────────────────────────────────────────────
+
+/// Sequential primitives whose live intervals do not overlap.  `assign_slots` will
+/// reuse slot 0 for all three; `claim()` assigns sequential slots 4/8/12.  The shadow
+/// comparison logs the mismatch but must not panic — the function must still execute
+/// correctly.
+#[test]
+fn shadow_comparison_sequential_dead_primitives() {
+    code!(
+        "fn add_chain() -> integer {
+    x = 3;
+    y = x + 1;
+    z = y * 2;
+    z
+}
+
+fn test() {
+    assert(add_chain() == 8, \"Expected 8\");
+}"
+    );
+}
+
+/// A function with both alive-across-call integer accumulators and text variables.
+/// Verifies assign_slots' shadow result is conflict-free (validate_slots does not panic).
+#[test]
+fn shadow_comparison_text_and_integer_mixed() {
+    code!(
+        "fn greet(name: text) -> text {
+    msg = \"Hello \";
+    msg += name;
+    msg
+}
+
+fn test() {
+    result = greet(\"world\");
+    assert(result == \"Hello world\", \"Expected 'Hello world'\");
+}"
+    );
+}
+
+// ── A6.3 claim-free codegen tests ────────────────────────────────────────────
+
+/// Sequential primitives must be placed at correct slots and produce correct results
+/// with the new `is_stack_allocated` gate replacing the old `pos == u16::MAX` check.
+#[test]
+fn claim_free_sequential_primitives() {
+    code!(
+        "fn compute() -> integer {
+    a = 10;
+    b = a * 2;
+    c = b - 5;
+    c
+}
+
+fn test() {
+    assert(compute() == 15, \"Expected 15\");
+}"
+    );
+}
+
+/// Text-variable first allocation via the `stack_allocated` flag must emit `OpText`
+/// exactly once and allow subsequent appends.
+#[test]
+fn claim_free_text_variable_first_alloc() {
+    code!(
+        "fn build(prefix: text, n: integer) -> text {
+    result = prefix;
+    result += \" \";
+    result += \"{n}\";
+    result
+}
+
+fn test() {
+    assert(build(\"count\", 42) == \"count 42\", \"Expected 'count 42'\");
+}"
+    );
+}

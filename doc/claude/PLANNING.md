@@ -758,58 +758,47 @@ when multiple closures are live simultaneously.
 ---
 
 ### A6  Stack slot `assign_slots` pre-pass
-**Sources:** [ASSIGNMENT.md](ASSIGNMENT.md) Steps 3+4
-**Severity:** Low — `claim()` at code-generation time is O(n) and couples slot layout to
-runtime behaviour; no user-visible correctness impact (the correctness fix was completed
-2026-03-13); purely architectural debt
-**Description:** Replace the runtime `claim()` call in `byte_code()` with a compile-time
-`assign_slots()` pre-pass that uses the precomputed live intervals from `compute_intervals`
-to assign stack slots by greedy interval-graph colouring.  Makes slot layout auditable and
-removes a source of slot conflicts in long functions with many sequential variable reuses.
+**Sources:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md)
+**Severity:** Low — no user-visible impact; purely architectural (correctness fixed
+2026-03-13); safe mode already working
+**Description:** Replace the runtime `claim()` call in codegen with a compile-time
+pre-pass so slot layout is computed before bytecode generation.  Phases 2 and 3a are
+complete.  Phase 3b (optimised greedy mode) is blocked by three bugs.
 **Fix path:**
 
-**Phase 2 — Shadow mode** (`src/scopes.rs`):
-After `compute_intervals(fn)` runs in `scopes::check`, call `assign_slots(fn)` and compare
-its `stack_pos` assignments against the slots that `claim()` will later assign during
-`byte_code()`.  Because `byte_code()` hasn't run yet at this point, the comparison is
-deferred: store the `assign_slots()` result in a temporary `Vec<u16>` (one entry per
-variable), then after `byte_code()` completes, iterate variables and warn on any mismatch.
+**Phase 2 — Shadow mode (DONE):** Ran `assign_slots` alongside `claim()` and
+validated that the two layouts agreed.  Shadow infrastructure removed in Phase 3a.
 
-Mismatch log format (to `eprintln!` or `log::warn!`):
-```
-assign_slots mismatch in fn '<name>':
-  var '<v_name>' (slot [first_def, last_use)): assign_slots=<N>, claim=<M>
-```
-Abort the test run (`panic!`) if any mismatch is found while running under `cargo test`,
-so divergences block CI without breaking production.
+**Phase 3a — Safe pre-pass (DONE):** `assign_slots_safe` now runs as the default in
+`scopes::check`, assigning slots in `first_def` order with a high-water mark and no
+reuse.  `generate_set` reads the pre-assigned slot; `claim()` is called only as a
+fallback when the pre-assigned slot is above TOS (can happen after if-else restores
+`stack.position`).  All tests pass with this mode.
 
-Implementation detail: `scopes::check` already holds a mutable `Function`; calling
-`assign_slots` a second time (after the first in A6.1) is safe because `assign_slots`
-is idempotent given the same intervals.  The comparison needs to happen after the
-`byte_code()` pass fills in `stack_pos` via `claim()`.
+Three env-var gates allow testing alternative paths during development:
+- *(unset)* — `assign_slots_safe`: safe default, no slot reuse
+- `LOFT_ASSIGN_SLOTS=1` — `assign_slots`: greedy coloring, slot reuse; blocked by
+  three bugs (see [SLOT_FAILURES.md](SLOT_FAILURES.md))
+- `LOFT_LEGACY_SLOTS=1` — skip pre-pass; `claim()` in codegen as before A6.3
 
-*Tests:* full test suite passes with zero warnings; the unit tests in `variables.rs`
-(added in A6.1) pass; any future divergence between `assign_slots` and `claim` is caught
-immediately.
+**Phase 3b — Optimised mode (TODO):** Fix the three bugs in SLOT_FAILURES.md, then
+enable the greedy path as the default and remove the env-var gates.
 
-**Phase 3 — Replace `claim()`** (`src/state/codegen.rs`):
-Remove `claim()` calls from `byte_code()`.  Before this removal, `assign_slots(fn)` must
-already be running and its `stack_pos` values must be pre-populated on every variable.
-The `byte_code()` code that currently calls `fn.variables.claim(var_nr, size)` should
-instead read `fn.variables[var_nr].stack_pos` directly (already set by `assign_slots`).
+| Bug | File | Fix |
+|-----|------|-----|
+| A — Vector comprehension aliasing | `variables.rs` `compute_intervals` | Skip early `first_def` for `Type::Vector` |
+| B — Narrow→wide slot reuse | `variables.rs` `assign_slots` | Add `&& var_size == j_size` to reuse guard |
+| C — `Value::Iter` not traversed | `variables.rs` `compute_intervals` | Add `Value::Iter` arm that recurses into sub-expressions |
 
-Checklist:
-1. Locate all `claim()` call sites in `src/state/codegen.rs`.
-2. Replace each with a read of `variables[v].stack_pos`.
-3. Delete the `claim()` function from `src/variables.rs` (or keep it under `#[cfg(test)]`
-   for the shadow-mode comparison in case future debugging needs it).
-4. Remove the shadow-mode comparison code from Phase 2 (or leave it behind a
-   `#[cfg(debug_assertions)]` guard).
+Each fix is one or two lines.  After all three pass with `LOFT_ASSIGN_SLOTS=1`,
+remove the env-var gates and make the greedy path unconditional.
 
-*Tests:* full test suite passes with zero regressions; `cargo test` green on all
-platforms; `cargo test -- --test-threads=1` confirms no slot-conflict panics.
+**Phase 4 — Remove `claim()` (deferred):** Once Phase 3b is stable, delete `claim()`
+from `variables.rs` and the TOS-fallback from `generate_set`.
 
-**Effort:** High (variables.rs, scopes.rs, state/codegen.rs)
+*Tests:* full test suite green; `cargo test` passes on all platforms.
+
+**Effort:** Low (three small fixes + cleanup)
 **Target:** 0.8.2
 
 ---

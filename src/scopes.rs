@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-use crate::data::{Block, Data, DefType, Type, Value, v_set};
-use crate::variables::{Function, compute_intervals};
+use crate::data::{Block, Context, Data, DefType, Type, Value, v_set};
+use crate::variables::{Function, assign_slots, assign_slots_safe, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 struct Scopes {
@@ -66,6 +66,35 @@ pub fn check(data: &mut Data) {
             free_ref_nr,
             &mut seq,
         );
+        // Run assign_slots in shadow mode: pre-compute slots, save them, then reset so
+        // claim() continues to drive codegen as before (A6.2).  The saved layout is
+        // validated by check_shadow_slots after byte_code completes.
+        let local_start: u16 = {
+            let vars = &data.definitions[d_nr as usize].variables;
+            let arg_size: u16 = vars
+                .arguments()
+                .iter()
+                .map(|&a| size(vars.var_type(a), &Context::Argument))
+                .sum();
+            arg_size + 4 // 4 bytes for the return-address slot
+        };
+        // Pre-assign stack slots so codegen reads a pre-computed position instead of calling
+        // claim().  Three modes, selected by environment variable:
+        //
+        //   (unset)              — assign_slots_safe: sequential high-water mark, no slot reuse.
+        //                         Guaranteed conflict-free; equivalent to claim()-at-TOS strategy.
+        //   LOFT_ASSIGN_SLOTS=1 — assign_slots: optimised greedy coloring with slot reuse for
+        //                         small (≤4 B) primitives.  May expose interval-accuracy bugs.
+        //   LOFT_LEGACY_SLOTS=1 — skip entirely; all vars stay at u16::MAX and generate_set's
+        //                         claim() fallback drives slot allocation as before A6.3.
+        let vars = &mut data.definitions[d_nr as usize].variables;
+        if std::env::var("LOFT_LEGACY_SLOTS").is_ok() {
+            // legacy: claim() in codegen handles everything
+        } else if std::env::var("LOFT_ASSIGN_SLOTS").is_ok() {
+            assign_slots(vars, local_start);
+        } else {
+            assign_slots_safe(vars, local_start);
+        }
     }
 }
 

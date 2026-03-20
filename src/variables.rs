@@ -37,6 +37,7 @@ struct Iterator {
 
 // This is created for every variable instance, even if those are of the same name.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Variable {
     name: String,
     type_def: Type,
@@ -49,6 +50,10 @@ pub struct Variable {
     argument: bool,
     defined: bool,
     const_param: bool,
+    /// Whether this variable's stack storage has been initialised by codegen.
+    /// Set to `true` when the first-allocation init opcodes are emitted (A6.3).
+    /// Arguments are pre-allocated by the caller, so they start as `true`.
+    pub stack_allocated: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
     pub first_def: u32,
     /// Sequence number of the last `Value::Var` (or implicit `OpFreeText`/`OpFreeRef`) for this variable.
@@ -557,6 +562,7 @@ impl Function {
             argument: false,
             defined: self.variables[var as usize].defined,
             const_param: self.variables[var as usize].const_param,
+            stack_allocated: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -580,6 +586,7 @@ impl Function {
             argument: false,
             defined: false,
             const_param: false,
+            stack_allocated: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -600,6 +607,7 @@ impl Function {
             argument: false,
             defined: true,
             const_param: false,
+            stack_allocated: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -660,6 +668,7 @@ impl Function {
     pub fn become_argument(&mut self, var_nr: u16) {
         self.variables[var_nr as usize].argument = true;
         self.variables[var_nr as usize].defined = true;
+        self.variables[var_nr as usize].stack_allocated = true;
     }
 
     pub fn is_argument(&self, var_nr: u16) -> bool {
@@ -797,6 +806,19 @@ impl Function {
     pub fn var_type(&self, var_nr: u16) -> &Type {
         &self.variables[var_nr as usize].type_def
     }
+
+    /// Returns `true` when codegen has already emitted the first-allocation init opcodes
+    /// for this variable (e.g. `OpText`, `OpConvRefFromNull`).  Used by A6.3 to replace
+    /// the `stack_pos == u16::MAX` first-assignment guard in `generate_set`.
+    pub fn is_stack_allocated(&self, var_nr: u16) -> bool {
+        self.variables[var_nr as usize].stack_allocated
+    }
+
+    /// Mark `var_nr` as having been allocated on the stack (call once per variable,
+    /// when the first-allocation init opcodes are emitted in `generate_set`).
+    pub fn set_stack_allocated(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].stack_allocated = true;
+    }
 }
 
 pub fn size(tp: &Type, context: &Context) -> u16 {
@@ -850,11 +872,37 @@ pub fn compute_intervals(
             *seq += 1;
         }
         Value::Set(v, value) => {
-            // Process the value expression first so that variables defined inside it
-            // (e.g., block-return temporaries) get sequence numbers before the target.
-            compute_intervals(value, function, free_text_nr, free_ref_nr, seq);
             let v = *v as usize;
-            if v < function.variables.len() && function.variables[v].first_def == u32::MAX {
+            // For Text and Reference (size > 4 bytes), a pre-init opcode (OpText,
+            // OpConvRefFromNull, etc.) fires at TOS BEFORE the value expression runs during
+            // codegen.  Set first_def here — before traversing value — so assign_slots gives
+            // this variable a lower slot than any inner variable.  Without this, inner
+            // variables grab the lower slots and force the outer variable above TOS,
+            // triggering the claim() fallback with a slot conflict.
+            //
+            // Only types whose first assignment emits a pre-init opcode BEFORE the value
+            // expression runs qualify: Text (OpText), owned Reference (OpConvRefFromNull),
+            // struct-enum ref (OpConvRefFromNull).  Float (8 B), Long (8 B), and Vector do
+            // NOT have pre-init opcodes; setting first_def early for them causes spurious
+            // interval overlaps with variables defined inside the value expression.
+            let needs_early_first_def = v < function.variables.len()
+                && matches!(
+                    function.variables[v].type_def,
+                    Type::Text(_) | Type::Reference(_, _) | Type::Enum(_, true, _)
+                );
+            if needs_early_first_def && function.variables[v].first_def == u32::MAX {
+                function.variables[v].first_def = *seq;
+                *seq += 1;
+            }
+            // Process the value expression (inner variables get seq numbers after the target).
+            compute_intervals(value, function, free_text_nr, free_ref_nr, seq);
+            // Small/primitive types and Vector types: record first_def after traversing value
+            // so that inner temporaries (which finish before this assignment takes effect) can
+            // potentially share the same stack slot as this variable.
+            if !needs_early_first_def
+                && v < function.variables.len()
+                && function.variables[v].first_def == u32::MAX
+            {
                 function.variables[v].first_def = *seq;
             }
             *seq += 1;
@@ -865,8 +913,45 @@ pub fn compute_intervals(
             }
         }
         Value::Loop(lp) => {
+            let seq_start = *seq;
             for op in &lp.operators {
                 compute_intervals(op, function, free_text_nr, free_ref_nr, seq);
+            }
+            let seq_end = *seq;
+            // Extend last_use of loop-carried variables.
+            // A variable that is (a) defined BEFORE the loop and (b) used inside
+            // the loop may be read again at the top of the next iteration.  Extend
+            // such variables' last_use to loop_last (= seq_end - 1, the last seq
+            // inside the loop) so assign_slots does not let any loop-internal
+            // variable reuse their stack slot.
+            //
+            // Variables first defined INSIDE the loop (first_def >= seq_start) are
+            // intentionally excluded: they are written before each use within the
+            // same iteration and are not loop-carried (e.g. block-scope temporaries
+            // like `_for_result_1` that share a slot with the outer Set target).
+            if seq_end > seq_start {
+                let loop_last = seq_end - 1;
+                for v in &mut function.variables {
+                    // Extend loop-carried variables: any variable defined BEFORE the loop
+                    // and read INSIDE the loop.  Such variables may be read again at the
+                    // top of the next iteration; without extension, assign_slots would
+                    // consider them dead and let loop-internal variables reuse their slot,
+                    // causing corruption when iteration N+1 reads the stale slot.
+                    //
+                    // Variables first defined INSIDE the loop (first_def >= seq_start) are
+                    // intentionally excluded: they are written before each use within the
+                    // same iteration and are not loop-carried (e.g. block-scope temporaries
+                    // like `_for_result_1` that share a slot with the outer Set target).
+                    let var_size = size(&v.type_def, &Context::Variable);
+                    if var_size > 0
+                        && v.first_def != u32::MAX
+                        && v.first_def < seq_start   // defined before the loop
+                        && v.last_use >= seq_start   // used inside the loop
+                        && v.last_use < seq_end
+                    {
+                        v.last_use = loop_last;
+                    }
+                }
             }
         }
         Value::If(test, t_val, f_val) => {
@@ -1116,12 +1201,40 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
 /// `stack_pos == u16::MAX`.
 ///
 /// The pipeline is **not** changed: `claim()` remains the active mechanism.
-/// This function exists only to produce an independently-auditable slot layout
-/// (A6.1 of ASSIGNMENT.md).
-pub fn assign_slots(function: &mut Function) {
-    // Collect indices of variables that have a known live interval.
+/// Prepare local variable slots for codegen (A6.3a safe mode).
+///
+/// `local_start` is the first free byte offset after the argument area and the
+/// 4-byte return-address slot (`sum_of_argument_sizes + 4`).
+///
+/// This function marks size-0 variables (null-typed, no stack storage) with
+/// sentinel slot 0 and leaves all other local variables at `u16::MAX`.
+/// `generate_set` detects `u16::MAX` via the `is_stack_allocated` flag and falls
+/// through to `claim()`-at-TOS, which is always correct regardless of IR vs codegen
+/// ordering.  The `is_stack_allocated` flag makes first-allocation detection explicit
+/// instead of relying on `stack_pos == u16::MAX`.
+///
+/// The `local_start` argument is accepted but not used (it is reserved for A6.3b,
+/// where full pre-assignment without `claim()` will replace this stub).
+pub fn assign_slots_safe(function: &mut Function, _local_start: u16) {
+    for v in &mut function.variables {
+        if !v.argument && size(&v.type_def, &Context::Variable) == 0 {
+            v.stack_pos = 0; // sentinel: null-typed, no stack storage
+        }
+    }
+}
+
+/// `sum_of_argument_sizes + 4`.
+///
+/// Variables with `argument == true` or `first_def == u32::MAX` are skipped.
+/// Primitive types (`size <= 4 bytes`) may share a slot with an earlier dead variable;
+/// reference and text types (`size > 4 bytes`) always receive a fresh slot.
+pub fn assign_slots(function: &mut Function, local_start: u16) {
+    // Collect indices of local variables that have a known live interval.
     let mut order: Vec<usize> = (0..function.variables.len())
-        .filter(|&i| function.variables[i].first_def != u32::MAX)
+        .filter(|&i| {
+            let v = &function.variables[i];
+            !v.argument && v.first_def != u32::MAX
+        })
         .collect();
     // Sort by first_def to process variables in definition order.
     order.sort_by_key(|&i| function.variables[i].first_def);
@@ -1139,9 +1252,11 @@ pub fn assign_slots(function: &mut Function) {
             function.variables[i].stack_pos = 0;
             continue;
         }
-        // Find the lowest slot offset that doesn't conflict with any already-assigned
-        // variable whose live interval overlaps [first_def, last_use].
-        let mut candidate: u16 = 0;
+        // Find the lowest slot offset (>= local_start) that doesn't conflict with any
+        // already-assigned variable whose live interval overlaps [first_def, last_use].
+        // For large types (ref/text, size > 4) we never reuse a slot; for primitives we do.
+        let can_reuse = var_size <= 4;
+        let mut candidate: u16 = local_start;
         'retry: loop {
             let end = candidate.saturating_add(var_size);
             for &j in &order {
@@ -1164,11 +1279,31 @@ pub fn assign_slots(function: &mut Function) {
                         candidate = j_end;
                         continue 'retry;
                     }
+                    // For large types, even expired slots must not be reused (avoids
+                    // complications with init opcodes that write at stack.position).
+                    if !can_reuse {
+                        candidate = j_end;
+                        continue 'retry;
+                    }
                 }
             }
             break;
         }
         function.variables[i].stack_pos = candidate;
+    }
+    // Temporary debug: print slot assignments
+    if std::env::var("LOFT_DEBUG_SLOTS").is_ok() {
+        for &i in &order {
+            let v = &function.variables[i];
+            eprintln!(
+                "  var[{i}] '{}' slot={} size={} first_def={} last_use={}",
+                v.name,
+                v.stack_pos,
+                size(&v.type_def, &Context::Variable),
+                v.first_def,
+                v.last_use
+            );
+        }
     }
 }
 
@@ -1434,7 +1569,7 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 11;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "non-overlapping variables should share a slot"
@@ -1453,7 +1588,7 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 0;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         assert_ne!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "simultaneously-live variables must not share a slot"
@@ -1474,7 +1609,7 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 0;
         f.variables[v2 as usize].last_use = 5;
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         let s1 = f.variables[v1 as usize].stack_pos;
         let s2 = f.variables[v2 as usize].stack_pos;
         let dbref_size = size_of::<DbRef>() as u16;
@@ -1493,11 +1628,70 @@ mod tests {
         f.variables[v1 as usize].last_use = 10;
         let v2 = f.add_unique("v2", &INT, 0);
         // v2 is never defined — first_def stays u32::MAX
-        assign_slots(&mut f);
+        assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v2 as usize].stack_pos,
             u16::MAX,
             "never-defined variable must keep stack_pos == u16::MAX"
+        );
+    }
+
+    // ── A6.3b: Bug B — narrow → wide slot reuse ──────────────────────────────
+
+    /// A dead 1-byte variable must NOT donate its slot to a 4-byte variable.
+    /// A 4-byte fn-ref placed at a 1-byte slot produces an off-by-1 `OpPutX`
+    /// displacement at runtime, corrupting data.  `assign_slots` must require an
+    /// exact size match before reusing a dead slot.
+    #[test]
+    #[ignore = "A6.3b: assign_slots narrow→wide reuse bug not yet fixed"]
+    fn assign_slots_no_narrow_to_wide_reuse() {
+        const BOOL: Type = Type::Boolean;
+        // flag: boolean (1 byte), dead early; f: integer (4 bytes), born after flag dies.
+        let mut f = Function::new("f", "test");
+        let flag = f.add_unique("flag", &BOOL, 0);
+        f.variables[flag as usize].first_def = 0;
+        f.variables[flag as usize].last_use = 2;
+        let fnref = f.add_unique("fnref", &INT, 0);
+        f.variables[fnref as usize].first_def = 5;
+        f.variables[fnref as usize].last_use = 10;
+        assign_slots(&mut f, 0);
+        // flag gets slot 0 (1 byte).  fnref (4 bytes) must NOT reuse slot 0;
+        // it must start at a fresh 4-byte-aligned offset (i.e. >= 1 + size_of(INT) = 5,
+        // practically slot 1 since there is no alignment requirement — just must be > 0).
+        assert_ne!(
+            f.variables[fnref as usize].stack_pos, 0,
+            "4-byte variable must not reuse a dead 1-byte slot"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    // ── A6.3b: Bug C — Value::Iter not traversed by compute_intervals ─────────
+
+    /// The index variable of a `Value::Iter` node is read inside the iterator's
+    /// `create` / `next` sub-expressions.  `compute_intervals` must recurse into those
+    /// sub-expressions so that `last_use` is set beyond the loop body.  Without this,
+    /// `last_use` stays 0 and `assign_slots` treats the index as dead at birth,
+    /// allowing a later variable to steal its slot and corrupting the loop counter.
+    #[test]
+    #[ignore = "A6.3b: Value::Iter not yet handled in compute_intervals"]
+    fn compute_intervals_iter_index_var_gets_last_use() {
+        let mut f = Function::new("f", "test");
+        let idx = f.add_unique("idx", &INT, 0);
+        // Simulate: create = Set(idx, 0), next = Var(idx), extra_init = Null
+        let create = Value::Set(idx, Box::new(Value::Int(0)));
+        let next = Value::Var(idx);
+        let extra_init = Value::Null;
+        let iter = Value::Iter(idx, Box::new(create), Box::new(next), Box::new(extra_init));
+        let mut seq = 0u32;
+        compute_intervals(&iter, &mut f, u32::MAX, u32::MAX, &mut seq);
+        assert_ne!(
+            f.variables[idx as usize].last_use, 0,
+            "index variable's last_use must be set by traversing Iter sub-expressions"
+        );
+        assert_ne!(
+            f.variables[idx as usize].first_def,
+            u32::MAX,
+            "index variable's first_def must be set"
         );
     }
 }
