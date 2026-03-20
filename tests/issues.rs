@@ -1148,8 +1148,8 @@ fn n9_generated_fill_matches_src() {
     );
 }
 
-/// N8: OpSortVector, OpInsertVector, and OpLengthCharacter must exist in codegen_runtime.
-/// Generated sort/insert/fill tests fail to compile because these functions are absent.
+/// N8: Sort must work correctly in native-codegen mode.
+/// The #rust template for OpSortVector is inlined directly (no OpSortVector runtime fn needed).
 #[test]
 fn n8_codegen_runtime_vector_ops_exist() {
     // Sorting a vector of integers must work in native-codegen mode.
@@ -1160,8 +1160,8 @@ fn n8_codegen_runtime_vector_ops_exist() {
         std::fs::read_to_string("tests/generated/issues_n8_codegen_runtime_vector_ops_exist.rs")
             .expect("generated file not found");
     assert!(
-        src.contains("OpSortVector("),
-        "generated code missing OpSortVector call"
+        src.contains("vector::sort_vector("),
+        "generated code missing inlined vector::sort_vector call"
     );
 }
 
