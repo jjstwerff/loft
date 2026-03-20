@@ -40,6 +40,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [Recommended Implementation Order](#recommended-implementation-order)
 - [L — Language Quality](#l--language-quality)
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
+  - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
 - [N — Native Codegen](#n--native-codegen)
@@ -508,6 +509,30 @@ The second pass already resolves the element type correctly for assignment targe
 variable and init block are always emitted for empty `[]` literals.
 
 **Effort:** Medium (parser change; careful handling of `Type::Unknown` on second pass)
+**Target:** 0.8.2
+
+---
+
+### L5  Fix `v += extra` via `&vector` ref-param
+**Sources:** [PROBLEMS.md](PROBLEMS.md) #56; `tests/issues.rs::ref_param_append_bug`
+**Severity:** High — panics in debug builds; silently does nothing in release builds
+**Description:** `v += extra` compiled for a `v: &vector<T>` ref-param emits
+`OpAppendVector` with the raw ref-param DbRef (a stack pointer into the caller's frame)
+instead of dereferencing it first.  `vector_append` calls `store.get_int(v.rec, v.pos)`
+where `v.rec` is the caller's stack record, which is absent from the current function's
+store claims, causing "Unknown record" panic.
+
+**Fix path:** In `generate_set` / the vector-append codegen path
+(`src/state/codegen.rs`), when the target variable is `Type::RefVar(Vector)`:
+
+1. Emit `OpGetStackRef` to load the actual vector DbRef from the ref-param.
+2. Emit `OpAppendVector` on the loaded DbRef.
+3. Emit `OpSetStackRef` to write the (possibly reallocated) DbRef back through the ref.
+
+The same dereference-operate-writeback pattern applies to all collection-mutating
+operations on ref-params.  Identify them in codegen and apply the fix consistently.
+
+**Effort:** Medium (codegen change; audit all collection ops on `RefVar` targets)
 **Target:** 0.8.2
 
 ---

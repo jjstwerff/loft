@@ -17,6 +17,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | A6    | **Stack slot `assign_slots` pre-pass** *(A6.4 remains)*      | Low       |                 | SLOT_FAILURES.md            |
 | A6.4  | ↳ Remove dead `claim()` and `assign_slots_safe`              | Small     |                 | variables.rs, codegen.rs    |
 | L4    | Fix empty `[]` literal as mutable vector argument            | Medium    |                 | PROBLEMS.md #44             |
+| L5    | Fix `v += extra` via `&vector` ref-param (panic / silent nop) | Medium  |                 | PROBLEMS.md #56             |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
 | N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
