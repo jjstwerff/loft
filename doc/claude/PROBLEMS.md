@@ -51,38 +51,20 @@ R-tree) is already allocated in the schema; the iteration traversal is the main 
 
 ## Stack Slot Assignment (In Progress)
 
-### 24. Optimised slot assignment not yet stable
+### 24. `claim()` and `assign_slots_safe` not yet removed (A6.4)
 
-**Current:** The safe pre-pass (`assign_slots_safe`) is now the default — variables
-receive sequential slots in `first_def` order with no reuse.  `claim()` in codegen
-is retained but skipped for already-allocated variables.  The legacy `claim()`-only
-path is still reachable via `LOFT_LEGACY_SLOTS=1`; the greedy-coloring path via
-`LOFT_ASSIGN_SLOTS=1`.
+**Current (A6.3b):** Greedy interval-colouring (`assign_slots`) is now the
+unconditional default.  The three interval bugs (A, B, C) are all fixed.  The
+env-var gates (`LOFT_ASSIGN_SLOTS`, `LOFT_LEGACY_SLOTS`) are removed.  All tests
+pass except the pre-existing `ref_param_append_bug` (a `store.rs` bug unrelated to
+slot assignment).
 
-**Two known bugs block the optimised mode** (documented in `doc/claude/SLOT_FAILURES.md`):
+**Remaining:** `claim()` and `assign_slots_safe` are dead code — they are still
+compiled but no longer called.  A6.4 removes them and simplifies `generate_set` by
+replacing the `claim()` fallback with a `stack.position.max(pos + size)` advance.
 
-- **Bug A — Vector comprehension aliasing** (`compute_intervals`): **Fixed by A6.3a.**
-  The `needs_early_first_def` predicate now excludes `Type::Vector`; filter/map tests
-  pass in all modes.
-
-- **Bug B — Narrow→wide slot reuse** (`assign_slots`, optimised only):
-  A 4-byte fn-ref is allowed to reuse a dead 1-byte slot; the `OpPutX` displacement
-  is off by the size difference, corrupting data at runtime.
-  Fix: add `|| var_size != j_size` to the dead-slot-overlap guard (inner loop).
-
-- **Bug C — `Value::Iter` not traversed** (`compute_intervals`, optimised only):
-  Variables read only inside an iterator's `create`/`next`/`extra_init` keep
-  `last_use = 0` and appear dead at birth, allowing slot reuse that corrupts the
-  loop counter at runtime.
-  Fix: add a `Value::Iter` arm that recurses into all three sub-expressions.
-
-**Impact:** With the safe default, all tests pass (except the pre-existing
-`ref_param_append_bug`).  The optimised mode is gated behind `LOFT_ASSIGN_SLOTS=1`
-and should not be used until Bugs B and C are fixed.
-
-**Next steps:** Fix Bugs B and C (each a one- or two-line change); enable the ignored
-unit tests; make greedy the default; remove `LOFT_LEGACY_SLOTS` and `LOFT_ASSIGN_SLOTS`
-env-var gates.  Then A6.4: remove `claim()` and `assign_slots_safe`.
+**Next steps:** A6.4 per [PLANNING.md § A6](PLANNING.md) and
+[SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
 
 **Details:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
 

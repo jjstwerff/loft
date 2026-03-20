@@ -14,9 +14,8 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| A6    | **Stack slot `assign_slots` pre-pass** *(1 phase remains)*   | Low       |                 | SLOT_FAILURES.md            |
-| A6.3b | ↳ Fix 3 interval bugs; enable greedy mode; remove env gates  | Small     |                 | variables.rs                |
-| A6.4  | ↳ Remove `claim()` and TOS fallback once greedy mode stable  | Small     | A6.3b           | variables.rs, codegen.rs    |
+| A6    | **Stack slot `assign_slots` pre-pass** *(A6.4 remains)*      | Low       |                 | SLOT_FAILURES.md            |
+| A6.4  | ↳ Remove dead `claim()` and `assign_slots_safe`              | Small     |                 | variables.rs, codegen.rs    |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
 | N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |

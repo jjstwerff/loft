@@ -2,29 +2,28 @@
 
 ## Modes
 
-Three environment-variable modes select the slot-assignment strategy:
+As of A6.3b, `assign_slots` (greedy interval colouring) is the unconditional default.
+The `LOFT_ASSIGN_SLOTS` and `LOFT_LEGACY_SLOTS` env-var gates have been removed.
 
-| Mode | Env var | Strategy |
-|------|---------|----------|
-| safe sequential (default) | — | `assign_slots_safe`: fresh slot per variable, high-watermark |
-| optimised greedy | `LOFT_ASSIGN_SLOTS=1` | `assign_slots`: greedy interval colouring with small-type reuse |
-| legacy | `LOFT_LEGACY_SLOTS=1` | no pre-pass; `claim()`-at-TOS in codegen |
+| Mode | Status | Strategy |
+|------|--------|----------|
+| greedy (default) | **Active** | `assign_slots`: interval colouring with same-size primitive reuse |
+| legacy | Removed | no pre-pass; `claim()`-at-TOS in codegen |
 
 ---
 
 ## Failure matrix
 
-| Test | Safe | Optimised | Legacy | Bug |
-|------|------|-----------|--------|-----|
-| filter_integers | pass | pass | pass | A — **Fixed by A6.3a** |
-| map_integers | pass | pass | pass | A — **Fixed by A6.3a** |
-| fn_ref_conditional_call | pass | **FAIL** | pass | B — open |
-| n10_char_cast_in_generated_code | pass | **FAIL** | pass | C — open |
-| ref_param_append_bug | **FAIL** | **FAIL** | **FAIL** | unrelated (store.rs bug) |
+| Test | Status | Bug |
+|------|--------|-----|
+| filter_integers | **pass** | A — Fixed by A6.3a |
+| map_integers | **pass** | A — Fixed by A6.3a |
+| fn_ref_conditional_call | **pass** | B — Fixed by A6.3b |
+| n10_char_cast_in_generated_code | **pass** | C — Fixed by A6.3b |
+| ref_param_append_bug | **FAIL** | unrelated (store.rs bug) |
 
-Bug A was fixed by the `needs_early_first_def` change in A6.3a (`compute_intervals` no
-longer sets early `first_def` for `Type::Vector`).  Bugs B and C only affect the optimised
-greedy mode (`LOFT_ASSIGN_SLOTS=1`).  Safe mode and legacy mode are fully passing.
+All three slot-assignment bugs (A, B, C) are fixed.  `ref_param_append_bug` is a
+pre-existing `store.rs` bug unrelated to slot assignment.
 
 ---
 
@@ -234,15 +233,12 @@ extends `c#index.last_use` to `loop_last`.  `assign_slots` then sees
 
 | Bug | Status | File | Change |
 |-----|--------|------|--------|
-| A — comprehension aliasing | **Fixed (A6.3a)** | `src/variables.rs` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` (and Long/Float) |
-| B — narrow→wide reuse | **Open** | `src/variables.rs` `assign_slots` | Add `\|\| var_size != j_size` to the dead-slot-overlap guard |
-| C — Iter not traversed | **Open** | `src/variables.rs` `compute_intervals` | Add `Value::Iter` case that recurses into `create`, `next`, `extra_init` |
+| A — comprehension aliasing | **Fixed (A6.3a)** | `src/variables.rs` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` |
+| B — narrow→wide reuse | **Fixed (A6.3b)** | `src/variables.rs` `assign_slots` | `\|\| var_size != j_size` added to dead-slot-overlap guard |
+| C — Iter not traversed | **Fixed (A6.3b)** | `src/variables.rs` `compute_intervals` | `Value::Iter` arm recurses into `create`/`next`/`extra_init`; `Value::Set` now updates `last_use` for write targets |
 
-Fixes B and C are additive; neither removes existing behaviour.  No changes needed to
-`generate_set`, `assign_slots_safe`, or any other codegen logic.
-
-After B and C, all currently-failing slot-related tests are expected to pass with
-`LOFT_ASSIGN_SLOTS=1`.
+All three bugs are fixed.  `assign_slots` (greedy) is the unconditional default as of
+A6.3b.  All tests pass except `ref_param_append_bug` (pre-existing `store.rs` bug).
 
 ---
 

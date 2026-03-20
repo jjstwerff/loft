@@ -762,65 +762,16 @@ when multiple closures are live simultaneously.
 **Severity:** Low — no user-visible impact; purely architectural (correctness fixed
 2026-03-13); safe mode already working
 **Description:** Replace the runtime `claim()` call in codegen with a compile-time
-pre-pass so slot layout is computed before bytecode generation.  Phases 2 and 3a are
-complete.  Phase 3b (optimised greedy mode) is blocked by three bugs.
+pre-pass so slot layout is computed before bytecode generation.  Phases 2, 3a, and 3b
+are complete.  Only Phase 4 (remove dead `claim()` and `assign_slots_safe`) remains.
 **Fix path:**
 
-**Phase 2 — Shadow mode (DONE):** Ran `assign_slots` alongside `claim()` and
-validated that the two layouts agreed.  Shadow infrastructure removed in Phase 3a.
+**Phase 3b — Optimised mode (DONE A6.3b):** Fixed the two remaining bugs (B and C),
+made `assign_slots` the unconditional default, and removed the `LOFT_ASSIGN_SLOTS` /
+`LOFT_LEGACY_SLOTS` env-var gates.  `assign_slots_safe` and `claim()` are now dead code.
+All tests pass (except the pre-existing `ref_param_append_bug` in `store.rs`).
 
-**Phase 3a — Safe pre-pass (DONE):** `assign_slots_safe` now runs as the default in
-`scopes::check`, assigning slots in `first_def` order with a high-water mark and no
-reuse.  `generate_set` reads the pre-assigned slot; `claim()` is called only as a
-fallback when the pre-assigned slot is above TOS (can happen after if-else restores
-`stack.position`).  All tests pass with this mode.
-
-Three env-var gates allow testing alternative paths during development:
-- *(unset)* — `assign_slots_safe`: safe default, no slot reuse
-- `LOFT_ASSIGN_SLOTS=1` — `assign_slots`: greedy coloring, slot reuse; blocked by
-  three bugs (see [SLOT_FAILURES.md](SLOT_FAILURES.md))
-- `LOFT_LEGACY_SLOTS=1` — skip pre-pass; `claim()` in codegen as before A6.3
-
-**Phase 3b — Optimised mode (TODO):** Fix the two remaining bugs (A was fixed by
-A6.3a), then make greedy the default and remove the env-var gates.
-
-| Bug | Status | File | Fix |
-|-----|--------|------|-----|
-| A — Vector comprehension aliasing | **Fixed (A6.3a)** | `variables.rs` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` |
-| B — Narrow→wide slot reuse | **Open** | `variables.rs` `assign_slots` | `\|\| var_size != j_size` in dead-slot-overlap guard (inner loop) |
-| C — `Value::Iter` not traversed | **Open** | `variables.rs` `compute_intervals` | Add `Value::Iter` arm that recurses into `create`/`next`/`extra_init` |
-
-Ignored unit tests for Bugs B and C already live in `src/variables.rs`.
-
-**Fix B** — one change in the inner loop of `assign_slots` (`src/variables.rs`):
-```rust
-// was:
-if !can_reuse {
-// fix:
-if !can_reuse || var_size != j_size {
-```
-(`j_size` is computed two lines above in the same loop body.)
-
-**Fix C** — add `Value::Iter` arm in `compute_intervals` (`src/variables.rs`),
-after the `Value::Loop` arm:
-```rust
-Value::Iter(index_var, create, next, extra_init) => {
-    let v = *index_var as usize;
-    if v < function.variables.len() {
-        function.variables[v].last_use =
-            function.variables[v].last_use.max(*seq);
-    }
-    *seq += 1;
-    compute_intervals(create, function, free_text_nr, free_ref_nr, seq);
-    compute_intervals(next,   function, free_text_nr, free_ref_nr, seq);
-    compute_intervals(extra_init, function, free_text_nr, free_ref_nr, seq);
-}
-```
-
-**Making greedy the default** (`src/scopes.rs`): once both fixes pass, remove the
-`LOFT_LEGACY_SLOTS` and `LOFT_ASSIGN_SLOTS` branches and call `assign_slots` unconditionally.
-
-**Phase 4 — Remove `claim()` (deferred until Phase 3b stable):**
+**Phase 4 — Remove `claim()` (deferred, tracked as A6.4):**
 
 With accurate intervals, `assign_slots` pre-assigns ALL variables at their correct TOS
 position.  The `claim()` fallback in `generate_set` becomes dead code.
