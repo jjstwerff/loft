@@ -16,6 +16,9 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | L4    | Fix empty `[]` literal as mutable vector argument            | Medium    |                 | PROBLEMS.md #44             |
 | L5    | Fix `v += extra` via `&vector` ref-param (panic / silent nop) | Medium  |                 | PROBLEMS.md #56             |
+| A13   | Float and Long dead-slot reuse in `assign_slots`             | Very Small |                | PLANNING.md A13             |
+| A14   | `skip_free` flag — replace `clean_work_refs` type mutation   | Small     |                 | PLANNING.md A14             |
+| A15   | Exhaustive `inline_ref_set_in` + fallback assertion          | Very Small |                | PLANNING.md A15             |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
 | N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
@@ -36,6 +39,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | L3.1  | ↳ `FileResult` enum + `io_result` Rust helper               | Small     |                 | 02_images.loft, database/io.rs |
 | L3.2  | ↳ Op signatures + all Rust impls (fill.rs, io.rs)           | Small     | L3.1            | fill.rs, state/io.rs, database/io.rs |
 | L3.3  | ↳ `ok()` method + public API wrappers + test migration       | Small     | L3.2            | 02_images.loft, tests/      |
+| A12   | Lazy work-variable initialization (accurate intervals)        | Small–Med |                 | PLANNING.md A12             |
 | A10   | **Field iteration — `for f in s#fields`** *(5 ph)*           | Medium    |                 | Design eval 2026-03-18      |
 | A10.0 | ↳ Remove `fields` from `KEYWORDS` (revert L3 code change)   | Small     |                 | lexer.rs                    |
 | A10.1 | ↳ `Field` + `FieldValue` types in `default/01_code.loft`    | Small     | A10.0           | 01_code.loft                |

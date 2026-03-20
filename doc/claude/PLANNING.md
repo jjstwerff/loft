@@ -43,6 +43,10 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization)
+  - [A13 — Float and Long dead-slot reuse](#a13--float-and-long-dead-slot-reuse-in-assign_slots)
+  - [A14 — `skip_free` flag](#a14--skip_free-flag--replace-clean_work_refs-type-mutation)
+  - [A15 — Exhaustive `inline_ref_set_in`](#a15--exhaustive-inline_ref_set_in-and-fallback-assertion)
 - [N — Native Codegen](#n--native-codegen)
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
@@ -1115,6 +1119,258 @@ the generic type-mismatch message.
 
 **Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)
 **Target:** 0.8.3
+
+---
+
+### A12  Lazy work-variable initialization
+**Sources:** Stack efficiency evaluation 2026-03-20
+**Description:** Work text variables (`__work_N`) are currently initialized at function
+start via `Set(wt, Text(""))` inserted at index 0 of the body block.  This forces
+`first_def = 0` for every work text variable, making its live interval span the entire
+function.  Two sequential, non-overlapping text operations each hold a 24-byte slot for
+the full lifetime of the call frame.  The same applies to non-inline work ref variables
+(`__ref_N`), which also get function-start null-inits.
+
+Inline-ref temporaries already use lazy insertion (per A6.3a work): their null-init is
+placed immediately before the statement that first assigns them, giving accurate intervals.
+This item extends that approach to all work variables.
+
+**Fix path:**
+
+*Step 1 — Rename and generalize `inline_ref_set_in`* (`src/parser/expressions.rs`):
+
+Rename `inline_ref_set_in` to `first_set_in` (or add it as a general helper).  No logic
+changes — the function already recurses into all relevant `Value` variants and works
+correctly for both text and ref work variables.
+
+*Step 2 — Unify the three insertion loops in `parse_code`*:
+
+Replace the three separate loops that insert null-inits at function start:
+
+```rust
+// BEFORE (lines 50–97, three separate loops):
+for wt in self.vars.work_texts() {
+    ls.insert(0, v_set(wt, Value::Text(String::new())));  // always at index 0
+}
+for r in self.vars.work_references() {
+    if !is_argument && depend.is_empty() && !is_inline_ref {
+        ls.insert(0, v_set(r, Value::Null));              // always at index 0
+    }
+}
+// inline_refs loop: already uses first_set_in (correct)
+
+// AFTER (one unified loop over all work variables):
+let all_work: Vec<(u16, Value)> = self
+    .vars.work_texts().into_iter().map(|v| (v, Value::Text(String::new())))
+    .chain(self.vars.work_references().into_iter()
+        .filter(|&r| !self.vars.is_argument(r) && self.vars.tp(r).depend().is_empty())
+        .map(|r| (r, Value::Null)))
+    .collect();
+let mut insertions: Vec<(usize, u16, Value)> = Vec::new();
+for (r, init) in all_work {
+    let pos = ls.iter().position(|stmt| first_set_in(stmt, r))
+        .unwrap_or_else(|| { debug_assert!(false, ...); fallback });
+    insertions.push((pos, r, init));
+}
+// Sort by descending position to avoid index invalidation; same-position: higher var_nr first
+insertions.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+for (pos, r, init) in insertions {
+    ls.insert(pos, v_set(r, init));
+}
+```
+
+*Step 3 — Remove `inline_ref_vars` distinction if possible*:
+
+After Step 2, inline-refs use the same insertion path as all other work variables.  The
+`inline_ref_vars` `BTreeSet` on `Function` and `mark_inline_ref` / `is_inline_ref` /
+`inline_ref_references` can be removed if the LIFO ordering behaviour is identical — verify
+that the unified loop produces the same `var_order` for currently tested functions before
+removing.
+
+*Interval effect:* `first_def` for a work text variable that appears in the third statement
+of a five-statement function is now `seq(stmt3)` rather than 0.  Two sequential text
+operations — `__work_1` used in stmt 2 and `__work_2` used in stmt 4 — can now share a
+single 24-byte slot since their intervals no longer overlap.
+
+*Safety:* `first_set_in` finds the outermost top-level statement in `ls` that contains the
+work variable's Set, even if that Set is inside a nested if/loop/block.  The null-init is
+therefore inserted before that statement.  At runtime the null-init fires before any
+conditional path that might use and then free the variable — the same guarantee as the
+current function-start approach, but narrowed to the first-use statement.
+
+**Tests:** Add a unit test for `assign_slots`: two sequential `Type::Text` variables with
+non-overlapping intervals receive the same slot (size = 24).  Verify existing test suite
+still passes.
+**Effort:** Small–Medium (parser change; mostly refactoring the three loops into one)
+**Target:** 0.8.3
+
+---
+
+### A13  Float and Long dead-slot reuse in `assign_slots`
+**Sources:** Stack efficiency evaluation 2026-03-20
+**Description:** `assign_slots` (`src/variables.rs`) restricts dead-slot reuse to
+variables with `var_size <= 4`.  Float (`Type::Float`, 8 B) and Long (`Type::Long`, 8 B)
+are excluded even though they have no pre-init opcodes and their `first_def` is already
+computed late (after traversing the value expression), giving accurate intervals.
+
+The restriction was introduced to prevent reuse of large types whose pre-init opcodes
+(`OpText`, `OpConvRefFromNull`) fire at `stack.position` (TOS), making reuse unsafe.
+Float and Long have no such opcodes and are already excluded from `needs_early_first_def`
+(variables.rs:890–894), so the restriction does not apply to them.
+
+`set_var` in `codegen.rs` already emits `OpPutFloat` and `OpPutLong` with a stack
+displacement (`var_pos = stack.position - stack.function.stack(var)`, lines 973–981), so
+the dead-slot-reuse path (`pos < stack.position → set_var()` in `generate_set:464`) works
+correctly for these types today.
+
+**Fix path:**
+
+*Change in `src/variables.rs:1255`* — relax the reuse guard:
+```rust
+// BEFORE:
+let can_reuse = var_size <= 4;
+
+// AFTER:
+// Float (8 B) and Long (8 B) have no pre-init opcodes; OpPutFloat/OpPutLong handle
+// the below-TOS store correctly.  The size-mismatch guard (line 1285) still prevents
+// reusing a 4-byte slot for an 8-byte variable and vice versa.
+let can_reuse = var_size <= 8;
+```
+
+No other changes.  The existing exact-size guard at line 1285 (`var_size != j_size →
+candidate = j_end; continue`) already ensures a Float cannot reuse a dead Long slot and
+vice versa, and that neither can reuse a 4-byte primitive slot.
+
+**Tests:** Add a `assign_slots` unit test: two sequential `Type::Float` variables with
+non-overlapping intervals (`last_use_1 < first_def_2`) are assigned the same slot.  Verify
+the existing `assign_slots_sequential_reuse` test still passes.
+**Effort:** Very Small (one-line change + one unit test)
+**Target:** 0.8.2
+
+---
+
+### A14  `skip_free` flag — replace `clean_work_refs` type mutation
+**Sources:** Stack efficiency evaluation 2026-03-20
+**Description:** `clean_work_refs` (`src/variables.rs:738–745`) prevents `OpFreeRef`
+from being emitted for an abandoned work-ref variable by mutating the variable's type to
+`Type::Reference(0, vec![0])` — a non-empty `depend` list that causes `get_free_vars`
+(scopes.rs:407–413) to skip the variable.  Any code that inspects the variable's type
+after `clean_work_refs` sees a phantom dependency on ref 0 and may mishandle it.
+
+**Fix path:**
+
+*Step 1 — Add `skip_free: bool` to `Variable`* (`src/variables.rs:41–61`):
+```rust
+pub struct Variable {
+    // existing fields ...
+    pub skip_free: bool,   // if true, get_free_vars omits OpFreeRef/OpFreeText for this var
+}
+```
+Default: `false`.  Set in `Variable::new` and initialise in `Function::copy` / `Function::append`.
+
+*Step 2 — Expose via `Function`*:
+```rust
+pub fn set_skip_free(&mut self, var: u16) {
+    self.variables[var as usize].skip_free = true;
+}
+pub fn is_skip_free(&self, var: u16) -> bool {
+    self.variables[var as usize].skip_free
+}
+```
+
+*Step 3 — Update `clean_work_refs`*:
+```rust
+pub fn clean_work_refs(&mut self, work_ref: u16) {
+    for w in work_ref..self.work_ref {
+        let n = format!("__ref_{}", w + 1);
+        let v_nr = self.var(&n);
+        self.set_skip_free(v_nr);   // was: mutate type to Reference(0, vec![0])
+    }
+}
+```
+
+*Step 4 — Update `get_free_vars`* (`src/scopes.rs:407–413`):
+```rust
+if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
+    function.tp(v)
+    && dep.is_empty()
+    && !tp.depend().contains(&v)
+    && !function.is_skip_free(v)   // ← new guard
+{
+    ls.push(call("OpFreeRef", v, data));
+}
+```
+
+**Tests:** Existing tests that exercise `clean_work_refs` code paths (functions with
+abandoned ref-returning calls) must continue to pass.  No new tests needed.
+**Effort:** Small (add field + update 3 call sites)
+**Target:** 0.8.2
+
+---
+
+### A15  Exhaustive `inline_ref_set_in` and fallback assertion
+**Sources:** Stack efficiency evaluation 2026-03-20
+**Description:** `inline_ref_set_in` (`src/parser/expressions.rs:15–34`) uses `_ => false`
+as a catch-all for `Value` variants that contain no nested `Set` nodes.  If a new `Value`
+variant is added that CAN contain a nested `Set` but is not listed in the recursive cases,
+the function silently returns `false`, the fallback in `parse_code` fires, and the inline-ref
+temp's null-init is inserted at the wrong position — producing incorrect LIFO ordering
+without any diagnostic.
+
+The fallback position ("after the first non-`Line` statement") places the inline-ref too
+early in `var_order` when the real first use is in a later statement, causing `OpFreeRef`
+for that inline-ref to fire after variables that were allocated after it.
+
+**Fix path:**
+
+*Change 1 — Replace `_ => false` with an exhaustive leaf match*
+(`src/parser/expressions.rs:32`):
+```rust
+// BEFORE:
+_ => false,
+
+// AFTER: list every known leaf variant explicitly so the compiler errors on a new variant
+Value::Var(_) | Value::Num(_) | Value::Boolean(_) | Value::Text(_)
+| Value::Long(_) | Value::Float(_) | Value::Int(_) | Value::Null
+| Value::Line(_) | Value::Break(_) | Value::Continue(_) => false,
+// If a new Value variant is added that can contain nested expressions, add it to the
+// recursive cases above.  Pure-leaf variants (no nested Value) belong here.
+```
+
+*Change 2 — Assert the fallback is unreachable* (`src/parser/expressions.rs:84–87`):
+```rust
+// BEFORE:
+let pos = ls
+    .iter()
+    .position(|stmt| inline_ref_set_in(stmt, *r))
+    .unwrap_or(fallback);
+
+// AFTER:
+let pos = ls
+    .iter()
+    .position(|stmt| inline_ref_set_in(stmt, *r))
+    .unwrap_or_else(|| {
+        debug_assert!(
+            false,
+            "inline_ref __ref_{r} not found in any top-level statement; \
+             LIFO order may be wrong — add the relevant Value variant to \
+             inline_ref_set_in"
+        );
+        fallback
+    });
+```
+
+Both changes are defence-in-depth only — no semantic change for any currently tested input.
+The assert fires during development if a new `Value` variant causes a regression in the
+inline-ref ordering, converting silent LIFO corruption into a visible panic.
+
+**Note:** If A12 is implemented first, `inline_ref_set_in` will be renamed `first_set_in`
+and extended to all work variables.  Apply these changes to the renamed function.
+
+**Tests:** No new tests needed.  The change is purely defensive; existing tests cover all
+current code paths.
+**Effort:** Very Small (two targeted edits in expressions.rs)
+**Target:** 0.8.2
 
 ---
 
