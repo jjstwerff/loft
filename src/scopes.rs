@@ -65,6 +65,7 @@ pub fn check(data: &mut Data) {
             free_text_nr,
             free_ref_nr,
             &mut seq,
+            0,
         );
         // Run assign_slots in shadow mode: pre-compute slots, save them, then reset so
         // claim() continues to drive codegen as before (A6.2).  The saved layout is

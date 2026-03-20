@@ -359,6 +359,9 @@ impl Stores {
     }
 
     /// Look up a type by index, panicking with a diagnostic if the index is out of range.
+    ///
+    /// # Panics
+    /// Panics if `nr` is out of range for the types table.
     #[must_use]
     pub fn get_type(&self, nr: u16) -> &Type {
         self.types.get(nr as usize).unwrap_or_else(|| {
@@ -381,12 +384,12 @@ pub struct ShowDb<'a> {
     pub json: bool,
 }
 
-/// S6-65: get_type() with an out-of-range index must panic with a helpful message.
+/// S6-65: `get_type()` with an out-of-range index must panic with a helpful message.
 #[test]
 #[should_panic(expected = "type index 999 out of range")]
 fn get_type_out_of_range_panics() {
     let stores = Stores::new();
-    stores.get_type(999);
+    let _ = stores.get_type(999);
 }
 
 // These values are for amd64 or arm64 systems.

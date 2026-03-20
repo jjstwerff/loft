@@ -18,23 +18,29 @@ use super::{
 /// The match is exhaustive over all current `Value` variants so that adding a new
 /// compound variant without updating this function is a **compile error** rather than
 /// a silent miss that would insert the null-init at the wrong position (A15).
-fn inline_ref_set_in(val: &Value, r: u16) -> bool {
+#[allow(clippy::only_used_in_recursion)] // depth used in all recursive calls; check logic added in S2
+fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
     match val {
         // Compound variants — recurse into sub-expressions.
-        Value::Set(v, inner) => *v == r || inline_ref_set_in(inner, r),
+        Value::Set(v, inner) => *v == r || inline_ref_set_in(inner, r, depth + 1),
         Value::Call(_, args) | Value::CallRef(_, args) => {
-            args.iter().any(|a| inline_ref_set_in(a, r))
+            args.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
         }
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|a| inline_ref_set_in(a, r)),
-        Value::Insert(ops) => ops.iter().any(|a| inline_ref_set_in(a, r)),
+        Value::Block(bl) | Value::Loop(bl) => bl
+            .operators
+            .iter()
+            .any(|a| inline_ref_set_in(a, r, depth + 1)),
+        Value::Insert(ops) => ops.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
         Value::If(cond, then_val, else_val) => {
-            inline_ref_set_in(cond, r)
-                || inline_ref_set_in(then_val, r)
-                || inline_ref_set_in(else_val, r)
+            inline_ref_set_in(cond, r, depth + 1)
+                || inline_ref_set_in(then_val, r, depth + 1)
+                || inline_ref_set_in(else_val, r, depth + 1)
         }
-        Value::Return(inner) | Value::Drop(inner) => inline_ref_set_in(inner, r),
+        Value::Return(inner) | Value::Drop(inner) => inline_ref_set_in(inner, r, depth + 1),
         Value::Iter(_, a, b, c) => {
-            inline_ref_set_in(a, r) || inline_ref_set_in(b, r) || inline_ref_set_in(c, r)
+            inline_ref_set_in(a, r, depth + 1)
+                || inline_ref_set_in(b, r, depth + 1)
+                || inline_ref_set_in(c, r, depth + 1)
         }
         // Leaf variants — cannot contain a Set node.
         Value::Null
@@ -103,7 +109,7 @@ impl Parser {
                     if !self.vars.is_argument(*r) && self.vars.tp(*r).depend().is_empty() {
                         let pos = ls
                             .iter()
-                            .position(|stmt| inline_ref_set_in(stmt, *r))
+                            .position(|stmt| inline_ref_set_in(stmt, *r, 0))
                             .unwrap_or(fallback);
                         insertions.push((pos, *r));
                     }
@@ -3524,4 +3530,28 @@ pair the hash with a vector to iterate in insertion order"
     }
 
     // <if> ::= <expression> '{' <block> [ 'else' ( 'if' <if> | '{' <block> ) ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_ref_set_in;
+    use crate::data::{Block, Type, Value};
+
+    /// S2: `inline_ref_set_in` must return false conservatively when nesting exceeds the limit.
+    #[test]
+    #[ignore = "S2: depth-limit guard not yet in inline_ref_set_in"]
+    fn inline_ref_set_in_depth_limit_returns_false() {
+        let mut v: Value = Value::Null;
+        for _ in 0..1100 {
+            v = Value::Block(Box::new(Block {
+                name: "",
+                operators: vec![v],
+                result: Type::Void,
+                scope: 0,
+            }));
+        }
+        // At depth limit, inline_ref_set_in must not overflow the stack.
+        let result = inline_ref_set_in(&v, 0, 0);
+        assert!(!result, "depth-exceeded should return false conservatively");
+    }
 }
