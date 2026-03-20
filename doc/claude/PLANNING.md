@@ -1202,7 +1202,7 @@ current function-start approach, but narrowed to the first-use statement.
 non-overlapping intervals receive the same slot (size = 24).  Verify existing test suite
 still passes.
 **Effort:** Small–Medium (parser change; mostly refactoring the three loops into one)
-**Target:** 0.8.3
+**Target:** 0.8.2
 
 ---
 
