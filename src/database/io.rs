@@ -142,8 +142,14 @@ impl Stores {
                         self.read_data(&elem, elem_tp, little_endian, data);
                     }
                 }
-                _ => panic!(
-                    "Not implemented type for file writing {}",
+                Parts::Array(_)
+                | Parts::Sorted(_, _)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::Spacial(_, _)
+                | Parts::Base => panic!(
+                    "Not implemented type for file reading {}",
                     self.types[tp as usize].name
                 ),
             },
@@ -240,7 +246,13 @@ impl Stores {
                         vector::vector_finish(r, &mut self.allocations);
                     }
                 }
-                _ => panic!(
+                Parts::Array(_)
+                | Parts::Sorted(_, _)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::Spacial(_, _)
+                | Parts::Base => panic!(
                     "Not implemented type for file writing {}",
                     self.types[tp as usize].name
                 ),

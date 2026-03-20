@@ -361,7 +361,13 @@ impl Stores {
     /// Look up a type by index, panicking with a diagnostic if the index is out of range.
     #[must_use]
     pub fn get_type(&self, nr: u16) -> &Type {
-        todo!("S6-65: implement get_type — nr={nr}")
+        self.types.get(nr as usize).unwrap_or_else(|| {
+            panic!(
+                "type index {} out of range (total: {})",
+                nr,
+                self.types.len()
+            )
+        })
     }
 }
 
