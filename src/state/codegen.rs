@@ -92,8 +92,6 @@ impl State {
             data,
             def_nr,
         );
-        #[cfg(debug_assertions)]
-        crate::variables::check_shadow_slots(&data.definitions[def_nr as usize].variables, def_nr);
     }
 
     /**
@@ -372,11 +370,34 @@ impl State {
 
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
+        // Null-typed variables (e.g. `x = null`) have size 0 and no stack storage.
+        // assign_slots sets their slot to 0 as a sentinel; skip allocation entirely.
+        if size(stack.function.tp(v), &Context::Variable) == 0 {
+            stack.function.set_stack_allocated(v);
+            return;
+        }
         let pos = stack.function.stack(v);
-        if pos == u16::MAX {
+        if stack.function.is_stack_allocated(v) {
+            // Reassignment — variable already on the stack.
+            if matches!(stack.function.tp(v), Type::Text(_)) {
+                let var_pos = stack.position - pos;
+                stack.add_op("OpClearText", self);
+                self.code_add(var_pos);
+            }
+            self.set_var(stack, v, value);
+        } else {
+            #[cfg(debug_assertions)]
+            if std::env::var("LOFT_DEBUG_SLOTS").is_ok() {
+                eprintln!(
+                    "  first-alloc '{}' pos={pos} TOS={} fn={}",
+                    stack.function.name(v),
+                    stack.position,
+                    stack.data.def(stack.def_nr).name
+                );
+            }
+            // First allocation — slot pre-assigned by assign_slots (A6.3).
             // Check: does the first-assignment value reference v itself?
-            // Storage for v hasn't been allocated yet (pos == u16::MAX), so Var(v) inside
-            // the value reads an uninitialised stack slot — always a parser-level bug.
+            // A Var(v) inside the value reads an uninitialised stack slot — always a parser bug.
             // Classic example: OpCopyRecord(src, v, tp) passed as a function's self-arg.
             #[cfg(debug_assertions)]
             assert!(
@@ -387,58 +408,70 @@ impl State {
                 stack.function.name(v),
                 stack.data.def(stack.def_nr).name,
             );
-            stack.function.claim(v, stack.position, &Context::Variable);
-            if matches!(*stack.function.tp(v), Type::Text(_)) {
-                self.gen_set_first_text(stack, v, value);
-            } else if matches!(
-                stack.function.tp(v),
-                Type::Reference(_, _) | Type::Enum(_, true, _)
-            ) && *value == Value::Null
-            {
-                self.gen_set_first_ref_null(stack, v);
-            } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-                && let Value::Call(op_nr, _) = value
-                && stack.data.def(*op_nr).name == "OpCopyRecord"
-            {
-                // The first assignment of a Reference variable being copied from another:
-                // allocate a fresh store, initialize the struct record, then copy the data.
-                stack.add_op("OpConvRefFromNull", self);
-                stack.add_op("OpDatabase", self);
-                self.code_add(size_of::<crate::keys::DbRef>() as u16);
-                let tp_nr = stack.data.def(d_nr).known_type;
-                self.code_add(tp_nr);
-                self.generate(value, stack, false);
-            } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-                && let Value::Var(src) = value
-                && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
-                && d_nr == *src_d_nr
-            {
-                // First assignment `d = c` where both are owned References to the same struct:
-                // give d its own independent record by allocating storage and copying c's data.
-                let src = *src;
-                let tp_nr = stack.data.def(d_nr).known_type;
-                stack.add_op("OpConvRefFromNull", self);
-                stack.add_op("OpDatabase", self);
-                self.code_add(size_of::<crate::keys::DbRef>() as u16);
-                self.code_add(tp_nr);
-                let copy_nr = stack.data.def_nr("OpCopyRecord");
-                let copy_val = Value::Call(
-                    copy_nr,
-                    vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
-                );
-                self.generate(&copy_val, stack, false);
-            } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
-                self.gen_set_first_vector_null(stack, v);
+            stack.function.set_stack_allocated(v);
+            if pos > stack.position {
+                // Pre-assigned slot is above current TOS (can happen after if-else branch
+                // restores stack.position).  Fall back to claim() so the slot matches TOS.
+                // Also fires for large types (text/ref/vector) whose stack_pos was left at
+                // u16::MAX by assign_slots_safe — u16::MAX > any valid TOS.
+                stack.function.claim(v, stack.position, &Context::Variable);
+            }
+            let pos = stack.function.stack(v);
+            if pos == stack.position {
+                // Slot is at current TOS — use direct placement (same as old claim() path).
+                // Large types (text, refs, vectors) always land here; non-reusing primitives too.
+                if matches!(*stack.function.tp(v), Type::Text(_)) {
+                    self.gen_set_first_text(stack, v, value);
+                } else if matches!(
+                    stack.function.tp(v),
+                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                ) && *value == Value::Null
+                {
+                    self.gen_set_first_ref_null(stack, v);
+                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && let Value::Call(op_nr, _) = value
+                    && stack.data.def(*op_nr).name == "OpCopyRecord"
+                {
+                    // The first assignment of a Reference variable being copied from another:
+                    // allocate a fresh store, initialize the struct record, then copy the data.
+                    stack.add_op("OpConvRefFromNull", self);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                    let tp_nr = stack.data.def(d_nr).known_type;
+                    self.code_add(tp_nr);
+                    self.generate(value, stack, false);
+                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && let Value::Var(src) = value
+                    && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
+                    && d_nr == *src_d_nr
+                {
+                    // First assignment `d = c` where both are owned References to the same struct:
+                    // give d its own independent record by allocating storage and copying c's data.
+                    let src = *src;
+                    let tp_nr = stack.data.def(d_nr).known_type;
+                    stack.add_op("OpConvRefFromNull", self);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                    self.code_add(tp_nr);
+                    let copy_nr = stack.data.def_nr("OpCopyRecord");
+                    let copy_val = Value::Call(
+                        copy_nr,
+                        vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
+                    );
+                    self.generate(&copy_val, stack, false);
+                } else if matches!(stack.function.tp(v), Type::Vector(_, _))
+                    && *value == Value::Null
+                {
+                    self.gen_set_first_vector_null(stack, v);
+                } else {
+                    self.generate(value, stack, false);
+                }
             } else {
-                self.generate(value, stack, false);
+                // Slot is below current TOS — primitive reusing a dead variable's slot.
+                // Use set_var() so the value is generated at TOS then stored at pos via OpPutX.
+                debug_assert!(pos < stack.position);
+                self.set_var(stack, v, value);
             }
-        } else {
-            if matches!(stack.function.tp(v), Type::Text(_)) {
-                let var_pos = stack.position - pos;
-                stack.add_op("OpClearText", self);
-                self.code_add(var_pos);
-            }
-            self.set_var(stack, v, value);
         }
     }
 
@@ -948,7 +981,7 @@ impl State {
         self.generate(value, stack, false);
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
-            Type::Integer(_, _) => stack.add_op("OpPutInt", self),
+            Type::Integer(_, _) | Type::Function(_, _) => stack.add_op("OpPutInt", self),
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
