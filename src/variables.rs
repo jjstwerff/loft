@@ -856,6 +856,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
 ///
 /// `free_text_nr` / `free_ref_nr` are the definition numbers of `OpFreeText` / `OpFreeRef`
 /// (pass `u32::MAX` if the definition is not yet registered).
+#[allow(clippy::too_many_lines)]
 pub fn compute_intervals(
     val: &Value,
     function: &mut Function,
@@ -905,6 +906,17 @@ pub fn compute_intervals(
             {
                 function.variables[v].first_def = *seq;
             }
+            // A write to a variable occupies its stack slot just as much as a read does.
+            // Without this update, variables that are only ever WRITTEN (never read after
+            // their last write) keep last_use = 0, making them appear dead at birth.
+            // assign_slots then lets later variables reuse their slot while they are still
+            // being written — corrupting the written values at runtime.
+            // Classic case: c#index in a text for-loop is written every iteration
+            // (Set(c#index, Var(c#next))) but never read by the user; without this
+            // update its last_use stays 0 and the loop counter slot gets aliased.
+            if v < function.variables.len() {
+                function.variables[v].last_use = function.variables[v].last_use.max(*seq);
+            }
             *seq += 1;
         }
         Value::Block(bl) => {
@@ -953,6 +965,22 @@ pub fn compute_intervals(
                     }
                 }
             }
+        }
+        Value::Iter(index_var, create, next, extra_init) => {
+            // Record the index variable as used at this point, then recurse into all
+            // three sub-expressions so variables read inside create/next/extra_init
+            // get correct last_use values.  Without this, index variables that are only
+            // read inside the Iter sub-expressions keep last_use = 0 and appear dead at
+            // birth, allowing assign_slots to place a later variable at the same slot
+            // and corrupting the loop counter at runtime.
+            let v = *index_var as usize;
+            if v < function.variables.len() {
+                function.variables[v].last_use = function.variables[v].last_use.max(*seq);
+            }
+            *seq += 1;
+            compute_intervals(create, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(next, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(extra_init, function, free_text_nr, free_ref_nr, seq);
         }
         Value::If(test, t_val, f_val) => {
             compute_intervals(test, function, free_text_nr, free_ref_nr, seq);
@@ -1281,7 +1309,11 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
                     }
                     // For large types, even expired slots must not be reused (avoids
                     // complications with init opcodes that write at stack.position).
-                    if !can_reuse {
+                    // Also reject size-mismatched reuse: an OpPutX displacement is
+                    // computed as stack.position − slot_start; if the dead slot is
+                    // narrower than the new variable, the displacement is off by the
+                    // size difference and the store overwrites the wrong bytes.
+                    if !can_reuse || var_size != j_size {
                         candidate = j_end;
                         continue 'retry;
                     }
@@ -1643,7 +1675,6 @@ mod tests {
     /// displacement at runtime, corrupting data.  `assign_slots` must require an
     /// exact size match before reusing a dead slot.
     #[test]
-    #[ignore = "A6.3b: assign_slots narrow→wide reuse bug not yet fixed"]
     fn assign_slots_no_narrow_to_wide_reuse() {
         const BOOL: Type = Type::Boolean;
         // flag: boolean (1 byte), dead early; f: integer (4 bytes), born after flag dies.
@@ -1673,7 +1704,6 @@ mod tests {
     /// `last_use` stays 0 and `assign_slots` treats the index as dead at birth,
     /// allowing a later variable to steal its slot and corrupting the loop counter.
     #[test]
-    #[ignore = "A6.3b: Value::Iter not yet handled in compute_intervals"]
     fn compute_intervals_iter_index_var_gets_last_use() {
         let mut f = Function::new("f", "test");
         let idx = f.add_unique("idx", &INT, 0);
@@ -1693,5 +1723,42 @@ mod tests {
             u32::MAX,
             "index variable's first_def must be set"
         );
+    }
+
+    // ── A6.3b: Bug C part 2 — write-only variable last_use ───────────────────
+
+    /// A variable that is only ever WRITTEN (never read via `Value::Var`) must still
+    /// have its `last_use` updated so that `assign_slots` does not treat it as dead.
+    /// Without this, the slot is reused by later variables while the write is still
+    /// live, corrupting adjacent stack data at runtime.
+    #[test]
+    fn compute_intervals_write_only_var_gets_last_use() {
+        let mut f = Function::new("f", "test");
+        // acc: written at seq 0, then written again at seq 4 (inside a block simulating a loop
+        // body); never read via Var.  Its last_use must be >= 4 so assign_slots sees it as live.
+        let acc = f.add_unique("acc", &INT, 0);
+        let other = f.add_unique("other", &INT, 0);
+        // Simulate: Set(acc, 0), Set(other, 1), Set(acc, other+1)
+        let block = Value::Block(Box::new(crate::data::Block {
+            name: "",
+            operators: vec![
+                Value::Set(acc, Box::new(Value::Int(0))),
+                Value::Set(other, Box::new(Value::Int(1))),
+                Value::Set(
+                    acc,
+                    Box::new(Value::Call(0, vec![Value::Var(other), Value::Int(1)])),
+                ),
+            ],
+            result: Type::Void,
+            scope: 0,
+        }));
+        let mut seq = 0u32;
+        compute_intervals(&block, &mut f, u32::MAX, u32::MAX, &mut seq);
+        // acc is written twice; last_use must reflect the second write.
+        assert!(
+            f.variables[acc as usize].last_use > f.variables[other as usize].first_def,
+            "write-only acc must outlive other to prevent slot aliasing"
+        );
+        assert!(find_conflict(&f.variables).is_none());
     }
 }

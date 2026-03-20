@@ -57,6 +57,15 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **A6.3b** — Greedy interval-colouring slot assignment (`assign_slots`) is now the
+  unconditional default.  Three bugs fixed: (B) narrow→wide dead-slot reuse rejected
+  by requiring exact size match in the reuse guard; (C) `Value::Iter` now recurses
+  into `create`/`next`/`extra_init` sub-expressions so index variables get correct
+  `last_use` values; (C part 2) `Value::Set` now updates `last_use` for the write
+  target so write-only variables are not treated as dead.  The `LOFT_ASSIGN_SLOTS`
+  and `LOFT_LEGACY_SLOTS` env-var gates are removed.  (`src/variables.rs`,
+  `src/scopes.rs`)
+
 - **A6.3a** — Safe slot pre-pass (`assign_slots_safe`) is now the default codegen path.
   Variables receive sequential slots in `first_def` order with no reuse; `claim()` in
   codegen is retained but skipped for already-allocated variables.  An `is_stack_allocated`

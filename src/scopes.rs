@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use crate::data::{Block, Context, Data, DefType, Type, Value, v_set};
-use crate::variables::{Function, assign_slots, assign_slots_safe, compute_intervals, size};
+use crate::variables::{Function, assign_slots, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 struct Scopes {
@@ -78,23 +78,10 @@ pub fn check(data: &mut Data) {
                 .sum();
             arg_size + 4 // 4 bytes for the return-address slot
         };
-        // Pre-assign stack slots so codegen reads a pre-computed position instead of calling
-        // claim().  Three modes, selected by environment variable:
-        //
-        //   (unset)              — assign_slots_safe: sequential high-water mark, no slot reuse.
-        //                         Guaranteed conflict-free; equivalent to claim()-at-TOS strategy.
-        //   LOFT_ASSIGN_SLOTS=1 — assign_slots: optimised greedy coloring with slot reuse for
-        //                         small (≤4 B) primitives.  May expose interval-accuracy bugs.
-        //   LOFT_LEGACY_SLOTS=1 — skip entirely; all vars stay at u16::MAX and generate_set's
-        //                         claim() fallback drives slot allocation as before A6.3.
+        // Pre-assign stack slots using greedy interval colouring so codegen reads a
+        // pre-computed position instead of calling claim() at every allocation.
         let vars = &mut data.definitions[d_nr as usize].variables;
-        if std::env::var("LOFT_LEGACY_SLOTS").is_ok() {
-            // legacy: claim() in codegen handles everything
-        } else if std::env::var("LOFT_ASSIGN_SLOTS").is_ok() {
-            assign_slots(vars, local_start);
-        } else {
-            assign_slots_safe(vars, local_start);
-        }
+        assign_slots(vars, local_start);
     }
 }
 

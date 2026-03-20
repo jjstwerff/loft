@@ -762,43 +762,52 @@ when multiple closures are live simultaneously.
 **Severity:** Low — no user-visible impact; purely architectural (correctness fixed
 2026-03-13); safe mode already working
 **Description:** Replace the runtime `claim()` call in codegen with a compile-time
-pre-pass so slot layout is computed before bytecode generation.  Phases 2 and 3a are
-complete.  Phase 3b (optimised greedy mode) is blocked by three bugs.
+pre-pass so slot layout is computed before bytecode generation.  Phases 2, 3a, and 3b
+are complete.  Only Phase 4 (remove dead `claim()` and `assign_slots_safe`) remains.
 **Fix path:**
 
-**Phase 2 — Shadow mode (DONE):** Ran `assign_slots` alongside `claim()` and
-validated that the two layouts agreed.  Shadow infrastructure removed in Phase 3a.
+**Phase 3b — Optimised mode (DONE A6.3b):** Fixed the two remaining bugs (B and C),
+made `assign_slots` the unconditional default, and removed the `LOFT_ASSIGN_SLOTS` /
+`LOFT_LEGACY_SLOTS` env-var gates.  `assign_slots_safe` and `claim()` are now dead code.
+All tests pass (except the pre-existing `ref_param_append_bug` in `store.rs`).
 
-**Phase 3a — Safe pre-pass (DONE):** `assign_slots_safe` now runs as the default in
-`scopes::check`, assigning slots in `first_def` order with a high-water mark and no
-reuse.  `generate_set` reads the pre-assigned slot; `claim()` is called only as a
-fallback when the pre-assigned slot is above TOS (can happen after if-else restores
-`stack.position`).  All tests pass with this mode.
+**Phase 4 — Remove `claim()` (deferred, tracked as A6.4):**
 
-Three env-var gates allow testing alternative paths during development:
-- *(unset)* — `assign_slots_safe`: safe default, no slot reuse
-- `LOFT_ASSIGN_SLOTS=1` — `assign_slots`: greedy coloring, slot reuse; blocked by
-  three bugs (see [SLOT_FAILURES.md](SLOT_FAILURES.md))
-- `LOFT_LEGACY_SLOTS=1` — skip pre-pass; `claim()` in codegen as before A6.3
+With accurate intervals, `assign_slots` pre-assigns ALL variables at their correct TOS
+position.  The `claim()` fallback in `generate_set` becomes dead code.
 
-**Phase 3b — Optimised mode (TODO):** Fix the three bugs in SLOT_FAILURES.md, then
-enable the greedy path as the default and remove the env-var gates.
+*Key change in `src/state/codegen.rs` `generate_set`* — replace the fallback:
+```rust
+// BEFORE (A6.3):
+if pos > stack.position {
+    stack.function.claim(v, stack.position, &Context::Variable);
+}
+let pos = stack.function.stack(v);
 
-| Bug | File | Fix |
-|-----|------|-----|
-| A — Vector comprehension aliasing | `variables.rs` `compute_intervals` | Skip early `first_def` for `Type::Vector` |
-| B — Narrow→wide slot reuse | `variables.rs` `assign_slots` | Add `&& var_size == j_size` to reuse guard |
-| C — `Value::Iter` not traversed | `variables.rs` `compute_intervals` | Add `Value::Iter` arm that recurses into sub-expressions |
+// AFTER (A6.4):
+stack.position = stack.position.max(pos.saturating_add(var_size));
+let pos = stack.function.stack(v);
+```
+`max` is a no-op for dead-slot reuse (`pos < TOS`) and advances TOS by `var_size`
+for fresh slots (`pos == TOS`).
 
-Each fix is one or two lines.  After all three pass with `LOFT_ASSIGN_SLOTS=1`,
-remove the env-var gates and make the greedy path unconditional.
+*Argument setup (~line 32 in `codegen.rs`)* — inline what `claim()` did:
+```rust
+// BEFORE:
+stack.position = stack.function.claim(v, stack.position, &Context::Argument);
+// AFTER:
+stack.function.variables[v as usize].stack_pos = stack.position;
+stack.position += size(stack.function.tp(v), &Context::Argument);
+```
 
-**Phase 4 — Remove `claim()` (deferred):** Once Phase 3b is stable, delete `claim()`
-from `variables.rs` and the TOS-fallback from `generate_set`.
+*Delete from `src/variables.rs`:* `pub fn claim(...)`, `pub fn assign_slots_safe(...)`,
+and the `LOFT_DEBUG_SLOTS` debug block inside `assign_slots`.
+
+Full code details and invariants: [SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
 
 *Tests:* full test suite green; `cargo test` passes on all platforms.
 
-**Effort:** Low (three small fixes + cleanup)
+**Effort:** Low (two small fixes + cleanup)
 **Target:** 0.8.2
 
 ---

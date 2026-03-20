@@ -2,32 +2,32 @@
 
 ## Modes
 
-Three environment-variable modes select the slot-assignment strategy:
+As of A6.3b, `assign_slots` (greedy interval colouring) is the unconditional default.
+The `LOFT_ASSIGN_SLOTS` and `LOFT_LEGACY_SLOTS` env-var gates have been removed.
 
-| Mode | Env var | Strategy |
-|------|---------|----------|
-| safe sequential (default) | — | `assign_slots_safe`: fresh slot per variable, high-watermark |
-| optimised greedy | `LOFT_ASSIGN_SLOTS=1` | `assign_slots`: greedy interval colouring with small-type reuse |
-| legacy | `LOFT_LEGACY_SLOTS=1` | no pre-pass; `claim()`-at-TOS in codegen |
+| Mode | Status | Strategy |
+|------|--------|----------|
+| greedy (default) | **Active** | `assign_slots`: interval colouring with same-size primitive reuse |
+| legacy | Removed | no pre-pass; `claim()`-at-TOS in codegen |
 
 ---
 
 ## Failure matrix
 
-| Test | Safe | Optimised | Legacy |
-|------|------|-----------|--------|
-| filter_integers | **FAIL** | **FAIL** | **FAIL** |
-| map_integers | **FAIL** | **FAIL** | **FAIL** |
-| fn_ref_conditional_call | pass | **FAIL** | pass |
-| n10_char_cast_in_generated_code | pass | **FAIL** | pass |
-| ref_param_append_bug | **FAIL** | **FAIL** | **FAIL** |
+| Test | Status | Bug |
+|------|--------|-----|
+| filter_integers | **pass** | A — Fixed by A6.3a |
+| map_integers | **pass** | A — Fixed by A6.3a |
+| fn_ref_conditional_call | **pass** | B — Fixed by A6.3b |
+| n10_char_cast_in_generated_code | **pass** | C — Fixed by A6.3b |
+| ref_param_append_bug | **FAIL** | unrelated (store.rs bug) |
 
-`ref_param_append_bug` panics in `src/store.rs` ("Unknown record 5") — unrelated to slot
-assignment and excluded from this analysis.
+All three slot-assignment bugs (A, B, C) are fixed.  `ref_param_append_bug` is a
+pre-existing `store.rs` bug unrelated to slot assignment.
 
 ---
 
-## Bug A — Comprehension aliasing (filter / map, all modes)
+## Bug A — Comprehension aliasing (filter / map) — FIXED by A6.3a
 
 ### Observed slot layout in `n_test`
 
@@ -91,6 +91,11 @@ With this change, `r.first_def` is set **after** the comprehension body (seq ≈
 In all three modes the runtime slot stays 88 (claim() gives `r` TOS=88), so no behaviour
 changes.  `validate_slots` sees r.first_def > _filter_result_5.last_use and does not panic.
 
+**Status (2026-03-20):** Applied in A6.3a.  The actual implementation chose the equivalent
+but more precise form: `matches!(type_def, Type::Text(_) | Type::Reference(_, _) | Type::Enum(_, true, _))` —
+only types that have pre-init opcodes trigger early `first_def`.  The effect is the same:
+Vector is excluded.  All tests pass in default mode.
+
 ---
 
 ## Bug B — Narrow → wide slot reuse (fn_ref_conditional_call, optimised only)
@@ -124,15 +129,31 @@ Passes in safe and legacy because claim()-at-TOS always places `f` at the natura
 
 ### Fix B — one condition added in `assign_slots`
 
-Require exact size match for dead-slot reuse:
+Require exact size match for dead-slot reuse.  The check lives inside the inner loop
+where `j_size` is already computed.  The existing `!can_reuse` guard (large types) is
+extended to also reject size-mismatched reuse for small types:
 
 ```rust
-// was:  let can_reuse = var_size <= 4;
-let can_reuse = var_size <= 4 && var_size == j_size;
+// src/variables.rs  assign_slots  (inner loop, dead-slot-overlap path)
+
+// was:
+if !can_reuse {
+    candidate = j_end;
+    continue 'retry;
+}
+
+// fix:
+if !can_reuse || var_size != j_size {
+    candidate = j_end;
+    continue 'retry;
+}
 ```
 
-`j_size` is already computed in the inner loop (`size(&function.variables[j].type_def, ...)`).
-A 4-byte `f` may not reuse a 1-byte `flag` slot; it gets a fresh slot at the watermark.
+`j_size` is already computed two lines above in the same loop body
+(`let j_size = size(&function.variables[j].type_def, &Context::Variable)`).
+A 4-byte `f` may not reuse a dead 1-byte `flag` slot; it gets a fresh slot at the
+watermark.  Two same-sized primitives (e.g., two dead 4-byte integers) may still share
+a slot.
 
 ---
 
@@ -208,18 +229,97 @@ extends `c#index.last_use` to `loop_last`.  `assign_slots` then sees
 
 ---
 
-## Solution summary
+## A6.3b solution summary
 
-Three independent changes, two functions:
+| Bug | Status | File | Change |
+|-----|--------|------|--------|
+| A — comprehension aliasing | **Fixed (A6.3a)** | `src/variables.rs` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` |
+| B — narrow→wide reuse | **Fixed (A6.3b)** | `src/variables.rs` `assign_slots` | `\|\| var_size != j_size` added to dead-slot-overlap guard |
+| C — Iter not traversed | **Fixed (A6.3b)** | `src/variables.rs` `compute_intervals` | `Value::Iter` arm recurses into `create`/`next`/`extra_init`; `Value::Set` now updates `last_use` for write targets |
 
-| Bug | File | Change |
-|-----|------|--------|
-| A — comprehension aliasing | `src/variables.rs` `compute_intervals` | Don't set `first_def` early for `Vector` types; only do so for `Text` and `Reference` |
-| B — narrow→wide reuse | `src/variables.rs` `assign_slots` | Add `&& var_size == j_size` to the dead-slot reuse guard |
-| C — Iter not traversed | `src/variables.rs` `compute_intervals` | Add `Value::Iter` case that recurses into `create`, `next`, `extra_init` |
+All three bugs are fixed.  `assign_slots` (greedy) is the unconditional default as of
+A6.3b.  All tests pass except `ref_param_append_bug` (pre-existing `store.rs` bug).
 
-No changes to `generate_set`, `assign_slots_safe`, or any codegen logic.
-All three fixes are additive; none removes existing behaviour.
+---
 
-After these fixes, all currently-failing slot-related tests are expected to pass in all
-three modes.
+## A6.4 — Remove `claim()` (deferred until A6.3b is stable)
+
+### Goal
+
+After A6.3b, the greedy `assign_slots` pre-assigns ALL variables with correct slots.
+`generate_set` can trust `pos` directly; the `claim()` fallback is no longer needed.
+
+### What changes
+
+**1. `src/state/codegen.rs` — `generate_set` first-alloc path**
+
+```rust
+// BEFORE (A6.3a):
+stack.function.set_stack_allocated(v);
+if pos > stack.position {
+    // Pre-assigned slot above TOS or u16::MAX from assign_slots_safe.
+    stack.function.claim(v, stack.position, &Context::Variable);
+}
+let pos = stack.function.stack(v);
+
+// AFTER (A6.4):
+stack.function.set_stack_allocated(v);
+// Trust the pre-assigned slot. Advance TOS to cover it (no-op for dead-slot reuse).
+stack.position = stack.position.max(pos.saturating_add(var_size));
+let pos = stack.function.stack(v);
+```
+
+`pos.max(stack.position)` is correct because:
+- Large types (`!can_reuse` in `assign_slots`): slot is always at the current watermark,
+  so `pos == stack.position` and `max` is a no-op advance.
+- Primitive dead-slot reuse: `pos < stack.position`, `max` leaves TOS unchanged —
+  the `else` path (OpPutX) fires as before.
+- Primitive fresh slot: `pos == stack.position`, `max` advances by `var_size`.
+
+**2. `src/state/codegen.rs` — argument setup (~line 32)**
+
+```rust
+// BEFORE:
+stack.position = stack.function.claim(v, stack.position, &Context::Argument);
+
+// AFTER (inline what claim() did):
+stack.function.variables[v as usize].stack_pos = stack.position;
+stack.position += size(stack.function.tp(v), &Context::Argument);
+```
+
+**3. `src/scopes.rs` — remove env-var gates**
+
+```rust
+// BEFORE (A6.3):
+if std::env::var("LOFT_LEGACY_SLOTS").is_ok() {
+    // legacy
+} else if std::env::var("LOFT_ASSIGN_SLOTS").is_ok() {
+    assign_slots(vars, local_start);
+} else {
+    assign_slots_safe(vars, local_start);
+}
+
+// AFTER (A6.4):
+assign_slots(vars, local_start);
+```
+
+**4. `src/variables.rs` — delete**
+
+- `pub fn claim(...)` — no longer called
+- `pub fn assign_slots_safe(...)` — no longer called
+- `LOFT_DEBUG_SLOTS` env-var debug block inside `assign_slots` — optional cleanup
+
+### Invariants to verify after removal
+
+- `validate_slots` passes on the full test suite with no env-var gates.
+- `cargo clippy --tests -D warnings` clean.
+- The `pos < stack.position` (OpPutX dead-slot reuse) branch still fires correctly for
+  same-size primitive reuse (covered by `assign_slots_sequential_reuse` unit test).
+
+### Commit sequence (DEVELOPMENT.md)
+
+1. No new tests needed (existing suite is the gate).
+2. Code: `generate_set` + argument setup + delete `claim()` + delete `assign_slots_safe`.
+3. `scopes.rs`: remove env-var gates unconditionally.
+4. `cargo test && cargo clippy --tests -D warnings && cargo fmt --check`.
+5. Docs: CHANGELOG, PLANNING, ASSIGNMENT, PROBLEMS, ROADMAP.

@@ -289,7 +289,7 @@ intervals and can share or not share slots based on the interval check.
 
 | Step | Status |
 |---|---|
-| `compute_intervals` | **Done** (loop-carried extension and Iter traversal added in A6.3) |
+| `compute_intervals` | **Done** (loop-carried extension, Iter traversal, write-target last_use) |
 | `validate_slots` + `find_conflict` | **Done** (debug-only) |
 | Unit tests for `find_conflict` | **Done** (`src/variables.rs`) |
 | Integration tests (`tests/slot_assign.rs`) | **Done** (5 tests; all pass) |
@@ -297,9 +297,9 @@ intervals and can share or not share slots based on the interval check.
 | P1: pre-init for borrowed refs | **Done** |
 | Bug 3: `OpCreateStack` offset | **Fixed** |
 | A6.2: shadow mode | **Done** (removed — superseded by A6.3 safe mode) |
-| A6.3a: `assign_slots_safe` pre-pass | **Done** — default; all tests pass |
-| A6.3b: `assign_slots` greedy mode | **Blocked** — 3 bugs; see [SLOT_FAILURES.md](SLOT_FAILURES.md) |
-| A6.4: remove `claim()` | **Deferred** — after A6.3b passes |
+| A6.3a: `assign_slots_safe` pre-pass | **Done** (superseded by A6.3b) |
+| A6.3b: `assign_slots` greedy mode | **Done** — unconditional default; all tests pass |
+| A6.4: remove `claim()` | **Open** — `claim()` and `assign_slots_safe` are dead code |
 | P2: remove `copy_variable` | **Deferred** |
 | Issue 2: "Different definition of Point." | **Open** (separate bug) |
 
