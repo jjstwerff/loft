@@ -63,6 +63,16 @@ Goal: harden the interpreter, improve runtime efficiency, and ship working nativ
 generation.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
+**Correctness:**
+- **L4** — Empty `[]` literal as mutable vector argument: parser fix in `parse_vector`.
+- **L5** — `v += extra` via `&vector` ref-param panics: parser fix in `parse_append_vector`.
+
+**Stack slot efficiency (A12–A15):**
+- **A12** — Lazy work-variable initialization: accurate `first_def` intervals, slot sharing.
+- **A13** — Float/Long dead-slot reuse: relax `can_reuse` guard.
+- **A14** — `skip_free` flag: replace `clean_work_refs` type mutation.
+- **A15** — Exhaustive `inline_ref_set_in`: add fallback assertion.
+
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
   `replace`, `to_lowercase`, `to_uppercase` and format expressions.
@@ -488,51 +498,167 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 ### L4  Fix empty vector literal `[]` as mutable vector argument
 **Sources:** [PROBLEMS.md](PROBLEMS.md) #44
 **Severity:** Medium — passing `[]` directly as a mutable `vector<T>` argument panics in
-debug builds; workaround is to assign to a named variable first
-**Description:** `parse_vector` returns `Value::Insert([Null])` for an empty `[]` literal
-when the parse context has `Type::Unknown(0)` as the target type (which is always the case
-for call-site arguments).  No temporary variable is created and no `vector_db` init opcodes
-are emitted.  The mutable-argument handler in `generate_call` expects a 12-byte `DbRef` on
-the stack but finds 0 bytes.
+debug builds; workaround is to assign to a named variable first.
 
-**Fix path:** In `parse_vector` (`src/parser/expressions.rs`), when `[]` is parsed with an
-unknown element type and `is_var = false`:
+**Root cause:** `parse_vector` (`src/parser/expressions.rs`) has an early-return for `[]`
+(immediate `]`) that branches on `is_var` / `is_field`.  The `else` branch — reached when
+`[]` appears as a call-site expression, not as an existing variable or struct field — emits
+`Value::Insert([val.clone()])` with no temporary variable and no `vector_db` init opcodes.
+`generate_call` then fires a debug assertion: it expects a 12-byte `DbRef` for the mutable
+`vector<T>` parameter but finds 0 bytes on the stack.
 
-1. Create a unique temporary variable with `Type::Unknown(0)` as a placeholder.
-2. Emit the `vector_db` initialisation block — same as the non-empty path does when
-   `block = true`.  The element type will be inferred on the second pass from the
-   call-site context.
-3. Return `Value::Var(vec)` wrapped in `v_block`, matching the non-empty path.
+**Fix path:**
 
-The second pass already resolves the element type correctly for assignment targets
-(`my_vec = []`); the fix extends this to call-site arguments by ensuring a temporary
-variable and init block are always emitted for empty `[]` literals.
+*Location:* `parse_vector` else branch (~line 1607), currently:
+```rust
+} else {
+    *val = Value::Insert(vec![val.clone()]);
+    var_tp.clone()
+};
+```
 
-**Effort:** Medium (parser change; careful handling of `Type::Unknown` on second pass)
+*Replacement:*
+```rust
+} else {
+    // Empty [] at a call site — create a temporary so generate_call gets a real DbRef.
+    let vec = self.create_unique(
+        "vec",
+        &Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend()),
+    );
+    let mut ls = if assign_tp != Type::Unknown(0) {
+        // Second pass with known element type: emit the backing-store init.
+        let struct_tp = Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend());
+        self.vars.change_var_type(vec, &struct_tp, &self.data, &mut self.lexer);
+        self.data.vector_def(&mut self.lexer, &assign_tp);
+        self.vector_db(&assign_tp, vec)
+    } else {
+        // First pass (element type unknown) or still-unresolved context:
+        // vector_db already returns empty on first_pass; just create the temp var.
+        Vec::new()
+    };
+    ls.push(Value::Var(vec));
+    let tp = Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend());
+    *val = v_block(ls, tp.clone(), "empty vector");
+    tp
+};
+```
+
+*Two-pass semantics:*
+- **First pass** (`self.first_pass = true`): `vector_db` returns `Vec::new()` for the
+  first-pass guard it already has; the temp var is created with `Type::Unknown(0)`.
+- **Second pass** with known element type: on the second pass, `var_tp` is the call-site
+  expected type (the function's parameter type has been resolved), so `assign_tp =
+  var_tp.content()` is the concrete element type.  `vector_db` emits the three init ops
+  (`OpDatabase`, field-read `Set(vec, get_field(...))`, zero-write `set_field(...)`).
+
+*Why `var_tp` is known on the second pass:* In loft's two-pass design the first pass
+determines all function parameter types.  When parsing `join([], "-")` on the second pass,
+the call argument loop passes the expected parameter type as the context for each argument;
+`parse_vector` receives `var_tp = Type::Vector(Text, ...)`, so `assign_tp = Type::Text`.
+If `assign_tp` is still Unknown (edge case: function itself not yet resolved), the guard
+prevents calling `vector_db` with an Unknown element type — a second-pass resolution error
+will be reported elsewhere.
+
+*Tests:*
+- Re-enable `ref_param_append_bug` guard: the L4 assertion `join([], ...)` in
+  `tests/issues.rs` should pass.
+- Add test in `tests/vectors.rs`: `assert(join([], "-") == "", ...)`.
+
+**Effort:** Medium (parser change; two-pass type-inference interaction)
 **Target:** 0.8.2
 
 ---
 
 ### L5  Fix `v += extra` via `&vector` ref-param
 **Sources:** [PROBLEMS.md](PROBLEMS.md) #56; `tests/issues.rs::ref_param_append_bug`
-**Severity:** High — panics in debug builds; silently does nothing in release builds
-**Description:** `v += extra` compiled for a `v: &vector<T>` ref-param emits
-`OpAppendVector` with the raw ref-param DbRef (a stack pointer into the caller's frame)
-instead of dereferencing it first.  `vector_append` calls `store.get_int(v.rec, v.pos)`
-where `v.rec` is the caller's stack record, which is absent from the current function's
-store claims, causing "Unknown record" panic.
+**Severity:** High — panics in debug builds; silently does nothing in release builds.
 
-**Fix path:** In `generate_set` / the vector-append codegen path
-(`src/state/codegen.rs`), when the target variable is `Type::RefVar(Vector)`:
+**Root cause — two interacting issues:**
 
-1. Emit `OpGetStackRef` to load the actual vector DbRef from the ref-param.
-2. Emit `OpAppendVector` on the loaded DbRef.
-3. Emit `OpSetStackRef` to write the (possibly reallocated) DbRef back through the ref.
+*Issue A — wrong bytecode for the mutable arg:*
+`parse_append_vector` (`src/parser/expressions.rs:1148–1152`) detects `RefVar(Vector)` and
+returns `orig_var` as `var_nr`, then the loop emits
+`Call("OpAppendVector", [Var(orig_var), extra, rec_tp])`.  In `generate_call`, the mutable
+first argument of `OpAppendVector` hits the RefVar-to-RefVar shortcut (codegen.rs:502–509):
+```rust
+if matches!(a.typedef, Type::RefVar(_))
+    && let Value::Var(v) = &parameters[a_nr]
+    && matches!(stack.function.tp(*v), Type::RefVar(_))
+{
+    let var_pos = stack.position - stack.function.stack(*v);
+    stack.add_op("OpVarRef", self);
+    self.code_add(var_pos);   // ← pushes raw stack OFFSET, not the vector DbRef
+```
+`OpVarRef var_pos` pushes a 4-byte displacement integer.  `vector_append` in fill.rs then
+reads a DbRef from that offset on the CURRENT function's stack, which points to the
+CALLER's stack frame record — absent from the current function's store claims.
 
-The same dereference-operate-writeback pattern applies to all collection-mutating
-operations on ref-params.  Identify them in codegen and apply the fix consistently.
+*Issue B — no write-back:*
+Even if the dereference were correct, `vector_append` may reallocate the backing record and
+return an updated DbRef.  Without a write-back through the ref-param, the caller's vector
+variable would hold a stale record handle after the append.
 
-**Effort:** Medium (codegen change; audit all collection ops on `RefVar` targets)
+**Fix path — parser change in `parse_append_vector`:**
+
+Replace the single RefVar(Vector) branch with a three-op sequence that explicitly
+dereferences, appends, and writes back:
+
+```rust
+// BEFORE (parse_append_vector ~line 1148):
+} else if matches!(self.vars.tp(orig_var), Type::RefVar(t) if matches!(**t, Type::Vector(_, _))) {
+    // RefVar(Vector): append directly without an identity Set(v, Var(v)).
+    orig_var
+
+// AFTER — early return that builds the full deref/append/writeback sequence:
+} else if let Type::RefVar(inner) = self.vars.tp(orig_var).clone()
+    && matches!(*inner, Type::Vector(_, _))
+{
+    // 1. Create a temporary local variable to hold the dereferenced DbRef.
+    let tmp = self.create_unique("vec_ref_tmp", &inner);
+    // 2. Load the actual vector DbRef from the ref-param into tmp.
+    //    generate_var(orig_var: RefVar(Vector)) emits OpVarRef + OpGetStackRef,
+    //    so Set(tmp, Var(orig_var)) copies the caller's DbRef into our local slot.
+    ls.push(v_set(tmp, Value::Var(orig_var)));
+    // 3. Append to the local copy.  tmp is now a plain Vector, so generate_call
+    //    emits OpVarVector (not OpVarRef), and vector_append gets the correct DbRef.
+    for (val, _) in parts {
+        ls.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(tmp), val.clone(), Value::Int(rec_tp)],
+        ));
+    }
+    // 4. Write the (possibly reallocated) DbRef back to the ref-param.
+    //    set_var(orig_var: RefVar(Vector), Var(tmp)) emits OpVarRef + generate(tmp) + OpSetStackRef.
+    ls.push(v_set(orig_var, Value::Var(tmp)));
+    *code = Value::Insert(ls);
+    return Type::Rewritten(Box::new(tp.clone()));
+```
+
+*Why this works:*
+- `Set(tmp, Var(orig_var))`: first allocation of `tmp` at TOS; `generate_var(orig_var:
+  RefVar(Vector))` emits `OpVarRef displacement` → `OpGetStackRef 0` → loads the 12-byte
+  caller DbRef onto the stack and into `tmp`'s slot.
+- `OpAppendVector([Var(tmp), ...])`: `tmp` has type `Vector` (not `RefVar`), so the
+  RefVar-to-RefVar shortcut does not fire.  `generate_var(tmp)` emits `OpVarVector
+  displacement` — passes the displacement to `tmp`'s slot so `vector_append` finds the
+  correct DbRef and updates it in-place if reallocation occurs.
+- `Set(orig_var, Var(tmp))`: reassignment (`stack_allocated = true`); `set_var(orig_var:
+  RefVar(Vector))` emits `OpVarRef displacement_to_orig` → `generate(Var(tmp))` →
+  `OpSetStackRef 0` — writes the updated DbRef from `tmp`'s slot back through the
+  ref-param pointer to the caller's variable.
+
+*Audit — other collection-mutating ops on RefVar:*
+The same bug pattern applies to any `Call(op, [Var(refvar_vec), ...])` where op is a
+collection-mutating opcode and `refvar_vec: RefVar(Vector)`.  Search `parse_append_vector`
+and any other `+= / insert / remove` compilation sites for similar `RefVar` paths and apply
+the same three-op deref/operate/writeback pattern.
+
+*Tests:*
+- `ref_param_append_bug` in `tests/issues.rs` — remove `#[ignore]`, must pass.
+- Add a test for `v += [single_item]` via a ref-param.
+- Add a test for the release build (no `debug_assert` elision): run with `--release`.
+
+**Effort:** Medium (parser change in `parse_append_vector`; audit of other collection ops)
 **Target:** 0.8.2
 
 ---
