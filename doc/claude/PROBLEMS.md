@@ -52,22 +52,15 @@ R-tree) is already allocated in the schema; the iteration traversal is the main 
 
 ## Stack Slot Assignment (In Progress)
 
-### 24. `claim()` and `assign_slots_safe` not yet removed (A6.4)
+### 24. Stack slot `assign_slots` pre-pass (FIXED — A6.4)
 
-**Current (A6.3b):** Greedy interval-colouring (`assign_slots`) is now the
-unconditional default.  The three interval bugs (A, B, C) are all fixed.  The
-env-var gates (`LOFT_ASSIGN_SLOTS`, `LOFT_LEGACY_SLOTS`) are removed.  All tests
-pass except the pre-existing `ref_param_append_bug` (a `store.rs` bug unrelated to
-slot assignment).
+**Done (A6.4):** `claim()` and `assign_slots_safe` removed; `LOFT_DEBUG_SLOTS` debug
+blocks deleted from both `variables.rs` and `codegen.rs`.  `claim()` replaced by
+`set_stack_pos()`.  The TOS-drop fallback in `generate_set` calls
+`set_stack_pos(v, stack.position)` to override the pre-assigned slot to TOS.
+All tests pass except the pre-existing `ref_param_append_bug` (Issue 56).
 
-**Remaining:** `claim()` and `assign_slots_safe` are dead code — they are still
-compiled but no longer called.  A6.4 removes them and simplifies `generate_set` by
-replacing the `claim()` fallback with a `stack.position.max(pos + size)` advance.
-
-**Next steps:** A6.4 per [PLANNING.md § A6](PLANNING.md) and
-[SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
-
-**Details:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
+**History:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
 
 ---
 

@@ -242,84 +242,18 @@ A6.3b.  All tests pass except `ref_param_append_bug` (pre-existing `store.rs` bu
 
 ---
 
-## A6.4 — Remove `claim()` (deferred until A6.3b is stable)
+## A6.4 — Remove `claim()` (DONE 2026-03-20)
 
-### Goal
+### What was done
 
-After A6.3b, the greedy `assign_slots` pre-assigns ALL variables with correct slots.
-`generate_set` can trust `pos` directly; the `claim()` fallback is no longer needed.
+`claim()` replaced by `set_stack_pos()` — a minimal method that only sets the slot
+position, with the caller advancing `stack.position` separately.
 
-### What changes
+**TOS-drop case** (`pos > stack.position`): when an if-else restores TOS below a
+pre-assigned slot, `set_stack_pos(v, stack.position)` overrides the slot to current
+TOS so direct placement fires correctly.  Advancing TOS via `max` (the earlier design)
+was incorrect: it advanced the compile-time watermark without filling the gap on the
+runtime stack, causing "Variable outside stack" panics.
 
-**1. `src/state/codegen.rs` — `generate_set` first-alloc path**
-
-```rust
-// BEFORE (A6.3a):
-stack.function.set_stack_allocated(v);
-if pos > stack.position {
-    // Pre-assigned slot above TOS or u16::MAX from assign_slots_safe.
-    stack.function.claim(v, stack.position, &Context::Variable);
-}
-let pos = stack.function.stack(v);
-
-// AFTER (A6.4):
-stack.function.set_stack_allocated(v);
-// Trust the pre-assigned slot. Advance TOS to cover it (no-op for dead-slot reuse).
-stack.position = stack.position.max(pos.saturating_add(var_size));
-let pos = stack.function.stack(v);
-```
-
-`pos.max(stack.position)` is correct because:
-- Large types (`!can_reuse` in `assign_slots`): slot is always at the current watermark,
-  so `pos == stack.position` and `max` is a no-op advance.
-- Primitive dead-slot reuse: `pos < stack.position`, `max` leaves TOS unchanged —
-  the `else` path (OpPutX) fires as before.
-- Primitive fresh slot: `pos == stack.position`, `max` advances by `var_size`.
-
-**2. `src/state/codegen.rs` — argument setup (~line 32)**
-
-```rust
-// BEFORE:
-stack.position = stack.function.claim(v, stack.position, &Context::Argument);
-
-// AFTER (inline what claim() did):
-stack.function.variables[v as usize].stack_pos = stack.position;
-stack.position += size(stack.function.tp(v), &Context::Argument);
-```
-
-**3. `src/scopes.rs` — remove env-var gates**
-
-```rust
-// BEFORE (A6.3):
-if std::env::var("LOFT_LEGACY_SLOTS").is_ok() {
-    // legacy
-} else if std::env::var("LOFT_ASSIGN_SLOTS").is_ok() {
-    assign_slots(vars, local_start);
-} else {
-    assign_slots_safe(vars, local_start);
-}
-
-// AFTER (A6.4):
-assign_slots(vars, local_start);
-```
-
-**4. `src/variables.rs` — delete**
-
-- `pub fn claim(...)` — no longer called
-- `pub fn assign_slots_safe(...)` — no longer called
-- `LOFT_DEBUG_SLOTS` env-var debug block inside `assign_slots` — optional cleanup
-
-### Invariants to verify after removal
-
-- `validate_slots` passes on the full test suite with no env-var gates.
-- `cargo clippy --tests -D warnings` clean.
-- The `pos < stack.position` (OpPutX dead-slot reuse) branch still fires correctly for
-  same-size primitive reuse (covered by `assign_slots_sequential_reuse` unit test).
-
-### Commit sequence (DEVELOPMENT.md)
-
-1. No new tests needed (existing suite is the gate).
-2. Code: `generate_set` + argument setup + delete `claim()` + delete `assign_slots_safe`.
-3. `scopes.rs`: remove env-var gates unconditionally.
-4. `cargo test && cargo clippy --tests -D warnings && cargo fmt --check`.
-5. Docs: CHANGELOG, PLANNING, ASSIGNMENT, PROBLEMS, ROADMAP.
+**Deleted:** `pub fn claim(...)`, `pub fn assign_slots_safe(...)`, and
+`LOFT_DEBUG_SLOTS` debug blocks in both `variables.rs` and `codegen.rs`.

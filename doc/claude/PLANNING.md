@@ -59,10 +59,6 @@ Goal: harden the interpreter, improve runtime efficiency, and ship working nativ
 generation.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
-**Interpreter correctness:**
-- **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the
-  current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
-
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
   `replace`, `to_lowercase`, `to_uppercase` and format expressions.
@@ -808,61 +804,6 @@ when multiple closures are live simultaneously.
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1
 **Target:** 1.1+
-
----
-
-### A6  Stack slot `assign_slots` pre-pass
-**Sources:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md)
-**Severity:** Low — no user-visible impact; purely architectural (correctness fixed
-2026-03-13); safe mode already working
-**Description:** Replace the runtime `claim()` call in codegen with a compile-time
-pre-pass so slot layout is computed before bytecode generation.  Phases 2, 3a, and 3b
-are complete.  Only Phase 4 (remove dead `claim()` and `assign_slots_safe`) remains.
-**Fix path:**
-
-**Phase 3b — Optimised mode (DONE A6.3b):** Fixed the two remaining bugs (B and C),
-made `assign_slots` the unconditional default, and removed the `LOFT_ASSIGN_SLOTS` /
-`LOFT_LEGACY_SLOTS` env-var gates.  `assign_slots_safe` and `claim()` are now dead code.
-All tests pass (except the pre-existing `ref_param_append_bug` in `store.rs`).
-
-**Phase 4 — Remove `claim()` (deferred, tracked as A6.4):**
-
-With accurate intervals, `assign_slots` pre-assigns ALL variables at their correct TOS
-position.  The `claim()` fallback in `generate_set` becomes dead code.
-
-*Key change in `src/state/codegen.rs` `generate_set`* — replace the fallback:
-```rust
-// BEFORE (A6.3):
-if pos > stack.position {
-    stack.function.claim(v, stack.position, &Context::Variable);
-}
-let pos = stack.function.stack(v);
-
-// AFTER (A6.4):
-stack.position = stack.position.max(pos.saturating_add(var_size));
-let pos = stack.function.stack(v);
-```
-`max` is a no-op for dead-slot reuse (`pos < TOS`) and advances TOS by `var_size`
-for fresh slots (`pos == TOS`).
-
-*Argument setup (~line 32 in `codegen.rs`)* — inline what `claim()` did:
-```rust
-// BEFORE:
-stack.position = stack.function.claim(v, stack.position, &Context::Argument);
-// AFTER:
-stack.function.variables[v as usize].stack_pos = stack.position;
-stack.position += size(stack.function.tp(v), &Context::Argument);
-```
-
-*Delete from `src/variables.rs`:* `pub fn claim(...)`, `pub fn assign_slots_safe(...)`,
-and the `LOFT_DEBUG_SLOTS` debug block inside `assign_slots`.
-
-Full code details and invariants: [SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
-
-*Tests:* full test suite green; `cargo test` passes on all platforms.
-
-**Effort:** Low (two small fixes + cleanup)
-**Target:** 0.8.2
 
 ---
 
