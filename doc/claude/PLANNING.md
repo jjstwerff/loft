@@ -39,6 +39,8 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [Milestone Reevaluation](#milestone-reevaluation)
   - [Recommended Implementation Order](#recommended-implementation-order)
 - [L — Language Quality](#l--language-quality)
+  - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
+  - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
 - [N — Native Codegen](#n--native-codegen)
@@ -56,10 +58,6 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 Goal: harden the interpreter, improve runtime efficiency, and ship working native code
 generation.  No new language syntax.  Most items are independent and can be developed
 in parallel.
-
-**Interpreter correctness:**
-- **A6** — Stack slot `assign_slots` pre-pass: compile-time slot layout replaces the
-  current runtime `claim()` calls, eliminating the remaining category of slot-conflict bugs.
 
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
@@ -483,6 +481,58 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 
 ---
 
+### L4  Fix empty vector literal `[]` as mutable vector argument
+**Sources:** [PROBLEMS.md](PROBLEMS.md) #44
+**Severity:** Medium — passing `[]` directly as a mutable `vector<T>` argument panics in
+debug builds; workaround is to assign to a named variable first
+**Description:** `parse_vector` returns `Value::Insert([Null])` for an empty `[]` literal
+when the parse context has `Type::Unknown(0)` as the target type (which is always the case
+for call-site arguments).  No temporary variable is created and no `vector_db` init opcodes
+are emitted.  The mutable-argument handler in `generate_call` expects a 12-byte `DbRef` on
+the stack but finds 0 bytes.
+
+**Fix path:** In `parse_vector` (`src/parser/expressions.rs`), when `[]` is parsed with an
+unknown element type and `is_var = false`:
+
+1. Create a unique temporary variable with `Type::Unknown(0)` as a placeholder.
+2. Emit the `vector_db` initialisation block — same as the non-empty path does when
+   `block = true`.  The element type will be inferred on the second pass from the
+   call-site context.
+3. Return `Value::Var(vec)` wrapped in `v_block`, matching the non-empty path.
+
+The second pass already resolves the element type correctly for assignment targets
+(`my_vec = []`); the fix extends this to call-site arguments by ensuring a temporary
+variable and init block are always emitted for empty `[]` literals.
+
+**Effort:** Medium (parser change; careful handling of `Type::Unknown` on second pass)
+**Target:** 0.8.2
+
+---
+
+### L5  Fix `v += extra` via `&vector` ref-param
+**Sources:** [PROBLEMS.md](PROBLEMS.md) #56; `tests/issues.rs::ref_param_append_bug`
+**Severity:** High — panics in debug builds; silently does nothing in release builds
+**Description:** `v += extra` compiled for a `v: &vector<T>` ref-param emits
+`OpAppendVector` with the raw ref-param DbRef (a stack pointer into the caller's frame)
+instead of dereferencing it first.  `vector_append` calls `store.get_int(v.rec, v.pos)`
+where `v.rec` is the caller's stack record, which is absent from the current function's
+store claims, causing "Unknown record" panic.
+
+**Fix path:** In `generate_set` / the vector-append codegen path
+(`src/state/codegen.rs`), when the target variable is `Type::RefVar(Vector)`:
+
+1. Emit `OpGetStackRef` to load the actual vector DbRef from the ref-param.
+2. Emit `OpAppendVector` on the loaded DbRef.
+3. Emit `OpSetStackRef` to write the (possibly reallocated) DbRef back through the ref.
+
+The same dereference-operate-writeback pattern applies to all collection-mutating
+operations on ref-params.  Identify them in codegen and apply the fix consistently.
+
+**Effort:** Medium (codegen change; audit all collection ops on `RefVar` targets)
+**Target:** 0.8.2
+
+---
+
 ## P — Prototype Features
 
 ### P1  Lambda / anonymous function expressions
@@ -754,61 +804,6 @@ when multiple closures are live simultaneously.
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1
 **Target:** 1.1+
-
----
-
-### A6  Stack slot `assign_slots` pre-pass
-**Sources:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md)
-**Severity:** Low — no user-visible impact; purely architectural (correctness fixed
-2026-03-13); safe mode already working
-**Description:** Replace the runtime `claim()` call in codegen with a compile-time
-pre-pass so slot layout is computed before bytecode generation.  Phases 2, 3a, and 3b
-are complete.  Only Phase 4 (remove dead `claim()` and `assign_slots_safe`) remains.
-**Fix path:**
-
-**Phase 3b — Optimised mode (DONE A6.3b):** Fixed the two remaining bugs (B and C),
-made `assign_slots` the unconditional default, and removed the `LOFT_ASSIGN_SLOTS` /
-`LOFT_LEGACY_SLOTS` env-var gates.  `assign_slots_safe` and `claim()` are now dead code.
-All tests pass (except the pre-existing `ref_param_append_bug` in `store.rs`).
-
-**Phase 4 — Remove `claim()` (deferred, tracked as A6.4):**
-
-With accurate intervals, `assign_slots` pre-assigns ALL variables at their correct TOS
-position.  The `claim()` fallback in `generate_set` becomes dead code.
-
-*Key change in `src/state/codegen.rs` `generate_set`* — replace the fallback:
-```rust
-// BEFORE (A6.3):
-if pos > stack.position {
-    stack.function.claim(v, stack.position, &Context::Variable);
-}
-let pos = stack.function.stack(v);
-
-// AFTER (A6.4):
-stack.position = stack.position.max(pos.saturating_add(var_size));
-let pos = stack.function.stack(v);
-```
-`max` is a no-op for dead-slot reuse (`pos < TOS`) and advances TOS by `var_size`
-for fresh slots (`pos == TOS`).
-
-*Argument setup (~line 32 in `codegen.rs`)* — inline what `claim()` did:
-```rust
-// BEFORE:
-stack.position = stack.function.claim(v, stack.position, &Context::Argument);
-// AFTER:
-stack.function.variables[v as usize].stack_pos = stack.position;
-stack.position += size(stack.function.tp(v), &Context::Argument);
-```
-
-*Delete from `src/variables.rs`:* `pub fn claim(...)`, `pub fn assign_slots_safe(...)`,
-and the `LOFT_DEBUG_SLOTS` debug block inside `assign_slots`.
-
-Full code details and invariants: [SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
-
-*Tests:* full test suite green; `cargo test` passes on all platforms.
-
-**Effort:** Low (two small fixes + cleanup)
-**Target:** 0.8.2
 
 ---
 

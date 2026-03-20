@@ -299,7 +299,7 @@ intervals and can share or not share slots based on the interval check.
 | A6.2: shadow mode | **Done** (removed — superseded by A6.3 safe mode) |
 | A6.3a: `assign_slots_safe` pre-pass | **Done** (superseded by A6.3b) |
 | A6.3b: `assign_slots` greedy mode | **Done** — unconditional default; all tests pass |
-| A6.4: remove `claim()` | **Open** — `claim()` and `assign_slots_safe` are dead code |
+| A6.4: remove `claim()` | **Done** — `claim()`, `assign_slots_safe`, `LOFT_DEBUG_SLOTS` removed |
 | P2: remove `copy_variable` | **Deferred** |
 | Issue 2: "Different definition of Point." | **Open** (separate bug) |
 

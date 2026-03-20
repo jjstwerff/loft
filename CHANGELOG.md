@@ -57,6 +57,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **A6.4** — `claim()` and `assign_slots_safe` removed; `LOFT_DEBUG_SLOTS` debug blocks
+  deleted from both `variables.rs` and `codegen.rs`.  `claim()` is replaced by
+  `set_stack_pos()` — a minimal method that only sets the slot position — with the
+  caller advancing `stack.position` separately.  The TOS-drop fallback in `generate_set`
+  (pre-assigned slot above current TOS after an if-else) calls `set_stack_pos(v,
+  stack.position)` to override the slot to TOS so direct placement fires correctly.
+  (`src/variables.rs`, `src/state/codegen.rs`)
+
 - **A6.3b** — Greedy interval-colouring slot assignment (`assign_slots`) is now the
   unconditional default.  Three bugs fixed: (B) narrow→wide dead-slot reuse rejected
   by requiring exact size match in the reuse guard; (C) `Value::Iter` now recurses

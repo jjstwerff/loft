@@ -794,9 +794,10 @@ impl Function {
         res
     }
 
-    pub fn claim(&mut self, var: u16, pos: u16, context: &Context) -> u16 {
+    /// Set the pre-assigned stack position for `var`.  Called once per argument during
+    /// argument layout in `def_code`; the caller advances `stack.position` separately.
+    pub fn set_stack_pos(&mut self, var: u16, pos: u16) {
         self.variables[var as usize].stack_pos = pos;
-        pos + size(&self.variables[var as usize].type_def, context)
     }
 
     pub fn set_type(&mut self, var_nr: u16, tp: Type) {
@@ -1219,38 +1220,6 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
     writeln!(f)
 }
 
-/// Assign stack slot positions to all variables in `function` using greedy
-/// interval-graph colouring ordered by `first_def`.
-///
-/// Variables are sorted by `first_def` (ascending).  Each variable is placed
-/// at the lowest-offset slot not currently occupied by a simultaneously-live
-/// variable of the same or overlapping byte range.  Variables with
-/// `first_def == u32::MAX` (never written) are skipped and keep
-/// `stack_pos == u16::MAX`.
-///
-/// The pipeline is **not** changed: `claim()` remains the active mechanism.
-/// Prepare local variable slots for codegen (A6.3a safe mode).
-///
-/// `local_start` is the first free byte offset after the argument area and the
-/// 4-byte return-address slot (`sum_of_argument_sizes + 4`).
-///
-/// This function marks size-0 variables (null-typed, no stack storage) with
-/// sentinel slot 0 and leaves all other local variables at `u16::MAX`.
-/// `generate_set` detects `u16::MAX` via the `is_stack_allocated` flag and falls
-/// through to `claim()`-at-TOS, which is always correct regardless of IR vs codegen
-/// ordering.  The `is_stack_allocated` flag makes first-allocation detection explicit
-/// instead of relying on `stack_pos == u16::MAX`.
-///
-/// The `local_start` argument is accepted but not used (it is reserved for A6.3b,
-/// where full pre-assignment without `claim()` will replace this stub).
-pub fn assign_slots_safe(function: &mut Function, _local_start: u16) {
-    for v in &mut function.variables {
-        if !v.argument && size(&v.type_def, &Context::Variable) == 0 {
-            v.stack_pos = 0; // sentinel: null-typed, no stack storage
-        }
-    }
-}
-
 /// `sum_of_argument_sizes + 4`.
 ///
 /// Variables with `argument == true` or `first_def == u32::MAX` are skipped.
@@ -1322,20 +1291,6 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
             break;
         }
         function.variables[i].stack_pos = candidate;
-    }
-    // Temporary debug: print slot assignments
-    if std::env::var("LOFT_DEBUG_SLOTS").is_ok() {
-        for &i in &order {
-            let v = &function.variables[i];
-            eprintln!(
-                "  var[{i}] '{}' slot={} size={} first_def={} last_use={}",
-                v.name,
-                v.stack_pos,
-                size(&v.type_def, &Context::Variable),
-                v.first_def,
-                v.last_use
-            );
-        }
     }
 }
 

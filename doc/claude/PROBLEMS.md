@@ -27,6 +27,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Medium | Assign to named variable first |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
+| 56 | `v += extra` via `&vector` ref-param panics in debug / silently fails in release | High | Use a return value instead of a ref-param for vector append |
 
 ---
 
@@ -51,22 +52,15 @@ R-tree) is already allocated in the schema; the iteration traversal is the main 
 
 ## Stack Slot Assignment (In Progress)
 
-### 24. `claim()` and `assign_slots_safe` not yet removed (A6.4)
+### 24. Stack slot `assign_slots` pre-pass (FIXED — A6.4)
 
-**Current (A6.3b):** Greedy interval-colouring (`assign_slots`) is now the
-unconditional default.  The three interval bugs (A, B, C) are all fixed.  The
-env-var gates (`LOFT_ASSIGN_SLOTS`, `LOFT_LEGACY_SLOTS`) are removed.  All tests
-pass except the pre-existing `ref_param_append_bug` (a `store.rs` bug unrelated to
-slot assignment).
+**Done (A6.4):** `claim()` and `assign_slots_safe` removed; `LOFT_DEBUG_SLOTS` debug
+blocks deleted from both `variables.rs` and `codegen.rs`.  `claim()` replaced by
+`set_stack_pos()`.  The TOS-drop fallback in `generate_set` calls
+`set_stack_pos(v, stack.position)` to override the pre-assigned slot to TOS.
+All tests pass except the pre-existing `ref_param_append_bug` (Issue 56).
 
-**Remaining:** `claim()` and `assign_slots_safe` are dead code — they are still
-compiled but no longer called.  A6.4 removes them and simplifies `generate_set` by
-replacing the `claim()` fallback with a `stack.position.max(pos + size)` advance.
-
-**Next steps:** A6.4 per [PLANNING.md § A6](PLANNING.md) and
-[SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
-
-**Details:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
+**History:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
 
 ---
 
@@ -111,6 +105,50 @@ path does when `block = true`.  The difficulty is that `assign_tp` (the element 
 second pass or this path must be deferred until the call-site type is known.
 
 **Effort:** Medium (parser change; requires careful handling of the Unknown element type)
+
+---
+
+### 56. `v += extra` via `&vector` ref-param panics (debug) / silently fails (release)
+
+**Symptom:** A function that appends to a `&vector<T>` ref-param using `v += extra`
+panics in debug builds:
+```
+thread panicked at src/store.rs:785: Unknown record 5
+```
+In release builds the operation silently does nothing — the caller's vector is unchanged.
+Test: `ref_param_append_bug` in `tests/issues.rs`.
+
+**Root cause:** When `v += extra` is compiled for a `v: &vector<T>` ref-param, codegen
+emits `OpAppendVector` with the raw ref-param DbRef (a stack pointer into the caller's
+frame via `OpCreateStack`) rather than the actual vector DbRef.  `vector_append` calls
+`store.get_int(v.rec, v.pos)` to read the vector header; `v.rec` is the caller's stack
+frame record, which is not present in the current function's store `claims` — hence the
+`Unknown record` panic.  In release builds the `debug_assert` is elided, producing
+corrupt or no-op behaviour.
+
+**Fix path:** In codegen for `v += extra` where `v: RefVar(Vector)`:
+
+1. Emit `OpGetStackRef` to dereference the ref-param and load the actual vector DbRef.
+2. Emit `OpAppendVector` with the loaded DbRef.
+3. Emit `OpSetStackRef` to write back the (possibly reallocated) DbRef through the ref.
+
+The write-back is required because `vector_append` may resize the backing record and
+update the DbRef in-place; without writing back, the caller's variable would reference a
+stale record after the append.
+
+The same pattern is needed for any mutable collection operation on a ref-param
+(e.g. `v += [item]` for a single element, hash insert, etc.).
+
+**Workaround:** Return the modified vector and assign at the call site, or pass the
+vector by-value and reassign:
+```loft
+fn fill_ret(v: vector<Item>, extra: vector<Item>) -> vector<Item> { v += extra; v }
+buf = fill_ret(buf, extra);
+```
+
+**Effort:** Medium (codegen change in `src/state/codegen.rs`; requires identifying all
+collection-mutating operations on ref-params)
+**Target:** 0.8.2
 
 ---
 
