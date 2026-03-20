@@ -415,6 +415,42 @@ to worry about.
 
 ---
 
+### 71. `assign_slots` places variables above TOS causing codegen slot conflicts (FIXED 2026-03-20)
+
+**Tests:** `growing_vector`, `sorted_remove`, `index_iterator`, `index_key_null_removes_all`,
+`index_loop_remove_small`, `index_loop_remove_large`, `sorted_filtered_remove_large` — all
+produced "Slot conflict" panics in `validate_slots`.
+
+**Root cause:** `assign_slots` skipped dead slots when their size didn't match the candidate
+variable (`!can_reuse || var_size != j_size`).  This pushed the chosen slot above every dead
+slot from variables that lived inside a previous for-loop body.  Those loop-body slots are
+above the physical TOS after the loop exits (OpFreeStack restores TOS to the pre-loop
+position).  Codegen's `pos > stack.position` guard then overrode the pre-assigned slot to the
+current TOS, placing the variable at the same slot as another variable already pre-assigned
+there by `assign_slots`.
+
+**Example (sorted_remove):** `e#index` (int, slot 60) died at seq 129 inside loop 1.  `total`
+(int) had first_def=131.  `assign_slots` gave `total` slot 60 (sequential reuse of dead int).
+After loop 1 exited, TOS=52.  Codegen saw pos(60) > TOS(52) → overrode to 52.  `e#iter_state`
+(var 7) was also pre-assigned slot 52 for loop 2. Conflict.
+
+**Fix (`src/variables.rs` — `assign_slots`):**
+1. Before the slot-search loop, compute `tos_estimate` = the maximum slot-end of all
+   already-assigned variables that are live at `first_def`.  This is the guaranteed-reachable
+   TOS at the variable's first allocation.
+2. When skipping a dead slot due to `!can_reuse || var_size != j_size`, clamp the next
+   candidate to `tos_estimate` instead of jumping past the dead slot.  This prevents the
+   search from ever choosing a slot above TOS.
+3. When `candidate == tos_estimate` (fresh allocation at the expected TOS), skip the
+   `!can_reuse || var_size != j_size` check — dead slots at TOS are overwritten by direct
+   placement, so size compatibility doesn't matter there.
+
+**Also updated:** The `assign_slots_no_narrow_to_wide_reuse` unit test expected `fnref` to
+avoid slot 0 (dead 1-byte flag).  With the fix, `fnref` IS placed at slot 0 via direct
+placement (tos_estimate=0, no live vars), which is safe.  The test now asserts slot 0.
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries
