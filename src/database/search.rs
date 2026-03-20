@@ -514,3 +514,31 @@ impl Stores {
         Ordering::Equal
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Stores;
+    use crate::keys::{Content, DbRef};
+
+    /// S3: find() with a non-collection type must panic with a diagnostic message.
+    #[test]
+    #[ignore]
+    #[should_panic(expected = "find called on non-collection type")]
+    fn find_non_collection_panics() {
+        let stores = Stores::new();
+        let data = DbRef { store_nr: 0, rec: 0, pos: 0 };
+        stores.find(&data, 0, &[Content::Long(0)]);
+    }
+
+    /// S3: remove() with a non-collection type must panic with a diagnostic message.
+    #[test]
+    #[ignore]
+    #[should_panic(expected = "remove called on non-collection type")]
+    fn remove_non_collection_panics() {
+        let mut stores = Stores::new();
+        let data = DbRef { store_nr: 0, rec: 0, pos: 0 };
+        let rec = DbRef { store_nr: 0, rec: 0, pos: 0 };
+        stores.remove(&data, &rec, 0);
+    }
+}

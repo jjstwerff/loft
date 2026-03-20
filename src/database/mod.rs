@@ -357,6 +357,12 @@ impl Stores {
         *m = val;
         stack.pos += size_of::<T>() as u32;
     }
+
+    /// Look up a type by index, panicking with a diagnostic if the index is out of range.
+    #[must_use]
+    pub fn get_type(&self, nr: u16) -> &Type {
+        todo!("S6-65: implement get_type — nr={nr}")
+    }
 }
 
 pub struct ShowDb<'a> {
@@ -367,6 +373,15 @@ pub struct ShowDb<'a> {
     pub known_type: u16,
     pub pretty: bool,
     pub json: bool,
+}
+
+/// S6-65: get_type() with an out-of-range index must panic with a helpful message.
+#[test]
+#[ignore]
+#[should_panic(expected = "type index 999 out of range")]
+fn get_type_out_of_range_panics() {
+    let stores = Stores::new();
+    stores.get_type(999);
 }
 
 // These values are for amd64 or arm64 systems.

@@ -1134,6 +1134,18 @@ unsafe impl Send for Store {}
 mod tests {
     use super::Store;
 
+    /// S6-67: growing the store through many claims must not wrap or silently fail.
+    #[test]
+    #[ignore]
+    fn store_grows_without_overflow() {
+        let mut store = Store::new(4);
+        for _ in 0..200 {
+            store.claim(1);
+        }
+        // Store must have grown to hold 200 single-word claims (≥200 * 8 bytes).
+        assert!(store.byte_capacity() >= 200 * 8);
+    }
+
     /// T0-11: `addr_mut` on a locked store must panic (not silently discard the write).
     #[test]
     #[should_panic(expected = "Write to locked store")]
