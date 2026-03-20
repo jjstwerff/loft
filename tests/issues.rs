@@ -1130,6 +1130,24 @@ fn n9a_generated_fill_has_ops_import() {
     );
 }
 
+/// N9 (N20b/N20c/N20d): auto-generated tests/generated/fill.rs must be byte-for-byte
+/// identical to src/fill.rs once all #rust templates are present and rustfmt is applied.
+/// Ignored until N20b (rustfmt call) and N20d (#rust templates) are both implemented.
+#[test]
+#[ignore = "N9: N20b (rustfmt) and N20d (#rust templates) not yet implemented"]
+fn n9_generated_fill_matches_src() {
+    let generated = std::fs::read_to_string("tests/generated/fill.rs")
+        .expect("tests/generated/fill.rs not found — run any loft test first");
+    let src =
+        std::fs::read_to_string("src/fill.rs").expect("src/fill.rs not found");
+    assert_eq!(
+        generated,
+        src,
+        "tests/generated/fill.rs differs from src/fill.rs — \
+         run create::generate_code() and copy the result"
+    );
+}
+
 /// N8: OpSortVector, OpInsertVector, and OpLengthCharacter must exist in codegen_runtime.
 /// Generated sort/insert/fill tests fail to compile because these functions are absent.
 #[test]
