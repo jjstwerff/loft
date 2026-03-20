@@ -59,17 +59,16 @@ is retained but skipped for already-allocated variables.  The legacy `claim()`-o
 path is still reachable via `LOFT_LEGACY_SLOTS=1`; the greedy-coloring path via
 `LOFT_ASSIGN_SLOTS=1`.
 
-**Three known bugs block the optimised mode** (documented in `doc/claude/SLOT_FAILURES.md`):
+**Two known bugs block the optimised mode** (documented in `doc/claude/SLOT_FAILURES.md`):
 
-- **Bug A — Vector comprehension aliasing** (`compute_intervals`, all modes):
-  `r = filter(v, fn)` expands to a comprehension; both `r` and `_filter_result_5`
-  are assigned slot 88 because `first_def` is set too early for Vector types.
-  Fix: skip the early-`first_def` path for `Type::Vector`.
+- **Bug A — Vector comprehension aliasing** (`compute_intervals`): **Fixed by A6.3a.**
+  The `needs_early_first_def` predicate now excludes `Type::Vector`; filter/map tests
+  pass in all modes.
 
 - **Bug B — Narrow→wide slot reuse** (`assign_slots`, optimised only):
   A 4-byte fn-ref is allowed to reuse a dead 1-byte slot; the `OpPutX` displacement
   is off by the size difference, corrupting data at runtime.
-  Fix: require exact size match (`var_size == j_size`) in the reuse guard.
+  Fix: add `|| var_size != j_size` to the dead-slot-overlap guard (inner loop).
 
 - **Bug C — `Value::Iter` not traversed** (`compute_intervals`, optimised only):
   Variables read only inside an iterator's `create`/`next`/`extra_init` keep
@@ -79,11 +78,11 @@ path is still reachable via `LOFT_LEGACY_SLOTS=1`; the greedy-coloring path via
 
 **Impact:** With the safe default, all tests pass (except the pre-existing
 `ref_param_append_bug`).  The optimised mode is gated behind `LOFT_ASSIGN_SLOTS=1`
-and should not be used until the three bugs are fixed.
+and should not be used until Bugs B and C are fixed.
 
-**Next steps:** Fix Bugs A, B, C (each a one- or two-line change); enable the
-optimised tests; remove `LOFT_LEGACY_SLOTS` and `LOFT_ASSIGN_SLOTS` env-var gates
-once the optimised mode passes all tests.
+**Next steps:** Fix Bugs B and C (each a one- or two-line change); enable the ignored
+unit tests; make greedy the default; remove `LOFT_LEGACY_SLOTS` and `LOFT_ASSIGN_SLOTS`
+env-var gates.  Then A6.4: remove `claim()` and `assign_slots_safe`.
 
 **Details:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
 

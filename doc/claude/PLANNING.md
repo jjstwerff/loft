@@ -781,24 +781,82 @@ Three env-var gates allow testing alternative paths during development:
   three bugs (see [SLOT_FAILURES.md](SLOT_FAILURES.md))
 - `LOFT_LEGACY_SLOTS=1` — skip pre-pass; `claim()` in codegen as before A6.3
 
-**Phase 3b — Optimised mode (TODO):** Fix the three bugs in SLOT_FAILURES.md, then
-enable the greedy path as the default and remove the env-var gates.
+**Phase 3b — Optimised mode (TODO):** Fix the two remaining bugs (A was fixed by
+A6.3a), then make greedy the default and remove the env-var gates.
 
-| Bug | File | Fix |
-|-----|------|-----|
-| A — Vector comprehension aliasing | `variables.rs` `compute_intervals` | Skip early `first_def` for `Type::Vector` |
-| B — Narrow→wide slot reuse | `variables.rs` `assign_slots` | Add `&& var_size == j_size` to reuse guard |
-| C — `Value::Iter` not traversed | `variables.rs` `compute_intervals` | Add `Value::Iter` arm that recurses into sub-expressions |
+| Bug | Status | File | Fix |
+|-----|--------|------|-----|
+| A — Vector comprehension aliasing | **Fixed (A6.3a)** | `variables.rs` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` |
+| B — Narrow→wide slot reuse | **Open** | `variables.rs` `assign_slots` | `\|\| var_size != j_size` in dead-slot-overlap guard (inner loop) |
+| C — `Value::Iter` not traversed | **Open** | `variables.rs` `compute_intervals` | Add `Value::Iter` arm that recurses into `create`/`next`/`extra_init` |
 
-Each fix is one or two lines.  After all three pass with `LOFT_ASSIGN_SLOTS=1`,
-remove the env-var gates and make the greedy path unconditional.
+Ignored unit tests for Bugs B and C already live in `src/variables.rs`.
 
-**Phase 4 — Remove `claim()` (deferred):** Once Phase 3b is stable, delete `claim()`
-from `variables.rs` and the TOS-fallback from `generate_set`.
+**Fix B** — one change in the inner loop of `assign_slots` (`src/variables.rs`):
+```rust
+// was:
+if !can_reuse {
+// fix:
+if !can_reuse || var_size != j_size {
+```
+(`j_size` is computed two lines above in the same loop body.)
+
+**Fix C** — add `Value::Iter` arm in `compute_intervals` (`src/variables.rs`),
+after the `Value::Loop` arm:
+```rust
+Value::Iter(index_var, create, next, extra_init) => {
+    let v = *index_var as usize;
+    if v < function.variables.len() {
+        function.variables[v].last_use =
+            function.variables[v].last_use.max(*seq);
+    }
+    *seq += 1;
+    compute_intervals(create, function, free_text_nr, free_ref_nr, seq);
+    compute_intervals(next,   function, free_text_nr, free_ref_nr, seq);
+    compute_intervals(extra_init, function, free_text_nr, free_ref_nr, seq);
+}
+```
+
+**Making greedy the default** (`src/scopes.rs`): once both fixes pass, remove the
+`LOFT_LEGACY_SLOTS` and `LOFT_ASSIGN_SLOTS` branches and call `assign_slots` unconditionally.
+
+**Phase 4 — Remove `claim()` (deferred until Phase 3b stable):**
+
+With accurate intervals, `assign_slots` pre-assigns ALL variables at their correct TOS
+position.  The `claim()` fallback in `generate_set` becomes dead code.
+
+*Key change in `src/state/codegen.rs` `generate_set`* — replace the fallback:
+```rust
+// BEFORE (A6.3):
+if pos > stack.position {
+    stack.function.claim(v, stack.position, &Context::Variable);
+}
+let pos = stack.function.stack(v);
+
+// AFTER (A6.4):
+stack.position = stack.position.max(pos.saturating_add(var_size));
+let pos = stack.function.stack(v);
+```
+`max` is a no-op for dead-slot reuse (`pos < TOS`) and advances TOS by `var_size`
+for fresh slots (`pos == TOS`).
+
+*Argument setup (~line 32 in `codegen.rs`)* — inline what `claim()` did:
+```rust
+// BEFORE:
+stack.position = stack.function.claim(v, stack.position, &Context::Argument);
+// AFTER:
+stack.function.variables[v as usize].stack_pos = stack.position;
+stack.position += size(stack.function.tp(v), &Context::Argument);
+```
+
+*Delete from `src/variables.rs`:* `pub fn claim(...)`, `pub fn assign_slots_safe(...)`,
+and the `LOFT_DEBUG_SLOTS` debug block inside `assign_slots`.
+
+Full code details and invariants: [SLOT_FAILURES.md § A6.4](SLOT_FAILURES.md#a64--remove-claim-deferred-until-a63b-is-stable).
 
 *Tests:* full test suite green; `cargo test` passes on all platforms.
 
-**Effort:** Low (three small fixes + cleanup)
+**Effort:** Low (two small fixes + cleanup)
 **Target:** 0.8.2
 
 ---
