@@ -88,6 +88,7 @@ fn OpMkdirAll(path: text) -> boolean;
 // Clear the temporary string buffer used by native text functions.
 // Emitted at statement boundaries by the compiler; not callable from user code.
 fn OpClearScratch();
+#rust"stores.scratch.clear();"
 // Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
 // Use for fast colour comparison or storage.
 pub fn value(self: Pixel) -> integer {
@@ -292,3 +293,4 @@ pub fn ticks() -> long;
 fn OpReverseVector(r: vector, size: const u16);
 #rust"vector::reverse_vector(&@r, (@size) as u32, &mut s.database.allocations);"
 fn OpSortVector(r: vector, db_tp: const u16);
+#rust"{{ let _t = (@db_tp) as u16; let elem_size = stores.size(_t); let is_float = _t == 2 || _t == 3; vector::sort_vector(&@r, elem_size, is_float, &mut stores.allocations); }}"

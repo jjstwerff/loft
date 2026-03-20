@@ -90,6 +90,10 @@ pub fn init(state: &mut State) {{
         }
         writeln!(into, "}}")?;
     }
+    drop(into);
+    let _ = std::process::Command::new("rustfmt")
+        .arg("tests/generated/fill.rs")
+        .status();
     Ok(())
 }
 
