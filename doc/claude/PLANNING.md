@@ -42,10 +42,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
 - [S — Stability Hardening](#s--stability-hardening)
-  - [S1 — Undefined-name diagnostic (Issue 58)](#s1--undefined-name-diagnostic)
-  - [S2 — Recursion depth limit (Issue 60)](#s2--recursion-depth-limit)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
-  - [S6 — Store overflow guards remaining (Issue 64, 66)](#s6--store-overflow-guards-remaining)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization)
@@ -84,12 +81,8 @@ in parallel.
   exist, lambdas are needed before closures (A5) and aggregates (P3) can land.
 
 **Stability hardening (S1–S6):**
-- **S1** — Undefined-name diagnostic: emit an error on the second pass instead of creating a silent `Type::Unknown(0)` variable (Issue 58).
-- **S2** — Recursion depth limit: add `depth` counter to `generate`, `inline_ref_set_in`, `compute_intervals`, `scan` (Issue 60).
 - **S3** — Database dispatch exhaustiveness: explicit variant arms in `search.rs`/`io.rs`. ✓
 - **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63).
-- **S5** — Index-copy exhaustive match: panic with explicit message replaces `unreachable!()`. ✓
-- **S6** — Store overflow guards: `get_type()` helper and resize overflow fix done (Issues 65, 67). ✓ partial — narrowing-cast guards in vector ops (Issue 66) and full offset-cast audit (Issue 64) remain.
 
 **Native code generation (Tier N):**
 - N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
@@ -1355,54 +1348,6 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
-### S1 — Undefined-name diagnostic
-
-**Source:** PROBLEMS.md Issue 58 · `src/parser/expressions.rs:2641`
-
-**Problem:** When a name lookup fails on the second parser pass, the compiler silently
-creates a `Type::Unknown(0)` variable instead of emitting a diagnostic:
-```rust
-} else {
-    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-    t = Type::Unknown(0);
-}
-```
-A typo in a variable name produces a confusing downstream type error rather than
-"undefined variable `totla`".
-
-**Fix:**
-1. Introduce a `Pass` check: on `Pass::Second`, emit an "undefined variable" error
-   diagnostic and return `Type::Unknown(0)` without creating a new variable.
-2. Confirm that all legitimate forward-reference names are resolved before the second
-   pass begins (cross-function references, type aliases, etc.).
-3. Add a test in `tests/parse_errors.rs` that asserts the diagnostic is emitted.
-
-**Effort:** Medium · **Target:** 0.8.2
-
----
-
-### S2 — Recursion depth limit
-
-**Source:** PROBLEMS.md Issue 60 · `src/state/codegen.rs`, `src/scopes.rs`,
-`src/variables.rs`, `src/parser/expressions.rs`
-
-**Problem:** `generate`, `inline_ref_set_in`, `compute_intervals`, and `scan` are
-directly recursive with no depth counter.  Machine-generated or adversarially deep
-expressions cause Rust stack overflow (SIGSEGV).
-
-**Fix:**
-1. Add a `depth: usize` parameter to each of the four functions.
-2. At each recursive call, pass `depth + 1`.
-3. At the start of each function, if `depth > RECURSION_LIMIT` (suggest 1000), emit
-   a diagnostic and return a safe default rather than recursing further.
-4. The `generate` function has the most call sites; changing its signature is the
-   most invasive part — do it first, then follow the compiler errors.
-
-**Effort:** Small per function; the signature cascade through `generate` is Medium.
-**Target:** 0.8.2
-
----
-
 ### S4 — Binary I/O type coverage
 
 **Source:** PROBLEMS.md Issues 59, 63 · `src/database/io.rs:101`,
@@ -1424,26 +1369,6 @@ A struct type with a nested struct field panics on format/print.
 3. Add integration tests covering the newly implemented type combinations.
 
 **Effort:** Small–Medium per arm; Medium overall including tests.
-**Target:** 0.8.2
-
----
-
-### S6 — Store overflow guards (remaining)
-
-**Source:** PROBLEMS.md Issues 64, 66 · `src/store.rs`, `src/state/codegen.rs`,
-`src/database/database.rs`
-
-Issues 65 (`get_type()` helper) and 67 (`resize_store` overflow) are complete.
-
-**64 — Offset overflow (`store.rs`):** Byte-offset arithmetic casts between `i32` and
-`usize` without overflow checks.  Fix: replace bare `as i32` / `as usize` casts with
-`try_into().expect("store offset overflow")` or `checked_add` + panic.
-
-**66 — Vector cast truncation (`codegen.rs`, `database.rs`):** `count as i32` / `count as u16`
-silently truncate on very large vectors.  Fix: add `debug_assert!(count <= i32::MAX as usize)`
-before each narrowing cast, or use `try_into().expect(...)`.
-
-**Effort:** Small per sub-item; Small–Medium for full audit of cast points.
 **Target:** 0.8.2
 
 ---

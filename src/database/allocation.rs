@@ -184,6 +184,10 @@ impl Stores {
             return;
         }
         let into = self.store_mut(to).claim(1 + (size * cur).div_ceil(8));
+        debug_assert!(
+            i32::try_from(into).is_ok(),
+            "vector allocation offset overflow: {into}"
+        );
         self.store_mut(to).set_int(to.rec, to.pos, into as i32);
         self.copy_block(
             &DbRef {

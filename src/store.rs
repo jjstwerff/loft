@@ -21,6 +21,8 @@ use std::fmt::{Debug, Formatter};
 static A: System = System;
 const SIGNATURE: u32 = 0x53_74_6f_31;
 pub const PRIMARY: u32 = 1;
+/// Maximum store size in words; offsets are stored as `i32` so this is the limit.
+pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 
 /// Minimum free-block size (words) to register in the LLRB free-space tree.
 /// A node needs 4 (left) + 4 (right) + 1 (color) bytes after the 4-byte header = 13 bytes.
@@ -358,6 +360,13 @@ impl Store {
         if to_size <= self.size {
             return;
         }
+        assert!(
+            to_size <= MAX_STORE_WORDS,
+            "store offset overflow: requested {} words exceeds limit of {} ({} bytes)",
+            to_size,
+            MAX_STORE_WORDS,
+            u64::from(MAX_STORE_WORDS) * 8
+        );
         // saturating_mul prevents u32 overflow when the store is very large
         let inc = self.size.saturating_mul(7) / 3;
         let size = if to_size > inc { to_size } else { inc };
@@ -1140,7 +1149,7 @@ unsafe impl Send for Store {}
 
 #[cfg(test)]
 mod tests {
-    use super::Store;
+    use super::{MAX_STORE_WORDS, Store};
 
     /// S6-67: growing the store through many claims must not wrap or silently fail.
     #[test]
@@ -1152,6 +1161,15 @@ mod tests {
         }
         // Store must have grown to hold 200 single-word claims (≥200 * 8 bytes).
         assert!(store.byte_capacity() >= 200 * 8);
+    }
+
+    /// S6-64: `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.
+    #[test]
+    #[should_panic(expected = "store offset overflow")]
+    fn resize_store_exceeds_max_panics() {
+        let mut store = Store::new(4);
+        store.free = false;
+        store.resize_store(MAX_STORE_WORDS + 1);
     }
 
     /// T0-11: `addr_mut` on a locked store must panic (not silently discard the write).

@@ -96,6 +96,31 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   caused `resize_store` to return early, leaving the store under-allocated.
   (`src/store.rs`)
 
+- **S6-64** — `resize_store` now asserts `to_size <= MAX_STORE_WORDS` before
+  allocating, where `MAX_STORE_WORDS = i32::MAX as u32`.  Store offsets are stored
+  as `i32` values; without this guard a store grown beyond 2 GiB words would silently
+  produce negative offsets, corrupting all subsequent allocations.  (`src/store.rs`)
+
+- **S6-66** — `debug_assert!` guards added before narrowing `as i32` casts in
+  `gen_text` (long-text code offset and text length) and in `copy_vector` (vector
+  allocation offset).  Overflow is caught in debug builds with a clear message before
+  the silent truncation can corrupt the bytecode or the store.
+  (`src/state/codegen.rs`, `src/database/allocation.rs`)
+
+- **S1** — The parser now emits `"Unknown variable 'x'"` directly on the second
+  pass when a name is not found, instead of creating a ghost `Type::Unknown(0)`
+  variable that propagated as a confusing downstream type error.  A typo in a
+  variable name now produces a single, accurate diagnostic at the point of use.
+  (`src/parser/expressions.rs`)
+
+- **S2** — Recursion depth limits (1000 levels) added to `compute_intervals`,
+  `inline_ref_set_in`, `generate`, and `scan` to prevent stack overflows on
+  pathologically nested expression trees.  `compute_intervals` and
+  `inline_ref_set_in` use an explicit `depth: usize` parameter; `generate` and
+  `scan` use a struct field (`generate_depth`, `scan_depth`) to avoid cascading
+  signature changes.  (`src/variables.rs`, `src/parser/expressions.rs`,
+  `src/state/codegen.rs`, `src/scopes.rs`)
+
 - **A6.4** — `claim()` and `assign_slots_safe` removed; `LOFT_DEBUG_SLOTS` debug blocks
   deleted from both `variables.rs` and `codegen.rs`.  `claim()` is replaced by
   `set_stack_pos()` — a minimal method that only sets the slot position — with the

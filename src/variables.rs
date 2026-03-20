@@ -882,7 +882,12 @@ pub fn compute_intervals(
     free_text_nr: u32,
     free_ref_nr: u32,
     seq: &mut u32,
+    depth: usize,
 ) {
+    assert!(
+        depth <= 1000,
+        "expression nesting limit exceeded at depth {depth}"
+    );
     match val {
         Value::Var(v) => {
             let v = *v as usize;
@@ -915,7 +920,7 @@ pub fn compute_intervals(
                 *seq += 1;
             }
             // Process the value expression (inner variables get seq numbers after the target).
-            compute_intervals(value, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(value, function, free_text_nr, free_ref_nr, seq, depth + 1);
             // Small/primitive types and Vector types: record first_def after traversing value
             // so that inner temporaries (which finish before this assignment takes effect) can
             // potentially share the same stack slot as this variable.
@@ -940,13 +945,13 @@ pub fn compute_intervals(
         }
         Value::Block(bl) => {
             for op in &bl.operators {
-                compute_intervals(op, function, free_text_nr, free_ref_nr, seq);
+                compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
         }
         Value::Loop(lp) => {
             let seq_start = *seq;
             for op in &lp.operators {
-                compute_intervals(op, function, free_text_nr, free_ref_nr, seq);
+                compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
             let seq_end = *seq;
             // Extend last_use of loop-carried variables.
@@ -997,14 +1002,21 @@ pub fn compute_intervals(
                 function.variables[v].last_use = function.variables[v].last_use.max(*seq);
             }
             *seq += 1;
-            compute_intervals(create, function, free_text_nr, free_ref_nr, seq);
-            compute_intervals(next, function, free_text_nr, free_ref_nr, seq);
-            compute_intervals(extra_init, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(create, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(next, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                extra_init,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                seq,
+                depth + 1,
+            );
         }
         Value::If(test, t_val, f_val) => {
-            compute_intervals(test, function, free_text_nr, free_ref_nr, seq);
-            compute_intervals(t_val, function, free_text_nr, free_ref_nr, seq);
-            compute_intervals(f_val, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(test, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(t_val, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(f_val, function, free_text_nr, free_ref_nr, seq, depth + 1);
         }
         Value::Call(op_nr, args) => {
             // OpFreeText / OpFreeRef are implicit last uses of the variable they free.
@@ -1020,13 +1032,13 @@ pub fn compute_intervals(
                 return;
             }
             for arg in args {
-                compute_intervals(arg, function, free_text_nr, free_ref_nr, seq);
+                compute_intervals(arg, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
             *seq += 1;
         }
         Value::CallRef(v_nr, args) => {
             for a in args {
-                compute_intervals(a, function, free_text_nr, free_ref_nr, seq);
+                compute_intervals(a, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
             // Mark the fn-ref variable as used at this point
             function.variables[*v_nr as usize].last_use =
@@ -1034,11 +1046,11 @@ pub fn compute_intervals(
             *seq += 1;
         }
         Value::Return(v) | Value::Drop(v) => {
-            compute_intervals(v, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(v, function, free_text_nr, free_ref_nr, seq, depth + 1);
         }
         Value::Insert(ops) => {
             for op in ops {
-                compute_intervals(op, function, free_text_nr, free_ref_nr, seq);
+                compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
         }
         Value::Break(_) | Value::Continue(_) | Value::Null | Value::Line(_) => {}
@@ -1412,7 +1424,7 @@ mod tests {
             scope: 0,
         }));
         let mut seq = 0u32;
-        compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq);
+        compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
         assert_ne!(
             f.variables[v as usize].first_def,
             u32::MAX,
@@ -1445,7 +1457,7 @@ mod tests {
             scope: 0,
         }));
         let mut seq = 0u32;
-        compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq);
+        compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
         let fd = f.variables[v as usize].first_def;
         let lu = f.variables[v as usize].last_use;
         assert_ne!(fd, u32::MAX, "first_def not set");
@@ -1480,7 +1492,7 @@ mod tests {
             }))),
         );
         let mut seq = 0u32;
-        compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq);
+        compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
         // a's live interval is entirely before b's — they could share a slot.
         let a_last = f.variables[a as usize].last_use;
         let b_first = f.variables[b as usize].first_def;
@@ -1688,7 +1700,7 @@ mod tests {
         let extra_init = Value::Null;
         let iter = Value::Iter(idx, Box::new(create), Box::new(next), Box::new(extra_init));
         let mut seq = 0u32;
-        compute_intervals(&iter, &mut f, u32::MAX, u32::MAX, &mut seq);
+        compute_intervals(&iter, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
         assert_ne!(
             f.variables[idx as usize].last_use, 0,
             "index variable's last_use must be set by traversing Iter sub-expressions"
@@ -1802,12 +1814,30 @@ mod tests {
             scope: 0,
         }));
         let mut seq = 0u32;
-        compute_intervals(&block, &mut f, u32::MAX, u32::MAX, &mut seq);
+        compute_intervals(&block, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
         // acc is written twice; last_use must reflect the second write.
         assert!(
             f.variables[acc as usize].last_use > f.variables[other as usize].first_def,
             "write-only acc must outlive other to prevent slot aliasing"
         );
         assert!(find_conflict(&f.variables).is_none());
+    }
+
+    /// S2: `compute_intervals` must panic with a depth-limit message when nesting exceeds 1000.
+    #[test]
+    #[should_panic(expected = "expression nesting limit")]
+    fn compute_intervals_depth_limit() {
+        let mut v: Value = Value::Null;
+        for _ in 0..1100 {
+            v = Value::Block(Box::new(Block {
+                name: "",
+                operators: vec![v],
+                result: Type::Void,
+                scope: 0,
+            }));
+        }
+        let mut f = Function::new("f", "test");
+        let mut seq = 0u32;
+        compute_intervals(&v, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
     }
 }

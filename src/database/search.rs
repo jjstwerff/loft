@@ -545,11 +545,10 @@ impl Stores {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::database::Stores;
     use crate::keys::{Content, DbRef};
 
-    /// S3: find() with a non-collection type must panic with a diagnostic message.
+    /// S3: `find()` with a non-collection type must panic with a diagnostic message.
     #[test]
     #[should_panic(expected = "find called on non-collection type")]
     fn find_non_collection_panics() {
@@ -559,10 +558,10 @@ mod tests {
             rec: 0,
             pos: 0,
         };
-        stores.find(&data, 0, &[Content::Long(0)]);
+        let _ = stores.find(&data, 0, &[Content::Long(0)]);
     }
 
-    /// S3: remove() with a non-collection type must panic with a diagnostic message.
+    /// S3: `remove()` with a non-collection type must panic with a diagnostic message.
     #[test]
     #[should_panic(expected = "remove called on non-collection type")]
     fn remove_non_collection_panics() {

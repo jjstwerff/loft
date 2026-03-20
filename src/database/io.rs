@@ -41,6 +41,7 @@ fn fill_file(path: &std::path::Path, store: &mut Store, file: &DbRef) -> bool {
 impl Stores {
     /// # Panics
     /// If `tp` refers to a type that is not implemented for file reading.
+    #[allow(clippy::too_many_lines)]
     pub fn read_data(&self, r: &DbRef, tp: u16, little_endian: bool, data: &mut Vec<u8>) {
         let store = &self.allocations[r.store_nr as usize];
         match tp {

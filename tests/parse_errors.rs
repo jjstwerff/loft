@@ -24,6 +24,15 @@ fn unknown_var() {
     code!("fn test() { a == 1 }").error("Unknown variable 'a' at unknown_var:1:19");
 }
 
+/// S1: a misspelled variable name must produce a clear "Unknown variable" diagnostic
+/// on the second pass without creating a ghost variable that could cause cascading errors.
+#[test]
+fn typo_var_name() {
+    code!("fn test() { count = 0; cound + 1; }")
+        .error("Unknown variable 'cound' at typo_var_name:1:33")
+        .warning("Variable count is never read at typo_var_name:1:20");
+}
+
 #[test]
 fn use_before_define() {
     code!("fn test() { if a == 1 { panic(); }; a = 1; }")
