@@ -77,6 +77,10 @@ in parallel.
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
   `replace`, `to_lowercase`, `to_uppercase` and format expressions.
 
+**Prototype features:**
+- **P1** — Lambda expressions: moved from 0.8.3 for stability; callable fn-refs already
+  exist, lambdas are needed before closures (A5) and aggregates (P3) can land.
+
 **Native code generation (Tier N):**
 - N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
   range-bounded iteration) completed in 0.8.2.  Remaining: **N9** (fill.rs auto-generation
@@ -699,7 +703,8 @@ works.  No compiler changes expected — the def-nr representation is already co
 inline lambdas; nested lambdas (lambda passed to a lambda).
 
 **Effort:** Medium–High (parser.rs, compile.rs)
-**Target:** 0.8.3
+**Target:** 0.8.2 (moved from 0.8.3 — needed before closures and aggregates; stability
+benefit from landing alongside the other correctness work)
 
 ---
 
