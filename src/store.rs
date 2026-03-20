@@ -1144,9 +1144,9 @@ mod tests {
 
     /// S6-67: growing the store through many claims must not wrap or silently fail.
     #[test]
-    #[ignore]
     fn store_grows_without_overflow() {
         let mut store = Store::new(4);
+        store.free = false; // mark as in-use so validate() does not reject it
         for _ in 0..200 {
             store.claim(1);
         }

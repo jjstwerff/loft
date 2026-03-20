@@ -551,7 +551,6 @@ mod tests {
 
     /// S3: find() with a non-collection type must panic with a diagnostic message.
     #[test]
-    #[ignore]
     #[should_panic(expected = "find called on non-collection type")]
     fn find_non_collection_panics() {
         let stores = Stores::new();
@@ -565,7 +564,6 @@ mod tests {
 
     /// S3: remove() with a non-collection type must panic with a diagnostic message.
     #[test]
-    #[ignore]
     #[should_panic(expected = "remove called on non-collection type")]
     fn remove_non_collection_panics() {
         let mut stores = Stores::new();

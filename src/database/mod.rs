@@ -383,7 +383,6 @@ pub struct ShowDb<'a> {
 
 /// S6-65: get_type() with an out-of-range index must panic with a helpful message.
 #[test]
-#[ignore]
 #[should_panic(expected = "type index 999 out of range")]
 fn get_type_out_of_range_panics() {
     let stores = Stores::new();
