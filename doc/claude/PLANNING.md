@@ -44,9 +44,8 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [S — Stability Hardening](#s--stability-hardening)
   - [S1 — Undefined-name diagnostic (Issue 58)](#s1--undefined-name-diagnostic)
   - [S2 — Recursion depth limit (Issue 60)](#s2--recursion-depth-limit)
-  - [S3 — Database dispatch exhaustiveness (Issue 57)](#s3--database-dispatch-exhaustiveness)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
-  - [S6 — Store overflow guards (Issue 64, 65, 66, 67)](#s6--store-overflow-guards)
+  - [S6 — Store overflow guards remaining (Issue 64, 66)](#s6--store-overflow-guards-remaining)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization)
@@ -87,10 +86,10 @@ in parallel.
 **Stability hardening (S1–S6):**
 - **S1** — Undefined-name diagnostic: emit an error on the second pass instead of creating a silent `Type::Unknown(0)` variable (Issue 58).
 - **S2** — Recursion depth limit: add `depth` counter to `generate`, `inline_ref_set_in`, `compute_intervals`, `scan` (Issue 60).
-- **S3** — Database dispatch exhaustiveness: convert `_ => panic!` catch-alls in `search.rs`/`io.rs` to explicit arms; add new arms when schema types are added (Issue 57).
+- **S3** — Database dispatch exhaustiveness: explicit variant arms in `search.rs`/`io.rs`. ✓
 - **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63).
 - **S5** — Index-copy exhaustive match: panic with explicit message replaces `unreachable!()`. ✓
-- **S6** — Store overflow guards: checked arithmetic for offset casts, `get_type()` helper for OOB diagnostics, narrowing-cast guards in vector ops, panic on store resize limit (Issues 64, 65, 66, 67).
+- **S6** — Store overflow guards: `get_type()` helper and resize overflow fix done (Issues 65, 67). ✓ partial — narrowing-cast guards in vector ops (Issue 66) and full offset-cast audit (Issue 64) remain.
 
 **Native code generation (Tier N):**
 - N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
@@ -1404,28 +1403,6 @@ expressions cause Rust stack overflow (SIGSEGV).
 
 ---
 
-### S3 — Database dispatch exhaustiveness
-
-**Source:** PROBLEMS.md Issue 57 · `src/database/search.rs:30,93,224,401,455`,
-`src/database/io.rs:145,243`
-
-**Problem:** Type-dispatch functions use `_ => panic!(...)` catch-alls.  Any new schema
-primitive type added without updating all dispatch sites panics at the first database
-operation that touches the new type.
-
-**Fix:**
-1. Convert each `_ => panic!(...)` arm to an explicit list of the currently known type
-   tags, keeping a `_ => panic!(...)` for truly unknown values but making the known-but-
-   unhandled cases a compile-time exhaustiveness warning.
-2. Establish a checklist: when a new primitive type is added to the schema, update
-   `search.rs`, `io.rs`, `allocation.rs`, and `format.rs` as part of the same PR.
-3. Add a regression test per type that exercises search, I/O read, and I/O write.
-
-**Effort:** Small per file; Medium for the full audit + test coverage.
-**Target:** 0.8.2
-
----
-
 ### S4 — Binary I/O type coverage
 
 **Source:** PROBLEMS.md Issues 59, 63 · `src/database/io.rs:101`,
@@ -1451,29 +1428,20 @@ A struct type with a nested struct field panics on format/print.
 
 ---
 
-### S6 — Store overflow guards
+### S6 — Store overflow guards (remaining)
 
-**Source:** PROBLEMS.md Issues 64, 65, 66, 67 · `src/store.rs`, `src/data.rs`,
-`src/state/codegen.rs`, `src/database/database.rs`
+**Source:** PROBLEMS.md Issues 64, 66 · `src/store.rs`, `src/state/codegen.rs`,
+`src/database/database.rs`
 
-**Four sub-problems:**
+Issues 65 (`get_type()` helper) and 67 (`resize_store` overflow) are complete.
 
 **64 — Offset overflow (`store.rs`):** Byte-offset arithmetic casts between `i32` and
 `usize` without overflow checks.  Fix: replace bare `as i32` / `as usize` casts with
 `try_into().expect("store offset overflow")` or `checked_add` + panic.
 
-**65 — Type index OOB (`data.rs`):** `self.types[tp as usize]` panics with a generic
-index-OOB message.  Fix: introduce `fn get_type(&self, nr: u16) -> &TypeDef` that panics
-with `"type index {nr} out of range (total: {})"`, replacing all bare indexing.
-
 **66 — Vector cast truncation (`codegen.rs`, `database.rs`):** `count as i32` / `count as u16`
 silently truncate on very large vectors.  Fix: add `debug_assert!(count <= i32::MAX as usize)`
 before each narrowing cast, or use `try_into().expect(...)`.
-
-**67 — Store resize silent early-return (`store.rs`):** The resize path returns early
-without a diagnostic when the limit is reached.  Fix: change to
-`panic!("store size limit exceeded: {} bytes", limit)` so large-dataset failures are
-visible immediately.
 
 **Effort:** Small per sub-item; Small–Medium for full audit of cast points.
 **Target:** 0.8.2

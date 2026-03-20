@@ -28,16 +28,16 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | 56 | `v += extra` via `&vector` ref-param panics in debug / silently fails in release | High | Use a return value instead of a ref-param for vector append |
-| 57 | Database type-dispatch panics on unrecognized types in search/io | Medium | N/A — defensive panics for schema corruption |
+| 57 | Database type-dispatch panics on unrecognized types in search/io | ~~Fixed~~ | S3: exhaustive match arms in search.rs and io.rs |
 | 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
 | 59 | Unimplemented type combinations in binary file I/O | Medium | Avoid schema types not yet covered by `read_data`/`write_data` |
 | 60 | No recursion depth limit in codegen and parser traversals | Medium | N/A — only affects adversarially deep ASTs |
 | 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
 | 63 | `todo!()` for sub-record type traversal in `format.rs` | Medium | Avoid sub-record schemas until implemented |
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
-| 65 | Type index out-of-bounds (`[]` indexing in `data.rs`) | Medium | N/A — only triggered by corrupted/invalid type numbers |
+| 65 | Type index out-of-bounds (`[]` indexing in `data.rs`) | ~~Fixed~~ | S6-65: get_type() helper in Stores panics with diagnostic |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
-| 67 | Silent early-return on store resize limit (no diagnostic) | Medium | N/A — large-dataset failures are invisible |
+| 67 | Silent early-return on store resize limit (no diagnostic) | ~~Fixed~~ | S6-67: saturating_mul + checked_add panic in store.rs |
 
 ---
 
