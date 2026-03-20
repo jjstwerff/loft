@@ -31,7 +31,8 @@ impl State {
             let n = &stack.data.def(def_nr).attributes[a as usize].name;
             let v = stack.function.var(n);
             if v != u16::MAX {
-                stack.position = stack.function.claim(v, stack.position, &Context::Argument);
+                stack.function.set_stack_pos(v, stack.position);
+                stack.position += size(stack.function.tp(v), &Context::Argument);
             }
         }
         let start = self.code_pos;
@@ -386,15 +387,6 @@ impl State {
             }
             self.set_var(stack, v, value);
         } else {
-            #[cfg(debug_assertions)]
-            if std::env::var("LOFT_DEBUG_SLOTS").is_ok() {
-                eprintln!(
-                    "  first-alloc '{}' pos={pos} TOS={} fn={}",
-                    stack.function.name(v),
-                    stack.position,
-                    stack.data.def(stack.def_nr).name
-                );
-            }
             // First allocation — slot pre-assigned by assign_slots (A6.3).
             // Check: does the first-assignment value reference v itself?
             // A Var(v) inside the value reads an uninitialised stack slot — always a parser bug.
@@ -410,11 +402,10 @@ impl State {
             );
             stack.function.set_stack_allocated(v);
             if pos > stack.position {
-                // Pre-assigned slot is above current TOS (can happen after if-else branch
-                // restores stack.position).  Fall back to claim() so the slot matches TOS.
-                // Also fires for large types (text/ref/vector) whose stack_pos was left at
-                // u16::MAX by assign_slots_safe — u16::MAX > any valid TOS.
-                stack.function.claim(v, stack.position, &Context::Variable);
+                // Pre-assigned slot is above current TOS (can happen after if-else
+                // restores stack.position).  Override slot to TOS so direct placement
+                // fires correctly — the runtime stack has no bytes at pos yet.
+                stack.function.set_stack_pos(v, stack.position);
             }
             let pos = stack.function.stack(v);
             if pos == stack.position {
