@@ -1823,6 +1823,32 @@ mod tests {
         assert!(find_conflict(&f.variables).is_none());
     }
 
+    // ── A12: Lazy work-variable initialization — Text slot sharing ────────────
+
+    /// Two sequential Text (24 B) variables with non-overlapping intervals must
+    /// share a slot after A12 extends `can_reuse` to the `Text` type.
+    /// Before A12, `can_reuse = var_size <= 8` prevented Text (24 B) from
+    /// reusing dead same-type slots.
+    #[test]
+    #[ignore = "A12: can_reuse not yet extended to Text (assign_slots)"]
+    fn assign_slots_sequential_text_reuse() {
+        let text_tp = Type::Text(Vec::new());
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &text_tp, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 10;
+        let v2 = f.add_unique("v2", &text_tp, 0);
+        f.variables[v2 as usize].first_def = 11;
+        f.variables[v2 as usize].last_use = 20;
+        assign_slots(&mut f, 0);
+        assert_eq!(
+            f.variables[v1 as usize].stack_pos,
+            f.variables[v2 as usize].stack_pos,
+            "sequential Text variables must share a slot (A12)"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
     /// S2: `compute_intervals` must panic with a depth-limit message when nesting exceeds 1000.
     #[test]
     #[should_panic(expected = "expression nesting limit")]
