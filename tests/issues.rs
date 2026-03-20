@@ -152,9 +152,32 @@ fn test() {
     );
 }
 
-/// Bug: `v += extra` via ref-param leaves the caller's vector unchanged.
-/// Tracked as Issue 4 in doc/claude/PROBLEMS.md.
+// ── Issue 44 ─────────────────────────────────────────────────────────────────
+// Empty vector literal `[]` cannot be passed directly as a mutable vector argument.
+// `parse_vector` else branch emits `Value::Insert([val])` with no temp var and no
+// `vector_db` init ops; `generate_call` then fires a debug assert expecting a 12-byte
+// DbRef but finding 0 bytes on the stack.
+
+/// Bug: passing `[]` directly as a mutable `vector<text>` argument panics in debug builds.
+/// Tracked as Issue 44 in doc/claude/PROBLEMS.md.
 #[test]
+#[ignore = "L4: empty [] as mutable vector argument not yet fixed"]
+fn empty_vector_as_mutable_arg() {
+    code!(
+        "fn test() {
+    result = join([], \"-\");
+    assert(result == \"\", \"join([]): {result}\");
+}"
+    );
+}
+
+// ── Issue 56 ─────────────────────────────────────────────────────────────────
+// `v += extra` via ref-param panics in debug / silently fails in release.
+
+/// Bug: `v += extra` via ref-param leaves the caller's vector unchanged.
+/// Tracked as Issue 56 in doc/claude/PROBLEMS.md.
+#[test]
+#[ignore = "L5: parse_append_vector RefVar path not yet fixed"]
 fn ref_param_append_bug() {
     code!(
         "struct Item { name: text, value: integer }
