@@ -51,23 +51,41 @@ R-tree) is already allocated in the schema; the iteration traversal is the main 
 
 ## Stack Slot Assignment (In Progress)
 
-### 24. Full compile-time slot assignment not yet implemented
+### 24. Optimised slot assignment not yet stable
 
-**Current:** Stack slot positions are determined at codegen time by `claim()` in
-`state.rs`. The final two steps of the planned P2 pass are missing:
-- `assign_slots()` — compute optimal positions using precomputed live intervals
-- Remove `claim()` calls and `copy_variable()` once the above is done
+**Current:** The safe pre-pass (`assign_slots_safe`) is now the default — variables
+receive sequential slots in `first_def` order with no reuse.  `claim()` in codegen
+is retained but skipped for already-allocated variables.  The legacy `claim()`-only
+path is still reachable via `LOFT_LEGACY_SLOTS=1`; the greedy-coloring path via
+`LOFT_ASSIGN_SLOTS=1`.
 
-**Impact:** Non-optimal stack usage; potential conflicts detected by `validate_slots`
-in debug builds.
+**Three known bugs block the optimised mode** (documented in `doc/claude/SLOT_FAILURES.md`):
 
-**Best way forward:** Implement `assign_slots()` in `variables.rs` as a greedy
-interval-graph colouring: sort variables by `first_def`, assign each to the lowest
-slot position not occupied by a live variable of incompatible type. Wire it into
-`scopes::check` after `compute_intervals`. Once all tests pass with `assign_slots`,
-remove `claim()` from `state.rs`.
+- **Bug A — Vector comprehension aliasing** (`compute_intervals`, all modes):
+  `r = filter(v, fn)` expands to a comprehension; both `r` and `_filter_result_5`
+  are assigned slot 88 because `first_def` is set too early for Vector types.
+  Fix: skip the early-`first_def` path for `Type::Vector`.
 
-**Details:** [ASSIGNMENT.md](ASSIGNMENT.md) §"P2 — Full slot assignment pass".
+- **Bug B — Narrow→wide slot reuse** (`assign_slots`, optimised only):
+  A 4-byte fn-ref is allowed to reuse a dead 1-byte slot; the `OpPutX` displacement
+  is off by the size difference, corrupting data at runtime.
+  Fix: require exact size match (`var_size == j_size`) in the reuse guard.
+
+- **Bug C — `Value::Iter` not traversed** (`compute_intervals`, optimised only):
+  Variables read only inside an iterator's `create`/`next`/`extra_init` keep
+  `last_use = 0` and appear dead at birth, allowing slot reuse that corrupts the
+  loop counter at runtime.
+  Fix: add a `Value::Iter` arm that recurses into all three sub-expressions.
+
+**Impact:** With the safe default, all tests pass (except the pre-existing
+`ref_param_append_bug`).  The optimised mode is gated behind `LOFT_ASSIGN_SLOTS=1`
+and should not be used until the three bugs are fixed.
+
+**Next steps:** Fix Bugs A, B, C (each a one- or two-line change); enable the
+optimised tests; remove `LOFT_LEGACY_SLOTS` and `LOFT_ASSIGN_SLOTS` env-var gates
+once the optimised mode passes all tests.
+
+**Details:** [ASSIGNMENT.md](ASSIGNMENT.md), [SLOT_FAILURES.md](SLOT_FAILURES.md).
 
 ---
 

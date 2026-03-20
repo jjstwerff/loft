@@ -285,26 +285,28 @@ intervals and can share or not share slots based on the interval check.
 
 ---
 
-## Current status (2026-03-11)
+## Current status (2026-03-20)
 
 | Step | Status |
 |---|---|
-| `compute_intervals` | **Done** |
+| `compute_intervals` | **Done** (loop-carried extension and Iter traversal added in A6.3) |
 | `validate_slots` + `find_conflict` | **Done** (debug-only) |
 | Unit tests for `find_conflict` | **Done** (`src/variables.rs`) |
-| Integration tests (`tests/slot_assign.rs`) | **Done** (5 tests; 1 ignored) |
-| P1: pre-init for owned refs | **Done** — `validate_slots` no longer panics for `t_4Code_define` |
-| P1: pre-init for borrowed refs | **Done** — passes ([PROBLEMS.md](PROBLEMS.md) #2 FIXED) |
+| Integration tests (`tests/slot_assign.rs`) | **Done** (5 tests; all pass) |
+| P1: pre-init for owned refs | **Done** |
+| P1: pre-init for borrowed refs | **Done** |
 | Bug 3: `OpCreateStack` offset | **Fixed** |
-| P2: `assign_slots` | **TODO** |
-| P2: remove `claim()` | **TODO** |
+| A6.2: shadow mode | **Done** (removed — superseded by A6.3 safe mode) |
+| A6.3a: `assign_slots_safe` pre-pass | **Done** — default; all tests pass |
+| A6.3b: `assign_slots` greedy mode | **Blocked** — 3 bugs; see [SLOT_FAILURES.md](SLOT_FAILURES.md) |
+| A6.4: remove `claim()` | **Deferred** — after A6.3b passes |
 | P2: remove `copy_variable` | **Deferred** |
 | Issue 2: "Different definition of Point." | **Open** (separate bug) |
-| Issue 4: dead Option-B helpers | **Done** (already deleted) |
 
 ---
 
 ## See also
-- [PLANNING.md § A6](PLANNING.md) — A6 backlog item: `assign_slots` pre-pass (Steps 3–5 of P2)
+- [PLANNING.md § A6](PLANNING.md) — A6 backlog item with current phase breakdown
+- [SLOT_FAILURES.md](SLOT_FAILURES.md) — Detailed analysis of the three bugs blocking the optimised mode
 - [COMPILER.md](COMPILER.md) — Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode
 - [INTERMEDIATE.md](INTERMEDIATE.md) — Value/Type enums in detail; 233 bytecode operators; State layout
