@@ -33,7 +33,6 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 59 | Unimplemented type combinations in binary file I/O | Medium | Avoid schema types not yet covered by `read_data`/`write_data` |
 | 60 | No recursion depth limit in codegen and parser traversals | Medium | N/A — only affects adversarially deep ASTs |
 | 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
-| 62 | `unreachable!()` in index-copy path for unhandled index types | Low | N/A — currently gated by spacial pre-check |
 | 63 | `todo!()` for sub-record type traversal in `format.rs` | Medium | Avoid sub-record schemas until implemented |
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
 | 65 | Type index out-of-bounds (`[]` indexing in `data.rs`) | Medium | N/A — only triggered by corrupted/invalid type numbers |
@@ -305,23 +304,6 @@ roadmap), add the corresponding arm to every dispatch site in `generation.rs`.  
 exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arms first.
 
 **Effort:** Low per opcode; Medium to reach full coverage (tracked as N9).
-
----
-
-### 62. `unreachable!()` in index-copy path for unhandled index types
-
-**Severity:** Low — currently fully gated; spacial pre-check prevents any program reaching it.
-
-**Location:** `src/database/allocation.rs:338`
-
-**Symptom:** `unreachable!()` in the index-copy dispatch for an index type that is not
-`Sorted`, `Hash`, or `Spacial`.  Currently dead code because only those three index
-kinds are allocated, and `Spacial` is rejected at compile time.
-
-**Fix path:** Convert to an explicit exhaustive match.  When a new index type is added,
-update this dispatch site at the same time.
-
-**Effort:** Very Small (one match arm to add when each new index type is introduced)
 
 ---
 

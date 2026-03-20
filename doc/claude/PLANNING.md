@@ -46,14 +46,10 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S2 — Recursion depth limit (Issue 60)](#s2--recursion-depth-limit)
   - [S3 — Database dispatch exhaustiveness (Issue 57)](#s3--database-dispatch-exhaustiveness)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
-  - [S5 — Index-copy exhaustive match (Issue 62)](#s5--index-copy-exhaustive-match)
   - [S6 — Store overflow guards (Issue 64, 65, 66, 67)](#s6--store-overflow-guards)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization)
-  - [A13 — Float and Long dead-slot reuse](#a13--float-and-long-dead-slot-reuse-in-assign_slots)
-  - [A14 — `skip_free` flag](#a14--skip_free-flag--replace-clean_work_refs-type-mutation)
-  - [A15 — Exhaustive `inline_ref_set_in`](#a15--exhaustive-inline_ref_set_in-and-fallback-assertion)
 - [N — Native Codegen](#n--native-codegen)
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
@@ -74,11 +70,11 @@ in parallel.
 - **L4** — Empty `[]` literal as mutable vector argument: parser fix in `parse_vector`.
 - **L5** — `v += extra` via `&vector` ref-param panics: parser fix in `parse_append_vector`.
 
-**Stack slot efficiency (A12–A15):**
+**Stack slot efficiency:**
 - **A12** — Lazy work-variable initialization: accurate `first_def` intervals, slot sharing.
-- **A13** — Float/Long dead-slot reuse: relax `can_reuse` guard.
-- **A14** — `skip_free` flag: replace `clean_work_refs` type mutation.
-- **A15** — Exhaustive `inline_ref_set_in`: add fallback assertion.
+- **A13** — Float/Long dead-slot reuse: `can_reuse` guard raised to ≤ 8 bytes. ✓
+- **A14** — `skip_free` flag: `clean_work_refs` sets `skip_free` instead of mutating type. ✓
+- **A15** — Exhaustive `inline_ref_set_in`: match now exhaustive; new compound variants are a compile error. ✓
 
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
@@ -93,7 +89,7 @@ in parallel.
 - **S2** — Recursion depth limit: add `depth` counter to `generate`, `inline_ref_set_in`, `compute_intervals`, `scan` (Issue 60).
 - **S3** — Database dispatch exhaustiveness: convert `_ => panic!` catch-alls in `search.rs`/`io.rs` to explicit arms; add new arms when schema types are added (Issue 57).
 - **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63).
-- **S5** — Index-copy exhaustive match: replace `unreachable!()` in `allocation.rs:338` with an explicit match; update when each new index type is added (Issue 62).
+- **S5** — Index-copy exhaustive match: panic with explicit message replaces `unreachable!()`. ✓
 - **S6** — Store overflow guards: checked arithmetic for offset casts, `get_type()` helper for OOB diagnostics, narrowing-cast guards in vector ops, panic on store resize limit (Issues 64, 65, 66, 67).
 
 **Native code generation (Tier N):**
@@ -1352,173 +1348,6 @@ still passes.
 
 ---
 
-### A13  Float and Long dead-slot reuse in `assign_slots`
-**Sources:** Stack efficiency evaluation 2026-03-20
-**Description:** `assign_slots` (`src/variables.rs`) restricts dead-slot reuse to
-variables with `var_size <= 4`.  Float (`Type::Float`, 8 B) and Long (`Type::Long`, 8 B)
-are excluded even though they have no pre-init opcodes and their `first_def` is already
-computed late (after traversing the value expression), giving accurate intervals.
-
-The restriction was introduced to prevent reuse of large types whose pre-init opcodes
-(`OpText`, `OpConvRefFromNull`) fire at `stack.position` (TOS), making reuse unsafe.
-Float and Long have no such opcodes and are already excluded from `needs_early_first_def`
-(variables.rs:890–894), so the restriction does not apply to them.
-
-`set_var` in `codegen.rs` already emits `OpPutFloat` and `OpPutLong` with a stack
-displacement (`var_pos = stack.position - stack.function.stack(var)`, lines 973–981), so
-the dead-slot-reuse path (`pos < stack.position → set_var()` in `generate_set:464`) works
-correctly for these types today.
-
-**Fix path:**
-
-*Change in `src/variables.rs:1255`* — relax the reuse guard:
-```rust
-// BEFORE:
-let can_reuse = var_size <= 4;
-
-// AFTER:
-// Float (8 B) and Long (8 B) have no pre-init opcodes; OpPutFloat/OpPutLong handle
-// the below-TOS store correctly.  The size-mismatch guard (line 1285) still prevents
-// reusing a 4-byte slot for an 8-byte variable and vice versa.
-let can_reuse = var_size <= 8;
-```
-
-No other changes.  The existing exact-size guard at line 1285 (`var_size != j_size →
-candidate = j_end; continue`) already ensures a Float cannot reuse a dead Long slot and
-vice versa, and that neither can reuse a 4-byte primitive slot.
-
-**Tests:** Add a `assign_slots` unit test: two sequential `Type::Float` variables with
-non-overlapping intervals (`last_use_1 < first_def_2`) are assigned the same slot.  Verify
-the existing `assign_slots_sequential_reuse` test still passes.
-**Effort:** Very Small (one-line change + one unit test)
-**Target:** 0.8.2
-
----
-
-### A14  `skip_free` flag — replace `clean_work_refs` type mutation
-**Sources:** Stack efficiency evaluation 2026-03-20
-**Description:** `clean_work_refs` (`src/variables.rs:738–745`) prevents `OpFreeRef`
-from being emitted for an abandoned work-ref variable by mutating the variable's type to
-`Type::Reference(0, vec![0])` — a non-empty `depend` list that causes `get_free_vars`
-(scopes.rs:407–413) to skip the variable.  Any code that inspects the variable's type
-after `clean_work_refs` sees a phantom dependency on ref 0 and may mishandle it.
-
-**Fix path:**
-
-*Step 1 — Add `skip_free: bool` to `Variable`* (`src/variables.rs:41–61`):
-```rust
-pub struct Variable {
-    // existing fields ...
-    pub skip_free: bool,   // if true, get_free_vars omits OpFreeRef/OpFreeText for this var
-}
-```
-Default: `false`.  Set in `Variable::new` and initialise in `Function::copy` / `Function::append`.
-
-*Step 2 — Expose via `Function`*:
-```rust
-pub fn set_skip_free(&mut self, var: u16) {
-    self.variables[var as usize].skip_free = true;
-}
-pub fn is_skip_free(&self, var: u16) -> bool {
-    self.variables[var as usize].skip_free
-}
-```
-
-*Step 3 — Update `clean_work_refs`*:
-```rust
-pub fn clean_work_refs(&mut self, work_ref: u16) {
-    for w in work_ref..self.work_ref {
-        let n = format!("__ref_{}", w + 1);
-        let v_nr = self.var(&n);
-        self.set_skip_free(v_nr);   // was: mutate type to Reference(0, vec![0])
-    }
-}
-```
-
-*Step 4 — Update `get_free_vars`* (`src/scopes.rs:407–413`):
-```rust
-if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
-    function.tp(v)
-    && dep.is_empty()
-    && !tp.depend().contains(&v)
-    && !function.is_skip_free(v)   // ← new guard
-{
-    ls.push(call("OpFreeRef", v, data));
-}
-```
-
-**Tests:** Existing tests that exercise `clean_work_refs` code paths (functions with
-abandoned ref-returning calls) must continue to pass.  No new tests needed.
-**Effort:** Small (add field + update 3 call sites)
-**Target:** 0.8.2
-
----
-
-### A15  Exhaustive `inline_ref_set_in` and fallback assertion
-**Sources:** Stack efficiency evaluation 2026-03-20
-**Description:** `inline_ref_set_in` (`src/parser/expressions.rs:15–34`) uses `_ => false`
-as a catch-all for `Value` variants that contain no nested `Set` nodes.  If a new `Value`
-variant is added that CAN contain a nested `Set` but is not listed in the recursive cases,
-the function silently returns `false`, the fallback in `parse_code` fires, and the inline-ref
-temp's null-init is inserted at the wrong position — producing incorrect LIFO ordering
-without any diagnostic.
-
-The fallback position ("after the first non-`Line` statement") places the inline-ref too
-early in `var_order` when the real first use is in a later statement, causing `OpFreeRef`
-for that inline-ref to fire after variables that were allocated after it.
-
-**Fix path:**
-
-*Change 1 — Replace `_ => false` with an exhaustive leaf match*
-(`src/parser/expressions.rs:32`):
-```rust
-// BEFORE:
-_ => false,
-
-// AFTER: list every known leaf variant explicitly so the compiler errors on a new variant
-Value::Var(_) | Value::Num(_) | Value::Boolean(_) | Value::Text(_)
-| Value::Long(_) | Value::Float(_) | Value::Int(_) | Value::Null
-| Value::Line(_) | Value::Break(_) | Value::Continue(_) => false,
-// If a new Value variant is added that can contain nested expressions, add it to the
-// recursive cases above.  Pure-leaf variants (no nested Value) belong here.
-```
-
-*Change 2 — Assert the fallback is unreachable* (`src/parser/expressions.rs:84–87`):
-```rust
-// BEFORE:
-let pos = ls
-    .iter()
-    .position(|stmt| inline_ref_set_in(stmt, *r))
-    .unwrap_or(fallback);
-
-// AFTER:
-let pos = ls
-    .iter()
-    .position(|stmt| inline_ref_set_in(stmt, *r))
-    .unwrap_or_else(|| {
-        debug_assert!(
-            false,
-            "inline_ref __ref_{r} not found in any top-level statement; \
-             LIFO order may be wrong — add the relevant Value variant to \
-             inline_ref_set_in"
-        );
-        fallback
-    });
-```
-
-Both changes are defence-in-depth only — no semantic change for any currently tested input.
-The assert fires during development if a new `Value` variant causes a regression in the
-inline-ref ordering, converting silent LIFO corruption into a visible panic.
-
-**Note:** If A12 is implemented first, `inline_ref_set_in` will be renamed `first_set_in`
-and extended to all work variables.  Apply these changes to the renamed function.
-
-**Tests:** No new tests needed.  The change is purely defensive; existing tests cover all
-current code paths.
-**Effort:** Very Small (two targeted edits in expressions.rs)
-**Target:** 0.8.2
-
----
 
 ## S — Stability Hardening
 
@@ -1619,23 +1448,6 @@ A struct type with a nested struct field panics on format/print.
 
 **Effort:** Small–Medium per arm; Medium overall including tests.
 **Target:** 0.8.2
-
----
-
-### S5 — Index-copy exhaustive match
-
-**Source:** PROBLEMS.md Issue 62 · `src/database/allocation.rs:338`
-
-**Problem:** The index-copy dispatch has `_ => unreachable!()`.  Currently safe because
-only `Sorted` and `Hash` reach this path (spacial is pre-gated), but fragile when new
-index types are added.
-
-**Fix:**
-1. Replace `_ => unreachable!()` with an explicit `Parts::Spacial(_, _) => panic!("Spacial index copy not implemented")` arm (already exists at line 439/559 — unify the pattern).
-2. Establish a convention: every new index type added to `Parts` must update the copy,
-   format, and iteration dispatch at the same time.
-
-**Effort:** Very Small · **Target:** 0.8.2
 
 ---
 

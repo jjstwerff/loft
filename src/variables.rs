@@ -1715,8 +1715,7 @@ mod tests {
         f.variables[v2 as usize].last_use = 20;
         assign_slots(&mut f, 0);
         assert_eq!(
-            f.variables[v1 as usize].stack_pos,
-            f.variables[v2 as usize].stack_pos,
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "sequential Long variables must share a slot (A13)"
         );
         assert!(find_conflict(&f.variables).is_none());
@@ -1735,8 +1734,7 @@ mod tests {
         f.variables[v2 as usize].last_use = 15;
         assign_slots(&mut f, 0);
         assert_ne!(
-            f.variables[v1 as usize].stack_pos,
-            f.variables[v2 as usize].stack_pos,
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "concurrent Long variables must not share a slot"
         );
         assert!(find_conflict(&f.variables).is_none());
@@ -1757,7 +1755,11 @@ mod tests {
         // Allocate a real work-ref variable via work_refs() so the naming matches.
         let baseline = f.work_ref();
         let v_nr = f.work_refs(&ref_tp, &mut lexer);
-        assert_eq!(f.work_ref(), baseline + 1, "work_ref counter should have incremented");
+        assert_eq!(
+            f.work_ref(),
+            baseline + 1,
+            "work_ref counter should have incremented"
+        );
         // Mark the range [baseline, work_ref) as skip_free.
         f.clean_work_refs(baseline);
         // The variable's type must be unchanged — not mutated to Reference(0, [0]).

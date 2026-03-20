@@ -335,9 +335,9 @@ impl Stores {
         let left = self.fields(tp);
         let content_tp = match &self.types[tp as usize].parts {
             Parts::Index(c, _, _) => *c,
-            other => panic!(
-                "copy_claims_index_body called with non-index type {tp} (parts: {other:?})"
-            ),
+            other => {
+                panic!("copy_claims_index_body called with non-index type {tp} (parts: {other:?})")
+            }
         };
         let size = u32::from(self.size(content_tp));
         let keys = self.types[tp as usize].keys.clone();

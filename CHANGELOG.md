@@ -57,6 +57,27 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **A13** — Float (`f64`, 8 B) and Long (`i64`, 8 B) variables now reuse dead stack
+  slots of the same size, matching the existing behaviour for `integer` and `single`.
+  Neither type has a pre-init opcode so slot reuse is safe.  (`src/variables.rs`
+  `assign_slots`: `can_reuse` threshold raised from ≤ 4 to ≤ 8 bytes)
+
+- **A14** — `clean_work_refs` no longer mutates a work-ref variable's `type_def` to
+  `Reference(0, [0])` to suppress `OpFreeRef` emission.  A new `skip_free: bool` field
+  on `Variable` carries this intent explicitly; `get_free_vars` in `scopes.rs` checks
+  `is_skip_free()` before emitting `OpFreeRef`.  This keeps `type_def` intact for
+  downstream passes that inspect the real type.  (`src/variables.rs`, `src/scopes.rs`)
+
+- **A15** — `inline_ref_set_in` (parser) is now an exhaustive match over all `Value`
+  variants instead of using a `_ => false` catch-all.  Adding a new compound `Value`
+  variant without updating this function is now a compile error rather than a silent
+  incorrect null-init placement.  (`src/parser/expressions.rs`)
+
+- **S5** — `copy_claims_index_body` (database) replaces `unreachable!()` with an
+  explicit `panic!` that names the type index and the unexpected `Parts` variant,
+  giving a diagnostic instead of an opaque crash if called incorrectly.
+  (`src/database/allocation.rs`)
+
 - **A6.4** — `claim()` and `assign_slots_safe` removed; `LOFT_DEBUG_SLOTS` debug blocks
   deleted from both `variables.rs` and `codegen.rs`.  `claim()` is replaced by
   `set_stack_pos()` — a minimal method that only sets the slot position — with the

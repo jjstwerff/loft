@@ -17,14 +17,10 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | L4    | Fix empty `[]` literal as mutable vector argument            | Medium    |                 | PROBLEMS.md #44             |
 | L5    | Fix `v += extra` via `&vector` ref-param (panic / silent nop) | Medium  |                 | PROBLEMS.md #56             |
 | A12   | Lazy work-variable initialization (accurate intervals)        | Small–Med |                 | PLANNING.md A12             |
-| A13   | Float and Long dead-slot reuse in `assign_slots`             | Very Small |                | PLANNING.md A13             |
-| A14   | `skip_free` flag — replace `clean_work_refs` type mutation   | Small     |                 | PLANNING.md A14             |
-| A15   | Exhaustive `inline_ref_set_in` + fallback assertion          | Very Small |                | PLANNING.md A15             |
 | S1    | Undefined-name diagnostic (Issue 58)                         | Medium    |                 | PROBLEMS.md #58             |
 | S2    | Recursion depth limit in codegen/parser (Issue 60)           | Medium    |                 | PROBLEMS.md #60             |
 | S3    | Database dispatch exhaustiveness (Issue 57)                  | Small–Med |                 | PROBLEMS.md #57             |
 | S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
-| S5    | Index-copy exhaustive match (Issue 62)                       | Very Small |                | PROBLEMS.md #62             |
 | S6    | Store overflow guards (Issues 64–67)                         | Small–Med |                 | PROBLEMS.md #64–67          |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |
