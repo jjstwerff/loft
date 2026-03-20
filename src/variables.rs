@@ -906,6 +906,17 @@ pub fn compute_intervals(
             {
                 function.variables[v].first_def = *seq;
             }
+            // A write to a variable occupies its stack slot just as much as a read does.
+            // Without this update, variables that are only ever WRITTEN (never read after
+            // their last write) keep last_use = 0, making them appear dead at birth.
+            // assign_slots then lets later variables reuse their slot while they are still
+            // being written — corrupting the written values at runtime.
+            // Classic case: c#index in a text for-loop is written every iteration
+            // (Set(c#index, Var(c#next))) but never read by the user; without this
+            // update its last_use stays 0 and the loop counter slot gets aliased.
+            if v < function.variables.len() {
+                function.variables[v].last_use = function.variables[v].last_use.max(*seq);
+            }
             *seq += 1;
         }
         Value::Block(bl) => {
