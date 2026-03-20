@@ -1664,7 +1664,6 @@ mod tests {
     /// displacement at runtime, corrupting data.  `assign_slots` must require an
     /// exact size match before reusing a dead slot.
     #[test]
-    #[ignore = "A6.3b: assign_slots narrow→wide reuse bug not yet fixed"]
     fn assign_slots_no_narrow_to_wide_reuse() {
         const BOOL: Type = Type::Boolean;
         // flag: boolean (1 byte), dead early; f: integer (4 bytes), born after flag dies.
@@ -1694,7 +1693,6 @@ mod tests {
     /// `last_use` stays 0 and `assign_slots` treats the index as dead at birth,
     /// allowing a later variable to steal its slot and corrupting the loop counter.
     #[test]
-    #[ignore = "A6.3b: Value::Iter not yet handled in compute_intervals"]
     fn compute_intervals_iter_index_var_gets_last_use() {
         let mut f = Function::new("f", "test");
         let idx = f.add_unique("idx", &INT, 0);
