@@ -1,8 +1,8 @@
-// The bytecode executor operates on a raw byte stack; signed/unsigned casts between stack
-// values are architecturally necessary and individually safe throughout this file.
-#![allow(clippy::cast_possible_wrap)] // i32 <-> u32 on stack bytes: 2's-complement wrap is intended
-#![allow(clippy::cast_sign_loss)] // negative i32/i8 stored as u32/u8 in the byte stream: expected
-#![allow(clippy::cast_possible_truncation)] // wider → narrower casts in bytecode encoding: range validated at encode time
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(unused_parens)]
+
 use crate::keys::{DbRef, Str};
 use crate::ops;
 use crate::state::State;
@@ -281,12 +281,6 @@ fn call(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_to = *s.code::<i32>();
     s.fn_call(v_size, v_to);
-}
-
-fn call_ref(s: &mut State) {
-    let fn_var = *s.code::<u16>();
-    let arg_size = *s.code::<u16>();
-    s.fn_call_ref(fn_var, arg_size);
 }
 
 fn op_return(s: &mut State) {
@@ -811,31 +805,31 @@ fn rem_single(s: &mut State) {
 }
 
 fn math_func_single(s: &mut State) {
-    let fn_id = *s.code::<i8>();
-    let v = *s.get_stack::<f32>();
-    let new_value = match fn_id {
-        0 => v.cos(),
-        1 => v.sin(),
-        2 => v.tan(),
-        3 => v.acos(),
-        4 => v.asin(),
-        5 => v.atan(),
-        6 => v.ceil(),
-        7 => v.floor(),
-        8 => v.round(),
-        9 => v.sqrt(),
+    let v_fn_id = *s.code::<i8>();
+    let v_v1 = *s.get_stack::<f32>();
+    let new_value = match v_fn_id {
+        0 => v_v1.cos(),
+        1 => v_v1.sin(),
+        2 => v_v1.tan(),
+        3 => v_v1.acos(),
+        4 => v_v1.asin(),
+        5 => v_v1.atan(),
+        6 => v_v1.ceil(),
+        7 => v_v1.floor(),
+        8 => v_v1.round(),
+        9 => v_v1.sqrt(),
         _ => f32::NAN,
     };
     s.put_stack(new_value);
 }
 
 fn math_func2_single(s: &mut State) {
-    let fn_id = *s.code::<i8>();
-    let v2 = *s.get_stack::<f32>();
-    let v1 = *s.get_stack::<f32>();
-    let new_value = match fn_id {
-        0 => v1.atan2(v2),
-        1 => v1.log(v2),
+    let v_fn_id = *s.code::<i8>();
+    let v_v2 = *s.get_stack::<f32>();
+    let v_v1 = *s.get_stack::<f32>();
+    let new_value = match v_fn_id {
+        0 => v_v1.atan2(v_v2),
+        1 => v_v1.log(v_v2),
         _ => f32::NAN,
     };
     s.put_stack(new_value);
@@ -924,31 +918,31 @@ fn math_e_float(s: &mut State) {
 }
 
 fn math_func_float(s: &mut State) {
-    let fn_id = *s.code::<i8>();
-    let v = *s.get_stack::<f64>();
-    let new_value = match fn_id {
-        0 => v.cos(),
-        1 => v.sin(),
-        2 => v.tan(),
-        3 => v.acos(),
-        4 => v.asin(),
-        5 => v.atan(),
-        6 => v.ceil(),
-        7 => v.floor(),
-        8 => v.round(),
-        9 => v.sqrt(),
+    let v_fn_id = *s.code::<i8>();
+    let v_v1 = *s.get_stack::<f64>();
+    let new_value = match v_fn_id {
+        0 => v_v1.cos(),
+        1 => v_v1.sin(),
+        2 => v_v1.tan(),
+        3 => v_v1.acos(),
+        4 => v_v1.asin(),
+        5 => v_v1.atan(),
+        6 => v_v1.ceil(),
+        7 => v_v1.floor(),
+        8 => v_v1.round(),
+        9 => v_v1.sqrt(),
         _ => f64::NAN,
     };
     s.put_stack(new_value);
 }
 
 fn math_func2_float(s: &mut State) {
-    let fn_id = *s.code::<i8>();
-    let v2 = *s.get_stack::<f64>();
-    let v1 = *s.get_stack::<f64>();
-    let new_value = match fn_id {
-        0 => v1.atan2(v2),
-        1 => v1.log(v2),
+    let v_fn_id = *s.code::<i8>();
+    let v_v2 = *s.get_stack::<f64>();
+    let v_v1 = *s.get_stack::<f64>();
+    let new_value = match v_fn_id {
+        0 => v_v1.atan2(v_v2),
+        1 => v_v1.log(v_v2),
         _ => f64::NAN,
     };
     s.put_stack(new_value);
@@ -1269,16 +1263,13 @@ fn conv_ref_from_null(s: &mut State) {
     s.put_stack(new_value);
 }
 
-/// Push a null-sentinel `DbRef` (`store_nr=u16::MAX`) WITHOUT allocating a database store.
-/// Used for inline-ref temporary variables whose null-init must not claim a store —
-/// the actual store is assigned later via `OpPutRef` when the called method returns.
-/// `OpFreeRef` is a no-op for sentinels (see `Stores::free`).
 fn null_ref_sentinel(s: &mut State) {
-    s.put_stack(DbRef {
+    let new_value = DbRef {
         store_nr: u16::MAX,
         rec: 0,
         pos: 0,
-    });
+    };
+    s.put_stack(new_value);
 }
 
 fn free_ref(s: &mut State) {
@@ -1322,7 +1313,7 @@ fn ne_ref(s: &mut State) {
 fn get_ref(s: &mut State) {
     let v_fld = *s.code::<u16>();
     let v_v1 = *s.get_stack::<DbRef>();
-    let new_value = s.database.get_ref(&v_v1, u32::from(v_fld));
+    let new_value = s.database.get_ref(&v_v1, ((v_fld) as u32));
     s.put_stack(new_value);
 }
 
@@ -1334,7 +1325,7 @@ fn set_ref(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v_val.rec as i32);
+            .set_int(db.rec, db.pos + ((v_fld) as u32), v_val.rec as i32);
     }
 }
 
@@ -1344,7 +1335,7 @@ fn get_field(s: &mut State) {
     let new_value = DbRef {
         store_nr: v_v1.store_nr,
         rec: v_v1.rec,
-        pos: v_v1.pos + u32::from(v_fld),
+        pos: v_v1.pos + ((v_fld) as u32),
     };
     s.put_stack(new_value);
 }
@@ -1359,7 +1350,7 @@ fn get_int(s: &mut State) {
         } else {
             s.database
                 .store(&db)
-                .get_int(db.rec, db.pos + u32::from(v_fld))
+                .get_int(db.rec, db.pos + ((v_fld) as u32))
         }
     };
     s.put_stack(new_value);
@@ -1376,7 +1367,7 @@ fn get_character(s: &mut State) {
             char::from_u32(
                 s.database
                     .store(&db)
-                    .get_int(db.rec, db.pos + u32::from(v_fld)) as u32,
+                    .get_int(db.rec, db.pos + ((v_fld) as u32)) as u32,
             )
             .unwrap_or(char::from(0))
         }
@@ -1391,7 +1382,7 @@ fn get_long(s: &mut State) {
         let db = v_v1;
         s.database
             .store(&db)
-            .get_long(db.rec, db.pos + u32::from(v_fld))
+            .get_long(db.rec, db.pos + ((v_fld) as u32))
     };
     s.put_stack(new_value);
 }
@@ -1403,7 +1394,7 @@ fn get_single(s: &mut State) {
         let db = v_v1;
         s.database
             .store(&db)
-            .get_single(db.rec, db.pos + u32::from(v_fld))
+            .get_single(db.rec, db.pos + ((v_fld) as u32))
     };
     s.put_stack(new_value);
 }
@@ -1415,7 +1406,7 @@ fn get_float(s: &mut State) {
         let db = v_v1;
         s.database
             .store(&db)
-            .get_float(db.rec, db.pos + u32::from(v_fld))
+            .get_float(db.rec, db.pos + ((v_fld) as u32))
     };
     s.put_stack(new_value);
 }
@@ -1428,7 +1419,7 @@ fn get_byte(s: &mut State) {
         let db = v_v1;
         s.database
             .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min))
+            .get_byte(db.rec, db.pos + ((v_fld) as u32), i32::from(v_min))
     };
     s.put_stack(new_value);
 }
@@ -1438,14 +1429,9 @@ fn get_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        // get_byte returns i32::MIN when rec==0 (null DbRef from e.g. an out-of-bounds
-        // vector access).  Map that to 255, the plain-enum null sentinel, so that
-        // conv_bool_from_enum correctly terminates for-loops on vector<PlainEnum>.
-        let raw = s
-            .database
+        s.database
             .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
-        if raw == i32::MIN { 255u8 } else { raw as u8 }
+            .get_byte(db.rec, db.pos + ((v_fld) as u32), 0) as u8
     };
     s.put_stack(new_value);
 }
@@ -1458,7 +1444,7 @@ fn set_enum(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v_val));
+            .set_byte(db.rec, db.pos + ((v_fld) as u32), 0, i32::from(v_val));
     }
 }
 
@@ -1470,7 +1456,7 @@ fn get_short(s: &mut State) {
         let db = v_v1;
         s.database
             .store(&db)
-            .get_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min))
+            .get_short(db.rec, db.pos + ((v_fld) as u32), i32::from(v_min))
     };
     s.put_stack(new_value);
 }
@@ -1481,7 +1467,7 @@ fn get_text(s: &mut State) {
     let new_value = {
         let db = v_v1;
         let store = s.database.store(&db);
-        Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(v_fld)) as u32))
+        Str::new(store.get_str(store.get_int(db.rec, db.pos + ((v_fld) as u32)) as u32))
     };
     s.put_stack(new_value);
 }
@@ -1494,7 +1480,7 @@ fn set_int(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_int(db.rec, db.pos + ((v_fld) as u32), v_val);
     }
 }
 
@@ -1506,7 +1492,7 @@ fn set_character(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v_val as i32);
+            .set_int(db.rec, db.pos + ((v_fld) as u32), v_val as i32);
     }
 }
 
@@ -1518,7 +1504,7 @@ fn set_long(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_long(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_long(db.rec, db.pos + ((v_fld) as u32), v_val);
     }
 }
 
@@ -1530,7 +1516,7 @@ fn set_single(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_single(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_single(db.rec, db.pos + ((v_fld) as u32), v_val);
     }
 }
 
@@ -1542,7 +1528,7 @@ fn set_float(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_float(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_float(db.rec, db.pos + ((v_fld) as u32), v_val);
     }
 }
 
@@ -1555,7 +1541,7 @@ fn set_byte(s: &mut State) {
         let db = v_v1;
         s.database.store_mut(&db).set_byte(
             db.rec,
-            db.pos + u32::from(v_fld),
+            db.pos + ((v_fld) as u32),
             i32::from(v_min),
             v_val,
         );
@@ -1571,7 +1557,7 @@ fn set_short(s: &mut State) {
         let db = v_v1;
         s.database.store_mut(&db).set_short(
             db.rec,
-            db.pos + u32::from(v_fld),
+            db.pos + ((v_fld) as u32),
             i32::from(v_min),
             v_val,
         );
@@ -1587,7 +1573,7 @@ fn set_text(s: &mut State) {
         let s_val = v_val.str().to_string();
         let store = s.database.store_mut(&db);
         let s_pos = store.set_str(&s_val);
-        store.set_int(db.rec, db.pos + u32::from(v_fld), s_pos as i32);
+        store.set_int(db.rec, db.pos + ((v_fld) as u32), s_pos as i32);
     }
 }
 
@@ -1612,7 +1598,7 @@ fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_index = *s.get_stack::<i32>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
+    let new_value = vector::get_vector(&v_r, ((v_size) as u32), v_index, &s.database.allocations);
     s.put_stack(new_value);
 }
 
@@ -1639,7 +1625,7 @@ fn remove_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = vector::remove_vector(
         &v_r,
-        u32::from(v_size),
+        ((v_size) as u32),
         v_index,
         &mut s.database.allocations,
     );
@@ -1822,6 +1808,12 @@ fn truncate_file(s: &mut State) {
     s.truncate_file();
 }
 
+fn call_ref(s: &mut State) {
+    let v_fn_var = *s.code::<u16>();
+    let v_arg_size = *s.code::<u16>();
+    s.fn_call_ref(v_fn_var, v_arg_size);
+}
+
 fn mkdir(s: &mut State) {
     let v_path = s.string();
     let new_value = std::fs::create_dir(v_path.str()).is_ok();
@@ -1838,17 +1830,19 @@ fn clear_scratch(s: &mut State) {
     s.database.scratch.clear();
 }
 
-fn sort_vector(s: &mut State) {
-    let v_db_tp = *s.code::<u16>();
-    let v_r = *s.get_stack::<DbRef>();
-    let elem_size = s.database.size(v_db_tp);
-    // base types: 2 = single (f32), 3 = float (f64)
-    let is_float = v_db_tp == 2 || v_db_tp == 3;
-    vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
-}
-
 fn reverse_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_r = *s.get_stack::<DbRef>();
-    vector::reverse_vector(&v_r, u32::from(v_size), &mut s.database.allocations);
+    vector::reverse_vector(&v_r, (v_size) as u32, &mut s.database.allocations);
+}
+
+fn sort_vector(s: &mut State) {
+    let v_db_tp = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    {
+        let _t = (v_db_tp) as u16;
+        let elem_size = s.database.size(_t);
+        let is_float = _t == 2 || _t == 3;
+        vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
+    }
 }
