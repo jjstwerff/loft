@@ -1132,12 +1132,16 @@ fn n9a_generated_fill_has_ops_import() {
 
 /// N9 (N20b/N20c/N20d): auto-generated tests/generated/fill.rs must be byte-for-byte
 /// identical to src/fill.rs once all #rust templates are present and rustfmt is applied.
-/// Ignored until N20b (rustfmt call) and N20d (#rust templates) are both implemented.
+/// For reliable results run in isolation: `cargo test --test issues n9_generated_fill_matches_src`
+/// (parallel test runs race on tests/generated/fill.rs writes from other tests).
 #[test]
-#[ignore = "N9: N20b (rustfmt) and N20d (#rust templates) not yet implemented"]
 fn n9_generated_fill_matches_src() {
+    // Trigger a fresh generate_code() so this test's write is the most recent.
+    code!("fn n9_check() -> integer { 42 }")
+        .expr("n9_check()")
+        .result(Value::Int(42));
     let generated = std::fs::read_to_string("tests/generated/fill.rs")
-        .expect("tests/generated/fill.rs not found — run any loft test first");
+        .expect("tests/generated/fill.rs not found");
     let src =
         std::fs::read_to_string("src/fill.rs").expect("src/fill.rs not found");
     assert_eq!(

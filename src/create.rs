@@ -125,6 +125,7 @@ pub fn generate_code(data: &Data) -> std::io::Result<()> {
         "#![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(unused_parens)]
 
 use crate::keys::{{DbRef, Str}};
 use crate::ops;
