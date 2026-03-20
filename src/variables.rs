@@ -856,6 +856,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
 ///
 /// `free_text_nr` / `free_ref_nr` are the definition numbers of `OpFreeText` / `OpFreeRef`
 /// (pass `u32::MAX` if the definition is not yet registered).
+#[allow(clippy::too_many_lines)]
 pub fn compute_intervals(
     val: &Value,
     function: &mut Function,
@@ -953,6 +954,22 @@ pub fn compute_intervals(
                     }
                 }
             }
+        }
+        Value::Iter(index_var, create, next, extra_init) => {
+            // Record the index variable as used at this point, then recurse into all
+            // three sub-expressions so variables read inside create/next/extra_init
+            // get correct last_use values.  Without this, index variables that are only
+            // read inside the Iter sub-expressions keep last_use = 0 and appear dead at
+            // birth, allowing assign_slots to place a later variable at the same slot
+            // and corrupting the loop counter at runtime.
+            let v = *index_var as usize;
+            if v < function.variables.len() {
+                function.variables[v].last_use = function.variables[v].last_use.max(*seq);
+            }
+            *seq += 1;
+            compute_intervals(create, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(next, function, free_text_nr, free_ref_nr, seq);
+            compute_intervals(extra_init, function, free_text_nr, free_ref_nr, seq);
         }
         Value::If(test, t_val, f_val) => {
             compute_intervals(test, function, free_text_nr, free_ref_nr, seq);
@@ -1281,7 +1298,11 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
                     }
                     // For large types, even expired slots must not be reused (avoids
                     // complications with init opcodes that write at stack.position).
-                    if !can_reuse {
+                    // Also reject size-mismatched reuse: an OpPutX displacement is
+                    // computed as stack.position − slot_start; if the dead slot is
+                    // narrower than the new variable, the displacement is off by the
+                    // size difference and the store overwrites the wrong bytes.
+                    if !can_reuse || var_size != j_size {
                         candidate = j_end;
                         continue 'retry;
                     }
