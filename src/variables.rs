@@ -1285,6 +1285,32 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
         // Float) may reuse dead slots; large compound types (Text 24 B, Reference 12 B,
         // Vector 12 B) are never reused because their init opcodes write at TOS.
         let can_reuse = var_size <= 8;
+
+        // Compute the expected TOS when this variable is first allocated.
+        // This is the maximum slot-end among already-assigned variables that are
+        // live at first_def (i.e., their bytes are guaranteed to be on the physical
+        // stack at that point).  A pre-assigned slot above this value risks triggering
+        // the `pos > stack.position` override in codegen (which fires when a loop body
+        // has freed its stack frame, dropping TOS below any slot allocated inside it).
+        // Clamping to tos_estimate ensures the chosen slot is reachable via direct
+        // placement (slot == TOS) or displacement (slot < TOS), never an override.
+        let mut tos_estimate: u16 = local_start;
+        for &j in &order {
+            if j == i {
+                continue;
+            }
+            let js = function.variables[j].stack_pos;
+            if js == u16::MAX {
+                continue;
+            }
+            let jf = function.variables[j].first_def;
+            let jl = function.variables[j].last_use;
+            if jf <= first_def && jl >= first_def {
+                let j_size = size(&function.variables[j].type_def, &Context::Variable);
+                tos_estimate = tos_estimate.max(js.saturating_add(j_size));
+            }
+        }
+
         let mut candidate: u16 = local_start;
         'retry: loop {
             let end = candidate.saturating_add(var_size);
@@ -1314,8 +1340,20 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
                     // computed as stack.position − slot_start; if the dead slot is
                     // narrower than the new variable, the displacement is off by the
                     // size difference and the store overwrites the wrong bytes.
-                    if !can_reuse || var_size != j_size {
+                    //
+                    // Exception: if candidate == tos_estimate this is a fresh allocation
+                    // at the expected TOS position.  Dead slots here are safe to overlap
+                    // (the bytes belong to a loop-freed or dead variable) and using
+                    // direct placement avoids the `pos > stack.position` codegen override
+                    // that would otherwise remap this variable onto a conflicting slot.
+                    if candidate != tos_estimate && (!can_reuse || var_size != j_size) {
                         candidate = j_end;
+                        // Never skip above tos_estimate: a slot beyond TOS would trigger
+                        // the pos > stack.position override in codegen, defeating
+                        // pre-assignment.  Clamp so the next retry checks tos_estimate.
+                        if candidate > tos_estimate {
+                            candidate = tos_estimate;
+                        }
                         continue 'retry;
                     }
                 }
@@ -1657,14 +1695,18 @@ mod tests {
 
     // ── A6.3b: Bug B — narrow → wide slot reuse ──────────────────────────────
 
-    /// A dead 1-byte variable must NOT donate its slot to a 4-byte variable.
-    /// A 4-byte fn-ref placed at a 1-byte slot produces an off-by-1 `OpPutX`
-    /// displacement at runtime, corrupting data.  `assign_slots` must require an
-    /// exact size match before reusing a dead slot.
+    /// A dead 1-byte variable's slot may be reused by a wider variable only when
+    /// that wider variable is placed via **direct** placement (candidate == tos_estimate,
+    /// i.e. it is a fresh allocation at the expected TOS).  Displacement-based reuse
+    /// (candidate < tos_estimate) with a size mismatch is still forbidden because the
+    /// OpPutX displacement depends on an exact size match.
+    ///
+    /// In this test there are no live variables at fnref's first_def, so tos_estimate == 0
+    /// and fnref is placed directly at slot 0 — safe because no OpPutX displacement fires.
     #[test]
     fn assign_slots_no_narrow_to_wide_reuse() {
         const BOOL: Type = Type::Boolean;
-        // flag: boolean (1 byte), dead early; f: integer (4 bytes), born after flag dies.
+        // flag: boolean (1 byte), dead early; fnref: integer (4 bytes), born after flag dies.
         let mut f = Function::new("f", "test");
         let flag = f.add_unique("flag", &BOOL, 0);
         f.variables[flag as usize].first_def = 0;
@@ -1673,12 +1715,11 @@ mod tests {
         f.variables[fnref as usize].first_def = 5;
         f.variables[fnref as usize].last_use = 10;
         assign_slots(&mut f, 0);
-        // flag gets slot 0 (1 byte).  fnref (4 bytes) must NOT reuse slot 0;
-        // it must start at a fresh 4-byte-aligned offset (i.e. >= 1 + size_of(INT) = 5,
-        // practically slot 1 since there is no alignment requirement — just must be > 0).
-        assert_ne!(
+        // No live variables at T=5, so tos_estimate == 0.  fnref is placed at slot 0
+        // via direct placement (no OpPutX displacement).  No conflict with dead flag.
+        assert_eq!(
             f.variables[fnref as usize].stack_pos, 0,
-            "4-byte variable must not reuse a dead 1-byte slot"
+            "fnref should reuse slot 0 via direct TOS placement when no live vars block it"
         );
         assert!(find_conflict(&f.variables).is_none());
     }
@@ -1842,8 +1883,7 @@ mod tests {
         f.variables[v2 as usize].last_use = 20;
         assign_slots(&mut f, 0);
         assert_eq!(
-            f.variables[v1 as usize].stack_pos,
-            f.variables[v2 as usize].stack_pos,
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "sequential Text variables must share a slot (A12)"
         );
         assert!(find_conflict(&f.variables).is_none());
