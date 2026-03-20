@@ -774,6 +774,15 @@ impl Function {
         self.inline_ref_vars.contains(&v)
     }
 
+    /// Returns true if this work-ref variable should be skipped when emitting `OpFreeRef`.
+    /// Set by `clean_work_refs` for ref variables that were re-assigned to a different type
+    /// and must not be freed at scope exit.
+    /// A14: stub — always false until the `skip_free` field is added to `Variable`.
+    #[allow(clippy::unused_self)]
+    pub fn is_skip_free(&self, _v: u16) -> bool {
+        false
+    }
+
     pub fn inline_ref_references(&self) -> Vec<u16> {
         self.inline_ref_vars.iter().copied().collect()
     }
@@ -1677,6 +1686,81 @@ mod tests {
             f.variables[idx as usize].first_def,
             u32::MAX,
             "index variable's first_def must be set"
+        );
+    }
+
+    // ── A13: Float/Long dead-slot reuse ──────────────────────────────────────
+
+    /// Two sequential Long (8-byte) variables must share a slot after A13.
+    /// Before A13 `can_reuse = var_size <= 4` prevented Long/Float from reusing dead slots.
+    #[test]
+    #[ignore = "A13: Long/Float slot reuse not yet enabled (can_reuse <= 4)"]
+    fn assign_slots_sequential_long_reuse() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &Type::Long, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 10;
+        let v2 = f.add_unique("v2", &Type::Long, 0);
+        f.variables[v2 as usize].first_def = 11;
+        f.variables[v2 as usize].last_use = 20;
+        assign_slots(&mut f, 0);
+        assert_eq!(
+            f.variables[v1 as usize].stack_pos,
+            f.variables[v2 as usize].stack_pos,
+            "sequential Long variables must share a slot (A13)"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    /// Two concurrent Long variables must still get distinct slots — the reuse
+    /// guard must not fire when intervals overlap.
+    #[test]
+    #[ignore = "A13: needs Long slot-reuse enabled first"]
+    fn assign_slots_concurrent_long_separate_slots() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &Type::Long, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 20;
+        let v2 = f.add_unique("v2", &Type::Long, 0);
+        f.variables[v2 as usize].first_def = 5;
+        f.variables[v2 as usize].last_use = 15;
+        assign_slots(&mut f, 0);
+        assert_ne!(
+            f.variables[v1 as usize].stack_pos,
+            f.variables[v2 as usize].stack_pos,
+            "concurrent Long variables must not share a slot"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    // ── A14: skip_free flag ───────────────────────────────────────────────────
+
+    /// `clean_work_refs` must set `skip_free = true` on the work-ref variables it marks,
+    /// and must NOT mutate their `type_def`.  Before A14 it set the type to
+    /// `Type::Reference(0, vec![0])` to suppress the `OpFreeRef` emit — a type-mutation
+    /// hack that confused downstream code.
+    ///
+    /// This test uses `var` by name because `work_refs` (which needs a real Lexer) is not
+    /// needed — we simulate the naming convention directly with `add_variable_raw`.
+    #[test]
+    #[ignore = "A14: skip_free field not yet added to Variable"]
+    fn clean_work_refs_sets_flag_not_type() {
+        let ref_tp = Type::Reference(1, vec![]);
+        let mut f = Function::new("f", "test");
+        // Manually register a __ref_1 variable to simulate what work_refs() would create.
+        let v_nr = f.add_unique("__ref_1", &ref_tp, 0);
+        // Simulate clean_work_refs(0): mark the range [0, 1) as skip_free.
+        // After A14 this sets skip_free=true; before A14 it mutates type_def.
+        f.clean_work_refs(0);
+        // The variable's type must be unchanged — not mutated to Reference(0, [0]).
+        assert!(
+            !matches!(f.tp(v_nr), Type::Reference(0, dep) if dep == &[0u16]),
+            "clean_work_refs must not mutate the type to Reference(0, [0])"
+        );
+        // The variable must have skip_free set.
+        assert!(
+            f.is_skip_free(v_nr),
+            "clean_work_refs must set skip_free = true on the marked variable"
         );
     }
 
