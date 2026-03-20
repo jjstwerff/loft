@@ -3544,7 +3544,6 @@ mod tests {
 
     /// S2: `inline_ref_set_in` must return false conservatively when nesting exceeds the limit.
     #[test]
-    #[ignore = "S2: depth-limit guard not yet in inline_ref_set_in"]
     fn inline_ref_set_in_depth_limit_returns_false() {
         let mut v: Value = Value::Null;
         for _ in 0..1100 {

@@ -1165,7 +1165,6 @@ mod tests {
 
     /// S6-64: `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.
     #[test]
-    #[ignore = "S6-64: MAX_STORE_WORDS guard not yet added to resize_store"]
     #[should_panic(expected = "store offset overflow")]
     fn resize_store_exceeds_max_panics() {
         let mut store = Store::new(4);

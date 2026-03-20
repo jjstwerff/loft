@@ -27,10 +27,10 @@ fn unknown_var() {
 /// S1: a misspelled variable name must produce a clear "Unknown variable" diagnostic
 /// on the second pass without creating a ghost variable that could cause cascading errors.
 #[test]
-#[ignore = "S1: second-pass diagnostic path not yet emitted directly"]
 fn typo_var_name() {
-    code!("fn test() { let count = 0; cound + 1; }")
-        .error("Unknown variable 'cound' at typo_var_name:1:32");
+    code!("fn test() { count = 0; cound + 1; }")
+        .error("Unknown variable 'cound' at typo_var_name:1:33")
+        .warning("Variable count is never read at typo_var_name:1:20");
 }
 
 #[test]

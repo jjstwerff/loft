@@ -1825,7 +1825,6 @@ mod tests {
 
     /// S2: `compute_intervals` must panic with a depth-limit message when nesting exceeds 1000.
     #[test]
-    #[ignore = "S2: depth-limit check not yet implemented in compute_intervals"]
     #[should_panic(expected = "expression nesting limit")]
     fn compute_intervals_depth_limit() {
         let mut v: Value = Value::Null;
