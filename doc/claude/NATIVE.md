@@ -52,16 +52,17 @@ cargo fmt -- --check                    # formatted
 
 ## Current State
 
-**Updated 2026-03-18 — N2–N9 planning items completed (PR #36).**
+**Updated 2026-03-20 — N9 (N20b/N20c/N20d) completed.**
 
 `src/generation.rs` translates the loft IR tree into Rust source files.  The original 6
 root-cause error categories (totalling ~1500 errors) are resolved by the completed N-steps.
 The `codegen_runtime.rs` module is in place; templates are corrected; stdlib inclusion works.
+`src/fill.rs` is now auto-generated: `create.rs::generate_code()` runs `rustfmt` after
+writing and the `n9_generated_fill_matches_src` test enforces byte-exact match.
 
 **Remaining work (PLANNING.md items):**
 - **N6.3** — Reverse iteration and range-bounded sub-expressions in `fill_iter` / `generation.rs`
-- **N9** — `fill.rs` auto-generation: N20b (multi-line format options), N20c (CI diff check), N20d (`#state_call` annotation)
-- **N1** — `--native` CLI flag (last step; depends on N6.3 and N9)
+- **N1** — `--native` CLI flag (last step; depends on N6.3 and N9 ✓)
 
 ### Architecture
 

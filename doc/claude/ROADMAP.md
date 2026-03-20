@@ -50,7 +50,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | H1    | `#json` annotation — parser + `to_json` synthesis           | Small     |                 | WEB_SERVICES.md             |
-| H2    | JSON primitive extraction stdlib (`serde_json`)              | Medium    | H1              | WEB_SERVICES.md             |
+| H2    | JSON primitive extraction stdlib (`src/database/json.rs`)    | Small     | H1              | WEB_SERVICES.md             |
 | H3    | `from_json` codegen — scalar struct fields                   | Medium    | H1, H2          | WEB_SERVICES.md             |
 | H4    | HTTP client stdlib + `HttpResponse` (`ureq`)                 | Medium    | H2              | WEB_SERVICES.md             |
 | H5    | Nested/array/enum `from_json` + integration tests            | Med–High  | H3, H4          | WEB_SERVICES.md             |

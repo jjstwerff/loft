@@ -55,6 +55,20 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   `tests/generated/fill.rs` header so the file can be compiled as a crate module
   without unresolved `ops::` references.  (`src/create.rs`)
 
+- **N9 (N20b/N20d)** — `create.rs::generate_code()` now calls `rustfmt` on the generated
+  `tests/generated/fill.rs` (N20b) so the file is formatted identically to
+  `src/fill.rs`.  Six operators that previously generated `s.{op}()` delegation
+  stubs now have `#rust` templates and generate real implementations (N20d):
+  `OpMathFuncSingle` / `OpMathFunc2Single` (f32 match dispatch),
+  `OpMathFuncFloat` / `OpMathFunc2Float` (f64 match dispatch),
+  `OpClearScratch` (`stores.scratch.clear()`), and `OpSortVector`
+  (inlined elem\_size + is\_float + `vector::sort_vector` call; the inline
+  also replaces the `OpSortVector` call that previously required a
+  `codegen_runtime` entry).  `src/fill.rs` is replaced by the auto-generated
+  version; a new `n9_generated_fill_matches_src` test enforces the invariant.
+  (`src/create.rs`, `default/01_code.loft`, `default/02_images.loft`,
+   `src/fill.rs`, `tests/issues.rs`)
+
 ### Bug fixes
 
 - **L4** — Passing an empty vector literal `[]` directly as a mutable `vector<T>`
