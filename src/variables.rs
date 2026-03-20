@@ -54,6 +54,10 @@ pub struct Variable {
     /// Set to `true` when the first-allocation init opcodes are emitted (A6.3).
     /// Arguments are pre-allocated by the caller, so they start as `true`.
     pub stack_allocated: bool,
+    /// When true, `get_free_vars` must not emit `OpFreeRef` for this variable.
+    /// Set by `clean_work_refs` for work-ref temporaries that have been re-purposed
+    /// and must not be freed at scope exit (A14 replacement for type-mutation hack).
+    pub skip_free: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
     pub first_def: u32,
     /// Sequence number of the last `Value::Var` (or implicit `OpFreeText`/`OpFreeRef`) for this variable.
@@ -563,6 +567,7 @@ impl Function {
             defined: self.variables[var as usize].defined,
             const_param: self.variables[var as usize].const_param,
             stack_allocated: false,
+            skip_free: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -587,6 +592,7 @@ impl Function {
             defined: false,
             const_param: false,
             stack_allocated: false,
+            skip_free: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -608,6 +614,7 @@ impl Function {
             defined: true,
             const_param: false,
             stack_allocated: false,
+            skip_free: false,
             first_def: u32::MAX,
             last_use: 0,
         });
@@ -739,8 +746,10 @@ impl Function {
         for w in work_ref..self.work_ref {
             let n = format!("__ref_{}", w + 1);
             let v_nr = self.var(&n);
-            // prevent free for this variable
-            self.variables[v_nr as usize].type_def = Type::Reference(0, vec![0]);
+            // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
+            // A14: replaced the previous type-mutation hack (setting type to Reference(0,[0]))
+            // with this explicit flag, keeping the type_def intact for downstream passes.
+            self.variables[v_nr as usize].skip_free = true;
         }
     }
 
@@ -772,6 +781,15 @@ impl Function {
 
     pub fn is_inline_ref(&self, v: u16) -> bool {
         self.inline_ref_vars.contains(&v)
+    }
+
+    /// Returns true if this work-ref variable should be skipped when emitting `OpFreeRef`.
+    /// Set by `clean_work_refs` for ref variables that were re-assigned to a different type
+    /// and must not be freed at scope exit.
+    /// Returns true if `get_free_vars` must not emit `OpFreeRef` for this variable.
+    /// Set by `clean_work_refs` for work-ref temporaries that are re-purposed after use.
+    pub fn is_skip_free(&self, v: u16) -> bool {
+        self.variables[v as usize].skip_free
     }
 
     pub fn inline_ref_references(&self) -> Vec<u16> {
@@ -1251,8 +1269,10 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
         }
         // Find the lowest slot offset (>= local_start) that doesn't conflict with any
         // already-assigned variable whose live interval overlaps [first_def, last_use].
-        // For large types (ref/text, size > 4) we never reuse a slot; for primitives we do.
-        let can_reuse = var_size <= 4;
+        // Primitives (4 B integers, booleans, fn-refs) and wide primitives (8 B Long,
+        // Float) may reuse dead slots; large compound types (Text 24 B, Reference 12 B,
+        // Vector 12 B) are never reused because their init opcodes write at TOS.
+        let can_reuse = var_size <= 8;
         let mut candidate: u16 = local_start;
         'retry: loop {
             let end = candidate.saturating_add(var_size);
@@ -1677,6 +1697,80 @@ mod tests {
             f.variables[idx as usize].first_def,
             u32::MAX,
             "index variable's first_def must be set"
+        );
+    }
+
+    // ── A13: Float/Long dead-slot reuse ──────────────────────────────────────
+
+    /// Two sequential Long (8-byte) variables must share a slot after A13.
+    /// Before A13 `can_reuse = var_size <= 4` prevented Long/Float from reusing dead slots.
+    #[test]
+    fn assign_slots_sequential_long_reuse() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &Type::Long, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 10;
+        let v2 = f.add_unique("v2", &Type::Long, 0);
+        f.variables[v2 as usize].first_def = 11;
+        f.variables[v2 as usize].last_use = 20;
+        assign_slots(&mut f, 0);
+        assert_eq!(
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
+            "sequential Long variables must share a slot (A13)"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    /// Two concurrent Long variables must still get distinct slots — the reuse
+    /// guard must not fire when intervals overlap.
+    #[test]
+    fn assign_slots_concurrent_long_separate_slots() {
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &Type::Long, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 20;
+        let v2 = f.add_unique("v2", &Type::Long, 0);
+        f.variables[v2 as usize].first_def = 5;
+        f.variables[v2 as usize].last_use = 15;
+        assign_slots(&mut f, 0);
+        assert_ne!(
+            f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
+            "concurrent Long variables must not share a slot"
+        );
+        assert!(find_conflict(&f.variables).is_none());
+    }
+
+    // ── A14: skip_free flag ───────────────────────────────────────────────────
+
+    /// `clean_work_refs` must set `skip_free = true` on the work-ref variables it marks,
+    /// and must NOT mutate their `type_def`.  Before A14 it set the type to
+    /// `Type::Reference(0, vec![0])` to suppress the `OpFreeRef` emit — a type-mutation
+    /// hack that confused downstream code.
+    #[test]
+    fn clean_work_refs_sets_flag_not_type() {
+        use crate::lexer::Lexer;
+        let ref_tp = Type::Reference(1, vec![]);
+        let mut f = Function::new("f", "test");
+        let mut lexer = Lexer::from_str("", "test");
+        // Allocate a real work-ref variable via work_refs() so the naming matches.
+        let baseline = f.work_ref();
+        let v_nr = f.work_refs(&ref_tp, &mut lexer);
+        assert_eq!(
+            f.work_ref(),
+            baseline + 1,
+            "work_ref counter should have incremented"
+        );
+        // Mark the range [baseline, work_ref) as skip_free.
+        f.clean_work_refs(baseline);
+        // The variable's type must be unchanged — not mutated to Reference(0, [0]).
+        assert!(
+            !matches!(f.tp(v_nr), Type::Reference(0, dep) if dep == &[0u16]),
+            "clean_work_refs must not mutate the type to Reference(0, [0])"
+        );
+        // The variable must have skip_free set.
+        assert!(
+            f.is_skip_free(v_nr),
+            "clean_work_refs must set skip_free = true on the marked variable"
         );
     }
 

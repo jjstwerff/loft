@@ -16,7 +16,17 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | L4    | Fix empty `[]` literal as mutable vector argument            | Medium    |                 | PROBLEMS.md #44             |
 | L5    | Fix `v += extra` via `&vector` ref-param (panic / silent nop) | Medium  |                 | PROBLEMS.md #56             |
+| A12   | Lazy work-variable initialization (accurate intervals)        | Small–Med |                 | PLANNING.md A12             |
+| S1    | Undefined-name diagnostic (Issue 58)                         | Medium    |                 | PROBLEMS.md #58             |
+| S2    | Recursion depth limit in codegen/parser (Issue 60)           | Medium    |                 | PROBLEMS.md #60             |
+| S3    | Database dispatch exhaustiveness (Issue 57)                  | Small–Med |                 | PROBLEMS.md #57             |
+| S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
+| S6    | Store overflow guards (Issues 64–67)                         | Small–Med |                 | PROBLEMS.md #64–67          |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
+| P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |
+| P1.1  | ↳ Parser — `fn(params) -> type block` primary expression     | Small     |                 | expressions.rs              |
+| P1.2  | ↳ Compilation — synthesise anon def, emit def-nr             | Medium    | P1.1            | codegen.rs, compile.rs      |
+| P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
 | N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
 | N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
 
@@ -26,10 +36,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |
-| P1.1  | ↳ Parser — `fn(params) -> type block` primary expression     | Small     |                 | expressions.rs              |
-| P1.2  | ↳ Compilation — synthesise anon def, emit def-nr             | Medium    | P1.1            | codegen.rs, compile.rs      |
-| P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
 | L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
 | L3    | **`FileResult` enum** — mutating fs ops return enum + `.ok()` *(3 ph)* | Small |        | User request 2026-03-19     |

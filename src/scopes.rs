@@ -408,6 +408,7 @@ impl Scopes {
                 function.tp(v)
                 && dep.is_empty()
                 && !tp.depend().contains(&v)
+                && !function.is_skip_free(v)
             {
                 ls.push(call("OpFreeRef", v, data));
             }

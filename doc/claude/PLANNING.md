@@ -41,8 +41,15 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [L — Language Quality](#l--language-quality)
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
+- [S — Stability Hardening](#s--stability-hardening)
+  - [S1 — Undefined-name diagnostic (Issue 58)](#s1--undefined-name-diagnostic)
+  - [S2 — Recursion depth limit (Issue 60)](#s2--recursion-depth-limit)
+  - [S3 — Database dispatch exhaustiveness (Issue 57)](#s3--database-dispatch-exhaustiveness)
+  - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
+  - [S6 — Store overflow guards (Issue 64, 65, 66, 67)](#s6--store-overflow-guards)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization)
 - [N — Native Codegen](#n--native-codegen)
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
@@ -59,9 +66,31 @@ Goal: harden the interpreter, improve runtime efficiency, and ship working nativ
 generation.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
+**Correctness:**
+- **L4** — Empty `[]` literal as mutable vector argument: parser fix in `parse_vector`.
+- **L5** — `v += extra` via `&vector` ref-param panics: parser fix in `parse_append_vector`.
+
+**Stack slot efficiency:**
+- **A12** — Lazy work-variable initialization: accurate `first_def` intervals, slot sharing.
+- **A13** — Float/Long dead-slot reuse: `can_reuse` guard raised to ≤ 8 bytes. ✓
+- **A14** — `skip_free` flag: `clean_work_refs` sets `skip_free` instead of mutating type. ✓
+- **A15** — Exhaustive `inline_ref_set_in`: match now exhaustive; new compound variants are a compile error. ✓
+
 **Efficiency and packaging:**
 - **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
   `replace`, `to_lowercase`, `to_uppercase` and format expressions.
+
+**Prototype features:**
+- **P1** — Lambda expressions: moved from 0.8.3 for stability; callable fn-refs already
+  exist, lambdas are needed before closures (A5) and aggregates (P3) can land.
+
+**Stability hardening (S1–S6):**
+- **S1** — Undefined-name diagnostic: emit an error on the second pass instead of creating a silent `Type::Unknown(0)` variable (Issue 58).
+- **S2** — Recursion depth limit: add `depth` counter to `generate`, `inline_ref_set_in`, `compute_intervals`, `scan` (Issue 60).
+- **S3** — Database dispatch exhaustiveness: convert `_ => panic!` catch-alls in `search.rs`/`io.rs` to explicit arms; add new arms when schema types are added (Issue 57).
+- **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63).
+- **S5** — Index-copy exhaustive match: panic with explicit message replaces `unreachable!()`. ✓
+- **S6** — Store overflow guards: checked arithmetic for offset casts, `get_type()` helper for OOB diagnostics, narrowing-cast guards in vector ops, panic on store resize limit (Issues 64, 65, 66, 67).
 
 **Native code generation (Tier N):**
 - N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
@@ -484,51 +513,167 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 ### L4  Fix empty vector literal `[]` as mutable vector argument
 **Sources:** [PROBLEMS.md](PROBLEMS.md) #44
 **Severity:** Medium — passing `[]` directly as a mutable `vector<T>` argument panics in
-debug builds; workaround is to assign to a named variable first
-**Description:** `parse_vector` returns `Value::Insert([Null])` for an empty `[]` literal
-when the parse context has `Type::Unknown(0)` as the target type (which is always the case
-for call-site arguments).  No temporary variable is created and no `vector_db` init opcodes
-are emitted.  The mutable-argument handler in `generate_call` expects a 12-byte `DbRef` on
-the stack but finds 0 bytes.
+debug builds; workaround is to assign to a named variable first.
 
-**Fix path:** In `parse_vector` (`src/parser/expressions.rs`), when `[]` is parsed with an
-unknown element type and `is_var = false`:
+**Root cause:** `parse_vector` (`src/parser/expressions.rs`) has an early-return for `[]`
+(immediate `]`) that branches on `is_var` / `is_field`.  The `else` branch — reached when
+`[]` appears as a call-site expression, not as an existing variable or struct field — emits
+`Value::Insert([val.clone()])` with no temporary variable and no `vector_db` init opcodes.
+`generate_call` then fires a debug assertion: it expects a 12-byte `DbRef` for the mutable
+`vector<T>` parameter but finds 0 bytes on the stack.
 
-1. Create a unique temporary variable with `Type::Unknown(0)` as a placeholder.
-2. Emit the `vector_db` initialisation block — same as the non-empty path does when
-   `block = true`.  The element type will be inferred on the second pass from the
-   call-site context.
-3. Return `Value::Var(vec)` wrapped in `v_block`, matching the non-empty path.
+**Fix path:**
 
-The second pass already resolves the element type correctly for assignment targets
-(`my_vec = []`); the fix extends this to call-site arguments by ensuring a temporary
-variable and init block are always emitted for empty `[]` literals.
+*Location:* `parse_vector` else branch (~line 1607), currently:
+```rust
+} else {
+    *val = Value::Insert(vec![val.clone()]);
+    var_tp.clone()
+};
+```
 
-**Effort:** Medium (parser change; careful handling of `Type::Unknown` on second pass)
+*Replacement:*
+```rust
+} else {
+    // Empty [] at a call site — create a temporary so generate_call gets a real DbRef.
+    let vec = self.create_unique(
+        "vec",
+        &Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend()),
+    );
+    let mut ls = if assign_tp != Type::Unknown(0) {
+        // Second pass with known element type: emit the backing-store init.
+        let struct_tp = Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend());
+        self.vars.change_var_type(vec, &struct_tp, &self.data, &mut self.lexer);
+        self.data.vector_def(&mut self.lexer, &assign_tp);
+        self.vector_db(&assign_tp, vec)
+    } else {
+        // First pass (element type unknown) or still-unresolved context:
+        // vector_db already returns empty on first_pass; just create the temp var.
+        Vec::new()
+    };
+    ls.push(Value::Var(vec));
+    let tp = Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend());
+    *val = v_block(ls, tp.clone(), "empty vector");
+    tp
+};
+```
+
+*Two-pass semantics:*
+- **First pass** (`self.first_pass = true`): `vector_db` returns `Vec::new()` for the
+  first-pass guard it already has; the temp var is created with `Type::Unknown(0)`.
+- **Second pass** with known element type: on the second pass, `var_tp` is the call-site
+  expected type (the function's parameter type has been resolved), so `assign_tp =
+  var_tp.content()` is the concrete element type.  `vector_db` emits the three init ops
+  (`OpDatabase`, field-read `Set(vec, get_field(...))`, zero-write `set_field(...)`).
+
+*Why `var_tp` is known on the second pass:* In loft's two-pass design the first pass
+determines all function parameter types.  When parsing `join([], "-")` on the second pass,
+the call argument loop passes the expected parameter type as the context for each argument;
+`parse_vector` receives `var_tp = Type::Vector(Text, ...)`, so `assign_tp = Type::Text`.
+If `assign_tp` is still Unknown (edge case: function itself not yet resolved), the guard
+prevents calling `vector_db` with an Unknown element type — a second-pass resolution error
+will be reported elsewhere.
+
+*Tests:*
+- Re-enable `ref_param_append_bug` guard: the L4 assertion `join([], ...)` in
+  `tests/issues.rs` should pass.
+- Add test in `tests/vectors.rs`: `assert(join([], "-") == "", ...)`.
+
+**Effort:** Medium (parser change; two-pass type-inference interaction)
 **Target:** 0.8.2
 
 ---
 
 ### L5  Fix `v += extra` via `&vector` ref-param
 **Sources:** [PROBLEMS.md](PROBLEMS.md) #56; `tests/issues.rs::ref_param_append_bug`
-**Severity:** High — panics in debug builds; silently does nothing in release builds
-**Description:** `v += extra` compiled for a `v: &vector<T>` ref-param emits
-`OpAppendVector` with the raw ref-param DbRef (a stack pointer into the caller's frame)
-instead of dereferencing it first.  `vector_append` calls `store.get_int(v.rec, v.pos)`
-where `v.rec` is the caller's stack record, which is absent from the current function's
-store claims, causing "Unknown record" panic.
+**Severity:** High — panics in debug builds; silently does nothing in release builds.
 
-**Fix path:** In `generate_set` / the vector-append codegen path
-(`src/state/codegen.rs`), when the target variable is `Type::RefVar(Vector)`:
+**Root cause — two interacting issues:**
 
-1. Emit `OpGetStackRef` to load the actual vector DbRef from the ref-param.
-2. Emit `OpAppendVector` on the loaded DbRef.
-3. Emit `OpSetStackRef` to write the (possibly reallocated) DbRef back through the ref.
+*Issue A — wrong bytecode for the mutable arg:*
+`parse_append_vector` (`src/parser/expressions.rs:1148–1152`) detects `RefVar(Vector)` and
+returns `orig_var` as `var_nr`, then the loop emits
+`Call("OpAppendVector", [Var(orig_var), extra, rec_tp])`.  In `generate_call`, the mutable
+first argument of `OpAppendVector` hits the RefVar-to-RefVar shortcut (codegen.rs:502–509):
+```rust
+if matches!(a.typedef, Type::RefVar(_))
+    && let Value::Var(v) = &parameters[a_nr]
+    && matches!(stack.function.tp(*v), Type::RefVar(_))
+{
+    let var_pos = stack.position - stack.function.stack(*v);
+    stack.add_op("OpVarRef", self);
+    self.code_add(var_pos);   // ← pushes raw stack OFFSET, not the vector DbRef
+```
+`OpVarRef var_pos` pushes a 4-byte displacement integer.  `vector_append` in fill.rs then
+reads a DbRef from that offset on the CURRENT function's stack, which points to the
+CALLER's stack frame record — absent from the current function's store claims.
 
-The same dereference-operate-writeback pattern applies to all collection-mutating
-operations on ref-params.  Identify them in codegen and apply the fix consistently.
+*Issue B — no write-back:*
+Even if the dereference were correct, `vector_append` may reallocate the backing record and
+return an updated DbRef.  Without a write-back through the ref-param, the caller's vector
+variable would hold a stale record handle after the append.
 
-**Effort:** Medium (codegen change; audit all collection ops on `RefVar` targets)
+**Fix path — parser change in `parse_append_vector`:**
+
+Replace the single RefVar(Vector) branch with a three-op sequence that explicitly
+dereferences, appends, and writes back:
+
+```rust
+// BEFORE (parse_append_vector ~line 1148):
+} else if matches!(self.vars.tp(orig_var), Type::RefVar(t) if matches!(**t, Type::Vector(_, _))) {
+    // RefVar(Vector): append directly without an identity Set(v, Var(v)).
+    orig_var
+
+// AFTER — early return that builds the full deref/append/writeback sequence:
+} else if let Type::RefVar(inner) = self.vars.tp(orig_var).clone()
+    && matches!(*inner, Type::Vector(_, _))
+{
+    // 1. Create a temporary local variable to hold the dereferenced DbRef.
+    let tmp = self.create_unique("vec_ref_tmp", &inner);
+    // 2. Load the actual vector DbRef from the ref-param into tmp.
+    //    generate_var(orig_var: RefVar(Vector)) emits OpVarRef + OpGetStackRef,
+    //    so Set(tmp, Var(orig_var)) copies the caller's DbRef into our local slot.
+    ls.push(v_set(tmp, Value::Var(orig_var)));
+    // 3. Append to the local copy.  tmp is now a plain Vector, so generate_call
+    //    emits OpVarVector (not OpVarRef), and vector_append gets the correct DbRef.
+    for (val, _) in parts {
+        ls.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(tmp), val.clone(), Value::Int(rec_tp)],
+        ));
+    }
+    // 4. Write the (possibly reallocated) DbRef back to the ref-param.
+    //    set_var(orig_var: RefVar(Vector), Var(tmp)) emits OpVarRef + generate(tmp) + OpSetStackRef.
+    ls.push(v_set(orig_var, Value::Var(tmp)));
+    *code = Value::Insert(ls);
+    return Type::Rewritten(Box::new(tp.clone()));
+```
+
+*Why this works:*
+- `Set(tmp, Var(orig_var))`: first allocation of `tmp` at TOS; `generate_var(orig_var:
+  RefVar(Vector))` emits `OpVarRef displacement` → `OpGetStackRef 0` → loads the 12-byte
+  caller DbRef onto the stack and into `tmp`'s slot.
+- `OpAppendVector([Var(tmp), ...])`: `tmp` has type `Vector` (not `RefVar`), so the
+  RefVar-to-RefVar shortcut does not fire.  `generate_var(tmp)` emits `OpVarVector
+  displacement` — passes the displacement to `tmp`'s slot so `vector_append` finds the
+  correct DbRef and updates it in-place if reallocation occurs.
+- `Set(orig_var, Var(tmp))`: reassignment (`stack_allocated = true`); `set_var(orig_var:
+  RefVar(Vector))` emits `OpVarRef displacement_to_orig` → `generate(Var(tmp))` →
+  `OpSetStackRef 0` — writes the updated DbRef from `tmp`'s slot back through the
+  ref-param pointer to the caller's variable.
+
+*Audit — other collection-mutating ops on RefVar:*
+The same bug pattern applies to any `Call(op, [Var(refvar_vec), ...])` where op is a
+collection-mutating opcode and `refvar_vec: RefVar(Vector)`.  Search `parse_append_vector`
+and any other `+= / insert / remove` compilation sites for similar `RefVar` paths and apply
+the same three-op deref/operate/writeback pattern.
+
+*Tests:*
+- `ref_param_append_bug` in `tests/issues.rs` — remove `#[ignore]`, must pass.
+- Add a test for `v += [single_item]` via a ref-param.
+- Add a test for the release build (no `debug_assert` elision): run with `--release`.
+
+**Effort:** Medium (parser change in `parse_append_vector`; audit of other collection ops)
 **Target:** 0.8.2
 
 ---
@@ -569,7 +714,8 @@ works.  No compiler changes expected — the def-nr representation is already co
 inline lambdas; nested lambdas (lambda passed to a lambda).
 
 **Effort:** Medium–High (parser.rs, compile.rs)
-**Target:** 0.8.3
+**Target:** 0.8.2 (moved from 0.8.3 — needed before closures and aggregates; stability
+benefit from landing alongside the other correctness work)
 
 ---
 
@@ -1115,6 +1261,222 @@ the generic type-mismatch message.
 
 **Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)
 **Target:** 0.8.3
+
+---
+
+### A12  Lazy work-variable initialization
+**Sources:** Stack efficiency evaluation 2026-03-20
+**Description:** Work text variables (`__work_N`) are currently initialized at function
+start via `Set(wt, Text(""))` inserted at index 0 of the body block.  This forces
+`first_def = 0` for every work text variable, making its live interval span the entire
+function.  Two sequential, non-overlapping text operations each hold a 24-byte slot for
+the full lifetime of the call frame.  The same applies to non-inline work ref variables
+(`__ref_N`), which also get function-start null-inits.
+
+Inline-ref temporaries already use lazy insertion (per A6.3a work): their null-init is
+placed immediately before the statement that first assigns them, giving accurate intervals.
+This item extends that approach to all work variables.
+
+**Fix path:**
+
+*Step 1 — Rename and generalize `inline_ref_set_in`* (`src/parser/expressions.rs`):
+
+Rename `inline_ref_set_in` to `first_set_in` (or add it as a general helper).  No logic
+changes — the function already recurses into all relevant `Value` variants and works
+correctly for both text and ref work variables.
+
+*Step 2 — Unify the three insertion loops in `parse_code`*:
+
+Replace the three separate loops that insert null-inits at function start:
+
+```rust
+// BEFORE (lines 50–97, three separate loops):
+for wt in self.vars.work_texts() {
+    ls.insert(0, v_set(wt, Value::Text(String::new())));  // always at index 0
+}
+for r in self.vars.work_references() {
+    if !is_argument && depend.is_empty() && !is_inline_ref {
+        ls.insert(0, v_set(r, Value::Null));              // always at index 0
+    }
+}
+// inline_refs loop: already uses first_set_in (correct)
+
+// AFTER (one unified loop over all work variables):
+let all_work: Vec<(u16, Value)> = self
+    .vars.work_texts().into_iter().map(|v| (v, Value::Text(String::new())))
+    .chain(self.vars.work_references().into_iter()
+        .filter(|&r| !self.vars.is_argument(r) && self.vars.tp(r).depend().is_empty())
+        .map(|r| (r, Value::Null)))
+    .collect();
+let mut insertions: Vec<(usize, u16, Value)> = Vec::new();
+for (r, init) in all_work {
+    let pos = ls.iter().position(|stmt| first_set_in(stmt, r))
+        .unwrap_or_else(|| { debug_assert!(false, ...); fallback });
+    insertions.push((pos, r, init));
+}
+// Sort by descending position to avoid index invalidation; same-position: higher var_nr first
+insertions.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+for (pos, r, init) in insertions {
+    ls.insert(pos, v_set(r, init));
+}
+```
+
+*Step 3 — Remove `inline_ref_vars` distinction if possible*:
+
+After Step 2, inline-refs use the same insertion path as all other work variables.  The
+`inline_ref_vars` `BTreeSet` on `Function` and `mark_inline_ref` / `is_inline_ref` /
+`inline_ref_references` can be removed if the LIFO ordering behaviour is identical — verify
+that the unified loop produces the same `var_order` for currently tested functions before
+removing.
+
+*Interval effect:* `first_def` for a work text variable that appears in the third statement
+of a five-statement function is now `seq(stmt3)` rather than 0.  Two sequential text
+operations — `__work_1` used in stmt 2 and `__work_2` used in stmt 4 — can now share a
+single 24-byte slot since their intervals no longer overlap.
+
+*Safety:* `first_set_in` finds the outermost top-level statement in `ls` that contains the
+work variable's Set, even if that Set is inside a nested if/loop/block.  The null-init is
+therefore inserted before that statement.  At runtime the null-init fires before any
+conditional path that might use and then free the variable — the same guarantee as the
+current function-start approach, but narrowed to the first-use statement.
+
+**Tests:** Add a unit test for `assign_slots`: two sequential `Type::Text` variables with
+non-overlapping intervals receive the same slot (size = 24).  Verify existing test suite
+still passes.
+**Effort:** Small–Medium (parser change; mostly refactoring the three loops into one)
+**Target:** 0.8.2
+
+---
+
+
+## S — Stability Hardening
+
+Items found in a systematic stability audit (2026-03-20).  Each addresses a panic,
+silent failure, or missing bound in the interpreter and database engine.  All target 0.8.2.
+
+---
+
+### S1 — Undefined-name diagnostic
+
+**Source:** PROBLEMS.md Issue 58 · `src/parser/expressions.rs:2641`
+
+**Problem:** When a name lookup fails on the second parser pass, the compiler silently
+creates a `Type::Unknown(0)` variable instead of emitting a diagnostic:
+```rust
+} else {
+    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
+    t = Type::Unknown(0);
+}
+```
+A typo in a variable name produces a confusing downstream type error rather than
+"undefined variable `totla`".
+
+**Fix:**
+1. Introduce a `Pass` check: on `Pass::Second`, emit an "undefined variable" error
+   diagnostic and return `Type::Unknown(0)` without creating a new variable.
+2. Confirm that all legitimate forward-reference names are resolved before the second
+   pass begins (cross-function references, type aliases, etc.).
+3. Add a test in `tests/parse_errors.rs` that asserts the diagnostic is emitted.
+
+**Effort:** Medium · **Target:** 0.8.2
+
+---
+
+### S2 — Recursion depth limit
+
+**Source:** PROBLEMS.md Issue 60 · `src/state/codegen.rs`, `src/scopes.rs`,
+`src/variables.rs`, `src/parser/expressions.rs`
+
+**Problem:** `generate`, `inline_ref_set_in`, `compute_intervals`, and `scan` are
+directly recursive with no depth counter.  Machine-generated or adversarially deep
+expressions cause Rust stack overflow (SIGSEGV).
+
+**Fix:**
+1. Add a `depth: usize` parameter to each of the four functions.
+2. At each recursive call, pass `depth + 1`.
+3. At the start of each function, if `depth > RECURSION_LIMIT` (suggest 1000), emit
+   a diagnostic and return a safe default rather than recursing further.
+4. The `generate` function has the most call sites; changing its signature is the
+   most invasive part — do it first, then follow the compiler errors.
+
+**Effort:** Small per function; the signature cascade through `generate` is Medium.
+**Target:** 0.8.2
+
+---
+
+### S3 — Database dispatch exhaustiveness
+
+**Source:** PROBLEMS.md Issue 57 · `src/database/search.rs:30,93,224,401,455`,
+`src/database/io.rs:145,243`
+
+**Problem:** Type-dispatch functions use `_ => panic!(...)` catch-alls.  Any new schema
+primitive type added without updating all dispatch sites panics at the first database
+operation that touches the new type.
+
+**Fix:**
+1. Convert each `_ => panic!(...)` arm to an explicit list of the currently known type
+   tags, keeping a `_ => panic!(...)` for truly unknown values but making the known-but-
+   unhandled cases a compile-time exhaustiveness warning.
+2. Establish a checklist: when a new primitive type is added to the schema, update
+   `search.rs`, `io.rs`, `allocation.rs`, and `format.rs` as part of the same PR.
+3. Add a regression test per type that exercises search, I/O read, and I/O write.
+
+**Effort:** Small per file; Medium for the full audit + test coverage.
+**Target:** 0.8.2
+
+---
+
+### S4 — Binary I/O type coverage
+
+**Source:** PROBLEMS.md Issues 59, 63 · `src/database/io.rs:101`,
+`src/database/allocation.rs:399,461`, `src/database/format.rs:109`
+
+**Problem (I/O — Issue 59):** `read_data` / `write_data` have `todo!()` and `panic!()`
+for type combinations not yet implemented.  Schemas using those types panic at file I/O
+time.
+
+**Problem (format — Issue 63):** `format_record` has a `todo!()` for sub-record fields.
+A struct type with a nested struct field panics on format/print.
+
+**Fix:**
+1. Implement the missing `read_data`/`write_data` arms following the pattern of existing
+   scalar arms, paying attention to endianness and byte-offset computation.
+2. Implement sub-record traversal in `format_record:109`: recurse into `format_record`
+   for each field whose type is a record type, using the field's byte offset within the
+   parent record.
+3. Add integration tests covering the newly implemented type combinations.
+
+**Effort:** Small–Medium per arm; Medium overall including tests.
+**Target:** 0.8.2
+
+---
+
+### S6 — Store overflow guards
+
+**Source:** PROBLEMS.md Issues 64, 65, 66, 67 · `src/store.rs`, `src/data.rs`,
+`src/state/codegen.rs`, `src/database/database.rs`
+
+**Four sub-problems:**
+
+**64 — Offset overflow (`store.rs`):** Byte-offset arithmetic casts between `i32` and
+`usize` without overflow checks.  Fix: replace bare `as i32` / `as usize` casts with
+`try_into().expect("store offset overflow")` or `checked_add` + panic.
+
+**65 — Type index OOB (`data.rs`):** `self.types[tp as usize]` panics with a generic
+index-OOB message.  Fix: introduce `fn get_type(&self, nr: u16) -> &TypeDef` that panics
+with `"type index {nr} out of range (total: {})"`, replacing all bare indexing.
+
+**66 — Vector cast truncation (`codegen.rs`, `database.rs`):** `count as i32` / `count as u16`
+silently truncate on very large vectors.  Fix: add `debug_assert!(count <= i32::MAX as usize)`
+before each narrowing cast, or use `try_into().expect(...)`.
+
+**67 — Store resize silent early-return (`store.rs`):** The resize path returns early
+without a diagnostic when the limit is reached.  Fix: change to
+`panic!("store size limit exceeded: {} bytes", limit)` so large-dataset failures are
+visible immediately.
+
+**Effort:** Small per sub-item; Small–Medium for full audit of cast points.
+**Target:** 0.8.2
 
 ---
 
