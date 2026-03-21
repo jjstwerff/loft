@@ -6,12 +6,16 @@
 //! Testing framework
 use loft::create;
 #[cfg(debug_assertions)]
-use loft::data::{Context, Data};
+use loft::data::Context;
 use loft::scopes;
 extern crate loft;
+#[path = "common/mod.rs"]
+mod common;
 use loft::compile::byte_code;
 #[cfg(debug_assertions)]
 use loft::compile::show_code;
+use loft::data::Data;
+use loft::database::Stores;
 use loft::generation::Output;
 #[cfg(debug_assertions)]
 use loft::log_config::LogConfig;
@@ -39,6 +43,7 @@ macro_rules! expr {
     };
 }
 
+use common::cached_default;
 use loft::data::{Type, Value};
 use loft::diagnostics::Level;
 use loft::parser::Parser;
@@ -190,7 +195,9 @@ impl Drop for Test {
     #[allow(unused_variables)]
     fn drop(&mut self) {
         let mut p = Parser::new();
-        p.parse_dir("default", true, true).unwrap();
+        let (data, db) = cached_default();
+        p.data = data;
+        p.database = db;
         let types = p.database.types.len();
         let start = p.data.definitions();
         let mut code = self.code.clone();

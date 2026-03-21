@@ -132,10 +132,34 @@ impl Default for Stores {
     }
 }
 
+impl Clone for Stores {
+    /// Clone the type-schema portion of a `Stores`.
+    /// Runtime-only fields (`allocations`, `files`, `scratch`, `parallel_ctx`)
+    /// are reset to empty/None because they are only valid during execution.
+    fn clone(&self) -> Self {
+        Self {
+            types: self.types.clone(),
+            names: self.names.clone(),
+            allocations: Vec::new(),
+            files: Vec::new(),
+            max: self.max,
+            parallel_ctx: None,
+            logger: self.logger.clone(),
+            scratch: Vec::new(),
+            had_fatal: false,
+            start_time: self.start_time,
+        }
+    }
+}
+
 // Safety: `Content::Str` raw pointers in type metadata point into parse-time
 // source strings that live for the program duration and are never mutated.
 // Workers only read this metadata.  `Store` is already `unsafe impl Send`.
+// `Sync` is additionally required so that `OnceLock<(Data, Stores)>` can be
+// used as a process-wide static; the same invariant (read-only after parse)
+// makes concurrent shared access safe.
 unsafe impl Send for Stores {}
+unsafe impl Sync for Stores {}
 
 struct ParseKey {
     // The current line on the source data. Only relevant if that has a pretty print format.
