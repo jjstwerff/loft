@@ -115,6 +115,24 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   error rather than a silent fall-through to a misleading panic.
   (`src/database/search.rs`, `src/database/io.rs`)
 
+- **S4** — `read_data` and `write_data` in `database/io.rs` now correctly handle
+  `Parts::Struct` fields: each field is accessed at `r.pos + f.position` instead of
+  the same `r.pos` for every field (previously every field in a struct would read the
+  first field's value).  A new `binary_size()` helper computes the byte width of each
+  type so that `write_data` advances the data-slice offset between fields.  Collection
+  variants (`Array`, `Sorted`, `Ordered`, `Hash`, `Index`, `Spacial`) are now
+  `unreachable!()` with a message referencing the F57 compile-time guard that blocks
+  those field types at parse time.  `Parts::Base` is likewise `unreachable!()`.  Unit
+  tests in `database::io::tests` verify that both read and write correctly distinguish
+  field `a` from field `b` in a two-field struct.  (Issues 59, 63;
+  `src/database/io.rs` `read_data`/`write_data`/`binary_size`)
+
+- **S4 (format)** — `Stores::path()` in `database/format.rs` no longer silently skips
+  the `// TODO` branch for sub-struct traversal.  When a parent struct's field is itself
+  a struct (or enum-value) containing a collection of the child type, `path()` now
+  builds the path component as `"field.subfield[index]"`.
+  (`src/database/format.rs` `Stores::path`)
+
 - **S5** — `copy_claims_index_body` (database) replaces `unreachable!()` with an
   explicit `panic!` that names the type index and the unexpected `Parts` variant,
   giving a diagnostic instead of an opaque crash if called incorrectly.
