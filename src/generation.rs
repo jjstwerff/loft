@@ -911,6 +911,37 @@ extern crate loft;"
             self.output_code_inner(w, v)?;
             return Ok(());
         }
+        // For If expressions, apply substitution structurally rather than via string
+        // replacement on the full generated text.  String-level substitution on the full
+        // if-else tree corrupts the `let _pre_N = …;` declarations that inner Block
+        // branches emit for their own operators: those declarations contain the same
+        // raw code strings (e.g. `get_int_8_code`) as the outer pre-evals, so a
+        // replacen call intended for the outer condition accidentally replaces the inner
+        // declaration, making the inner variable a stale alias of the outer pre-eval.
+        //
+        // The structural fix: apply substitution only to the *condition* part of the If
+        // (and recursively to any else-if conditions); emit Block branches directly via
+        // `output_code_inner`, which calls `output_block` and manages their own
+        // pre-evals internally.
+        if let Value::If(test, true_v, false_v) = v {
+            // Check exact match first: if this entire If expression equals a pre-eval
+            // binding, emit the name.  Save/restore counter and declared so the check
+            // pass does not corrupt state for the real structural emission below.
+            let saved_counter = self.counter;
+            let saved_declared = self.declared.clone();
+            let mut check_buf = std::io::BufWriter::new(Vec::new());
+            self.output_code_inner(&mut check_buf, v)?;
+            let full_code = String::from_utf8(check_buf.into_inner()?).unwrap();
+            self.counter = saved_counter;
+            self.declared = saved_declared;
+            for (name, pre_code, _, _) in pre_evals {
+                if full_code == *pre_code {
+                    write!(w, "{name}")?;
+                    return Ok(());
+                }
+            }
+            return self.output_if_with_subst(w, test, true_v, false_v, pre_evals);
+        }
         let mut buf_check = std::io::BufWriter::new(Vec::new());
         self.output_code_inner(&mut buf_check, v)?;
         let code = String::from_utf8(buf_check.into_inner()?).unwrap();
@@ -935,6 +966,61 @@ extern crate loft;"
             }
         }
         write!(w, "{result}")?;
+        Ok(())
+    }
+
+    /// Use this to emit an `if`/`else` expression with pre-eval substitution applied
+    /// structurally: the condition receives substitution, Block branches are emitted
+    /// directly (they handle their own pre-evals via `output_block`), and non-Block
+    /// branches (else-if chains) receive substitution recursively.
+    fn output_if_with_subst(
+        &mut self,
+        w: &mut dyn Write,
+        test: &Value,
+        true_v: &Value,
+        false_v: &Value,
+        pre_evals: &[(String, String, u32, bool)],
+    ) -> std::io::Result<()> {
+        write!(w, "if ")?;
+        let b_true = matches!(*true_v, Value::Block(_));
+        let b_false = matches!(*false_v, Value::Block(_));
+        // Condition: apply substitution (this is exactly what the pre-evals are for).
+        self.output_code_with_subst(w, test, pre_evals)?;
+        if b_true {
+            write!(w, " ")?;
+        } else {
+            write!(w, " {{")?;
+        }
+        self.indent += u32::from(!b_true);
+        if b_true {
+            // Block branch: manages its own pre-evals, no outer substitution needed.
+            self.output_code_inner(w, true_v)?;
+        } else {
+            self.output_code_with_subst(w, true_v, pre_evals)?;
+        }
+        self.indent -= u32::from(!b_true);
+        if let Value::Block(_) = *true_v {
+            write!(w, " else ")?;
+        } else {
+            write!(w, "}} else ")?;
+        }
+        if !b_false {
+            write!(w, "{{")?;
+        }
+        self.indent += u32::from(!b_false);
+        if matches!(false_v, Value::Null) && let Some(tp) = self.infer_type(true_v) {
+            Self::write_typed_null(w, &tp)?;
+        } else if b_false {
+            // Block branch: manages its own pre-evals, no outer substitution needed.
+            self.output_code_inner(w, false_v)?;
+        } else {
+            // Non-block false branch (else-if chain or leaf): apply substitution.
+            self.output_code_with_subst(w, false_v, pre_evals)?;
+        }
+        self.indent -= u32::from(!b_false);
+        if !b_false {
+            write!(w, "}}")?;
+        }
         Ok(())
     }
 

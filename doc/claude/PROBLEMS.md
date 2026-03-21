@@ -38,6 +38,12 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 65 | Type index out-of-bounds (`[]` indexing in `data.rs`) | ~~Fixed~~ | S6-65: get_type() helper in Stores panics with diagnostic |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
 | 67 | Silent early-return on store resize limit (no diagnostic) | ~~Fixed~~ | S6-67: saturating_mul + checked_add panic in store.rs |
+| 74 | Native codegen: `OpGetFileText`/`OpTruncateFile`/`OpSeekFile`/`OpSizeFile` missing from `codegen_runtime` | High | `--native` only; no workaround |
+| 75 | Native codegen: text variable (`String`) passed where `Str` expected in function calls | High | `--native` only; no workaround |
+| 76 | Native codegen: `OpFormatSingle`, `OpFormatStackText`, `OpRemove`, `OpHashRemove`, `OpAppendCopy` missing from `codegen_runtime` | Medium | `--native` only; affects float/vector/collection tests |
+| 77 | Native codegen: `CallRef`/function-pointer calls not implemented | Medium | `--native` only; affects `06-function.loft` |
+| 78 | Native codegen: double-borrow of `stores` in some generated code | Medium | `--native` only; affects struct/library/lock tests |
+| 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 
 ---
 
@@ -444,6 +450,73 @@ After loop 1 exited, TOS=52.  Codegen saw pos(60) > TOS(52) → overrode to 52. 
 **Also updated:** The `assign_slots_no_narrow_to_wide_reuse` unit test expected `fnref` to
 avoid slot 0 (dead 1-byte flag).  With the fix, `fnref` IS placed at slot 0 via direct
 placement (tos_estimate=0, no live vars), which is safe.  The test now asserts slot 0.
+
+---
+
+## Native Codegen Blockers (discovered 2026-03-21 via `make test-native`)
+
+All 24 `tests/docs/*.loft` files fail to compile under `--native`.  The root causes are:
+
+### 74. `OpGetFileText` / `OpTruncateFile` / `OpSeekFile` / `OpSizeFile` missing from `codegen_runtime`
+
+**Symptom:** `error[E0425]: cannot find function OpGetFileText` in every generated file that
+touches the `File` type (all 24 tests use the stdlib which transitively includes file ops).
+
+**Root cause:** These four Op functions are defined in `default/02_images.loft` with no `#rust`
+template.  The bytecode interpreter uses them via `fill.rs` stack-based wrappers.  Native
+codegen emits them as direct function calls but no implementation is provided.
+
+**Fix path:** Add `pub fn OpGetFileText`, `pub fn OpTruncateFile`, `pub fn OpSeekFile`, and
+`pub fn OpSizeFile` to `src/codegen_runtime.rs` with direct-call signatures matching how the
+generator emits them (e.g. `fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String)`).
+The implementations can delegate to the same logic already in `src/state/io.rs`.
+
+### 75. Text variable (`String`) passed where `Str` expected in function calls
+
+**Symptom:** `error[E0308]: mismatched types — expected Str, found &String`.
+
+**Root cause:** Text-typed local variables are emitted as `String` (via `Context::Variable`),
+but function parameter signatures emit text arguments as `Str` (via `Context::Argument`).
+`&String` does not coerce to `Str` because `Str` is a store-backed reference, not a string slice.
+
+**Fix path:** In `output_function` and `output_call_template`, change text parameters in
+user-defined functions to `&str` (or `String`) instead of `Str`, and emit call-site text
+variables as `&*var_name` (or `var_name.as_str()`).  `Str` should only be used for
+store-backed text passed between template/Op functions.
+
+### 76. Format / collection Op functions missing from `codegen_runtime`
+
+**Symptom:** `cannot find function OpFormatSingle / OpFormatStackText / OpRemove / OpHashRemove / OpAppendCopy`.
+
+**Fix path:** Same approach as #74 — add wrappers to `codegen_runtime.rs`.  These affect
+float formatting (05), text formatting (06), vector remove (07, 10), hash remove (10–12), and
+struct copy (08).
+
+### 77. Function-pointer calls (`CallRef`) not implemented
+
+**Symptom:** `cannot find function CallRef` in `06-function.loft`.  Also `Int`/`Var` emitted
+as bare identifiers from lambda/routine call codegen.
+
+**Fix path:** Implement the `Value::CallRef` (or equivalent) case in `output_code_inner` so
+that calling a function by stored `u32` def-number generates a Rust indirect call or a match
+dispatch table.
+
+### 78. Double-borrow of `stores` in generated code
+
+**Symptom:** `error[E0502]: cannot borrow *stores as immutable because it is also borrowed as mutable`.
+
+**Fix path:** The `needs_pre_eval` hoisting logic in `generation.rs` does not hoist all
+sub-expressions that take `&stores` while the outer call takes `&mut stores`.  Extend
+`needs_pre_eval` to cover the additional cases found in struct/library/lock tests.
+
+### 79. `external` crate reference unresolved
+
+**Symptom:** `error[E0433]: failed to resolve: use of unresolved module external` in
+`21-random.loft`.
+
+**Fix path:** The random number extension uses an `external` FFI crate that is not included in
+the native codegen output.  Either bundle the implementation in `codegen_runtime` or emit the
+necessary `extern` block in the generated file.
 
 ---
 
