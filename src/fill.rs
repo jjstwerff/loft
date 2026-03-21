@@ -297,8 +297,8 @@ fn free_stack(s: &mut State) {
 }
 
 fn reserve_frame(s: &mut State) {
-    let size = *s.code::<u16>();
-    s.reserve_frame(size);
+    let v_size = *s.code::<u16>();
+    s.reserve_frame(v_size);
 }
 
 fn const_true(s: &mut State) {

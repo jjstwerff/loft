@@ -21,8 +21,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | P1.1  | ↳ Parser — `fn(params) -> type block` primary expression     | Small     |                 | expressions.rs              |
 | P1.2  | ↳ Compilation — synthesise anon def, emit def-nr             | Medium    | P1.1            | codegen.rs, compile.rs      |
 | P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
-| N9    | Repair fill.rs auto-generation (N20b–N20d remaining)         | Medium    |                 | NATIVE.md N20               |
-| N1    | `--native` CLI flag                                          | Medium    | N6, N9          | NATIVE.md                   |
+| N1    | `--native` CLI flag                                          | Medium    |                 | NATIVE.md                   |
 
 ---
 
