@@ -721,7 +721,7 @@ fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
 #rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
+#rust"{{let db = @v1; let store = stores.store(&db); store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32)}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);

@@ -48,6 +48,54 @@ impl std::fmt::Display for Str {
     }
 }
 
+impl PartialEq<str> for Str {
+    fn eq(&self, other: &str) -> bool {
+        self.str() == other
+    }
+}
+
+impl PartialEq<&str> for Str {
+    fn eq(&self, other: &&str) -> bool {
+        self.str() == *other
+    }
+}
+
+impl PartialEq<Str> for &str {
+    fn eq(&self, other: &Str) -> bool {
+        *self == other.str()
+    }
+}
+
+impl PartialEq<String> for Str {
+    fn eq(&self, other: &String) -> bool {
+        self.str() == other.as_str()
+    }
+}
+
+impl PartialEq<Str> for String {
+    fn eq(&self, other: &Str) -> bool {
+        self.as_str() == other.str()
+    }
+}
+
+impl PartialOrd<str> for Str {
+    fn partial_cmp(&self, other: &str) -> Option<std::cmp::Ordering> {
+        self.str().partial_cmp(other)
+    }
+}
+
+impl PartialOrd<&str> for Str {
+    fn partial_cmp(&self, other: &&str) -> Option<std::cmp::Ordering> {
+        self.str().partial_cmp(*other)
+    }
+}
+
+impl PartialOrd<Str> for &str {
+    fn partial_cmp(&self, other: &Str) -> Option<std::cmp::Ordering> {
+        (*self).partial_cmp(other.str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Key {
     pub type_nr: i8,
