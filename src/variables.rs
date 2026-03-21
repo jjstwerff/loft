@@ -1445,6 +1445,17 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
 /// `code` is the function's top-level IR value (the outermost `Value::Block`).
 /// `local_start` is the stack offset immediately after the function arguments.
 pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16) {
+    // Enable slot-assignment logging when LOFT_ASSIGN_LOG=<name> matches function name.
+    #[cfg(debug_assertions)]
+    if let Ok(filter) = std::env::var("LOFT_ASSIGN_LOG")
+        && (filter == "*" || function.name.contains(&*filter))
+    {
+        function.logging = true;
+        eprintln!(
+            "[assign_slots] === {} ===  local_start={local_start}",
+            function.name
+        );
+    }
     // Reset all non-argument variable slots.
     for v in &mut function.variables {
         if !v.argument {
@@ -1454,10 +1465,15 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
     }
     // Walk the IR tree, assigning slots scope-by-scope.
     process_scope(function, code, local_start, 0);
+    #[cfg(debug_assertions)]
+    {
+        function.logging = false;
+    }
 }
 
 /// Assign slots for all variables in the scope owned by `block_val` (a Block or Loop node),
 /// then recurse into child scopes.
+#[allow(clippy::too_many_lines)]
 fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16, depth: u32) {
     assert!(
         depth <= 1000,
@@ -1483,6 +1499,23 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
         .collect();
     small_vars.sort_by_key(|&i| function.variables[i].first_def);
 
+    if function.logging {
+        eprintln!(
+            "[assign_slots] process_scope  scope={bl_scope}  frame_base={frame_base}  \
+             zone1_vars=[{}]",
+            small_vars
+                .iter()
+                .map(|&i| format!(
+                    "{}({}B,fd={},lu={})",
+                    function.variables[i].name,
+                    size(&function.variables[i].type_def, &Context::Variable),
+                    function.variables[i].first_def,
+                    function.variables[i].last_use
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let mut zone1_hwm: u16 = frame_base;
     for &i in &small_vars {
         let v_size = size(&function.variables[i].type_def, &Context::Variable);
@@ -1530,6 +1563,13 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
         function.variables[i].stack_pos = candidate;
         function.variables[i].pre_assigned_pos = candidate;
         zone1_hwm = zone1_hwm.max(candidate + v_size);
+        if function.logging {
+            eprintln!(
+                "[assign_slots]   zone1  '{}' scope={bl_scope} size={v_size}B → slot={candidate}  \
+                 live=[{first_def},{last_use}]",
+                function.variables[i].name
+            );
+        }
     }
     let zone1_size = zone1_hwm - frame_base;
 
@@ -1541,6 +1581,9 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
     // ── Zone 2: place large variables and recurse into child scopes ────────────
     // tos tracks the physical TOS after zone1 is pre-claimed.
     let mut tos = frame_base + zone1_size;
+    if function.logging {
+        eprintln!("[assign_slots]   zone1_size={zone1_size}  zone2_tos_start={tos}");
+    }
 
     let operators = match block_val {
         Value::Block(bl) | Value::Loop(bl) => &mut bl.operators,
@@ -1589,10 +1632,44 @@ fn place_large_and_recurse(
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
                 if v_size > 8 {
-                    function.variables[v].stack_pos = *tos;
-                    function.variables[v].pre_assigned_pos = *tos;
+                    let v_slot = *tos;
+                    if function.logging {
+                        eprintln!(
+                            "[assign_slots]   zone2  '{}' scope={scope} size={v_size}B → slot={v_slot}  \
+                             inner={}",
+                            function.variables[v].name,
+                            match inner.as_ref() {
+                                Value::Block(bl) => format!("Block(scope={})", bl.scope),
+                                Value::Loop(bl) => format!("Loop(scope={})", bl.scope),
+                                other => format!("{:?}", std::mem::discriminant(other)),
+                            }
+                        );
+                    }
+                    function.variables[v].stack_pos = v_slot;
+                    function.variables[v].pre_assigned_pos = v_slot;
                     *tos += v_size;
+                    // Block-return pattern: Set(v, Block([..., Var(inner_result)])).
+                    // For non-Text types, generate_block is called with `to = v.stack_pos`,
+                    // so at runtime the block's frame starts at v's slot (v is not yet live).
+                    // Zone-1 vars of the child scope share v's slot area safely.
+                    // Using frame_base = v_slot (not *tos after advancing) prevents the
+                    // pos > TOS override in generate_set for Zone-2 vars of the child scope.
+                    //
+                    // Text is excluded: gen_set_first_text emits OpText BEFORE the block runs,
+                    // advancing stack.position by v_size, so the block's frame_base at codegen
+                    // time is v_slot + v_size — matching the old *tos value.
+                    if matches!(inner.as_ref(), Value::Block(_))
+                        && !matches!(function.variables[v].type_def, Type::Text(_))
+                    {
+                        process_scope(function, inner, v_slot, depth + 1);
+                        return;
+                    }
                 }
+            } else if function.logging && function.variables[v].scope != scope {
+                eprintln!(
+                    "[assign_slots]   zone2  skip '{}' (scope={}, not {scope})",
+                    function.variables[v].name, function.variables[v].scope
+                );
             }
             place_large_and_recurse(function, inner, scope, tos, depth + 1);
         }
