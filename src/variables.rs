@@ -62,6 +62,10 @@ pub struct Variable {
     pub first_def: u32,
     /// Sequence number of the last `Value::Var` (or implicit `OpFreeText`/`OpFreeRef`) for this variable.
     pub last_use: u32,
+    /// Slot assigned by `assign_slots` before codegen may override it via `set_stack_pos`.
+    /// `u16::MAX` means `assign_slots` has not run yet.  Shown as `pre:` in `validate_slots`
+    /// diagnostics when it differs from the final `stack_pos`.
+    pub pre_assigned_pos: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +91,22 @@ pub struct Function {
     inline_ref_vars: BTreeSet<u16>,
     // The names store only the last known instance of this variable in the function.
     names: HashMap<String, u16>,
+    // Scope numbers that correspond to loop bodies (Value::Loop), i.e. scopes whose
+    // variables are freed by OpFreeStack when the loop exits.  If-block scopes
+    // (Value::Block) are NOT in this set; their variables live until function return.
+    // Used by assign_slots to compute the physical TOS accurately.
+    loop_scopes: HashSet<u16>,
+    // Maps each loop-body scope number → (seq_start, seq_end) where seq_start / seq_end
+    // are the `compute_intervals` sequence counters immediately before / after the loop
+    // body is traversed.  assign_slots uses this to decide whether a dead loop-scope
+    // variable j is still physically present at i.first_def:
+    //   - If i.first_def < seq_end(j.scope): the loop's FreeStack fires AFTER i.first_def
+    //     → j's bytes are still on the physical stack at i.first_def (include in tos_estimate).
+    //   - If i.first_def >= seq_end(j.scope): the loop exited before i.first_def
+    //     → j's bytes were freed by FreeStack (exclude from tos_estimate).
+    loop_seq_ranges: HashMap<u16, (u32, u32)>,
+    // Maps each scope number to the source construct that introduced it: "block", "for", "if", etc.
+    scope_origins: HashMap<u16, &'static str>,
     pub done: bool,
     pub logging: bool,
 }
@@ -116,6 +136,9 @@ impl Function {
             work_refs: BTreeSet::new(),
             inline_ref_vars: BTreeSet::new(),
             names: HashMap::new(),
+            loop_scopes: HashSet::new(),
+            loop_seq_ranges: HashMap::new(),
+            scope_origins: HashMap::new(),
             logging: false,
             done: false,
         }
@@ -142,6 +165,12 @@ impl Function {
         self.names.clear();
         self.names.clone_from(&other.names);
         other.names.clear();
+        self.loop_scopes.clear();
+        self.loop_scopes.clone_from(&other.loop_scopes);
+        self.loop_seq_ranges.clear();
+        self.loop_seq_ranges.clone_from(&other.loop_seq_ranges);
+        self.scope_origins.clear();
+        self.scope_origins.clone_from(&other.scope_origins);
     }
 
     pub fn copy(other: &Function) -> Self {
@@ -159,6 +188,9 @@ impl Function {
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
             names: other.names.clone(),
+            loop_scopes: other.loop_scopes.clone(),
+            loop_seq_ranges: other.loop_seq_ranges.clone(),
+            scope_origins: other.scope_origins.clone(),
             logging: other.logging,
             done: other.done,
         }
@@ -338,6 +370,59 @@ impl Function {
         );
         self.variables[var_nr as usize].scope = scope;
         self.done = true;
+    }
+
+    /// Mark a scope number as corresponding to a loop body (`Value::Loop`).
+    /// Variables in loop scopes are freed by `OpFreeStack` when the loop exits;
+    /// if-block scopes (`Value::Block`) are NOT marked and live until function return.
+    pub fn mark_loop_scope(&mut self, scope: u16) {
+        self.loop_scopes.insert(scope);
+    }
+
+    /// Returns true if `scope` is a loop-body scope (variables freed by `OpFreeStack`).
+    pub fn is_loop_scope(&self, scope: u16) -> bool {
+        self.loop_scopes.contains(&scope)
+    }
+
+    /// Record the seq-number range [`seq_start`, `seq_end`) for a loop-body scope.
+    /// Called by `compute_intervals` when it finishes traversing a `Value::Loop`.
+    pub fn record_loop_range(&mut self, scope: u16, seq_start: u32, seq_end: u32) {
+        self.loop_seq_ranges.insert(scope, (seq_start, seq_end));
+    }
+
+    /// Returns the `seq_end` for a loop scope (the sequence number immediately after the
+    /// last statement inside the loop body), or None if the scope was not recorded.
+    /// Variables with `first_def` < `seq_end` are inside the loop body; their iteration's
+    /// `FreeStack` has NOT yet fired at that point.
+    pub fn loop_seq_end(&self, scope: u16) -> Option<u32> {
+        self.loop_seq_ranges.get(&scope).map(|&(_, end)| end)
+    }
+
+    pub fn loop_seq_range(&self, scope: u16) -> Option<(u32, u32)> {
+        self.loop_seq_ranges.get(&scope).copied()
+    }
+
+    pub fn record_scope_origin(&mut self, scope: u16, name: &'static str) {
+        let short = match name {
+            "For block" => "for",
+            "For loop" | "Slice materialise" | "For comprehension" => "loop",
+            "Formatted string" => "fmt",
+            "" => "if",
+            o => o,
+        };
+        self.scope_origins.entry(scope).or_insert(short);
+    }
+
+    pub fn scope_origin(&self, scope: u16) -> &'static str {
+        self.scope_origins.get(&scope).copied().unwrap_or("block")
+    }
+
+    pub fn first_def(&self, var_nr: u16) -> u32 {
+        self.variables[var_nr as usize].first_def
+    }
+
+    pub fn last_use(&self, var_nr: u16) -> u32 {
+        self.variables[var_nr as usize].last_use
     }
 
     pub fn scope(&self, var_nr: u16) -> u16 {
@@ -570,6 +655,7 @@ impl Function {
             skip_free: false,
             first_def: u32::MAX,
             last_use: 0,
+            pre_assigned_pos: u16::MAX,
         });
         v
     }
@@ -595,6 +681,7 @@ impl Function {
             skip_free: false,
             first_def: u32::MAX,
             last_use: 0,
+            pre_assigned_pos: u16::MAX,
         });
         v
     }
@@ -617,6 +704,7 @@ impl Function {
             skip_free: false,
             first_def: u32::MAX,
             last_use: 0,
+            pre_assigned_pos: u16::MAX,
         });
         v
     }
@@ -944,16 +1032,19 @@ pub fn compute_intervals(
             *seq += 1;
         }
         Value::Block(bl) => {
+            function.record_scope_origin(bl.scope, bl.name);
             for op in &bl.operators {
                 compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
         }
         Value::Loop(lp) => {
+            function.record_scope_origin(lp.scope, lp.name);
             let seq_start = *seq;
             for op in &lp.operators {
                 compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
             }
             let seq_end = *seq;
+            function.record_loop_range(lp.scope, seq_start, seq_end);
             // Extend last_use of loop-carried variables.
             // A variable that is (a) defined BEFORE the loop and (b) used inside
             // the loop may be read again at the top of the next iteration.  Extend
@@ -1088,10 +1179,77 @@ fn short_type(tp: &Type) -> String {
     }
 }
 
+/// Build a map from each scope number → its parent scope number, by walking the IR tree.
+/// Scopes with no parent (e.g. the root block) are not in the map.
+fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>) {
+    match val {
+        Value::Block(bl) | Value::Loop(bl) => {
+            parents.insert(bl.scope, parent);
+            for op in &bl.operators {
+                build_scope_parents(op, bl.scope, parents);
+            }
+        }
+        Value::If(cond, t, f) => {
+            build_scope_parents(cond, parent, parents);
+            build_scope_parents(t, parent, parents);
+            build_scope_parents(f, parent, parents);
+        }
+        Value::Set(_, inner) | Value::Drop(inner) | Value::Return(inner) => {
+            build_scope_parents(inner, parent, parents);
+        }
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            for a in args {
+                build_scope_parents(a, parent, parents);
+            }
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                build_scope_parents(op, parent, parents);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns true if `ancestor` is a strict ancestor of `child` in the scope tree.
+fn is_scope_ancestor(ancestor: u16, child: u16, parents: &HashMap<u16, u16>) -> bool {
+    let mut cur = child;
+    let mut steps = 0u32;
+    loop {
+        assert!(
+            steps <= 10_000,
+            "is_scope_ancestor: cycle in scope parent map after {steps} steps \
+             (ancestor={ancestor}, child={child}, cur={cur}). \
+             This indicates build_scope_parents inserted a scope with itself as parent."
+        );
+        steps += 1;
+        match parents.get(&cur) {
+            Some(&p) if p == ancestor => return true,
+            Some(&p) if p == cur => return false, // self-loop → not an ancestor
+            Some(&p) => cur = p,
+            None => return false,
+        }
+    }
+}
+
+/// Returns true if scope SA and scope SB can be physically concurrent, i.e., one is an
+/// ancestor of the other (or they are equal).  Variables in sibling branches of the IR tree
+/// cannot be simultaneously on the stack, so byte-range overlap between them is allowed.
+fn scopes_can_conflict(sa: u16, sb: u16, parents: &HashMap<u16, u16>) -> bool {
+    // u16::MAX = "no scope" (global or argument) — always treat as possible conflict.
+    if sa == u16::MAX || sb == u16::MAX {
+        return true;
+    }
+    sa == sb || is_scope_ancestor(sa, sb, parents) || is_scope_ancestor(sb, sa, parents)
+}
+
 /// Scan `vars` for the first pair of variables whose stack slots AND live intervals both
-/// overlap.  Returns `(i, u_slot_end, j, v_slot_end)` for the first conflicting pair found,
-/// where `i < j` are indices into `vars`.
-fn find_conflict(vars: &[Variable]) -> Option<(usize, u16, usize, u16)> {
+/// overlap AND whose scopes are in the same execution branch (i.e. one scope is an ancestor
+/// of the other).  Variables in sibling branches cannot be simultaneously on the stack.
+fn find_conflict(
+    vars: &[Variable],
+    scope_parents: &HashMap<u16, u16>,
+) -> Option<(usize, u16, usize, u16)> {
     for left_idx in 0..vars.len() {
         let left = &vars[left_idx];
         if left.stack_pos == u16::MAX || left.first_def == u32::MAX {
@@ -1122,6 +1280,12 @@ fn find_conflict(vars: &[Variable]) -> Option<(usize, u16, usize, u16)> {
                 if left.name == right.name && left.stack_pos == right.stack_pos {
                     continue;
                 }
+                // Variables in sibling (or cousin) scope branches cannot physically overlap:
+                // one block exits before the other starts.  The live-interval overlap is an
+                // artefact of OpFreeRef/OpFreeText tracking across scope boundaries.
+                if !scopes_can_conflict(left.scope, right.scope, scope_parents) {
+                    continue;
+                }
                 return Some((left_idx, left_slot_end, right_idx, right_slot_end));
             }
         }
@@ -1136,8 +1300,14 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
     if !cfg!(debug_assertions) {
         return;
     }
+    // Build scope parent map from the IR tree so find_conflict can skip sibling-branch conflicts.
+    let mut scope_parents: HashMap<u16, u16> = HashMap::new();
+    build_scope_parents(&data.def(def_nr).code, u16::MAX, &mut scope_parents);
+
     let vars = &function.variables;
-    let Some((left_idx, left_slot_end, right_idx, right_slot_end)) = find_conflict(vars) else {
+    let Some((left_idx, left_slot_end, right_idx, right_slot_end)) =
+        find_conflict(vars, &scope_parents)
+    else {
         return;
     };
     let left = &vars[left_idx];
@@ -1155,16 +1325,21 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
     );
     eprintln!();
     eprintln!(
-        "  {:<4} {:<2} {:<20} {:<14} {:<12} {:<14}",
-        "#", "", "name", "type", "slot", "live"
+        "  {:<4} {:<2} {:<20} {:<14} {:<16} {:<12} {:<12} {:<14}",
+        "#", "", "name", "type", "scope", "slot", "pre", "live"
     );
-    eprintln!("  {}", "-".repeat(70));
+    eprintln!("  {}", "-".repeat(96));
     for (idx, var) in vars.iter().enumerate() {
         let vs = size(&var.type_def, &Context::Variable);
         let slot_str = if var.stack_pos == u16::MAX {
             "-".to_string()
         } else {
             format!("[{}, {})", var.stack_pos, var.stack_pos + vs)
+        };
+        let pre_str = if var.pre_assigned_pos == u16::MAX || var.pre_assigned_pos == var.stack_pos {
+            String::new()
+        } else {
+            format!("[{}, {})", var.pre_assigned_pos, var.pre_assigned_pos + vs)
         };
         let live_str = if var.first_def == u32::MAX {
             "-".to_string()
@@ -1176,8 +1351,17 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
         } else {
             " "
         };
+        // Show scope number; append "L seq:[s..e)" for loop scopes so physical-TOS
+        // decisions are immediately visible without reading the full IR.
+        let scope_str = if var.scope == u16::MAX {
+            "-".to_string()
+        } else if let Some((s, e)) = function.loop_seq_range(var.scope) {
+            format!("{}L seq:[{}..{})", var.scope, s, e)
+        } else {
+            var.scope.to_string()
+        };
         eprintln!(
-            "  {idx:<4} {mark:<2} {:<20} {:<14} {slot_str:<12} {live_str:<14}",
+            "  {idx:<4} {mark:<2} {:<20} {:<14} {scope_str:<16} {slot_str:<12} {pre_str:<12} {live_str:<14}",
             var.name,
             short_type(&var.type_def),
         );
@@ -1253,68 +1437,71 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
 /// `sum_of_argument_sizes + 4`.
 ///
 /// Variables with `argument == true` or `first_def == u32::MAX` are skipped.
-/// Primitive types (`size <= 4 bytes`) may share a slot with an earlier dead variable;
-/// reference and text types (`size > 4 bytes`) always receive a fresh slot.
-pub fn assign_slots(function: &mut Function, local_start: u16) {
-    // Collect indices of local variables that have a known live interval.
-    let mut order: Vec<usize> = (0..function.variables.len())
-        .filter(|&i| {
-            let v = &function.variables[i];
-            !v.argument && v.first_def != u32::MAX
-        })
-        .collect();
-    // Sort by first_def to process variables in definition order.
-    order.sort_by_key(|&i| function.variables[i].first_def);
-
-    // Reset all slots for variables we will assign.
-    for &i in &order {
-        function.variables[i].stack_pos = u16::MAX;
+/// Assign stack slots to all local variables using the two-zone block pre-claim approach.
+///
+/// Zone 1 (small variables, ≤ 8 B): greedy interval colouring within each scope's frame.
+/// Zone 2 (large variables, > 8 B): placed sequentially at TOS in IR-walk order.
+///
+/// `code` is the function's top-level IR value (the outermost `Value::Block`).
+/// `local_start` is the stack offset immediately after the function arguments.
+pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16) {
+    // Reset all non-argument variable slots.
+    for v in &mut function.variables {
+        if !v.argument {
+            v.stack_pos = u16::MAX;
+            v.pre_assigned_pos = u16::MAX;
+        }
     }
+    // Walk the IR tree, assigning slots scope-by-scope.
+    process_scope(function, code, local_start, 0);
+}
 
-    for &i in &order {
+/// Assign slots for all variables in the scope owned by `block_val` (a Block or Loop node),
+/// then recurse into child scopes.
+fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16, depth: u32) {
+    assert!(
+        depth <= 1000,
+        "assign_slots scope nesting limit exceeded at depth {depth}"
+    );
+    let bl_scope = match block_val {
+        Value::Block(bl) | Value::Loop(bl) => bl.scope,
+        _ => return,
+    };
+
+    // ── Zone 1: colour small variables (size ≤ 8) ─────────────────────────────
+    let mut small_vars: Vec<usize> = function
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| {
+            !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
+                let s = size(&v.type_def, &Context::Variable);
+                s > 0 && s <= 8
+            }
+        })
+        .map(|(i, _)| i)
+        .collect();
+    small_vars.sort_by_key(|&i| function.variables[i].first_def);
+
+    let mut zone1_hwm: u16 = frame_base;
+    for &i in &small_vars {
+        let v_size = size(&function.variables[i].type_def, &Context::Variable);
         let first_def = function.variables[i].first_def;
         let last_use = function.variables[i].last_use;
-        let var_size = size(&function.variables[i].type_def, &Context::Variable);
-        if var_size == 0 {
-            function.variables[i].stack_pos = 0;
-            continue;
-        }
-        // Find the lowest slot offset (>= local_start) that doesn't conflict with any
-        // already-assigned variable whose live interval overlaps [first_def, last_use].
-        // Primitives (4 B integers, booleans, fn-refs) and wide primitives (8 B Long,
-        // Float) may reuse dead slots; large compound types (Text 24 B, Reference 12 B,
-        // Vector 12 B) are never reused because their init opcodes write at TOS.
-        let can_reuse = var_size <= 8;
 
-        // Compute the expected TOS when this variable is first allocated.
-        // This is the maximum slot-end among already-assigned variables that are
-        // live at first_def (i.e., their bytes are guaranteed to be on the physical
-        // stack at that point).  A pre-assigned slot above this value risks triggering
-        // the `pos > stack.position` override in codegen (which fires when a loop body
-        // has freed its stack frame, dropping TOS below any slot allocated inside it).
-        // Clamping to tos_estimate ensures the chosen slot is reachable via direct
-        // placement (slot == TOS) or displacement (slot < TOS), never an override.
-        let mut tos_estimate: u16 = local_start;
-        for &j in &order {
-            if j == i {
-                continue;
-            }
-            let js = function.variables[j].stack_pos;
-            if js == u16::MAX {
-                continue;
-            }
-            let jf = function.variables[j].first_def;
-            let jl = function.variables[j].last_use;
-            if jf <= first_def && jl >= first_def {
-                let j_size = size(&function.variables[j].type_def, &Context::Variable);
-                tos_estimate = tos_estimate.max(js.saturating_add(j_size));
-            }
-        }
-
-        let mut candidate: u16 = local_start;
+        let mut candidate = frame_base;
+        let mut retry_count = 0u32;
         'retry: loop {
-            let end = candidate.saturating_add(var_size);
-            for &j in &order {
+            assert!(
+                retry_count <= 10_000,
+                "assign_slots: greedy coloring loop exceeded 10000 iterations for variable '{}' \
+                 (size={v_size}, scope={bl_scope}, candidate={candidate}). \
+                 Infinite loop in slot search — check for conflicting variables that prevent placement.",
+                function.variables[i].name
+            );
+            retry_count += 1;
+            let end = candidate + v_size;
+            for &j in &small_vars {
                 if j == i {
                     continue;
                 }
@@ -1323,37 +1510,17 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
                     continue;
                 }
                 let j_size = size(&function.variables[j].type_def, &Context::Variable);
-                let j_end = js.saturating_add(j_size);
-                // Check byte-range overlap.
-                if candidate < j_end && end > js {
-                    // Check live-interval overlap.
+                if candidate < js + j_size && end > js {
                     let jf = function.variables[j].first_def;
                     let jl = function.variables[j].last_use;
                     if first_def <= jl && last_use >= jf {
-                        // Conflict — try next available slot after this variable's range.
-                        candidate = j_end;
+                        // Live-interval overlap: try next slot.
+                        candidate = js + j_size;
                         continue 'retry;
                     }
-                    // For large types, even expired slots must not be reused (avoids
-                    // complications with init opcodes that write at stack.position).
-                    // Also reject size-mismatched reuse: an OpPutX displacement is
-                    // computed as stack.position − slot_start; if the dead slot is
-                    // narrower than the new variable, the displacement is off by the
-                    // size difference and the store overwrites the wrong bytes.
-                    //
-                    // Exception: if candidate == tos_estimate this is a fresh allocation
-                    // at the expected TOS position.  Dead slots here are safe to overlap
-                    // (the bytes belong to a loop-freed or dead variable) and using
-                    // direct placement avoids the `pos > stack.position` codegen override
-                    // that would otherwise remap this variable onto a conflicting slot.
-                    if candidate != tos_estimate && (!can_reuse || var_size != j_size) {
-                        candidate = j_end;
-                        // Never skip above tos_estimate: a slot beyond TOS would trigger
-                        // the pos > stack.position override in codegen, defeating
-                        // pre-assignment.  Clamp so the next retry checks tos_estimate.
-                        if candidate > tos_estimate {
-                            candidate = tos_estimate;
-                        }
+                    // Dead slot: only reuse if sizes match (avoids displacement errors).
+                    if v_size != j_size {
+                        candidate = js + j_size;
                         continue 'retry;
                     }
                 }
@@ -1361,6 +1528,113 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
             break;
         }
         function.variables[i].stack_pos = candidate;
+        function.variables[i].pre_assigned_pos = candidate;
+        zone1_hwm = zone1_hwm.max(candidate + v_size);
+    }
+    let zone1_size = zone1_hwm - frame_base;
+
+    // Store var_size (zone1 bytes) in the Block node so generate_block can emit OpReserveFrame.
+    if let Value::Block(bl) | Value::Loop(bl) = block_val {
+        bl.var_size = zone1_size;
+    }
+
+    // ── Zone 2: place large variables and recurse into child scopes ────────────
+    // tos tracks the physical TOS after zone1 is pre-claimed.
+    let mut tos = frame_base + zone1_size;
+
+    let operators = match block_val {
+        Value::Block(bl) | Value::Loop(bl) => &mut bl.operators,
+        _ => return,
+    };
+
+    for op in operators.iter_mut() {
+        place_large_and_recurse(function, op, bl_scope, &mut tos, depth);
+    }
+}
+
+/// Walk a single IR node to place large variables and recurse into child scopes.
+///
+/// - `Value::Set(v, _)` where `v` belongs to `scope` and `v` is large (> 8 B):
+///   assign `v.stack_pos = *tos` and advance `*tos`.
+/// - `Value::Block` / `Value::Loop`: recurse via `process_scope` (child has own frame).
+/// - `Value::If`: process then/else each starting from the same `*tos`; after both, `*tos`
+///   is unchanged (`gen_if` resets `stack.position` between arms and restores on exit).
+/// - Other compound nodes: recurse into sub-expressions.
+///
+/// # Zone-2 ordering invariant
+///
+/// This function finds a large variable `v` only when `Value::Set(v, ...)` appears as a
+/// **direct top-level operator** of the enclosing scope's Block, or as the direct RHS of
+/// such a Set (e.g. `Set(outer, Block([Set(inner, ...), ...]))`).  If a parser change
+/// places a first-assignment `Set(v, ...)` inside a non-recursed position — for example
+/// as an argument to a `Call` node — `v` would never be visited here and would keep
+/// `stack_pos = u16::MAX`, causing a panic in `generate_set` at codegen time.
+///
+/// The parser currently guarantees that every variable's first assignment is a block-level
+/// statement, never nested inside an expression.  Document any future exception here.
+fn place_large_and_recurse(
+    function: &mut Function,
+    val: &mut Value,
+    scope: u16,
+    tos: &mut u16,
+    depth: u32,
+) {
+    assert!(
+        depth <= 1000,
+        "assign_slots nesting limit exceeded at depth {depth}"
+    );
+    match val {
+        Value::Set(v_nr, inner) => {
+            let v = *v_nr as usize;
+            if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
+                let v_size = size(&function.variables[v].type_def, &Context::Variable);
+                if v_size > 8 {
+                    function.variables[v].stack_pos = *tos;
+                    function.variables[v].pre_assigned_pos = *tos;
+                    *tos += v_size;
+                }
+            }
+            place_large_and_recurse(function, inner, scope, tos, depth + 1);
+        }
+        Value::Block(_) => {
+            let child_base = *tos;
+            process_scope(function, val, child_base, depth + 1);
+            // Child cleans up with its own OpFreeStack; tos unchanged after child exits.
+        }
+        Value::Loop(_) => {
+            let child_base = *tos;
+            process_scope(function, val, child_base, depth + 1);
+        }
+        Value::If(cond, then_val, else_val) => {
+            place_large_and_recurse(function, cond, scope, tos, depth + 1);
+            let branch_tos = *tos;
+            if matches!(then_val.as_ref(), Value::Block(_)) {
+                process_scope(function, then_val, branch_tos, depth + 1);
+            } else {
+                place_large_and_recurse(function, then_val, scope, tos, depth + 1);
+                *tos = branch_tos;
+            }
+            if matches!(else_val.as_ref(), Value::Block(_)) {
+                process_scope(function, else_val, branch_tos, depth + 1);
+            } else {
+                place_large_and_recurse(function, else_val, scope, tos, depth + 1);
+            }
+            *tos = branch_tos;
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                place_large_and_recurse(function, op, scope, tos, depth + 1);
+            }
+        }
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            for a in args {
+                place_large_and_recurse(function, a, scope, tos, depth + 1);
+            }
+        }
+        Value::Drop(inner) | Value::Return(inner) => {
+            place_large_and_recurse(function, inner, scope, tos, depth + 1);
+        }
+        _ => {}
     }
 }
 
@@ -1368,11 +1642,98 @@ pub fn assign_slots(function: &mut Function, local_start: u16) {
 mod tests {
     use super::*;
     use crate::data::Block;
+    use std::collections::HashMap;
     use std::mem::size_of;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
     const INT: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32);
+
+    /// Wrap `assign_slots` for unit tests: builds a minimal flat Block (scope 0) with
+    /// `Value::Set` nodes for every non-argument large (>8 B) variable so Zone 2 can
+    /// place them.  Small variables (≤ 8 B) are handled by Zone 1 without needing IR nodes.
+    fn run_assign_slots(f: &mut Function, local_start: u16) {
+        let large_sets: Vec<Value> = f
+            .variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                !v.argument && v.first_def != u32::MAX && size(&v.type_def, &Context::Variable) > 8
+            })
+            .map(|(i, _)| Value::Set(i as u16, Box::new(Value::Null)))
+            .collect();
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            operators: large_sets,
+            result: Type::Void,
+            scope: 0,
+            var_size: 0,
+        }));
+        assign_slots(f, &mut code, local_start);
+    }
+
+    /// Variant of `run_assign_slots` for the multi-scope sequential-for-loops test.
+    /// Builds a nested Block tree matching the scope hierarchy supplied by the caller.
+    /// `scope_tree`: list of `(scope, parent_scope, is_loop)` entries.
+    /// Large vars in each scope are placed as Set nodes in that scope's block.
+    fn run_assign_slots_scoped(
+        f: &mut Function,
+        local_start: u16,
+        root_scope: u16,
+        // (child_scope, parent_scope, is_loop)
+        child_scopes: &[(u16, u16, bool)],
+    ) {
+        // Build the nested Value tree bottom-up.
+        // Maps scope → Vec<Value> of operators for that scope's block.
+        let mut operators: HashMap<u16, Vec<Value>> = HashMap::new();
+
+        // Seed with large-var Set nodes per scope.
+        for (i, v) in f.variables.iter().enumerate() {
+            if v.argument || v.first_def == u32::MAX {
+                continue;
+            }
+            if size(&v.type_def, &Context::Variable) > 8 {
+                operators
+                    .entry(v.scope)
+                    .or_default()
+                    .push(Value::Set(i as u16, Box::new(Value::Null)));
+            }
+        }
+
+        // Insert child blocks into their parent's operator list, innermost first.
+        // Process in reverse order so deeper scopes are nested before shallower ones.
+        for &(child, parent, is_loop) in child_scopes.iter().rev() {
+            let ops = operators.remove(&child).unwrap_or_default();
+            let child_block = if is_loop {
+                Value::Loop(Box::new(Block {
+                    name: "",
+                    operators: ops,
+                    result: Type::Void,
+                    scope: child,
+                    var_size: 0,
+                }))
+            } else {
+                Value::Block(Box::new(Block {
+                    name: "",
+                    operators: ops,
+                    result: Type::Void,
+                    scope: child,
+                    var_size: 0,
+                }))
+            };
+            operators.entry(parent).or_default().push(child_block);
+        }
+
+        let root_ops = operators.remove(&root_scope).unwrap_or_default();
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            operators: root_ops,
+            result: Type::Void,
+            scope: root_scope,
+            var_size: 0,
+        }));
+        assign_slots(f, &mut code, local_start);
+    }
 
     /// Add a variable with an already-known slot and live interval.
     fn add_var(f: &mut Function, tp: &Type, slot: u16, first_def: u32, last_use: u32) -> u16 {
@@ -1383,6 +1744,32 @@ mod tests {
         v
     }
 
+    /// Add a variable for `assign_slots` tests: named, scoped, with a live interval
+    /// but no pre-assigned slot.  The scope is recorded on the variable; call
+    /// `declare_loop` separately if the scope is a loop scope.
+    fn add_scoped_var(
+        f: &mut Function,
+        name: &str,
+        tp: &Type,
+        scope: u16,
+        first_def: u32,
+        last_use: u32,
+    ) -> u16 {
+        let v = f.add_unique(name, tp, scope);
+        f.variables[v as usize].scope = scope;
+        f.variables[v as usize].first_def = first_def;
+        f.variables[v as usize].last_use = last_use;
+        v
+    }
+
+    /// Mark `scope` as a loop scope and record its seq-number range [seq_start, seq_end).
+    /// Must be called before `assign_slots` runs for the loop scope to influence
+    /// `tos_estimate`.
+    fn declare_loop(f: &mut Function, scope: u16, seq_start: u32, seq_end: u32) {
+        f.mark_loop_scope(scope);
+        f.record_loop_range(scope, seq_start, seq_end);
+    }
+
     // ── find_conflict unit tests ──────────────────────────────────────────────
 
     /// Slot reuse is fine when the two live intervals are strictly sequential.
@@ -1391,7 +1778,7 @@ mod tests {
         let mut f = Function::new("f", "test");
         add_var(&mut f, &INT, 0, 0, 10); // dies at seq 10
         add_var(&mut f, &INT, 0, 11, 20); // born at seq 11 — no overlap
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// Variables that are simultaneously alive but occupy adjacent, non-overlapping slots are fine.
@@ -1400,7 +1787,7 @@ mod tests {
         let mut f = Function::new("f", "test");
         add_var(&mut f, &INT, 0, 0, 20); // slot [0, 4)
         add_var(&mut f, &INT, 4, 0, 20); // slot [4, 8)
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// Two variables at the exact same slot that are alive at the same time must be flagged.
@@ -1409,7 +1796,7 @@ mod tests {
         let mut f = Function::new("f", "test");
         add_var(&mut f, &INT, 0, 0, 10);
         add_var(&mut f, &INT, 0, 5, 15); // overlaps both in slot and time
-        assert!(find_conflict(&f.variables).is_some());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_some());
     }
 
     /// Reproduces the `res`/`_elm_1` pattern from the real bug:
@@ -1422,7 +1809,7 @@ mod tests {
         add_var(&mut f, &INT, 4, 0, 100); // long-lived int at slot [4, 8)
         add_var(&mut f, &ref_tp, 0, 50, 80); // DbRef at slot [0, 12), alive [50, 80]
         // Both are alive at e.g., seq 50..80, and [0,12) overlaps [4,8).
-        assert!(find_conflict(&f.variables).is_some());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_some());
     }
 
     /// A variable with no assigned slot (`stack_pos == u16::MAX`) must never trigger a conflict.
@@ -1433,7 +1820,7 @@ mod tests {
         let v = f.add_unique("y", &INT, 0); // stack_pos stays u16::MAX
         f.variables[v as usize].first_def = 5;
         f.variables[v as usize].last_use = 15;
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// A variable that was declared but never assigned (`first_def == u32::MAX`) must be ignored,
@@ -1444,7 +1831,7 @@ mod tests {
         add_var(&mut f, &INT, 0, 0, 20);
         let v = f.add_unique("y", &INT, 0);
         f.variables[v as usize].stack_pos = 0; // same slot, but first_def stays u32::MAX
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     // ── compute_intervals unit tests ──────────────────────────────────────────
@@ -1460,6 +1847,7 @@ mod tests {
             operators: vec![Value::Set(v, Box::new(Value::Int(42))), Value::Var(v)],
             result: INT,
             scope: 0,
+            var_size: 0,
         }));
         let mut seq = 0u32;
         compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
@@ -1489,10 +1877,12 @@ mod tests {
                     operators: vec![Value::Var(v)],
                     result: Type::Void,
                     scope: 0,
+                    var_size: 0,
                 })),
             ],
             result: Type::Void,
             scope: 0,
+            var_size: 0,
         }));
         let mut seq = 0u32;
         compute_intervals(&code, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
@@ -1521,12 +1911,14 @@ mod tests {
                 operators: vec![Value::Set(a, Box::new(Value::Int(1))), Value::Var(a)],
                 result: INT,
                 scope: 0,
+                var_size: 0,
             }))),
             Box::new(Value::Block(Box::new(Block {
                 name: "",
                 operators: vec![Value::Set(b, Box::new(Value::Int(2))), Value::Var(b)],
                 result: INT,
                 scope: 0,
+                var_size: 0,
             }))),
         );
         let mut seq = 0u32;
@@ -1541,7 +1933,7 @@ mod tests {
         // Manually assign them the same slot and confirm no conflict is reported.
         f.variables[a as usize].stack_pos = 0;
         f.variables[b as usize].stack_pos = 0;
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     // ── regression tests for specific known bugs ──────────────────────────────
@@ -1565,7 +1957,7 @@ mod tests {
         // This is the buggy assignment — placing it at 62 conflicts with res at [66, 70).
         add_var(&mut f, &ref_tp, 62, 100, 150);
         assert!(
-            find_conflict(&f.variables).is_some(),
+            find_conflict(&f.variables, &HashMap::new()).is_some(),
             "_elm_1 at [62,74) must be detected as conflicting with res at [66,70)"
         );
     }
@@ -1589,7 +1981,7 @@ mod tests {
         // t reuses v's slot — safe because their intervals [50..80] and [90..120] don't overlap.
         add_var(&mut f, &ref_tp, 144, 90, 120);
         assert!(
-            find_conflict(&f.variables).is_none(),
+            find_conflict(&f.variables, &HashMap::new()).is_none(),
             "t should be allowed to reuse v's slot after the loop ends"
         );
     }
@@ -1607,7 +1999,7 @@ mod tests {
         // while v is still alive — live intervals overlap → conflict.
         add_var(&mut f, &ref_tp, 144, 80, 120);
         assert!(
-            find_conflict(&f.variables).is_some(),
+            find_conflict(&f.variables, &HashMap::new()).is_some(),
             "overlapping intervals at the same slot must be a conflict"
         );
     }
@@ -1626,12 +2018,12 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 11;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "non-overlapping variables should share a slot"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// Two concurrent variables must get distinct slots.
@@ -1645,12 +2037,12 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 0;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         assert_ne!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "simultaneously-live variables must not share a slot"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// A `DbRef` variable is 12 bytes; the slot after it must start at offset 12,
@@ -1666,13 +2058,13 @@ mod tests {
         let v2 = f.add_unique("v2", &INT, 0);
         f.variables[v2 as usize].first_def = 0;
         f.variables[v2 as usize].last_use = 5;
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         let s1 = f.variables[v1 as usize].stack_pos;
         let s2 = f.variables[v2 as usize].stack_pos;
         let dbref_size = size_of::<DbRef>() as u16;
         let no_overlap = s2 >= s1 + dbref_size || s1 >= s2 + 4;
         assert!(no_overlap, "DbRef slot must not overlap integer slot");
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// Variables that were never defined (`first_def` == `u32::MAX`) must be skipped.
@@ -1685,7 +2077,7 @@ mod tests {
         f.variables[v1 as usize].last_use = 10;
         let v2 = f.add_unique("v2", &INT, 0);
         // v2 is never defined — first_def stays u32::MAX
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v2 as usize].stack_pos,
             u16::MAX,
@@ -1695,14 +2087,11 @@ mod tests {
 
     // ── A6.3b: Bug B — narrow → wide slot reuse ──────────────────────────────
 
-    /// A dead 1-byte variable's slot may be reused by a wider variable only when
-    /// that wider variable is placed via **direct** placement (candidate == tos_estimate,
-    /// i.e. it is a fresh allocation at the expected TOS).  Displacement-based reuse
-    /// (candidate < tos_estimate) with a size mismatch is still forbidden because the
-    /// OpPutX displacement depends on an exact size match.
-    ///
-    /// In this test there are no live variables at fnref's first_def, so tos_estimate == 0
-    /// and fnref is placed directly at slot 0 — safe because no OpPutX displacement fires.
+    /// A dead 1-byte variable's slot must not be reused by a wider variable via
+    /// displacement.  `flag` (scope 0, argument/outermost scope — permanent, never freed)
+    /// remains physically on the stack even after its live interval ends, so tos_estimate=1.
+    /// `fnref` (4B) cannot displace into the 1B flag slot (size mismatch) and is
+    /// placed at slot 1 (fresh TOS), which is also correct for direct placement.
     #[test]
     fn assign_slots_no_narrow_to_wide_reuse() {
         const BOOL: Type = Type::Boolean;
@@ -1711,17 +2100,18 @@ mod tests {
         let flag = f.add_unique("flag", &BOOL, 0);
         f.variables[flag as usize].first_def = 0;
         f.variables[flag as usize].last_use = 2;
+        f.variables[flag as usize].scope = 0; // function scope — not a loop scope
         let fnref = f.add_unique("fnref", &INT, 0);
         f.variables[fnref as usize].first_def = 5;
         f.variables[fnref as usize].last_use = 10;
-        assign_slots(&mut f, 0);
-        // No live variables at T=5, so tos_estimate == 0.  fnref is placed at slot 0
-        // via direct placement (no OpPutX displacement).  No conflict with dead flag.
+        run_assign_slots(&mut f, 0);
+        // flag (scope 0) is dead but physically present → tos_estimate=1.
+        // fnref cannot displace into the mismatched 1B slot; placed at fresh TOS slot 1.
         assert_eq!(
-            f.variables[fnref as usize].stack_pos, 0,
-            "fnref should reuse slot 0 via direct TOS placement when no live vars block it"
+            f.variables[fnref as usize].stack_pos, 1,
+            "4-byte fnref must not reuse 1-byte flag slot; it gets a fresh slot at TOS"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     // ── A6.3b: Bug C — Value::Iter not traversed by compute_intervals ─────────
@@ -1766,12 +2156,12 @@ mod tests {
         let v2 = f.add_unique("v2", &Type::Long, 0);
         f.variables[v2 as usize].first_def = 11;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "sequential Long variables must share a slot (A13)"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     /// Two concurrent Long variables must still get distinct slots — the reuse
@@ -1785,12 +2175,12 @@ mod tests {
         let v2 = f.add_unique("v2", &Type::Long, 0);
         f.variables[v2 as usize].first_def = 5;
         f.variables[v2 as usize].last_use = 15;
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         assert_ne!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "concurrent Long variables must not share a slot"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     // ── A14: skip_free flag ───────────────────────────────────────────────────
@@ -1853,6 +2243,7 @@ mod tests {
             ],
             result: Type::Void,
             scope: 0,
+            var_size: 0,
         }));
         let mut seq = 0u32;
         compute_intervals(&block, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
@@ -1861,7 +2252,7 @@ mod tests {
             f.variables[acc as usize].last_use > f.variables[other as usize].first_def,
             "write-only acc must outlive other to prevent slot aliasing"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
     // ── A12: Lazy work-variable initialization — Text slot sharing ────────────
@@ -1881,12 +2272,66 @@ mod tests {
         let v2 = f.add_unique("v2", &text_tp, 0);
         f.variables[v2 as usize].first_def = 11;
         f.variables[v2 as usize].last_use = 20;
-        assign_slots(&mut f, 0);
+        run_assign_slots(&mut f, 0);
         assert_eq!(
             f.variables[v1 as usize].stack_pos, f.variables[v2 as usize].stack_pos,
             "sequential Text variables must share a slot (A12)"
         );
-        assert!(find_conflict(&f.variables).is_none());
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── A15: sequential for-loops must not let iter_state alias total ─────────
+
+    /// Regression for the `sorted_remove` slot-conflict: two sequential for-loops where
+    /// the first loop's variables (non-loop-scope block vars `e#iter_state`, `e#index`) are
+    /// dead when the second loop starts, and a non-loop variable `total` is born between
+    /// the two loops and lives through the second.
+    ///
+    /// Before the `loop_seq_ranges` fix, `assign_slots` computed tos_estimate for the second
+    /// `e#iter_state` by including the dead first-loop block vars (non-loop scope → physically
+    /// present until return).  This raised tos_estimate to 64, which caused the second
+    /// `e#iter_state` to be placed at slot 56 (past `total` at 52).  Codegen then remapped it
+    /// to 52 (actual TOS) → conflict with `total`.
+    ///
+    /// The correct behavior: `assign_slots` must see the dead non-loop-scope vars and place
+    /// the second `e#iter_state` at tos_estimate, which codegen's actual TOS also matches.
+    #[test]
+    fn assign_slots_sequential_for_loops_no_conflict() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("n_test", "test");
+        // scope 3: first for-loop body (loop scope, seq range [95, 129])
+        declare_loop(&mut f, 3, 95, 129);
+        // scope 8: second for-loop body (loop scope, seq range [142, 167])
+        declare_loop(&mut f, 8, 142, 167);
+
+        // Always-live variables (scope 1, non-loop)
+        add_scoped_var(&mut f, "work", &Type::Text(vec![]), 1, 0, 187);
+        add_scoped_var(&mut f, "db", &ref_tp, 1, 3, 186);
+        // Dead at seq 131 (non-loop scope → physically present until return)
+        add_scoped_var(&mut f, "_elm_1", &ref_tp, 1, 12, 81);
+        // First for-loop vars: scope 2 = non-loop block wrapper, scope 3 = loop body
+        add_scoped_var(&mut f, "e#iter_state_1", &Type::Long, 2, 95, 129);
+        add_scoped_var(&mut f, "e#index_1", &INT, 2, 97, 129);
+        add_scoped_var(&mut f, "e_1", &ref_tp, 3, 98, 115);
+        // total: born after first loop, lives through second (non-loop scope)
+        add_scoped_var(&mut f, "total", &INT, 1, 131, 174);
+        // Second for-loop vars: scope 7 = non-loop block wrapper, scope 8 = loop body
+        add_scoped_var(&mut f, "e#iter_state_2", &Type::Long, 7, 142, 167);
+        add_scoped_var(&mut f, "e#index_2", &INT, 7, 144, 167);
+        add_scoped_var(&mut f, "e_2", &ref_tp, 8, 145, 163);
+
+        // Scope hierarchy: root=1, children: 2→1 (non-loop), 3→2 (loop), 7→1 (non-loop), 8→7 (loop)
+        run_assign_slots_scoped(
+            &mut f,
+            4,
+            1,
+            &[(2, 1, false), (3, 2, true), (7, 1, false), (8, 7, true)],
+        ); // local_start=4: no-arg function, 4-byte return address
+        assert!(
+            find_conflict(&f.variables, &HashMap::new()).is_none(),
+            "second e#iter_state must not alias total; variable table:\n{}",
+            f
+        );
     }
 
     /// S2: `compute_intervals` must panic with a depth-limit message when nesting exceeds 1000.
@@ -1900,6 +2345,7 @@ mod tests {
                 operators: vec![v],
                 result: Type::Void,
                 scope: 0,
+                var_size: 0,
             }));
         }
         let mut f = Function::new("f", "test");

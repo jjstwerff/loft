@@ -3429,6 +3429,7 @@ pair the hash with a vector to iterate in insertion order"
                     .collect(),
                 result: bl.result,
                 scope: bl.scope,
+                var_size: 0,
             })),
             other => other,
         }
@@ -3552,6 +3553,7 @@ mod tests {
                 operators: vec![v],
                 result: Type::Void,
                 scope: 0,
+                var_size: 0,
             }));
         }
         // At depth limit, inline_ref_set_in must not overflow the stack.
