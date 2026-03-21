@@ -135,4 +135,38 @@ fn main() {
   assert(join(["hello", "world"], " ") == "hello world", "join with space");
   assert(join(["a", "b", "c"], "") == "abc", "join with empty separator");
   assert(join(["one"], "") == "one", "join single with empty separator");
+  // --- Text-level predicates (whole-string classify) ---
+  // Note: empty string has no characters so all predicates return true (vacuous).
+  assert("hello".is_alphabetic(), "text is_alphabetic: all letters");
+  assert(!"hello123".is_alphabetic(), "text is_alphabetic: mixed letter+digit is false");
+  assert("12345".is_numeric(), "text is_numeric: all digits");
+  assert(!"12a".is_numeric(), "text is_numeric: letter makes it false");
+  assert("hello123".is_alphanumeric(), "text is_alphanumeric: letters and digits");
+  assert(!"hello!".is_alphanumeric(), "text is_alphanumeric: punct makes it false");
+  assert("hello".is_lowercase(), "text is_lowercase: all lower");
+  assert(!"Hello".is_lowercase(), "text is_lowercase: capital makes it false");
+  assert("HELLO".is_uppercase(), "text is_uppercase: all upper");
+  assert(!"Hello".is_uppercase(), "text is_uppercase: lowercase letter makes it false");
+  assert("   \t".is_whitespace(), "text is_whitespace: spaces and tab");
+  assert(!" hello ".is_whitespace(), "text is_whitespace: letters make it false");
+  assert(!"hello".is_control(), "text is_control: normal text returns false");
+  // --- Character predicates (individual char classify) ---
+  assert('a'.is_lowercase(), "char is_lowercase: 'a' is lower");
+  assert(!'A'.is_lowercase(), "char is_lowercase: 'A' is false");
+  assert(!'5'.is_lowercase(), "char is_lowercase: digit is false");
+  assert('Z'.is_uppercase(), "char is_uppercase: 'Z' is upper");
+  assert(!'z'.is_uppercase(), "char is_uppercase: 'z' is false");
+  assert(!'3'.is_uppercase(), "char is_uppercase: digit is false");
+  assert('5'.is_numeric(), "char is_numeric: digit");
+  assert(!'a'.is_numeric(), "char is_numeric: letter is false");
+  assert(!' '.is_numeric(), "char is_numeric: space is false");
+  assert('a'.is_alphabetic(), "char is_alphabetic: letter");
+  assert('Z'.is_alphabetic(), "char is_alphabetic: uppercase letter");
+  assert(!'5'.is_alphabetic(), "char is_alphabetic: digit is false");
+  assert(!' '.is_alphabetic(), "char is_alphabetic: space is false");
+  // --- Text-to-float parse edge cases ---
+  assert(!("abc" as float), "parse non-numeric text to float yields null");
+  assert(!("" as float), "parse empty text to float yields null");
+  assert("3.14" as float == 3.14, "parse valid float text");
+  assert("-2.5" as float == -2.5, "parse negative float text");
 }
