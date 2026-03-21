@@ -33,6 +33,9 @@ pub struct Block {
     pub operators: Vec<Value>,
     pub result: Type,
     pub scope: u16,
+    /// Bytes to pre-claim for small variables (≤ 8 B) at block entry via `OpReserveFrame`.
+    /// Computed by `assign_slots`; 0 until then.
+    pub var_size: u16,
 }
 
 /// A value that can be assigned to attributes on a definition of instance
@@ -651,6 +654,7 @@ pub fn v_block(operators: Vec<Value>, result: Type, name: &'static str) -> Value
         operators,
         result,
         scope: u16::MAX,
+        var_size: 0,
     }))
 }
 
@@ -661,6 +665,7 @@ pub fn v_loop(operators: Vec<Value>, name: &'static str) -> Value {
         operators,
         result: Type::Void,
         scope: u16::MAX,
+        var_size: 0,
     }))
 }
 

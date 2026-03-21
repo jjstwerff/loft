@@ -180,6 +180,11 @@ impl State {
         self.copy_result(value, pos, self.stack_pos);
     }
 
+    /// Advance the stack pointer by `size` bytes, reserving space for pre-claimed variables.
+    pub fn reserve_frame(&mut self, size: u16) {
+        self.stack_pos += u32::from(size);
+    }
+
     pub(crate) fn copy_result(&mut self, value: u8, pos: u32, fn_stack: u32) {
         let size = u32::from(value);
         if value > 0 {

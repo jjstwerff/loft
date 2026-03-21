@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 239] = &[
+pub const OPERATORS: &[fn(&mut State); 240] = &[
     goto,
     goto_word,
     goto_false,
@@ -16,6 +16,7 @@ pub const OPERATORS: &[fn(&mut State); 239] = &[
     call,
     op_return,
     free_stack,
+    reserve_frame,
     const_true,
     const_false,
     cast_text_from_bool,
@@ -299,6 +300,11 @@ fn free_stack(s: &mut State) {
     let v_value = *s.code::<u8>();
     let v_discard = *s.code::<u16>();
     s.free_stack(v_value, v_discard);
+}
+
+fn reserve_frame(s: &mut State) {
+    let size = *s.code::<u16>();
+    s.reserve_frame(size);
 }
 
 fn const_true(s: &mut State) {

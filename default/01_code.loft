@@ -42,6 +42,8 @@ fn OpReturn(ret: const u16, value: const u8, discard: const u16);
 #rust"s.fn_return(@ret, @value, @discard);"
 fn OpFreeStack(value: const u8, discard: const u16);
 #rust"s.free_stack(@value, @discard);"
+fn OpReserveFrame(size: const u16);
+#rust"s.reserve_frame(@size);"
 // Boolean operations
 fn OpConstTrue() -> boolean;
 #rust"true"
