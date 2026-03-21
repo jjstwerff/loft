@@ -44,6 +44,7 @@ impl Stores {
     When this path cannot be detected correctly.
     */
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn path(&self, db: &DbRef, tp: u16) -> String {
         if db.rec == 1 {
             return "/".to_string();
