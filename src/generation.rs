@@ -219,7 +219,15 @@ extern crate loft;"
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
-        self.output_functions(w, from, till, None)
+        self.output_functions(w, from, till, None)?;
+        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
+        if (from..till).any(|d| self.data.def(d).name == "n_main") {
+            writeln!(
+                w,
+                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+            )?;
+        }
+        Ok(())
     }
 
     /// Like `output_native`, but only emits functions reachable from `entry_defs`.
@@ -264,7 +272,15 @@ extern crate loft;"
         self.output_init(w, 0, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
         // Emit only reachable functions across the full definition range.
-        self.output_functions(w, 0, till, Some(&reachable))
+        self.output_functions(w, 0, till, Some(&reachable))?;
+        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
+        if (0..till).any(|d| self.data.def(d).name == "n_main") {
+            writeln!(
+                w,
+                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+            )?;
+        }
+        Ok(())
     }
 
     /// Use this to emit only the `init` body that registers all types.
