@@ -152,14 +152,14 @@ fn test() {
     );
 }
 
-// ── Issue 44 ─────────────────────────────────────────────────────────────────
-// Empty vector literal `[]` cannot be passed directly as a mutable vector argument.
-// `parse_vector` else branch emits `Value::Insert([val])` with no temp var and no
-// `vector_db` init ops; `generate_call` then fires a debug assert expecting a 12-byte
-// DbRef but finding 0 bytes on the stack.
+// ── Issue 44 — L4: Empty `[]` literal as a mutable vector argument ───────────
+// Fixed in parser/mod.rs call_nr(): when Value::Insert([Null]) (or empty Insert)
+// appears where a vector parameter is expected, a temp variable is created with
+// vector_db initialisation ops, giving the caller a proper 12-byte DbRef.
+// The fix is in call_nr(), not in parse_vector(), so it runs whenever [] reaches
+// the call-site type-check regardless of call nesting.
 
-/// Bug: passing `[]` directly as a mutable `vector<text>` argument panics in debug builds.
-/// Tracked as Issue 44 in doc/claude/PROBLEMS.md.
+/// Baseline: `join([], "-")` — empty `vector<text>` arg via call_nr fix.
 #[test]
 fn empty_vector_as_mutable_arg() {
     code!(
@@ -170,11 +170,46 @@ fn empty_vector_as_mutable_arg() {
     );
 }
 
-// ── Issue 56 ─────────────────────────────────────────────────────────────────
-// `v += extra` via ref-param panics in debug / silently fails in release.
+/// L4 edge: `[]` passed to a user-defined function taking `vector<integer>`.
+/// Exercises the same call_nr path for a non-text element type.
+#[test]
+fn l4_empty_int_vector_arg() {
+    code!(
+        "fn sum_vec(v: vector<integer>) -> integer {
+    r = 0;
+    for x in v { r += x; }
+    r
+}
+fn test() {
+    assert(sum_vec([]) == 0, \"sum_vec([])\");
+    assert(sum_vec([3, 4]) == 7, \"sum_vec([3,4])\");
+}"
+    );
+}
 
-/// Bug: `v += extra` via ref-param leaves the caller's vector unchanged.
-/// Tracked as Issue 56 in doc/claude/PROBLEMS.md.
+/// L4 edge: `[]` as second argument, not first — verifies argument index handling.
+#[test]
+fn l4_empty_vector_second_arg() {
+    code!(
+        "fn pick(prefix: text, parts: vector<text>) -> text {
+    result = prefix;
+    for p in parts { result += p; }
+    result
+}
+fn test() {
+    assert(pick(\"x\", []) == \"x\", \"pick with empty vector\");
+    assert(pick(\"a\", [\"b\", \"c\"]) == \"abc\", \"pick with two parts\");
+}"
+    );
+}
+
+// ── Issue 56 — L5: `v += extra` via `&vector` ref-param ──────────────────────
+// Fixed in state/codegen.rs generate_var(): RefVar(Vector) now emits OpGetStackRef
+// to dereference the ref-param and load the actual vector DbRef before OpAppendVector.
+// The vector record write-back happens implicitly: vector_append writes through the
+// DbRef into the caller's local-variable record, so the caller sees the updated vector.
+
+/// Baseline: `v += extra` via ref-param appends elements to the caller's vector.
 #[test]
 fn ref_param_append_bug() {
     code!(
@@ -185,6 +220,38 @@ fn test() {
     fill(buf, [Item { name: \"b\", value: 2 }]);
     assert(len(buf) == 2, \"len after fill: {len(buf)}\");
     assert(buf[1].value == 2, \"buf[1].value: {buf[1].value}\");
+}"
+    );
+}
+
+/// L5 edge: append integers via ref-param; verify values and length.
+#[test]
+fn l5_ref_param_append_int_vec() {
+    code!(
+        "fn append_ints(v: &vector<integer>, extra: vector<integer>) { v += extra; }
+fn test() {
+    nums = [1, 2, 3];
+    append_ints(nums, [4, 5]);
+    assert(len(nums) == 5, \"len: {len(nums)}\");
+    assert(nums[3] == 4, \"nums[3]: {nums[3]}\");
+    assert(nums[4] == 5, \"nums[4]: {nums[4]}\");
+}"
+    );
+}
+
+/// L5 edge: multiple sequential ref-param appends grow the vector correctly.
+#[test]
+fn l5_ref_param_multiple_appends() {
+    code!(
+        "fn push_one(v: &vector<integer>, x: integer) { v += [x]; }
+fn test() {
+    nums = [0];
+    push_one(nums, 10);
+    push_one(nums, 20);
+    push_one(nums, 30);
+    assert(len(nums) == 4, \"len: {len(nums)}\");
+    assert(nums[1] == 10, \"nums[1]: {nums[1]}\");
+    assert(nums[3] == 30, \"nums[3]: {nums[3]}\");
 }"
     );
 }
