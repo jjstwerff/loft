@@ -9,6 +9,34 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ## [Unreleased]
 
+### New features
+
+- **N1** — `--native` and `--native-emit` CLI flags added.  `--native <file.loft>`
+  parses and compiles the program, emits a self-contained Rust source file to a
+  temporary path, invokes `rustc --edition=2024` to produce a native binary, and
+  runs it.  `--native-emit <out.rs>` emits the Rust source to a named file without
+  compiling — useful for inspecting codegen output.  A clear error is printed if
+  `rustc` is not in `PATH`.  (`src/main.rs`, `src/generation.rs`)
+
+### Prototype features
+
+- **P1.1** — Lambda expressions are now parsed as primary expressions.  An inline
+  `fn(params) -> type { body }` at any expression position produces a
+  `Type::Function` value — identical to a named fn-ref — without requiring a
+  top-level function declaration.  Lambda bodies cannot capture outer variables
+  yet (closure capture is A5).  (`src/parser/expressions.rs` `parse_lambda`)
+
+### Improvements
+
+- **S4** — `read_data` in `database/io.rs` now implements `Parts::Array` (indirect
+  record reads by looping over element count and recursing per element).
+  `Parts::Sorted | Ordered | Hash | Index | Spacial` now emits a clear panic
+  message explaining that binary I/O is not supported for keyed collections, instead
+  of the previous generic `"Not implemented"` panic.  `Parts::Base` is now
+  `unreachable!`.  The same messaging improvements are applied to `write_data`;
+  `Parts::Array` write support is deferred (requires allocating new records).
+  (`src/database/io.rs`)
+
 ### Native codegen fixes
 
 - **N3** — `output_set` now emits `OpCopyRecord` after a reference-to-reference
