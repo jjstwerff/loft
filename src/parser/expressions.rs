@@ -1416,10 +1416,8 @@ use a separate collection or add after the loop"
     pub(crate) fn parse_lambda(&mut self, code: &mut Value) -> Type {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
-        // add_fn stores as "n_{name}", so lookup uses "n_{lambda_name}".
         let stored_name = format!("n_{lambda_name}");
 
-        // Save outer context.
         let outer_context = self.context;
         let outer_vars = std::mem::replace(
             &mut self.vars,
@@ -1428,13 +1426,11 @@ use a separate collection or add after the loop"
         let outer_loop = self.in_loop;
         self.in_loop = false;
 
-        // Parse parameter list.
         self.lexer.token("(");
         let mut arguments = Vec::new();
         self.parse_arguments(&lambda_name, &mut arguments);
         self.lexer.token(")");
 
-        // Register (first pass) or look up (second pass) the definition.
         self.context = if self.first_pass {
             self.data.add_fn(&mut self.lexer, &lambda_name, &arguments)
         } else {
@@ -1463,10 +1459,8 @@ use a separate collection or add after the loop"
             self.data.set_returned(d_nr, result);
         }
 
-        // Bring stored variables back into scope (second pass rehydrates vars).
         self.vars
             .append(&mut self.data.definitions[d_nr as usize].variables);
-        // Register argument variables.
         for (a_nr, a) in arguments.iter().enumerate() {
             if self.first_pass {
                 let v_nr = self.create_var(&a.name, &a.typedef);
@@ -1479,19 +1473,16 @@ use a separate collection or add after the loop"
             }
         }
 
-        // Parse body.
         self.parse_code();
         self.data.op_code(d_nr);
         self.data.definitions[d_nr as usize]
             .variables
             .append(&mut self.vars);
 
-        // Restore outer context.
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
 
-        // Emit definition number as the value.
         self.data.def_used(d_nr);
         *code = Value::Int(d_nr as i32);
         let n_args = self.data.attributes(d_nr);
