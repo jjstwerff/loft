@@ -1429,9 +1429,11 @@ fn get_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
+        let r = s
+            .database
             .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), 0) as u8
+            .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
+        if r < 0 { 255u8 } else { r as u8 }
     };
     s.put_stack(new_value);
 }
