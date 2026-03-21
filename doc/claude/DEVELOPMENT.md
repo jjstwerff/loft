@@ -237,8 +237,7 @@ Review every file in `doc/claude/` for references to the feature and update as n
 Any item rated **Medium–High or higher** in PLANNING.md must be split into
 sub-steps before work begins.  A sub-step is a change that:
 
-1. **Passes all three CI checks on its own** (`cargo test`, `cargo clippy --tests -- -D warnings`,
-   `cargo fmt -- --check`).
+1. **Passes all three CI checks on its own** (`make ci`).
 2. **Has at least one test** that was written before the implementation (Step 1 of the
    structured sequence) and enabled immediately after (Step 3).
 3. **Leaves the codebase in a better or equal state** — no sub-step may introduce a
@@ -328,7 +327,7 @@ lambda_basic_parse, lambda_with_return_type, lambda_in_map_call.
 All marked #[ignore] until the parser extension lands.
 ```
 
-Verify: `cargo test` must pass with the new tests reported as ignored, not failed.
+Verify: `make run-tests` must pass with the new tests reported as ignored, not failed.
 
 ### Step 2 — Code Changes
 
@@ -379,7 +378,7 @@ All three tests now pass. Removes the #[ignore] markers added in the
 initial test commit.
 ```
 
-Verify: `cargo test` must pass with zero ignored tests among the new ones.
+Verify: `make run-tests` must pass with zero ignored tests among the new ones.
 
 ### Step 4 — Structural Refactors
 
@@ -397,7 +396,7 @@ parse_binary_operator exceeded 55 lines after the L3 constant-zero check.
 Extract the new check into its own function per CODE.md § Functions.
 ```
 
-Verify: `cargo test` unchanged; `cargo clippy --tests -- -D warnings` clean.
+Verify: `make run-tests` unchanged; `cargo clippy --tests -- -D warnings` clean.
 
 ### Step 5 — Documentation
 
@@ -430,7 +429,7 @@ docs: P1 lambda expressions — update CHANGELOG, PLANNING, LOFT, STDLIB
 - STDLIB.md: document map/filter/reduce accepting lambda arguments
 ```
 
-Verify: `cargo test` still passes (documentation changes are non-functional).
+Verify: `make run-tests` still passes (documentation changes are non-functional).
 
 ---
 

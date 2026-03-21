@@ -31,6 +31,9 @@ ci:
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
 	cargo test >> result.txt 2>&1
 
+run-tests:
+	cargo test > result.txt 2>&1
+
 clippy:
 	cargo clippy -- -W clippy::all -W clippy::cognitive_complexity > result.txt 2>&1
 	cargo clippy --tests -- -W clippy::all -W clippy::cognitive_complexity >> result.txt 2>&1
