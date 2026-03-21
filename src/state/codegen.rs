@@ -431,14 +431,19 @@ impl State {
                     ))
             {
                 // Override slot to TOS in two cases:
-                // 1. pos > TOS: pre-assigned slot is above current TOS (after if-else restores
-                //    stack.position).  Runtime stack has no bytes at pos yet.
-                // 2. pos < TOS for a large type (Reference/Vector/struct-enum, 12 B):
-                //    assign_slots never reuses dead slots for large types (see variables.rs
-                //    `can_reuse` = size <= 8), so pos < TOS only arises when an earlier mutable
-                //    call argument was already pushed to the eval stack before this block runs.
-                //    The pre-assigned slot coincides with an already-live arg value (e.g. the
-                //    OpCreateStack DbRef for a &vector<T> param), so bump the slot to TOS.
+                // 1. pos > TOS: assign_slots over-estimated TOS for this variable.
+                //    Known case: Set(outer_var, Block([Set(inner_var, ...), Var(inner_var)]))
+                //    where assign_slots places outer_var first (advancing TOS by its size), then
+                //    recurses into the block at that higher TOS.  At codegen time the block
+                //    evaluates first so inner_var lands at the lower TOS; outer_var's pre-assigned
+                //    pos is above the real stack top.  Both share the block's return-value slot.
+                //    Fix: detect the "block-return = outer var" sharing pattern in
+                //    place_large_and_recurse and process the inner block before placing outer_var.
+                // 2. pos < TOS for a large type (Reference/Vector/struct-enum):
+                //    assign_slots places large types at exact TOS via place_large_and_recurse, but
+                //    a mutable &vector<T> argument passed by OpCreateStack can push a DbRef to the
+                //    eval stack before this block's large var is allocated, raising the codegen TOS
+                //    above the pre-assigned slot.  Bump the slot to actual TOS.
                 stack.function.set_stack_pos(v, stack.position);
             }
             let pos = stack.function.stack(v);
@@ -495,6 +500,23 @@ impl State {
                 // Slot is below current TOS — primitive reusing a dead variable's slot.
                 // Use set_var() so the value is generated at TOS then stored at pos via OpPutX.
                 debug_assert!(pos < stack.position);
+                // Text variables MUST be initialised with OpText (direct placement) before any
+                // OpAppendText call.  If a Text variable lands here (pos < TOS) it means
+                // assign_slots under-estimated the physical TOS at first_def: the pre-assigned
+                // slot is below an already-live evaluation-stack value, so OpText was never
+                // emitted and OpAppendText will dereference garbage → SIGSEGV at runtime.
+                // When this assert fires, fix assign_slots to raise tos_estimate so the Text
+                // variable is placed at the correct physical TOS (where pos == stack.position).
+                debug_assert!(
+                    !matches!(stack.function.tp(v), Type::Text(_)),
+                    "[generate_set] Text variable '{}' (var={v}) in '{}': \
+                     pre-assigned slot {pos} < TOS {} — OpText not emitted, \
+                     OpAppendText would corrupt the stack. \
+                     Fix: raise tos_estimate in assign_slots so Text lands at TOS.",
+                    stack.function.name(v),
+                    stack.data.def(stack.def_nr).name,
+                    stack.position,
+                );
                 self.set_var(stack, v, value);
             }
         }
@@ -831,6 +853,14 @@ impl State {
             return Type::Void;
         }
         let to = stack.position;
+
+        // Pre-claim small-variable (zone1) frame so large-type init opcodes see exact TOS.
+        if block.var_size > 0 {
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(block.var_size);
+            stack.position += block.var_size;
+        }
+
         let mut tp = Type::Void;
         let mut return_expr = 0;
         let mut has_return = false;
