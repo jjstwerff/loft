@@ -519,15 +519,34 @@ but the body is compiled inline.  No closure capture is required initially (capt
 can be added in a follow-up, see A5).
 **Fix path:**
 
+**Two-pass strategy:**
+The parser is two-pass.  Anonymous functions must produce the same `d_nr` on both passes.
+Use a `lambda_counter: u32` on `Parser` that increments each time a lambda expression is
+parsed.  The name is `"__lambda_N"` where N is the counter value at that lexer position.
+On the first pass, `add_def("__lambda_N", ...)` registers the definition and advances the
+counter; on the second pass, `def_nr("__lambda_N")` looks it up and the counter advances
+identically, guaranteeing consistency.
+
 **Phase 1 — Parser** (`src/parser/expressions.rs`):
-Recognise `fn '(' params ')' '->' type block` as a primary expression and produce a new
-IR node (e.g. `Value::Lambda`).  Existing `fn <name>` references are unaffected.
+In `parse_primary`, when `fn` is followed by `(` (rather than an identifier), call the new
+`parse_lambda` helper:
+1. Synthesise `name = format!("__lambda_{}", self.lambda_counter)` and increment the counter.
+2. First pass: call `self.data.add_def(&name, pos, DefType::Function)`; parse parameter list
+   (building arg descriptors on `data`); parse `->` return type; skip the body block
+   (use `self.lexer.skip_block()`).
+3. Second pass: look up `d_nr = self.data.def_nr(&name)`; parse parameter list (same tokens,
+   registering arguments on `data`); parse `->` return type; parse the body block fully
+   (calls existing expression/statement parsing machinery).
+4. Emit `Value::Int(d_nr as i32)` — same representation as `fn <name>`.  Return
+   `Type::Function(arg_types, Box::new(ret_type))`.
 *Tests:* parser accepts valid lambda syntax; rejects malformed lambdas with a clear
 diagnostic; all existing `fn_ref_*` tests still pass.
 
 **Phase 2 — Compilation** (`src/state/codegen.rs`, `src/compile.rs`):
-Synthesise a unique anonymous definition name, compile the body as a top-level function,
-and emit the def-nr as `Value::Int` — the same representation as a named `fn <name>` ref.
+Because the lambda body is compiled inline during Phase 1's second-pass parse (same as a
+regular function definition), no changes to `compile.rs` are expected.  The def is already
+registered and compiled before `generate` encounters the `Value::Int(d_nr)` node — identical
+to how named fn-refs are handled.
 *Tests:* a basic `fn(x: integer) -> integer { x * 2 }` can be assigned to a variable
 and called through it; type checker accepts it wherever a `fn(integer) -> integer` is
 expected.
@@ -1188,13 +1207,35 @@ time.
 **Problem (format — Issue 63):** `format_record` has a `todo!()` for sub-record fields.
 A struct type with a nested struct field panics on format/print.
 
-**Fix:**
-1. Implement the missing `read_data`/`write_data` arms following the pattern of existing
-   scalar arms, paying attention to endianness and byte-offset computation.
-2. Implement sub-record traversal in `format_record:109`: recurse into `format_record`
-   for each field whose type is a record type, using the field's byte offset within the
-   parent record.
-3. Add integration tests covering the newly implemented type combinations.
+**Exact locations:**
+- `src/database/io.rs:152` — `read_data` panics on `Parts::Array | Sorted | Ordered | Hash | Index | Spacial | Base`
+- `src/database/io.rs:256` — `write_data` panics on the same variants
+- `src/database/format.rs:109` — `// TODO if f_tp is sub_record/vector/sorted/enum` in `format_record`
+
+**Design:**
+
+*Issue 59 — `read_data` / `write_data`:*
+- `Parts::Array(elem_tp)`: A fixed-size embedded array. Implement by looping over element
+  count (from type metadata), computing each element's byte offset, and recursing into
+  `read_data`/`write_data` for the element type — same pattern as `Parts::Vector`.
+- `Parts::Sorted | Ordered | Hash | Index | Spacial`: Keyed collections store internal
+  store pointers (`DbRef`) that are meaningless outside the originating process. Binary
+  serialisation of these types is undefined. Emit a **compile-time diagnostic** ("cannot
+  use read_file/write_file with a struct containing a sorted/hash/index field") rather than
+  a runtime panic. The `has_collection_field` guard in `native.rs` (see S5/F57 in CHANGELOG)
+  already handles sorted/index/hash for the struct level; extend it or rely on it for these
+  variants.
+- `Parts::Base`: Should be unreachable for a well-formed type. Convert to `unreachable!`
+  with a descriptive message.
+
+*Issue 63 — `format_record` line 109 sub-record TODO:*
+- When a field's type has `Parts::Struct(_)` or `Parts::EnumValue(_, _)`, the display code
+  at line 109 falls through to the closing `}` without printing the field.  Fix: call
+  `self.write_field(s, field_index, indent + 1)` recursively for the nested record, just as
+  `write_struct` already does for `Parts::Struct` at line 351.
+
+3. Add integration tests covering: a struct with an `Array` field serialized to/from binary;
+   a struct with a nested struct field displayed via `format_record`.
 
 **Effort:** Small–Medium per arm; Medium overall including tests.
 **Target:** 0.8.2
@@ -1220,7 +1261,7 @@ See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
 **Description:** Add `--native` mode to `src/main.rs`: parse a `.loft` file, emit a
 self-contained Rust source file via `Output::output_native()`, compile it with `rustc`,
 and run the resulting binary.  This is the end-to-end native codegen path.
-**Depends on:** N6, N9
+**Dependencies:** N6 ✓ (reverse/range iteration complete), N9 ✓ (fill.rs auto-generation complete) — all dependencies met.
 
 **Fix path:**
 
