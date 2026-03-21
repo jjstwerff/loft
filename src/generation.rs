@@ -763,6 +763,10 @@ extern crate loft;"
                     // are emitted as todo!() but still take `&mut Stores` — pre-eval
                     // them to avoid double-borrow when they appear as nested arguments.
                     true
+                } else if def.rust.contains("stores") {
+                    // Template fns that use `stores` can cause double-borrow when nested
+                    // inside another stores-using call; treat them as needing pre-eval.
+                    true
                 } else {
                     vals.iter().any(|a| self.needs_pre_eval(a))
                 }
@@ -1324,6 +1328,7 @@ extern crate loft;"
             // mutable borrow of stores when user-defined functions are nested).
             // NOTE: indent is incremented here to match the level used in
             // output_code_with_subst below, so multi-line block pre_codes match.
+            let counter_before = self.counter;
             self.indent += 1;
             let pre_evals = self.collect_pre_evals(v)?;
             self.indent -= 1;
@@ -1342,6 +1347,9 @@ extern crate loft;"
                 .unwrap_or(self.counter);
             self.counter = restore_counter;
             self.indent(w)?;
+            // Restore counter so the buffer-check pass in output_code_with_subst
+            // produces the same counter values as collect_pre_evals did above.
+            self.counter = counter_before;
             if has_trailing_void && return_idx == Some(vnr) {
                 write!(w, "let _ret = ")?;
                 self.indent += 1;
