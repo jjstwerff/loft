@@ -346,6 +346,9 @@ impl State {
     /// If the named function has exactly one `vector<…>` parameter, the strings in `argv`
     /// are built into a `vector<text>` and pushed onto the stack before the return address.
     /// If the function takes no parameters, `argv` is ignored.
+    ///
+    /// # Panics
+    /// Panics if the program executes more than 10 000 000 operations (infinite-loop guard).
     pub fn execute_argv(&mut self, name: &str, data: &Data, argv: &[String]) {
         let d_nr = data.def_nr(&format!("n_{name}"));
         let pos = data.def(d_nr).code_position;
@@ -376,12 +379,51 @@ impl State {
         }
         self.put_stack(u32::MAX);
         let mut step = 0;
+        #[cfg(debug_assertions)]
+        let mut trail_pos = [u32::MAX; 16usize];
+        #[cfg(debug_assertions)]
+        let mut trail_op = [0u8; 16usize];
+        #[cfg(debug_assertions)]
+        let mut trail_head: usize = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
+            #[cfg(debug_assertions)]
+            let op_pos = self.code_pos;
             let op = *self.code::<u8>();
+            #[cfg(debug_assertions)]
+            {
+                trail_pos[trail_head] = op_pos;
+                trail_op[trail_head] = op;
+                trail_head = (trail_head + 1) % 16;
+            }
             OPERATORS[op as usize](self);
             step += 1;
-            debug_assert!(step < 10_000_000, "Too many operations");
+            #[cfg(debug_assertions)]
+            if step >= 10_000_000 {
+                use std::fmt::Write as _;
+                let mut msg = String::from("Too many operations (infinite loop?). Last 16 ops:\n");
+                for i in 0..16usize {
+                    let idx = (trail_head + i) % 16;
+                    if trail_pos[idx] == u32::MAX {
+                        continue;
+                    }
+                    let pos = trail_pos[idx];
+                    let fn_nr = Self::fn_d_nr_for_pos(pos, data);
+                    let (label, offset) = if fn_nr == u32::MAX {
+                        ("?".to_owned(), pos)
+                    } else {
+                        (
+                            data.def(fn_nr).name.trim_start_matches("n_").to_owned(),
+                            pos - data.def(fn_nr).code_position,
+                        )
+                    };
+                    let op_name = (0..data.definitions())
+                        .find(|&d| data.def(d).op_code == u16::from(trail_op[idx]))
+                        .map_or("?", |d| data.def(d).name.as_str());
+                    let _ = writeln!(msg, "  {label}+{offset}: {op_name}");
+                }
+                panic!("{msg}");
+            }
             if self.code_pos == u32::MAX {
                 break;
             }
