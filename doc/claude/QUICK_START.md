@@ -205,6 +205,7 @@ default/03_text.loft    — text utilities
 | [DOC.md](DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
 | [DESIGN.md](DESIGN.md) | Algorithm catalog with complexity analysis and enhancement priorities |
 | [CODE.md](CODE.md) | Code quality rules (naming, functions, doc comments, clippy) |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
 | [ASSIGNMENT.md](ASSIGNMENT.md) | Stack slot assignment algorithm — status and design decisions |
 | [PROBLEMS.md](PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
 | [FORMATTER.md](FORMATTER.md) | Source formatter design and implementation notes |
@@ -231,6 +232,7 @@ default/03_text.loft    — text utilities
 | Debug a runtime crash | [PROBLEMS.md](PROBLEMS.md) (check open issues) → [TESTING.md](TESTING.md) § LogConfig → [INTERNALS.md](INTERNALS.md) |
 | Add a native (Rust) standard library function | [INTERNALS.md](INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
 | Plan or review enhancements | [PLANNING.md](PLANNING.md), then [OPTIMISATIONS.md](OPTIMISATIONS.md) |
+| Implement a PLANNING.md item | [DEVELOPMENT.md](DEVELOPMENT.md) — branching, commit order, CI |
 | Understand the parallel execution model | [THREADING.md](THREADING.md), then [INTERNALS.md](INTERNALS.md) § Parallel Execution |
 | Set up logging in a loft program | `STDLIB.md § Logging`, then [LOGGER.md](LOGGER.md) |
 | Understand the heap / memory model | [DATABASE.md](DATABASE.md), then `INTERMEDIATE.md § DbRef` |
