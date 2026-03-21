@@ -101,8 +101,16 @@ impl Stores {
             }
             _ => match self.types[tp as usize].parts.clone() {
                 Parts::Struct(s) | Parts::EnumValue(_, s) => {
-                    for f in s {
-                        self.read_data(r, f.content, little_endian, data);
+                    for f in &s {
+                        if f.name == "enum" || f.position == u16::MAX {
+                            continue;
+                        }
+                        let field_r = DbRef {
+                            store_nr: r.store_nr,
+                            rec: r.rec,
+                            pos: r.pos + u32::from(f.position),
+                        };
+                        self.read_data(&field_r, f.content, little_endian, data);
                     }
                 }
                 Parts::Enum(_) => {
@@ -148,11 +156,35 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _)
-                | Parts::Base => panic!(
-                    "Not implemented type for file reading {}",
+                | Parts::Spacial(_, _) => unreachable!(
+                    "binary read of collection-type field '{}': \
+                     collection fields are blocked at parse time by the F57 guard",
                     self.types[tp as usize].name
                 ),
+                Parts::Base => unreachable!("Parts::Base is not a user-visible type (tp={})", tp),
+            },
+        }
+    }
+
+    /// Return the number of bytes that `read_data` will append for the given type.
+    /// Returns 0 for types whose binary size is variable (text) or unsupported (collections).
+    fn binary_size(&self, tp: u16) -> usize {
+        match tp {
+            0 | 6 => 4, // integer, character
+            1 => 8,     // long
+            2 => 4,     // single
+            3 => 8,     // float
+            4 => 1,     // boolean
+            5 => 0,     // text: variable length
+            _ => match &self.types[tp as usize].parts {
+                Parts::Struct(s) | Parts::EnumValue(_, s) => s
+                    .iter()
+                    .filter(|f| f.name != "enum" && f.position != u16::MAX)
+                    .map(|f| self.binary_size(f.content))
+                    .sum(),
+                Parts::Enum(_) | Parts::Byte(_, _) => 1,
+                Parts::Short(_, _) => 2,
+                _ => 0,
             },
         }
     }
@@ -218,8 +250,18 @@ impl Stores {
             }
             _ => match self.types[tp as usize].parts.clone() {
                 Parts::Struct(s) | Parts::EnumValue(_, s) => {
-                    for f in s {
-                        self.write_data(r, f.content, little_endian, data);
+                    let mut offset = 0usize;
+                    for f in &s {
+                        if f.name == "enum" || f.position == u16::MAX {
+                            continue;
+                        }
+                        let field_r = DbRef {
+                            store_nr: r.store_nr,
+                            rec: r.rec,
+                            pos: r.pos + u32::from(f.position),
+                        };
+                        self.write_data(&field_r, f.content, little_endian, &data[offset..]);
+                        offset += self.binary_size(f.content);
                     }
                 }
                 Parts::Enum(_) | Parts::Byte(_, _) => {
@@ -252,11 +294,12 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _)
-                | Parts::Base => panic!(
-                    "Not implemented type for file writing {}",
+                | Parts::Spacial(_, _) => unreachable!(
+                    "binary write of collection-type field '{}': \
+                     collection fields are blocked at parse time by the F57 guard",
                     self.types[tp as usize].name
                 ),
+                Parts::Base => unreachable!("Parts::Base is not a user-visible type (tp={})", tp),
             },
         }
     }
@@ -352,5 +395,70 @@ impl Stores {
         if let Some(f) = &mut self.files[file_ref as usize] {
             f.write_all(v.as_bytes()).unwrap_or_default();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S4 — Issue 59: `read_data Parts::Struct` must use `r.pos + f.position` for every
+    /// field, not `r.pos` for all fields.  Without the fix both fields serialise the same
+    /// value (the first field is read twice).
+    #[test]
+    fn read_data_struct_field_positions() {
+        let mut stores = Stores::new();
+        // Define struct Pair { a: integer, b: integer }
+        let pair_tp = stores.structure("Pair", -1);
+        stores.field(pair_tp, "a", 0); // integer
+        stores.field(pair_tp, "b", 0); // integer
+        stores.finish();
+
+        // Allocate a record: 3 words = 24 bytes
+        //   word 0 byte 0..3: claim counter
+        //   word 0 byte 4..7: (header padding / parent ptr for top-level)
+        //   word 1 byte 0..3: field a  (pos 8 + struct-position 0 = 8)
+        //   word 1 byte 4..7: field b  (pos 8 + struct-position 4 = 12)
+        let db = stores.database(3);
+        {
+            let s = &mut stores.allocations[db.store_nr as usize];
+            s.set_int(db.rec, db.pos, 10); // a = 10
+            s.set_int(db.rec, db.pos + 4, 20); // b = 20
+        }
+
+        let mut data = Vec::new();
+        stores.read_data(&db, pair_tp, true, &mut data);
+
+        assert_eq!(data.len(), 8, "Pair binary size: 2 × i32 = 8 bytes");
+        let a_val = i32::from_le_bytes(data[0..4].try_into().unwrap());
+        let b_val = i32::from_le_bytes(data[4..8].try_into().unwrap());
+        assert_eq!(a_val, 10, "field a should be 10");
+        assert_eq!(b_val, 20, "field b should be 20 (was 10 before fix)");
+    }
+
+    /// S4 — Issue 59: `write_data Parts::Struct` must use `r.pos + f.position` for every
+    /// field and advance the data-slice offset between fields.
+    #[test]
+    fn write_data_struct_field_positions() {
+        let mut stores = Stores::new();
+        let pair_tp = stores.structure("Pair", -1);
+        stores.field(pair_tp, "a", 0);
+        stores.field(pair_tp, "b", 0);
+        stores.finish();
+
+        let db = stores.database(3);
+        // Write [a=77_le, b=99_le] into the struct
+        let bytes: Vec<u8> = {
+            let mut v = 77i32.to_le_bytes().to_vec();
+            v.extend_from_slice(&99i32.to_le_bytes());
+            v
+        };
+        stores.write_data(&db, pair_tp, true, &bytes);
+
+        let s = &stores.allocations[db.store_nr as usize];
+        let a_val = s.get_int(db.rec, db.pos);
+        let b_val = s.get_int(db.rec, db.pos + 4);
+        assert_eq!(a_val, 77, "field a should be 77");
+        assert_eq!(b_val, 99, "field b should be 99 (was 77 before fix)");
     }
 }

@@ -106,7 +106,62 @@ impl Stores {
                     res += "]";
                     break;
                 }
-                // TODO if f_tp is sub_record/vector/sorted/enum
+                // If the field is an embedded sub-struct, check one level deeper:
+                // the child type `tp` may live inside a collection that belongs to that sub-struct.
+                if let Parts::Struct(sub_fields) | Parts::EnumValue(_, sub_fields) =
+                    &self.types[f.content as usize].parts.clone()
+                {
+                    for sf in sub_fields {
+                        let sf_tp = &self.types[sf.content as usize];
+                        if sf_tp.contains(tp) {
+                            // Build path via the sub-struct field name, then the inner field name.
+                            res += &f.name;
+                            res += ".";
+                            res += &sf.name;
+                            res += "[";
+                            if sf_tp.keys.is_empty() {
+                                let sub_data = DbRef {
+                                    store_nr: db.store_nr,
+                                    rec: db.rec,
+                                    pos: 8 + u32::from(f.position) + u32::from(sf.position),
+                                };
+                                let mut pos = i32::MAX;
+                                let mut count = 0;
+                                loop {
+                                    vector::vector_next(
+                                        &sub_data,
+                                        &mut pos,
+                                        sf_tp.size,
+                                        &self.allocations,
+                                    );
+                                    if pos == i32::MAX {
+                                        res += "?";
+                                        break;
+                                    }
+                                    let rec =
+                                        self.store(db).get_int(sub_data.rec, sub_data.pos) as u32;
+                                    if rec == db.rec {
+                                        write!(res, "{count}").unwrap();
+                                        break;
+                                    }
+                                    count += 1;
+                                }
+                            } else {
+                                for (c_nr, c) in keys::get_key(db, &self.allocations, &sf_tp.keys)
+                                    .iter()
+                                    .enumerate()
+                                {
+                                    if c_nr > 0 {
+                                        res += ",";
+                                    }
+                                    write!(res, "{c}").unwrap();
+                                }
+                            }
+                            res += "]";
+                            break;
+                        }
+                    }
+                }
             }
         }
         res
