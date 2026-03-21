@@ -113,4 +113,39 @@ fn main() {
   zl = 0l;
   xl_null = xl / zl;
   assert((xl_null ?? 10l) == 10l, "?? long null returns default");
+  // --- Null propagation through bitwise ops ---
+  z_bit = 0;
+  n_bit = 1 / z_bit;
+  assert(!(n_bit & 5), "null & int is null");
+  assert(!(5 & n_bit), "int & null is null");
+  assert(!(n_bit | 5), "null | int is null");
+  assert(!(5 | n_bit), "int | null is null");
+  assert(!(n_bit ^ 5), "null ^ int is null");
+  assert(!(5 ^ n_bit), "int ^ null is null");
+  // Long null propagation through bitwise ops:
+  zl2 = 0l;
+  nl = 1l / zl2;
+  assert(!(nl & 5l), "long null & int is null");
+  assert(!(nl | 5l), "long null | int is null");
+  assert(!(nl ^ 5l), "long null ^ int is null");
+  // --- Arithmetic (signed) right shift ---
+  assert((-5) >> 1 == -3, "arithmetic right shift: (-5)>>1 == -3");
+  assert((-8) >> 2 == -2, "arithmetic right shift: (-8)>>2 == -2");
+  assert((-1) >> 5 == -1, "arithmetic right shift all-ones stays -1");
+  assert((-128) >> 3 == -16, "arithmetic right shift: (-128)>>3 == -16");
+  // --- Shift with null operand ---
+  z_sh = 0;
+  n_sh = 1 / z_sh;
+  assert(!(n_sh << 1), "null << int is null");
+  assert(!(n_sh >> 1), "null >> int is null");
+  assert(!(1 << n_sh), "int << null is null");
+  assert(!(1 >> n_sh), "int >> null is null");
+  // --- Text-to-int parse edge cases ---
+  assert(!("abc" as integer), "parse non-numeric text yields null");
+  assert(!("123abc" as integer), "parse partial-numeric text yields null");
+  assert(!("" as integer), "parse empty text yields null");
+  assert(!(" 42 " as integer), "parse text with leading/trailing spaces yields null");
+  // Long text-to-long parse edge cases:
+  assert(!("xyz" as long), "parse non-numeric text to long yields null");
+  assert(!("" as long), "parse empty text to long yields null");
 }

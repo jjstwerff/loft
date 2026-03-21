@@ -76,4 +76,58 @@ fn main() {
   assert(!(bad + 1.0), "nan + float is null");
   assert(!(bad * 2.0), "nan * float is null");
   assert(!(1.0 + bad), "float + nan is null");
+  // --- Math domain boundaries: out-of-domain inputs produce NaN (null) ---
+  assert(!sqrt(-1.0), "sqrt of negative is null");
+  assert(!asin(2.0), "asin out of [-1,1] is null");
+  assert(!acos(-2.0), "acos out of [-1,1] is null");
+  assert(!pow(-1.0, 0.5), "pow(-1, 0.5) is null (complex result)");
+  assert(!log(-1.0, 10.0), "log of negative base is null");
+  // --- Log(0) is negative infinity (not null) ---
+  log_zero = log(0.0, 10.0);
+  assert(log_zero < -1000000.0, "log(0, base) is negative infinity");
+  // --- Division producing positive infinity (not null) ---
+  pos_inf = 1.0 / 0.0;
+  assert(pos_inf > 1000000.0, "1.0/0.0 is positive infinity");
+  // --- Special power cases ---
+  assert(pow(0.0, 0.0) == 1.0, "0^0 == 1 by convention");
+  assert(pow(2.0, 0.0) == 1.0, "x^0 == 1");
+  assert(pow(0.0, 2.0) == 0.0, "0^n == 0 for n>0");
+  // --- Trig inverse: asin, acos, atan ---
+  assert(round(asin(1.0) * 10000.0) == round(PI / 2.0 * 10000.0), "asin(1) == PI/2");
+  assert(acos(1.0) == 0.0, "acos(1) == 0");
+  assert(round(atan(1.0) * 10000.0) == round(PI / 4.0 * 10000.0), "atan(1) == PI/4");
+  assert(round(atan2(1.0, 1.0) * 10000.0) == round(PI / 4.0 * 10000.0), "atan2(1,1) == PI/4");
+  // --- tan ---
+  assert(round(tan(PI / 4.0) * 10000.0) == 10000.0, "tan(PI/4) == 1");
+  // --- sqrt ---
+  assert(sqrt(9.0) == 3.0, "sqrt(9) == 3");
+  assert(sqrt(0.0) == 0.0, "sqrt(0) == 0");
+  // --- Float comparison epsilon boundary (tolerance = 1e-9) ---
+  assert(1.0 + 0.0000000005 == 1.0, "within float epsilon (5e-10): equal");
+  assert(1.0 + 0.0000000015 != 1.0, "outside float epsilon (1.5e-9): not equal");
+  // --- Single (f32) domain boundaries ---
+  assert(!sqrt(-1.0f), "single sqrt of negative is null");
+  assert(!asin(2.0f), "single asin out of domain is null");
+  assert(!acos(-2.0f), "single acos out of domain is null");
+  assert(!pow(-1.0f, 0.5f), "single pow(-1, 0.5) is null");
+  // --- Single arithmetic ---
+  assert(sin(0.0f) == 0.0f, "single sin(0) == 0");
+  assert(cos(0.0f) == 1.0f, "single cos(0) == 1");
+  assert(tan(0.0f) == 0.0f, "single tan(0) == 0");
+  assert(pow(2.0f, 3.0f) == 8.0f, "single pow(2,3) == 8");
+  assert(abs(-3.5f) == 3.5f, "single abs(-3.5) == 3.5");
+  assert(sqrt(4.0f) == 2.0f, "single sqrt(4) == 2");
+  assert(round(asin(1.0f) * 1000.0f) == round(PI as single / 2.0f * 1000.0f), "single asin(1) == PI/2");
+  assert(acos(1.0f) == 0.0f, "single acos(1) == 0");
+  // --- Single comparison epsilon boundary (tolerance = 1e-6) ---
+  assert(1.0f + 0.0000005f == 1.0f, "within single epsilon (5e-7): equal");
+  assert(1.0f + 0.0000015f != 1.0f, "outside single epsilon (1.5e-6): not equal");
+  // --- Float-to-int cast edge cases ---
+  nan_val = sqrt(-1.0);
+  assert(!(nan_val as integer), "NaN as integer is null");
+  assert(!(nan_val as long), "NaN as long is null");
+  inf_pos = 1.0 / 0.0;
+  assert(inf_pos as integer == 2147483647, "positive infinity as integer saturates to i32::MAX");
+  inf_neg = -1.0 / 0.0;
+  assert(!(inf_neg as integer), "negative infinity as integer is null (i32::MIN)");
 }
