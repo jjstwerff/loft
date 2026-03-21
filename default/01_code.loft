@@ -715,7 +715,7 @@ fn OpGetFloat(v1: reference, fld: const u16) -> float;
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
 #rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0) as u8}}"
+#rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0); if r < 0 {{ 255u8 }} else {{ r as u8 }}}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
 #rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
