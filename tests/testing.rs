@@ -337,11 +337,11 @@ impl Drop for Test {
             }
         }
         #[cfg(debug_assertions)]
-        let config = LogConfig::from_env();
-        #[cfg(debug_assertions)]
-        let mut w = self.output_code(&mut p.data, types, &mut code, &mut state, &config);
-        #[cfg(debug_assertions)]
-        state.execute_log(&mut w, "test", &config, &p.data).unwrap();
+        {
+            let config = LogConfig::from_env();
+            let mut w = self.output_code(&mut p.data, types, &mut code, &mut state, &config);
+            state.execute_log(&mut w, "test", &config, &p.data).unwrap();
+        }
         #[cfg(not(debug_assertions))]
         state.execute("test", &p.data);
     }

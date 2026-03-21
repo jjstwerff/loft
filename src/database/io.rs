@@ -170,12 +170,10 @@ impl Stores {
     /// Returns 0 for types whose binary size is variable (text) or unsupported (collections).
     fn binary_size(&self, tp: u16) -> usize {
         match tp {
-            0 | 6 => 4, // integer, character
-            1 => 8,     // long
-            2 => 4,     // single
-            3 => 8,     // float
-            4 => 1,     // boolean
-            5 => 0,     // text: variable length
+            0 | 2 | 6 => 4, // integer, single, character
+            1 | 3 => 8,     // long, float
+            4 => 1,         // boolean
+            5 => 0,         // text: variable length
             _ => match &self.types[tp as usize].parts {
                 Parts::Struct(s) | Parts::EnumValue(_, s) => s
                     .iter()
@@ -191,6 +189,7 @@ impl Stores {
 
     /// # Panics
     /// If `data` does not contain enough bytes for the given type.
+    #[allow(clippy::too_many_lines)]
     pub fn write_data(&mut self, r: &DbRef, tp: u16, little_endian: bool, data: &[u8]) {
         let store = &mut self.allocations[r.store_nr as usize];
         match tp {
