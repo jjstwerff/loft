@@ -618,6 +618,7 @@ pub enum Context {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 /// The immutable data of a parsed loft program
 pub struct Data {
     pub definitions: Vec<Definition>,

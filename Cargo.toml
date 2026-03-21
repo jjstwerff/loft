@@ -38,6 +38,12 @@ dirs         = "5"
 [dev-dependencies]
 stdext = "0.3"
 
+[profile.test]
+# Reduce DWARF to line-tables only; keeps file:line in backtraces and
+# preserves debug_assertions, but skips per-variable debug info.
+# Cuts test-binary compile and link time significantly.
+debug = 1
+
 [package.metadata.deb]
 maintainer = "Jurjen Stellingwerff <j.stellingwerff@gmail.com>"
 copyright = " 2026, Jurjen Stellingwerff <j.stellingwerff@gmail.com>"

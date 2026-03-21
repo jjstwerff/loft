@@ -6,7 +6,6 @@ extern crate loft;
 use loft::compile::byte_code;
 #[cfg(debug_assertions)]
 use loft::compile::show_code;
-#[cfg(debug_assertions)]
 use loft::data::Data;
 #[cfg(debug_assertions)]
 use loft::log_config::LogConfig;
@@ -20,6 +19,8 @@ use std::io::Error;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
+mod common;
+use common::cached_default;
 
 /// Process-wide lock: prevents any two `wrap` tests from running concurrently.
 ///
@@ -183,7 +184,9 @@ fn main(args: vector<text>) {
 }
 "#;
     let mut p = Parser::new();
-    p.parse_dir("default", true, false).unwrap();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
     p.parse_str(code, "main_argv", false);
     for l in p.diagnostics.lines() {
         println!("{l}");
@@ -212,7 +215,9 @@ fn main(args: vector<text>) {
 fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()> {
     println!("run {entry:?}");
     let mut p = Parser::new();
-    p.parse_dir("default", true, debug)?;
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
     #[cfg(debug_assertions)]
     let types = p.database.types.len();
     let path = entry.to_string_lossy().to_string();
