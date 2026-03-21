@@ -45,7 +45,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
 - [P — Prototype Features](#p--prototype-features)
 - [A — Architecture](#a--architecture)
-  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization)
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(1.1+ backlog)*
 - [N — Native Codegen](#n--native-codegen)
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
@@ -67,7 +67,6 @@ in parallel.
 - **L5** — `v += extra` via `&vector` ref-param panics: parser fix in `parse_append_vector`.
 
 **Stack slot efficiency:**
-- **A12** — Lazy work-variable initialization: accurate `first_def` intervals, slot sharing.
 - **A13** — Float/Long dead-slot reuse: `can_reuse` guard raised to ≤ 8 bytes. ✓
 - **A14** — `skip_free` flag: `clean_work_refs` sets `skip_free` instead of mutating type. ✓
 - **A15** — Exhaustive `inline_ref_set_in`: match now exhaustive; new compound variants are a compile error. ✓
@@ -184,6 +183,7 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
 
 **Deferred from 0.9.0:**
+- A12 (lazy work-variable init) — Blocked by Issues 68–70; deferred to 1.1+.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
 - A7 (native extension libraries) — Useful after the ecosystem exists; 1.1+.
 
@@ -1090,6 +1090,7 @@ the generic type-mismatch message.
 ---
 
 ### A12  Lazy work-variable initialization
+**Status: deferred to 1.1+ — blocked by Issues 68–70 (see PROBLEMS.md)**
 **Sources:** Stack efficiency evaluation 2026-03-20
 **Description:** Work text variables (`__work_N`) are currently initialized at function
 start via `Set(wt, Text(""))` inserted at index 0 of the body block.  This forces

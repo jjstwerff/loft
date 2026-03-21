@@ -14,7 +14,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| A12   | Lazy work-variable init — blocked (Issues 68–70)             | Medium    |                 | PLANNING.md A12             |
 | S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
 | P1    | **Lambda expressions** *(3 phases)*                          | Med–High  |                 | Prototype goal              |
@@ -97,6 +96,7 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
+| A12   | Lazy work-variable init (blocked: Issues 68–70)              | Medium    |                 | PLANNING.md A12             |
 | A5    | **Closure capture for lambdas** *(5 phases)*                 | Very High | P1              | Depends on P1               |
 | A5.1  | ↳ Capture analysis — identify free variables                 | Small     | P1              | scopes.rs, expressions.rs   |
 | A5.2  | ↳ Closure record layout — synthesise anon struct type        | Small     | A5.1            | data.rs, typedef.rs         |
