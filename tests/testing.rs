@@ -15,7 +15,6 @@ use loft::compile::byte_code;
 #[cfg(debug_assertions)]
 use loft::compile::show_code;
 use loft::data::Data;
-use loft::database::Stores;
 use loft::generation::Output;
 #[cfg(debug_assertions)]
 use loft::log_config::LogConfig;
@@ -273,9 +272,7 @@ impl Drop for Test {
                 } else {
                     scope.to_string()
                 };
-                let origin: &str = if is_arg {
-                    ""
-                } else if scope == u16::MAX {
+                let origin: &str = if is_arg || scope == u16::MAX {
                     ""
                 } else {
                     f.scope_origin(scope)

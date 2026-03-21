@@ -21,6 +21,8 @@ use crate::keys::{Content, DbRef, Key};
 use crate::ops;
 use crate::tree;
 use crate::vector;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write as _};
 
 /// Allocate a database root record for the given type.
 /// The generated code calls this as `OpDatabase(stores, var, tp)` where `var` is
@@ -131,7 +133,8 @@ pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
     #![allow(clippy::cast_possible_wrap)]
     let len = text.len() as i32;
     let f = from.max(0).min(len) as usize;
-    let t = till.max(0).min(len) as usize;
+    // Negative `till` counts backwards from the end (e.g., -1 means len-1).
+    let t = if till < 0 { (len + till).max(0).min(len) } else { till.min(len) } as usize;
     if f >= t { "" } else { &text[f..t] }
 }
 
@@ -389,4 +392,199 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
 
     *iter = pack_iter(cur, finish);
     result
+}
+
+/// Read the entire contents of a file into `content`, replacing its previous value.
+/// If the file cannot be opened or read, `content` is cleared.
+/// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
+pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
+    if file.rec == 0 {
+        return;
+    }
+    let file_path = {
+        let store = stores.store(&file);
+        store
+            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .to_owned()
+    };
+    content.clear();
+    if let Ok(mut f) = File::open(&file_path)
+        && f.read_to_string(content).is_err()
+    {
+        content.clear();
+    }
+}
+
+/// Seek to `pos` bytes from the start of the file.
+/// If the file handle is not yet open, stores `pos` in `#next` so the first
+/// read/write applies the seek after opening.
+/// Bytecode equivalent: `State::seek_file` in `src/state/io.rs`.
+pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
+    if file.rec == 0 {
+        return;
+    }
+    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    if file_ref == i32::MIN {
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 16, pos);
+    } else if let Some(f) = &mut stores.files[file_ref as usize]
+        && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
+    {
+        eprintln!("file seek error: {e}");
+    }
+}
+
+/// Return the byte size of the file, or `i64::MIN` if the size cannot be determined.
+/// Bytecode equivalent: `State::size_file` in `src/state/io.rs`.
+#[must_use]
+pub fn OpSizeFile(stores: &mut Stores, file: DbRef) -> i64 {
+    if file.rec == 0 {
+        return i64::MIN;
+    }
+    let file_path = {
+        let store = stores.store(&file);
+        store
+            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .to_owned()
+    };
+    if let Ok(meta) = std::fs::metadata(&file_path) {
+        meta.len() as i64
+    } else {
+        i64::MIN
+    }
+}
+
+/// Truncate (or extend) the file to `size` bytes.  Closes any open handle first.
+/// Returns `true` on success, `false` on failure.
+/// Bytecode equivalent: `State::truncate_file` in `src/state/io.rs`.
+pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
+    if file.rec == 0 {
+        return false;
+    }
+    let file_path = {
+        let store = stores.store(&file);
+        store
+            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .to_owned()
+    };
+    // Close any open handle so resize starts from a clean state.
+    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
+        stores.files[file_ref as usize] = None;
+        stores
+            .store_mut(&file)
+            .set_int(file.rec, file.pos + 28, i32::MIN);
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 8, i64::MIN);
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 16, i64::MIN);
+    }
+    OpenOptions::new()
+        .write(true)
+        .open(&file_path)
+        .and_then(|f| f.set_len(size as u64))
+        .is_ok()
+}
+
+/// Trait allowing `OpRemove` to work with both plain-vector (`i32` index) and
+/// sorted/tree (`i64` packed iterator) state variables.
+pub trait IterState {
+    fn get_cur(&self) -> i32;
+    fn set_cur(&mut self, n: i32);
+}
+
+impl IterState for i32 {
+    fn get_cur(&self) -> i32 {
+        *self
+    }
+    fn set_cur(&mut self, n: i32) {
+        *self = n;
+    }
+}
+
+impl IterState for i64 {
+    fn get_cur(&self) -> i32 {
+        (*self as u64) as u32 as i32
+    }
+    fn set_cur(&mut self, n: i32) {
+        let finish = (*self as u64) >> 32;
+        *self = ((finish << 32) | (n as u32 as u64)) as i64;
+    }
+}
+
+/// Remove the element at the current iterator position and update the iterator
+/// so the next step visits the correct successor.
+///
+/// - `on & 63 == 0`: plain vector — `arg` is the element type index; size is
+///   looked up via `stores.get_type(arg as u16).size`.
+/// - `on & 63 == 2`: sorted vector — `arg` is the element size in bytes directly.
+///
+/// Bytecode equivalent: `State::remove` in `src/state/io.rs`.
+pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
+    let cur = state.get_cur();
+    let reverse = (on & 64) != 0;
+    match on & 63 {
+        0 => {
+            // plain vector: arg is the element type index
+            let elem_size = u32::from(stores.size(arg as u16));
+            let n = if reverse { cur + 1 } else { cur - 1 };
+            vector::remove_vector(&data, elem_size, cur, &mut stores.allocations);
+            state.set_cur(n);
+        }
+        2 => {
+            // sorted vector: arg is the element size in bytes
+            if cur < 0 {
+                return;
+            }
+            let n = if reverse { cur + 1 } else { cur - 1 };
+            vector::remove_vector(&data, arg as u32, cur, &mut stores.allocations);
+            state.set_cur(n);
+        }
+        _ => {}
+    }
+}
+
+/// Remove a record from a hash or index collection.
+///
+/// Bytecode equivalent: `State::hash_remove` in `src/state/io.rs`.
+pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
+    if rec.rec != 0 {
+        stores.remove(&data, &rec, tp as u16);
+    }
+}
+
+/// Append `count - 1` copies of the last element of `data`, expanding the vector.
+///
+/// Bytecode equivalent: `State::append_copy` in `src/state/io.rs`.
+pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
+    let ctp = stores.content(tp as u16);
+    let size = u32::from(stores.size(ctp));
+    let length = vector::length_vector(&data, &stores.allocations) as u32;
+    // Read v_rec before resize; from points to the last existing element.
+    let v_rec_before = crate::keys::store(&data, &stores.allocations)
+        .get_int(data.rec, data.pos) as u32;
+    let from = DbRef {
+        store_nr: data.store_nr,
+        rec: v_rec_before,
+        pos: 8 + (length * size - size),
+    };
+    let multiply = count as u32;
+    // Resize to accommodate `multiply` additional elements.
+    vector::vector_append(&data, size, &mut stores.allocations);
+    stores.vector_set_size(&data, multiply, size);
+    // Re-read v_rec in case the resize moved the record.
+    let v_rec = crate::keys::store(&data, &stores.allocations)
+        .get_int(data.rec, data.pos) as u32;
+    for i in 0..(multiply - 1) {
+        let to = DbRef {
+            store_nr: data.store_nr,
+            rec: v_rec,
+            pos: 8 + (length + i) * size,
+        };
+        stores.copy_block(&from, &to, size);
+        stores.copy_claims(&data, &to, ctp);
+    }
 }
