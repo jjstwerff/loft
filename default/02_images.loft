@@ -291,6 +291,6 @@ pub fn ticks() -> long;
 // --- Vector operations (T2-8, T2-5) ---
 // reverse(v) and sort(v) are compiler special-cased in parse_call.
 fn OpReverseVector(r: vector, size: const u16);
-#rust"vector::reverse_vector(&@r, (@size) as u32, &mut s.database.allocations);"
+#rust"vector::reverse_vector(&@r, u32::from(@size), &mut s.database.allocations);"
 fn OpSortVector(r: vector, db_tp: const u16);
-#rust"{{ let _t = (@db_tp) as u16; let elem_size = stores.size(_t); let is_float = _t == 2 || _t == 3; vector::sort_vector(&@r, elem_size, is_float, &mut stores.allocations); }}"
+#rust"{{ let t = @db_tp; let elem_size = stores.size(t); let is_float = t == 2 || t == 3; vector::sort_vector(&@r, elem_size, is_float, &mut stores.allocations); }}"

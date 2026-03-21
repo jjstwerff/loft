@@ -1142,11 +1142,9 @@ fn n9_generated_fill_matches_src() {
         .result(Value::Int(42));
     let generated = std::fs::read_to_string("tests/generated/fill.rs")
         .expect("tests/generated/fill.rs not found");
-    let src =
-        std::fs::read_to_string("src/fill.rs").expect("src/fill.rs not found");
+    let src = std::fs::read_to_string("src/fill.rs").expect("src/fill.rs not found");
     assert_eq!(
-        generated,
-        src,
+        generated, src,
         "tests/generated/fill.rs differs from src/fill.rs — \
          run create::generate_code() and copy the result"
     );
