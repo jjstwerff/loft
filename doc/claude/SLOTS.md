@@ -71,7 +71,7 @@ cargo test -p loft --test vectors    # 45/45
 | 3 | New `assign_slots` / `process_scope` / `place_large_and_recurse` | ✅ done |
 | 4 | `generate_block` emits `OpReserveFrame` | ✅ done |
 | 5 | Enable `slots.rs` `#[ignore]` tests | ✅ done — all 3/3 enabled |
-| 6 | Replace override branches with debug assertions | ⚠️ partial — `pos > TOS` override retained (block-return pattern); `pos < TOS + large_type` also retained |
+| 6 | Replace override branches with debug assertions | ⚠️ partial — `pos > TOS` override retained as safety net (debug_assert guards regression); `pos < TOS + large_type` retained for `&vector<T>` args |
 | 7 | Remove `running_tos` / `eager_slots` / `assign_slots_old` machinery | ✅ done |
 
 ---
@@ -472,11 +472,10 @@ the block's result slot legally (non-overlapping live intervals, parent+child sc
 this fix, add `debug_assert!(pos <= stack.position)` to the first override branch in
 `generate_set` and verify it never fires.
 
-**Step 9 — Add `pos != u16::MAX` release-mode guard:**
-In `generate_set`, before computing `pos = stack.function.stack(v)`, add an unconditional
-(non-`debug_assertions`) assert that `pos != u16::MAX`.  A variable that escaped slot
-assignment would silently corrupt the stack at runtime in release builds; this single integer
-compare catches it before any write occurs.
+**Step 9:** ✅ `pos != u16::MAX` unconditional assert added to `generate_set` after
+computing `pos`.  Also added `debug_assert!(pos <= stack.position)` before the override block
+to guard against any Step-8 regression (case 1: `pos > TOS` should never fire).
+Comments on both override cases updated to reflect current status.
 
 **Step 10 — Audit `build_scope_parents` for missing IR variants:**
 Cross-check `build_scope_parents` against `scan_inner`: every Value variant that contains a
