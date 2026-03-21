@@ -26,6 +26,11 @@ profile:
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
 
+ci:
+	cargo fmt -- --check > result.txt 2>&1 && \
+	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
+	cargo test >> result.txt 2>&1
+
 clippy:
 	cargo clippy -- -W clippy::all -W clippy::cognitive_complexity > result.txt 2>&1
 	cargo clippy --tests -- -W clippy::all -W clippy::cognitive_complexity >> result.txt 2>&1
