@@ -693,51 +693,51 @@ fn OpNeRef(v1: reference, v2: reference) -> boolean;
 #rust"@v1 != @v2"
 // Can be used to get another record within the same database
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
-#rust"stores.get_ref(&@v1, ((@fld) as u32))"
+#rust"stores.get_ref(&@v1, u32::from(@fld))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + ((@fld) as u32), @val.rec as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val.rec as i32);}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
-#rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + ((@fld) as u32)}}"
+#rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + u32::from(@fld)}}"
 // Simple type value write and read, vector elements always have fld=0.
 // All these types are passed by value instead of by reference.
 fn OpGetInt(v1: reference, fld: const u16) -> integer;
-#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + ((@fld) as u32))}} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
 fn OpGetCharacter(v1: reference, fld: const u16) -> character;
-#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + ((@fld) as u32)) as u32).unwrap_or(char::from(0)) }} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld)) as u32).unwrap_or(char::from(0)) }} }}"
 fn OpGetLong(v1: reference, fld: const u16) -> long;
-#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + ((@fld) as u32))}}"
+#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetSingle(v1: reference, fld: const u16) -> single;
-#rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + ((@fld) as u32))}}"
+#rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
-#rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + ((@fld) as u32))}}"
+#rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + ((@fld) as u32), i32::from(@min))}}"
+#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + ((@fld) as u32), 0) as u8}}"
+#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0) as u8}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + ((@fld) as u32), 0, i32::from(@val));}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + ((@fld) as u32), i32::from(@min))}}"
+#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + ((@fld) as u32)) as u32))}}"
+#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + ((@fld) as u32), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + ((@fld) as u32), @val as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val as i32);}}"
 fn OpSetLong(v1: reference, fld: const u16, val: long);
-#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + ((@fld) as u32), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
-#rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + ((@fld) as u32), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetFloat(v1: reference, fld: const u16, val: float);
-#rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + ((@fld) as u32), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + ((@fld) as u32), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + ((@fld) as u32), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
-#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + ((@fld) as u32), s_pos as i32);}}"
+#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + u32::from(@fld), s_pos as i32);}}"
 // --- Collections ---
 // Operations on vector<T> — the primary ordered collection type.
 // Vectors are grown by appending with += and elements are accessed by index.
@@ -764,14 +764,14 @@ pub fn clear(both: vector) {
 
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
-#rust"vector::get_vector(&@r, ((@size) as u32), @index, &s.database.allocations)"
+#rust"vector::get_vector(&@r, u32::from(@size), @index, &s.database.allocations)"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
 #rust"stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
 fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
 #rust"s.db_from_text(@val, @db_tp)"
 fn OpRemoveVector(r: vector, size: const u16, index: integer) -> boolean;
-#rust"vector::remove_vector(&@r, ((@size) as u32), @index, &mut s.database.allocations)"
+#rust"vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
 // Insert space into a vector, no data written
 fn OpInsertVector(r: vector, size: const u16, index: integer, db_tp: const u16) -> reference[r];
 // Claim space for a new record for the given structure
