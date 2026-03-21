@@ -1221,6 +1221,151 @@ struct Container { data: sorted<Sort[nr]> }"
     );
 }
 
+// ── S4: Binary I/O type coverage ─────────────────────────────────────────────
+// read_data / write_data panic with "Not implemented" for Array / Sorted /
+// Ordered / Hash / Index / Spacial / Base — should be improved.
+
+/// S4: writing a struct with a `sorted<T>` field must panic with a message that
+/// explains WHY (store-internal references) rather than "Not implemented".
+/// After the S4 fix the panic message contains "binary I/O not supported".
+#[test]
+#[should_panic(expected = "binary I/O not supported")]
+#[ignore = "S4: panic message still says 'Not implemented type for file writing'"]
+fn s4_sorted_field_write_panics_with_clear_message() {
+    code!(
+        "struct Item { key: integer, value: integer }
+struct Container { items: sorted<Item[key]> }
+fn test() {
+    c = Container { items: [Item { key: 1, value: 10 }] };
+    f = file(\"tests/tmp_s4_sorted.dat\");
+    f#format = LittleEndian;
+    f += c;
+    delete(\"tests/tmp_s4_sorted.dat\");
+}"
+    );
+}
+
+/// S4: writing a struct with a `hash<T>` field must give a clear panic.
+#[test]
+#[should_panic(expected = "binary I/O not supported")]
+#[ignore = "S4: panic message still says 'Not implemented type for file writing'"]
+fn s4_hash_field_write_panics_with_clear_message() {
+    code!(
+        "struct Tag { name: text }
+struct Bag { tags: hash<Tag[name]> }
+fn test() {
+    b = Bag { tags: [Tag { name: \"hello\" }] };
+    f = file(\"tests/tmp_s4_hash.dat\");
+    f#format = LittleEndian;
+    f += b;
+    delete(\"tests/tmp_s4_hash.dat\");
+}"
+    );
+}
+
+// ── N1: --native CLI flag ─────────────────────────────────────────────────────
+// src/main.rs must recognise --native and run the native codegen pipeline.
+
+/// N1: parsing the default library and a trivial loft program, then generating
+/// native Rust via output_native, then compiling with rustc must succeed.
+/// Marked ignored until the --native pipeline is wired up in main.rs.
+#[test]
+#[ignore = "N1: --native flag and native pipeline not yet in main.rs"]
+fn n1_native_pipeline_trivial_program() {
+    use loft::generation::Output;
+    let mut p = loft::parser::Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    let start_def = p.data.definitions();
+    p.parse_str(
+        "fn main() { assert(1 + 1 == 2, \"arithmetic\"); }",
+        "n1_test",
+        false,
+    );
+    assert!(p.diagnostics.is_empty(), "parse errors: {}", p.diagnostics);
+    loft::scopes::check(&mut p.data);
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+    let end_def = p.data.definitions();
+    let tmp_rs = std::env::temp_dir().join("loft_n1_test.rs");
+    let mut f = std::fs::File::create(&tmp_rs).expect("tmp file");
+    let mut out = Output {
+        data: &p.data,
+        stores: &state.database,
+        counter: 0,
+        indent: 0,
+        def_nr: 0,
+        declared: Default::default(),
+    };
+    out.output_native(&mut f, start_def, end_def)
+        .expect("output_native");
+    drop(f);
+    // Compile with rustc
+    let binary = std::env::temp_dir().join("loft_n1_test_bin");
+    let status = std::process::Command::new("rustc")
+        .args([
+            "--edition=2024",
+            "-o",
+            binary.to_str().unwrap(),
+            tmp_rs.to_str().unwrap(),
+        ])
+        .status();
+    match status {
+        Ok(s) => assert!(s.success(), "rustc compilation failed"),
+        Err(e) => eprintln!("skipping rustc test (not in PATH): {e}"),
+    }
+    let _ = std::fs::remove_file(&tmp_rs);
+    let _ = std::fs::remove_file(&binary);
+}
+
+// ── P1.1: Lambda parser ───────────────────────────────────────────────────────
+// Parser must accept fn(params) -> ret { body } as an anonymous function
+// expression, producing a Type::Function value like a named fn-ref.
+
+/// P1.1: a basic lambda `fn(x: integer) -> integer { x * 2 }` can be assigned
+/// to a variable and called through it.
+#[test]
+#[ignore = "P1.1: lambda expressions not yet parsed"]
+fn p1_1_lambda_basic_call() {
+    code!(
+        "fn test() {
+    f = fn(x: integer) -> integer { x * 2 };
+    result = f(21);
+    assert(result == 42, \"expected 42, got {result}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.1: lambda passed inline to a function accepting fn(integer) -> integer.
+#[test]
+#[ignore = "P1.1: lambda expressions not yet parsed"]
+fn p1_1_lambda_as_argument() {
+    code!(
+        "fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn test() {
+    result = apply(fn(n: integer) -> integer { n * n }, 7);
+    assert(result == 49, \"expected 49, got {result}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.1: lambda with no return type (void).
+#[test]
+#[ignore = "P1.1: lambda expressions not yet parsed"]
+fn p1_1_lambda_void_body() {
+    code!(
+        "fn test() {
+    count = 0;
+    f = fn(x: integer) { count += x; };
+    f(10);
+    f(32);
+    assert(count == 42, \"expected 42, got {count}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 /// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
 /// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
 #[test]
