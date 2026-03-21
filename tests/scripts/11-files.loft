@@ -83,4 +83,20 @@ fn main() {
   // === lines() reads text file into vector ===
   c = file("tests/example/config/terrain.txt").lines();
   assert(c[1] == "    terrain = [", "lines()[1] content");
+  // === path_sep: platform path separator is '/' or '\' ===
+  sep = path_sep();
+  assert(sep == '/' || sep == '\\', "path_sep is slash or backslash");
+  // === now: milliseconds since Unix epoch (non-negative, sanity check) ===
+  ms = now();
+  assert(ms > 0l, "now() returns positive timestamp");
+  // Rough sanity: 2020-01-01 = 1577836800000 ms
+  assert(ms > 1577836800000l, "now() is past year 2020");
+  // === ticks: microseconds since program start (monotonic) ===
+  t1 = ticks();
+  assert(t1 >= 0l, "ticks() returns non-negative value");
+  t2 = ticks();
+  assert(t2 >= t1, "ticks() is monotonically non-decreasing");
+  // === env_variable: returns empty text for unknown variable ===
+  missing = env_variable("LOFT_TEST_NONEXISTENT_VAR_XYZ");
+  assert(missing == "", "env_variable of unknown name returns empty string");
 }

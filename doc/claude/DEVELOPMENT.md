@@ -93,9 +93,17 @@ require separate commits for tests, implementation, and docs.
 Verify locally at any point using the full CI gate:
 
 ```bash
-cargo test                              # all tests pass
-cargo clippy --tests -- -D warnings     # zero warnings, including test code
+make ci       # fmt → clippy → test; stops at first failure; full output in result.txt
+```
+
+The order matters: `cargo fmt --check` and `cargo clippy --tests -- -D warnings` run
+first so formatting and lint errors are fixed before the slower `cargo test` runs.
+If `make` is unavailable, run the three commands manually in the same order:
+
+```bash
 cargo fmt -- --check                    # no formatting diff; run `cargo fmt` to fix
+cargo clippy --tests -- -D warnings     # zero warnings, including test code
+cargo test                              # all tests pass
 ```
 
 ---
@@ -125,10 +133,10 @@ A branch may contain **any number of commits** as long as every commit satisfies
 local CI gate — see [CI Validation](#ci-validation) for the exact commands.  In short:
 
 ```bash
-cargo test && cargo clippy --tests -- -D warnings && cargo fmt -- --check
+make ci
 ```
 
-Run all three **before every `git commit`** (including amends).  A commit that breaks
+Run this **before every `git commit`** (including amends).  A commit that breaks
 any of these must be fixed before the session ends.  Never rely on the remote CI to
 catch failures that could have been caught locally.
 
@@ -229,8 +237,7 @@ Review every file in `doc/claude/` for references to the feature and update as n
 Any item rated **Medium–High or higher** in PLANNING.md must be split into
 sub-steps before work begins.  A sub-step is a change that:
 
-1. **Passes all three CI checks on its own** (`cargo test`, `cargo clippy --tests -- -D warnings`,
-   `cargo fmt -- --check`).
+1. **Passes all three CI checks on its own** (`make ci`).
 2. **Has at least one test** that was written before the implementation (Step 1 of the
    structured sequence) and enabled immediately after (Step 3).
 3. **Leaves the codebase in a better or equal state** — no sub-step may introduce a
@@ -320,7 +327,7 @@ lambda_basic_parse, lambda_with_return_type, lambda_in_map_call.
 All marked #[ignore] until the parser extension lands.
 ```
 
-Verify: `cargo test` must pass with the new tests reported as ignored, not failed.
+Verify: `make run-tests` must pass with the new tests reported as ignored, not failed.
 
 ### Step 2 — Code Changes
 
@@ -357,7 +364,7 @@ def-nr, completing the compile-to-bytecode path for inline lambdas.
 
 When there is only a single area, one commit is fine.
 
-Verify after each commit: run the full local CI gate (`cargo test`, `cargo clippy --tests -- -D warnings`, `cargo fmt -- --check`) — all three must pass.
+Verify after each commit: run `make ci` — all three checks must pass.
 
 ### Step 3 — Enable Tests
 
@@ -371,7 +378,7 @@ All three tests now pass. Removes the #[ignore] markers added in the
 initial test commit.
 ```
 
-Verify: `cargo test` must pass with zero ignored tests among the new ones.
+Verify: `make run-tests` must pass with zero ignored tests among the new ones.
 
 ### Step 4 — Structural Refactors
 
@@ -389,7 +396,7 @@ parse_binary_operator exceeded 55 lines after the L3 constant-zero check.
 Extract the new check into its own function per CODE.md § Functions.
 ```
 
-Verify: `cargo test` unchanged; `cargo clippy --tests -- -D warnings` clean.
+Verify: `make run-tests` unchanged; `cargo clippy --tests -- -D warnings` clean.
 
 ### Step 5 — Documentation
 
@@ -422,7 +429,7 @@ docs: P1 lambda expressions — update CHANGELOG, PLANNING, LOFT, STDLIB
 - STDLIB.md: document map/filter/reduce accepting lambda arguments
 ```
 
-Verify: `cargo test` still passes (documentation changes are non-functional).
+Verify: `make run-tests` still passes (documentation changes are non-functional).
 
 ---
 
@@ -474,10 +481,12 @@ Run all three checks and confirm they are clean **before** `git commit`.  Never 
 when any check fails — fix first, then commit.
 
 ```bash
-cargo test                              # all tests pass
-cargo clippy --tests -- -D warnings     # zero warnings, including test code; warnings are errors
-cargo fmt -- --check                    # no formatting diff; run `cargo fmt` to fix
+make ci   # fmt → clippy → test in order; stops at first failure; output in result.txt
 ```
+
+The `make ci` target runs `cargo fmt --check` and `cargo clippy --tests -- -D warnings`
+**before** `cargo test`.  Fix any fmt or clippy errors first — this avoids re-running
+the slow test suite after a trivial lint fix.
 
 These are the same checks the remote CI runs.  Running them locally catches errors that
 would otherwise only surface after a push, which cannot be taken back.

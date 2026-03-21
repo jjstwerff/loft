@@ -5,9 +5,9 @@
 #![allow(clippy::cast_sign_loss)]
 
 use super::{
-    DefType, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS, OUTPUT_DEFAULT, OutputState,
-    Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format, field_id,
-    rename, to_default, v_block, v_if, v_loop, v_set,
+    DefType, Function, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS, OUTPUT_DEFAULT,
+    OutputState, Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format,
+    field_id, rename, to_default, v_block, v_if, v_loop, v_set,
 };
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
@@ -1324,7 +1324,11 @@ use a separate collection or add after the loop"
         } else if self.lexer.has_token("match") {
             self.parse_match(val)
         } else if self.lexer.has_token("fn") {
-            self.parse_fn_ref(val)
+            if self.lexer.peek_token("(") {
+                self.parse_lambda(val)
+            } else {
+                self.parse_fn_ref(val)
+            }
         } else if self.lexer.has_token("sizeof") {
             self.lexer.token("(");
             self.parse_size(val)
@@ -1401,6 +1405,86 @@ use a separate collection or add after the loop"
         }
         *code = Value::Int(d_nr as i32);
         self.data.def_used(d_nr);
+        let n_args = self.data.attributes(d_nr);
+        let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
+        let ret_type = self.data.def(d_nr).returned.clone();
+        Type::Function(arg_types, Box::new(ret_type))
+    }
+
+    // <lambda> ::= 'fn' '(' [<params>] ')' ['->' <type>] '{' <body> '}'
+    // Produces Type::Function; runtime representation is d_nr as i32, same as fn-ref.
+    pub(crate) fn parse_lambda(&mut self, code: &mut Value) -> Type {
+        let lambda_name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+        let stored_name = format!("n_{lambda_name}");
+
+        let outer_context = self.context;
+        let outer_vars = std::mem::replace(
+            &mut self.vars,
+            Function::new(&lambda_name, &self.lexer.pos().file),
+        );
+        let outer_loop = self.in_loop;
+        self.in_loop = false;
+
+        self.lexer.token("(");
+        let mut arguments = Vec::new();
+        self.parse_arguments(&lambda_name, &mut arguments);
+        self.lexer.token(")");
+
+        self.context = if self.first_pass {
+            self.data.add_fn(&mut self.lexer, &lambda_name, &arguments)
+        } else {
+            self.data.def_nr(&stored_name)
+        };
+        if self.context == u32::MAX {
+            self.context = outer_context;
+            self.vars = outer_vars;
+            self.in_loop = outer_loop;
+            return Type::Unknown(0);
+        }
+        let d_nr = self.context;
+
+        // Parse optional return type annotation.
+        let result = if self.lexer.has_token("->") {
+            if let Some(type_name) = self.lexer.has_identifier() {
+                self.parse_type(d_nr, &type_name, true)
+                    .unwrap_or(Type::Void)
+            } else {
+                Type::Void
+            }
+        } else {
+            Type::Void
+        };
+        if self.first_pass {
+            self.data.set_returned(d_nr, result);
+        }
+
+        self.vars
+            .append(&mut self.data.definitions[d_nr as usize].variables);
+        for (a_nr, a) in arguments.iter().enumerate() {
+            if self.first_pass {
+                let v_nr = self.create_var(&a.name, &a.typedef);
+                if v_nr != u16::MAX {
+                    self.vars.become_argument(v_nr);
+                    self.var_usages(v_nr, false);
+                }
+            } else {
+                self.change_var_type(a_nr as u16, &a.typedef);
+            }
+        }
+
+        self.parse_code();
+        self.data.op_code(d_nr);
+        self.data.definitions[d_nr as usize]
+            .variables
+            .append(&mut self.vars);
+
+        self.context = outer_context;
+        self.vars = outer_vars;
+        self.in_loop = outer_loop;
+
+        self.data.def_used(d_nr);
+        *code = Value::Int(d_nr as i32);
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();

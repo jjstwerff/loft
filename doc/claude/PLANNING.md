@@ -84,10 +84,10 @@ in parallel.
 - **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63).
 
 **Native code generation (Tier N):**
-- N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
-  range-bounded iteration) completed in 0.8.2.  N9 (N20b/N20d) also completed:
-  rustfmt added, six missing `#rust` templates added, `src/fill.rs` replaced by the
-  auto-generated version.  Remaining: **N1** (`--native` CLI flag) which lands last.
+- N2–N9, N6.3, and N1 all completed in 0.8.2.  N9 (N20b/N20d): rustfmt added, six
+  missing `#rust` templates added, `src/fill.rs` replaced by the auto-generated
+  version.  N1: `--native` / `--native-emit` CLI flags land the end-to-end native
+  pipeline.  All Tier N items for 0.8.2 are done.
 
 ---
 
@@ -98,7 +98,7 @@ syntax decisions can be validated and refined independently.  All items change t
 or type system; 0.8.2 correctness work is a prerequisite.
 
 **Lambda expressions (P1):**
-- **P1.1** — Parser: recognise `fn(params) -> type block` as a primary expression.
+- **P1.1** — Parser: ✓ completed in 0.8.2.
 - **P1.2** — Compilation: synthesise an anonymous `def`, emit a def-number at the call site.
 - **P1.3** — Integration: `map`, `filter`, `reduce` accept inline lambdas.
 - **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
@@ -293,7 +293,7 @@ in a better state than it found it, with passing tests).
 1. **A6** — slot pre-pass; High, independent
 4. **A8** — destination-passing; Med–High, independent efficiency win
 5. **N9** — ✓ completed: rustfmt, #rust templates, fill.rs replaced
-6. **N1** — `--native` CLI flag; lands next
+6. **N1** — ✓ completed: `--native` / `--native-emit` CLI flags
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
@@ -519,28 +519,9 @@ but the body is compiled inline.  No closure capture is required initially (capt
 can be added in a follow-up, see A5).
 **Fix path:**
 
-**Two-pass strategy:**
-The parser is two-pass.  Anonymous functions must produce the same `d_nr` on both passes.
-Use a `lambda_counter: u32` on `Parser` that increments each time a lambda expression is
-parsed.  The name is `"__lambda_N"` where N is the counter value at that lexer position.
-On the first pass, `add_def("__lambda_N", ...)` registers the definition and advances the
-counter; on the second pass, `def_nr("__lambda_N")` looks it up and the counter advances
-identically, guaranteeing consistency.
-
-**Phase 1 — Parser** (`src/parser/expressions.rs`):
-In `parse_primary`, when `fn` is followed by `(` (rather than an identifier), call the new
-`parse_lambda` helper:
-1. Synthesise `name = format!("__lambda_{}", self.lambda_counter)` and increment the counter.
-2. First pass: call `self.data.add_def(&name, pos, DefType::Function)`; parse parameter list
-   (building arg descriptors on `data`); parse `->` return type; skip the body block
-   (use `self.lexer.skip_block()`).
-3. Second pass: look up `d_nr = self.data.def_nr(&name)`; parse parameter list (same tokens,
-   registering arguments on `data`); parse `->` return type; parse the body block fully
-   (calls existing expression/statement parsing machinery).
-4. Emit `Value::Int(d_nr as i32)` — same representation as `fn <name>`.  Return
-   `Type::Function(arg_types, Box::new(ret_type))`.
-*Tests:* parser accepts valid lambda syntax; rejects malformed lambdas with a clear
-diagnostic; all existing `fn_ref_*` tests still pass.
+**Phase 1 — Parser** ✓ completed (0.8.2): `parse_lambda` added to `parse_primary`;
+`lambda_counter: u32` on `Parser` guarantees consistent `__lambda_N` naming across both
+passes.  Emits `Value::Int(d_nr)` — same representation as a named fn-ref.
 
 **Phase 2 — Compilation** (`src/state/codegen.rs`, `src/compile.rs`):
 Because the lambda body is compiled inline during Phase 1's second-pass parse (same as a
@@ -558,8 +539,7 @@ works.  No compiler changes expected — the def-nr representation is already co
 inline lambdas; nested lambdas (lambda passed to a lambda).
 
 **Effort:** Medium–High (parser.rs, compile.rs)
-**Target:** 0.8.2 (moved from 0.8.3 — needed before closures and aggregates; stability
-benefit from landing alongside the other correctness work)
+**Target:** 0.8.3 (P1.1 landed in 0.8.2; P1.2 and P1.3 remain)
 
 ---
 
@@ -1200,44 +1180,22 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 **Source:** PROBLEMS.md Issues 59, 63 · `src/database/io.rs:101`,
 `src/database/allocation.rs:399,461`, `src/database/format.rs:109`
 
-**Problem (I/O — Issue 59):** `read_data` / `write_data` have `todo!()` and `panic!()`
-for type combinations not yet implemented.  Schemas using those types panic at file I/O
-time.
+**Completed (0.8.2):**
+- `read_data`: `Parts::Array` implemented (loop over element count, recurse per element).
+  `Parts::Sorted | Ordered | Hash | Index | Spacial` now panics with a clear message
+  ("binary I/O not supported for keyed collection fields").  `Parts::Base` → `unreachable!`.
+- `write_data`: same messaging improvements for Sorted/etc. and `Parts::Base`.
 
-**Problem (format — Issue 63):** `format_record` has a `todo!()` for sub-record fields.
-A struct type with a nested struct field panics on format/print.
+**Remaining:**
+- `write_data` `Parts::Array` — write support requires allocating new records in the store;
+  deferred.  Currently panics with a clear message.
+- `format_record` Issue 63 — `src/database/format.rs:109` still has a `TODO` for
+  `Parts::Struct(_)` and `Parts::EnumValue(_, _)` sub-record fields.  A struct with a
+  nested struct field prints `{}` instead of field contents.  Fix: call
+  `self.write_field(s, field_index, indent + 1)` recursively, as `write_struct` already
+  does for `Parts::Struct` at line 351.
 
-**Exact locations:**
-- `src/database/io.rs:152` — `read_data` panics on `Parts::Array | Sorted | Ordered | Hash | Index | Spacial | Base`
-- `src/database/io.rs:256` — `write_data` panics on the same variants
-- `src/database/format.rs:109` — `// TODO if f_tp is sub_record/vector/sorted/enum` in `format_record`
-
-**Design:**
-
-*Issue 59 — `read_data` / `write_data`:*
-- `Parts::Array(elem_tp)`: A fixed-size embedded array. Implement by looping over element
-  count (from type metadata), computing each element's byte offset, and recursing into
-  `read_data`/`write_data` for the element type — same pattern as `Parts::Vector`.
-- `Parts::Sorted | Ordered | Hash | Index | Spacial`: Keyed collections store internal
-  store pointers (`DbRef`) that are meaningless outside the originating process. Binary
-  serialisation of these types is undefined. Emit a **compile-time diagnostic** ("cannot
-  use read_file/write_file with a struct containing a sorted/hash/index field") rather than
-  a runtime panic. The `has_collection_field` guard in `native.rs` (see S5/F57 in CHANGELOG)
-  already handles sorted/index/hash for the struct level; extend it or rely on it for these
-  variants.
-- `Parts::Base`: Should be unreachable for a well-formed type. Convert to `unreachable!`
-  with a descriptive message.
-
-*Issue 63 — `format_record` line 109 sub-record TODO:*
-- When a field's type has `Parts::Struct(_)` or `Parts::EnumValue(_, _)`, the display code
-  at line 109 falls through to the closing `}` without printing the field.  Fix: call
-  `self.write_field(s, field_index, indent + 1)` recursively for the nested record, just as
-  `write_struct` already does for `Parts::Struct` at line 351.
-
-3. Add integration tests covering: a struct with an `Array` field serialized to/from binary;
-   a struct with a nested struct field displayed via `format_record`.
-
-**Effort:** Small–Medium per arm; Medium overall including tests.
+**Effort:** Small (each remaining arm is isolated)
 **Target:** 0.8.2
 
 ---
@@ -1252,86 +1210,6 @@ below.  Full design in [NATIVE.md](NATIVE.md).
 **Target: 0.8.2** — the generator already exists; N items are incremental fixes that turn
 broken generated output into correct compiled Rust.  Each fix is small and independent.
 See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
-
----
-
----
-
-### N1  Add `--native` CLI flag
-**Description:** Add `--native` mode to `src/main.rs`: parse a `.loft` file, emit a
-self-contained Rust source file via `Output::output_native()`, compile it with `rustc`,
-and run the resulting binary.  This is the end-to-end native codegen path.
-**Dependencies:** N6 ✓ (reverse/range iteration complete), N9 ✓ (fill.rs auto-generation complete) — all dependencies met.
-
-**Fix path:**
-
-**Step 1 — CLI argument** (`src/main.rs`):
-Extend the argument-parsing loop to recognise `--native`:
-```rust
-"--native" => { native_mode = true; }
-```
-When `native_mode` is set, run the native pipeline instead of the interpreter pipeline.
-
-**Step 2 — Parse and compile** (`src/main.rs`):
-Re-use the existing interpreter pipeline up through `byte_code()`:
-```rust
-let mut p = Parser::new();
-p.parse(&file_content, &file_name)?;
-let start_def = compile::byte_code(&mut p.data, &mut p.database)?;
-```
-`start_def` is the first definition index of the user program (after the stdlib
-definitions).
-
-**Step 3 — Emit Rust source** (`src/main.rs`, `src/generation.rs`):
-Write to a temporary file in `std::env::temp_dir()`:
-```rust
-let tmp = std::env::temp_dir().join("loft_native.rs");
-let mut f = File::create(&tmp)?;
-let mut out = Output { data: &p.data, stores: &p.database, counter: 0,
-                       indent: 0, def_nr: 0, declared: Default::default() };
-out.output_native(&mut f, 0, start_def)?;
-```
-
-**Step 4 — Compile and run** (`src/main.rs`):
-```rust
-let binary = std::env::temp_dir().join("loft_native_bin");
-let status = std::process::Command::new("rustc")
-    .args(["--edition=2024", "-o", binary.to_str().unwrap(),
-           tmp.to_str().unwrap()])
-    .status()?;
-if !status.success() {
-    eprintln!("loft: native compilation failed");
-    std::process::exit(1);
-}
-std::process::Command::new(&binary)
-    .args(std::env::args().skip_while(|a| a != "--native").skip(2))
-    .status()?;
-```
-The `rustc` invocation needs `--edition=2024` (the project uses Rust 2024 features
-including `let` chains).  Linking against the `loft` crate is not needed for
-self-contained generated code — `output_native` already emits all required `use` paths
-from `codegen_runtime`.
-
-**Step 5 — Error handling:**
-- If `rustc` is not in `PATH`: print a clear error (`loft: rustc not found; install
-  the Rust toolchain to use --native mode`) and exit 1.
-- If the generated source has compile errors (indicates a codegen bug): print the
-  `rustc` stderr and suggest `--debug` flag to dump the generated source.
-- If the binary exits non-zero: propagate the exit code.
-
-**Step 6 — `--native-emit` flag (optional, for debugging):**
-Add `--native-emit <out.rs>` to emit the Rust source to a named file without
-compiling.  Useful for inspecting codegen output.
-
-**Files changed:**
-
-| File | Change |
-|---|---|
-| `src/main.rs` | Add `--native` / `--native-emit` flag; native pipeline |
-| `tests/native.rs` | Integration test: compile + run a trivial loft program via `--native` |
-
-**Effort:** Medium
-**Target:** 0.8.2
 
 ---
 

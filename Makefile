@@ -26,6 +26,14 @@ profile:
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
 
+ci:
+	cargo fmt -- --check > result.txt 2>&1 && \
+	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
+	cargo test >> result.txt 2>&1
+
+run-tests:
+	cargo test > result.txt 2>&1
+
 clippy:
 	cargo clippy -- -W clippy::all -W clippy::cognitive_complexity > result.txt 2>&1
 	cargo clippy --tests -- -W clippy::all -W clippy::cognitive_complexity >> result.txt 2>&1
@@ -59,6 +67,66 @@ gtest:
 pdf:
 	cargo run --bin gendoc
 	typst compile doc/loft-reference.typ doc/loft-reference.pdf
+
+test-native:
+	@cargo build --release -q
+	@failed=0; \
+	for f in tests/docs/*.loft; do \
+		printf "  %-45s" "$$f"; \
+		out=$$(./target/release/loft --native "$$f" 2>&1); \
+		code=$$?; \
+		if [ $$code -ne 0 ] || echo "$$out" | grep -q "^Error:\|panicked"; then \
+			echo "FAILED"; \
+			echo "$$out" | grep -A2 "^Error:\|panicked" | head -5; \
+			failed=$$((failed + 1)); \
+		else \
+			echo "ok"; \
+		fi; \
+	done; \
+	if [ $$failed -gt 0 ]; then \
+		echo "$$failed file(s) failed"; \
+		exit 1; \
+	else \
+		echo "All native tests passed."; \
+	fi
+
+test-wasm:
+	@cargo build --release -q
+	@WASMTIME=$$(which wasmtime 2>/dev/null); \
+	if [ -n "$$WASMTIME" ]; then echo "Running wasm tests with wasmtime"; else echo "wasmtime not found — compile-only (install via: brew install wasmtime)"; fi; \
+	failed=0; \
+	for f in tests/docs/*.loft; do \
+		printf "  %-45s" "$$f"; \
+		wasm=$$(mktemp /tmp/loft_wasm_XXXXXX.wasm); \
+		out=$$(./target/release/loft --native-wasm "$$wasm" "$$f" 2>&1); \
+		code=$$?; \
+		if [ $$code -ne 0 ]; then \
+			rm -f "$$wasm"; \
+			echo "FAILED (compile)"; \
+			echo "$$out" | head -5; \
+			failed=$$((failed + 1)); \
+		elif [ -n "$$WASMTIME" ]; then \
+			run_out=$$($$WASMTIME "$$wasm" 2>&1); \
+			run_code=$$?; \
+			rm -f "$$wasm"; \
+			if [ $$run_code -ne 0 ] || echo "$$run_out" | grep -q "^Error:\|panicked"; then \
+				echo "FAILED (run)"; \
+				echo "$$run_out" | grep -A2 "^Error:\|panicked" | head -5; \
+				failed=$$((failed + 1)); \
+			else \
+				echo "ok"; \
+			fi; \
+		else \
+			rm -f "$$wasm"; \
+			echo "ok (compiled)"; \
+		fi; \
+	done; \
+	if [ $$failed -gt 0 ]; then \
+		echo "$$failed file(s) failed"; \
+		exit 1; \
+	else \
+		echo "All wasm tests passed."; \
+	fi
 
 loft-test:
 	@cargo build --bin loft --release -q

@@ -90,6 +90,10 @@ pub struct Parser {
     expr_not_null: bool,
     /// The field name for the most recently parsed `not null` field access (for diagnostics).
     expr_not_null_name: String,
+    /// Counter incremented each time a lambda expression is parsed.
+    /// Lambda names are `__lambda_N`; the same N is produced on both passes because the counter
+    /// advances identically in both passes (same token order → same parse order).
+    pub lambda_counter: u32,
 }
 
 // Operators ordered on their precedence
@@ -209,6 +213,7 @@ impl Parser {
             pending_imports: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
+            lambda_counter: 0,
         }
     }
 
@@ -224,11 +229,13 @@ impl Parser {
         self.first_pass = true;
         self.pending_imports.clear();
         self.data.reset();
+        self.lambda_counter = 0;
         self.parse_file();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
             self.data.reset();
+            self.lambda_counter = 0;
             self.lexer.switch(filename);
             self.parse_file();
         }
@@ -308,6 +315,7 @@ impl Parser {
         self.vars.logging = logging;
         self.lexer.parse_string(text, filename);
         self.data.reset();
+        self.lambda_counter = 0;
         self.parse_file();
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
@@ -315,6 +323,7 @@ impl Parser {
             return;
         }
         self.data.reset();
+        self.lambda_counter = 0;
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
         self.parse_file();
