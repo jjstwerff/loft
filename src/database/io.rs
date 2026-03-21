@@ -143,14 +143,43 @@ impl Stores {
                         self.read_data(&elem, elem_tp, little_endian, data);
                     }
                 }
-                Parts::Array(_)
-                | Parts::Sorted(_, _)
+                Parts::Array(elem_tp) => {
+                    let v_rec = {
+                        let store = &self.allocations[r.store_nr as usize];
+                        store.get_int(r.rec, r.pos) as u32
+                    };
+                    let length = if v_rec == 0 {
+                        0u32
+                    } else {
+                        let store = &self.allocations[r.store_nr as usize];
+                        store.get_int(v_rec, 4) as u32
+                    };
+                    let store_nr = r.store_nr;
+                    for i in 0..length {
+                        let elm_rec = {
+                            let store = &self.allocations[store_nr as usize];
+                            store.get_int(v_rec, 8 + 4 * i) as u32
+                        };
+                        let elem = DbRef {
+                            store_nr,
+                            rec: elm_rec,
+                            pos: 8,
+                        };
+                        self.read_data(&elem, elem_tp, little_endian, data);
+                    }
+                }
+                Parts::Sorted(_, _)
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _)
-                | Parts::Base => panic!(
-                    "Not implemented type for file reading {}",
+                | Parts::Spacial(_, _) => panic!(
+                    "binary I/O not supported for type '{}': it contains a collection field \
+                     with store-internal references that cannot be serialized",
+                    self.types[tp as usize].name
+                ),
+                Parts::Base => unreachable!(
+                    "Parts::Base should never appear as a field type in read_data \
+                     (type: {})",
                     self.types[tp as usize].name
                 ),
             },
@@ -252,9 +281,14 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _)
-                | Parts::Base => panic!(
-                    "Not implemented type for file writing {}",
+                | Parts::Spacial(_, _) => panic!(
+                    "binary I/O not supported for type '{}': it contains a collection field \
+                     with store-internal references that cannot be serialized",
+                    self.types[tp as usize].name
+                ),
+                Parts::Base => unreachable!(
+                    "Parts::Base should never appear as a field type in write_data \
+                     (type: {})",
                     self.types[tp as usize].name
                 ),
             },
