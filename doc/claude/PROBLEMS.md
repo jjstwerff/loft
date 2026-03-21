@@ -39,11 +39,12 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
 | 67 | Silent early-return on store resize limit (no diagnostic) | ~~Fixed~~ | S6-67: saturating_mul + checked_add panic in store.rs |
 | 74 | Native codegen: `OpGetFileText`/`OpTruncateFile`/`OpSeekFile`/`OpSizeFile` missing from `codegen_runtime` | High | `--native` only; no workaround |
-| 75 | Native codegen: text variable (`String`) passed where `Str` expected in function calls | High | `--native` only; no workaround |
-| 76 | Native codegen: `OpFormatSingle`, `OpFormatStackText`, `OpRemove`, `OpHashRemove`, `OpAppendCopy` missing from `codegen_runtime` | Medium | `--native` only; affects float/vector/collection tests |
+| 75 | Native codegen: text variable (`String`) passed where `Str` expected in function calls | ~~Fixed~~ | N1: `append_text` uses `&*(val)`, `emit_content` uses `Str::new(&*(expr))` |
+| 76 | Native codegen: `OpFormatSingle`, `OpFormatStackText`, `OpRemove`, `OpHashRemove`, `OpAppendCopy` missing from `codegen_runtime` | ~~Fixed~~ | N1: `format_single` uses `ops::format_single`; others implemented in prior sessions |
 | 77 | Native codegen: `CallRef`/function-pointer calls not implemented | Medium | `--native` only; affects `06-function.loft` |
-| 78 | Native codegen: double-borrow of `stores` in some generated code | Medium | `--native` only; affects struct/library/lock tests |
+| 78 | Native codegen: double-borrow of `stores` in some generated code | ~~Fixed~~ | N1: `output_if_with_subst` applies pre-eval substitution only to conditions |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
+| 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
 
 ---
 
@@ -471,27 +472,6 @@ codegen emits them as direct function calls but no implementation is provided.
 generator emits them (e.g. `fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String)`).
 The implementations can delegate to the same logic already in `src/state/io.rs`.
 
-### 75. Text variable (`String`) passed where `Str` expected in function calls
-
-**Symptom:** `error[E0308]: mismatched types — expected Str, found &String`.
-
-**Root cause:** Text-typed local variables are emitted as `String` (via `Context::Variable`),
-but function parameter signatures emit text arguments as `Str` (via `Context::Argument`).
-`&String` does not coerce to `Str` because `Str` is a store-backed reference, not a string slice.
-
-**Fix path:** In `output_function` and `output_call_template`, change text parameters in
-user-defined functions to `&str` (or `String`) instead of `Str`, and emit call-site text
-variables as `&*var_name` (or `var_name.as_str()`).  `Str` should only be used for
-store-backed text passed between template/Op functions.
-
-### 76. Format / collection Op functions missing from `codegen_runtime`
-
-**Symptom:** `cannot find function OpFormatSingle / OpFormatStackText / OpRemove / OpHashRemove / OpAppendCopy`.
-
-**Fix path:** Same approach as #74 — add wrappers to `codegen_runtime.rs`.  These affect
-float formatting (05), text formatting (06), vector remove (07, 10), hash remove (10–12), and
-struct copy (08).
-
 ### 77. Function-pointer calls (`CallRef`) not implemented
 
 **Symptom:** `cannot find function CallRef` in `06-function.loft`.  Also `Int`/`Var` emitted
@@ -501,14 +481,6 @@ as bare identifiers from lambda/routine call codegen.
 that calling a function by stored `u32` def-number generates a Rust indirect call or a match
 dispatch table.
 
-### 78. Double-borrow of `stores` in generated code
-
-**Symptom:** `error[E0502]: cannot borrow *stores as immutable because it is also borrowed as mutable`.
-
-**Fix path:** The `needs_pre_eval` hoisting logic in `generation.rs` does not hoist all
-sub-expressions that take `&stores` while the outer call takes `&mut stores`.  Extend
-`needs_pre_eval` to cover the additional cases found in struct/library/lock tests.
-
 ### 79. `external` crate reference unresolved
 
 **Symptom:** `error[E0433]: failed to resolve: use of unresolved module external` in
@@ -517,6 +489,24 @@ sub-expressions that take `&stores` while the outer call takes `&mut stores`.  E
 **Fix path:** The random number extension uses an `external` FFI crate that is not included in
 the native codegen output.  Either bundle the implementation in `codegen_runtime` or emit the
 necessary `extern` block in the generated file.
+
+### 80. 16-parser native runtime panic: "Allocating a used store" (LIFO free order)
+
+**Symptom:** `thread 'main' panicked at src/database/allocation.rs:24:9: Allocating a used store`
+when running `--native tests/docs/16-parser.loft` on the third call to `n_parse`.
+
+**Root cause:** Inside `n_parse`, three stores are allocated (`var_p`, `var___ref_1`,
+`var___ref_2`) in LIFO stack order.  They are freed at the end of the function in allocation
+order (var_p first), which violates the LIFO contract.  When an intermediate function call
+(like `t_4Code_define`) allocates and does not free its own stores, `max` advances beyond 3,
+so freeing var_p (store 0) sets `max = max - 1` to an index that points at an in-use store.
+On the next call to `n_parse`, `OpDatabase` tries to allocate at that index and panics.
+
+**Fix path:** Change the generated `OpFreeRef` order at the end of `n_parse` to LIFO (free
+`var___ref_2` first, then `var___ref_1`, then `var_p`).  This is a codegen issue: the loft
+compiler emits frees in declaration order, but the store allocator requires LIFO.  Fix in
+`output_block` to sort free calls by store_nr descending, or fix in `allocation.rs` to accept
+non-LIFO frees (would require a free-list instead of a stack pointer).
 
 ---
 

@@ -82,6 +82,28 @@ fn sanitize(name: &str) -> String {
     name.replace('#', "__")
 }
 
+/// Use this to determine whether a type is a narrow integer subtype (u8/u16/i8/i16).
+/// Returns `Some("u8")` etc. when a cast from `i32` to that type is needed at return sites.
+/// Returns `None` for `i32`, `i64`, and all non-integer types.
+#[must_use]
+fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
+    match tp {
+        Type::Integer(from, to)
+            if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
+        {
+            Some("u8")
+        }
+        Type::Integer(from, to)
+            if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
+        {
+            Some("u16")
+        }
+        Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 255 => Some("i8"),
+        Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 65536 => Some("i16"),
+        _ => None,
+    }
+}
+
 /// Use this to map a loft type to the Rust type used in generated code.
 /// The context controls whether the type appears as an owned value, argument, variable, or reference.
 ///
@@ -99,19 +121,38 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         return format!("&mut {}", rust_type(in_tp, &Context::Variable));
     }
     match tp {
+        // Narrow integer subtypes use their precise Rust type only in the function-return
+        // context.  In variable and argument contexts `i32` is used instead to avoid
+        // cascading type-mismatch errors when the variable is passed to a template
+        // operation (e.g. `set_short`) that expects `i32`.  The `return` site adds an
+        // explicit `as u16` / `as u8` cast (see `narrow_int_cast`).
         Type::Integer(from, to)
-            if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
+            if context == &Context::Result
+                && i64::from(*to) - i64::from(*from) <= 255
+                && i64::from(*from) >= 0 =>
         {
             "u8"
         }
         Type::Integer(from, to)
-            if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
+            if context == &Context::Result
+                && i64::from(*to) - i64::from(*from) <= 65536
+                && i64::from(*from) >= 0 =>
         {
             "u16"
         }
+        Type::Integer(from, to)
+            if context == &Context::Result
+                && i64::from(*to) - i64::from(*from) <= 255 =>
+        {
+            "i8"
+        }
+        Type::Integer(from, to)
+            if context == &Context::Result
+                && i64::from(*to) - i64::from(*from) <= 65536 =>
+        {
+            "i16"
+        }
         Type::Enum(_, false, _) => "u8",
-        Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
-        Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
         Type::Integer(_, _) | Type::Character => "i32",
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
@@ -1107,14 +1148,20 @@ extern crate loft;"
                 self.output_call(w, *def_nr, vals)?;
             }
             Value::Return(val) => {
-                let returns_text = matches!(self.data.def(self.def_nr).returned, Type::Text(_));
+                let returned = &self.data.def(self.def_nr).returned;
+                let returns_text = matches!(returned, Type::Text(_));
+                let narrow = narrow_int_cast(returned);
                 write!(w, "return ")?;
                 if returns_text {
                     write!(w, "Str::new(")?;
+                } else if narrow.is_some() {
+                    write!(w, "(")?;
                 }
                 self.output_code_inner(w, val)?;
                 if returns_text {
                     write!(w, ")")?;
+                } else if let Some(cast) = narrow {
+                    write!(w, ") as {cast}")?;
                 }
             }
             Value::Keys(keys) => {
@@ -1305,14 +1352,20 @@ extern crate loft;"
                 let is_return_expr =
                     !is_void_block && !has_trailing_void && return_idx == Some(vnr);
                 let wrap_result = is_return_expr && is_text_result;
+                let narrow_cast =
+                    if is_return_expr { narrow_int_cast(&bl.result) } else { None };
                 if wrap_result {
                     write!(w, "Str::new(")?;
+                } else if narrow_cast.is_some() {
+                    write!(w, "(")?;
                 }
                 self.indent += 1;
                 self.output_code_with_subst(w, v, &pre_evals)?;
                 self.indent -= 1;
                 if wrap_result {
                     write!(w, ")")?;
+                } else if let Some(cast) = narrow_cast {
+                    write!(w, ") as {cast}")?;
                 }
                 if is_return_expr {
                     writeln!(w)?;
@@ -1328,6 +1381,8 @@ extern crate loft;"
             self.indent(w)?;
             if is_text_result {
                 writeln!(w, "Str::new(_ret)")?;
+            } else if let Some(cast) = narrow_int_cast(&bl.result) {
+                writeln!(w, "_ret as {cast}")?;
             } else {
                 writeln!(w, "_ret")?;
             }
@@ -1407,6 +1462,11 @@ extern crate loft;"
             self.output_code_inner(w, to)?;
             if needs_to_string {
                 write!(w, ".to_string()")?;
+            } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
+                // Variable is a narrow integer type (stored as i32), but the RHS expression
+                // (a function returning u16 or an iterator block returning as u16) produces
+                // the narrow type. Add an explicit `as i32` cast.
+                write!(w, " as i32")?;
             }
         }
         if let Some((src_name, d_nr)) = copy_record {
@@ -1698,7 +1758,7 @@ extern crate loft;"
             2 => write!(w, "Content::Long({expr})"),
             3 => write!(w, "Content::Single({expr})"),
             4 => write!(w, "Content::Float({expr})"),
-            6 => write!(w, "Content::Str(Str::new({expr}))"),
+            6 => write!(w, "Content::Str(Str::new(&*({expr})))"),
             _ => write!(w, "Content::Long(0)"),
         }
     }
@@ -1733,7 +1793,7 @@ extern crate loft;"
         if let [Value::Var(nr), val] = vals {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
-            write!(w, "var_{s_nr} += {val_expr}")?;
+            write!(w, "var_{s_nr} += &*({val_expr})")?;
             return Ok(());
         }
         panic!("Could not parse {vals:?}");
@@ -1825,8 +1885,7 @@ extern crate loft;"
         panic!("Could not parse {vals:?}");
     }
 
-    /// Use this to emit `OpFormatSingle`/`OpFormatStackSingle` as a call to `ops::format_float`
-    /// with the single (f32) value widened to f64.
+    /// Use this to emit `OpFormatSingle`/`OpFormatStackSingle` as a call to `ops::format_single`.
     fn format_single(
         &mut self,
         w: &mut dyn Write,
@@ -1841,7 +1900,7 @@ extern crate loft;"
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_float({prefix}var_{s_nr}, f64::from({val_expr}), {width_expr}, {prec_expr})"
+                "ops::format_single({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr})"
             )?;
             return Ok(());
         }
@@ -1949,7 +2008,9 @@ extern crate loft;"
                 } else {
                     // When the template parameter expects a narrow unsigned integer (u8/u16),
                     // native codegen emits i32 literals.  Add a cast so the types match.
-                    let tp_str = rust_type(&a.typedef, &Context::Variable);
+                    // Use Context::Result to get the precise narrow type (e.g. u16) since
+                    // Context::Variable returns i32 for narrow integers.
+                    let tp_str = rust_type(&a.typedef, &Context::Result);
                     if matches!(tp_str.as_str(), "u8" | "u16") {
                         let typed_with = if with.ends_with("_i32") {
                             format!("{}_{tp_str}", &with[..with.len() - 4])
