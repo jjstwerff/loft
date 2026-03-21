@@ -531,7 +531,6 @@ fn test() {
 // ── map / filter / reduce ─────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "slot conflict in map comprehension block-return pattern (Step 8)"]
 fn map_integers() {
     code!(
         "fn double(x: integer) -> integer { x * 2 }
@@ -549,7 +548,6 @@ fn test() {
 }
 
 #[test]
-#[ignore = "slot conflict in filter comprehension block-return pattern (Step 8)"]
 fn filter_integers() {
     code!(
         "fn is_even(x: integer) -> boolean { x % 2 == 0 }
