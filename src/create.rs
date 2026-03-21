@@ -92,7 +92,7 @@ pub fn init(state: &mut State) {{
     }
     drop(into);
     let _ = std::process::Command::new("rustfmt")
-        .arg("tests/generated/fill.rs")
+        .args(["--edition", "2024", "tests/generated/fill.rs"])
         .status();
     Ok(())
 }
@@ -113,7 +113,27 @@ fn replace_attributes(data: &Data, d_nr: u32, res: &mut String) {
 /// # Errors
 /// When the resulting file cannot be correctly written.
 pub fn generate_code(data: &Data) -> std::io::Result<()> {
-    let mut into = File::create("tests/generated/fill.rs")?;
+    generate_code_to(data, "tests/generated/fill.rs").map(|_| ())
+}
+
+/// Write fill.rs content to `path`, then format it with rustfmt and return the result.
+/// Use this when you need a formatted copy at a custom path (e.g. to avoid file-write races).
+/// # Errors
+/// When the file cannot be written.
+pub fn generate_code_to(data: &Data, path: &str) -> std::io::Result<String> {
+    let mut into = File::create(path)?;
+    generate_code_into(data, &mut into)?;
+    drop(into);
+    let _ = std::process::Command::new("rustfmt")
+        .args(["--edition", "2024", path])
+        .status();
+    std::fs::read_to_string(path)
+}
+
+/// Write fill.rs content directly to an arbitrary writer (no rustfmt).
+/// # Errors
+/// When the writer reports an error.
+pub fn generate_code_into(data: &Data, into: &mut dyn Write) -> std::io::Result<()> {
     let mut count = 0;
     for d_nr in 0..data.definitions() {
         if data.def(d_nr).is_operator() {

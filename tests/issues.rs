@@ -1130,22 +1130,26 @@ fn n9a_generated_fill_has_ops_import() {
     );
 }
 
-/// N9 (N20b/N20c/N20d): auto-generated tests/generated/fill.rs must be byte-for-byte
-/// identical to src/fill.rs once all #rust templates are present and rustfmt is applied.
-/// For reliable results run in isolation: `cargo test --test issues n9_generated_fill_matches_src`
-/// (parallel test runs race on tests/generated/fill.rs writes from other tests).
+/// N9 (N20b/N20c/N20d): auto-generated fill.rs must be byte-for-byte identical to
+/// src/fill.rs once all #rust templates are present.
+/// Generates to a thread-local temp file to avoid races with other tests writing
+/// tests/generated/fill.rs.
 #[test]
 fn n9_generated_fill_matches_src() {
-    // Trigger a fresh generate_code() so this test's write is the most recent.
-    code!("fn n9_check() -> integer { 42 }")
-        .expr("n9_check()")
-        .result(Value::Int(42));
-    let generated = std::fs::read_to_string("tests/generated/fill.rs")
-        .expect("tests/generated/fill.rs not found");
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    // Use a unique path so parallel test runs do not race on the same file.
+    let tmp = format!(
+        "tests/generated/fill_n9_{:?}.rs",
+        std::thread::current().id()
+    );
+    let generated = loft::create::generate_code_to(&p.data, &tmp).expect("generate_code_to failed");
+    let _ = std::fs::remove_file(&tmp);
     let src = std::fs::read_to_string("src/fill.rs").expect("src/fill.rs not found");
     assert_eq!(
         generated, src,
-        "tests/generated/fill.rs differs from src/fill.rs — \
+        "generated fill.rs differs from src/fill.rs — \
          run create::generate_code() and copy the result"
     );
 }
