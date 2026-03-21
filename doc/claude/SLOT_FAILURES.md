@@ -1,5 +1,10 @@
 # Slot assignment failure analysis and design
 
+> **HISTORICAL** — All three bugs (A, B, C) documented here are fixed (A6.3a/b, two-zone redesign).
+> The failure matrix shows every listed test passing.
+> The current slot assignment design is in [SLOTS.md](SLOTS.md).
+> Issue 72 (block-return slot conflict) is documented in [PROBLEMS.md](PROBLEMS.md) § 72.
+
 ## Modes
 
 As of A6.3b, `assign_slots` (greedy interval colouring) is the unconditional default.
