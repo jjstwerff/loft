@@ -1839,7 +1839,7 @@ mod tests {
         v
     }
 
-    /// Mark `scope` as a loop scope and record its seq-number range [seq_start, seq_end).
+    /// Mark `scope` as a loop scope and record its seq-number range [`seq_start`, `seq_end`).
     /// Must be called before `assign_slots` runs for the loop scope to influence
     /// `tos_estimate`.
     fn declare_loop(f: &mut Function, scope: u16, seq_start: u32, seq_end: u32) {
@@ -2166,7 +2166,7 @@ mod tests {
 
     /// A dead 1-byte variable's slot must not be reused by a wider variable via
     /// displacement.  `flag` (scope 0, argument/outermost scope — permanent, never freed)
-    /// remains physically on the stack even after its live interval ends, so tos_estimate=1.
+    /// remains physically on the stack even after its live interval ends, so `tos_estimate`=1.
     /// `fnref` (4B) cannot displace into the 1B flag slot (size mismatch) and is
     /// placed at slot 1 (fresh TOS), which is also correct for direct placement.
     #[test]
@@ -2364,14 +2364,14 @@ mod tests {
     /// dead when the second loop starts, and a non-loop variable `total` is born between
     /// the two loops and lives through the second.
     ///
-    /// Before the `loop_seq_ranges` fix, `assign_slots` computed tos_estimate for the second
+    /// Before the `loop_seq_ranges` fix, `assign_slots` computed `tos_estimate` for the second
     /// `e#iter_state` by including the dead first-loop block vars (non-loop scope → physically
-    /// present until return).  This raised tos_estimate to 64, which caused the second
+    /// present until return).  This raised `tos_estimate` to 64, which caused the second
     /// `e#iter_state` to be placed at slot 56 (past `total` at 52).  Codegen then remapped it
     /// to 52 (actual TOS) → conflict with `total`.
     ///
     /// The correct behavior: `assign_slots` must see the dead non-loop-scope vars and place
-    /// the second `e#iter_state` at tos_estimate, which codegen's actual TOS also matches.
+    /// the second `e#iter_state` at `tos_estimate`, which codegen's actual TOS also matches.
     #[test]
     fn assign_slots_sequential_for_loops_no_conflict() {
         let ref_tp = Type::Reference(0, vec![]);
@@ -2406,8 +2406,7 @@ mod tests {
         ); // local_start=4: no-arg function, 4-byte return address
         assert!(
             find_conflict(&f.variables, &HashMap::new()).is_none(),
-            "second e#iter_state must not alias total; variable table:\n{}",
-            f
+            "second e#iter_state must not alias total; variable table:\n{f}",
         );
     }
 

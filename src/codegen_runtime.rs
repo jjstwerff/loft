@@ -21,6 +21,8 @@ use crate::keys::{Content, DbRef, Key};
 use crate::ops;
 use crate::tree;
 use crate::vector;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write as _};
 
 /// Allocate a database root record for the given type.
 /// The generated code calls this as `OpDatabase(stores, var, tp)` where `var` is
@@ -389,4 +391,99 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
 
     *iter = pack_iter(cur, finish);
     result
+}
+
+/// Read the entire contents of a file into `content`, replacing its previous value.
+/// If the file cannot be opened or read, `content` is cleared.
+/// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
+pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
+    if file.rec == 0 {
+        return;
+    }
+    let file_path = {
+        let store = stores.store(&file);
+        store
+            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .to_owned()
+    };
+    content.clear();
+    if let Ok(mut f) = File::open(&file_path)
+        && f.read_to_string(content).is_err()
+    {
+        content.clear();
+    }
+}
+
+/// Seek to `pos` bytes from the start of the file.
+/// If the file handle is not yet open, stores `pos` in `#next` so the first
+/// read/write applies the seek after opening.
+/// Bytecode equivalent: `State::seek_file` in `src/state/io.rs`.
+pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
+    if file.rec == 0 {
+        return;
+    }
+    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    if file_ref == i32::MIN {
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 16, pos);
+    } else if let Some(f) = &mut stores.files[file_ref as usize]
+        && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
+    {
+        eprintln!("file seek error: {e}");
+    }
+}
+
+/// Return the byte size of the file, or `i64::MIN` if the size cannot be determined.
+/// Bytecode equivalent: `State::size_file` in `src/state/io.rs`.
+#[must_use]
+pub fn OpSizeFile(stores: &mut Stores, file: DbRef) -> i64 {
+    if file.rec == 0 {
+        return i64::MIN;
+    }
+    let file_path = {
+        let store = stores.store(&file);
+        store
+            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .to_owned()
+    };
+    if let Ok(meta) = std::fs::metadata(&file_path) {
+        meta.len() as i64
+    } else {
+        i64::MIN
+    }
+}
+
+/// Truncate (or extend) the file to `size` bytes.  Closes any open handle first.
+/// Returns `true` on success, `false` on failure.
+/// Bytecode equivalent: `State::truncate_file` in `src/state/io.rs`.
+pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
+    if file.rec == 0 {
+        return false;
+    }
+    let file_path = {
+        let store = stores.store(&file);
+        store
+            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .to_owned()
+    };
+    // Close any open handle so resize starts from a clean state.
+    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
+        stores.files[file_ref as usize] = None;
+        stores
+            .store_mut(&file)
+            .set_int(file.rec, file.pos + 28, i32::MIN);
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 8, i64::MIN);
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 16, i64::MIN);
+    }
+    OpenOptions::new()
+        .write(true)
+        .open(&file_path)
+        .and_then(|f| f.set_len(size as u64))
+        .is_ok()
 }

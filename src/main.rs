@@ -6,7 +6,6 @@
 pub mod diagnostics;
 mod calc;
 mod compile;
-mod create;
 mod data;
 mod database;
 mod fill;
@@ -35,6 +34,7 @@ mod variables;
 mod vector;
 
 use crate::state::State;
+use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 
@@ -69,7 +69,11 @@ fn print_help() {
     );
     println!("  --format-check <file>         exit 1 if file is not in canonical format");
     println!("  --native                      compile to native Rust via rustc and run");
+    println!("  --native-release              like --native but emit only reachable functions and");
+    println!("                                compile with rustc -O (optimised build)");
     println!("  --native-emit <out.rs>        write generated Rust source to <out.rs> and exit");
+    println!("  --native-wasm <out.wasm>      compile to WebAssembly (wasm32-wasip2) and write");
+    println!("                                the .wasm file to <out.wasm>");
 }
 
 fn handle_generate_log_config(path_opt: Option<&str>) {
@@ -101,7 +105,9 @@ fn main() {
     let mut generate_log_config: Option<Option<String>> = None;
     let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = false;
+    let mut native_release = false;
     let mut native_emit: Option<String> = None;
+    let mut native_wasm: Option<String> = None;
     let mut user_args: Vec<String> = Vec::new();
     while let Some(arg) = args.next() {
         let a = arg.to_str().unwrap();
@@ -143,8 +149,17 @@ fn main() {
             format_mode = Some(("check", path));
         } else if a == "--native" {
             native_mode = true;
+        } else if a == "--native-release" {
+            native_mode = true;
+            native_release = true;
         } else if a == "--native-emit" {
             native_emit = Some(
+                args.next()
+                    .map(|s| s.to_str().unwrap().to_string())
+                    .unwrap_or_default(),
+            );
+        } else if a == "--native-wasm" {
+            native_wasm = Some(
                 args.next()
                     .map(|s| s.to_str().unwrap().to_string())
                     .unwrap_or_default(),
@@ -245,6 +260,85 @@ fn main() {
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut p.data);
 
+    // WASM codegen pipeline: --native-wasm
+    if let Some(ref wasm_out) = native_wasm {
+        if wasm_out.is_empty() {
+            eprintln!("loft: --native-wasm requires an output path (e.g. --native-wasm out.wasm)");
+            std::process::exit(1);
+        }
+        let end_def = p.data.definitions();
+        let rs_path = std::env::temp_dir().join("loft_wasm.rs");
+        {
+            let mut f = match std::fs::File::create(&rs_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(
+                        "loft: cannot write wasm source to '{}': {e}",
+                        rs_path.display()
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let mut out = generation::Output {
+                data: &p.data,
+                stores: &state.database,
+                counter: 0,
+                indent: 0,
+                def_nr: 0,
+                declared: HashSet::new(),
+            };
+            let main_nr = p.data.def_nr("n_main");
+            let entry_defs: Vec<u32> = if main_nr < end_def {
+                vec![main_nr]
+            } else {
+                (start_def..end_def).collect()
+            };
+            if let Err(e) =
+                out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)
+            {
+                eprintln!("loft: wasm code generation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        let mut cmd = std::process::Command::new("rustc");
+        cmd.arg("--edition=2024")
+            .arg("--target")
+            .arg("wasm32-wasip2")
+            .arg("--crate-type")
+            .arg("bin")
+            .arg("-O")
+            .arg("-o")
+            .arg(wasm_out)
+            .arg(&rs_path);
+        if let Some(lib_dir) = loft_lib_dir() {
+            cmd.arg("--extern")
+                .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+            cmd.arg("-L").arg(lib_dir.join("deps"));
+        }
+        let status = cmd.status();
+        let _ = std::fs::remove_file(&rs_path);
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                eprintln!(
+                    "loft: wasm compilation failed (try --native-emit to inspect the source)"
+                );
+                std::process::exit(1);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!(
+                    "loft: rustc not found; install the Rust toolchain to use --native-wasm"
+                );
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("loft: failed to launch rustc: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // Native codegen pipeline: --native or --native-emit
     if native_mode || native_emit.is_some() {
         let end_def = p.data.definitions();
@@ -269,9 +363,20 @@ fn main() {
                 counter: 0,
                 indent: 0,
                 def_nr: 0,
-                declared: Default::default(),
+                declared: HashSet::new(),
             };
-            if let Err(e) = out.output_native(&mut f, start_def, end_def) {
+            let result = if native_release {
+                let main_nr = p.data.def_nr("n_main");
+                let entry_defs: Vec<u32> = if main_nr < end_def {
+                    vec![main_nr]
+                } else {
+                    (start_def..end_def).collect()
+                };
+                out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)
+            } else {
+                out.output_native(&mut f, 0, end_def)
+            };
+            if let Err(e) = result {
                 eprintln!("loft: native code generation failed: {e}");
                 std::process::exit(1);
             }
@@ -279,16 +384,22 @@ fn main() {
         if native_emit.is_some() {
             return; // --native-emit: just write the file, don't compile
         }
-        // --native: compile with rustc and run
+        // --native / --native-release: compile with rustc and run
         let binary = std::env::temp_dir().join("loft_native_bin");
-        let status = std::process::Command::new("rustc")
-            .args([
-                "--edition=2024",
-                "-o",
-                binary.to_str().unwrap(),
-                emit_path.to_str().unwrap(),
-            ])
-            .status();
+        let mut cmd = std::process::Command::new("rustc");
+        cmd.arg("--edition=2024")
+            .arg("-o")
+            .arg(&binary)
+            .arg(&emit_path);
+        if native_release {
+            cmd.arg("-O");
+        }
+        if let Some(lib_dir) = loft_lib_dir() {
+            cmd.arg("--extern")
+                .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+            cmd.arg("-L").arg(lib_dir.join("deps"));
+        }
+        let status = cmd.status();
         let status = match status {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -349,6 +460,17 @@ fn with_trailing_sep(p: &std::path::Path) -> String {
         s.push(std::path::MAIN_SEPARATOR);
     }
     s
+}
+
+/// Return the directory that contains `libloft.rlib` so that rustc invocations
+/// can find `extern crate loft` via `-L`.  Returns `None` when the binary path
+/// cannot be determined or the file is not present.
+fn loft_lib_dir() -> Option<std::path::PathBuf> {
+    let dir = env::current_exe().ok()?.parent()?.to_path_buf();
+    if dir.join("libloft.rlib").exists() {
+        return Some(dir);
+    }
+    None
 }
 
 fn project_dir() -> String {

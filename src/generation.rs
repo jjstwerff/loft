@@ -6,6 +6,7 @@ use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 
+
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
 fn collect_calls(val: &Value, calls: &mut HashSet<u32>) {
@@ -113,6 +114,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
         Type::Integer(_, _) | Type::Character => "i32",
         Type::Text(_) if context == &Context::Variable => "String",
+        Type::Text(_) if context == &Context::Argument => "&str",
         Type::Text(_) => "Str",
         Type::Long => "i64",
         Type::Boolean => "bool",
@@ -124,7 +126,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _) => "DbRef",
-        Type::Routine(_) => "u32",
+        Type::Routine(_) | Type::Function(_, _) => "u32",
         Type::Unknown(_) => "??",
         Type::Iterator(_, _) => "Iterator",
         Type::Keys => "&[Key]",
@@ -151,40 +153,7 @@ impl Output<'_> {
         self.declared.clear();
     }
 
-    /// Use this instead of `output_native` when the target is a WASM runtime.
-    /// It wraps `output_native` with the crate scaffolding that WASM requires.
-    ///
-    /// # Errors
-    /// Returns an error if any file-system operation fails.
-    pub fn output_webassembly(&mut self, dir: &str) -> std::io::Result<()> {
-        let program = "code/".to_string() + dir;
-        let source = "code/".to_string() + dir + "/src";
-        std::fs::create_dir_all(&source)?;
-        std::fs::copy("webassembly/src/ops.rs", source.clone() + "/ops.rs")?;
-        std::fs::copy("webassembly/src/store.rs", source.clone() + "/store.rs")?;
-        let cw = &mut std::fs::File::create(program + "/Cargo.toml")?;
-        cw.write_all(
-            "[package]
-name = \"scriptlib\"
-version = \"0.1.0\"
-"
-            .as_bytes(),
-        )?;
-        let w = &mut std::fs::File::create(source + "/main.rs")?;
-        w.write_all(
-            "#![allow(unused_parens)]
-mod ops;
-mod store;
-
-use ops::*;
-"
-            .as_bytes(),
-        )?;
-        self.output_native(w, 0, self.data.definitions())
-    }
-
     /// Use this as the main entry point for native Rust code generation.
-    /// Use `output_webassembly` instead when the target is a WASM runtime.
     ///
     /// # Errors
     /// Returns an error if any write action to `w` fails.
@@ -266,7 +235,14 @@ extern crate loft;"
         writeln!(w, "    db.finish();\n}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
-        self.emit_main_bootstrap(w, till)
+        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
+        if (0..till).any(|d| self.data.def(d).name == "n_main") {
+            writeln!(
+                w,
+                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+            )?;
+        }
+        Ok(())
     }
 
     /// Emit a Rust `fn main()` bootstrap if the program defines a loft `main` function.
@@ -610,35 +586,92 @@ extern crate loft;"
         writeln!(w, "\n")
     }
 
-    /// Use this when you need to generate code for an isolated expression, e.g. in tests.
-    /// Use `output_native` for whole-function emission.
-    ///
-    /// # Errors
-    /// Returns an error if any writing to `w` fails.
-    ///
-    /// # Panics
-    /// If internal buffer-to-string conversions encounter non-UTF-8 data, which should
-    /// never happen for well-formed generated code.
-    pub fn output_code(&mut self, w: &mut dyn Write, code: &Value) -> std::io::Result<()> {
-        self.declared.clear();
-        self.output_code_inner(w, code)
-    }
-
     /// Use this instead of emitting an argument block when the block exists only to pass a
     /// local text variable by mutable reference. Returns the variable index so the call site
     /// can emit `&mut var_<name>` without generating a spurious empty block expression.
     fn create_stack_var(&self, v: &Value) -> Option<u16> {
+        // Direct OpCreateStack call on a text variable: `fn f(x: &text)` called as `f(txt)`.
+        // The parser wraps the argument as Value::Call("OpCreateStack", [Value::Var(n)]).
+        // output_call emits nothing for OpCreateStack, so we must intercept here and emit
+        // `&mut var_<name>` instead.
+        if let Value::Call(d_nr, args) = v
+            && self.data.def(*d_nr).name == "OpCreateStack"
+            && let [Value::Var(nr)] = args.as_slice()
+            && matches!(self.data.def(self.def_nr).variables.tp(*nr), Type::Text(_))
+        {
+            return Some(*nr);
+        }
         let Value::Block(bl) = v else { return None };
-        let Type::Reference(_, vars) = &bl.result else {
-            return None;
-        };
-        let [vr] = vars.as_slice() else { return None };
-        let only_create_stack = bl
-            .operators
+        // Handle DbRef-stack refs: Type::Reference with OpCreateStack ops.
+        if let Type::Reference(_, vars) = &bl.result {
+            let [vr] = vars.as_slice() else { return None };
+            let only_create_stack = bl
+                .operators
+                .iter()
+                .filter(|op| !matches!(op, Value::Line(_)))
+                .all(|op| matches!(op, Value::Call(d_nr, _) if self.data.def(*d_nr).name == "OpCreateStack"));
+            return only_create_stack.then_some(*vr);
+        }
+        None
+    }
+
+    /// Fix the "hoisted return value" pattern inserted by `scopes::free_vars`.
+    ///
+    /// When a function returns early (`return expr`) and has local text/ref variables
+    /// that need cleanup, `scopes::free_vars` transforms the return into:
+    ///   `[expr, OpFreeText(v)…, Return(Null)]`
+    /// so the interpreter can push `expr` onto the stack before freeing locals and returning.
+    ///
+    /// In native Rust code, `OpFreeText` is a no-op (Rust drops automatically), so the
+    /// pattern degenerates to `expr; return ();` which drops the return value and fails to
+    /// compile when the function return type is not void.
+    ///
+    /// This method detects the pattern in a slice of block operators and returns a patched
+    /// copy where `Return(Null)` is replaced by `Return(expr)` and `expr` is removed from
+    /// its earlier position.
+    fn patch_hoisted_returns<'a>(&self, ops: &'a [Value]) -> std::borrow::Cow<'a, [Value]> {
+        let fn_returned = &self.data.def(self.def_nr).returned;
+        if matches!(fn_returned, Type::Void) {
+            return std::borrow::Cow::Borrowed(ops);
+        }
+        // Quick check: is there any Return(Null) at all?
+        if !ops
             .iter()
-            .filter(|op| !matches!(op, Value::Line(_)))
-            .all(|op| matches!(op, Value::Call(d_nr, _) if self.data.def(*d_nr).name == "OpCreateStack"));
-        only_create_stack.then_some(*vr)
+            .any(|op| matches!(op, Value::Return(v) if **v == Value::Null))
+        {
+            return std::borrow::Cow::Borrowed(ops);
+        }
+        let is_free_op = |op: &Value| {
+            if let Value::Call(d, _) = op {
+                let name = &self.data.def(*d).name;
+                name == "OpFreeText" || name == "OpFreeRef"
+            } else {
+                false
+            }
+        };
+        let mut result: Vec<Value> = ops.to_vec();
+        // Process all Return(Null) occurrences (usually just one).
+        let mut search_from = 0;
+        while let Some(ret_pos) = result[search_from..]
+            .iter()
+            .position(|op| matches!(op, Value::Return(v) if **v == Value::Null))
+            .map(|p| p + search_from)
+        {
+            // Find the nearest preceding expression that is not a free-op, Line, or Return.
+            let expr_pos = result[..ret_pos]
+                .iter()
+                .rposition(|op| !matches!(op, Value::Line(_)) && !is_free_op(op));
+            if let Some(idx) = expr_pos {
+                let expr = result.remove(idx);
+                // ret_pos shifted by -1 because we removed one element before it.
+                let actual_ret = ret_pos - 1;
+                result[actual_ret] = Value::Return(Box::new(expr));
+                search_from = actual_ret + 1;
+            } else {
+                search_from = ret_pos + 1;
+            }
+        }
+        std::borrow::Cow::Owned(result)
     }
 
     /// Use this to detect sub-expressions that would cause a double-borrow of `stores`
@@ -648,6 +681,10 @@ extern crate loft;"
             Value::Call(d_nr, vals) => {
                 let def = self.data.def(*d_nr);
                 if def.rust.is_empty() {
+                    true
+                } else if def.rust.contains("stores") {
+                    // Template fns that use `stores` can cause double-borrow when nested
+                    // inside another stores-using call; treat them as needing pre-eval.
                     true
                 } else {
                     vals.iter().any(|a| self.needs_pre_eval(a))
@@ -688,6 +725,18 @@ extern crate loft;"
         v: &Value,
         result: &mut Vec<(String, String)>,
     ) -> std::io::Result<()> {
+        // Recurse into wrapper nodes so nested Call nodes inside Set/Drop/If are found.
+        if let Value::Set(_, rhs) = v {
+            return self.collect_pre_evals_inner(rhs, result);
+        }
+        if let Value::Drop(inner) = v {
+            return self.collect_pre_evals_inner(inner, result);
+        }
+        if let Value::If(test, true_v, false_v) = v {
+            self.collect_pre_evals_inner(test, result)?;
+            self.collect_pre_evals_inner(true_v, result)?;
+            return self.collect_pre_evals_inner(false_v, result);
+        }
         if let Value::Call(d_nr, vals) = v {
             let def_fn = self.data.def(*d_nr);
             if def_fn.rust.is_empty() {
@@ -866,7 +915,9 @@ extern crate loft;"
             Value::Var(var) => {
                 let variables = &self.data.def(self.def_nr).variables;
                 let text_var = if matches!(variables.tp(*var), Type::Text(_)) {
-                    "&"
+                    // Text params are `&str` — already a reference, don't add `&`
+                    // Text locals are `String` — add `&` to coerce to `&str`
+                    if variables.is_argument(*var) { "" } else { "&" }
                 } else {
                     ""
                 };
@@ -1023,22 +1074,35 @@ extern crate loft;"
         )?;
         let is_void_block = matches!(bl.result, Type::Void);
         let is_text_result = wrap_text && matches!(bl.result, Type::Text(_));
+        // Fix "hoisted return value" pattern from scopes::free_vars before iterating.
+        // This replaces [expr, OpFreeText…, Return(Null)] with [OpFreeText…, Return(expr)]
+        // so native code emits `return expr` rather than a dropped `expr` + `return ()`.
+        let patched_ops;
+        let operators: &[Value] = if is_void_block {
+            patched_ops = self.patch_hoisted_returns(&bl.operators);
+            &patched_ops
+        } else {
+            &bl.operators
+        };
         // When the block expects a non-void result but trailing operator(s) are
         // void (drops, if-without-else, etc.), find the last non-void operator
         // and capture its value before the trailing void ops run.
-        let last_op_idx = bl.operators.len().saturating_sub(1);
-        let return_idx = if is_void_block || bl.operators.is_empty() {
+        let last_op_idx = operators.len().saturating_sub(1);
+        let return_idx = if is_void_block || operators.is_empty() {
             None
         } else {
-            bl.operators.iter().rposition(|v| !self.is_void_value(v))
+            operators.iter().rposition(|v| !self.is_void_value(v))
         };
         let has_trailing_void = return_idx.is_some_and(|i| i < last_op_idx);
-        for (vnr, v) in bl.operators.iter().enumerate() {
+        for (vnr, v) in operators.iter().enumerate() {
             if matches!(v, Value::Line(_)) {
                 continue;
             }
             // Collect pre-evaluations needed for this operator (to avoid double
             // mutable borrow of stores when user-defined functions are nested).
+            // NOTE: indent is incremented here to match the level used in
+            // output_code_with_subst below, so multi-line block pre_codes match.
+            let counter_before = self.counter;
             self.indent += 1;
             let pre_evals = self.collect_pre_evals(v)?;
             self.indent -= 1;
@@ -1047,6 +1111,10 @@ extern crate loft;"
                 writeln!(w, "let {name} = {code};")?;
             }
             self.indent(w)?;
+            // Restore counter so the buffer-check pass in output_code_with_subst
+            // produces the same counter values as collect_pre_evals did above.
+            let counter_after = self.counter;
+            self.counter = counter_before;
             if has_trailing_void && return_idx == Some(vnr) {
                 write!(w, "let _ret = ")?;
                 self.indent += 1;
@@ -1072,6 +1140,7 @@ extern crate loft;"
                     writeln!(w, ";")?;
                 }
             }
+            self.counter = counter_after;
         }
         if has_trailing_void {
             self.indent(w)?;
@@ -1189,7 +1258,7 @@ extern crate loft;"
             "OpFormatFloat" | "OpFormatStackFloat" => {
                 return self.format_float(w, vals, name == "OpFormatStackFloat");
             }
-            "OpFormatText" => return self.format_text(w, vals),
+            "OpFormatText" | "OpFormatStackText" => return self.format_text(w, vals),
             "OpAppendText" => return self.append_text(w, vals),
             "OpAppendStackText" => {
                 write!(w, "*")?;
@@ -1462,7 +1531,7 @@ extern crate loft;"
         panic!("Could not parse {vals:?}");
     }
 
-    /// Use this to emit `OpFormatText` as a call to `ops::format_text`.
+    /// Use this to emit `OpFormatText`/`OpFormatStackText` as a call to `ops::format_text`.
     fn format_text(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
         if let [
             Value::Var(nr),
@@ -1474,10 +1543,20 @@ extern crate loft;"
         {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
+            // User-defined functions returning text produce `Str`; `format_text` expects `&str`.
+            // Wrap with `&*` to deref `Str` → `&str` (deref coercion via Deref<Target=str>).
+            let val_str = if let Value::Call(d, _) = val
+                && matches!(self.data.def(*d).returned, Type::Text(_))
+                && self.data.def(*d).rust.is_empty()
+            {
+                format!("&*({val_expr})")
+            } else {
+                val_expr
+            };
             let width_expr = self.generate_expr_buf(width)?;
             write!(
                 w,
-                "ops::format_text(&mut var_{s_nr}, {val_expr}, {width_expr}, {dir}, {token})"
+                "ops::format_text(&mut var_{s_nr}, {val_str}, {width_expr}, {dir}, {token})"
             )?;
             return Ok(());
         }
@@ -1590,6 +1669,27 @@ extern crate loft;"
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
+                // For character-typed parameters, a call returning character yields `i32`
+                // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
+                if matches!(a.typedef, Type::Character)
+                    && let Value::Call(d, _) = &vals[a_nr]
+                    && matches!(self.data.def(*d).returned, Type::Character)
+                {
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    continue;
+                }
+                // Text-typed parameters: a user-defined function returning text produces `Str`,
+                // but templates expect `&str`. Deref `Str` → `&str` with `&*`.
+                if matches!(a.typedef, Type::Text(_))
+                    && let Value::Call(d, _) = &vals[a_nr]
+                    && matches!(self.data.def(*d).returned, Type::Text(_))
+                    && self.data.def(*d).rust.is_empty()
+                {
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    res = res.replace(&name, &format!("(&*({inner}))"));
+                    continue;
+                }
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
                 // Integer parameter receiving a char value needs explicit cast.
                 if matches!(a.typedef, Type::Integer(_, _)) {
@@ -1606,7 +1706,15 @@ extern crate loft;"
                         with += " as u32 as i32";
                     }
                 }
-                res = res.replace(&name, &format!("({with})"));
+                // Templates use u32::from(@name) for field offsets; that was written for u16
+                // parameters (fill.rs).  Native codegen emits i32 literals, so substitute the
+                // entire u32::from(@name) pattern with (@value) as u32 to stay type-correct.
+                let u32_from_pat = format!("u32::from({name})");
+                if res.contains(&u32_from_pat) {
+                    res = res.replace(&u32_from_pat, &format!("({with}) as u32"));
+                } else {
+                    res = res.replace(&name, &format!("({with})"));
+                }
             } else {
                 println!(
                     "Problem def_fn {def_fn} attributes {:?} vals {vals:?}",
