@@ -391,6 +391,7 @@ impl State {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
         // Null-typed variables (e.g. `x = null`) have size 0 and no stack storage.
@@ -400,6 +401,15 @@ impl State {
             return;
         }
         let pos = stack.function.stack(v);
+        // Step 9: a variable that escaped assign_slots would silently corrupt the stack
+        // in release builds.  One unconditional integer compare catches it here.
+        assert!(
+            pos != u16::MAX,
+            "[generate_set] variable '{}' (var_nr={v}) in '{}' has stack_pos == u16::MAX — \
+             it was never assigned a slot by assign_slots.  This is a compiler bug.",
+            stack.function.name(v),
+            stack.data.def(stack.def_nr).name,
+        );
         if stack.function.is_stack_allocated(v) {
             // Reassignment — variable already on the stack.
             if matches!(stack.function.tp(v), Type::Text(_)) {
@@ -423,6 +433,18 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
+            // Step 8 fix: place_large_and_recurse processes the inner Block at v's slot, so
+            // outer_var and inner_var share the block-return slot — pos == stack.position always.
+            // Guard: if this fires, a new Set(v, Block) pattern bypassed the Step-8 fix.
+            #[cfg(debug_assertions)]
+            debug_assert!(
+                pos <= stack.position,
+                "[generate_set] Step-8 regression: pos({pos}) > stack.position({}) for '{}' \
+                 in '{}' — a Set(v, Block) pattern was not handled by place_large_and_recurse",
+                stack.position,
+                stack.function.name(v),
+                stack.data.def(stack.def_nr).name,
+            );
             if pos > stack.position
                 || (pos < stack.position
                     && matches!(
@@ -430,20 +452,13 @@ impl State {
                         Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
                     ))
             {
-                // Override slot to TOS in two cases:
-                // 1. pos > TOS: assign_slots over-estimated TOS for this variable.
-                //    Known case: Set(outer_var, Block([Set(inner_var, ...), Var(inner_var)]))
-                //    where assign_slots places outer_var first (advancing TOS by its size), then
-                //    recurses into the block at that higher TOS.  At codegen time the block
-                //    evaluates first so inner_var lands at the lower TOS; outer_var's pre-assigned
-                //    pos is above the real stack top.  Both share the block's return-value slot.
-                //    Fix: detect the "block-return = outer var" sharing pattern in
-                //    place_large_and_recurse and process the inner block before placing outer_var.
-                // 2. pos < TOS for a large type (Reference/Vector/struct-enum):
-                //    assign_slots places large types at exact TOS via place_large_and_recurse, but
-                //    a mutable &vector<T> argument passed by OpCreateStack can push a DbRef to the
-                //    eval stack before this block's large var is allocated, raising the codegen TOS
-                //    above the pre-assigned slot.  Bump the slot to actual TOS.
+                // Override slot to TOS.
+                // Case 1 (pos > TOS): should never fire after the Step-8 fix — the debug_assert
+                //   above catches any regression.  Retained as a release-mode safety net.
+                // Case 2 (pos < TOS for a large type): a mutable &vector<T> argument passed by
+                //   OpCreateStack pushes a DbRef to the eval stack before this block's large var
+                //   is allocated, raising the codegen TOS above the pre-assigned slot.  Still
+                //   fires legitimately in append_vector; retained until that pattern is fixed.
                 stack.function.set_stack_pos(v, stack.position);
             }
             let pos = stack.function.stack(v);
