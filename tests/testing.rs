@@ -6,7 +6,7 @@
 //! Testing framework
 use loft::create;
 #[cfg(debug_assertions)]
-use loft::data::Data;
+use loft::data::{Context, Data};
 use loft::scopes;
 extern crate loft;
 use loft::compile::byte_code;
@@ -59,6 +59,10 @@ pub struct Test {
     sizes: HashMap<String, u32>,
     result: Value,
     tp: Type,
+    /// Compact slot-mapping spec checked after byte_code (debug builds only).
+    /// Format: space-separated tokens of `name(scope)=slot`, e.g. `"_t(4L)=0 b(4L)=4"`.
+    /// Scope suffix "L" means the scope is a loop scope; no suffix means a regular scope.
+    expected_slots: Option<String>,
 }
 
 impl Test {
@@ -90,6 +94,17 @@ impl Test {
     /// Shorthand expressions for a test routine that returns a result.
     pub fn expr(&mut self, value: &str) -> &mut Test {
         self.expr = value.to_string();
+        self
+    }
+
+    /// Assert the stack-slot layout of `n_test` variables after codegen (debug builds only).
+    ///
+    /// `spec` is a space-separated list of `name(scope)=slot` tokens, e.g.:
+    /// `"_t(4L)=0  b(4L)=4"` — `_t` in loop scope 4 at slot 0, `b` in loop scope 4 at slot 4.
+    /// Scope suffix "L" asserts a loop scope; no suffix asserts a regular (non-loop) scope.
+    #[cfg(debug_assertions)]
+    pub fn slots(&mut self, spec: &str) -> &mut Test {
+        self.expected_slots = Some(spec.to_string());
         self
     }
 
@@ -204,6 +219,115 @@ impl Drop for Test {
         create::generate_lib(&p.data).unwrap();
         let mut state = State::new(p.database);
         byte_code(&mut state, &mut p.data);
+        #[cfg(debug_assertions)]
+        if let Some(spec) = &self.expected_slots {
+            let test_nr = p.data.def_nr("n_test");
+            let f = &p.data.def(test_nr).variables;
+            // Build the full calculated layout, sorted by slot, for diff output.
+            let mut all: Vec<(u16, u16, u16)> = (0..f.next_var())
+                .filter(|&v| f.stack(v) != u16::MAX)
+                .map(|v| (f.stack(v), f.scope(v), v))
+                .collect();
+            all.sort_by_key(|&(slot, _, _)| slot);
+            // Scope ranks: sorted unique non-arg scope numbers → depth 0, 1, 2, ...
+            let scope_ranks: std::collections::HashMap<u16, usize> = {
+                let unique: std::collections::BTreeSet<u16> = all
+                    .iter()
+                    .filter(|&&(_, _, v)| !f.is_argument(v))
+                    .map(|&(_, scope, _)| scope)
+                    .filter(|&s| s != u16::MAX)
+                    .collect();
+                unique
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, s)| (s, i))
+                    .collect()
+            };
+            // Build the calculated visual: a scope-header line on first entry into each scope,
+            // followed by variable lines with depth bars but no per-line scope label.
+            let mut seen_scopes: std::collections::HashSet<u16> = std::collections::HashSet::new();
+            let mut lines: Vec<String> = Vec::new();
+            let mut full_tokens: Vec<String> = Vec::new();
+            for &(slot, scope, v) in &all {
+                let is_arg = f.is_argument(v);
+                let ctx = if is_arg {
+                    Context::Argument
+                } else {
+                    Context::Variable
+                };
+                let sz = f.size(v, &ctx);
+                let scope_str = if is_arg {
+                    "arg".to_string()
+                } else if scope == u16::MAX {
+                    "-".to_string()
+                } else if f.is_loop_scope(scope) {
+                    format!("{scope}L")
+                } else {
+                    scope.to_string()
+                };
+                let origin: &str = if is_arg {
+                    ""
+                } else if scope == u16::MAX {
+                    ""
+                } else {
+                    f.scope_origin(scope)
+                };
+                let rank = if is_arg {
+                    0
+                } else {
+                    scope_ranks.get(&scope).copied().unwrap_or(0)
+                };
+                let bars = "│ ".repeat(rank);
+                let scope_key = if is_arg { u16::MAX } else { scope };
+                if seen_scopes.insert(scope_key) {
+                    let seq_range = if !is_arg && scope != u16::MAX {
+                        if let Some((s, e)) = f.loop_seq_range(scope) {
+                            format!(" [seq {s}..{e}]")
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+                    let header = if origin.is_empty() {
+                        format!("  {bars}{scope_str}{seq_range}")
+                    } else {
+                        format!("  {bars}{origin}:{scope_str}{seq_range}")
+                    };
+                    lines.push(header);
+                }
+                let interval = if is_arg {
+                    String::new()
+                } else {
+                    let fd = f.first_def(v);
+                    let lu = f.last_use(v);
+                    if fd == u32::MAX {
+                        " [never]".to_string()
+                    } else {
+                        format!(" [{fd}..{lu}]")
+                    }
+                };
+                lines.push(format!("  {bars}{}+{sz}={slot}{interval}", f.name(v)));
+                full_tokens.push(format!("{}({scope_str})+{sz}={slot}", f.name(v)));
+            }
+            let calculated = lines.join("\n");
+            // Compact single-line spec for copy-pasting slot values.
+            let spec_line = full_tokens.join("  ");
+            if spec.is_empty() {
+                panic!(
+                    "slots not asserted; calculated:\n{calculated}\n\n  .slots(\"{spec_line}\")"
+                );
+            }
+            if spec.trim() != calculated.trim() {
+                panic!(
+                    "slots mismatch:\n  asserted:\n{}\n  calculated:\n{calculated}\n\n  .slots(\"{spec_line}\")",
+                    spec.lines()
+                        .map(|l| format!("    {l}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+        }
         #[cfg(debug_assertions)]
         let config = LogConfig::from_env();
         #[cfg(debug_assertions)]
@@ -339,6 +463,7 @@ pub fn testing_code(code: &str, test: &str) -> Test {
         result: Value::Null,
         tp: Type::Unknown(0),
         sizes: HashMap::new(),
+        expected_slots: None,
     }
 }
 
@@ -354,5 +479,6 @@ pub fn testing_expr(expr: &str, test: &str) -> Test {
         result: Value::Null,
         tp: Type::Unknown(0),
         sizes: HashMap::new(),
+        expected_slots: None,
     }
 }
