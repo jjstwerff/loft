@@ -171,6 +171,7 @@ impl Test {
         state: &mut State,
         config: &LogConfig,
     ) -> File {
+        let _ = std::fs::create_dir_all("tests/dumps");
         let mut w = File::create(format!("tests/dumps/{}_{}.txt", self.file, self.name)).unwrap();
         writeln!(w, "{code}").unwrap();
         let to = state.database.types.len();
