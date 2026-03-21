@@ -30,10 +30,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 56 | `v += extra` via `&vector` ref-param panics in debug / silently fails in release | High | Use a return value instead of a ref-param for vector append |
 | 57 | Database type-dispatch panics on unrecognized types in search/io | ~~Fixed~~ | S3: exhaustive match arms in search.rs and io.rs |
 | 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
-| 59 | Unimplemented type combinations in binary file I/O | Medium | Avoid schema types not yet covered by `read_data`/`write_data` |
+| 59 | Unimplemented type combinations in binary file I/O | ~~Fixed~~ | S4: `read_data`/`write_data` now use `r.pos + f.position`; `binary_size()` helper advances slice; collection arms are `unreachable!()` |
 | 60 | No recursion depth limit in codegen and parser traversals | Medium | N/A — only affects adversarially deep ASTs |
 | 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
-| 63 | `todo!()` for sub-record type traversal in `format.rs` | Medium | Avoid sub-record schemas until implemented |
+| 63 | `todo!()` for sub-record type traversal in `format.rs` | ~~Fixed~~ | S4: `path()` now handles one-level nested structs, builds `"field.subfield[index]"` |
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
 | 65 | Type index out-of-bounds (`[]` indexing in `data.rs`) | ~~Fixed~~ | S6-65: get_type() helper in Stores panics with diagnostic |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
@@ -91,21 +91,19 @@ and `io.rs` and add the new case.  A compile-time exhaustiveness check (converti
 
 ---
 
-### 59. Unimplemented type combinations in binary file I/O
+### 59. Unimplemented type combinations in binary file I/O — ~~Fixed in S4~~
 
 **Severity:** Medium — triggers a panic on schemas using types not yet covered.
 
-**Location:** `src/database/io.rs:101`, `src/database/allocation.rs:399,461`
+**Location:** `src/database/io.rs` (fixed in commit S4)
 
-**Symptom:** `panic!("Not implemented type for file writing ...")` or `todo!()` in
-secondary-structure duplication paths when a schema uses a record type not yet handled by
-`read_data`/`write_data` or the allocation copy code.
-
-**Fix path:** Implement the missing arms one type at a time, following the pattern of
-the existing arms.  Secondary structure copy (`allocation.rs:399,461`) is a TODO for
-sub-record types that were deferred; implement analogously to the primary record copy path.
-
-**Effort:** Medium (several arms; requires careful binary layout knowledge)
+**Fix applied:** `read_data` and `write_data` now use `r.pos + u32::from(f.position)` for
+each struct field instead of the same `r.pos` for all fields.  A `binary_size()` helper
+advances the data slice between fields in `write_data`.  Collection-type arms
+(`Sorted`, `Hash`, `Index`, `Spacial`, `Array`, `Ordered`) are now `unreachable!()` with
+a message referencing the F57 compile-time guard; `Parts::Base` is likewise `unreachable!()`.
+Unit tests `read_data_struct_field_positions` and `write_data_struct_field_positions` in
+`database::io::tests` verify the fix.
 
 ---
 
@@ -254,22 +252,20 @@ exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arm
 
 ---
 
-### 63. `todo!()` for sub-record type traversal in `format.rs`
+### 63. `todo!()` for sub-record type traversal in `format.rs` — ~~Fixed in S4~~
 
 **Severity:** Medium — triggered by schemas that contain sub-records (nested struct types
 as fields).
 
-**Location:** `src/database/format.rs:109`
+**Location:** `src/database/format.rs` (fixed in commit S4)
 
-**Symptom:** `todo!()` when `format_record` encounters a field whose type is a nested
-record (sub-record).  The primary-record format path handles scalars and known compound
-types, but sub-record traversal is deferred.
-
-**Fix path:** Implement the sub-record branch by recursing into `format_record` for the
-nested type, following the pattern of the existing scalar arms.
-
-**Effort:** Small–Medium (recursive traversal; requires correct byte-offset computation
-for the nested record's fields)
+**Fix applied:** The `// TODO if f_tp is sub_record/vector/sorted/enum` at line 109 is
+replaced with a one-level nested struct traversal.  When a parent struct's field has
+`Parts::Struct(_)` or `Parts::EnumValue(_, _)` and the sub-struct contains a collection
+of the child type, `path()` now builds `"field.subfield[index]"` by iterating the
+sub-fields, computing the nested `DbRef` at
+`8 + u32::from(f.position) + u32::from(sf.position)`, and walking the collection to find
+the index.
 
 ---
 

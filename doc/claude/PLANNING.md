@@ -81,7 +81,7 @@ in parallel.
 
 **Stability hardening (S1–S6):**
 - **S3** — Database dispatch exhaustiveness: explicit variant arms in `search.rs`/`io.rs`. ✓
-- **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63).
+- **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63). ✓
 
 **Native code generation (Tier N):**
 - N2–N9 and N6.3 (runtime fixes, codegen fixes, fill.rs auto-generation, reverse and
