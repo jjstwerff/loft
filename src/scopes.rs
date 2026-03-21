@@ -82,10 +82,11 @@ pub fn check(data: &mut Data) {
                 .sum();
             arg_size + 4 // 4 bytes for the return-address slot
         };
-        // Pre-assign stack slots using greedy interval colouring so codegen reads a
-        // pre-computed position instead of calling claim() at every allocation.
-        let vars = &mut data.definitions[d_nr as usize].variables;
-        assign_slots(vars, local_start);
+        // Pre-assign stack slots using the two-zone block pre-claim approach.
+        {
+            let d = &mut data.definitions[d_nr as usize];
+            assign_slots(&mut d.variables, &mut d.code, local_start);
+        }
     }
 }
 
@@ -122,6 +123,7 @@ impl Scopes {
             Value::Loop(lp) => {
                 let scope = self.enter_scope();
                 self.loops.push(scope);
+                function.mark_loop_scope(scope);
                 let ls = self.convert(lp, function, data);
                 self.loops.pop();
                 self.exit_scope();
@@ -130,6 +132,7 @@ impl Scopes {
                     result: Type::Void,
                     name: lp.name,
                     scope,
+                    var_size: 0,
                 }))
             }
             Value::If(test, t_val, f_val) => self.scan_if(test, t_val, f_val, function, data),
@@ -183,6 +186,7 @@ impl Scopes {
                     result: bl.result.clone(),
                     name: bl.name,
                     scope,
+                    var_size: 0,
                 }))
             }
             Value::Call(d_nr, args) => {
@@ -202,6 +206,18 @@ impl Scopes {
             Value::Insert(ops) => {
                 Value::Insert(ops.iter().map(|v| self.scan(v, function, data)).collect())
             }
+            Value::Drop(inner) => Value::Drop(Box::new(self.scan(inner, function, data))),
+            // COVERAGE GAP: Value::Iter(index_var, create, next, extra_init) is NOT recursed
+            // into here.  Iter nodes ARE present in the IR at this point (compute_intervals
+            // handles them after scan_inner runs).  Any Value::Set inside create/next/extra_init
+            // is never seen by scan_set, so those variables keep scope = u16::MAX.
+            // Currently safe because Iter sub-expressions are synthesised by the parser and
+            // contain only index-variable reads (no user Set nodes in named variables).
+            // If that invariant ever changes — e.g. a Set(v, ...) appears inside an Iter
+            // sub-expression — v will keep scope = u16::MAX, making scopes_can_conflict always
+            // return true for v, and validate_slots will panic with a false-positive conflict.
+            // Fix: add a Value::Iter arm that recurses into all three sub-expressions, mirroring
+            // the compute_intervals arm in variables.rs.
             _ => val.clone(),
         }
     }
@@ -523,6 +539,7 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
         operators: ls,
         result: block.result.clone(),
         scope: block.scope,
+        var_size: 0,
     })));
     res
 }
