@@ -78,6 +78,17 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **Two-zone slot assignment** — `assign_slots` redesigned to eliminate TOS-estimate errors.
+  Large variables (Text 24 B, Reference 12 B, Vector 12 B) are placed sequentially in
+  IR-walk order (`place_large_and_recurse`); small variables (≤ 8 B) are coloured within a
+  pre-claimed zone at the frame base.  A new `Block.var_size` field stores the zone-1 size;
+  `generate_block` emits `OpReserveFrame(var_size)` at block entry to claim the small-variable
+  frame upfront.  `validate_slots` (debug-only) checks for slot conflicts and reports
+  overlapping live ranges.  The old `assign_slots_old`, `eager_slots`, and `running_tos`
+  machinery is removed.  Design notes: `doc/claude/SLOTS.md`.
+  (`src/variables.rs`, `src/state/codegen.rs`, `src/data.rs`, `default/01_code.loft`,
+  `src/fill.rs`, `src/state/mod.rs`)
+
 - **A13** — Float (`f64`, 8 B) and Long (`i64`, 8 B) variables now reuse dead stack
   slots of the same size, matching the existing behaviour for `integer` and `single`.
   Neither type has a pre-init opcode so slot reuse is safe.  (`src/variables.rs`
@@ -194,6 +205,17 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   updated accordingly.
 
 ### Bug fixes
+
+- **Issue 72** — `map`, `filter`, and `reduce` comprehensions no longer produce slot
+  conflicts.  In `place_large_and_recurse`, when a large non-Text variable is initialised
+  from a block (`Set(outer, Block([Set(inner, ...), Var(inner)]))`), the inner block is now
+  processed with `frame_base = outer.stack_pos` instead of `outer.stack_pos + outer.size`.
+  This matches codegen: `generate_block` runs with `to = outer.stack_pos`, so both
+  `outer` and `inner` share the block's result slot legally (non-overlapping live intervals
+  in parent/child scopes).  A `debug_assert!(pos <= stack.position)` guard added to
+  `generate_set` catches any future regression; an unconditional `assert!(pos != u16::MAX)`
+  added to detect variables that escape `assign_slots` before they corrupt the stack.
+  (`src/variables.rs` `place_large_and_recurse`; `src/state/codegen.rs` `generate_set`)
 
 - **F57** — `write_file` and `read_file` on a struct that contains a `sorted<T>`,
   `index<T>`, or `hash<T>` field now emits a compile-time error ("cannot use
