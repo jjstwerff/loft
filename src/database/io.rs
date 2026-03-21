@@ -152,22 +152,19 @@ impl Stores {
                     }
                 }
                 Parts::Array(elem_tp) => {
-                    let v_rec = {
-                        let store = &self.allocations[r.store_nr as usize];
-                        store.get_int(r.rec, r.pos) as u32
-                    };
+                    let store_nr = r.store_nr;
+                    let store = &self.allocations[store_nr as usize];
+                    let v_rec = store.get_int(r.rec, r.pos) as u32;
                     let length = if v_rec == 0 {
                         0u32
                     } else {
-                        let store = &self.allocations[r.store_nr as usize];
                         store.get_int(v_rec, 4) as u32
                     };
-                    let store_nr = r.store_nr;
-                    for i in 0..length {
-                        let elm_rec = {
-                            let store = &self.allocations[store_nr as usize];
-                            store.get_int(v_rec, 8 + 4 * i) as u32
-                        };
+                    // Collect elm_recs before the mutable borrow in read_data.
+                    let elm_recs: Vec<u32> = (0..length)
+                        .map(|i| store.get_int(v_rec, 8 + 4 * i) as u32)
+                        .collect();
+                    for elm_rec in elm_recs {
                         let elem = DbRef {
                             store_nr,
                             rec: elm_rec,

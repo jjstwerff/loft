@@ -220,14 +220,7 @@ extern crate loft;"
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
         self.output_functions(w, from, till, None)?;
-        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
-        if (from..till).any(|d| self.data.def(d).name == "n_main") {
-            writeln!(
-                w,
-                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
-            )?;
-        }
-        Ok(())
+        self.emit_main_bootstrap(w, till)
     }
 
     /// Like `output_native`, but only emits functions reachable from `entry_defs`.
@@ -273,8 +266,13 @@ extern crate loft;"
         writeln!(w, "    db.finish();\n}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
-        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
-        if (0..till).any(|d| self.data.def(d).name == "n_main") {
+        self.emit_main_bootstrap(w, till)
+    }
+
+    /// Emit a Rust `fn main()` bootstrap if the program defines a loft `main` function.
+    fn emit_main_bootstrap(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
+        let main_nr = self.data.def_nr("n_main");
+        if main_nr < till {
             writeln!(
                 w,
                 "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"

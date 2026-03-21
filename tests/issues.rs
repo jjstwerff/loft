@@ -1387,19 +1387,17 @@ fn n1_native_pipeline_trivial_program() {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
-    let loft_rlib = std::fs::read_dir(&deps_dir)
-        .ok()
-        .and_then(|mut it| {
-            it.find(|e| {
-                e.as_ref().is_ok_and(|e| {
-                    let n = e.file_name();
-                    let s = n.to_string_lossy();
-                    s.starts_with("libloft") && s.ends_with(".rlib")
-                })
+    let loft_rlib = std::fs::read_dir(&deps_dir).ok().and_then(|mut it| {
+        it.find(|e| {
+            e.as_ref().is_ok_and(|e| {
+                let n = e.file_name();
+                let s = n.to_string_lossy();
+                s.starts_with("libloft") && s.ends_with(".rlib")
             })
-            .and_then(|e| e.ok())
-            .map(|e| e.path())
-        });
+        })
+        .and_then(|e| e.ok())
+        .map(|e| e.path())
+    });
     let binary = std::env::temp_dir().join("loft_n1_test_bin");
     let mut rustc_args = vec![
         "--edition=2024".to_string(),
@@ -1411,7 +1409,10 @@ fn n1_native_pipeline_trivial_program() {
         rustc_args.push(format!("-L={}", deps_dir.display()));
     }
     rustc_args.push(tmp_rs.to_str().unwrap().to_string());
-    match std::process::Command::new("rustc").args(&rustc_args).status() {
+    match std::process::Command::new("rustc")
+        .args(&rustc_args)
+        .status()
+    {
         Ok(s) if s.success() => {
             // Binary compiled — run it to confirm correctness.
             let run = std::process::Command::new(&binary).status();
