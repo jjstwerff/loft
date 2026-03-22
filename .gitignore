@@ -5,3 +5,4 @@ tests/dumps
 tests/generated
 *.rlib
 tests/docs/log.txt
+.idea/

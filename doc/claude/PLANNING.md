@@ -509,15 +509,43 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 **Sources:** Prototype-friendly goal; callable fn refs already complete (landed in 0.8.0)
 **Severity:** Medium — without lambdas, `map` / `filter` require a named top-level function
 for every single-use transform, which is verbose for prototyping
-**Description:** Allow inline function literals at the expression level:
+**Description:** Two syntactic forms for inline function literals:
+
 ```loft
+// Long form — fully explicit types (always valid)
 doubled = map(items, fn(x: integer) -> integer { x * 2 });
 evens   = filter(items, fn(x: integer) -> boolean { x % 2 == 0 });
+
+// Short form — types inferred from call-site context
+doubled = map(items, |x| { x * 2 });
+evens   = filter(items, |x| { x > 0 });
+(a, b) = reduce(pairs, (0, 0), |acc, x| { (acc.0 + x.0, acc.1 + x.1) });
+
+// Short form with explicit annotations (when no context is available)
+transform: fn(integer) -> integer = |x: integer| -> integer { x * 2 };
+
+// Zero-parameter short form uses the existing || token
+run(|| { say("hello") });
 ```
-An anonymous function expression produces a `Type::Function` value, exactly like `fn <name>`,
-but the body is compiled inline.  No closure capture is required initially (captured variables
-can be added in a follow-up, see A5).
-**Fix path:**
+
+Both forms produce a `Type::Function` value with the same d_nr representation as
+`fn <name>`.  No closure capture is required initially (see A5 for full closures).
+
+**Grammar additions:**
+```
+single ::= ...
+         | 'fn' '(' [ param_list ] ')' [ '->' type ] block     // long form
+         | '|' [ short_param { ',' short_param } ] '|'
+               [ '->' type ] block                              // short form ≥1 param
+         | '||' [ '->' type ] block                             // short form 0 params
+
+short_param ::= lower_ident [ ':' type ]    // type optional when context supplies it
+```
+
+The `||` token already exists in the lexer; inside `parse_primary` it is re-interpreted
+as a zero-parameter closure opener rather than logical-OR (which is a binary operator
+and cannot appear at a primary-expression position).  A closing `|` token after the
+parameter list is consumed before `->` and the body block.
 
 **Two-pass strategy:**
 The parser is two-pass.  Anonymous functions must produce the same `d_nr` on both passes.
@@ -527,35 +555,66 @@ On the first pass, `add_def("__lambda_N", ...)` registers the definition and adv
 counter; on the second pass, `def_nr("__lambda_N")` looks it up and the counter advances
 identically, guaranteeing consistency.
 
-**Phase 1 — Parser** (`src/parser/expressions.rs`):
-In `parse_primary`, when `fn` is followed by `(` (rather than an identifier), call the new
-`parse_lambda` helper:
+**Type inference for short-form parameters:**
+Parameter types missing from the short form are resolved on the **second pass** from the
+**expected function type** propagated down through `parse_call`.  When `parse_call`
+determines that argument K expects type `fn(T1, T2) -> R`, it passes
+`hint: Some(Type::Function([T1, T2], R))` to `parse_primary`.  `parse_lambda_short`
+fills in any unannotated parameter types from `hint.args[K]` and the return type from
+`hint.ret` if no `->` annotation is present.
+
+If no hint is available and a parameter lacks an explicit annotation, the parser emits a
+compile error: *"cannot infer type for lambda parameter 'x'; add an explicit type
+annotation"*.
+
+On the first pass, short-form parameters without annotations are registered with a
+placeholder type (`Type::Unknown`); the second pass overwrites them with the inferred
+types before compiling the body.
+
+**Phase 1 — Long-form parser** (`src/parser/expressions.rs`):
+In `parse_primary`, when `fn` is followed by `(` (rather than an identifier), call the
+new `parse_lambda` helper:
 1. Synthesise `name = format!("__lambda_{}", self.lambda_counter)` and increment the counter.
-2. First pass: call `self.data.add_def(&name, pos, DefType::Function)`; parse parameter list
-   (building arg descriptors on `data`); parse `->` return type; skip the body block
-   (use `self.lexer.skip_block()`).
-3. Second pass: look up `d_nr = self.data.def_nr(&name)`; parse parameter list (same tokens,
-   registering arguments on `data`); parse `->` return type; parse the body block fully
-   (calls existing expression/statement parsing machinery).
-4. Emit `Value::Int(d_nr as i32)` — same representation as `fn <name>`.  Return
-   `Type::Function(arg_types, Box::new(ret_type))`.
-*Tests:* parser accepts valid lambda syntax; rejects malformed lambdas with a clear
-diagnostic; all existing `fn_ref_*` tests still pass.
+2. First pass: register the def, parse parameter list with explicit types, parse `->` return
+   type, skip the body (`self.lexer.skip_block()`).
+3. Second pass: look up `d_nr`; parse parameter list; parse `->` return type; parse body.
+4. Emit `Value::Int(d_nr as i32)`.  Return `Type::Function(arg_types, Box::new(ret_type))`.
+*Tests:* long-form lambda accepted; malformed lambda produces a clear diagnostic; all
+existing `fn_ref_*` tests still pass.
 
-**Phase 2 — Compilation** (`src/state/codegen.rs`, `src/compile.rs`):
-Because the lambda body is compiled inline during Phase 1's second-pass parse (same as a
-regular function definition), no changes to `compile.rs` are expected.  The def is already
-registered and compiled before `generate` encounters the `Value::Int(d_nr)` node — identical
-to how named fn-refs are handled.
-*Tests:* a basic `fn(x: integer) -> integer { x * 2 }` can be assigned to a variable
-and called through it; type checker accepts it wherever a `fn(integer) -> integer` is
-expected.
+**Phase 2 — Short-form parser** (`src/parser/expressions.rs`):
+Add a `parse_lambda_short` helper called from `parse_primary` when the current token is
+`|` or `||`:
+1. Consume the opening delimiter; collect `(name, Option<Type>)` pairs up to the
+   closing `|`.
+2. Optionally consume `->` and a return type.
+3. First pass: register `__lambda_N` with placeholder types for unannotated params;
+   skip the body.
+4. Second pass: fill in any `None` parameter types from `hint`; error if hint is absent
+   and a type is still `None`; compile the body.
+5. Emit `Value::Int(d_nr as i32)`.
+*Tests:* `|x| { x * 2 }` as argument to `fn(integer)->integer`; `|x, y| { x + y }`;
+`|| { 0 }` for zero params; explicit annotation `|x: integer| -> integer { x }`;
+error when no context and no annotation.
 
-**Phase 3 — Integration with map / filter / reduce**:
-Verify that anywhere a named `fn <name>` ref works, an inline `fn(...)` expression also
-works.  No compiler changes expected — the def-nr representation is already compatible.
-*Tests:* `map(v, fn(x: integer) -> integer { x * 2 })`, `filter` and `reduce` with
-inline lambdas; nested lambdas (lambda passed to a lambda).
+**Phase 3 — Hint propagation** (`src/parser/control.rs`):
+Extend `parse_call` to compute the expected type of each argument position and pass it
+as a hint to `parse_expression` → `parse_primary`.  When the expected type is
+`Type::Function(...)`, pass it as the hint for the short-lambda parser.  No change
+needed for the long form or non-lambda arguments.
+*Tests:* `map(v, |x| { x * 2 })` compiles and runs; `filter(v, |x| { x > 0 })`; nested
+call `map(filter(v, |x| { x > 0 }), |x| { x * 3 })`.
+
+**Phase 4 — Compilation** (`src/state/codegen.rs`, `src/compile.rs`):
+No changes expected.  Both lambda forms emit `Value::Int(d_nr)`, which is already handled
+identically to named fn-refs.
+*Tests:* both forms callable through a `fn(T) -> R` variable; `reduce` with a two-param
+short lambda.
+
+**Phase 5 — Integration with map / filter / reduce**:
+Verify that anywhere a named `fn <name>` ref works, both lambda forms also work.
+*Tests:* `map`, `filter`, `reduce` with short-form lambdas; named fn-ref alongside
+short lambda in the same expression; nested lambdas.
 
 **Effort:** Medium–High (parser.rs, compile.rs)
 **Target:** 0.8.2 (moved from 0.8.3 — needed before closures and aggregates; stability
@@ -769,15 +828,23 @@ defined inside the lambda are not flagged; non-capturing lambdas produce an empt
 **Phase 2 — Closure record layout** (`src/data.rs`, `src/typedef.rs`):
 For each capturing lambda, synthesise an anonymous struct type whose fields hold the
 captured variables; verify field offsets and total size.
+The element-size table and offset arithmetic introduced for tuples (see
+[TUPLES.md](TUPLES.md) § Memory Layout) are identical for closure record fields; use
+the shared helpers `element_size`, `element_offsets`, and `owned_elements` from
+`data.rs` rather than duplicating the logic.  The closure record is heap-allocated
+(a store record) and passed as a hidden trailing argument alongside the def-nr — it
+does not use the stack-only tuple layout.
 *Tests:* closure struct has the correct field count, types, and sizes; `sizeof` matches
-the expected layout.
+the expected layout; a record containing a `text` capture has `owned_elements` count 1.
 
 **Phase 3 — Capture at call site** (`src/state/codegen.rs`):
 At the point where a lambda expression is evaluated, emit code to allocate a closure
 record and copy the current values of the captured variables into it.  Pass the record
-as a hidden trailing argument alongside the def-nr.
+as a hidden trailing argument alongside the def-nr.  Copying a captured `text`
+variable into the record requires a deep copy (same rule as tuple text elements —
+see [TUPLES.md](TUPLES.md) § Copy Semantics).
 *Tests:* captured variable has the correct value when the lambda is called immediately
-after its definition.
+after its definition; captured `text` is independent of the original after capture.
 
 **Phase 4 — Closure body reads** (`src/state/codegen.rs`, `src/fill.rs`):
 Inside the compiled lambda function, redirect reads of captured variables to load from
@@ -787,9 +854,13 @@ modifying the original variable after capture does not affect the lambda's copy 
 semantics — mutable capture is out of scope for this item).
 
 **Phase 5 — Lifetime and cleanup** (`src/scopes.rs`):
-Emit `OpFreeRef` for the closure record at the end of the enclosing scope.
+Emit `OpFreeRef` for the closure record at the end of the enclosing scope.  When the
+record contains `text` or `reference` captures, free them in **reverse field index
+order** before releasing the record itself — the same LIFO invariant required by tuple
+scope exit (see [TUPLES.md](TUPLES.md) § Calling Convention, Scope exit order).  Use
+`owned_elements` from Phase 2 to enumerate the fields that need freeing.
 *Tests:* no store leak after a lambda goes out of scope; LIFO free order is respected
-when multiple closures are live simultaneously.
+when multiple closures are live simultaneously; a `text` capture is freed exactly once.
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1
