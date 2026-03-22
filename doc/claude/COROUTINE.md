@@ -1,0 +1,1137 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+# Coroutine Design
+
+> **Status: planned — not yet implemented.**
+
+Coroutines give loft programs generator functions: functions that can suspend
+execution with `yield`, return a value to the caller, and resume from the same
+point on the next iteration. The suspended function's entire stack — including
+any nested calls active at the point of `yield` — is serialised to a
+heap-allocated, extensible frame. This makes loft coroutines **stackful**: a
+`yield` inside a helper called from the generator is valid, and `yield from`
+delegates cleanly to a sub-generator.
+
+---
+
+## Contents
+
+- [Goals](#goals)
+- [Language Syntax](#language-syntax)
+- [Exposed Types](#exposed-types)
+- [Stack Layout and Execution Model](#stack-layout-and-execution-model)
+- [Coroutine Frame Design](#coroutine-frame-design)
+- [Runtime Design](#runtime-design)
+- [Safety Concerns and Mitigations](#safety-concerns-and-mitigations)
+- [Implementation Phases](#implementation-phases)
+- [Known Limitations](#known-limitations)
+- [Non-Goals](#non-goals)
+- [See also](#see-also)
+
+---
+
+## Goals
+
+- Allow any function returning `iterator<T>` to use `yield` to produce values
+  lazily, one at a time.
+- Preserve the full call stack at the point of `yield` (stackful semantics),
+  not only the generator's own locals. This allows `yield` inside helper
+  functions and makes `yield from` implementable without a trampoline.
+- Integrate naturally with the existing `for item in expr { }` loop syntax.
+- Keep the hot path (all existing code that does not use coroutines) completely
+  unaffected: no overhead on ordinary `fn_call` / `fn_return`.
+- Store suspended frames on the heap in extensible allocations so the frame
+  can grow to any call depth without preallocating a fixed stack size.
+
+---
+
+## Language Syntax
+
+### Generator function
+
+A function whose return type is `iterator<T>` is a **generator function**.
+Its body may contain `yield` expressions. The compiler rejects `yield` in any
+function not declared with an `iterator<T>` return type.
+
+```loft
+fn count_up(start: integer) -> iterator<integer> {
+    i = start;
+    loop {
+        yield i;
+        i += 1;
+    }
+}
+```
+
+The function body is **not** executed when the function is called. Instead, a
+suspended coroutine frame is allocated and returned as an `iterator<integer>`
+value. Execution begins on the first `next()` call or the first iteration of a
+consuming `for` loop.
+
+### `yield` — produce one value and suspend
+
+```loft
+yield expr;
+```
+
+Evaluates `expr` to type `T`, produces it as the next element of the iterator,
+and suspends the coroutine. Control returns to the consumer. The coroutine
+resumes from the statement immediately after `yield` on the next advance.
+
+`yield` may appear at any call depth inside the generator, including inside
+helper functions called from it (stackful semantics).
+
+### `yield from` — delegate to a sub-generator
+
+```loft
+yield from expr;    // expr must have type iterator<T>
+```
+
+Exhausts the sub-generator `expr`, forwarding each element it produces to the
+consumer, then continues execution in the outer generator. Equivalent to:
+
+```loft
+for item in expr { yield item; }
+```
+
+but dispatches the sub-advance directly without rebuilding a for-loop frame.
+Useful for tree traversal and recursive generators:
+
+```loft
+fn all_leaves(node: reference<TreeNode>) -> iterator<integer> {
+    if !node.left && !node.right {
+        yield node.value;
+    } else {
+        yield from all_leaves(node.left);
+        yield from all_leaves(node.right);
+    }
+}
+```
+
+### Consuming a generator
+
+**In a `for` loop (primary use case):**
+
+```loft
+for n in count_up(0) {
+    if n > 10 { break; }
+    say("{n}");
+}
+```
+
+The for-loop attributes `#first`, `#count`, and `#index` work on generator
+iterators; they are maintained by the for-loop wrapper, not by the generator
+itself. `e#remove` is a **compile-time error** on a generator iterator — a
+generator cannot remove a value it has already yielded
+(see [SC-CO-11](#sc-co-11--eremove-inside-a-generator-for-loop-must-be-a-compile-time-error)).
+
+**Explicit advance:**
+
+```loft
+gen = count_up(5);
+a = next(gen);    // 5 — gen is now suspended after the first yield
+b = next(gen);    // 6
+if exhausted(gen) { say("done"); }
+```
+
+`next(gen)` returns null when the generator is exhausted. `exhausted(gen)`
+tests the frame's `status` field and returns true regardless of whether the
+generator ever yielded a null value (see
+[Known Limitations CL-1](#known-limitations)).
+
+### Generator function with parameters
+
+Parameters are captured into the frame at construction time. They are
+accessible as locals inside the generator body and may be read or mutated.
+
+```loft
+fn range(from: integer, to: integer) -> iterator<integer> {
+    i = from;
+    while i < to { yield i; i += 1; }
+}
+```
+
+### Exhausting a generator early
+
+A `return` statement inside a generator marks it as exhausted immediately.
+The `for` loop exits normally; subsequent `next()` calls return null.
+
+```loft
+fn first_positive(v: vector<integer>) -> iterator<integer> {
+    for x in v {
+        if x > 0 { yield x; return; }
+    }
+}
+```
+
+---
+
+## Exposed Types
+
+Declared `pub` in `default/05_coroutine.loft`, loaded after `04_stacktrace.loft`.
+
+### `CoroutineStatus` — lifecycle state
+
+```loft
+pub enum CoroutineStatus {
+    Created,      // allocated; body not yet entered
+    Suspended,    // yielded; waiting to be resumed
+    Running,      // currently executing; re-entrant advance is a runtime error
+    Exhausted,    // returned or fell off the end; next() always returns null
+}
+```
+
+### `iterator<T>` — the generator handle
+
+`iterator<T>` is the existing loft iterator type. A generator function returns
+an `iterator<T>`; at the language level no new type name is needed. The runtime
+representation differs from a collection iterator (it uses `store_nr ==
+COROUTINE_STORE` in the DbRef), which is how the for-loop compiler and the
+`OpCoroutineNext` opcode distinguish a coroutine from a store-backed iterator.
+
+### `next(gen: iterator<T>) -> T`
+
+Advances the iterator by one step and returns the yielded value, or null when
+the generator is exhausted. Bound to `OpCoroutineNext`.
+
+### `exhausted(gen: iterator<T>) -> boolean`
+
+Returns true if and only if the frame's `status` is `Exhausted`. Safe to call
+on a null iterator (returns true). Bound to `OpExhausted`.
+
+---
+
+## Stack Layout and Execution Model
+
+### Stack layout overview
+
+```
+         lower addresses
+         ┌────────────────────────────────────────────┐
+         │  ... caller locals (e.g. the gen DbRef) ...│  ← caller's frame
+         ├────────────────────────────────────────────┤  ← new_base = stack_pos at resume
+         │  generator parameter 0                     │
+         │  generator parameter 1                     │
+         │  generator local variable A                │
+         │  generator local variable B                │
+         │  ... nested helper call locals ...         │
+         ├────────────────────────────────────────────┤  ← stack_pos
+```
+
+The generator frame is placed immediately above the caller's current stack top
+(`new_base = self.stack_pos`) at each resume. It is never at a fixed absolute
+position; `frame.stack_base` is updated to `self.stack_pos` at the start of
+every `OpCoroutineNext` (see [SC-CO-7](#sc-co-7--absolute-stack_base-stale-when-the-caller-pushes-locals-after-creation)).
+
+When the generator yields, the region `[new_base .. value_start)` is serialised
+into `frame.stack_bytes` and the stack pointer is rewound to `new_base`. The
+yielded value is slid down to `new_base` as the return value of `next()`.
+
+### Return address handling
+
+Unlike `fn_call`, which writes the return address onto the loft stack,
+`OpCoroutineNext` stores the continuation in the frame itself:
+
+```
+frame.caller_return_pos = self.code_pos   // instruction after OpCoroutineNext
+```
+
+`OpYield` and `OpCoroutineReturn` both jump to `frame.caller_return_pos` to
+return control to the `next()` call site. This avoids placing any return
+address on the loft stack and decouples the coroutine's execution from the
+caller's stack depth.
+
+### Lifecycle state machine
+
+```
+                 next() or for-loop
+    Created ──────────────────────────► Running
+                                            │
+               ┌────────────────────────────┤
+               │ yield                      │ return / end of body
+               ▼                            ▼
+           Suspended ──── next() ────► Running    Exhausted
+           (frame saved)                (frame          │
+                                         active)        │ next()
+                                                        ▼
+                                                   (null pushed)
+```
+
+### Construction (call → `Created`)
+
+When the compiler encounters a call to a generator function, it emits
+`OpCoroutineCreate` instead of `OpCall`:
+
+1. The call-site arguments have already been pushed onto the stack.
+2. The runtime copies those argument bytes into `frame.stack_bytes`, processes
+   any dynamic text slots (see [SC-CO-1](#sc-co-1--text-ownership-in-the-saved-stack),
+   [SC-CO-8](#sc-co-8--dynamic-string-objects-leaked-during-yield-serialisation)),
+   and sets `frame.code_pos` to the function's entry bytecode position.
+3. `frame.stack_base` is set to `0` — it has no meaning until the first resume.
+4. The argument bytes are removed from the live stack.
+5. The frame's index (as a `COROUTINE_STORE` DbRef) is pushed as the result.
+6. **The function body is not entered.**
+
+### First advance and resume (`Created` / `Suspended` → `Running`)
+
+`OpCoroutineNext` on a `Created` or `Suspended` frame (both cases are identical):
+
+1. Check `active_coroutines` for a re-entrant advance (see
+   [SC-CO-3](#sc-co-3--re-entrant-advance-corrupts-the-live-stack),
+   [SC-CO-9](#sc-co-9--coroutine_sp-scalar-cannot-represent-yield-from-nesting)).
+2. Record `frame.caller_return_pos = self.code_pos` (continuation address).
+3. Set `frame.call_depth = self.call_stack.len()` — the frame's call frames
+   will go above the current call stack depth at this resume (see note below).
+4. Set `frame.stack_base = self.stack_pos` — place frame at the current stack
+   top (SC-CO-7).
+5. Patch `Str` pointers in `frame.stack_bytes` to point to the current
+   `text_owned` buffer addresses (SC-CO-1).
+6. Write `frame.stack_bytes` into `State.stack` at `frame.stack_base`.
+7. Set `stack_pos = frame.stack_base + frame.stack_bytes.len() as u32`.
+8. Append `frame.call_frames` onto `State.call_stack`.
+9. Mark frame `Running`; push its index onto `active_coroutines`.
+10. Set `code_pos = frame.code_pos`; execution continues normally.
+
+**Note on `call_depth`:** `frame.call_depth` is reset at every resume to the
+current `call_stack.len()`. This keeps the "coroutine's own frames" slice
+`call_stack[call_depth..]` accurate regardless of the caller's nesting depth
+at the time of the advance.
+
+### Yielding (`yield expr` → `Suspended`)
+
+`OpYield` fires with `value_size` (the byte width of type `T`) as operand:
+
+1. The yielded value occupies `stack[value_start..stack_pos]` where
+   `value_start = stack_pos - value_size`.
+2. Serialise the **entire** region `stack[stack_base..stack_pos]` (locals
+   **and** yielded value together) to detect any `Str` in the yielded value
+   itself (see [SC-CO-10](#sc-co-10--yielded-text-value-is-not-serialised-its-string-may-be-freed)).
+   Split the result: `frame.stack_bytes = bytes[..locals_len]`, and keep the
+   updated value bytes separately for the slide step below.
+3. Free original dynamic `String` allocations via the text side-table
+   (SC-CO-8).
+4. Save `call_stack[call_depth..]` into `frame.call_frames`; truncate
+   `call_stack` to `call_depth`.
+5. Set `frame.code_pos = self.code_pos` (instruction after `OpYield`).
+6. Mark frame `Suspended`; pop its index from `active_coroutines`.
+7. Slide the (pointer-updated) yielded value bytes to `frame.stack_base`.
+8. Set `stack_pos = frame.stack_base + value_size`.
+9. Set `code_pos = frame.caller_return_pos`; execution returns to the
+   `next()` call site.
+
+### Exhaustion (`return` / end of body → `Exhausted`)
+
+`OpCoroutineReturn` fires with `value_size` as operand:
+
+1. Drop `frame.text_owned` (frees all owned String allocations).
+2. Clear `frame.stack_bytes`.
+3. Truncate `call_stack` to `frame.call_depth`.
+4. Mark frame `Exhausted`; pop its index from `active_coroutines`.
+5. Set `stack_pos = frame.stack_base`.
+6. Push typed null (value_size null bytes) at `frame.stack_base`.
+7. Set `code_pos = frame.caller_return_pos`; execution returns to the
+   `next()` call site.
+
+### `yield from` (`OpYieldFrom`)
+
+`yield from sub_gen` is implemented as a tight inner loop inside the outer
+generator's execution:
+
+1. Load `sub_gen` DbRef from the generator's local variable.
+2. Loop:
+   a. Dispatch `OpCoroutineNext` on `sub_gen` — this pushes the sub-generator's
+      yielded value (or null) directly onto the live stack at the current
+      `stack_pos`.
+   b. If the value is non-null, dispatch `OpYield` with it — this suspends the
+      outer generator and returns the value to the consumer.
+   c. On outer resume, `stack_pos` is back inside the outer generator's frame.
+      `sub_gen`'s DbRef is restored from `frame.stack_bytes`. Go to step (a).
+   d. If the value is null, `sub_gen` is exhausted. Clear `sub_gen` from the
+      local; continue execution past `yield from`.
+
+The outer generator's frame is saved/restored on each outer yield exactly as
+in the normal yield path. The sub-generator lives in `State.coroutines`
+independently; its DbRef is just another local variable in the outer frame and
+is preserved across suspensions.
+
+---
+
+## Coroutine Frame Design
+
+### Why frames are not in the loft Store system
+
+The loft `Store` system holds fixed-schema records; every record of a given
+type has the same byte layout. A `CoroutineFrame` contains two variable-length
+fields (`stack_bytes` and `call_frames`) whose sizes depend on the call depth
+at the point of `yield`. Storing them in a fixed-schema store would require
+either capping the frame size or adding an indirect pointer chain.
+
+Instead, frames are held in a side-table on `State`:
+
+```rust
+pub coroutines: Vec<Option<Box<CoroutineFrame>>>,
+```
+
+`None` entries are freed slots available for reuse. Index 0 is permanently
+`None` to make the null-sentinel rule (`rec == 0 → null`) work without special
+cases.
+
+### `CoroutineFrame` — internal Rust struct
+
+```rust
+pub struct CoroutineFrame {
+    /// Definition number of the generator function.
+    pub d_nr: u32,
+    /// Lifecycle state.
+    pub status: CoroutineStatus,
+    /// Bytecode position to resume at (points to the instruction after the
+    /// last OpYield, or to the function entry for a Created frame).
+    pub code_pos: u32,
+    /// Absolute stack position of the frame's first byte during execution.
+    /// Set to 0 at construction; updated to self.stack_pos at every resume
+    /// (SC-CO-7). Read by OpYield to know the frame's extent.
+    pub stack_base: u32,
+    /// Return address in the consumer — the instruction to execute after the
+    /// generator yields or exhausts. Stored here to avoid mixing coroutine
+    /// return addresses into the loft stack layout.
+    pub caller_return_pos: u32,
+    /// Serialised stack contents: locals from stack_base up to (but not
+    /// including) the yielded value, as of the last suspension. Empty for a
+    /// Created frame (the parameters are the initial contents).
+    pub stack_bytes: Vec<u8>,
+    /// Owned copies of every dynamic text slot that was live in the frame at
+    /// the last yield. The u32 is the byte offset within stack_bytes at which
+    /// the Str's pointer must be patched on resume. u32 (not u16) to handle
+    /// large frames without silent truncation (SC-CO-12).
+    pub text_owned: Vec<(u32, String)>,
+    /// Saved entries from State.call_stack that belong to this frame's
+    /// execution (indices [call_depth..] at the time of the last yield).
+    pub call_frames: Vec<CallFrame>,
+    /// Index into State.call_stack at the start of this frame's execution.
+    /// Reset to self.call_stack.len() at every resume so that the "coroutine's
+    /// own frames" slice is always consistent with the caller's current depth.
+    pub call_depth: usize,
+}
+```
+
+### DbRef encoding for coroutines
+
+```
+store_nr == COROUTINE_STORE   (reserved u16 constant, not a real allocations index)
+rec      == index into State.coroutines   (non-zero for a live frame)
+pos      == 0   (unused)
+```
+
+Null sentinel: `rec == 0` (index 0 is permanently `None`). This matches the
+standard loft null rule for references: `rec == 0 && store_nr == …` is null.
+
+### Extensibility
+
+`stack_bytes`, `text_owned`, and `call_frames` are Rust `Vec`s and grow on
+demand. There is no preallocated frame size. A generator that calls N levels
+of helpers at the point of yield will have `call_frames.len() == N` and
+`stack_bytes.len()` proportional to the total locals across those N frames.
+
+---
+
+## Runtime Design
+
+### State additions
+
+```rust
+// New fields on State:
+pub coroutines:        Vec<Option<Box<CoroutineFrame>>>,
+pub active_coroutines: Vec<usize>,  // indices of all currently-running coroutines,
+                                     // innermost (most recently resumed) last.
+                                     // A coroutine is "active" from the moment
+                                     // OpCoroutineNext enters it until OpYield or
+                                     // OpCoroutineReturn exits it.
+```
+
+`active_coroutines` replaces the scalar `coroutine_sp` that was considered
+in earlier drafts. The `Vec` correctly handles `yield from` nesting where
+both the outer and the inner generator are simultaneously active (SC-CO-9).
+
+### Opcode table
+
+| Opcode | Operands | Emitted by | Purpose |
+|---|---|---|---|
+| `OpCoroutineCreate` | `d_nr: u32`, `args_size: u16` | call to `fn ... -> iterator<T>` | Allocate frame; serialise args; push DbRef |
+| `OpCoroutineNext` | `value_size: u16` | `next(gen)`, for-loop advance | Resume frame; push yielded value or null |
+| `OpYield` | `value_size: u16` | `yield expr` | Suspend; serialise frame; slide value to base; return to consumer |
+| `OpYieldFrom` | (none) | `yield from expr` | Drive sub-generator loop; forward each value via OpYield |
+| `OpCoroutineReturn` | `value_size: u16` | `return` or end of generator body | Exhaust frame; push null; return to consumer |
+| `OpExhausted` | (none) | `exhausted(gen)` | Push true if frame status == Exhausted or DbRef is null |
+
+All coroutine opcodes require direct `&mut self` access (same pattern as
+`OpStackTrace`). They are not routed through the `library` table.
+
+### `OpCoroutineCreate` pseudocode
+
+```rust
+OpCoroutineCreate { d_nr, args_size } => {
+    let def = &data.definitions[d_nr as usize];
+    let args_start = self.stack_pos - u32::from(args_size);
+
+    // Serialise the argument bytes and take ownership of any dynamic text.
+    // The argument region is the only content for a Created frame.
+    let mut initial_bytes = self.stack[args_start as usize
+                                        .. self.stack_pos as usize].to_vec();
+    let text_owned = serialise_text_slots(
+        &mut initial_bytes, &def.attributes, &mut self.database);
+
+    let frame = CoroutineFrame {
+        d_nr,
+        status:             CoroutineStatus::Created,
+        code_pos:           def.code_pos,
+        stack_base:         0,            // set on first resume (SC-CO-7)
+        caller_return_pos:  0,            // set on first resume
+        stack_bytes:        initial_bytes,
+        text_owned,
+        call_frames:        vec![],
+        call_depth:         0,            // set on first resume
+    };
+
+    let idx = allocate_coroutine(&mut self.coroutines, frame);
+    // Remove the now-serialised arguments from the live stack.
+    self.stack_pos = args_start;
+    // Push the coroutine DbRef as the result.
+    self.put_stack(DbRef { store_nr: COROUTINE_STORE, rec: idx as u32, pos: 0 });
+}
+```
+
+### `OpCoroutineNext` pseudocode
+
+```rust
+OpCoroutineNext { value_size } => {
+    // The DbRef to advance is on top of the stack (already popped by codegen
+    // into a register, or read via self.get_stack).
+    let db_ref: DbRef = self.pop_stack();
+
+    // Null iterator — push typed null immediately.
+    if db_ref.rec == 0 {
+        self.push_null(value_size);
+        return;
+    }
+    debug_assert_eq!(db_ref.store_nr, COROUTINE_STORE);
+    let idx = db_ref.rec as usize;
+
+    // Re-entrant advance check: any currently-running frame (SC-CO-3, SC-CO-9).
+    if self.active_coroutines.contains(&idx) {
+        self.runtime_error(
+            "coroutine advanced re-entrantly; this generator is already running");
+    }
+
+    let frame = self.coroutines[idx].as_mut()
+        .expect("coroutine DbRef refers to freed slot");
+
+    match frame.status {
+        CoroutineStatus::Exhausted => {
+            // Always null; no stack restoration needed.
+            self.push_null(value_size);
+            return;
+        }
+        CoroutineStatus::Running => {
+            // Caught by active_coroutines check above; unreachable here.
+            unreachable!()
+        }
+        CoroutineStatus::Created | CoroutineStatus::Suspended => {
+            // --- Save the continuation address ---
+            frame.caller_return_pos = self.code_pos;
+
+            // --- Anchor the frame to the current stack top (SC-CO-7) ---
+            frame.stack_base = self.stack_pos;
+
+            // --- Record the call-stack depth for this resume (see call_depth note) ---
+            frame.call_depth = self.call_stack.len();
+
+            // --- Patch Str pointers in stack_bytes to point to text_owned buffers ---
+            // text_owned[i] = (offset, String); the String is on the Rust heap;
+            // its buffer address is stable as long as no push reallocates the Vec.
+            // We pin by ensuring no push occurs between here and the copy below.
+            for (offset, s) in &frame.text_owned {
+                let patched = Str::new(s.as_str());
+                write_str_at(&mut frame.stack_bytes, *offset as usize, patched);
+            }
+
+            // --- Restore the generator's locals onto the live stack ---
+            let bytes_len = frame.stack_bytes.len();
+            let base = frame.stack_base as usize;
+            self.stack[base .. base + bytes_len]
+                .copy_from_slice(&frame.stack_bytes);
+            self.stack_pos = frame.stack_base + bytes_len as u32;
+
+            // --- Restore saved call frames ---
+            self.call_stack.extend_from_slice(&frame.call_frames);
+
+            // --- Mark running ---
+            frame.status = CoroutineStatus::Running;
+            self.active_coroutines.push(idx);
+
+            // --- Jump into the generator ---
+            self.code_pos = frame.code_pos;
+            // Normal bytecode dispatch continues; the next OpYield or
+            // OpCoroutineReturn will pop active_coroutines and return to
+            // caller_return_pos.
+        }
+    }
+}
+```
+
+### `OpYield` pseudocode
+
+```rust
+OpYield { value_size } => {
+    let idx = *self.active_coroutines.last()
+        .expect("OpYield outside active coroutine");
+    let frame = self.coroutines[idx].as_mut().unwrap();
+
+    let value_size = value_size as usize;
+    let stack_top  = self.stack_pos as usize;
+    let base       = frame.stack_base as usize;
+    let value_start = stack_top - value_size;
+    let locals_len  = value_start - base;
+
+    // --- Serialise the full frame region including the yielded value (SC-CO-10) ---
+    // Work on a copy so that text pointer patching does not alias the live stack.
+    let mut full_buf: Vec<u8> = self.stack[base .. stack_top].to_vec();
+
+    // serialise_text_slots processes ALL text slots in the region (locals + value),
+    // writes new Str pointers (into the text_owned buffers) into full_buf, and
+    // returns the (offset, owned-String) pairs (SC-CO-1, SC-CO-8, SC-CO-10).
+    let text_owned = serialise_text_slots(
+        &mut full_buf, &def.all_text_slots, &mut self.database);
+
+    // Split the serialised buffer: locals go into frame.stack_bytes;
+    // the updated value bytes are held separately for the slide step.
+    frame.stack_bytes = full_buf[.. locals_len].to_vec();
+    let updated_value = full_buf[locals_len .. locals_len + value_size].to_vec();
+    frame.text_owned  = text_owned;
+
+    // --- Save call frames above the base depth ---
+    frame.call_frames = self.call_stack[frame.call_depth ..].to_vec();
+    self.call_stack.truncate(frame.call_depth);
+
+    // --- Suspend ---
+    frame.code_pos = self.code_pos;           // instruction after OpYield
+    frame.status   = CoroutineStatus::Suspended;
+    self.active_coroutines.pop();
+
+    // --- Slide the (pointer-updated) value to frame.stack_base ---
+    self.stack[base .. base + value_size].copy_from_slice(&updated_value);
+    self.stack_pos = frame.stack_base + value_size as u32;
+
+    // --- Return to the consumer ---
+    self.code_pos = frame.caller_return_pos;
+}
+```
+
+### `OpCoroutineReturn` pseudocode
+
+```rust
+OpCoroutineReturn { value_size } => {
+    let idx = *self.active_coroutines.last()
+        .expect("OpCoroutineReturn outside active coroutine");
+    let frame = self.coroutines[idx].as_mut().unwrap();
+
+    // --- Drop all serialised state ---
+    // Dropping text_owned frees the owned String allocations (Rust RAII).
+    frame.text_owned.clear();
+    frame.stack_bytes.clear();
+
+    // --- Restore call stack to consumer depth ---
+    self.call_stack.truncate(frame.call_depth);
+
+    // --- Exhaust ---
+    frame.status = CoroutineStatus::Exhausted;
+    self.active_coroutines.pop();
+
+    // --- Rewind stack to frame base; push typed null ---
+    self.stack_pos = frame.stack_base;
+    self.push_null(value_size);
+
+    // --- Return to the consumer ---
+    self.code_pos = frame.caller_return_pos;
+}
+```
+
+### `OpExhausted` pseudocode
+
+```rust
+OpExhausted => {
+    let db_ref: DbRef = self.pop_stack();
+    let result = if db_ref.rec == 0 {
+        true   // null iterator is considered exhausted
+    } else {
+        debug_assert_eq!(db_ref.store_nr, COROUTINE_STORE);
+        let frame = self.coroutines[db_ref.rec as usize].as_ref()
+            .expect("OpExhausted: invalid coroutine index");
+        matches!(frame.status, CoroutineStatus::Exhausted)
+    };
+    self.put_stack(result as u8);
+}
+```
+
+### `serialise_text_slots` — implementation contract
+
+```rust
+/// Process all text (Str) slots within `bytes`, which covers the stack region
+/// [frame_start .. some_end] including any yielded value bytes.
+///
+/// For each non-null Str slot that points to a dynamic allocation:
+///   1. Call `to_owned()` to make an independent String copy.
+///   2. Free the original String via `database.free_dynamic_str(ptr)` so it
+///      is not leaked (SC-CO-8).
+///   3. Write a new Str pointing to the owned buffer back into `bytes`.
+///   4. Record `(offset as u32, owned_string)` in the returned Vec (SC-CO-12).
+///
+/// Static Strs (pointers inside `text_code`) are left untouched; they need no
+/// ownership transfer.
+///
+/// `type_slots`: an iterator or slice of (byte_offset_in_bytes, Type) pairs
+/// describing every text slot in the region. This is computed from the
+/// function definition's layout information for the current stack extent.
+fn serialise_text_slots(
+    bytes:    &mut Vec<u8>,
+    type_slots: &[(usize, &Type)],
+    database: &mut Stores,
+) -> Vec<(u32, String)> {
+    let mut owned = Vec::new();
+    for &(offset, typ) in type_slots {
+        if !matches!(typ, Type::Text) { continue; }
+        let str_ref = read_str_at(bytes, offset);
+        if str_ref.ptr == STRING_NULL.as_ptr() { continue; }   // null text
+        if database.is_static_text(str_ref.ptr) { continue; }  // static pool
+        // Dynamic: copy, free original, patch.
+        let s = str_ref.str().to_owned();
+        database.free_dynamic_str(str_ref.ptr);                 // SC-CO-8
+        let new_str = Str::new(s.as_str());
+        write_str_at(bytes, offset, new_str);
+        owned.push((offset as u32, s));                         // SC-CO-12 u32
+    }
+    owned
+}
+```
+
+At resume time (`OpCoroutineNext`), each `(offset, String)` pair is used to
+patch the `Str` in `stack_bytes` to point to the current (stable) buffer
+address of the owned `String`, before copying `stack_bytes` onto the live
+stack. No extra allocation occurs on the resume path.
+
+---
+
+## Safety Concerns and Mitigations
+
+### SC-CO-1 — Text ownership in the saved stack
+
+**Problem:** `Str { ptr, len }` slots in `stack_bytes` may point to a dynamic
+`String` that was freed when the stack was rewound after the yield. On resume,
+those pointers dangle.
+
+**Mitigation:** `serialise_text_slots` converts every dynamic text slot to an
+owned `String` in `frame.text_owned`, and writes a `Str` pointing to the new
+buffer into `stack_bytes`. On resume, the owned `String` addresses are patched
+back into `stack_bytes` before the bytes are written to the live stack, keeping
+all `Str` pointers valid.
+
+---
+
+### SC-CO-2 — DbRef locals may dangle if stores are freed mid-suspension
+
+**Problem:** A generator may hold a `DbRef` local that refers to a heap record.
+If the consumer frees or reallocates that record between iterations, the
+suspended frame holds stale coordinates.
+
+**Mitigation:** This is no different from any other loft local holding a
+`DbRef`. The generator does not add a new risk. Document as a Known Limitation
+(CL-2); the caller must not free records that a suspended generator still
+references.
+
+---
+
+### SC-CO-3 — Re-entrant advance corrupts the live stack
+
+**Problem:** Advancing a `Running` generator overwrites live stack bytes with
+saved bytes, corrupting the currently executing frame.
+
+**Mitigation:** `OpCoroutineNext` checks `active_coroutines.contains(&idx)`
+before resuming. If the index is already active, execution aborts:
+
+```
+runtime error: coroutine advanced re-entrantly; this generator is already running
+```
+
+The `contains` check is O(depth) but depth is bounded by nested `yield from`
+chains, which are shallow in practice.
+
+---
+
+### SC-CO-4 — `yield` inside a `par(...)` body crosses thread boundaries
+
+**Problem:** Each parallel worker has its own `State` and `coroutines` table.
+A `COROUTINE_STORE` DbRef produced inside a worker cannot be advanced by
+the enclosing scope's `State`.
+
+**Mitigation:** The compiler must reject `yield` and generator function calls
+inside `par(...)` bodies. `iterator<T>` values must not be assigned to
+cross-thread shared variables. Until the compiler check is implemented, this
+is a hard documented restriction:
+
+> Generator functions and `yield` may not be used inside `par(...)` bodies.
+> The `iterator<T>` DbRef must not cross thread boundaries.
+
+---
+
+### SC-CO-5 — Stack serialisation cost is O(depth) per yield
+
+**Problem:** A deeply recursive generator copies a large `stack_bytes` and
+`call_frames` on every yield and resume.
+
+**Mitigation:** Document the cost model. Use iterative generators for
+performance-critical paths; recursive `yield from` is for correctness-first
+code. No optimisation is planned for the initial implementation.
+
+---
+
+### SC-CO-6 — Advancing an exhausted generator must always return null
+
+**Problem:** If an exhausted frame were freed and its slot reused, a subsequent
+`next()` on the old DbRef would access the wrong frame.
+
+**Mitigation:** Exhausted frames are kept alive in `State.coroutines` (status
+set to `Exhausted`, `stack_bytes` and `text_owned` cleared). `OpCoroutineNext`
+on an `Exhausted` frame pushes null immediately without entering the body. The
+slot is not freed until the DbRef goes out of scope (pending GC — see CL-3).
+
+---
+
+### SC-CO-7 — Absolute `stack_base` stale when caller pushes locals after creation
+
+**Problem:** If `stack_base` were fixed at creation time (position `P`), any
+local the caller pushes after creation would live at `P + …`. Resuming the
+generator would then write `stack_bytes` starting at `P`, overwriting those
+locals.
+
+```loft
+gen = count_up(0);  // suppose base captured at P
+x   = 42;           // x at P+12 (after DbRef)
+for n in gen { say("{n} {x}"); }  // would overwrite x!
+```
+
+**Mitigation:** `OpCoroutineNext` always sets `frame.stack_base = self.stack_pos`
+before writing any bytes. The frame is placed at the current top of the caller's
+stack, above all live caller locals. This is safe because no slot in
+`stack_bytes` contains an absolute stack address; `Str` pointers reference
+`text_code` or `text_owned` buffers, and `DbRef` values reference the store
+heap — neither is affected by relocating the frame base.
+
+---
+
+### SC-CO-8 — Dynamic String objects leaked during yield serialisation
+
+**Problem:** `str.str().to_owned()` creates a new `String` but does not free
+the original. The original dynamic allocation has no remaining owner and leaks.
+
+**Mitigation:** `serialise_text_slots` calls `database.free_dynamic_str(ptr)`
+on the original allocation immediately after `to_owned()`. The exact API
+mirrors `OpFreeText`; the implementation must align with how `text.rs` manages
+the scratch/side-table of dynamic `String` objects.
+
+---
+
+### SC-CO-9 — Scalar `coroutine_sp` cannot represent `yield from` nesting
+
+**Problem:** `yield from` makes two coroutines simultaneously active — the
+outer (waiting in the `OpYieldFrom` loop) and the inner (executing). A single
+`usize` cannot represent both, so the re-entrant check would miss the outer
+generator while it is mid-`yield-from`.
+
+**Mitigation:** `active_coroutines: Vec<usize>` holds the indices of all
+currently active frames. `OpCoroutineNext` checks membership before resuming.
+`OpYield` and `OpCoroutineReturn` pop the last entry.
+
+---
+
+### SC-CO-10 — Yielded `text` value not serialised; its String may be freed
+
+**Problem:** If serialisation covers only the locals region (below the yielded
+value), a `Str` in the yielded value still points to a dynamic `String` that
+`SC-CO-8`'s mitigation then frees. The consumer receives a dangling pointer.
+
+**Mitigation:** `OpYield` serialises the **entire** region from `stack_base`
+to `stack_pos` (locals + yielded value) in one pass. After serialisation, the
+yielded value bytes contain `Str` pointers that point into `text_owned` buffers
+(not freed originals). Only the locals portion is stored in `frame.stack_bytes`;
+the value portion is slid to `stack_base` as the `next()` return value.
+
+---
+
+### SC-CO-11 — `e#remove` inside a generator for-loop must be a compile-time error
+
+**Problem:** Generators do not back a store record; any remove opcode emitted
+against a generator iterator would operate on garbage coordinates, potentially
+corrupting an unrelated record.
+
+**Mitigation:** The compiler must detect `e#remove` on a generator-typed
+iterator (identified at the `for` loop's type-resolution step by the element
+type's source — a `COROUTINE_STORE` DbRef) and report:
+
+```
+error: `e#remove` is not valid on a generator iterator;
+       generators do not back a store — use a collection if removal is needed.
+```
+
+---
+
+### SC-CO-12 — `text_owned` offset stored as `u16` silently truncates
+
+**Problem:** A `u16` offset caps at 65535 bytes. A deeply recursive generator
+can exceed this (e.g. 3000 nested calls × ~22 bytes/CallFrame ≈ 66 KB).
+Truncation silently patches the wrong `Str` slot on resume.
+
+**Mitigation:** Use `u32` for the offset field (`Vec<(u32, String)>`), giving
+4 GB headroom — sufficient for any realistic frame size.
+
+---
+
+### Summary of safety concerns
+
+| ID | Concern | Severity | Resolution |
+|---|---|---|---|
+| SC-CO-1 | Dynamic text slots dangle after stack rewind | High | `text_owned` deep-copy; pointer patch on resume |
+| SC-CO-2 | DbRef locals dangle if caller frees records mid-suspension | Medium | Documented (CL-2); caller responsibility |
+| SC-CO-3 | Re-entrant advance overwrites live stack | High | `active_coroutines.contains()` check; runtime error |
+| SC-CO-4 | `yield` inside `par(...)` crosses thread boundaries | High | Compiler error; documented hard restriction |
+| SC-CO-5 | Serialisation cost O(depth) per yield | Low | Documented cost model; no optimisation planned |
+| SC-CO-6 | Advancing exhausted generator after slot reuse | Medium | Exhausted frames kept alive; null pushed without frame entry |
+| SC-CO-7 | Fixed `stack_base` overwritten by caller locals pushed after creation | High | Set `stack_base = stack_pos` at every resume |
+| SC-CO-8 | Original dynamic String leaked after `to_owned()` | High | `database.free_dynamic_str(ptr)` in `serialise_text_slots` |
+| SC-CO-9 | Scalar active-coroutine tracker fails for `yield from` nesting | Medium | `active_coroutines: Vec<usize>` replaces scalar |
+| SC-CO-10 | Yielded `text` value's `Str` not serialised; freed by SC-CO-8 mitigation | High | Serialise entire `[stack_base..stack_pos]` region in one pass |
+| SC-CO-11 | `e#remove` against generator emits store-remove opcode; corrupts unrelated records | Medium | Compile-time error at `for` loop type resolution |
+| SC-CO-12 | `text_owned` `u16` offset truncates for frames > 65535 bytes | Low | `u32` offset field |
+
+---
+
+## Implementation Phases
+
+---
+
+### Phase 1 — Infrastructure (`src/state/mod.rs`, `src/data.rs`)
+
+Introduce all runtime data structures without any language surface.
+
+1. Define `CoroutineStatus { Created, Suspended, Running, Exhausted }` in
+   `src/data.rs`.
+
+2. Define `CoroutineFrame` (all fields above) in `src/state/mod.rs`.
+
+3. Add `coroutines: Vec<Option<Box<CoroutineFrame>>>` and
+   `active_coroutines: Vec<usize>` to `State`; initialise both in the
+   constructor. Pre-push one `None` at index 0 (null sentinel).
+
+4. Add helper functions to `State`:
+   - `allocate_coroutine(frame: CoroutineFrame) -> usize` — finds the first
+     `None` slot at index ≥ 1 or pushes a new slot; returns the index.
+   - `free_coroutine(idx: usize)` — sets the slot to `None` and zeroes the
+     capacity hint.
+   - `coroutine_frame_mut(db_ref: DbRef) -> &mut CoroutineFrame` — asserts
+     `store_nr == COROUTINE_STORE` and `rec != 0`; panics on invalid index.
+
+5. Define `COROUTINE_STORE: u16 = u16::MAX` (or another value that cannot
+   clash with `Stores.allocations` indices, which are limited by `Stores.max`).
+
+6. Add `serialise_text_slots` as described in the Runtime Design section.
+   Leave `free_dynamic_str` as a stub (panics) until the text side-table API
+   is confirmed.
+
+#### Tests — Phase 1
+
+| Test | What it verifies |
+|---|---|
+| `coroutine_allocate_nonzero` | `allocate_coroutine` never returns 0 |
+| `coroutine_allocate_retrieve` | allocated frame is retrievable via `coroutine_frame_mut` |
+| `coroutine_free_reuse` | after `free_coroutine`, the slot is `None`; next allocation reuses it |
+| `coroutine_null_dbref` | DbRef with `rec == 0` is treated as null by `coroutine_frame_mut` |
+| `serialise_static_text` | `serialise_text_slots` does not add to `text_owned` for static `Str` |
+| `serialise_null_text` | `serialise_text_slots` skips null `Str` (ptr == STRING_NULL) |
+
+---
+
+### Phase 2 — Type and opcode declarations (`default/05_coroutine.loft`, `src/main.rs`)
+
+1. Create `default/05_coroutine.loft` declaring:
+   - `CoroutineStatus` enum
+   - `next(gen: iterator<T>) -> T` bound to `OpCoroutineNext`
+   - `exhausted(gen: iterator<T>) -> boolean` bound to `OpExhausted`
+
+2. Add the file to the default load order in `src/main.rs` after
+   `04_stacktrace.loft`.
+
+3. Add all six coroutine opcodes to the `Op` enum in `src/data.rs` (or
+   wherever opcodes are defined) with their operand types.
+
+4. Add stub implementations in `fill.rs` for all opcodes (abort with
+   "not yet implemented" to catch accidental emission during later phases).
+
+5. Add parser recognition:
+   - A function with return type `iterator<T>` is flagged as a generator.
+   - `yield expr` is parsed as a new statement type; compile error if outside
+     a generator function.
+   - `yield from expr` is parsed as a new statement type.
+   - `e#remove` on a generator iterator emits a compile error (SC-CO-11).
+   - `yield` inside `par(...)` emits a compile error (SC-CO-4).
+
+#### Tests — Phase 2
+
+| Test | What it verifies |
+|---|---|
+| `gen_types_declared` | `CoroutineStatus`, `next`, `exhausted` resolve in a loft program |
+| `yield_non_generator_error` | `yield` in a plain function is a compile error |
+| `yield_par_error` | `yield` inside `par(...)` is a compile error |
+| `remove_generator_error` | `e#remove` in a `for` loop over a generator is a compile error |
+
+---
+
+### Phase 3 — Creation and exhaustion (`src/fill.rs`, `src/state/mod.rs`)
+
+Implement the frame lifecycle without the yield/resume cycle.
+
+1. Implement `OpCoroutineCreate` as in the pseudocode above:
+   - `serialise_text_slots` for the argument region.
+   - Allocate frame; push DbRef.
+
+2. Implement `OpCoroutineReturn` as above:
+   - Clear `text_owned` and `stack_bytes`; truncate `call_stack`;
+     mark `Exhausted`; push null; jump to `caller_return_pos`.
+
+3. Implement `OpCoroutineNext` for `Created` and `Exhausted` cases only:
+   - `Exhausted`: push null immediately.
+   - `Created`: restore frame, push `call_frames`, jump to `code_pos`.
+   - `Running` / re-entrant: runtime error.
+
+4. Implement `OpExhausted`.
+
+5. In `codegen.rs`, emit `OpCoroutineCreate` (instead of `OpCall`) when the
+   called function is a generator; emit `OpCoroutineReturn` at each `return`
+   and at the implicit end of a generator body.
+
+#### Tests — Phase 3
+
+| Test | What it verifies |
+|---|---|
+| `gen_create_returns_dbref` | calling a generator function returns a non-null `iterator<T>` DbRef |
+| `gen_empty_body_null` | a generator with an empty body returns null on first `next()` |
+| `gen_return_immediately` | a generator that returns without yielding is exhausted after one `next()` |
+| `gen_exhausted_next_null` | `next()` on an exhausted generator always returns null |
+| `gen_exhausted_flag` | `exhausted(gen)` returns true after the generator finishes |
+| `gen_reentrant_error` | advancing a `Running` generator produces the expected runtime error message |
+| `gen_null_iterator` | `next(null_gen)` returns null without crashing |
+
+---
+
+### Phase 4 — Yield and resume (`src/fill.rs`, `src/state/mod.rs`)
+
+Implement the suspend/resume cycle.
+
+1. Implement `OpYield`:
+   - Serialise `stack[stack_base..stack_pos]` including the yielded value
+     (SC-CO-10); split into `stack_bytes` and `updated_value`.
+   - Save `call_frames`; truncate `call_stack`.
+   - Mark `Suspended`; pop `active_coroutines`.
+   - Slide `updated_value` to `stack_base`; jump to `caller_return_pos`.
+
+2. Extend `OpCoroutineNext` for the `Suspended` case:
+   - Save `caller_return_pos`, update `stack_base` and `call_depth` (SC-CO-7).
+   - Patch `text_owned` pointers into `stack_bytes`; write to live stack.
+   - Restore `call_frames`; mark `Running`; push to `active_coroutines`.
+   - Jump to `frame.code_pos`.
+
+3. In the compiler, emit `OpYield` at each `yield expr` statement.
+
+4. In the for-loop code generator, emit `OpCoroutineNext` (instead of a
+   collection-iterator advance) when the iterator is a generator (detected
+   by the `COROUTINE_STORE` type tag on the `iterator<T>` value).
+
+#### Tests — Phase 4
+
+| Test | What it verifies |
+|---|---|
+| `gen_single_yield` | a generator that yields once produces exactly one value then exhausts |
+| `gen_multiple_yield` | a generator that yields three values produces them in order |
+| `gen_for_loop` | `for n in count_up(0)` with break at 5 produces 0..4 |
+| `gen_resume_local` | the generator's local variable retains its value across a yield |
+| `gen_text_local` | a text local is correctly preserved across a yield (SC-CO-1, SC-CO-8) |
+| `gen_text_yield` | a generator that yields a `text` value does not dangle (SC-CO-10) |
+| `gen_caller_local_intact` | a caller local pushed after creating the generator survives resumption (SC-CO-7) |
+| `gen_infinite_break` | an infinite generator with a break in the consumer terminates cleanly |
+| `gen_count_attribute` | `n#count` counts from 0 across iterations |
+| `gen_first_attribute` | `n#first` is true only on the first iteration |
+
+---
+
+### Phase 5 — `yield from` (`src/fill.rs`, parser)
+
+1. Implement `OpYieldFrom`:
+   - Inner loop: `OpCoroutineNext` on sub-generator; if non-null, `OpYield` it;
+     on outer resume, loop; if null (sub exhausted), exit loop.
+   - `active_coroutines` naturally contains both outer and inner indices while
+     both are active; the check in Phase 4 covers the nested case (SC-CO-9).
+
+2. In the compiler, emit `OpYieldFrom` at each `yield from expr` statement.
+
+#### Tests — Phase 5
+
+| Test | What it verifies |
+|---|---|
+| `yield_from_flat` | `yield from range(0, 3)` produces 0, 1, 2 |
+| `yield_from_chain` | two sequential `yield from` calls produce their values in order |
+| `yield_from_recursive` | recursive `yield from` on a tree produces leaves in left-to-right order |
+| `yield_from_empty` | `yield from` an already-exhausted sub-generator produces no values |
+| `yield_from_reentrant` | advancing the outer generator while inside `yield from` produces the expected runtime error (SC-CO-9) |
+
+---
+
+## Known Limitations
+
+| ID | Limitation | Workaround |
+|---|---|---|
+| CL-1 | `next()` returns null for both exhaustion and a yielded null value — indistinguishable | Use the `for` loop (which tracks exhaustion separately), or wrap `T` in a struct with an `is_null: boolean` field |
+| CL-2 | DbRef locals held across a yield dangle if the caller frees or reallocates the referenced record | Do not free records that a suspended generator still holds; advance the generator to exhaustion first |
+| CL-3 | Exhausted frames are not freed until the `iterator<T>` DbRef goes out of scope; without GC, frames are leaked if the variable is abandoned | Ensure every generator is run to exhaustion, or call `drop(gen)` once implemented |
+| CL-4 | Generator `iterator<T>` values must not cross `par(...)` boundaries | Accumulate parallel results in a collection, then iterate the collection outside `par(...)` |
+| CL-5 | Serialisation cost per yield is O(frame depth); deeply recursive `yield from` chains are slow | Flatten recursive generators iteratively using an explicit `vector` stack local |
+| CL-6 | Mutable-reference parameters (`&vector<T>`) in a generator function are not visible to the frame copy | Pass collections by value or use `reference<T>` and write through the reference |
+
+---
+
+## Non-Goals
+
+- **Symmetric coroutines** — two coroutines transferring control directly to
+  each other. The design is asymmetric: a generator always yields to its
+  consumer.
+- **`async`/`await`** — asynchronous I/O concurrency. Coroutines here are
+  synchronous; the consumer blocks for each yielded value.
+- **Cross-thread coroutine migration** — a suspended frame cannot be resumed
+  on a different thread than the one that created it.
+- **Mutable yielded values** — yielded values are copies; the consumer cannot
+  mutate a value and have the mutation visible inside the generator.
+- **Garbage collection of abandoned frames** — the design does not implement
+  automatic frame cleanup when a generator goes out of scope without exhausting.
+
+---
+
+## See also
+
+- [STACKTRACE.md](STACKTRACE.md) — `call_stack: Vec<CallFrame>` (Phase 1) is
+  a prerequisite; `CallFrame` is shared between the two features
+- [INTERMEDIATE.md](INTERMEDIATE.md) — `State` layout, `fn_call`/`fn_return`,
+  stack frame conventions, `Str` vs `String`, `STRING_NULL` sentinel
+- [THREADING.md](THREADING.md) — `par(...)` execution model; coroutines must
+  not cross `par` boundaries (SC-CO-4)
+- [SLOTS.md](SLOTS.md) — stack slot layout; understanding the two-zone design
+  is important for `serialise_text_slots` and `stack_bytes` construction
+- [LOFT.md](LOFT.md) — iterator protocol, for-loop attributes, existing
+  `iterator<T>` type semantics
+- [PLANNING.md](PLANNING.md) — enhancement backlog; coroutine priority
