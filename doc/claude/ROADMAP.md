@@ -17,6 +17,8 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | S5    | Fix optional `& text` parameter subtract-with-overflow panic (Issue 89) | Small |      | PROBLEMS.md #89             |
+| S7    | Add diagnostic error for `string` type name — should be `text` (Issue 82) | Trivial |    | PROBLEMS.md #82             |
+| S8    | Compile-time error when hash-value struct has field named `key` (Issue 83) | Small |     | PROBLEMS.md #83             |
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
 | L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
 | L3    | **`FileResult` enum** — mutating fs ops return enum + `.ok()` *(3 ph)* | Small |        | User request 2026-03-19     |
@@ -86,7 +88,10 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | S6    | Fix `for` loop in recursive function — per-function variable scoping (Issue 84) | High | | PROBLEMS.md #84 |
-| A12   | Lazy work-variable init (blocked: Issues 68–70)              | Medium    |                 | PLANNING.md A12             |
+| A12   | **Lazy work-variable init** (blocked: Issues 68–70)          | Medium    | A12.1–A12.3     | PLANNING.md A12             |
+| A12.1 | ↳ Fix `first_set_in` Block/Loop descent (Issue 68)           | Small     |                 | PROBLEMS.md #68             |
+| A12.2 | ↳ Text slot reuse: require exact size match (Issue 69)       | Small–Med | A12.1           | PROBLEMS.md #69             |
+| A12.3 | ↳ Revert `Type::Text` override in `generate_set` (Issue 70)  | Trivial   | A12.2           | PROBLEMS.md #70             |
 | A5    | **Closure capture for lambdas** *(5 phases)*                 | Very High | P1              | Depends on P1               |
 | A5.1  | ↳ Capture analysis — identify free variables                 | Small     | P1              | scopes.rs, expressions.rs   |
 | A5.2  | ↳ Closure record layout — synthesise anon struct type        | Small     | A5.1            | data.rs, typedef.rs         |
@@ -113,6 +118,17 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | CO1.4 | ↳ `yield from` — sub-generator delegation                   | Medium    | CO1.3           | state/mod.rs                |
 | CO1.5 | ↳ `for item in generator` integration — iterator protocol    | Small     | CO1.3           | parser/collections.rs       |
 | CO1.6 | ↳ `next()` / `exhausted()` stdlib functions                 | Small     | CO1.2           | native.rs, 05_coroutine.loft |
+| N2    | Native codegen: `CallRef` function-pointer dispatch (Issue 77) | Medium  |                 | PROBLEMS.md #77             |
+| N3    | Native codegen: resolve `external` crate reference (Issue 79) | Low     |                 | PROBLEMS.md #79             |
+| N4    | Native codegen: fix LIFO store-free order in generated frees (Issue 80) | Medium |        | PROBLEMS.md #80             |
+| N5    | Native codegen: `file_from_bytes` for `DbRef` vector types (Issue 86) | Medium |          | PROBLEMS.md #86             |
+| N6    | Native codegen: text method in format interpolation — emit `&str` (Issue 87) | Small |    | PROBLEMS.md #87             |
+| N7    | Native codegen: `directory()` scratch buffer argument (Issue 88) | Small  |                | PROBLEMS.md #88             |
+| N9    | Native codegen: exhaustive IR pattern matching — remove `panic!` catch-alls (Issue 61) | Medium | N2–N7 | PROBLEMS.md #61 |
+| A13   | **Complete two-zone slot assignment** — Steps 8 + 10 *(3 ph)* | Medium  |                 | SLOTS.md Steps 8, 10        |
+| A13.1 | ↳ Step 8: `Set(v, Block)` ordering fix in `place_large_and_recurse` | Medium |            | SLOTS.md Step 8             |
+| A13.2 | ↳ Step 10: Audit `build_scope_parents` for missing IR variants | Medium  | A13.1           | SLOTS.md Step 10            |
+| A13.3 | ↳ `scan_inner`: add `Value::Iter` arm (latent false-positive scope gap) | Small |          | SLOTS.md § Open Issues      |
 | A4    | **Spatial index operations** *(4 phases)*                    | High      |                 | PROBLEMS #22                |
 | A4.1  | ↳ Insert + exact lookup; remove pre-gate for these ops       | Medium    |                 | database.rs, fill.rs        |
 | A4.2  | ↳ Bounding-box range query `spacial[x1..x2, y1..y2]`        | Medium    | A4.1            | database.rs, collections.rs |
