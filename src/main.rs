@@ -295,9 +295,7 @@ fn main() {
             } else {
                 (start_def..end_def).collect()
             };
-            if let Err(e) =
-                out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)
-            {
+            if let Err(e) = out.output_native_reachable(&mut f, start_def, end_def, &entry_defs) {
                 eprintln!("loft: wasm code generation failed: {e}");
                 std::process::exit(1);
             }
@@ -328,9 +326,7 @@ fn main() {
                 std::process::exit(1);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "loft: rustc not found; install the Rust toolchain to use --native-wasm"
-                );
+                eprintln!("loft: rustc not found; install the Rust toolchain to use --native-wasm");
                 std::process::exit(1);
             }
             Err(e) => {

@@ -18,6 +18,9 @@ impl Stores {
         self.database_named(size, "")
     }
 
+    /// Try to allocate a new named store.
+    /// # Panics
+    /// When a store already in use is allocated again.
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
         if self.max >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
@@ -40,9 +43,15 @@ impl Stores {
         };
         if std::env::var("LOFT_STORE_LOG").is_ok() {
             if name.is_empty() {
-                eprintln!("[store] alloc store={} rec={} size={size}", result.store_nr, result.rec);
+                eprintln!(
+                    "[store] alloc store={} rec={} size={size}",
+                    result.store_nr, result.rec
+                );
             } else {
-                eprintln!("[store] alloc store={} \"{name}\" rec={} size={size}", result.store_nr, result.rec);
+                eprintln!(
+                    "[store] alloc store={} \"{name}\" rec={} size={size}",
+                    result.store_nr, result.rec
+                );
             }
         }
         result

@@ -48,12 +48,12 @@ const SUITE_SKIP: &[&str] = &[
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
-    "06-function.loft",   // #77: CallRef not implemented
-    "13-file.loft",       // #74: file I/O ops missing; also no WASM filesystem
-    "18-locks.loft",      // todo!()
-    "19-threading.loft",  // todo!(); WASM threading model differs
-    "21-random.loft",     // #79: external crate
-    "22-time.loft",       // todo!()
+    "06-function.loft",  // #77: CallRef not implemented
+    "13-file.loft",      // #74: file I/O ops missing; also no WASM filesystem
+    "18-locks.loft",     // todo!()
+    "19-threading.loft", // todo!(); WASM threading model differs
+    "21-random.loft",    // #79: external crate
+    "22-time.loft",      // todo!()
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
@@ -169,7 +169,10 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     }
 
     // Run with wasmtime if available
-    match std::process::Command::new("wasmtime").arg(&tmp_wasm).status() {
+    match std::process::Command::new("wasmtime")
+        .arg(&tmp_wasm)
+        .status()
+    {
         Ok(s) => {
             let _ = std::fs::remove_file(&tmp_wasm);
             if !s.success() {
