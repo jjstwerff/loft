@@ -1129,7 +1129,15 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 /// Returns `i32::MIN` (null) when `lo > hi` or when the `random` feature is disabled.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
 pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
-    crate::ops::rand_int(lo, hi)
+    #[cfg(feature = "random")]
+    {
+        crate::ops::rand_int(lo, hi)
+    }
+    #[cfg(not(feature = "random"))]
+    {
+        let _ = (lo, hi);
+        i32::MIN
+    }
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
@@ -1144,6 +1152,7 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
     };
     // Build shuffled index list.
     let mut indices: Vec<i32> = (0..count as i32).collect();
+    #[cfg(feature = "random")]
     crate::ops::shuffle_ints(&mut indices);
     // Allocate: vec_rec holds size + data, header_rec holds pointer to vec_rec.
     let base = stores.null();
