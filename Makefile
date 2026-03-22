@@ -109,7 +109,7 @@ test-wasm:
 	@WASMTIME=$$(which wasmtime 2>/dev/null); \
 	if [ -n "$$WASMTIME" ]; then echo "Running wasm tests with wasmtime"; else echo "wasmtime not found — compile-only (install via: brew install wasmtime)"; fi; \
 	failed=0; \
-	for f in tests/docs/*.loft; do \
+	for f in tests/docs/*.loft tests/scripts/*.loft; do \
 		printf "  %-45s" "$$f"; \
 		wasm=$$(mktemp /tmp/loft_wasm_XXXXXX.wasm); \
 		out=$$(./target/release/loft --native-wasm "$$wasm" "$$f" 2>&1); \
@@ -120,7 +120,7 @@ test-wasm:
 			echo "$$out" | head -5; \
 			failed=$$((failed + 1)); \
 		elif [ -n "$$WASMTIME" ]; then \
-			run_out=$$($$WASMTIME "$$wasm" 2>&1); \
+			run_out=$$($$WASMTIME --dir . "$$wasm" 2>&1); \
 			run_code=$$?; \
 			rm -f "$$wasm"; \
 			if [ $$run_code -ne 0 ] || echo "$$run_out" | grep -q "^Error:\|panicked"; then \
