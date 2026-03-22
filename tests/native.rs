@@ -59,13 +59,17 @@ fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
     Some((rlib, debug_deps))
 }
 
-/// On Windows MSVC, locate build-script output directories that contain `.lib` files.
+/// On Windows MSVC, locate build-script output directories for native import libraries.
 ///
 /// When linking against `libloft.rlib` with standalone `rustc`, crates like `windows-sys`
 /// that emit native import libraries via their build scripts (e.g. `windows.0.48.5.lib`)
 /// are not automatically found.  Cargo normally passes the build-script output dirs as
-/// `-L native=…` linker arguments; we replicate that here by scanning `target/{profile}/build/`
-/// for `out/` subdirectories that contain at least one `.lib` file.
+/// `-L native=…` linker arguments; we replicate that here.
+///
+/// Strategy: add every `out/` subdirectory of `target/{profile}/build/` as a `-L` path,
+/// plus each of their immediate subdirectories.  Some crates (e.g. `windows-targets`) place
+/// import libraries in a platform-specific subdirectory such as `out/x86_64-pc-windows-msvc/`
+/// rather than directly in `out/`.  Adding both levels covers all known layouts.
 fn find_native_lib_dirs(rlib_info: &Option<(PathBuf, PathBuf)>) -> Vec<PathBuf> {
     #[cfg(not(windows))]
     {
@@ -93,17 +97,23 @@ fn find_native_lib_dirs(rlib_info: &Option<(PathBuf, PathBuf)>) -> Vec<PathBuf> 
         let Ok(entries) = std::fs::read_dir(&build_dir) else {
             return Vec::new();
         };
-        entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path().join("out"))
-            .filter(|out| {
-                out.is_dir()
-                    && std::fs::read_dir(out).ok().map_or(false, |it| {
-                        it.filter_map(|f| f.ok())
-                            .any(|f| f.path().extension().map_or(false, |ext| ext == "lib"))
-                    })
-            })
-            .collect()
+        let mut dirs = Vec::new();
+        for entry in entries.filter_map(|e| e.ok()) {
+            let out = entry.path().join("out");
+            if !out.is_dir() {
+                continue;
+            }
+            dirs.push(out.clone());
+            // Add immediate subdirectories of out/ to cover platform-specific layouts.
+            if let Ok(subdirs) = std::fs::read_dir(&out) {
+                for sub in subdirs.filter_map(|e| e.ok()) {
+                    if sub.path().is_dir() {
+                        dirs.push(sub.path());
+                    }
+                }
+            }
+        }
+        dirs
     }
 }
 
