@@ -15,6 +15,10 @@ impl Stores {
     When a store already in use is allocated again.
     */
     pub fn database(&mut self, size: u32) -> DbRef {
+        self.database_named(size, "")
+    }
+
+    pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
         if self.max >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
         } else {
@@ -29,11 +33,19 @@ impl Stores {
             store.claim(size)
         };
         self.max += 1;
-        DbRef {
+        let result = DbRef {
             store_nr: self.max - 1,
             rec,
             pos: 8,
+        };
+        if std::env::var("LOFT_STORE_LOG").is_ok() {
+            if name.is_empty() {
+                eprintln!("[store] alloc store={} rec={} size={size}", result.store_nr, result.rec);
+            } else {
+                eprintln!("[store] alloc store={} \"{name}\" rec={} size={size}", result.store_nr, result.rec);
+            }
         }
+        result
     }
 
     /**
@@ -42,12 +54,27 @@ impl Stores {
     When the code doesn't free the last claimed store first.
     */
     pub fn free(&mut self, db: &DbRef) {
+        self.free_named(db, "");
+    }
+
+    /**
+    Like [`free`], but includes the loft variable name in `LOFT_STORE_LOG` output.
+    Generated native code calls this variant via `OpFreeRef(stores, var, "var_name")`.
+    */
+    pub fn free_named(&mut self, db: &DbRef, name: &str) {
         // u16::MAX is the null-sentinel used by OpNullRefSentinel for inline-ref temporaries
         // that were never assigned a real store.  Nothing to free in this case.
         if db.store_nr == u16::MAX {
             return;
         }
         let al = db.store_nr;
+        if std::env::var("LOFT_STORE_LOG").is_ok() {
+            if name.is_empty() {
+                eprintln!("[store] free  store={al} (max={})", self.max);
+            } else {
+                eprintln!("[store] free  store={al} \"{name}\" (max={})", self.max);
+            }
+        }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         debug_assert!(!self.allocations[al as usize].free, "Double free store");
         debug_assert!(
@@ -102,6 +129,12 @@ impl Stores {
     #[must_use]
     pub fn null(&mut self) -> DbRef {
         self.database(u32::MAX)
+    }
+
+    /// Like [`null`], but includes the loft variable name in `LOFT_STORE_LOG` output.
+    /// Generated native code calls this for each `DbRef` variable declaration.
+    pub fn null_named(&mut self, name: &str) -> DbRef {
+        self.database_named(u32::MAX, name)
     }
 
     #[must_use]

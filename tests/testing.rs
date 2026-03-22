@@ -355,6 +355,8 @@ impl Test {
             indent: 0,
             def_nr: 0,
             declared: Default::default(),
+            reachable: Default::default(),
+            loop_stack: Vec::new(),
         };
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.

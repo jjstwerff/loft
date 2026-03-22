@@ -1364,6 +1364,8 @@ fn n1_native_pipeline_trivial_program() {
         indent: 0,
         def_nr: 0,
         declared: Default::default(),
+        reachable: Default::default(),
+        loop_stack: Vec::new(),
     };
     out.output_native_reachable(&mut f, start_def, end_def, &[main_nr])
         .expect("output_native_reachable");

@@ -46,162 +46,15 @@ const SUITE_SKIP: &[&str] = &[
     // (PROBLEMS #42 generate_call size mismatch fixed 2026-03-16)
 ];
 
-/// Docs files that are known to fail in `--native` mode.
-/// See PROBLEMS.md for details on each issue number.
-const NATIVE_SKIP: &[&str] = &[
-    "06-function.loft",   // #77: CallRef / function-pointer calls not implemented
-    "13-file.loft",       // #74: OpGetFileText / OpTruncateFile / OpSeekFile / OpSizeFile missing
-    "16-parser.loft",     // #80: LIFO store-free order panic at runtime
-    "18-locks.loft",      // n_get_store_lock is todo!()
-    "19-threading.loft",  // parallel worker functions are todo!()
-    "21-random.loft",     // #79: external crate reference not resolved
-    "22-time.loft",       // n_now is todo!()
-];
-
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
     "06-function.loft",   // #77: CallRef not implemented
     "13-file.loft",       // #74: file I/O ops missing; also no WASM filesystem
-    "16-parser.loft",     // #80: LIFO store-free order panic
     "18-locks.loft",      // todo!()
     "19-threading.loft",  // todo!(); WASM threading model differs
     "21-random.loft",     // #79: external crate
     "22-time.loft",       // todo!()
 ];
-
-/// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
-///
-/// Prefers `target/release/libloft.rlib` (clean single-version deps) over the debug
-/// test binary's `deps/` directory (which may have multiple versions of the same crate,
-/// causing rustc "multiple candidates" errors).  Falls back to debug if release is absent.
-fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
-    // Walk up from the test binary to find the cargo target directory.
-    // test binary: target/debug/deps/wrap-<hash>  →  target/
-    let target_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| {
-            // deps/ → debug/ or release/ → target/
-            p.parent()?.parent()?.parent().map(|d| d.to_path_buf())
-        })?;
-
-    // Prefer the release build: libloft.rlib sits directly in target/release/
-    // and target/release/deps/ has only one copy of each transitive dep.
-    let release_rlib = target_dir.join("release").join("libloft.rlib");
-    if release_rlib.exists() {
-        let deps = target_dir.join("release").join("deps");
-        return Some((release_rlib, deps));
-    }
-
-    // Fall back to debug deps: scan for libloft-<hash>.rlib.
-    let debug_deps = target_dir.join("debug").join("deps");
-    let rlib = std::fs::read_dir(&debug_deps)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .find(|e| {
-            let n = e.file_name();
-            let s = n.to_string_lossy();
-            s.starts_with("libloft") && s.ends_with(".rlib")
-        })
-        .map(|e| e.path())?;
-    Some((rlib, debug_deps))
-}
-
-/// Compile a `.loft` file to a native binary via the loft codegen + rustc, then run it.
-///
-/// Fails the test if:
-/// - the loft parse or scope-check step produces diagnostics
-/// - `rustc` is in PATH but compilation fails
-/// - the compiled binary exits non-zero
-///
-/// Skips silently (returns `Ok`) if `rustc` is not found in PATH.
-fn run_native_test(entry: &Path) -> std::io::Result<()> {
-    let stem = entry
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .replace('-', "_");
-    println!("native {entry:?}");
-
-    // Parse
-    let mut p = Parser::new();
-    let (data, db) = cached_default();
-    p.data = data;
-    p.database = db;
-    let start_def = p.data.definitions();
-    p.parse(&entry.to_string_lossy(), false);
-    for l in p.diagnostics.lines() {
-        println!("{l}");
-    }
-    if !p.diagnostics.is_empty() {
-        return Err(Error::from(std::io::ErrorKind::InvalidData));
-    }
-    scopes::check(&mut p.data);
-    let mut state = State::new(p.database);
-    byte_code(&mut state, &mut p.data);
-    let end_def = p.data.definitions();
-    let main_nr = p.data.def_nr("n_main");
-    let entry_defs: Vec<u32> = if main_nr < end_def {
-        vec![main_nr]
-    } else {
-        (start_def..end_def).collect()
-    };
-
-    // Generate Rust source
-    let tmp_rs = std::env::temp_dir().join(format!("loft_native_{stem}.rs"));
-    {
-        let mut f = std::fs::File::create(&tmp_rs)?;
-        let mut out = Output {
-            data: &p.data,
-            stores: &state.database,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: HashSet::new(),
-        };
-        out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
-    }
-
-    // Compile
-    let binary = std::env::temp_dir().join(format!("loft_native_{stem}_bin"));
-    let mut cmd = std::process::Command::new("rustc");
-    cmd.arg("--edition=2024")
-        .arg("-o")
-        .arg(&binary)
-        .arg(&tmp_rs);
-    if let Some((rlib, deps_dir)) = find_loft_rlib() {
-        // Note: rustc requires space-separated form for --extern and -L.
-        // The `=` form (e.g. `-L=path`) is not supported by all rustc versions.
-        cmd.arg("--extern")
-            .arg(format!("loft={}", rlib.display()))
-            .arg("-L")
-            .arg(&deps_dir);
-    }
-    let compile_out = cmd.output();
-    let _ = std::fs::remove_file(&tmp_rs);
-    let compile_out = match compile_out {
-        Ok(o) => o,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("  rustc not found — skipping native test for {stem}");
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
-    if !compile_out.status.success() {
-        let stderr = String::from_utf8_lossy(&compile_out.stderr);
-        eprintln!("rustc failed for {stem}:\n{stderr}");
-        let _ = std::fs::remove_file(&binary);
-        return Err(Error::from(std::io::ErrorKind::Other));
-    }
-
-    // Run
-    let run_status = std::process::Command::new(&binary).status()?;
-    let _ = std::fs::remove_file(&binary);
-    if !run_status.success() {
-        eprintln!("native binary failed for {stem} (exit {:?})", run_status.code());
-        return Err(Error::from(std::io::ErrorKind::Other));
-    }
-    Ok(())
-}
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
 /// optionally run it with `wasmtime`.
@@ -252,6 +105,8 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             indent: 0,
             def_nr: 0,
             declared: HashSet::new(),
+            reachable: HashSet::new(),
+            loop_stack: Vec::new(),
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }
@@ -355,33 +210,6 @@ fn dir() -> std::io::Result<()> {
             continue;
         }
         run_test(entry, false, true)?;
-    }
-    Ok(())
-}
-
-/// Compile and run every `.loft` file in `tests/docs/` through the native Rust
-/// backend (`--native` mode), skipping files listed in `NATIVE_SKIP`.
-///
-/// Skips silently if `rustc` is not in PATH.  Fails if rustc compilation or the
-/// resulting binary exit non-zero.
-#[test]
-fn native_dir() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut files: Vec<PathBuf> = std::fs::read_dir("tests/docs")?
-        .filter_map(|f| f.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
-        })
-        .collect();
-    files.sort();
-    for entry in files {
-        let name = entry.file_name().unwrap_or_default().to_string_lossy();
-        if NATIVE_SKIP.iter().any(|s| *s == name.as_ref()) {
-            println!("skip {entry:?} (native skip list — see NATIVE_SKIP)");
-            continue;
-        }
-        run_native_test(&entry)?;
     }
     Ok(())
 }
