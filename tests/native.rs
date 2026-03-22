@@ -99,16 +99,39 @@ fn find_native_lib_dirs(rlib_info: &Option<(PathBuf, PathBuf)>) -> Vec<PathBuf> 
         };
         let mut dirs = Vec::new();
         for entry in entries.filter_map(|e| e.ok()) {
-            let out = entry.path().join("out");
-            if !out.is_dir() {
-                continue;
+            let build_entry = entry.path();
+
+            // Add out/ and its immediate subdirs (for libs generated into OUT_DIR).
+            let out = build_entry.join("out");
+            if out.is_dir() {
+                dirs.push(out.clone());
+                if let Ok(subdirs) = std::fs::read_dir(&out) {
+                    for sub in subdirs.filter_map(|e| e.ok()) {
+                        if sub.path().is_dir() {
+                            dirs.push(sub.path());
+                        }
+                    }
+                }
             }
-            dirs.push(out.clone());
-            // Add immediate subdirectories of out/ to cover platform-specific layouts.
-            if let Ok(subdirs) = std::fs::read_dir(&out) {
-                for sub in subdirs.filter_map(|e| e.ok()) {
-                    if sub.path().is_dir() {
-                        dirs.push(sub.path());
+
+            // Read the build-script output file for `cargo:rustc-link-search` directives.
+            // Crates like `windows_x86_64_msvc` ship `windows.0.48.5.lib` inside their
+            // source package (cargo registry) and emit
+            //   cargo:rustc-link-search=<CARGO_MANIFEST_DIR>
+            // rather than writing the file to OUT_DIR.  Cargo caches these directives in
+            // `target/{profile}/build/{crate}-{hash}/output`.  Reading them here replicates
+            // exactly what cargo passes to the linker.
+            let output_file = build_entry.join("output");
+            if let Ok(content) = std::fs::read_to_string(&output_file) {
+                for line in content.lines() {
+                    let path_str = line
+                        .strip_prefix("cargo:rustc-link-search=native=")
+                        .or_else(|| line.strip_prefix("cargo:rustc-link-search="));
+                    if let Some(path_str) = path_str {
+                        let p = PathBuf::from(path_str);
+                        if p.is_dir() && !dirs.contains(&p) {
+                            dirs.push(p);
+                        }
                     }
                 }
             }
