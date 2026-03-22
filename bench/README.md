@@ -14,10 +14,10 @@ Performance comparison across five targets: Python, loft interpreter, loft nativ
 | 04 | collatz | Collatz sequence lengths 1..1,000,000 |
 | 05 | mandelbrot | 200×200 Mandelbrot, 256 max iters |
 | 06 | newton_sqrt | Newton's method sqrt, 1M calls |
-| 07 | string_build | 5,000 string appends |
-| 08 | word_count | Hash-based word frequency, 100K ops |
-| 09 | matrix_mul | Float dot product, 1M elements |
-| 10 | sort | Merge sort (index-bound), 3,000 integers |
+| 07 | string_build | 500,000 string appends |
+| 08 | word_count | Hash-based word frequency, 600K ops |
+| 09 | matrix_mul | Float dot product, 5M elements |
+| 10 | sort | Insertion sort, 3,000 integers |
 
 ## Targets
 
@@ -42,17 +42,21 @@ Missing tools produce a warning and that target is skipped — no hard failures.
 ```bash
 cd bench
 ./run_bench.sh                        # run all benchmarks, all targets
-./run_bench.sh --only 01_fibonacci    # single benchmark
+./run_bench.sh --list                 # list benchmarks with descriptions
+./run_bench.sh --only 8               # single benchmark by number
+./run_bench.sh --only 08_word_count   # single benchmark by full name
 ./run_bench.sh --skip-python          # skip Python
 ./run_bench.sh --skip-wasm            # skip wasm
 ./run_bench.sh --no-build             # skip compilation step
 ./run_bench.sh --warmup               # run once before timing
+./run_bench.sh -h                     # show all options
 ```
 
 ## Output
 
 ```
-bench            python    loft-interp  loft-native  loft-wasm    rust
-01_fibonacci     1823ms    612ms        18ms         22ms         8ms
+bench                python       loft-interp   loft-native   loft-wasm     rust
+---------------------------------------------------------------------------------
+01_fibonacci         1823ms       612ms         18ms          22ms          8ms
 ...
 ```
