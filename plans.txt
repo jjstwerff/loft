@@ -1,8 +1,6 @@
 reorder user documentation into a more logical flow
 
 update remaining documentation of state.rs with the moved name
-validate `Store` allocator | O(B/8) linear scan; no free list    and update this in DEVELOPERS documentation
-validate Scope analysis | Borrowed-ref pre-init is incomplete     and update this in DEVELOPERS documentation
 Type cycles detection
 Hash table | 87.5% load threshold
 clear out caveats that are actually fixed

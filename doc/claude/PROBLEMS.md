@@ -460,17 +460,11 @@ All 24 `tests/docs/*.loft` files fail to compile under `--native`.  The root cau
 
 ### 74. `OpGetFileText` / `OpTruncateFile` / `OpSeekFile` / `OpSizeFile` missing from `codegen_runtime`
 
-**Symptom:** `error[E0425]: cannot find function OpGetFileText` in every generated file that
-touches the `File` type (all 24 tests use the stdlib which transitively includes file ops).
+**Status: FIXED** (see `src/codegen_runtime.rs`)
 
-**Root cause:** These four Op functions are defined in `default/02_images.loft` with no `#rust`
-template.  The bytecode interpreter uses them via `fill.rs` stack-based wrappers.  Native
-codegen emits them as direct function calls but no implementation is provided.
-
-**Fix path:** Add `pub fn OpGetFileText`, `pub fn OpTruncateFile`, `pub fn OpSeekFile`, and
-`pub fn OpSizeFile` to `src/codegen_runtime.rs` with direct-call signatures matching how the
-generator emits them (e.g. `fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String)`).
-The implementations can delegate to the same logic already in `src/state/io.rs`.
+`pub fn OpGetFileText`, `OpSeekFile`, `OpSizeFile`, and `OpTruncateFile` were added to
+`src/codegen_runtime.rs` with direct-call signatures. `13-file.loft` now passes in `native_dir`.
+`n_path_sep` was also added (needed by `11-files.loft`).
 
 ### 77. Function-pointer calls (`CallRef`) not implemented
 
@@ -507,6 +501,20 @@ On the next call to `n_parse`, `OpDatabase` tries to allocate at that index and 
 compiler emits frees in declaration order, but the store allocator requires LIFO.  Fix in
 `output_block` to sort free calls by store_nr descending, or fix in `allocation.rs` to accept
 non-LIFO frees (would require a free-list instead of a stack pointer).
+
+### 81. 17-libraries native runtime panic: "Stores must be freed in LIFO order" (same root as #80)
+
+**Status: FIXED** (see `src/generation.rs` `output_set`)
+
+**Root cause:** `__ref_*` inline-ref temporaries (compiler-generated work variables that are
+immediately overwritten by a function's return value) were initialised with `stores.null_named()`
+which allocated a real store.  That store was then orphaned when the variable was overwritten by
+the callee's returned `DbRef`, leaving a leaked store that broke the LIFO invariant.
+
+**Fix:** In `output_set`, when a `__ref_*` variable is marked `is_inline_ref` (via
+`variables.is_inline_ref(var)`), emit `DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }` (the null
+sentinel) instead of `stores.null_named(...)`.  This matches the interpreter's `OpNullRefSentinel`
+path.  `17-libraries.loft` now passes in `native_dir`.
 
 ---
 
