@@ -129,6 +129,13 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A13.1 | ↳ Step 8: `Set(v, Block)` ordering fix in `place_large_and_recurse` | Medium |            | SLOTS.md Step 8             |
 | A13.2 | ↳ Step 10: Audit `build_scope_parents` for missing IR variants | Medium  | A13.1           | SLOTS.md Step 10            |
 | A13.3 | ↳ `scan_inner`: add `Value::Iter` arm (latent false-positive scope gap) | Small |          | SLOTS.md § Open Issues      |
+| O1    | **Interpreter: superinstruction merging** — peephole pass, 6 merged opcodes (240–245) | Medium | | PERFORMANCE.md P1 |
+| O2    | **Interpreter: stack raw pointer cache** — eliminate store-indirection on push/pop | High | | PERFORMANCE.md P2 |
+| O3    | Interpreter: verify integer paths carry no `long` null-sentinel | Low       |                 | PERFORMANCE.md P3           |
+| O4    | **Native: direct-emit local collections** — escape analysis + `Vec<T>`/`HashMap` | High |   | PERFORMANCE.md N1           |
+| O5    | **Native: omit `stores` param from pure functions** — purity analysis + `_pure` wrapper | High | O4 | PERFORMANCE.md N2 |
+| O6    | Native: remove `long` null-sentinel from local arithmetic (`_nn` variants) | Low   |                 | PERFORMANCE.md N3           |
+| O7    | wasm: pre-allocate string buffers in format path                | Medium    | W1              | PERFORMANCE.md W1           |
 | A4    | **Spatial index operations** *(4 phases)*                    | High      |                 | PROBLEMS #22                |
 | A4.1  | ↳ Insert + exact lookup; remove pre-gate for these ops       | Medium    |                 | database.rs, fill.rs        |
 | A4.2  | ↳ Bounding-box range query `spacial[x1..x2, y1..y2]`        | Medium    | A4.1            | database.rs, collections.rs |
