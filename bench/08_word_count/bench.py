@@ -3,7 +3,7 @@ from collections import defaultdict
 
 words = ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog",
          "the", "fox", "and", "the", "dog", "are", "friends", "the", "end"]
-n = 100_000
+n = 600_000
 
 t0 = time.time()
 freq = defaultdict(int)

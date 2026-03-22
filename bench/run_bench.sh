@@ -32,11 +32,49 @@ ONLY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --list)
+      echo "Available benchmarks:"
+      echo ""
+      for d in "$SCRIPT_DIR"/*/; do
+        local_name="$(basename "$d")"
+        local_desc=""
+        if [[ -f "$d/bench.loft" ]]; then
+          local_desc="$(grep -m1 '^// Benchmark' "$d/bench.loft" | sed 's|^// Benchmark [0-9]*: ||')"
+        fi
+        printf "  %-20s %s\n" "$local_name" "$local_desc"
+      done
+      exit 0 ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: run_bench.sh [OPTIONS]
+
+Run the loft benchmark suite and print a comparison table.
+
+Options:
+  --skip-python   Skip the Python measurements
+  --skip-wasm     Skip the loft-wasm measurements
+  --no-build      Skip (re)building native/wasm/rust binaries; use existing ones
+  --warmup        Run each benchmark once silently before timing
+  --only N        Run only one benchmark: a number (e.g. --only 8) or full name (e.g. --only 08_word_count)
+  --list          List available benchmarks with a short description
+  -h, --help      Show this help message and exit
+
+Environment:
+  LOFT_BIN        Path to the loft binary (default: target/release/loft)
+  LOFT_STDLIB     Path to the stdlib root directory (default: project root)
+
+Output columns: bench | python | loft-interp | loft-native | loft-wasm | rust
+EOF
+      exit 0 ;;
     --skip-python) SKIP_PYTHON=1 ;;
     --skip-wasm)   SKIP_WASM=1 ;;
     --no-build)    NO_BUILD=1 ;;
     --warmup)      WARMUP=1 ;;
-    --only)        ONLY="$2"; shift ;;
+    --only)
+      if [[ ! "$2" =~ ^[0-9]+$ && ! "$2" =~ ^[0-9]+_ ]]; then
+        echo "error: --only requires a number or full bench name (e.g. --only 8 or --only 08_word_count)"; exit 1
+      fi
+      ONLY="$2"; shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
   shift
@@ -86,8 +124,17 @@ run_bench() {
   local name
   name="$(basename "$dir")"
 
-  if [[ -n "$ONLY" && "$name" != "$ONLY" ]]; then
-    return
+  if [[ -n "$ONLY" ]]; then
+    if [[ "$ONLY" == *_* ]]; then
+      # Full name: exact match
+      [[ "$name" != "$ONLY" ]] && return
+    else
+      # Number: match by stripping leading zeros from both sides
+      local num="${name%%_*}"
+      num="${num#"${num%%[!0]*}"}"
+      local only_stripped="${ONLY#"${ONLY%%[!0]*}"}"
+      [[ "$num" != "$only_stripped" ]] && return
+    fi
   fi
 
   local py_ms="-" li_ms="-" ln_ms="-" lw_ms="-" rs_ms="-"

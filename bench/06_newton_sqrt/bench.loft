@@ -1,7 +1,7 @@
 // Benchmark 6: Newton's method square root (1 million calls)
 fn newton_sqrt(x: float) -> float {
   guess = x / 2.0;
-  for nw_i in 0..50 {
+  for _ in 0..50 {
     guess = (guess + x / guess) / 2.0;
   }
   guess
