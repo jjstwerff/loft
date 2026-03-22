@@ -1,0 +1,28 @@
+// Benchmark 4: Collatz sequence lengths (1..1,000,000)
+fn collatz_len(start: long) -> integer {
+  cur = start;
+  steps = 1;
+  for _ in 0..10000000 {
+    if cur == 1l { break; }
+    if cur % 2l == 0l { cur = cur / 2l; }
+    else { cur = 3l * cur + 1l; }
+    steps += 1;
+  }
+  steps
+}
+
+fn main() {
+  n = 1000000;
+  t0 = ticks();
+  max_steps = 0;
+  max_n = 0l;
+  for col_i in 1..n {
+    s = collatz_len(col_i as long);
+    if s > max_steps {
+      max_steps = s;
+      max_n = col_i as long;
+    }
+  }
+  ms = (ticks() - t0) / 1000l;
+  println("result: {max_n} steps={max_steps}  time: {ms}ms");
+}

@@ -1,0 +1,66 @@
+// Benchmark 10: Merge sort (3000 integers, index-bound approach)
+// Passes the full array with lo/hi bounds into each recursive call so the
+// input array is never sliced or copied — only the merge output is allocated.
+// Workaround for loft flat-namespace: every loop variable must be unique
+// across all functions in the file.
+
+fn msort_merge(left_part: const vector<integer>, right_part: const vector<integer>) -> vector<integer> {
+  out = [for mg_init in 0..0 { mg_init }];
+  li = 0;
+  ri = 0;
+  ll = len(left_part);
+  rl = len(right_part);
+  total_steps = ll + rl;
+  for mg_step in 0..total_steps {
+    if li >= ll && ri >= rl {
+      break;
+    }
+    li = li + mg_step * 0;
+    if li >= ll {
+      out += [right_part[ri]];
+      ri += 1;
+    } else if ri >= rl {
+      out += [left_part[li]];
+      li += 1;
+    } else if left_part[li] <= right_part[ri] {
+      out += [left_part[li]];
+      li += 1;
+    } else {
+      out += [right_part[ri]];
+      ri += 1;
+    }
+  }
+  out
+}
+
+// Sort arr[lo..hi] by passing index bounds — no slice copies at split points.
+fn msort_range(arr: const vector<integer>, lo: integer, hi: integer) -> vector<integer> {
+  sz = hi - lo;
+  if sz <= 1 {
+    base = [for ms_init in 0..0 { ms_init }];
+    if sz == 1 {
+      base += [arr[lo]];
+    }
+    return base;
+  }
+  mid = lo + sz / 2;
+  lv = msort_range(arr, lo, mid);
+  rv = msort_range(arr, mid, hi);
+  msort_merge(lv, rv)
+}
+
+fn main() {
+  total = 3000;
+  data = [for sort_i in 0..total { (sort_i * 31337 + 17) % 100000 }];
+  t0 = ticks();
+  ms_out = msort_range(data, 0, total);
+  ms = (ticks() - t0) / 1000l;
+  checksum = ms_out[0] + ms_out[total - 1] + ms_out[total / 2];
+  ok = true;
+  for sort_j in 1..total {
+    if ms_out[sort_j] < ms_out[sort_j - 1] {
+      ok = false;
+    }
+  }
+  println("result: {checksum} sorted={ok}  time: {ms}ms");
+}

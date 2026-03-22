@@ -1,0 +1,11 @@
+// Benchmark 1: Fibonacci (recursive)
+fn fib(n: integer) -> integer {
+  if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+  t0 = ticks();
+  r = fib(38);
+  ms = (ticks() - t0) / 1000l;
+  println("result: {r}  time: {ms}ms");
+}

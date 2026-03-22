@@ -1,0 +1,19 @@
+// Benchmark 6: Newton's method square root (1 million calls)
+fn newton_sqrt(x: float) -> float {
+  guess = x / 2.0;
+  for nw_i in 0..50 {
+    guess = (guess + x / guess) / 2.0;
+  }
+  guess
+}
+
+fn main() {
+  n = 1000000;
+  t0 = ticks();
+  acc = 0.0;
+  for nw_j in 0..n {
+    acc += newton_sqrt((nw_j + 1) as float);
+  }
+  ms = (ticks() - t0) / 1000l;
+  println("result: {round(acc)}  time: {ms}ms");
+}
