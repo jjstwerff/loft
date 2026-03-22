@@ -104,18 +104,15 @@ pub struct Stores {
     pub allocations: Vec<Store>,
     pub files: Vec<Option<std::fs::File>>,
     pub max: u16,
+    /// Temporary strings produced by text-returning native functions.
+    /// Cleared by `OpClearScratch` at statement boundaries.
+    pub scratch: Vec<String>,
     /// Set by `State::execute()` to allow native functions to access the
     /// interpreter's bytecode, library, and compiled data during execution.
     pub parallel_ctx: Option<Box<ParallelCtx>>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
-    /// Temporary strings produced by native functions (e.g. `to_uppercase`, `replace`).
-    /// Native functions that create new owned strings push them here and return a
-    /// `Str` (raw pointer + length) pointing into the stored data.  The strings live
-    /// for the lifetime of the interpreter run, which is safe for short programs and
-    /// bounded-size test suites.
-    pub scratch: Vec<String>,
     /// Set to `true` when a loft `panic()` or failed `assert` fires in production mode
     /// (where the error is logged instead of aborting).  `main.rs` checks this after
     /// execution and exits with code 1 so shell scripts can detect failure.
@@ -134,7 +131,7 @@ impl Default for Stores {
 
 impl Clone for Stores {
     /// Clone the type-schema portion of a `Stores`.
-    /// Runtime-only fields (`allocations`, `files`, `scratch`, `parallel_ctx`)
+    /// Runtime-only fields (`allocations`, `files`, `parallel_ctx`)
     /// are reset to empty/None because they are only valid during execution.
     fn clone(&self) -> Self {
         Self {
@@ -143,9 +140,9 @@ impl Clone for Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: self.max,
+            scratch: Vec::new(),
             parallel_ctx: None,
             logger: self.logger.clone(),
-            scratch: Vec::new(),
             had_fatal: false,
             start_time: self.start_time,
         }
@@ -354,9 +351,9 @@ impl Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: 0,
+            scratch: Vec::new(),
             parallel_ctx: None,
             logger: None,
-            scratch: Vec::new(),
             had_fatal: false,
             start_time: Instant::now(),
         };

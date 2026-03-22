@@ -10,6 +10,14 @@ use crate::variables::size;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+/// Returns true for the three text-returning native functions that use destination-passing (A8).
+fn is_text_dest_native(name: &str) -> bool {
+    matches!(
+        name,
+        "t_4text_replace" | "t_4text_to_lowercase" | "t_4text_to_uppercase"
+    )
+}
+
 impl State {
     /**
     Define byte code for a function.
@@ -186,11 +194,11 @@ impl State {
                 panic!("Should have rewritten {val:?}");
             }
             Value::Line(line) => {
-                // T3-9: clear the scratch buffer at statement boundaries so native
-                // text functions (replace, to_lowercase, to_uppercase) don't
-                // accumulate temporary strings for the entire program run.
-                stack.add_op("OpClearScratch", self);
                 self.line_numbers.insert(self.code_pos, *line);
+                if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
+                    stack.add_op("OpStaticCall", self);
+                    self.code_add(lib_nr);
+                }
                 Type::Void
             }
         }
@@ -566,6 +574,43 @@ impl State {
             parameters.len(),
             stack.data.def(op).attributes.len(),
         );
+        // A8: destination-passing for text-producing natives inside OpAppendText.
+        // OpAppendText(dest_var, Call(text_dest_fn, args)) → dest-passing call, skip OpAppendText.
+        if stack.data.def(op).name == "OpAppendText"
+            && parameters.len() >= 2
+            && let Value::Var(dest_var) = &parameters[0]
+            && let Value::Call(inner_op, inner_args) = &parameters[1]
+        {
+            let inner_name = stack.data.def(*inner_op).name.clone();
+            if is_text_dest_native(&inner_name) {
+                let dest_name = inner_name.clone() + "_dest";
+                if let Some(&lib_nr) = self.library_names.get(&dest_name) {
+                    let dest_var = *dest_var;
+                    let inner_op = *inner_op;
+                    let inner_args = inner_args.clone();
+                    let inner_attrs: Vec<Type> = stack
+                        .data
+                        .def(inner_op)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    for arg_val in &inner_args {
+                        self.generate(arg_val, stack, false);
+                    }
+                    stack.add_op("OpCreateStack", self);
+                    let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
+                    self.code_add(before_stack - stack.function.stack(dest_var));
+                    stack.add_op("OpStaticCall", self);
+                    self.code_add(lib_nr);
+                    for attr_type in &inner_attrs {
+                        stack.position -= size(attr_type, &Context::Argument);
+                    }
+                    stack.position -= size_of::<crate::keys::DbRef>() as u16;
+                    return Type::Void;
+                }
+            }
+        }
         for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
             if a.mutable {
                 #[cfg(debug_assertions)]
@@ -1052,6 +1097,19 @@ impl State {
             self.code_add(0u16);
             return;
         }
+        // A8: destination-passing — avoid scratch buffer for text-returning natives.
+        if matches!(stack.function.tp(var), Type::Text(_))
+            && let Value::Call(op, args) = value
+        {
+            let name = stack.data.def(*op).name.clone();
+            if is_text_dest_native(&name) {
+                let dest_name = name.clone() + "_dest";
+                if let Some(&lib_nr) = self.library_names.get(&dest_name) {
+                    self.gen_text_dest_call(stack, var, *op, args, lib_nr);
+                    return;
+                }
+            }
+        }
         self.generate(value, stack, false);
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
@@ -1079,6 +1137,39 @@ impl State {
             ),
         }
         self.code_add(var_pos);
+    }
+
+    /// A8: emit a destination-passing call for a text-returning native function.
+    ///
+    /// Instead of: evaluate call → Str on stack → OpAppendText(var)
+    /// Emits:      args → OpCreateStack(var) → `OpStaticCall`  (native writes to var directly)
+    fn gen_text_dest_call(
+        &mut self,
+        stack: &mut Stack,
+        var: u16,
+        op: u32,
+        args: &[Value],
+        lib_nr: u16,
+    ) {
+        let attr_types: Vec<Type> = stack
+            .data
+            .def(op)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect();
+        for arg_val in args {
+            self.generate(arg_val, stack, false);
+        }
+        stack.add_op("OpCreateStack", self);
+        let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
+        self.code_add(before_stack - stack.function.stack(var));
+        stack.add_op("OpStaticCall", self);
+        self.code_add(lib_nr);
+        for attr_type in &attr_types {
+            stack.position -= size(attr_type, &Context::Argument);
+        }
+        stack.position -= size_of::<crate::keys::DbRef>() as u16;
     }
 }
 

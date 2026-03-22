@@ -94,6 +94,11 @@ pub struct Parser {
     /// Lambda names are `__lambda_N`; the same N is produced on both passes because the counter
     /// advances identically in both passes (same token order → same parse order).
     pub lambda_counter: u32,
+    /// Expected `Type::Function(params, ret)` for the argument currently being parsed.
+    /// Set by `parse_call` before parsing a function-typed argument so that short-form
+    /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
+    /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
+    pub(crate) lambda_hint: Type,
 }
 
 // Operators ordered on their precedence
@@ -214,6 +219,7 @@ impl Parser {
             expr_not_null: false,
             expr_not_null_name: String::new(),
             lambda_counter: 0,
+            lambda_hint: Type::Unknown(0),
         }
     }
 

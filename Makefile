@@ -29,6 +29,10 @@ install: check-targets all
 	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
 		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
 	fi
+install: all
+	sudo install -d /usr/local/share/loft
+	sudo cp -r default /usr/local/share/loft/
+	sudo install -m 755 target/release/loft /usr/local/bin/loft
 
 uninstall:
 	sudo rm -f /usr/local/bin/loft
