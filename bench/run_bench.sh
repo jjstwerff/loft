@@ -4,8 +4,25 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOFT="${LOFT_BIN:-loft}"
-STDLIB_PATH="${LOFT_STDLIB:-}"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Auto-detect loft binary: env override → project target/release → PATH
+if [[ -n "${LOFT_BIN:-}" ]]; then
+  LOFT="$LOFT_BIN"
+elif [[ -x "$PROJECT_ROOT/target/release/loft" ]]; then
+  LOFT="$PROJECT_ROOT/target/release/loft"
+else
+  LOFT="loft"
+fi
+
+# Auto-detect stdlib: env override → sibling default/ directory (inside the project)
+if [[ -n "${LOFT_STDLIB:-}" ]]; then
+  STDLIB_PATH="$LOFT_STDLIB"
+elif [[ -d "$PROJECT_ROOT/default" ]]; then
+  STDLIB_PATH="$PROJECT_ROOT/"
+else
+  STDLIB_PATH=""
+fi
 
 SKIP_PYTHON=0
 SKIP_WASM=0
@@ -34,7 +51,7 @@ HAS_WASMTIME=0
 if command -v "$LOFT" > /dev/null 2>&1; then
   HAS_LOFT=1
 else
-  echo "warning: loft not found (set LOFT_BIN=<path> to specify location) — loft targets will be skipped"
+  echo "warning: loft not found (run from inside the project, or set LOFT_BIN=<path>) — loft targets will be skipped"
 fi
 
 if command -v python3 > /dev/null 2>&1; then
