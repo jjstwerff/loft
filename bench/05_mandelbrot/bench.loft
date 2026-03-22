@@ -1,0 +1,27 @@
+// Benchmark 5: Mandelbrot set (200x200, max 256 iterations)
+fn mandelbrot(cx: float, cy: float) -> integer {
+  zx = 0.0;
+  zy = 0.0;
+  for mb_i in 0..256 {
+    if zx * zx + zy * zy > 4.0 { return mb_i; }
+    tmp = zx * zx - zy * zy + cx;
+    zy = 2.0 * zx * zy + cy;
+    zx = tmp;
+  }
+  256
+}
+
+fn main() {
+  size = 200;
+  t0 = ticks();
+  total = 0;
+  for mb_y in 0..size {
+    for mb_x in 0..size {
+      cx = (mb_x as float / size as float) * 3.5 - 2.5;
+      cy = (mb_y as float / size as float) * 2.0 - 1.0;
+      total += mandelbrot(cx, cy);
+    }
+  }
+  ms = (ticks() - t0) / 1000l;
+  println("result: {total}  time: {ms}ms");
+}

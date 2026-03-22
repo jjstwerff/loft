@@ -1,0 +1,26 @@
+// Benchmark 8: Word frequency count
+// Hash must be a struct field in loft; iteration not supported so track total separately.
+struct Word { word: text, count: integer }
+struct WordDb { freq: hash<Word[word]> }
+
+fn main() {
+  words = ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog",
+           "the", "fox", "and", "the", "dog", "are", "friends", "the", "end"];
+  n = 600000;
+  t0 = ticks();
+  db = WordDb { freq: [] };
+  total = 0;
+  for wc_i in 0..n {
+    w = words[wc_i % 18];
+    existing = db.freq[w];
+    if existing == null {
+      db.freq += [Word { word: w, count: 1 }];
+    } else {
+      existing.count += 1;
+    }
+    total += 1;
+  }
+  ms = (ticks() - t0) / 1000l;
+  the_count = db.freq["the"].count;
+  println("result: total={total} the={the_count}  time: {ms}ms");
+}

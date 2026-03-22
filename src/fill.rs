@@ -1299,14 +1299,22 @@ fn put_ref(s: &mut State) {
 fn eq_ref(s: &mut State) {
     let v_v2 = *s.get_stack::<DbRef>();
     let v_v1 = *s.get_stack::<DbRef>();
-    let new_value = v_v1 == v_v2;
+    let new_value = if v_v1.rec == 0 || v_v2.rec == 0 {
+        v_v1.rec == 0 && v_v2.rec == 0
+    } else {
+        v_v1 == v_v2
+    };
     s.put_stack(new_value);
 }
 
 fn ne_ref(s: &mut State) {
     let v_v2 = *s.get_stack::<DbRef>();
     let v_v1 = *s.get_stack::<DbRef>();
-    let new_value = v_v1 != v_v2;
+    let new_value = if v_v1.rec == 0 || v_v2.rec == 0 {
+        v_v1.rec != 0 || v_v2.rec != 0
+    } else {
+        v_v1 != v_v2
+    };
     s.put_stack(new_value);
 }
 

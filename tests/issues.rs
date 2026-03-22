@@ -1202,7 +1202,6 @@ fn n9a_generated_fill_has_ops_import() {
 /// Generates to a thread-local temp file to avoid races with other tests writing
 /// tests/generated/fill.rs.
 #[test]
-#[ignore = "fill.rs needs regeneration after fill.rs changes — run create::generate_code() and copy the result"]
 fn n9_generated_fill_matches_src() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
@@ -1481,6 +1480,141 @@ fn p1_1_lambda_void_body() {
     .result(loft::data::Value::Null);
 }
 
+// ── Issue 82 ─────────────────────────────────────────────────────────────────
+// `string` is not a valid type name — the canonical text type is `text`.
+// Using `string` in a struct field produces "Undefined type string" and a
+// cascade of "Invalid index key" / "Cannot write unknown" errors.
+
+/// Issue 82: `string` in a struct field must produce a clear "Undefined type" error.
+#[test]
+fn issue_82_string_type_is_undefined() {
+    code!("struct Bad { x: string }")
+        .error("Undefined type string at issue_82_string_type_is_undefined:1:25");
+}
+
+/// Issue 82 positive: the same pattern with `text` must work correctly.
+#[test]
+fn issue_82_text_type_works() {
+    code!(
+        "struct Word { key: text, count: integer }
+fn test() {
+    w = Word { key: \"hello\", count: 1 };
+    assert(w.key == \"hello\", \"key\");
+    assert(w.count == 1, \"count\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── Issue 83 ─────────────────────────────────────────────────────────────────
+// A struct field named `key` used as a hash-value type causes a runtime panic:
+// "Allocating a used store" (src/database/allocation.rs).
+// `key` is a pseudo-field used by hash iteration (`kv.key`) and conflicts with
+// the real struct field at the allocation level.
+
+/// Issue 83: field named `key` in a hash-value struct panics at runtime.
+#[test]
+fn issue_83_hash_value_field_named_key_panics() {
+    code!(
+        "struct Entry { key: text, count: integer }
+struct Db { data: hash<Entry[key]> }
+fn test() {
+    db = Db { data: [] };
+    db.data += [Entry { key: \"hello\", count: 1 }];
+    e = db.data[\"hello\"];
+    assert(e != null, \"entry should exist\");
+    assert(e.count == 1, \"count should be 1\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
+#[test]
+fn issue_83_hash_value_field_renamed_works() {
+    code!(
+        "struct Score { id: integer not null, pts: integer not null }
+struct Board { scores: hash<Score[id]> }
+fn test() {
+    b = Board { scores: [] };
+    b.scores += [Score { id: 1, pts: 42 }];
+    s = b.scores[1];
+    assert(s != null, \"entry should exist\");
+    assert(s.pts == 42, \"pts should be 42, got {s.pts}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── Issue 84 ─────────────────────────────────────────────────────────────────
+// A `for` loop in any function that is called from a recursive function causes
+// a codegen panic: "Too few parameters on n_<recursive_fn>".
+// Root cause: the flat global variable namespace corrupts the parameter-count
+// slot table for the recursive function when the helper's loop variables are
+// assigned. Affects both `const vector<T>` and plain `vector<T>` params.
+
+/// Issue 84: for loop in helper + recursive caller panics "Too few parameters".
+#[test]
+#[ignore = "issue 84: for loop in helper called from recursive function panics at codegen — see PROBLEMS.md #84"]
+fn issue_84_for_loop_in_helper_called_from_recursive_fn() {
+    code!(
+        "fn sum_vec(v: vector<integer>) -> integer {
+    s = 0;
+    for sv_i in 0..len(v) { s += v[sv_i]; }
+    s
+}
+fn recurse(n: integer) -> integer {
+    if n <= 0 { return 0; }
+    v = [n];
+    sum_vec(v) + recurse(n - 1)
+}
+fn test() {
+    result = recurse(5);
+    assert(result == 15, \"expected 15, got {result}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Issue 84: merge sort (index-bound) also triggers the same panic.
+#[test]
+#[ignore = "issue 84: merge sort with for loop in msort_merge panics 'Too few parameters on n_msort_range' — see PROBLEMS.md #84"]
+fn issue_84_merge_sort_too_few_parameters() {
+    code!(
+        "fn msort_merge(lp: vector<integer>, rp: vector<integer>) -> vector<integer> {
+    out = [for mg_i in 0..0 { mg_i }];
+    li = 0; ri = 0;
+    ll = len(lp); rl = len(rp);
+    for mg_step in 0..(ll + rl) {
+        if li >= ll && ri >= rl { break; }
+        li = li + mg_step * 0;
+        if li >= ll { out += [rp[ri]]; ri += 1; }
+        else if ri >= rl { out += [lp[li]]; li += 1; }
+        else if lp[li] <= rp[ri] { out += [lp[li]]; li += 1; }
+        else { out += [rp[ri]]; ri += 1; }
+    }
+    out
+}
+fn msort(arr: vector<integer>, lo: integer, hi: integer) -> vector<integer> {
+    sz = hi - lo;
+    if sz <= 1 {
+        base = [for ms_i in 0..0 { ms_i }];
+        if sz == 1 { base += [arr[lo]]; }
+        return base;
+    }
+    mid = lo + sz / 2;
+    msort_merge(msort(arr, lo, mid), msort(arr, mid, hi))
+}
+fn test() {
+    data = [3, 1, 4, 1, 5, 9, 2, 6];
+    out = msort(data, 0, 8);
+    assert(out[0] == 1, \"first={out[0]}\");
+    assert(out[7] == 9, \"last={out[7]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
 /// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
 #[test]
@@ -1500,4 +1634,48 @@ fn n7_format_ops_generate_correct_rust() {
         src.contains("ops::format_float("),
         "generated code missing ops::format_float call"
     );
+}
+
+// ── Issue 85 ─────────────────────────────────────────────────────────────────
+// Null-returning hash lookup before insert causes subsequent lookup to return null.
+// Pattern: `e = hash[key]` (null result) followed by `hash += [Elem{...}]`
+// makes the inserted element unfindable via `hash[key]`.
+
+/// Issue 85: null hash lookup before insert — integer key.
+/// The inserted element must be findable immediately after insertion.
+#[test]
+fn issue_85_hash_null_lookup_then_insert_integer_key() {
+    code!(
+        "struct Item { id: integer, val: integer }
+struct Db { data: hash<Item[id]> }
+fn test() {
+    db = Db { data: [] };
+    e0 = db.data[0];
+    assert(e0 == null, \"pre-insert lookup should be null\");
+    db.data += [Item { id: 0, val: 42 }];
+    e1 = db.data[0];
+    assert(e1 != null, \"inserted item must be findable\");
+    assert(e1.val == 42, \"val should be 42, got {e1.val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Issue 85: null hash lookup before insert — text key.
+#[test]
+fn issue_85_hash_null_lookup_then_insert_text_key() {
+    code!(
+        "struct Word { word: text, count: integer }
+struct WordDb { freq: hash<Word[word]> }
+fn test() {
+    db = WordDb { freq: [] };
+    e0 = db.freq[\"hello\"];
+    assert(e0 == null, \"pre-insert lookup should be null\");
+    db.freq += [Word { word: \"hello\", count: 1 }];
+    e1 = db.freq[\"hello\"];
+    assert(e1 != null, \"inserted word must be findable\");
+    assert(e1.count == 1, \"count should be 1, got {e1.count}\");
+}"
+    )
+    .result(Value::Null);
 }

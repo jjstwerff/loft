@@ -165,9 +165,9 @@ stack_trace_full() requires debug symbols; rebuild with the debug_symbols flag
 fn assert_positive(n: integer) {
     if n <= 0 {
         for frame in stack_trace() {
-            say("{frame.file}:{frame.line}  {frame.function}");
+            println("{frame.file}:{frame.line}  {frame.function}");
             for arg in frame.arguments {
-                say("  {arg.name}: {arg.type_name} = {inspect_arg(arg.value)}");
+                println("  {arg.name}: {arg.type_name} = {inspect_arg(arg.value)}");
             }
         }
         assert(false, "n must be positive");
@@ -208,9 +208,9 @@ fn debug_caller() {
     frames = stack_trace();
     if len(frames) >= 2 {
         caller = frames[len(frames) - 2];
-        say("called from {caller.function} with {len(caller.arguments)} args");
+        println("called from {caller.function} with {len(caller.arguments)} args");
         for arg in caller.arguments {
-            say("  {arg.name}: {arg.type_name}");
+            println("  {arg.name}: {arg.type_name}");
         }
     }
 }
@@ -222,12 +222,12 @@ fn debug_caller() {
 fn diagnose() {
     frames = stack_trace_full();
     for frame in frames {
-        say("{frame.function}:");
+        println("{frame.function}:");
         for arg in frame.arguments {
-            say("  param {arg.name} = {inspect_arg(arg.value)}");
+            println("  param {arg.name} = {inspect_arg(arg.value)}");
         }
         for v in frame.variables {
-            say("  local {v.name} = {inspect_arg(v.value)}");
+            println("  local {v.name} = {inspect_arg(v.value)}");
         }
     }
 }

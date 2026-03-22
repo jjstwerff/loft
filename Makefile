@@ -5,7 +5,21 @@ all:
 	RUSTFLAGS=-g cargo build --release
 
 install: all
-	sudo ln -f -s ${PWD}/target/release/loft /usr/local/bin/loft
+	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
+	sudo install -d /usr/local/share/loft/deps
+	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
+	sudo cp -r default /usr/local/share/loft/
+	sudo install -m 644 target/release/libloft.rlib /usr/local/share/loft/
+	sudo cp target/release/deps/*.rlib /usr/local/share/loft/deps/
+	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
+	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
+	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
+		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
+	fi
+
+uninstall:
+	sudo rm -f /usr/local/bin/loft
+	sudo rm -rf /usr/local/share/loft
 
 debug:
 	RUSTFLAGS=-g RUST_BACKTRACE=1 cargo build -v
@@ -95,7 +109,7 @@ test-wasm:
 	@WASMTIME=$$(which wasmtime 2>/dev/null); \
 	if [ -n "$$WASMTIME" ]; then echo "Running wasm tests with wasmtime"; else echo "wasmtime not found — compile-only (install via: brew install wasmtime)"; fi; \
 	failed=0; \
-	for f in tests/docs/*.loft; do \
+	for f in tests/docs/*.loft tests/scripts/*.loft; do \
 		printf "  %-45s" "$$f"; \
 		wasm=$$(mktemp /tmp/loft_wasm_XXXXXX.wasm); \
 		out=$$(./target/release/loft --native-wasm "$$wasm" "$$f" 2>&1); \
@@ -106,7 +120,7 @@ test-wasm:
 			echo "$$out" | head -5; \
 			failed=$$((failed + 1)); \
 		elif [ -n "$$WASMTIME" ]; then \
-			run_out=$$($$WASMTIME "$$wasm" 2>&1); \
+			run_out=$$($$WASMTIME --dir . "$$wasm" 2>&1); \
 			run_code=$$?; \
 			rm -f "$$wasm"; \
 			if [ $$run_code -ne 0 ] || echo "$$run_out" | grep -q "^Error:\|panicked"; then \

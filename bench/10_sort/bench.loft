@@ -1,0 +1,37 @@
+// Benchmark 10: Insertion sort (3000 integers)
+// In-place sort: element mutations are visible to the caller without '&'.
+// Avoids issue 84 (for loop in helper called from recursive function)
+// by using a non-recursive sort with no vector-returning helper functions.
+
+fn insertion_sort(arr: vector<integer>) {
+  n = len(arr);
+  for is_i in 1..n {
+    key = arr[is_i];
+    j = is_i;
+    for _ in 0..is_i {
+      if arr[j - 1] > key {
+        arr[j] = arr[j - 1];
+        j -= 1;
+      } else {
+        break;
+      }
+    }
+    arr[j] = key;
+  }
+}
+
+fn main() {
+  total = 3000;
+  data = [for sort_i in 0..total { (sort_i * 31337 + 17) % 100000 }];
+  t0 = ticks();
+  insertion_sort(data);
+  ms = (ticks() - t0) / 1000l;
+  checksum = data[0] + data[total - 1] + data[total / 2];
+  ok = true;
+  for sort_j in 1..total {
+    if data[sort_j] < data[sort_j - 1] {
+      ok = false;
+    }
+  }
+  println("result: {checksum} sorted={ok}  time: {ms}ms");
+}

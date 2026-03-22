@@ -133,9 +133,9 @@ A reference for when to use each prompt, what each achieves, and where to be car
 
 ### Session start
 
-#### `remember to always start with reading doc/claude/QUICK_START.md`
+#### `remember to always review CLAUDE.md at the project root before starting work`
 **When:** Every new session before doing any real work.
-**What it does:** Forces Claude to orient itself before acting — confirms execution path, data structures, key conventions, and logging flags.
+**What it does:** Forces Claude to orient itself before acting — CLAUDE.md is the single entry point containing the project overview, execution path, key data structures, conventions, branch policy, and the full documentation index.
 **Caveats:** Redundant if the session opened with an auto-memory summary that already loaded the relevant context. Adds token cost up front but prevents much larger recovery cost from acting on wrong assumptions.
 
 #### `remember to always update the doc/claude/ documentation after resolving any issue`

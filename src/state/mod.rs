@@ -378,6 +378,7 @@ impl State {
             self.put_stack(args_vec);
         }
         self.put_stack(u32::MAX);
+        #[cfg(debug_assertions)]
         let mut step = 0;
         #[cfg(debug_assertions)]
         let mut trail_pos = [u32::MAX; 16usize];
@@ -397,7 +398,10 @@ impl State {
                 trail_head = (trail_head + 1) % 16;
             }
             OPERATORS[op as usize](self);
-            step += 1;
+            #[cfg(debug_assertions)]
+            {
+                step += 1;
+            }
             #[cfg(debug_assertions)]
             if step >= 10_000_000 {
                 use std::fmt::Write as _;

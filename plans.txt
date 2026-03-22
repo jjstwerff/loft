@@ -34,13 +34,3 @@ Keep the "Format" class usable in user code. Even think about "File".
 
 
 
-Make the following steps part of the release process:
-- verify all doc/claude files carefully for remaining documentation of problems that are currently solved
-- verify all doc/claude files on links to code that was moved or renamed
-- verify if all doc/claude files are fully discoverable
-- find places in doc/claude files that are unneeded verbose and compact them
-- validate all aspects of the user documentation against the changes that are part of this release.
-- validate especially the caveats in DEVELOPERS.md, the vs-rust and vs-python conclusions.
-- validate if the user documentation has a proper flow of subjects, consider moving the latest added topics to a different spot.
-- generate the user html and pdf
-

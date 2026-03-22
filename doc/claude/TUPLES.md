@@ -109,8 +109,8 @@ x = t.1.0           // 3.14 — first element of the inner tuple
 Individual tuple elements may be used inside format strings:
 
 ```loft
-say("{t.0}: {t.1}")     // valid — elements are normal typed expressions
-say("{t}")              // ERROR — whole-tuple formatting not supported (see Non-Goals)
+println("{t.0}: {t.1}")     // valid — elements are normal typed expressions
+println("{t}")              // ERROR — whole-tuple formatting not supported (see Non-Goals)
 ```
 
 ### Element assignment
@@ -153,7 +153,7 @@ A tuple type may be used as a parameter type (pass by value):
 
 ```loft
 fn print_pair(t: (integer, text)) {
-    say("{t.0}: {t.1}")
+    println("{t.0}: {t.1}")
 }
 
 print_pair((42, "hello"))   // tuple literal

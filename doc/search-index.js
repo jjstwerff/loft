@@ -11,6 +11,7 @@ const SEARCH_INDEX=[
 {name:"Environment",kind:"section",url:"stdlib-environment.html"},
 {name:"Random",kind:"section",url:"stdlib-random.html"},
 {name:"Time",kind:"section",url:"stdlib-time.html"},
+{name:"Vector operations (T2-8, T2-5)",kind:"section",url:"stdlib-vector-operations-t2-8-t2-5.html"},
 {name:"boolean",kind:"type",url:"stdlib-types.html"},
 {name:"integer",kind:"type",url:"stdlib-types.html"},
 {name:"long",kind:"type",url:"stdlib-types.html"},

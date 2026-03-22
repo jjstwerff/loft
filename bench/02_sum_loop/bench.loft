@@ -1,0 +1,11 @@
+// Benchmark 2: Sum loop (10 million integers)
+fn main() {
+  n = 10000000;
+  sum = 0l;
+  t0 = ticks();
+  for i in 0..n {
+    sum += i as long;
+  }
+  ms = (ticks() - t0) / 1000l;
+  println("result: {sum}  time: {ms}ms");
+}

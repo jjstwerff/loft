@@ -1,0 +1,26 @@
+// Benchmark 3: Count primes up to 100,000 (trial division)
+fn is_prime(n: integer) -> boolean {
+  if n < 2 { return false; }
+  if n == 2 { return true; }
+  if n % 2 == 0 { return false; }
+  i = 3;
+  for _ in 0..n {
+    if i * i > n { break; }
+    if n % i == 0 { return false; }
+    i += 2;
+  }
+  true
+}
+
+fn main() {
+  limit = 100000;
+  t0 = ticks();
+  count = 0;
+  for n in 0..limit {
+    if is_prime(n) {
+      count += 1;
+    }
+  }
+  ms = (ticks() - t0) / 1000l;
+  println("result: {count}  time: {ms}ms");
+}

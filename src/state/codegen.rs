@@ -4,7 +4,9 @@
 use super::State;
 use crate::data::{Block, Context, Data, I32, Type, Value};
 use crate::stack::Stack;
-use crate::variables::{Function, size};
+#[cfg(debug_assertions)]
+use crate::variables::Function;
+use crate::variables::size;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -559,8 +561,10 @@ impl State {
         let mut was_stack = u16::MAX;
         assert!(
             parameters.len() >= stack.data.def(op).attributes.len(),
-            "Too few parameters on {}",
-            stack.data.def(op).name
+            "Too few parameters on {} (got {}, need {})",
+            stack.data.def(op).name,
+            parameters.len(),
+            stack.data.def(op).attributes.len(),
         );
         for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
             if a.mutable {

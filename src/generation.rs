@@ -1375,7 +1375,7 @@ extern crate loft;"
     /// block's return value.
     fn is_void_value(&self, v: &Value) -> bool {
         match v {
-            Value::Null | Value::Drop(_) | Value::Set(_, _) => true,
+            Value::Null | Value::Drop(_) | Value::Set(_, _) | Value::Line(_) => true,
             Value::If(_, _, false_v) => matches!(**false_v, Value::Null),
             Value::Call(d_nr, _) => {
                 let def = self.data.def(*d_nr);
@@ -1637,7 +1637,7 @@ extern crate loft;"
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _) => {
-                write!(w, "DbRef {{ store_nr: 0, rec: 0, pos: 0 }}")
+                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")
             }
             _ => write!(w, "()"),
         }
@@ -2053,7 +2053,35 @@ extern crate loft;"
             }
             "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
             "OpClearVector" => return self.clear_vector(w, vals),
-            "OpFreeText" | "OpCreateStack" | "OpNullRefSentinel" => return Ok(()),
+            "OpFreeText" | "OpCreateStack" => return Ok(()),
+            "OpNullRefSentinel" => {
+                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
+                return Ok(());
+            }
+            // Null-aware reference equality: treat rec==0 as null regardless of store_nr,
+            // matching the bytecode eq_ref/ne_ref implementation.
+            "OpEqRef" => {
+                if let [v1, v2] = vals {
+                    let s1 = self.generate_expr_buf(v1)?;
+                    let s2 = self.generate_expr_buf(v2)?;
+                    write!(
+                        w,
+                        "{{let _a={s1};let _b={s2};if _a.rec==0||_b.rec==0{{_a.rec==0&&_b.rec==0}}else{{_a==_b}}}}"
+                    )?;
+                    return Ok(());
+                }
+            }
+            "OpNeRef" => {
+                if let [v1, v2] = vals {
+                    let s1 = self.generate_expr_buf(v1)?;
+                    let s2 = self.generate_expr_buf(v2)?;
+                    write!(
+                        w,
+                        "{{let _a={s1};let _b={s2};if _a.rec==0||_b.rec==0{{_a.rec!=0||_b.rec!=0}}else{{_a!=_b}}}}"
+                    )?;
+                    return Ok(());
+                }
+            }
             "OpFreeRef" => {
                 // Emit OpFreeRef(stores, var, "var_name") so LOFT_STORE_LOG shows the loft name.
                 if let [ref db_val] = vals[..] {
@@ -2539,6 +2567,7 @@ extern crate loft;"
 
     /// Use this to inline a `#rust` template operator by substituting `@param` placeholders
     /// with generated argument expressions.
+    #[allow(clippy::too_many_lines)]
     fn output_call_template(
         &mut self,
         w: &mut dyn Write,
@@ -2546,12 +2575,53 @@ extern crate loft;"
         vals: &[Value],
     ) -> std::io::Result<()> {
         let mut res = def_fn.rust.clone();
+        // Bytecode templates wrap text values in Str::new(...) for put_stack compatibility.
+        // Native code uses &str directly — strip the wrapper by extracting its argument.
+        // Must be done before @param substitution so argument expressions are not affected.
+        while let Some(start) = res.find("Str::new(") {
+            let arg_start = start + "Str::new(".len();
+            let mut depth = 1usize;
+            let mut end = arg_start;
+            for (i, c) in res[arg_start..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = arg_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            res = format!(
+                "{}{}{}",
+                &res[..start],
+                &res[arg_start..end],
+                &res[end + 1..]
+            );
+        }
         for (a_nr, a) in def_fn.attributes.iter().enumerate() {
             let name = "@".to_string() + &a.name;
             if a_nr < vals.len() {
                 // For enum-typed parameters, Value::Null means the null enum byte (255).
                 if matches!(a.typedef, Type::Enum(_, _, _)) && matches!(vals[a_nr], Value::Null) {
                     res = res.replace(&name, "(255u8)");
+                    continue;
+                }
+                // For reference-typed parameters, Value::Null means the null DbRef sentinel.
+                if matches!(
+                    a.typedef,
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Enum(_, true, _)
+                ) && matches!(vals[a_nr], Value::Null)
+                {
+                    res = res.replace(&name, "(DbRef { store_nr: u16::MAX, rec: 0, pos: 8 })");
                     continue;
                 }
                 // For character-typed parameters, Value::Int means a character code point.
