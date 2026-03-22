@@ -2,7 +2,7 @@
 
 Step-by-step process for taking a PLANNING.md item from backlog to merged.
 
-**Session start:** Read [QUICK_START.md](QUICK_START.md) before beginning any implementation work.
+**Session start:** Review [CLAUDE.md](../../CLAUDE.md) at the project root — it contains the project overview, architecture, branch policy, and documentation index.
 
 ---
 

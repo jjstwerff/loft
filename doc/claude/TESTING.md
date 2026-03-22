@@ -810,5 +810,5 @@ Trace the expected element sequence manually before writing the assert.
 
 ## See also
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs, limitations, workarounds, and fix plans
-- [QUICK_START.md](QUICK_START.md) — Compact orientation: execution path, key data structures, conventions
+- [CLAUDE.md](../../CLAUDE.md) — Project orientation: execution path, key data structures, branch policy, documentation index
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Debugging strategy (LOFT_LOG presets, scope bugs, slot conflicts), working with Claude

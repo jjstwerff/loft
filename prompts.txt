@@ -1,5 +1,5 @@
 ***** start *****
-remember to always start with reading doc/claude/QUICK_START.md
+remember to always review CLAUDE.md at the project root before starting work
 remember to always update the doc/claude/ documentation after resolving any issue
 
 ***** often *****
