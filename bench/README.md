@@ -29,10 +29,13 @@ Performance comparison across five targets: Python, loft interpreter, loft nativ
 
 ## Prerequisites
 
-- `loft` in PATH (with `--path` pointing to stdlib)
-- `python3` in PATH
-- `rustc` in PATH
-- `wasmtime` in PATH (for wasm target)
+Missing tools produce a warning and that target is skipped — no hard failures.
+
+- `loft` — either in PATH, or set `LOFT_BIN=/path/to/loft`
+- `LOFT_STDLIB` — set to the directory containing `default/` if loft can't find its stdlib (e.g. `LOFT_STDLIB=/path/to/loft-repo/`)
+- `python3` — in PATH
+- `rustc` — in PATH
+- `wasmtime` — in PATH (wasm target only)
 
 ## Usage
 

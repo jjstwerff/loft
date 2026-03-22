@@ -4,9 +4,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOFT="${LOFT_BIN:-loft}"
-STDLIB_PATH="${LOFT_STDLIB:-$REPO_ROOT/}"
+STDLIB_PATH="${LOFT_STDLIB:-}"
 
 SKIP_PYTHON=0
 SKIP_WASM=0
@@ -26,6 +25,40 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Check prerequisites and warn (never abort — just skip missing targets)
+HAS_LOFT=0
+HAS_PYTHON=0
+HAS_RUST=0
+HAS_WASMTIME=0
+
+if command -v "$LOFT" > /dev/null 2>&1; then
+  HAS_LOFT=1
+else
+  echo "warning: loft not found (set LOFT_BIN=<path> to specify location) — loft targets will be skipped"
+fi
+
+if command -v python3 > /dev/null 2>&1; then
+  HAS_PYTHON=1
+else
+  echo "warning: python3 not found — python target will be skipped"
+fi
+
+if command -v rustc > /dev/null 2>&1; then
+  HAS_RUST=1
+else
+  echo "warning: rustc not found — rust target will be skipped"
+fi
+
+if command -v wasmtime > /dev/null 2>&1; then
+  HAS_WASMTIME=1
+fi
+
+# Build --path flag for loft if STDLIB_PATH is set
+LOFT_PATH_FLAG=()
+if [[ -n "$STDLIB_PATH" ]]; then
+  LOFT_PATH_FLAG=(--path "$STDLIB_PATH")
+fi
+
 extract_ms() {
   # Extract trailing "time: Xms" from output
   grep -oE 'time: [0-9]+ms' | tail -1 | grep -oE '[0-9]+'
@@ -43,42 +76,43 @@ run_bench() {
   local py_ms="-" li_ms="-" ln_ms="-" lw_ms="-" rs_ms="-"
 
   # Python
-  if [[ $SKIP_PYTHON -eq 0 && -f "$dir/bench.py" ]]; then
+  if [[ $SKIP_PYTHON -eq 0 && $HAS_PYTHON -eq 1 && -f "$dir/bench.py" ]]; then
     [[ $WARMUP -eq 1 ]] && python3 "$dir/bench.py" > /dev/null 2>&1 || true
     py_ms=$(python3 "$dir/bench.py" 2>/dev/null | extract_ms || echo "-")
   fi
 
   # loft interpreter
-  if [[ -f "$dir/bench.loft" ]]; then
-    [[ $WARMUP -eq 1 ]] && "$LOFT" run --path "$STDLIB_PATH" "$dir/bench.loft" > /dev/null 2>&1 || true
-    li_ms=$("$LOFT" run --path "$STDLIB_PATH" "$dir/bench.loft" 2>/dev/null | extract_ms || echo "-")
+  if [[ $HAS_LOFT -eq 1 && -f "$dir/bench.loft" ]]; then
+    [[ $WARMUP -eq 1 ]] && "$LOFT" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
+    li_ms=$("$LOFT" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" 2>/dev/null | extract_ms || echo "-")
   fi
 
   # loft native
-  if [[ $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
-    "$LOFT" build --native --path "$STDLIB_PATH" "$dir/bench.loft" -o "$dir/bench_bin" > /dev/null 2>&1 || true
+  if [[ $HAS_LOFT -eq 1 && $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
+    "$LOFT" --native "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
+    mv "$dir/bench" "$dir/bench_bin" 2>/dev/null || true
   fi
-  if [[ -f "$dir/bench_bin" ]]; then
+  if [[ $HAS_LOFT -eq 1 && -f "$dir/bench_bin" ]]; then
     [[ $WARMUP -eq 1 ]] && "$dir/bench_bin" > /dev/null 2>&1 || true
     ln_ms=$("$dir/bench_bin" 2>/dev/null | extract_ms || echo "-")
   fi
 
   # loft wasm
-  if [[ $SKIP_WASM -eq 0 ]]; then
+  if [[ $SKIP_WASM -eq 0 && $HAS_LOFT -eq 1 ]]; then
     if [[ $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
-      "$LOFT" build --wasm --path "$STDLIB_PATH" "$dir/bench.loft" -o "$dir/bench.wasm" > /dev/null 2>&1 || true
+      "$LOFT" --native-wasm "$dir/bench.wasm" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
     fi
-    if [[ -f "$dir/bench.wasm" ]] && command -v wasmtime > /dev/null 2>&1; then
+    if [[ -f "$dir/bench.wasm" && $HAS_WASMTIME -eq 1 ]]; then
       [[ $WARMUP -eq 1 ]] && wasmtime "$dir/bench.wasm" > /dev/null 2>&1 || true
       lw_ms=$(wasmtime "$dir/bench.wasm" 2>/dev/null | extract_ms || echo "-")
     fi
   fi
 
   # Rust
-  if [[ $NO_BUILD -eq 0 && -f "$dir/bench.rs" ]]; then
+  if [[ $HAS_RUST -eq 1 && $NO_BUILD -eq 0 && -f "$dir/bench.rs" ]]; then
     rustc -O -o "$dir/bench_rs_bin" "$dir/bench.rs" > /dev/null 2>&1 || true
   fi
-  if [[ -f "$dir/bench_rs_bin" ]]; then
+  if [[ $HAS_RUST -eq 1 && -f "$dir/bench_rs_bin" ]]; then
     [[ $WARMUP -eq 1 ]] && "$dir/bench_rs_bin" > /dev/null 2>&1 || true
     rs_ms=$("$dir/bench_rs_bin" 2>/dev/null | extract_ms || echo "-")
   fi
