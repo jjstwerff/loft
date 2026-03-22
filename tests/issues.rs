@@ -1690,7 +1690,7 @@ fn test() {
 
 /// P1.2: `|x: integer| -> integer { x * 2 }` with fully explicit annotations.
 #[test]
-#[ignore = "P1.2: short-form lambda parser not yet implemented"]
+
 fn p1_2_short_lambda_explicit_types() {
     code!(
         "fn test() {
@@ -1704,7 +1704,7 @@ fn p1_2_short_lambda_explicit_types() {
 
 /// P1.2: Zero-parameter short lambda `|| -> integer { 42 }`.
 #[test]
-#[ignore = "P1.2: short-form lambda parser not yet implemented"]
+
 fn p1_2_short_lambda_zero_params() {
     code!(
         "fn test() {
@@ -1717,7 +1717,7 @@ fn p1_2_short_lambda_zero_params() {
 
 /// P1.2: Two-parameter short lambda with explicit types.
 #[test]
-#[ignore = "P1.2: short-form lambda parser not yet implemented"]
+
 fn p1_2_short_lambda_two_params() {
     code!(
         "fn test() {
@@ -1730,7 +1730,7 @@ fn p1_2_short_lambda_two_params() {
 
 /// P1.2: Short lambda with inferred param type from call-site hint.
 #[test]
-#[ignore = "P1.2: short-form lambda type inference from call context not yet implemented"]
+
 fn p1_2_short_lambda_inferred_type() {
     code!(
         "fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
@@ -1746,7 +1746,7 @@ fn test() {
 
 /// P1.3: `map` with a short-form lambda.
 #[test]
-#[ignore = "P1.3: map with inline lambda — depends on P1.2"]
+
 fn p1_3_map_short_lambda() {
     code!(
         "fn test() {
@@ -1762,7 +1762,7 @@ fn p1_3_map_short_lambda() {
 
 /// P1.3: `filter` with a short-form lambda.
 #[test]
-#[ignore = "P1.3: filter with inline lambda — depends on P1.2"]
+
 fn p1_3_filter_short_lambda() {
     code!(
         "fn test() {
@@ -1778,7 +1778,7 @@ fn p1_3_filter_short_lambda() {
 
 /// P1.3: `reduce` with a short-form lambda.
 #[test]
-#[ignore = "P1.3: reduce with inline lambda — depends on P1.2"]
+
 fn p1_3_reduce_short_lambda() {
     code!(
         "fn test() {
@@ -1796,7 +1796,7 @@ fn p1_3_reduce_short_lambda() {
 
 /// A8: `replace` result assigned to a variable produces the right string.
 #[test]
-#[ignore = "A8: destination-passing for text natives not yet implemented"]
+
 fn a8_replace_into_var() {
     code!(
         "fn test() {
@@ -1810,7 +1810,7 @@ fn a8_replace_into_var() {
 
 /// A8: `to_lowercase` result in a format string.
 #[test]
-#[ignore = "A8: destination-passing for text natives not yet implemented"]
+
 fn a8_to_lowercase_in_format() {
     code!(
         "fn test() {
