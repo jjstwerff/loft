@@ -45,6 +45,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 78 | Native codegen: double-borrow of `stores` in some generated code | ~~Fixed~~ | N1: `output_if_with_subst` applies pre-eval substitution only to conditions |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
+| 82 | `string` is not a valid type name — use `text` | Medium | Replace `string` with `text` in all struct fields and signatures |
+| 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | High | Avoid naming hash-value struct fields `key`; use a different name (e.g. `word`, `name`) |
+| 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | No known workaround for mutual recursion; avoid `for` loops in functions called from recursive functions |
 
 ---
 
@@ -515,6 +518,115 @@ the callee's returned `DbRef`, leaving a leaked store that broke the LIFO invari
 `variables.is_inline_ref(var)`), emit `DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }` (the null
 sentinel) instead of `stores.null_named(...)`.  This matches the interpreter's `OpNullRefSentinel`
 path.  `17-libraries.loft` now passes in `native_dir`.
+
+---
+
+---
+
+## Bugs Found During Benchmark Development (2026-03-22)
+
+### 82. `string` is not a valid type name — use `text`
+
+**Severity:** Medium — silent or misleading error.
+
+**Symptom:** Using `string` as a type name in a struct field produces:
+```
+Error: Undefined type string
+Error: Invalid index key
+Error: Cannot write unknown(423) on field Foo.bar:text["..."]
+```
+
+**Root cause:** The canonical UTF-8 string type in loft is `text`. The name `string` is not
+defined anywhere in the stdlib or interpreter. Code coming from other languages (Python, Rust,
+Java) naturally reaches for `string`, which fails at runtime.
+
+**Workaround / Fix:** Replace every occurrence of `string` with `text` in struct field
+definitions and function signatures. The type behaves identically to what other languages call
+`string`.
+
+**Effort:** Trivial (rename).
+
+---
+
+### 83. Struct field named `key` in a hash collection causes "Allocating a used store" panic
+
+**Severity:** High — silent name collision causes a runtime panic.
+
+**Location:** `src/database/allocation.rs:31`
+
+**Symptom:** Declaring a struct used as a hash value with a field named `key` causes a panic
+when the hash is accessed:
+```
+thread 'main' panicked at src/database/allocation.rs:31:9: Allocating a used store
+```
+
+**Root cause:** `key` is a pseudo-field name reserved for hash iteration (`for kv in h { kv.key }`).
+When a real struct field is also named `key`, the name clashes with the hash machinery's internal
+field reference, corrupting store allocation.
+
+**Workaround:** Never name a struct field `key` when the struct is used as a hash value type.
+Use a descriptive name instead (`word`, `name`, `label`, `id`, etc.):
+```loft
+// WRONG
+struct Entry { key: text, count: integer }
+struct Db    { data: hash<Entry[key]> }
+
+// CORRECT
+struct Entry { word: text, count: integer }
+struct Db    { data: hash<Entry[word]> }
+```
+
+**Fix path:** The hash machinery should use an internal name that cannot conflict with user
+field names, or the compiler should emit an error when a hash-value struct has a field named
+`key`.
+
+**Effort:** Small (emit compile-time error); Medium (fix internal naming).
+
+---
+
+### 84. `for` loop in a function called from a recursive function panics: "Too few parameters on n_xxx"
+
+**Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
+
+**Location:** `src/state/codegen.rs:560` — `assert!(parameters.len() >= ...)`.
+
+**Symptom:** When function A is recursive (calls itself) and function A calls function B, and
+function B contains a `for` loop, the interpreter panics:
+```
+thread 'main' panicked at src/state/codegen.rs:560:9:
+Too few parameters on n_A
+```
+The panic occurs regardless of whether parameters are `const`, `&`, or by value.
+
+**Minimal reproduction:**
+```loft
+fn helper(v: vector<integer>) -> integer {
+  s = 0;
+  for h_i in 0..len(v) { s += v[h_i]; }  // ← this for loop triggers the bug
+  s
+}
+fn recurse(n: integer) -> integer {
+  if n <= 0 { return 0; }
+  v = [n];
+  helper(v) + recurse(n - 1)             // ← recursive call triggers the panic
+}
+fn main() { println("{recurse(5)}"); }
+```
+
+**Root cause:** Loft uses a flat global variable namespace — all loop variables across all
+functions in a file share the same slot-assignment table. The codegen for a `for` loop in the
+helper function corrupts the parameter count recorded for the recursive function, causing the
+assertion to fire when codegen processes the recursive call site.
+
+**Workaround:** Replace the `for` loop in the helper function with recursion, or restructure
+the algorithm so the recursive function and the looping helper are in separate files (if
+supported), or inline the loop body into the recursive function itself.
+
+**Fix path:** The flat namespace slot assignment must be replaced with per-function scope so
+that loop variable slots in one function do not interfere with parameter count tracking in
+another. This is a significant refactor of `src/variables.rs` and `src/state/codegen.rs`.
+
+**Effort:** High (requires per-function variable scoping).
 
 ---
 
