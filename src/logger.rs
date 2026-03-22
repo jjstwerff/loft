@@ -136,7 +136,7 @@ impl Logger {
             .parent()
             .unwrap_or(Path::new("."))
             .to_path_buf();
-        let default_log_path = default_log_dir.join("log.txt");
+        let default_log_path = default_log_dir.join(".loft").join("log.txt");
 
         let config = if path.exists() {
             if let Ok(content) = std::fs::read_to_string(path) {
@@ -315,6 +315,9 @@ impl Logger {
 
     fn open_file(&mut self) {
         let path = &self.config.log_path;
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         match OpenOptions::new().create(true).append(true).open(path) {
             Ok(f) => {
                 let size = f.metadata().map(|m| m.len()).unwrap_or(0);

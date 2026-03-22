@@ -71,9 +71,10 @@ fn print_help() {
     println!("  --native                      compile to native Rust via rustc and run");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");
-    println!("  --native-emit <out.rs>        write generated Rust source to <out.rs> and exit");
-    println!("  --native-wasm <out.wasm>      compile to WebAssembly (wasm32-wasip2) and write");
-    println!("                                the .wasm file to <out.wasm>");
+    println!("  --native-emit [out.rs]        write generated Rust source and exit");
+    println!("                                (default: .loft/<script>.rs beside the script)");
+    println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
+    println!("                                (default: .loft/<script>.wasm beside the script)");
 }
 
 fn handle_generate_log_config(path_opt: Option<&str>) {
@@ -94,8 +95,11 @@ fn handle_generate_log_config(path_opt: Option<&str>) {
 
 #[allow(clippy::too_many_lines)]
 fn main() {
-    let mut args = env::args_os();
-    args.next();
+    let argv: Vec<String> = env::args_os()
+        .skip(1)
+        .map(|a| a.to_str().unwrap_or("").to_string())
+        .collect();
+    let mut i = 0;
     let mut file_name = String::new();
     let mut dir = project_dir();
     let mut project: Option<String> = None;
@@ -106,46 +110,50 @@ fn main() {
     let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = false;
     let mut native_release = false;
+    // None  = flag not given
+    // Some("") = flag given without explicit path → use .loft/ default
+    // Some(path) = explicit output path
     let mut native_emit: Option<String> = None;
     let mut native_wasm: Option<String> = None;
     let mut user_args: Vec<String> = Vec::new();
-    while let Some(arg) = args.next() {
-        let a = arg.to_str().unwrap();
+
+    while i < argv.len() {
+        let a = argv[i].as_str();
+        i += 1;
         if a == "--version" {
             println!("loft {}", env!("CARGO_PKG_VERSION"));
             return;
         } else if a == "--path" {
-            dir = args.next().unwrap().to_str().unwrap().to_string();
+            dir.clone_from(&argv[i]);
+            i += 1;
         } else if a == "--project" {
-            project = Some(args.next().unwrap().to_str().unwrap().to_string());
+            project = Some(argv[i].clone());
+            i += 1;
         } else if a == "--lib" {
-            lib_dirs.push(args.next().unwrap().to_str().unwrap().to_string());
+            lib_dirs.push(argv[i].clone());
+            i += 1;
         } else if a == "--log-conf" {
-            log_conf = Some(args.next().unwrap().to_str().unwrap().to_string());
+            log_conf = Some(argv[i].clone());
+            i += 1;
         } else if a == "--production" {
             production = true;
         } else if a == "--generate-log-config" {
-            // Optional path argument: peek at next arg (if it doesn't start with -)
-            let next = args.next();
-            let path = next.as_ref().and_then(|s| s.to_str()).and_then(|s| {
-                if s.starts_with('-') {
-                    None
-                } else {
-                    Some(s.to_string())
-                }
-            });
+            // Optional path: consume next arg only if it doesn't look like a flag or source file
+            let path = if argv.get(i).is_some_and(|s| is_output_path(s)) {
+                let p = argv[i].clone();
+                i += 1;
+                Some(p)
+            } else {
+                None
+            };
             generate_log_config = Some(path);
         } else if a == "--format" {
-            let path = args
-                .next()
-                .map(|s| s.to_str().unwrap().to_string())
-                .unwrap_or_default();
+            let path = argv.get(i).cloned().unwrap_or_default();
+            i += 1;
             format_mode = Some(("format", path));
         } else if a == "--format-check" {
-            let path = args
-                .next()
-                .map(|s| s.to_str().unwrap().to_string())
-                .unwrap_or_default();
+            let path = argv.get(i).cloned().unwrap_or_default();
+            i += 1;
             format_mode = Some(("check", path));
         } else if a == "--native" {
             native_mode = true;
@@ -153,17 +161,23 @@ fn main() {
             native_mode = true;
             native_release = true;
         } else if a == "--native-emit" {
-            native_emit = Some(
-                args.next()
-                    .map(|s| s.to_str().unwrap().to_string())
-                    .unwrap_or_default(),
-            );
+            // Optional path: consume next arg only if it looks like an output path
+            native_emit = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
+                let p = argv[i].clone();
+                i += 1;
+                p
+            } else {
+                String::new() // sentinel: compute default from file_name later
+            });
         } else if a == "--native-wasm" {
-            native_wasm = Some(
-                args.next()
-                    .map(|s| s.to_str().unwrap().to_string())
-                    .unwrap_or_default(),
-            );
+            // Optional path: consume next arg only if it looks like an output path
+            native_wasm = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
+                let p = argv[i].clone();
+                i += 1;
+                p
+            } else {
+                String::new() // sentinel: compute default from file_name later
+            });
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
@@ -177,6 +191,25 @@ fn main() {
         } else {
             user_args.push(a.to_string());
         }
+    }
+    // Resolve sentinel empty paths to .loft/ defaults now that file_name is known.
+    if let Some(ref mut p) = native_wasm
+        && p.is_empty()
+        && !file_name.is_empty()
+    {
+        *p = default_artifact_path(&file_name, "wasm")
+            .to_str()
+            .unwrap_or("out.wasm")
+            .to_string();
+    }
+    if let Some(ref mut p) = native_emit
+        && p.is_empty()
+        && !file_name.is_empty()
+    {
+        *p = default_artifact_path(&file_name, "rs")
+            .to_str()
+            .unwrap_or("out.rs")
+            .to_string();
     }
 
     // Handle --format / --format-check before requiring an input file
@@ -262,10 +295,15 @@ fn main() {
 
     // WASM codegen pipeline: --native-wasm
     if let Some(ref wasm_out) = native_wasm {
-        if wasm_out.is_empty() {
-            eprintln!("loft: --native-wasm requires an output path (e.g. --native-wasm out.wasm)");
-            std::process::exit(1);
-        }
+        let wasm_out = if wasm_out.is_empty() {
+            default_artifact_path(&abs_file, "wasm")
+                .to_str()
+                .unwrap_or("out.wasm")
+                .to_string()
+        } else {
+            wasm_out.clone()
+        };
+        let wasm_out = &wasm_out;
         let end_def = p.data.definitions();
         let rs_path = std::env::temp_dir().join("loft_wasm.rs");
         {
@@ -340,10 +378,11 @@ fn main() {
     // Native codegen pipeline: --native or --native-emit
     if native_mode || native_emit.is_some() {
         let end_def = p.data.definitions();
-        let emit_path = native_emit.as_deref().map_or_else(
-            || std::env::temp_dir().join("loft_native.rs"),
-            std::path::PathBuf::from,
-        );
+        let emit_path = match native_emit.as_deref() {
+            None => std::env::temp_dir().join("loft_native.rs"),
+            Some("") => default_artifact_path(&abs_file, "rs"),
+            Some(p) => std::path::PathBuf::from(p),
+        };
         {
             let mut f = match std::fs::File::create(&emit_path) {
                 Ok(f) => f,
@@ -436,11 +475,16 @@ fn main() {
     let conf_path = if let Some(ref cp) = log_conf {
         std::path::PathBuf::from(cp)
     } else {
-        // Default: log.conf next to the main loft file
-        std::path::Path::new(&abs_file)
+        // Prefer .loft/log.conf beside the script; fall back to log.conf beside the script.
+        let script_dir = std::path::Path::new(&abs_file)
             .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("log.conf")
+            .unwrap_or(std::path::Path::new("."));
+        let loft_conf = script_dir.join(".loft").join("log.conf");
+        if loft_conf.exists() {
+            loft_conf
+        } else {
+            script_dir.join("log.conf")
+        }
     };
     let mut lg = logger::Logger::from_config_file(&conf_path, &abs_file);
     if production {
@@ -506,6 +550,35 @@ fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBuf> {
 
 fn loft_lib_dir() -> Option<std::path::PathBuf> {
     loft_lib_dir_for(None)
+}
+
+/// Return true if `s` looks like an explicit output path rather than a flag or loft source file.
+fn is_output_path(s: &str) -> bool {
+    !s.starts_with('-')
+        && !std::path::Path::new(s)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("loft"))
+}
+
+/// Return (and create) the `.loft/` artifact directory beside `script_path`.
+/// Falls back to the current directory's `.loft/` if the parent cannot be determined.
+fn loft_artifact_dir(script_path: &str) -> std::path::PathBuf {
+    let dir = std::path::Path::new(script_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let loft_dir = dir.join(".loft");
+    let _ = std::fs::create_dir_all(&loft_dir);
+    loft_dir
+}
+
+/// Return the default output path for a compiled artifact beside `script_path`.
+/// `ext` is the file extension without leading dot (e.g. `"wasm"`, `"rs"`).
+fn default_artifact_path(script_path: &str, ext: &str) -> std::path::PathBuf {
+    let stem = std::path::Path::new(script_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("out");
+    loft_artifact_dir(script_path).join(format!("{stem}.{ext}"))
 }
 
 fn project_dir() -> String {
