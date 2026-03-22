@@ -116,8 +116,17 @@ else
   echo "warning: rustc not found — rust target will be skipped"
 fi
 
-if command -v wasmtime > /dev/null 2>&1; then
+WASMTIME=""
+for _wt_candidate in "$(command -v wasmtime 2>/dev/null)" "$HOME/.cargo/bin/wasmtime" "$HOME/.wasmtime/bin/wasmtime"; do
+  if [[ -x "$_wt_candidate" ]]; then
+    WASMTIME="$_wt_candidate"
+    break
+  fi
+done
+if [[ -n "$WASMTIME" ]]; then
   HAS_WASMTIME=1
+else
+  echo "warning: wasmtime not found — loft-wasm column will show '-' (install via: cargo install wasmtime-cli  OR  brew install wasmtime)"
 fi
 
 # Build --path flag for loft if STDLIB_PATH is set
@@ -187,8 +196,8 @@ run_bench() {
       "$LOFT" --native-wasm "$dir/bench.wasm" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
     fi
     if [[ -f "$dir/bench.wasm" && $HAS_WASMTIME -eq 1 ]]; then
-      [[ $WARMUP -eq 1 ]] && wasmtime "$dir/bench.wasm" > /dev/null 2>&1 || true
-      lw_ms=$(wasmtime "$dir/bench.wasm" 2>/dev/null | extract_ms || true)
+      [[ $WARMUP -eq 1 ]] && "$WASMTIME" --dir . "$dir/bench.wasm" > /dev/null 2>&1 || true
+      lw_ms=$("$WASMTIME" --dir . "$dir/bench.wasm" 2>/dev/null | extract_ms || true)
     fi
   fi
 
