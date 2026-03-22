@@ -24,6 +24,17 @@ else
   STDLIB_PATH=""
 fi
 
+# Auto-detect libloft.rlib for native compilation: project target/release → installed share/loft
+if [[ -n "${LOFT_LIB_DIR:-}" ]]; then
+  LOFT_LIB="$LOFT_LIB_DIR"
+elif [[ -f "$PROJECT_ROOT/target/release/libloft.rlib" ]]; then
+  LOFT_LIB="$PROJECT_ROOT/target/release"
+elif [[ -f "/usr/local/share/loft/libloft.rlib" ]]; then
+  LOFT_LIB="/usr/local/share/loft"
+else
+  LOFT_LIB=""
+fi
+
 SKIP_PYTHON=0
 SKIP_WASM=0
 NO_BUILD=0
@@ -62,6 +73,7 @@ Options:
 Environment:
   LOFT_BIN        Path to the loft binary (default: target/release/loft)
   LOFT_STDLIB     Path to the stdlib root directory (default: project root)
+  LOFT_LIB_DIR    Directory containing libloft.rlib (default: target/release or /usr/local/share/loft)
 
 Output columns: bench | python | loft-interp | loft-native | loft-wasm | rust
 EOF
@@ -137,28 +149,36 @@ run_bench() {
     fi
   fi
 
-  local py_ms="-" li_ms="-" ln_ms="-" lw_ms="-" rs_ms="-"
+  local py_ms="" li_ms="" ln_ms="" lw_ms="" rs_ms=""
 
   # Python
   if [[ $SKIP_PYTHON -eq 0 && $HAS_PYTHON -eq 1 && -f "$dir/bench.py" ]]; then
     [[ $WARMUP -eq 1 ]] && python3 "$dir/bench.py" > /dev/null 2>&1 || true
-    py_ms=$(python3 "$dir/bench.py" 2>/dev/null | extract_ms || echo "-")
+    py_ms=$(python3 "$dir/bench.py" 2>/dev/null | extract_ms || true)
   fi
 
   # loft interpreter
   if [[ $HAS_LOFT -eq 1 && -f "$dir/bench.loft" ]]; then
     [[ $WARMUP -eq 1 ]] && "$LOFT" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
-    li_ms=$("$LOFT" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" 2>/dev/null | extract_ms || echo "-")
+    li_ms=$("$LOFT" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" 2>/dev/null | extract_ms || true)
   fi
 
   # loft native
-  if [[ $HAS_LOFT -eq 1 && $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
-    "$LOFT" --native "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
-    mv "$dir/bench" "$dir/bench_bin" 2>/dev/null || true
+  if [[ $HAS_LOFT -eq 1 && $HAS_RUST -eq 1 && -n "$LOFT_LIB" && $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
+    native_rs="$dir/bench_native.rs"
+    "$LOFT" --native-emit "$native_rs" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
+    if [[ -f "$native_rs" ]]; then
+      rustc -O --edition=2024 \
+        --extern "loft=$LOFT_LIB/libloft.rlib" \
+        -L "$LOFT_LIB/deps" \
+        -o "$dir/bench_bin" \
+        "$native_rs" > /dev/null 2>&1 || true
+      rm -f "$native_rs"
+    fi
   fi
-  if [[ $HAS_LOFT -eq 1 && -f "$dir/bench_bin" ]]; then
+  if [[ -f "$dir/bench_bin" ]]; then
     [[ $WARMUP -eq 1 ]] && "$dir/bench_bin" > /dev/null 2>&1 || true
-    ln_ms=$("$dir/bench_bin" 2>/dev/null | extract_ms || echo "-")
+    ln_ms=$("$dir/bench_bin" 2>/dev/null | extract_ms || true)
   fi
 
   # loft wasm
@@ -168,7 +188,7 @@ run_bench() {
     fi
     if [[ -f "$dir/bench.wasm" && $HAS_WASMTIME -eq 1 ]]; then
       [[ $WARMUP -eq 1 ]] && wasmtime "$dir/bench.wasm" > /dev/null 2>&1 || true
-      lw_ms=$(wasmtime "$dir/bench.wasm" 2>/dev/null | extract_ms || echo "-")
+      lw_ms=$(wasmtime "$dir/bench.wasm" 2>/dev/null | extract_ms || true)
     fi
   fi
 
@@ -178,12 +198,13 @@ run_bench() {
   fi
   if [[ $HAS_RUST -eq 1 && -f "$dir/bench_rs_bin" ]]; then
     [[ $WARMUP -eq 1 ]] && "$dir/bench_rs_bin" > /dev/null 2>&1 || true
-    rs_ms=$("$dir/bench_rs_bin" 2>/dev/null | extract_ms || echo "-")
+    rs_ms=$("$dir/bench_rs_bin" 2>/dev/null | extract_ms || true)
   fi
 
+  ms() { [[ -z "$1" ]] && echo "-" || echo "${1}ms"; }
   printf "%-20s %-12s %-13s %-13s %-13s %-10s\n" \
-    "$name" "${py_ms:+${py_ms}ms}" "${li_ms:+${li_ms}ms}" \
-    "${ln_ms:+${ln_ms}ms}" "${lw_ms:+${lw_ms}ms}" "${rs_ms:+${rs_ms}ms}"
+    "$name" "$(ms "$py_ms")" "$(ms "$li_ms")" \
+    "$(ms "$ln_ms")" "$(ms "$lw_ms")" "$(ms "$rs_ms")"
 }
 
 printf "%-20s %-12s %-13s %-13s %-13s %-10s\n" \
