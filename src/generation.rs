@@ -306,6 +306,7 @@ impl Output<'_> {
 #![allow(redundant_semicolons)]
 #![allow(unused_assignments)]
 #![allow(unused_labels)]
+#![allow(unused_braces)]
 #![allow(clippy::double_parens)]
 #![allow(clippy::unused_unit)]
 
