@@ -46,8 +46,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
 | 82 | `string` is not a valid type name — use `text` | Medium | Replace `string` with `text` in all struct fields and signatures |
-| 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | High | Avoid naming hash-value struct fields `key`; use a different name (e.g. `word`, `name`) |
-| 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | No known workaround for mutual recursion; avoid `for` loops in functions called from recursive functions |
+| 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | Issue 85 fix: `convert()` now uses `OpNullRefSentinel` for null→Reference; `eq_ref`/`ne_ref` treat `rec==0` as null |
+| 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | Use in-place (non-vector-returning) algorithms for recursive functions; `bench/10_sort` uses bubble sort as workaround |
+| 85 | Null-returning hash lookup before insert causes subsequent lookup to return null / "Allocating a used store" panic | ~~Fixed~~ | Root cause: `convert()` used `OpConvRefFromNull` (allocates a store) for `null`→`Reference` in comparisons; `eq_ref`/`ne_ref` did full `DbRef` comparison (not rec-only). Fix: `convert()` uses `OpNullRefSentinel` (no allocation, sentinel `{u16::MAX,0,0}`); `eq_ref`/`ne_ref` treat `rec==0` as null |
 
 ---
 
@@ -588,7 +589,7 @@ field names, or the compiler should emit an error when a hash-value struct has a
 
 **Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
 
-**Location:** `src/state/codegen.rs:560` — `assert!(parameters.len() >= ...)`.
+**Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."``.
 
 **Symptom:** When function A is recursive (calls itself) and function A calls function B, and
 function B contains a `for` loop, the interpreter panics:
@@ -613,20 +614,30 @@ fn recurse(n: integer) -> integer {
 fn main() { println("{recurse(5)}"); }
 ```
 
-**Root cause:** Loft uses a flat global variable namespace — all loop variables across all
-functions in a file share the same slot-assignment table. The codegen for a `for` loop in the
-helper function corrupts the parameter count recorded for the recursive function, causing the
-assertion to fire when codegen processes the recursive call site.
+**Root cause:** `ref_return` in `src/parser/control.rs` adds extra attributes (work-ref buffer
+parameters) to a function while its body is being parsed. When the function is recursive,
+call sites parsed earlier in the body see the pre-update attribute count. By the time
+`ref_return` finishes (end of body), the function has more attributes than those recursive
+call sites were generated with. Codegen then panics because the call has too few arguments.
 
-**Workaround:** Replace the `for` loop in the helper function with recursion, or restructure
-the algorithm so the recursive function and the looping helper are in separate files (if
-supported), or inline the loop body into the recursive function itself.
+More precisely: a vector-returning function F that allocates vectors internally triggers
+`ref_return`, which promotes internal work-ref variables to function attributes so callers
+pre-allocate result buffers (required for LIFO store ordering). When F is called from a
+recursive function G, `add_defaults` in G creates work-refs for the extra attributes. Those
+work-refs end up in the dep list of G's return type, causing G's own `ref_return` to add
+yet more attributes to G — AFTER the recursive calls to G in G's body were already parsed.
 
-**Fix path:** The flat namespace slot assignment must be replaced with per-function scope so
-that loop variable slots in one function do not interfere with parameter count tracking in
-another. This is a significant refactor of `src/variables.rs` and `src/state/codegen.rs`.
+**Workaround:** Use a non-recursive, in-place sorting algorithm (e.g. bubble sort or
+insertion sort) instead of recursive divide-and-conquer. In-place sorts do not return new
+vectors from recursive helpers, so `ref_return` is never triggered on the recursive
+function. The `bench/10_sort` benchmark uses bubble sort for this reason.
 
-**Effort:** High (requires per-function variable scoping).
+**Fix path:** After parsing a function body (second pass), scan the IR tree for recursive
+calls with fewer arguments than the now-finalized attribute count, and patch them via
+`add_defaults`. This targeted post-parse fixup is significantly simpler than a full
+per-function variable scoping refactor.
+
+**Effort:** Medium (post-parse IR scan and call-site patching in `parse_function`).
 
 ---
 
