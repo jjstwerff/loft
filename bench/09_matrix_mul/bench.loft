@@ -1,7 +1,7 @@
-// Benchmark 9: Float vector dot product (1 million elements)
+// Benchmark 9: Float vector dot product (5 million elements)
 // Matrix multiply replaced: nested struct+vector type inference not yet supported.
 fn main() {
-  n = 1000000;
+  n = 5000000;
   xs = [for dot_i in 0..n { dot_i as float / 1000.0 }];
   ys = [for dot_j in 0..n { (n - dot_j) as float / 1000.0 }];
   t0 = ticks();

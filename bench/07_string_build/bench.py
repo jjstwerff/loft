@@ -1,6 +1,6 @@
 import time
 
-n = 5000
+n = 500_000
 t0 = time.time()
 parts = []
 for i in range(n):

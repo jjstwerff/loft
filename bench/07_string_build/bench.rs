@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 fn main() {
-    let n = 5000;
+    let n = 500_000;
     let t0 = Instant::now();
     let mut s = String::new();
     for i in 0..n {

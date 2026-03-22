@@ -1,6 +1,6 @@
-// Benchmark 7: String building (5000 appends)
+// Benchmark 7: String building (500000 appends)
 fn main() {
-  n = 5000;
+  n = 500000;
   t0 = ticks();
   s = "";
   for sb_i in 0..n {
