@@ -5,8 +5,10 @@ all:
 	RUSTFLAGS=-g cargo build --release
 
 install: all
-	sudo install -d /usr/local/share/loft
+	sudo install -d /usr/local/share/loft/deps
 	sudo cp -r default /usr/local/share/loft/
+	sudo install -m 644 target/release/libloft.rlib /usr/local/share/loft/
+	sudo cp target/release/deps/*.rlib /usr/local/share/loft/deps/
 	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
 		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
 	fi

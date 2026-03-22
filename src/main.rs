@@ -470,6 +470,13 @@ fn loft_lib_dir() -> Option<std::path::PathBuf> {
     if dir.join("libloft.rlib").exists() {
         return Some(dir);
     }
+    // When installed as <prefix>/bin/loft, look in <prefix>/share/loft/.
+    if dir.file_name()? == "bin" {
+        let share = dir.parent()?.join("share").join("loft");
+        if share.join("libloft.rlib").exists() {
+            return Some(share);
+        }
+    }
     None
 }
 
