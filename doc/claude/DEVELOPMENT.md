@@ -23,6 +23,24 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
 
 ---
 
+## Branch Policy — Main is Read-Only
+
+**Direct commits to `main` are not allowed.**
+
+`main` is the release branch; every commit on it must be releasable.  All
+development happens on feature branches and reaches `main` only through a
+reviewed, CI-green pull request.
+
+The **currently active development branch** is `benchmark`.
+
+Rules:
+- Never `git commit` directly on `main`.
+- Never `git push` without an explicit user instruction.
+- Never create a feature branch from another feature branch — always branch from `main`.
+- Merging to `main` is done via a GitHub pull request, not a local `git merge`.
+
+---
+
 ## Branch Naming
 
 A branch covers one or more PLANNING.md items (or phases of a single item).
