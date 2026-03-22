@@ -285,7 +285,9 @@ pub fn now() -> long;
 pub fn ticks() -> long;
 
 // Clears the scratch buffer used by text-returning native functions (A8).
+// Emitted at statement boundaries by the compiler; not callable from user code.
 fn OpClearScratch();
+#rust"stores.scratch.clear();"
 
 // --- Vector operations (T2-8, T2-5) ---
 // reverse(v) and sort(v) are compiler special-cased in parse_call.

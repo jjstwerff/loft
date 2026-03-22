@@ -1532,10 +1532,6 @@ fn test() {
 
 /// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
 #[test]
-/// Marked ignore because hash insertion also triggers issue 81 (LIFO store-free order)
-/// in debug builds — verified working in the interpreter (release build).
-#[test]
-#[ignore = "issue 83 workaround: hits issue 81 (LIFO store-free) in debug builds; works in interpreter — see PROBLEMS.md #81 and #83"]
 fn issue_83_hash_value_field_renamed_works() {
     code!(
         "struct Score { id: integer not null, pts: integer not null }
@@ -1820,4 +1816,16 @@ fn a8_to_lowercase_in_format() {
 }"
     )
     .result(loft::data::Value::Null);
+}
+
+/// Regenerate src/fill.rs from the default library definitions.
+/// Run with: cargo test regen_fill_rs -- --ignored --nocapture
+#[test]
+#[ignore = "maintenance: regenerates src/fill.rs — run manually when default/*.loft changes"]
+fn regen_fill_rs() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    loft::create::generate_code_to(&p.data, "src/fill.rs").expect("generate_code_to failed");
+    println!("src/fill.rs regenerated");
 }
