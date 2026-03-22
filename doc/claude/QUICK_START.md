@@ -95,7 +95,7 @@ Naming rules enforced by the parser: `lower_case` for functions/variables, `Came
 ### Functions
 ```loft
 fn add(a: integer, b: integer) -> integer { a + b }
-fn greet(name: text) { say("hello {name}"); }
+fn greet(name: text) { println("hello {name}"); }
 fn fill(v: &vector<Item>) { v += [Item{x: 1}]; }  // & needed to propagate append
 ```
 
@@ -113,10 +113,10 @@ fn area(self: Rect)   -> float { self.w * self.h }     // polymorphic dispatch
 
 ### Format strings — ⚠ CRITICAL
 ```loft
-say("hello {name}");               // basic interpolation
-say("val={x:.2}");                 // 2 decimal places
-say("json={o:j}");                 // JSON format
-say("{{literal braces}}");         // escape { } by doubling
+println("hello {name}");               // basic interpolation
+println("val={x:.2}");                 // 2 decimal places
+println("json={o:j}");                 // JSON format
+println("{{literal braces}}");         // escape { } by doubling
 // WRONG:  assert("{p}" == "{r:128,g:0,b:64}")  — r/g/b parsed as variables!
 // CORRECT: assert("{p}" == "{{r:128,g:0,b:64}}")
 ```
@@ -135,13 +135,13 @@ for rev(i in 0..n) { }            // reverse iteration
 ### Match
 ```loft
 match color {
-    Red => say("red"),
-    Green | Blue => say("cool"),
-    _ => say("other"),
+    Red => println("red"),
+    Green | Blue => println("cool"),
+    _ => println("other"),
 }
 match shape {
-    Circle{radius} => say("r={radius}"),
-    Rect{w, h} if w == h => say("square"),
+    Circle{radius} => println("r={radius}"),
+    Rect{w, h} if w == h => println("square"),
     _ => {},
 }
 ```

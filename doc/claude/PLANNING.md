@@ -525,7 +525,7 @@ evens   = filter(items, |x| { x > 0 });
 transform: fn(integer) -> integer = |x: integer| -> integer { x * 2 };
 
 // Zero-parameter short form uses the existing || token
-run(|| { say("hello") });
+run(|| { println("hello") });
 ```
 
 Both forms produce a `Type::Function` value with the same d_nr representation as
