@@ -16,6 +16,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
+| S5    | Fix optional `& text` parameter subtract-with-overflow panic (Issue 89) | Small |      | PROBLEMS.md #89             |
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
 | L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
 | L3    | **`FileResult` enum** — mutating fs ops return enum + `.ok()` *(3 ph)* | Small |        | User request 2026-03-19     |
@@ -84,6 +85,7 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
+| S6    | Fix `for` loop in recursive function — per-function variable scoping (Issue 84) | High | | PROBLEMS.md #84 |
 | A12   | Lazy work-variable init (blocked: Issues 68–70)              | Medium    |                 | PLANNING.md A12             |
 | A5    | **Closure capture for lambdas** *(5 phases)*                 | Very High | P1              | Depends on P1               |
 | A5.1  | ↳ Capture analysis — identify free variables                 | Small     | P1              | scopes.rs, expressions.rs   |
@@ -91,6 +93,26 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A5.3  | ↳ Capture at call site — alloc record, copy captured vars    | Medium    | A5.2            | codegen.rs                  |
 | A5.4  | ↳ Closure body reads — redirect to closure record arg        | Medium    | A5.3            | codegen.rs, fill.rs         |
 | A5.5  | ↳ Lifetime + cleanup — `OpFreeRef` at end of enclosing scope | Small     | A5.4            | scopes.rs                   |
+| T1    | **Tuple types** — multi-value returns, stack-allocated compound values *(7 ph)* | Very High | | TUPLES.md |
+| T1.1  | ↳ Type system — `Type::Tuple`, element offsets, `element_size` helpers | Medium | | data.rs, typedef.rs |
+| T1.2  | ↳ Parser — type notation, literal syntax, destructuring assignment | Medium | T1.1 | parser/           |
+| T1.3  | ↳ Scope analysis — tuple variable intervals, text/ref element lifetimes | Small | T1.2 | scopes.rs |
+| T1.4  | ↳ Bytecode codegen — slot allocation, element read/write     | Medium    | T1.3            | state/codegen.rs            |
+| T1.5  | ↳ SC-4: Reference-tuple parameters with owned elements       | Small     | T1.4            | compiler                    |
+| T1.6  | ↳ SC-8: Tuple-aware mutation guard                           | Small     | T1.4            | scopes.rs                   |
+| T1.7  | ↳ SC-7: `not null` annotation for tuple integer elements     | Small     | T1.4            | typedef.rs                  |
+| TR1   | **Stack trace introspection** (`stack_trace()`, `StackFrame`, `ArgValue`) *(4 ph)* | Medium | | STACKTRACE.md |
+| TR1.1 | ↳ Shadow call-frame vector (push/pop per fn call)            | Small     |                 | state/mod.rs                |
+| TR1.2 | ↳ Type declarations — `ArgValue` enum, `StackFrame` struct (`default/04_stacktrace.loft`) | Small | TR1.1 | 04_stacktrace.loft |
+| TR1.3 | ↳ Materialisation — `stack_trace()` native builds `vector<StackFrame>` | Medium | TR1.2 | state/mod.rs, fill.rs |
+| TR1.4 | ↳ Call-site line numbers — track source position in call frame | Small   | TR1.3           | state/codegen.rs            |
+| CO1   | **Coroutines** (`yield`, `iterator<T>`, `yield from`) *(6 ph)* | Very High | TR1           | COROUTINE.md                |
+| CO1.1 | ↳ `iterator<T>` type + `CoroutineStatus` enum (`default/05_coroutine.loft`) | Small | TR1.2 | typedef.rs |
+| CO1.2 | ↳ `OpCoroutineCreate` + `OpCoroutineNext` — frame construction and advance | High | CO1.1 | state/mod.rs, data.rs |
+| CO1.3 | ↳ `OpYield` — serialise live stack to heap frame, return to caller | High | CO1.2 | state/mod.rs |
+| CO1.4 | ↳ `yield from` — sub-generator delegation                   | Medium    | CO1.3           | state/mod.rs                |
+| CO1.5 | ↳ `for item in generator` integration — iterator protocol    | Small     | CO1.3           | parser/collections.rs       |
+| CO1.6 | ↳ `next()` / `exhausted()` stdlib functions                 | Small     | CO1.2           | native.rs, 05_coroutine.loft |
 | A4    | **Spatial index operations** *(4 phases)*                    | High      |                 | PROBLEMS #22                |
 | A4.1  | ↳ Insert + exact lookup; remove pre-gate for these ops       | Medium    |                 | database.rs, fill.rs        |
 | A4.2  | ↳ Bounding-box range query `spacial[x1..x2, y1..y2]`        | Medium    | A4.1            | database.rs, collections.rs |
@@ -108,3 +130,4 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | ID    | Title                                                        | Effort    | Notes                                               |
 |-------|--------------------------------------------------------------|-----------|-----------------------------------------------------|
 | P4    | Bytecode cache (`.loftc`)                                    | Medium    | Superseded by Tier N native codegen                 |
+| A7.4  | External Libs Phase 3 — package registry, `loft install`, SHA-256 | Medium | 2.x; ecosystem must exist first (EXTERNAL_LIBS.md Ph3) |
