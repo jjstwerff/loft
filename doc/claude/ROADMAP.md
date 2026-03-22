@@ -16,9 +16,7 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
 | A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
-| P1    | **Lambda expressions** *(2 phases remaining)*                | Med–High  |                 | Prototype goal              |
-| P1.2  | ↳ Compilation — synthesise anon def, emit def-nr             | Medium    | P1.1 ✓          | codegen.rs, compile.rs      |
-| P1.3  | ↳ Integration — map/filter/reduce with inline lambdas        | Small     | P1.2            | tests only                  |
+| P1    | **Lambda expressions** ✓ all phases complete                 | Med–High  |                 | Prototype goal              |
 
 ---
 

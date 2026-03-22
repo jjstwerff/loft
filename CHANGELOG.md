@@ -26,6 +26,18 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   top-level function declaration.  Lambda bodies cannot capture outer variables
   yet (closure capture is A5).  (`src/parser/expressions.rs` `parse_lambda`)
 
+- **P1.2** — Short-form lambda syntax `|x| { body }` and `|| { body }` is now
+  accepted everywhere a `fn(…) -> …` type is expected.  Parameter types are
+  inferred from the call-site hint when no explicit `: type` annotation is given.
+  Return type is inferred from the hint when no `-> type` annotation is given.
+  (`src/parser/expressions.rs` `parse_lambda_short`, `src/parser/mod.rs`
+  `lambda_hint`, `src/parser/control.rs` hint propagation in `parse_call`)
+
+- **P1.3** — `map`, `filter`, and `reduce` now accept short-form lambdas as
+  their function argument.  Any call site where the expected parameter type is
+  `fn(…) -> …` now propagates the type hint so that untyped lambda params can
+  be inferred.  (`src/parser/control.rs`)
+
 ### Improvements
 
 - **S4** — `read_data` in `database/io.rs` now implements `Parts::Array` (indirect

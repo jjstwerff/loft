@@ -99,8 +99,8 @@ or type system; 0.8.2 correctness work is a prerequisite.
 
 **Lambda expressions (P1):**
 - **P1.1** — Parser: ✓ completed in 0.8.2.
-- **P1.2** — Compilation: synthesise an anonymous `def`, emit a def-number at the call site.
-- **P1.3** — Integration: `map`, `filter`, `reduce` accept inline lambdas.
+- **P1.2** — Compilation: ✓ completed in 0.8.2 (short-form `|x| {…}` and `||` with hint inference).
+- **P1.3** — Integration: ✓ completed in 0.8.2 (`map`, `filter`, `reduce` accept inline lambdas).
 - **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
 
 **Pattern extensions (L2):**
@@ -586,7 +586,7 @@ Verify that anywhere a named `fn <name>` ref works, both lambda forms also work.
 short lambda in the same expression; nested lambdas.
 
 **Effort:** Medium–High (parser.rs, compile.rs)
-**Target:** 0.8.3 (P1.1 landed in 0.8.2; P1.2 and P1.3 remain)
+**Completed:** 0.8.2 (P1.1 long-form, P1.2 short-form with hint inference, P1.3 map/filter/reduce integration)
 
 ---
 
