@@ -214,6 +214,7 @@ default/03_text.loft    — text utilities
 | [PLANNING.md](PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [MATCH.md](MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
+| [TUPLES.md](TUPLES.md) | Tuple design — multi-value returns, deconstruction, stack layout |
 | [NATIVE.md](NATIVE.md) | Native code generation (`src/generation.rs`) design and fix plans |
 | [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [BYTECODE_CACHE.md](BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
