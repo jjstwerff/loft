@@ -151,17 +151,42 @@ impl Stores {
                         self.read_data(&elem, elem_tp, little_endian, data);
                     }
                 }
-                Parts::Array(_)
-                | Parts::Sorted(_, _)
+                Parts::Array(elem_tp) => {
+                    let store_nr = r.store_nr;
+                    let store = &self.allocations[store_nr as usize];
+                    let v_rec = store.get_int(r.rec, r.pos) as u32;
+                    let length = if v_rec == 0 {
+                        0u32
+                    } else {
+                        store.get_int(v_rec, 4) as u32
+                    };
+                    // Collect elm_recs before the mutable borrow in read_data.
+                    let elm_recs: Vec<u32> = (0..length)
+                        .map(|i| store.get_int(v_rec, 8 + 4 * i) as u32)
+                        .collect();
+                    for elm_rec in elm_recs {
+                        let elem = DbRef {
+                            store_nr,
+                            rec: elm_rec,
+                            pos: 8,
+                        };
+                        self.read_data(&elem, elem_tp, little_endian, data);
+                    }
+                }
+                Parts::Sorted(_, _)
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _) => unreachable!(
-                    "binary read of collection-type field '{}': \
-                     collection fields are blocked at parse time by the F57 guard",
+                | Parts::Spacial(_, _) => panic!(
+                    "binary I/O not supported for type '{}': it contains a collection field \
+                     with store-internal references that cannot be serialized",
                     self.types[tp as usize].name
                 ),
-                Parts::Base => unreachable!("Parts::Base is not a user-visible type (tp={})", tp),
+                Parts::Base => unreachable!(
+                    "Parts::Base should never appear as a field type in read_data \
+                     (type: {})",
+                    self.types[tp as usize].name
+                ),
             },
         }
     }
@@ -293,12 +318,16 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _) => unreachable!(
-                    "binary write of collection-type field '{}': \
-                     collection fields are blocked at parse time by the F57 guard",
+                | Parts::Spacial(_, _) => panic!(
+                    "binary I/O not supported for type '{}': it contains a collection field \
+                     with store-internal references that cannot be serialized",
                     self.types[tp as usize].name
                 ),
-                Parts::Base => unreachable!("Parts::Base is not a user-visible type (tp={})", tp),
+                Parts::Base => unreachable!(
+                    "Parts::Base should never appear as a field type in write_data \
+                     (type: {})",
+                    self.types[tp as usize].name
+                ),
             },
         }
     }

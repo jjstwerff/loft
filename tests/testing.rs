@@ -15,7 +15,6 @@ use loft::compile::byte_code;
 #[cfg(debug_assertions)]
 use loft::compile::show_code;
 use loft::data::Data;
-use loft::database::Stores;
 use loft::generation::Output;
 #[cfg(debug_assertions)]
 use loft::log_config::LogConfig;
@@ -273,9 +272,7 @@ impl Drop for Test {
                 } else {
                     scope.to_string()
                 };
-                let origin: &str = if is_arg {
-                    ""
-                } else if scope == u16::MAX {
+                let origin: &str = if is_arg || scope == u16::MAX {
                     ""
                 } else {
                     f.scope_origin(scope)
@@ -358,6 +355,8 @@ impl Test {
             indent: 0,
             def_nr: 0,
             declared: Default::default(),
+            reachable: Default::default(),
+            loop_stack: Vec::new(),
         };
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.

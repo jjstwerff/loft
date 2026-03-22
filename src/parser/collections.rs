@@ -1013,14 +1013,21 @@ use #count instead"
         self.vars.in_use(len_var, true);
 
         // Create the result element variable (b) with the worker's return type.
-        let b_type = if fn_d_nr == u32::MAX || matches!(ret_type, Type::Unknown(_)) {
+        // On the first pass fn_d_nr is u32::MAX; use Type::Unknown so that the second
+        // pass can update the type to the correct one (Float, Boolean, etc.) via
+        // add_variable's "update if unknown" logic.  Using I32 here caused the type
+        // to stick as integer even when the worker returns float or boolean.
+        let b_type = if matches!(ret_type, Type::Unknown(_)) {
             I32.clone()
+        } else if fn_d_nr == u32::MAX {
+            // First pass: placeholder — will be replaced on second pass.
+            Type::Unknown(u32::MAX)
         } else {
             ret_type
         };
         let b_var = self.create_var(result_name, &b_type);
         self.vars.defined(b_var);
-        if matches!(b_type, Type::Integer(_, _)) {
+        if matches!(b_type, Type::Integer(_, _) | Type::Unknown(_)) {
             self.vars.in_use(b_var, true);
         }
 
