@@ -12,13 +12,25 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 ---
 
-## 0.8.3 — Language syntax extensions
+## 0.8.2 — Native stability and interpreter performance
 
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | S5    | Fix optional `& text` parameter subtract-with-overflow panic (Issue 89) | Small |      | PROBLEMS.md #89             |
 | S7    | Add diagnostic error for `string` type name — should be `text` (Issue 82) | Trivial |    | PROBLEMS.md #82             |
 | S8    | Compile-time error when hash-value struct has field named `key` (Issue 83) | Small |     | PROBLEMS.md #83             |
+| N6    | Native codegen: text method in format interpolation — emit `&str` (Issue 87) | Small |    | PROBLEMS.md #87             |
+| N7    | Native codegen: `directory()` scratch buffer argument (Issue 88) | Small  |                | PROBLEMS.md #88             |
+| O1    | **Interpreter: superinstruction merging** — peephole pass, 6 merged opcodes (240–245) | Medium | | PERFORMANCE.md P1 |
+| O3    | Interpreter: verify integer paths carry no `long` null-sentinel | Low       |                 | PERFORMANCE.md P3           |
+| O6    | Native: remove `long` null-sentinel from local arithmetic (`_nn` variants) | Low   |                 | PERFORMANCE.md N3           |
+
+---
+
+## 0.8.3 — Language syntax extensions
+
+| ID    | Title                                                        | Effort    | Depends on      | Source                      |
+|-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | P3    | Vector aggregates (sum, min_of, any, all, count_if)          | Low–Med   | P1              | Stdlib audit 2026-03-15     |
 | L2    | Nested patterns in field positions                           | Medium    |                 | MATCH.md L2                 |
 | L3    | **`FileResult` enum** — mutating fs ops return enum + `.ok()` *(3 ph)* | Small |        | User request 2026-03-19     |
@@ -122,19 +134,14 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | N3    | Native codegen: resolve `external` crate reference (Issue 79) | Low     |                 | PROBLEMS.md #79             |
 | N4    | Native codegen: fix LIFO store-free order in generated frees (Issue 80) | Medium |        | PROBLEMS.md #80             |
 | N5    | Native codegen: `file_from_bytes` for `DbRef` vector types (Issue 86) | Medium |          | PROBLEMS.md #86             |
-| N6    | Native codegen: text method in format interpolation — emit `&str` (Issue 87) | Small |    | PROBLEMS.md #87             |
-| N7    | Native codegen: `directory()` scratch buffer argument (Issue 88) | Small  |                | PROBLEMS.md #88             |
 | N9    | Native codegen: exhaustive IR pattern matching — remove `panic!` catch-alls (Issue 61) | Medium | N2–N7 | PROBLEMS.md #61 |
 | A13   | **Complete two-zone slot assignment** — Steps 8 + 10 *(3 ph)* | Medium  |                 | SLOTS.md Steps 8, 10        |
 | A13.1 | ↳ Step 8: `Set(v, Block)` ordering fix in `place_large_and_recurse` | Medium |            | SLOTS.md Step 8             |
 | A13.2 | ↳ Step 10: Audit `build_scope_parents` for missing IR variants | Medium  | A13.1           | SLOTS.md Step 10            |
 | A13.3 | ↳ `scan_inner`: add `Value::Iter` arm (latent false-positive scope gap) | Small |          | SLOTS.md § Open Issues      |
-| O1    | **Interpreter: superinstruction merging** — peephole pass, 6 merged opcodes (240–245) | Medium | | PERFORMANCE.md P1 |
 | O2    | **Interpreter: stack raw pointer cache** — eliminate store-indirection on push/pop | High | | PERFORMANCE.md P2 |
-| O3    | Interpreter: verify integer paths carry no `long` null-sentinel | Low       |                 | PERFORMANCE.md P3           |
 | O4    | **Native: direct-emit local collections** — escape analysis + `Vec<T>`/`HashMap` | High |   | PERFORMANCE.md N1           |
 | O5    | **Native: omit `stores` param from pure functions** — purity analysis + `_pure` wrapper | High | O4 | PERFORMANCE.md N2 |
-| O6    | Native: remove `long` null-sentinel from local arithmetic (`_nn` variants) | Low   |                 | PERFORMANCE.md N3           |
 | O7    | wasm: pre-allocate string buffers in format path                | Medium    | W1              | PERFORMANCE.md W1           |
 | A4    | **Spatial index operations** *(4 phases)*                    | High      |                 | PROBLEMS #22                |
 | A4.1  | ↳ Insert + exact lookup; remove pre-gate for these ops       | Medium    |                 | database.rs, fill.rs        |
