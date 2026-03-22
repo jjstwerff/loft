@@ -6,6 +6,9 @@ use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 
+/// Entry produced by `collect_pre_evals`: `(temp_var, type_str, expr_code, def_nr, stores_fn)`.
+type PreEvalEntry = (String, String, String, u32, bool);
+
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
 fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
@@ -291,8 +294,7 @@ impl Output<'_> {
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).
-    #[allow(clippy::unused_self)]
-    fn emit_file_header(&self, w: &mut dyn Write) -> std::io::Result<()> {
+    fn emit_file_header(w: &mut dyn Write) -> std::io::Result<()> {
         writeln!(
             w,
             "\
@@ -338,7 +340,7 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
-        self.emit_file_header(w)?;
+        Self::emit_file_header(w)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
@@ -362,7 +364,7 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
-        self.emit_file_header(w)?;
+        Self::emit_file_header(w)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
@@ -906,7 +908,6 @@ extern crate loft;"
         )
     }
 
-    #[allow(clippy::same_functions_in_if_condition)]
     fn needs_pre_eval(&self, v: &Value) -> bool {
         match v {
             Value::Call(d_nr, vals) => {
@@ -930,10 +931,6 @@ extern crate loft;"
                     // User-fn stubs (no rust template, no loft body, not a built-in Op)
                     // are emitted as todo!() but still take `&mut Stores` — pre-eval
                     // them to avoid double-borrow when they appear as nested arguments.
-                    true
-                } else if def.rust.contains("stores") {
-                    // Template fns that use `stores` can cause double-borrow when nested
-                    // inside another stores-using call; treat them as needing pre-eval.
                     true
                 } else {
                     vals.iter().any(|a| self.needs_pre_eval(a))
@@ -961,11 +958,10 @@ extern crate loft;"
     /// expression to prevent simultaneous `&mut Stores` borrows.
     /// Returns `(var_name, expr_code)` pairs ordered innermost-first so each pre-eval
     /// can safely reference earlier ones.
-    #[allow(clippy::type_complexity)]
     fn collect_pre_evals(
         &mut self,
         v: &Value,
-    ) -> std::io::Result<Vec<(String, String, String, u32, bool)>> {
+    ) -> std::io::Result<Vec<PreEvalEntry>> {
         let mut result = Vec::new();
         self.collect_pre_evals_inner(v, &mut result)?;
         Ok(result)
@@ -977,7 +973,7 @@ extern crate loft;"
     fn collect_pre_evals_inner(
         &mut self,
         v: &Value,
-        result: &mut Vec<(String, String, String, u32, bool)>,
+        result: &mut Vec<PreEvalEntry>,
     ) -> std::io::Result<()> {
         // Recurse into wrapper nodes so nested Call nodes inside Set/Drop/If are found.
         if let Value::Set(_, rhs) = v {
@@ -1063,7 +1059,7 @@ extern crate loft;"
     /// pre-evals already substituted, then push `(name, code)` onto `result`.
     fn rewrite_code(
         &mut self,
-        result: &mut Vec<(String, String, String, u32, bool)>,
+        result: &mut Vec<PreEvalEntry>,
         arg: &Value,
         name: String,
         replace_all: bool,

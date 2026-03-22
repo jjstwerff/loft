@@ -1525,20 +1525,20 @@ impl Parser {
             }
             return self.call(val, source, name, &list, &Vec::new());
         }
-        let fn_def_nr = if !self.first_pass {
-            let d_nr = self.data.def_nr(&format!("n_{name}"));
-            if d_nr != u32::MAX { Some(d_nr) } else { None }
-        } else {
+        let fn_def_nr = if self.first_pass {
             None
+        } else {
+            let d_nr = self.data.def_nr(&format!("n_{name}"));
+            (d_nr != u32::MAX).then_some(d_nr)
         };
         let mut arg_idx = 0usize;
         loop {
-            if let Some(d_nr) = fn_def_nr {
-                if arg_idx < self.data.attributes(d_nr) as usize {
-                    let expected = self.data.attr_type(d_nr, arg_idx);
-                    if matches!(expected, Type::Function(_, _)) {
-                        self.lambda_hint = expected;
-                    }
+            if let Some(d_nr) = fn_def_nr
+                && arg_idx < self.data.attributes(d_nr)
+            {
+                let expected = self.data.attr_type(d_nr, arg_idx);
+                if matches!(expected, Type::Function(_, _)) {
+                    self.lambda_hint = expected;
                 }
             }
             let mut p = Value::Null;

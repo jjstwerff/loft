@@ -1504,6 +1504,7 @@ use a separate collection or add after the loop"
     // false when `||` was consumed (zero params, no closing `|`).
     // Types are inferred from `lambda_hint` (set by the call-site parser) when omitted.
     // Produces Type::Function; runtime representation is d_nr as i32, same as fn-ref.
+    #[allow(clippy::too_many_lines)] // single context save/restore spans the whole body; splitting would need unsafe borrowing
     pub(crate) fn parse_lambda_short(&mut self, code: &mut Value, expect_close: bool) -> Type {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
@@ -1771,7 +1772,6 @@ use a separate collection or add after the loop"
     /// Build the second-pass bytecode for a `[for ... { body }]` vector comprehension.
     // parser helper threading IR-construction params alongside &mut self; no sensible grouping reduces the count
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::large_types_passed_by_value)] // Option<u16> is Copy; ref adds noise at call sites
     pub(crate) fn build_comprehension_code(
         &mut self,
         vec: u16,

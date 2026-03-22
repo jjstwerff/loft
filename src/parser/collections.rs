@@ -10,7 +10,6 @@ use super::{
 };
 
 impl Parser {
-    #[allow(clippy::large_types_passed_by_value)] // Option<u16> is Copy; ref adds noise at all call sites
     pub(crate) fn iter_text(
         &mut self,
         code: &mut Value,
