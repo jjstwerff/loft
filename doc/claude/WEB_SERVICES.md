@@ -435,3 +435,11 @@ the `http` Cargo feature.
   (Approach B) avoids this entirely.  Do not add `http_status()` even as a convenience.
 
 See [PROBLEMS.md](PROBLEMS.md) for the issue entries.
+
+---
+
+## See also
+- [PLANNING.md](PLANNING.md) — H1–H5 items: full fix paths, effort estimates, and target milestone (0.8.4)
+- [STDLIB.md](STDLIB.md) — `json_items` and existing text functions usable with JSON
+- [LOFT.md](LOFT.md) — Struct annotation syntax (`#json`) and callable fn-ref conventions
+- [THREADING.md](THREADING.md) — Why `http_status()` cannot be parallel-safe (issue #55)

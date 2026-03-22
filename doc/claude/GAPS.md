@@ -251,3 +251,11 @@ Add to `tests/log_config.rs`:
 8. **Parser stress / error recovery** — new `parser_stress.rs`; medium effort, high value for robustness.
 9. **Logger paths** — low risk; add to existing `log_config.rs`.
 10. **`codegen_runtime.rs`** — large effort (requires generation pipeline harness); defer until generation is more stable.
+
+---
+
+## See also
+- [TESTING.md](TESTING.md) — How to write tests, use `LOFT_LOG` presets, and add script/doc test files
+- [FAILURES.md](FAILURES.md) — Historical failure analysis that informed the coverage measurement baseline
+- [PROBLEMS.md](PROBLEMS.md) — Open bugs that block or reduce coverage in specific areas
+- [PLANNING.md](PLANNING.md) — Enhancement backlog; coverage gaps often align with planned work

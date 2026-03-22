@@ -131,3 +131,10 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 |-------|--------------------------------------------------------------|-----------|-----------------------------------------------------|
 | P4    | Bytecode cache (`.loftc`)                                    | Medium    | Superseded by Tier N native codegen                 |
 | A7.4  | External Libs Phase 3 — package registry, `loft install`, SHA-256 | Medium | 2.x; ecosystem must exist first (EXTERNAL_LIBS.md Ph3) |
+
+---
+
+## See also
+- [PLANNING.md](PLANNING.md) — Full descriptions, fix paths, and effort justifications for every item
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Branch naming, commit sequence, and CI workflow for implementing an item
+- [RELEASE.md](RELEASE.md) — Gate criteria each milestone must satisfy before tagging

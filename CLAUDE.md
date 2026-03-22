@@ -155,6 +155,14 @@ give each item a traceable history.
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
 | [CHANGELOG.md](doc/claude/CHANGELOG.md) | Release history |
+| [QUICK_START.md](doc/claude/QUICK_START.md) | Session-start orientation — commands, file map, naming conventions, key patterns |
+| [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) | Slot assignment design notes — P1/P2 proposals, resolved bugs, two-zone layout |
+| [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
+| [SLOT_FAILURES.md](doc/claude/SLOT_FAILURES.md) | Slot assignment failure analysis — root-cause matrix, A/B/C bug categories (A6) |
+| [FAILURES.md](doc/claude/FAILURES.md) | Historical test failure analysis — slot conflicts, vector append bug, fix evidence |
+| [GAPS.md](doc/claude/GAPS.md) | Test coverage gaps — zero-coverage files, missing edge-case areas, priorities |
+| [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
+| [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) | Web services design evaluation — HTTP/JSON approach comparison, issues #54/#55 |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---
@@ -173,6 +181,12 @@ give each item a traceable history.
 | Set up logging in a loft program | [STDLIB.md](doc/claude/STDLIB.md) § Logging, then [LOGGER.md](doc/claude/LOGGER.md) |
 | Understand the heap / memory model | [DATABASE.md](doc/claude/DATABASE.md), then [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) § DbRef |
 | Improve the test suite | [TESTING.md](doc/claude/TESTING.md), then `tests/scripts/` and `tests/docs/` |
+| Find test coverage gaps | [GAPS.md](doc/claude/GAPS.md) → [TESTING.md](doc/claude/TESTING.md) |
+| Fix a known bug | [PROBLEMS.md](doc/claude/PROBLEMS.md) (fix path) → [FAILURES.md](doc/claude/FAILURES.md) (test evidence) → [TESTING.md](doc/claude/TESTING.md) |
+| Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
+| Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) → [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) → [SLOT_FAILURES.md](doc/claude/SLOT_FAILURES.md) |
+| Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
+| Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) → [STDLIB.md](doc/claude/STDLIB.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |
 
 ---

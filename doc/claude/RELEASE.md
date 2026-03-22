@@ -267,3 +267,11 @@ Verify that `gendoc` completes without warnings and that the generated HTML file
 - **2.0** — reserved for breaking language changes.  Not expected in the near term.
 
 The stability guarantee applies to the **loft language surface** (syntax, type system, documented stdlib, CLI flags) and the **public IDE API** (`compileAndRun` / `getSymbols` JS interface).  The Rust library API (`lib.rs`) is not a public stable API until explicitly stabilised.
+
+---
+
+## See also
+- [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog; source for gate-item IDs
+- [ROADMAP.md](ROADMAP.md) — Items grouped by milestone with effort estimates
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Branch naming, commit sequence, and CI workflow
+- [INCONSISTENCIES.md](INCONSISTENCIES.md) — All known inconsistencies must be resolved or accepted before 1.0.0

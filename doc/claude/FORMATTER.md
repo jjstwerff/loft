@@ -334,3 +334,11 @@ pub fn check_source(source: &str) -> bool
 
 Golden files live in `tests/format/`. `.gitattributes` enforces `eol=lf` on checkout so
 `include_str!` yields `\n`-only strings on every platform.
+
+---
+
+## See also
+- [LOFT.md](LOFT.md) — Canonical syntax that the formatter must preserve
+- [CODE.md](CODE.md) — Formatting rules and style conventions the formatter enforces
+- [COMPILER.md](COMPILER.md) — Lexer and parser pipeline the formatter re-uses for token traversal
+- [TESTING.md](TESTING.md) — How to run formatter tests (`cargo test --test format`) and add golden files

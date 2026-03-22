@@ -257,3 +257,11 @@ runtime stack, causing "Variable outside stack" panics.
 
 **Deleted:** `pub fn claim(...)`, `pub fn assign_slots_safe(...)`, and
 `LOFT_DEBUG_SLOTS` debug blocks in both `variables.rs` and `codegen.rs`.
+
+---
+
+## See also
+- [SLOTS.md](SLOTS.md) — Two-zone slot-assignment design and current diagnostic tools
+- [ASSIGNMENT.md](ASSIGNMENT.md) — Full design history: P1/P2 proposals and the A6 resolution
+- [PROBLEMS.md](PROBLEMS.md) — Issues 68–70 (blockers for A12 lazy init) are direct descendants of this analysis
+- [TESTING.md](TESTING.md) — `variables` `LOFT_LOG` preset for slot-interval diagnostics
