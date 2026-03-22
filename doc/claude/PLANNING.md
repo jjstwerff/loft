@@ -52,8 +52,8 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
   - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(0.8.2)*
-  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(1.1+ backlog)*
-  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(1.1+)*
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(0.8.2)*
+  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(0.8.2)*
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(1.1+)*
 - [N — Native Codegen](#n--native-codegen)
   - [N2–N7 — Native codegen bug fixes](#n2--implement-callref--function-pointer-calls-in-native-codegen) *(0.8.2 / 1.1+)*
@@ -68,10 +68,10 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Version Milestones
 
-### Version 0.8.2 — Stability, efficiency, and native codegen (in progress)
+### Version 0.8.2 — Stability, native codegen, and slot correctness (in progress)
 
-Goal: harden the interpreter, improve runtime efficiency, and ship working native code
-generation.  No new language syntax.  Most items are independent and can be developed
+Goal: harden the interpreter, complete native code generation, fix slot assignment, and
+improve runtime efficiency.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
 **Completed in 0.8.2:**
@@ -103,6 +103,17 @@ in parallel.
 *Parallel execution:*
 - **A1.1** — Extra context args + value-struct returns: extend `execute_at_raw`, output buffer.
 - **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1).
+
+*Native codegen completeness:*
+- **N2** — `CallRef` / function-pointer dispatch in generated Rust.
+- **N3** — Resolve `external` crate reference for random/FFI.
+- **N4** — Fix LIFO store-free order in generated frees.
+- **N5** — `file_from_bytes` for `DbRef` vector types.
+- **N9** — Exhaustive IR pattern matching; remove `panic!` catch-alls (after N2–N7).
+
+*Interpreter slot correctness:*
+- **A12.1–A12.3 + A12** — Fix Issues 68–70, then enable lazy work-variable init.
+- **A13.1–A13.3** — Complete two-zone slot assignment (Steps 8 and 10).
 
 ---
 
@@ -323,9 +334,16 @@ in a better state than it found it, with passing tests).
 4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
 5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
-**For 0.8.2 (remaining — parallel):**
+**For 0.8.2 (remaining — parallel and native):**
 6. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
 7. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
+8. **N3** — external crate ref; Low; independent; fastest native fix
+9. **N4** — LIFO store-free order; Medium; independent; prevents heap corruption
+10. **N2** — `CallRef` dispatch; Medium; independent; enables function-pointer tests
+11. **N5** — `file_from_bytes`; Medium; independent; unblocks binary tests in native
+12. **N9** — exhaustive IR matching; Medium; after N2–N7 are complete
+13. **A12.1** → **A12.2** → **A12.3** → **A12** — sequential; each unblocks the next
+14. **A13.1** → **A13.2** → **A13.3** — sequential; completes two-zone slot design
 
 **For 0.9.0 (after 0.8.4 is tagged):**
 1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
@@ -1312,7 +1330,7 @@ use.
 **Tests:** `assign_slots_sequential_text_reuse` in `src/variables.rs` (currently
 `#[ignore]` — pending Issue 69 fix).
 **Effort:** Medium (three inter-related blockers; Issues 68–70)
-**Target:** 0.8.3
+**Target:** 0.8.2
 
 ---
 
@@ -1325,7 +1343,7 @@ use.
 - **Step 10b** — Add a `Value::Iter` arm to `scan_inner` in `src/scopes.rs`, recursing into all three sub-expressions, mirroring the existing arm in `compute_intervals`. Currently safe because parser-synthesised Iter nodes contain no user-defined `Set`; becomes a latent false-positive risk if a parser change ever places a `Set` inside an Iter sub-expression.
 
 **Effort:** Medium per step
-**Target:** 1.1+
+**Target:** 0.8.2
 
 ---
 
@@ -1461,7 +1479,7 @@ replaces the hand-maintained `src/fill.rs`.
 **Description:** `Value::CallRef` is not handled in `output_code_inner`; any loft program that calls a function by reference fails to produce correct native output. Affects `tests/scripts/06-function.loft`.
 **Fix path:** Add a `Value::CallRef` arm to `output_code_inner` in `src/generation.rs`; emit an indirect call using the function-pointer value, following the same ABI as direct calls.
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.8.2
 
 ---
 
@@ -1471,7 +1489,7 @@ replaces the hand-maintained `src/fill.rs`.
 **Description:** The native codegen emits references to an `external` module for random/FFI functions that has no corresponding crate in the generated build.
 **Fix path:** Bundle the required symbols into `codegen_runtime`, or emit a proper `extern` block; update `src/generation.rs` accordingly.
 **Effort:** Low
-**Target:** 1.1+
+**Target:** 0.8.2
 
 ---
 
@@ -1481,7 +1499,7 @@ replaces the hand-maintained `src/fill.rs`.
 **Description:** `OpFreeRef` calls are emitted in declaration order. The loft store allocator requires LIFO deallocation; out-of-order frees corrupt the heap on the third call to any function with multiple stores.
 **Fix path:** In `output_block` in `src/generation.rs`, collect all `OpFreeRef` emissions and sort them by `store_nr` descending before writing to the output.
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.8.2
 
 ---
 
@@ -1491,7 +1509,7 @@ replaces the hand-maintained `src/fill.rs`.
 **Description:** The interpreter fix for `read_file` is in place; the native-path `FileVal::file_from_bytes` implementation in `src/codegen_runtime.rs` remains a stub returning an empty vector.
 **Fix path:** Port the interpreter fix: iterate `data.len() / elem_size` elements, call `vector_append` + `write_data` for each element. Until fixed, `12-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.8.2
 
 ---
 
