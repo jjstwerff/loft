@@ -5,7 +5,15 @@ all:
 	RUSTFLAGS=-g cargo build --release
 
 install: all
-	sudo ln -f -s ${PWD}/target/release/loft /usr/local/bin/loft
+	sudo install -d /usr/local/share/loft
+	sudo cp -r default /usr/local/share/loft/
+	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
+		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
+	fi
+
+uninstall:
+	sudo rm -f /usr/local/bin/loft
+	sudo rm -rf /usr/local/share/loft
 
 debug:
 	RUSTFLAGS=-g RUST_BACKTRACE=1 cargo build -v

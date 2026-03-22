@@ -491,10 +491,14 @@ fn project_dir() -> String {
     {
         return with_trailing_sep(root);
     }
-    // Installed binary: strip bin/ to get the prefix.
+    // Installed binary: binary is in <prefix>/bin/, stdlib in <prefix>/share/loft/.
     if dir.ends_with("bin")
         && let Some(prefix) = dir.parent()
     {
+        let share_loft = prefix.join("share").join("loft");
+        if share_loft.is_dir() {
+            return with_trailing_sep(&share_loft);
+        }
         return with_trailing_sep(prefix);
     }
     with_trailing_sep(dir)
