@@ -734,6 +734,11 @@ pub fn build_nav(
     } else {
         parts.push("<a href=\"00-vs-python.html\">vs Python</a>".to_string());
     }
+    if active == "00-performance" {
+        parts.push("<span class=\"cur\">Performance</span>".to_string());
+    } else {
+        parts.push("<a href=\"00-performance.html\">Performance</a>".to_string());
+    }
 
     for (filename, name) in topic_info {
         if filename == active {
