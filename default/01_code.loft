@@ -688,9 +688,9 @@ fn OpVarRef(pos: const u16) -> reference;
 fn OpPutRef(pos: const u16, value: reference);
 #rust"s.put_var(@pos, @value);"
 fn OpEqRef(v1: reference, v2: reference) -> boolean;
-#rust"@v1 == @v2"
+#rust"if @v1.rec == 0 || @v2.rec == 0 {{ @v1.rec == 0 && @v2.rec == 0 }} else {{ @v1 == @v2 }}"
 fn OpNeRef(v1: reference, v2: reference) -> boolean;
-#rust"@v1 != @v2"
+#rust"if @v1.rec == 0 || @v2.rec == 0 {{ @v1.rec != 0 || @v2.rec != 0 }} else {{ @v1 != @v2 }}"
 // Can be used to get another record within the same database
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
 #rust"stores.get_ref(&@v1, u32::from(@fld))"
@@ -721,7 +721,7 @@ fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
 #rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust"{{let db = @v1; let store = stores.store(&db); store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32)}}"
+#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);

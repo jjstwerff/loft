@@ -1202,7 +1202,6 @@ fn n9a_generated_fill_has_ops_import() {
 /// Generates to a thread-local temp file to avoid races with other tests writing
 /// tests/generated/fill.rs.
 #[test]
-#[ignore = "fill.rs needs regeneration after fill.rs changes — run create::generate_code() and copy the result"]
 fn n9_generated_fill_matches_src() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
@@ -1515,7 +1514,6 @@ fn test() {
 
 /// Issue 83: field named `key` in a hash-value struct panics at runtime.
 #[test]
-#[ignore = "issue 83: field named 'key' in hash-value struct causes 'Allocating a used store' panic — see PROBLEMS.md #83"]
 fn issue_83_hash_value_field_named_key_panics() {
     code!(
         "struct Entry { key: text, count: integer }
@@ -1532,10 +1530,7 @@ fn test() {
 }
 
 /// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
-/// Marked ignore because hash insertion also triggers issue 81 (LIFO store-free order)
-/// in debug builds — verified working in the interpreter (release build).
 #[test]
-#[ignore = "issue 83 workaround: hits issue 81 (LIFO store-free) in debug builds; works in interpreter — see PROBLEMS.md #81 and #83"]
 fn issue_83_hash_value_field_renamed_works() {
     code!(
         "struct Score { id: integer not null, pts: integer not null }
@@ -1639,4 +1634,48 @@ fn n7_format_ops_generate_correct_rust() {
         src.contains("ops::format_float("),
         "generated code missing ops::format_float call"
     );
+}
+
+// ── Issue 85 ─────────────────────────────────────────────────────────────────
+// Null-returning hash lookup before insert causes subsequent lookup to return null.
+// Pattern: `e = hash[key]` (null result) followed by `hash += [Elem{...}]`
+// makes the inserted element unfindable via `hash[key]`.
+
+/// Issue 85: null hash lookup before insert — integer key.
+/// The inserted element must be findable immediately after insertion.
+#[test]
+fn issue_85_hash_null_lookup_then_insert_integer_key() {
+    code!(
+        "struct Item { id: integer, val: integer }
+struct Db { data: hash<Item[id]> }
+fn test() {
+    db = Db { data: [] };
+    e0 = db.data[0];
+    assert(e0 == null, \"pre-insert lookup should be null\");
+    db.data += [Item { id: 0, val: 42 }];
+    e1 = db.data[0];
+    assert(e1 != null, \"inserted item must be findable\");
+    assert(e1.val == 42, \"val should be 42, got {e1.val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Issue 85: null hash lookup before insert — text key.
+#[test]
+fn issue_85_hash_null_lookup_then_insert_text_key() {
+    code!(
+        "struct Word { word: text, count: integer }
+struct WordDb { freq: hash<Word[word]> }
+fn test() {
+    db = WordDb { freq: [] };
+    e0 = db.freq[\"hello\"];
+    assert(e0 == null, \"pre-insert lookup should be null\");
+    db.freq += [Word { word: \"hello\", count: 1 }];
+    e1 = db.freq[\"hello\"];
+    assert(e1 != null, \"inserted word must be findable\");
+    assert(e1.count == 1, \"count should be 1, got {e1.count}\");
+}"
+    )
+    .result(Value::Null);
 }

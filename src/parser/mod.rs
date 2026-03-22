@@ -388,12 +388,15 @@ impl Parser {
         for &dnr in self.data.get_possible("OpConv", &self.lexer) {
             if self.data.def(dnr).name.ends_with("FromNull") {
                 if *is_type == Type::Null {
-                    if self.data.def(dnr).returned == *should {
-                        *code = Value::Call(dnr, vec![]);
-                        return true;
-                    } else if matches!(self.data.def(dnr).returned, Type::Reference(_, _))
+                    if matches!(self.data.def(dnr).returned, Type::Reference(_, _))
                         && let Type::Reference(_, _) = *should
                     {
+                        // Use the non-allocating sentinel instead of OpConvRefFromNull so that
+                        // null comparisons (`s == null`, `s != null`) do not leak a store.
+                        let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
+                        *code = Value::Call(sentinel_nr, vec![]);
+                        return true;
+                    } else if self.data.def(dnr).returned == *should {
                         *code = Value::Call(dnr, vec![]);
                         return true;
                     }
@@ -1398,7 +1401,7 @@ impl Parser {
             Type::Single => self.cl("OpConvSingleFromNull", &[]),
             Type::Text(_) => self.cl("OpConvTextFromNull", &[]),
             Type::RefVar(tp) if matches!(**tp, Type::Text(_)) => self.cl("OpConvTextFromNull", &[]),
-            Type::Reference(_, _) => self.cl("OpConvRefFromNull", &[]),
+            Type::Reference(_, _) => self.cl("OpNullRefSentinel", &[]),
             _ => Value::Null,
         }
     }
