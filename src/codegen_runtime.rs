@@ -482,7 +482,7 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
             .to_owned()
     };
     if let Ok(meta) = std::fs::metadata(&file_path) {
-        meta.len() as i64
+        meta.len().cast_signed()
     } else {
         i64::MIN
     }
@@ -526,6 +526,7 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
 
 /// Open (or reuse) a file handle for writing.  Returns the index into
 /// `stores.files`, or `i32::MIN` on error.
+#[allow(clippy::cast_possible_wrap)]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
     let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
@@ -564,6 +565,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
 
 /// Open (or reuse) a file handle for reading, seeking to `initial_pos`.
 /// Returns the index into `stores.files`, or `i32::MIN` on error.
+#[allow(clippy::cast_possible_wrap)]
 fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
     let f_nr = stores.files.len() as i32;
     let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
@@ -612,7 +614,11 @@ impl FileVal for i32 {
         match db_tp {
             0 | 6 => {
                 // integer | character — 4 bytes
-                let b = if little_endian { self.to_le_bytes() } else { self.to_be_bytes() };
+                let b = if little_endian {
+                    self.to_le_bytes()
+                } else {
+                    self.to_be_bytes()
+                };
                 out.extend_from_slice(&b);
             }
             4 => out.push(*self as u8), // boolean — 1 byte
@@ -620,11 +626,19 @@ impl FileVal for i32 {
                 crate::database::Parts::Byte(_, _) => out.push(*self as u8),
                 crate::database::Parts::Short(_, _) => {
                     let v = *self as i16;
-                    let b = if little_endian { v.to_le_bytes() } else { v.to_be_bytes() };
+                    let b = if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    };
                     out.extend_from_slice(&b);
                 }
                 _ => {
-                    let b = if little_endian { self.to_le_bytes() } else { self.to_be_bytes() };
+                    let b = if little_endian {
+                        self.to_le_bytes()
+                    } else {
+                        self.to_be_bytes()
+                    };
                     out.extend_from_slice(&b);
                 }
             },
@@ -632,13 +646,7 @@ impl FileVal for i32 {
         out
     }
 
-    fn file_from_bytes(
-        &mut self,
-        stores: &Stores,
-        db_tp: i32,
-        little_endian: bool,
-        bytes: &[u8],
-    ) {
+    fn file_from_bytes(&mut self, stores: &Stores, db_tp: i32, little_endian: bool, bytes: &[u8]) {
         match db_tp {
             0 | 6 => {
                 if bytes.len() >= 4 {
@@ -651,13 +659,13 @@ impl FileVal for i32 {
             }
             4 => {
                 if let Some(&b) = bytes.first() {
-                    *self = b as i32;
+                    *self = i32::from(b);
                 }
             }
             _ => match &stores.types[db_tp as usize].parts {
                 crate::database::Parts::Byte(_, _) => {
                     if let Some(&b) = bytes.first() {
-                        *self = b as i32;
+                        *self = i32::from(b);
                     }
                 }
                 crate::database::Parts::Short(_, _) => {
@@ -667,7 +675,7 @@ impl FileVal for i32 {
                         } else {
                             i16::from_be_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
                         };
-                        *self = v as i32;
+                        *self = i32::from(v);
                     }
                 }
                 _ => {
@@ -774,8 +782,52 @@ impl FileVal for String {
     }
 }
 
+impl FileVal for DbRef {
+    /// Serialise a vector (or struct/simple) `DbRef` into bytes for binary file output.
+    ///
+    /// For `Parts::Vector(elem_tp)` the method iterates every element and delegates to
+    /// `Stores::read_data`; for all other types it calls `read_data` on `self` directly.
+    fn file_to_bytes(&self, stores: &Stores, db_tp: i32, little_endian: bool) -> Vec<u8> {
+        use crate::database::Parts;
+        let mut data = Vec::new();
+        if let Some(tp_info) = stores.types.get(db_tp as usize) {
+            if let Parts::Vector(elem_tp) = tp_info.parts {
+                let store = &stores.allocations[self.store_nr as usize];
+                let v_rec = store.get_int(self.rec, self.pos) as u32;
+                if v_rec != 0 {
+                    let length = store.get_int(v_rec, 4) as u32;
+                    let elem_size = u32::from(stores.size(elem_tp));
+                    for i in 0..length {
+                        let elem = DbRef {
+                            store_nr: self.store_nr,
+                            rec: v_rec,
+                            pos: 8 + elem_size * i,
+                        };
+                        stores.read_data(&elem, elem_tp, little_endian, &mut data);
+                    }
+                }
+            } else {
+                stores.read_data(self, db_tp as u16, little_endian, &mut data);
+            }
+        }
+        data
+    }
+
+    fn file_from_bytes(
+        &mut self,
+        _stores: &Stores,
+        _db_tp: i32,
+        _little_endian: bool,
+        _bytes: &[u8],
+    ) {
+        // Reading directly into a DbRef vector is not currently used by any loft script test.
+        // Implement when a test exercises `f#read(n) as vector<T>`.
+    }
+}
+
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
+#[allow(clippy::cast_possible_wrap)]
 pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db_tp: i32) {
     if file.rec == 0 {
         return;
@@ -798,10 +850,13 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
         .set_long(file.rec, file.pos + 8, next_pos);
     let data = val.file_to_bytes(stores, db_tp, little_endian);
     let written = data.len() as i64;
-    if let Some(f) = stores.files.get_mut(file_ref as usize).and_then(|x| x.as_mut()) {
-        if let Err(e) = f.write_all(&data) {
-            eprintln!("file write error: {e}");
-        }
+    if let Some(f) = stores
+        .files
+        .get_mut(file_ref as usize)
+        .and_then(|x| x.as_mut())
+        && let Err(e) = f.write_all(&data)
+    {
+        eprintln!("file write error: {e}");
     }
     // Update #next to reflect the end of this write.
     stores
@@ -811,6 +866,7 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
 
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
+#[allow(clippy::cast_possible_wrap)]
 pub fn OpReadFile<T: FileVal>(
     stores: &mut Stores,
     file: DbRef,
@@ -836,10 +892,21 @@ pub fn OpReadFile<T: FileVal>(
     if file_ref == i32::MIN {
         return;
     }
-    let mut buf = vec![0u8; bytes.max(0) as usize];
-    let nread = if let Some(f) = stores.files.get_mut(file_ref as usize).and_then(|x| x.as_mut())
+    let n = bytes.max(0) as usize;
+    let mut buf = vec![0u8; n];
+    let is_text = stores.is_text_type(db_tp as u16);
+    let nread = if let Some(f) = stores
+        .files
+        .get_mut(file_ref as usize)
+        .and_then(|x| x.as_mut())
     {
-        f.read(&mut buf).unwrap_or(0)
+        if is_text {
+            f.read(&mut buf).unwrap_or(0)
+        } else if f.read_exact(&mut buf).is_ok() {
+            n
+        } else {
+            0
+        }
     } else {
         0
     };
@@ -872,18 +939,18 @@ impl IterState for i32 {
 
 impl IterState for i64 {
     fn get_cur(&self) -> i32 {
-        (*self as u64) as u32 as i32
+        ((*self as u64) as u32).cast_signed()
     }
     fn set_cur(&mut self, n: i32) {
         let finish = (*self as u64) >> 32;
-        *self = ((finish << 32) | (n as u32 as u64)) as i64;
+        *self = ((finish << 32) | u64::from(n as u32)).cast_signed();
     }
     fn get_finish(&self) -> u32 {
         ((*self as u64) >> 32) as u32
     }
     fn set_finish(&mut self, n: u32) {
         let cur = (*self as u64) as u32;
-        *self = (((n as u64) << 32) | u64::from(cur)) as i64;
+        *self = ((u64::from(n) << 32) | u64::from(cur)).cast_signed();
     }
 }
 
@@ -938,7 +1005,7 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
                         tree::previous(store, &iter_ref(&data, n_after, fields))
                     }
                 };
-                state.set_cur(pred as i32);
+                state.set_cur(pred.cast_signed());
                 // If n_after equals the finish boundary, signal end-of-iteration.
                 if n_after == state.get_finish() {
                     state.set_finish(u32::MAX);
@@ -973,10 +1040,10 @@ pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
 pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
-    let length = vector::length_vector(&data, &stores.allocations) as u32;
+    let length = vector::length_vector(&data, &stores.allocations);
     // Read v_rec before resize; from points to the last existing element.
-    let v_rec_before = crate::keys::store(&data, &stores.allocations)
-        .get_int(data.rec, data.pos) as u32;
+    let v_rec_before =
+        crate::keys::store(&data, &stores.allocations).get_int(data.rec, data.pos) as u32;
     let from = DbRef {
         store_nr: data.store_nr,
         rec: v_rec_before,
@@ -987,8 +1054,7 @@ pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
     vector::vector_append(&data, size, &mut stores.allocations);
     stores.vector_set_size(&data, multiply, size);
     // Re-read v_rec in case the resize moved the record.
-    let v_rec = crate::keys::store(&data, &stores.allocations)
-        .get_int(data.rec, data.pos) as u32;
+    let v_rec = crate::keys::store(&data, &stores.allocations).get_int(data.rec, data.pos) as u32;
     for i in 0..(multiply - 1) {
         let to = DbRef {
             store_nr: data.store_nr,
@@ -1008,11 +1074,16 @@ pub fn cr_rand_seed(seed: i64) {
     #[cfg(not(feature = "random"))]
     let _ = seed;
 }
+#[must_use]
 pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
     #[cfg(feature = "random")]
-    { crate::ops::rand_int(lo, hi) }
+    {
+        crate::ops::rand_int(lo, hi)
+    }
     #[cfg(not(feature = "random"))]
-    { i32::MIN }
+    {
+        i32::MIN
+    }
 }
 
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
@@ -1029,6 +1100,13 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
 pub fn n_ticks(stores: &mut Stores) -> i64 {
     stores.start_time.elapsed().as_micros() as i64
+}
+
+/// Return the platform path separator as a loft character (`i32`).
+/// Returns `'/'` (47) on Unix and `'\\'` (92) on Windows.
+/// Bytecode equivalent: `n_path_sep` in `src/native.rs`.
+pub fn n_path_sep(_stores: &mut Stores) -> i32 {
+    crate::platform::sep() as i32
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
@@ -1057,8 +1135,13 @@ pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
+#[allow(clippy::cast_possible_wrap)]
 pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
-    let count = if n == i32::MIN || n <= 0 { 0usize } else { n as usize };
+    let count = if n == i32::MIN || n <= 0 {
+        0usize
+    } else {
+        n as usize
+    };
     // Build shuffled index list.
     let mut indices: Vec<i32> = (0..count as i32).collect();
     crate::ops::shuffle_ints(&mut indices);
@@ -1077,7 +1160,11 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
         }
         store.set_int(header_rec, 4, vec_rec as i32);
     }
-    DbRef { store_nr: base.store_nr, rec: header_rec, pos: 4 }
+    DbRef {
+        store_nr: base.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
 }
 
 /// Allocate a result vector of `n` elements, each `elem_size` bytes, and run
@@ -1088,6 +1175,7 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
 ///   header_rec, pos=4 → i32 pointing to vec_rec
 ///   vec_rec, pos=4    → element count (n)
 ///   vec_rec, pos=8+i*S → element i  (S = 4 int / 8 long+float / 1 bool bytes)
+#[allow(clippy::cast_possible_wrap)]
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,
     input: DbRef,
@@ -1122,9 +1210,15 @@ where
         let val = worker(stores, elm);
         let store = stores.store_mut(&result_db);
         match return_sz {
-            8 => { store.set_long(vec_rec, fld, val); }
-            1 => { store.set_byte(vec_rec, fld, 0, (val != 0) as i32); }
-            _ => { store.set_int(vec_rec, fld, val as i32); }
+            8 => {
+                store.set_long(vec_rec, fld, val);
+            }
+            1 => {
+                store.set_byte(vec_rec, fld, 0, i32::from(val != 0));
+            }
+            _ => {
+                store.set_int(vec_rec, fld, val as i32);
+            }
         }
         fld += return_sz;
     }
@@ -1133,27 +1227,46 @@ where
         store.set_int(vec_rec, 4, n as i32);
         store.set_int(header_rec, 4, vec_rec as i32);
     }
-    DbRef { store_nr: result_db.store_nr, rec: header_rec, pos: 4 }
+    DbRef {
+        store_nr: result_db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
 }
 
 /// Read an integer result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
     let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
-    stores.store(&DbRef { store_nr: r.store_nr, rec: v_rec, pos: 0 })
+    stores
+        .store(&DbRef {
+            store_nr: r.store_nr,
+            rec: v_rec,
+            pos: 0,
+        })
         .get_int(v_rec, 8 + (idx as u32) * 4)
 }
 
 /// Read a long result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
     let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
-    stores.store(&DbRef { store_nr: r.store_nr, rec: v_rec, pos: 0 })
+    stores
+        .store(&DbRef {
+            store_nr: r.store_nr,
+            rec: v_rec,
+            pos: 0,
+        })
         .get_long(v_rec, 8 + (idx as u32) * 8)
 }
 
 /// Read a float result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
     let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
-    let bits = stores.store(&DbRef { store_nr: r.store_nr, rec: v_rec, pos: 0 })
+    let bits = stores
+        .store(&DbRef {
+            store_nr: r.store_nr,
+            rec: v_rec,
+            pos: 0,
+        })
         .get_long(v_rec, 8 + (idx as u32) * 8);
     f64::from_bits(bits as u64)
 }
@@ -1161,6 +1274,12 @@ pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
 /// Read a boolean result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
     let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
-    stores.store(&DbRef { store_nr: r.store_nr, rec: v_rec, pos: 0 })
-        .get_byte(v_rec, 8 + idx as u32, 0) != 0
+    stores
+        .store(&DbRef {
+            store_nr: r.store_nr,
+            rec: v_rec,
+            pos: 0,
+        })
+        .get_byte(v_rec, 8 + idx as u32, 0)
+        != 0
 }

@@ -6,7 +6,6 @@ use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 
-
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
 fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
@@ -21,7 +20,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
                 && let Value::Int(fn_d_nr) = &args[4]
                 && *fn_d_nr >= 0
             {
-                calls.insert(*fn_d_nr as u32);
+                calls.insert((*fn_d_nr).cast_unsigned());
             }
             for a in args {
                 collect_calls(a, data, calls);
@@ -56,6 +55,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
 /// - `Set(var, Int(n))` where `var` has a `Function` or `Routine` type
 /// - `Call(d, args)` where a parameter of `d` is `Function`/`Routine` typed and the
 ///   corresponding arg is `Int(n)`
+///
 /// These are function-pointer uses like `f = fn double_it` or `apply_fn(fn double_it, x)`.
 fn collect_fn_ref_literals(
     val: &Value,
@@ -65,13 +65,10 @@ fn collect_fn_ref_literals(
 ) {
     match val {
         Value::Set(var, inner) => {
-            if matches!(
-                variables.tp(*var),
-                Type::Function(_, _) | Type::Routine(_)
-            ) {
-                if let Value::Int(n) = inner.as_ref() {
-                    calls.insert(*n as u32);
-                }
+            if matches!(variables.tp(*var), Type::Function(_, _) | Type::Routine(_))
+                && let Value::Int(n) = inner.as_ref()
+            {
+                calls.insert((*n).cast_unsigned());
             }
             collect_fn_ref_literals(inner, data, variables, calls);
         }
@@ -83,10 +80,9 @@ fn collect_fn_ref_literals(
                         callee.attributes[idx].typedef,
                         Type::Function(_, _) | Type::Routine(_)
                     )
+                    && let Value::Int(n) = a
                 {
-                    if let Value::Int(n) = a {
-                        calls.insert(*n as u32);
-                    }
+                    calls.insert((*n).cast_unsigned());
                 }
                 collect_fn_ref_literals(a, data, variables, calls);
             }
@@ -150,7 +146,7 @@ pub struct Output<'a> {
     pub def_nr: u32,
     pub indent: u32,
     pub declared: HashSet<u16>,
-    /// Set of reachable def_nrs for native output (populated by output_native_reachable).
+    /// Set of reachable `def_nrs` for native output (populated by `output_native_reachable`).
     pub reachable: HashSet<u32>,
     /// Stack of enclosing loop scope ids, innermost last.
     /// Used to emit Rust labeled breaks for `Value::Break(n)` with n > 0.
@@ -222,14 +218,12 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
             "u16"
         }
         Type::Integer(from, to)
-            if context == &Context::Result
-                && i64::from(*to) - i64::from(*from) <= 255 =>
+            if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 255 =>
         {
             "i8"
         }
         Type::Integer(from, to)
-            if context == &Context::Result
-                && i64::from(*to) - i64::from(*from) <= 65536 =>
+            if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 65536 =>
         {
             "i16"
         }
@@ -297,6 +291,7 @@ impl Output<'_> {
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).
+    #[allow(clippy::unused_self)]
     fn emit_file_header(&self, w: &mut dyn Write) -> std::io::Result<()> {
         writeln!(
             w,
@@ -310,6 +305,7 @@ impl Output<'_> {
 #![allow(dead_code)]
 #![allow(redundant_semicolons)]
 #![allow(unused_assignments)]
+#![allow(unused_labels)]
 #![allow(clippy::double_parens)]
 #![allow(clippy::unused_unit)]
 
@@ -364,7 +360,7 @@ extern crate loft;"
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
         let reachable = reachable_functions(self.data, entry_defs);
-        self.reachable = reachable.clone();
+        self.reachable.clone_from(&reachable);
         self.emit_file_header(w)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
@@ -397,6 +393,7 @@ extern crate loft;"
     /// Use this to emit only the `init` body that registers all types.
     /// Sorting by `known_type` ensures the runtime recreates type IDs in the same order
     /// as the compile-time database, keeping field indices consistent.
+    #[allow(clippy::cast_possible_truncation)]
     fn output_init(&mut self, w: &mut dyn Write, from: u32, till: u32) -> std::io::Result<()> {
         let mut type_defs: Vec<(u16, u32)> = Vec::new();
         for dnr in from..till {
@@ -415,6 +412,29 @@ extern crate loft;"
             }
         }
         type_defs.sort_by_key(|(type_id, _)| *type_id);
+
+        // Collect bare Byte/Short types that were registered by ensure_io_type() during
+        // file I/O parsing.  These have no corresponding loft definition, so output_init
+        // would otherwise skip them entirely, causing runtime type IDs to shift.
+        let def_type_id_set: HashSet<u16> = type_defs.iter().map(|&(tid, _)| tid).collect();
+        let mut bare_io: Vec<(u16, i32, bool, bool)> = Vec::new(); // (type_id, min, nullable, is_short)
+        for (idx, tp) in self.stores.types.iter().enumerate() {
+            let tid = idx as u16;
+            if def_type_id_set.contains(&tid) {
+                continue;
+            }
+            match &tp.parts {
+                crate::database::Parts::Byte(min, nullable) => {
+                    bare_io.push((tid, *min, *nullable, false));
+                }
+                crate::database::Parts::Short(min, nullable) => {
+                    bare_io.push((tid, *min, *nullable, true));
+                }
+                _ => {}
+            }
+        }
+        bare_io.sort_by_key(|&(tid, _, _, _)| tid);
+        let mut bare_idx = 0;
 
         // Build a map from known_type → dnr for dependency resolution.
         let type_id_to_dnr: HashMap<u16, u32> =
@@ -455,9 +475,30 @@ extern crate loft;"
         }
 
         // Emit type definitions in topological order: dependencies first.
+        // Bare byte/short IO types are interleaved at their correct positions.
         let mut emitted: HashSet<u16> = HashSet::new();
         for &(type_id, dnr) in &type_defs {
+            // Emit bare byte/short types that must precede this definition.
+            while bare_idx < bare_io.len() && bare_io[bare_idx].0 < type_id {
+                let (tid, min, nullable, is_short) = bare_io[bare_idx];
+                if is_short {
+                    writeln!(w, "    db.short({min}, {nullable}); // type {tid}")?;
+                } else {
+                    writeln!(w, "    db.byte({min}, {nullable}); // type {tid}")?;
+                }
+                bare_idx += 1;
+            }
             self.emit_def_ordered(w, type_id, dnr, &type_id_to_dnr, &deps, &mut emitted)?;
+        }
+        // Emit any remaining bare byte/short types after all defs.
+        while bare_idx < bare_io.len() {
+            let (tid, min, nullable, is_short) = bare_io[bare_idx];
+            if is_short {
+                writeln!(w, "    db.short({min}, {nullable}); // type {tid}")?;
+            } else {
+                writeln!(w, "    db.byte({min}, {nullable}); // type {tid}")?;
+            }
+            bare_idx += 1;
         }
         Ok(())
     }
@@ -673,22 +714,29 @@ extern crate loft;"
     /// Use this to emit one loft function as a Rust function.
     /// Every loft function receives `stores: &mut Stores` as its first implicit argument.
     fn output_function(&mut self, w: &mut dyn Write, def_nr: u32) -> std::io::Result<()> {
+        // Functions implemented in codegen_runtime (imported via `use loft::codegen_runtime::*`).
+        // Emitting a stub would shadow the real implementation.
+        const CODEGEN_RUNTIME_FNS: &[&str] = &[
+            "n_now",
+            "n_ticks",
+            "n_get_store_lock",
+            "n_set_store_lock",
+            "n_rand",
+            "n_rand_indices",
+            "n_parallel_for_native",
+            "n_parallel_get_int",
+            "n_parallel_get_long",
+            "n_parallel_get_float",
+            "n_parallel_get_bool",
+            "n_path_sep",
+        ];
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
         // Skip Op functions with no callable body.
         if def.name.starts_with("Op") && def.code == Value::Null {
             return Ok(());
         }
-        // Skip functions implemented in codegen_runtime (imported via `use loft::codegen_runtime::*`).
-        // Emitting a stub would shadow the real implementation.
-        const CODEGEN_RUNTIME_FNS: &[&str] = &[
-            "n_now", "n_ticks",
-            "n_get_store_lock", "n_set_store_lock",
-            "n_rand", "n_rand_indices",
-            "n_parallel_for_native",
-            "n_parallel_get_int", "n_parallel_get_long",
-            "n_parallel_get_float", "n_parallel_get_bool",
-        ];
+        // Skip functions implemented in codegen_runtime.
         if def.code == Value::Null && CODEGEN_RUNTIME_FNS.contains(&def.name.as_str()) {
             return Ok(());
         }
@@ -857,6 +905,7 @@ extern crate loft;"
         )
     }
 
+    #[allow(clippy::same_functions_in_if_condition)]
     fn needs_pre_eval(&self, v: &Value) -> bool {
         match v {
             Value::Call(d_nr, vals) => {
@@ -889,13 +938,12 @@ extern crate loft;"
                     vals.iter().any(|a| self.needs_pre_eval(a))
                 }
             }
-            Value::Block(_) => true,
+            // CallRef dispatches via match to user functions that take &mut Stores.
+            Value::Block(_) | Value::CallRef(_, _) => true,
             Value::If(test, t, f) => {
                 self.needs_pre_eval(test) || self.needs_pre_eval(t) || self.needs_pre_eval(f)
             }
             Value::Drop(v) => self.needs_pre_eval(v),
-            // CallRef dispatches via match to user functions that take &mut Stores.
-            Value::CallRef(_, _) => true,
             _ => false,
         }
     }
@@ -912,7 +960,11 @@ extern crate loft;"
     /// expression to prevent simultaneous `&mut Stores` borrows.
     /// Returns `(var_name, expr_code)` pairs ordered innermost-first so each pre-eval
     /// can safely reference earlier ones.
-    fn collect_pre_evals(&mut self, v: &Value) -> std::io::Result<Vec<(String, String, u32, bool)>> {
+    #[allow(clippy::type_complexity)]
+    fn collect_pre_evals(
+        &mut self,
+        v: &Value,
+    ) -> std::io::Result<Vec<(String, String, String, u32, bool)>> {
         let mut result = Vec::new();
         self.collect_pre_evals_inner(v, &mut result)?;
         Ok(result)
@@ -924,7 +976,7 @@ extern crate loft;"
     fn collect_pre_evals_inner(
         &mut self,
         v: &Value,
-        result: &mut Vec<(String, String, u32, bool)>,
+        result: &mut Vec<(String, String, String, u32, bool)>,
     ) -> std::io::Result<()> {
         // Recurse into wrapper nodes so nested Call nodes inside Set/Drop/If are found.
         if let Value::Set(_, rhs) = v {
@@ -966,16 +1018,12 @@ extern crate loft;"
                 // Also pre-eval any arg whose template placeholder appears more than once
                 // (e.g., `#rust"!@v1.is_nan() && ... @v1 ..."` expands @v1 twice, causing
                 // double-borrow when @v1 is a user-fn call returning stores-backed data).
-                let has_dup_param = def_fn
-                    .attributes
-                    .iter()
-                    .enumerate()
-                    .any(|(i, a)| {
-                        let placeholder = format!("@{}", a.name);
-                        i < vals.len()
-                            && def_fn.rust.matches(placeholder.as_str()).count() > 1
-                            && self.needs_pre_eval(&vals[i])
-                    });
+                let has_dup_param = def_fn.attributes.iter().enumerate().any(|(i, a)| {
+                    let placeholder = format!("@{}", a.name);
+                    i < vals.len()
+                        && def_fn.rust.matches(placeholder.as_str()).count() > 1
+                        && self.needs_pre_eval(&vals[i])
+                });
                 let needs_pre_eval_args = block_count > 0
                     || user_fn_count > 1
                     || (template_uses_stores && user_fn_count > 0)
@@ -984,11 +1032,9 @@ extern crate loft;"
                     for (arg_idx, arg) in vals.iter().enumerate() {
                         let is_block = matches!(arg, Value::Block(_));
                         let is_multi_user_fn = user_fn_count > 1 && self.needs_pre_eval(arg);
-                        let is_stores_conflict =
-                            template_uses_stores && self.needs_pre_eval(arg);
+                        let is_stores_conflict = template_uses_stores && self.needs_pre_eval(arg);
                         let is_dup = if arg_idx < def_fn.attributes.len() {
-                            let placeholder =
-                                format!("@{}", def_fn.attributes[arg_idx].name);
+                            let placeholder = format!("@{}", def_fn.attributes[arg_idx].name);
                             def_fn.rust.matches(placeholder.as_str()).count() > 1
                                 && self.needs_pre_eval(arg)
                         } else {
@@ -1016,7 +1062,7 @@ extern crate loft;"
     /// pre-evals already substituted, then push `(name, code)` onto `result`.
     fn rewrite_code(
         &mut self,
-        result: &mut Vec<(String, String, u32, bool)>,
+        result: &mut Vec<(String, String, String, u32, bool)>,
         arg: &Value,
         name: String,
         replace_all: bool,
@@ -1031,7 +1077,7 @@ extern crate loft;"
         // correctly transforms all N occurrences of the dup arg in the outer expression.
         if replace_all {
             for entry in &mut result[start_idx..] {
-                entry.3 = true;
+                entry.4 = true;
             }
         }
         let inner_pre_evals = result[start_idx..].to_vec();
@@ -1044,7 +1090,7 @@ extern crate loft;"
             raw_code
         } else {
             let mut s = raw_code;
-            for (pre_name, pre_code, _, inner_replace_all) in &inner_pre_evals {
+            for (pre_name, pre_code, _, _, inner_replace_all) in &inner_pre_evals {
                 if *inner_replace_all {
                     // Dup-param inner pre-eval: the arg code appears multiple times
                     // in the binding code (template expanded @v1 twice), replace all.
@@ -1056,8 +1102,32 @@ extern crate loft;"
             }
             s
         };
+        // When the argument type is a narrow integer (u8/u16/i8/i16), the Rust binding
+        // would have a narrow type.  Pre-eval bindings must have type i32 so they
+        // compare correctly against i32 expressions.  Compute a separate bind_code that
+        // wraps the expression with `as i32`; the match_code (used for substitution)
+        // is left unchanged so string replacement in the outer code still works.
+        let bind_code = if !substituted.is_empty() && substituted != "()" {
+            if let Some(tp) = self.infer_type(arg) {
+                if narrow_int_cast(&tp).is_some() {
+                    format!("({substituted}) as i32")
+                } else {
+                    substituted.clone()
+                }
+            } else {
+                substituted.clone()
+            }
+        } else {
+            substituted.clone()
+        };
         if !substituted.is_empty() && substituted != "()" {
-            result.push((name, substituted, counter_before_gen, replace_all));
+            result.push((
+                name,
+                substituted,
+                bind_code,
+                counter_before_gen,
+                replace_all,
+            ));
         }
         self.declared = decl_clone;
         Ok(())
@@ -1070,7 +1140,7 @@ extern crate loft;"
         &mut self,
         w: &mut dyn Write,
         v: &Value,
-        pre_evals: &[(String, String, u32, bool)],
+        pre_evals: &[(String, String, String, u32, bool)],
     ) -> std::io::Result<()> {
         if pre_evals.is_empty() {
             self.output_code_inner(w, v)?;
@@ -1099,7 +1169,7 @@ extern crate loft;"
             let full_code = String::from_utf8(check_buf.into_inner()?).unwrap();
             self.counter = saved_counter;
             self.declared = saved_declared;
-            for (name, pre_code, _, _) in pre_evals {
+            for (name, pre_code, _, _, _) in pre_evals {
                 if full_code == *pre_code {
                     write!(w, "{name}")?;
                     return Ok(());
@@ -1107,17 +1177,92 @@ extern crate loft;"
             }
             return self.output_if_with_subst(w, test, true_v, false_v, pre_evals);
         }
+        // For calls to user-defined functions, apply substitution structurally per
+        // argument.  String-level substitution on the full call text fails when a
+        // `Value::Block` argument emits counter-dependent inner pre-eval names that
+        // differ between the collect pass (high counter stored in pre_evals) and
+        // the regeneration pass (counter reset to counter_before).  Without structural
+        // handling the block is emitted inline, causing a double `&mut stores` borrow.
+        //
+        // Built-in opcodes (names starting with "Op") are handled by special-case
+        // logic in `output_call` and must NOT be intercepted here; they fall through
+        // to string-level substitution below.
+        if let Value::Call(d_nr, vals) = v {
+            let def_fn = self.data.def(*d_nr);
+            if def_fn.rust.is_empty() && !def_fn.name.starts_with("Op") {
+                // Full-expression match: if this entire call equals a pre-eval, emit the name.
+                let saved_counter = self.counter;
+                let saved_declared = self.declared.clone();
+                let mut check_buf = std::io::BufWriter::new(Vec::new());
+                self.output_code_inner(&mut check_buf, v)?;
+                let full_code = String::from_utf8(check_buf.into_inner()?).unwrap();
+                self.counter = saved_counter;
+                self.declared = saved_declared;
+                for (name, pre_code, _, _, _) in pre_evals {
+                    if full_code == *pre_code {
+                        write!(w, "{name}")?;
+                        return Ok(());
+                    }
+                }
+                // Structural emission: emit each argument with per-arg substitution.
+                let fn_name = def_fn.name.clone();
+                write!(w, "{fn_name}(stores")?;
+                for (idx, val) in vals.iter().enumerate() {
+                    write!(w, ", ")?;
+                    if let Some(vr) = self.create_stack_var(val) {
+                        let vname = sanitize(self.data.def(self.def_nr).variables.name(vr));
+                        write!(w, "&mut var_{vname}")?;
+                    } else {
+                        let matched = self.try_subst_pre_eval(w, val, pre_evals)?;
+                        if !matched {
+                            // Emit the argument with string-level substitution.
+                            let saved_c = self.counter;
+                            let saved_d = self.declared.clone();
+                            let mut buf = std::io::BufWriter::new(Vec::new());
+                            self.output_code_inner(&mut buf, val)?;
+                            let mut arg_code = String::from_utf8(buf.into_inner()?).unwrap();
+                            self.counter = saved_c;
+                            self.declared = saved_d;
+                            for (pname, pcode, _, _, replace_all) in pre_evals {
+                                if *replace_all {
+                                    arg_code = arg_code.replace(pcode.as_str(), pname.as_str());
+                                } else {
+                                    arg_code = arg_code.replacen(pcode.as_str(), pname.as_str(), 1);
+                                }
+                            }
+                            // When the parameter type is a fn-ref, cast i32 literal to u32.
+                            let param_is_fnref = idx < self.data.def(*d_nr).attributes.len()
+                                && matches!(
+                                    self.data.def(*d_nr).attributes[idx].typedef,
+                                    Type::Function(_, _) | Type::Routine(_)
+                                );
+                            if param_is_fnref && matches!(val, Value::Int(_)) {
+                                write!(w, "{arg_code} as u32")?;
+                            } else {
+                                write!(w, "{arg_code}")?;
+                            }
+                        }
+                    }
+                }
+                write!(w, ")")?;
+                // Add narrow-int cast if the user function returns a narrow int type.
+                if narrow_int_cast(&self.data.def(*d_nr).returned).is_some() {
+                    write!(w, " as i32")?;
+                }
+                return Ok(());
+            }
+        }
         let mut buf_check = std::io::BufWriter::new(Vec::new());
         self.output_code_inner(&mut buf_check, v)?;
         let code = String::from_utf8(buf_check.into_inner()?).unwrap();
-        for (name, pre_code, _, _) in pre_evals {
+        for (name, pre_code, _, _, _) in pre_evals {
             if code == *pre_code {
                 write!(w, "{name}")?;
                 return Ok(());
             }
         }
         let mut result = code;
-        for (name, pre_code, _, replace_all) in pre_evals {
+        for (name, pre_code, _, _, replace_all) in pre_evals {
             if *replace_all {
                 // Dup-param: the same arg code appears multiple times in a template
                 // expansion; replace all occurrences so the pre-eval is used everywhere.
@@ -1144,7 +1289,7 @@ extern crate loft;"
         test: &Value,
         true_v: &Value,
         false_v: &Value,
-        pre_evals: &[(String, String, u32, bool)],
+        pre_evals: &[(String, String, String, u32, bool)],
     ) -> std::io::Result<()> {
         write!(w, "if ")?;
         let b_true = matches!(*true_v, Value::Block(_));
@@ -1173,7 +1318,9 @@ extern crate loft;"
             write!(w, "{{")?;
         }
         self.indent += u32::from(!b_false);
-        if matches!(false_v, Value::Null) && let Some(tp) = self.infer_type(true_v) {
+        if matches!(false_v, Value::Null)
+            && let Some(tp) = self.infer_type(true_v)
+        {
             Self::write_typed_null(w, &tp)?;
         } else if b_false {
             // Block branch: manages its own pre-evals, no outer substitution needed.
@@ -1187,6 +1334,39 @@ extern crate loft;"
             write!(w, "}}")?;
         }
         Ok(())
+    }
+
+    /// Try to match `val` against one of the pre-eval bindings by regenerating `val`
+    /// at the counter state stored when that pre-eval was collected.  If a match is
+    /// found the pre-eval name is written to `w` and `Ok(true)` is returned.
+    ///
+    /// This is used by the structural `Value::Call` handler in `output_code_with_subst`
+    /// to match block-typed arguments whose inner counter-dependent names differ between
+    /// the collect pass (high counter) and the regeneration pass (reset counter).
+    fn try_subst_pre_eval(
+        &mut self,
+        w: &mut dyn Write,
+        val: &Value,
+        pre_evals: &[(String, String, String, u32, bool)],
+    ) -> std::io::Result<bool> {
+        for (pre_name, pre_code, _, pre_counter, _) in pre_evals {
+            let saved_counter = self.counter;
+            let saved_declared = self.declared.clone();
+            let saved_indent = self.indent;
+            self.counter = *pre_counter;
+            let mut check_buf = std::io::BufWriter::new(Vec::new());
+            let _ = self.output_code_inner(&mut check_buf, val);
+            let arg_code =
+                String::from_utf8(check_buf.into_inner().unwrap_or_default()).unwrap_or_default();
+            self.counter = saved_counter;
+            self.declared = saved_declared;
+            self.indent = saved_indent;
+            if arg_code == *pre_code {
+                write!(w, "{pre_name}")?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Use this to determine whether a value produces no Rust result (type `()`).
@@ -1208,6 +1388,7 @@ extern crate loft;"
     /// Central recursive dispatch from a `Value` node to its Rust representation.
     /// All emit functions ultimately call this; complex variants are delegated to
     /// dedicated helpers to keep each match arm concise.
+    #[allow(clippy::too_many_lines)]
     fn output_code_inner(&mut self, w: &mut dyn Write, code: &Value) -> std::io::Result<()> {
         match code {
             Value::Text(txt) => {
@@ -1331,7 +1512,7 @@ extern crate loft;"
             Value::CallRef(v_nr, args) => {
                 self.output_call_ref(w, *v_nr, args)?;
             }
-            _ => write!(w, "{code:?}")?,
+            Value::Iter(..) => write!(w, "{code:?}")?,
         }
         Ok(())
     }
@@ -1349,13 +1530,12 @@ extern crate loft;"
         let variables = &self.data.def(self.def_nr).variables;
         let var_name = sanitize(variables.name(v_nr));
         let fn_type = variables.tp(v_nr).clone();
-        let (param_types, ret_type) = match &fn_type {
-            Type::Function(p, r) => (p.clone(), *r.clone()),
-            _ => {
-                // Not a function type — fall back to debug print.
-                write!(w, "{:?}", crate::data::Value::CallRef(v_nr, args.to_vec()))?;
-                return Ok(());
-            }
+        let (param_types, ret_type) = if let Type::Function(p, r) = &fn_type {
+            (p.clone(), *r.clone())
+        } else {
+            // Not a function type — fall back to debug print.
+            write!(w, "{:?}", crate::data::Value::CallRef(v_nr, args.to_vec()))?;
+            return Ok(());
         };
         // Collect all definitions with a matching signature.
         // Only include native-callable functions (n_ / t_ prefix) in the reachable set;
@@ -1378,13 +1558,19 @@ extern crate loft;"
                 continue;
             }
             // Compare parameter types and return type via their Rust type strings.
-            let params_match = def.attributes.iter().zip(param_types.iter()).all(|(a, expected)| {
-                rust_type(&a.typedef, &Context::Argument) == rust_type(expected, &Context::Argument)
-            });
+            let params_match =
+                def.attributes
+                    .iter()
+                    .zip(param_types.iter())
+                    .all(|(a, expected)| {
+                        rust_type(&a.typedef, &Context::Argument)
+                            == rust_type(expected, &Context::Argument)
+                    });
             if !params_match {
                 continue;
             }
-            if rust_type(&def.returned, &Context::Result) != rust_type(&ret_type, &Context::Result) {
+            if rust_type(&def.returned, &Context::Result) != rust_type(&ret_type, &Context::Result)
+            {
                 continue;
             }
             candidates.push((d, def.name.clone()));
@@ -1404,7 +1590,10 @@ extern crate loft;"
             }
             write!(w, "),")?;
         }
-        write!(w, " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}) }}")?;
+        write!(
+            w,
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}) }}"
+        )?;
         Ok(())
     }
 
@@ -1505,6 +1694,7 @@ extern crate loft;"
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
+    #[allow(clippy::too_many_lines)]
     fn output_block(
         &mut self,
         w: &mut dyn Write,
@@ -1558,16 +1748,16 @@ extern crate loft;"
             let pre_evals = self.collect_pre_evals(v)?;
             self.indent -= 1;
             let counter_after_collect = self.counter;
-            for (name, code, _, _) in &pre_evals {
+            for (name, _, bind_code, _, _) in &pre_evals {
                 self.indent(w)?;
-                writeln!(w, "let {name} = {code};")?;
+                writeln!(w, "let {name} = {bind_code};")?;
             }
             // Restore counter to the value it had when the pre-eval code was generated
             // so that output_code_with_subst regenerates the same inner _pre_N names
             // as those stored in the pre-eval strings (counter desync fix).
             let restore_counter = pre_evals
                 .iter()
-                .map(|(_, _, c, _)| *c)
+                .map(|(_, _, _, c, _)| *c)
                 .max()
                 .unwrap_or(self.counter);
             self.counter = restore_counter;
@@ -1599,8 +1789,11 @@ extern crate loft;"
                 let is_return_expr =
                     !is_void_block && !has_trailing_void && return_idx == Some(vnr);
                 let wrap_result = is_return_expr && is_text_result;
-                let narrow_cast =
-                    if is_return_expr { narrow_int_cast(&bl.result) } else { None };
+                let narrow_cast = if is_return_expr {
+                    narrow_int_cast(&bl.result)
+                } else {
+                    None
+                };
                 if wrap_result {
                     write!(w, "Str::new(")?;
                 } else if narrow_cast.is_some() {
@@ -1666,9 +1859,10 @@ extern crate loft;"
     /// - Text variables assigned from a block are pre-declared as `String::new()` before the
     ///   block opens, so that a `drop(@var)` inside the block (e.g., on `break`) can still
     ///   reference the variable even though `let` has not been reached.
-    /// - `DbRef` variables assigned `Null` emit a null-sentinel DbRef (store_nr = u16::MAX)
+    /// - `DbRef` variables assigned `Null` emit a null-sentinel `DbRef` (`store_nr` = `u16::MAX`)
     ///   rather than `stores.null()`, to avoid leaking stores for temporaries that are
-    ///   overwritten by OpNewRecord without a matching OpFreeRef.
+    ///   overwritten by `OpNewRecord` without a matching `OpFreeRef`.
+    #[allow(clippy::too_many_lines)]
     fn output_set(&mut self, w: &mut dyn Write, var: u16, to: &Value) -> std::io::Result<()> {
         let variables = &self.data.def(self.def_nr).variables;
         if variables.is_argument(var)
@@ -1691,26 +1885,32 @@ extern crate loft;"
         // For a first declaration, we also need to allocate a fresh store via
         // OpDatabase(null_named(…)) so the destination has its own record to copy into.
         // For reassignment, the existing destination record is reused in-place.
-        if let (Type::Reference(d_nr, _), Value::Var(src)) = (variables.tp(var), to) {
-            if matches!(variables.tp(*src), Type::Reference(_, _)) {
-                let src_name = sanitize(variables.name(*src));
-                let tp_nr = self.data.def(*d_nr).known_type;
-                if !self.declared.contains(&var) {
-                    self.declared.insert(var);
-                    let var_tp = variables.tp(var);
-                    let tp_str = rust_type(var_tp, &Context::Variable);
-                    // Two statements: null_named and OpDatabase cannot share a &mut stores borrow.
-                    writeln!(w, "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");")?;
-                    self.indent(w)?;
-                    writeln!(w, "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);")?;
-                    self.indent(w)?;
-                }
-                write!(
+        if let (Type::Reference(d_nr, _), Value::Var(src)) = (variables.tp(var), to)
+            && matches!(variables.tp(*src), Type::Reference(_, _))
+        {
+            let src_name = sanitize(variables.name(*src));
+            let tp_nr = self.data.def(*d_nr).known_type;
+            if !self.declared.contains(&var) {
+                self.declared.insert(var);
+                let var_tp = variables.tp(var);
+                let tp_str = rust_type(var_tp, &Context::Variable);
+                // Two statements: null_named and OpDatabase cannot share a &mut stores borrow.
+                writeln!(
                     w,
-                    "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"
+                    "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
                 )?;
-                return Ok(());
+                self.indent(w)?;
+                writeln!(
+                    w,
+                    "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
+                )?;
+                self.indent(w)?;
             }
+            write!(
+                w,
+                "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"
+            )?;
+            return Ok(());
         }
         // For text/reference block assignments, pre-declare the variable so that
         // any drop(@var) inside the block (e.g., on break) can reference it.
@@ -1742,17 +1942,53 @@ extern crate loft;"
             // Using stores.null() for them would allocate a real store that leaks the moment
             // OpNewRecord overwrites the variable.  Use the null-sentinel instead.
             //
-            // All other DbRef null-inits use stores.null_named() because they participate in
-            // the "result-buffer" pattern: the caller pre-allocates a null store, passes the
-            // DbRef by value to a function that calls OpDatabase (reusing the same store), and
-            // then frees it with OpFreeRef via the original variable.  Switching those to the
-            // null-sentinel would cause OpDatabase to allocate a NEW store inside the callee
-            // that the caller can never free, leading to "Allocating a used store" panics.
-            let is_elm = variables.name(var).starts_with("_elm");
-            if is_elm {
+            // `__ref_*` compiler-generated work-ref variables are Vector result buffers:
+            // they are pre-allocated here (null_named + OpDatabase for Vector types) and
+            // freed with OpFreeRef at the end.  The OpDatabase call sets rec=1 so that
+            // vector_append inside the callee does not return early (it checks rec == 0).
+            //
+            // All other DbRef variables (user-facing names like `more`, `items2`, `p`,
+            // etc.) are either plain aliases that immediately get assigned to point at
+            // a `__ref_*` store, or struct values that will be allocated by OpDatabase
+            // when it sees the null sentinel (store_nr == u16::MAX).  Using null_named
+            // for those would allocate a real store that is then either orphaned (alias
+            // case) or redundantly pre-allocated before OpDatabase replaces it.  Both
+            // cases create stores that outlive their logical scope and break the LIFO
+            // invariant enforced by free_named.  Use the null sentinel instead.
+            let var_raw_name = variables.name(var);
+            let is_elm = var_raw_name.starts_with("_elm");
+            let is_ref_buf = var_raw_name.starts_with("__ref_");
+            if is_elm || !is_ref_buf {
                 write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
             } else {
-                write!(w, "stores.null_named(\"var_{name}\")")?;
+                // __ref_* variables are Vector result buffers passed into functions that return
+                // vector<T>.  The interpreter's gen_set_first_vector_null emits OpDatabase which
+                // sets rec=1; native code must do the same so that vector_append works correctly
+                // inside the called function (it returns early when db.rec == 0).
+                let ref_buf_type_id = {
+                    let var_tp = variables.tp(var).clone();
+                    if let Type::Vector(elm_tp, _) = &var_tp {
+                        let elm_name = elm_tp.name(self.data);
+                        self.data.name_type(&format!("main_vector<{elm_name}>"), 0)
+                    } else {
+                        u16::MAX
+                    }
+                };
+                if ref_buf_type_id != u16::MAX {
+                    writeln!(w, "stores.null_named(\"var_{name}\");")?;
+                    self.indent(w)?;
+                    write!(
+                        w,
+                        "var_{name} = OpDatabase(stores, var_{name}, {ref_buf_type_id}_i32)"
+                    )?;
+                } else if variables.is_inline_ref(var) {
+                    // Inline-ref temporaries are immediately overwritten by a function return
+                    // value (like the interpreter's OpNullRefSentinel).  Using null_named here
+                    // would allocate a real store that is never freed, breaking LIFO order.
+                    write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
+                } else {
+                    write!(w, "stores.null_named(\"var_{name}\")")?;
+                }
             }
         } else {
             self.output_code_inner(w, to)?;
@@ -2025,8 +2261,7 @@ extern crate loft;"
                 if vals.len() == 4 {
                     write!(w, "OpRemove(stores, &mut ")?;
                     if let Value::Var(v) = &vals[0] {
-                        let name =
-                            sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{name}")?;
                     } else {
                         self.output_code_inner(w, &vals[0])?;
@@ -2050,7 +2285,7 @@ extern crate loft;"
                     && let Value::Int(fn_d_nr) = &vals[4]
                     && *fn_d_nr >= 0
                 {
-                    let fn_d_nr = *fn_d_nr as u32;
+                    let fn_d_nr = (*fn_d_nr).cast_unsigned();
                     let worker_def = self.data.def(fn_d_nr);
                     let worker_name = worker_def.name.clone();
                     let worker_ret = worker_def.returned.clone();
@@ -2068,10 +2303,6 @@ extern crate loft;"
                         Type::Float => write!(
                             w,
                             ", |stores, elm| {{ {worker_name}(stores, elm).to_bits() as i64 }})"
-                        )?,
-                        Type::Boolean => write!(
-                            w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm) as i64 }})"
                         )?,
                         _ => write!(
                             w,
@@ -2296,7 +2527,13 @@ extern crate loft;"
                 }
             }
         }
-        write!(w, ")")
+        write!(w, ")")?;
+        // Narrow integer return types (u8/u16/i8/i16) must be widened to i32 so that
+        // assignments and comparisons with i32 expressions type-check in Rust.
+        if narrow_int_cast(&def_fn.returned).is_some() {
+            write!(w, " as i32")?;
+        }
+        Ok(())
     }
 
     /// Use this to inline a `#rust` template operator by substituting `@param` placeholders
@@ -2409,8 +2646,21 @@ extern crate loft;"
         res = res.replace("crate::state::", "loft::state::");
         // loft represents `character` as `i32`; template functions that return `char`
         // (like `ops::text_character`) need an explicit cast at the call site.
+        // Narrow integer returns (u8/u16/i8/i16) must be widened to i32 so that
+        // pre-eval bindings (`let _pre_N = narrow_func()`) do not cause type-mismatch
+        // errors when compared against i32 literals.
+        // Multi-statement template bodies (containing `;`) are wrapped in `{...}` so
+        // they are valid in expression position when inlined as function arguments.
         if matches!(def_fn.returned, Type::Character) {
             write!(w, "({res}) as u32 as i32")
+        } else if narrow_int_cast(&def_fn.returned).is_some() {
+            if res.contains(';') {
+                write!(w, "({{{res}}}) as i32")
+            } else {
+                write!(w, "({res}) as i32")
+            }
+        } else if res.contains(';') {
+            write!(w, "{{{res}}}")
         } else {
             write!(w, "{res}")
         }
