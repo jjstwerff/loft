@@ -195,7 +195,14 @@ impl State {
                 .store_mut(&val)
                 .addr_mut::<String>(val.rec, val.pos) = s;
         } else if actual == n {
-            self.database.write_data(&val, db_tp, little_endian, &data);
+            if let Parts::Vector(_) = &self.database.types[db_tp as usize].parts {
+                // Vector variables on the stack hold an inner DbRef; dereference it so
+                // that write_data / vector_append gets the actual vector location.
+                let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+                self.database.write_data(&vec_ref, db_tp, little_endian, &data);
+            } else {
+                self.database.write_data(&val, db_tp, little_endian, &data);
+            }
         }
         // For typed non-text reads with incomplete data: leave destination at null (already initialized)
     }

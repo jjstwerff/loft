@@ -36,6 +36,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | Issue 85 fix: `convert()` now uses `OpNullRefSentinel` for null→Reference; `eq_ref`/`ne_ref` treat `rec==0` as null |
 | 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | Use in-place (non-vector-returning) algorithms for recursive functions; `bench/10_sort` uses bubble sort as workaround |
 | 85 | Null-returning hash lookup before insert causes subsequent lookup to return null / "Allocating a used store" panic | ~~Fixed~~ | Root cause: `convert()` used `OpConvRefFromNull` (allocates a store) for `null`→`Reference` in comparisons; `eq_ref`/`ne_ref` did full `DbRef` comparison (not rec-only). Fix: `convert()` uses `OpNullRefSentinel` (no allocation, sentinel `{u16::MAX,0,0}`); `eq_ref`/`ne_ref` treat `rec==0` as null |
+| 86 | `f#read(n) as vector<T>` silently returned an empty vector | Medium | Interpreter fixed; native `file_from_bytes` still a stub (`12-binary.loft` skipped) |
+| 87 | Native codegen: text method call in format interpolation emits `String` not `&str` | Medium | Pre-compute to a variable; use `{low_tag}` not `{tag.to_lowercase()}` |
+| 88 | Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument | Medium | Avoid in `--native` path; interpreter works |
+| 89 | Optional `& text` parameter causes subtract-with-overflow panic at call site | High | Call without the optional argument |
 
 ---
 
@@ -542,6 +546,133 @@ calls with fewer arguments than the now-finalized attribute count, and patch the
 per-function variable scoping refactor.
 
 **Effort:** Medium (post-parse IR scan and call-site patching in `parse_function`).
+
+---
+
+---
+
+## Bugs Found During Script Test Development (2026-03-22)
+
+### 86. `f#read(n) as vector<T>` silently produced an empty vector (interpreter FIXED; native still broken)
+
+**Severity:** High — interpreter: fixed; native (`--native`): `file_from_bytes` stub returns empty vector.
+
+**Location:** `src/state/io.rs` — `read_file` (interpreter, fixed); `src/codegen_runtime.rs` — `FileVal for DbRef::file_from_bytes` (native, stub).
+
+**Symptom:** Reading binary data from a file into a vector variable via `rv = f#read(n) as vector<T>`
+returned a vector of length 0 regardless of the byte count requested. The write direction
+(`f += vector_value`) worked correctly.
+
+**Root cause:** `read_file` called `self.database.write_data(&val, db_tp, little_endian, &data)` where
+`val` is the stack DbRef for the destination variable. For vector types, the stack slot does not hold
+the vector record pointer directly — it holds an inner DbRef (same two-level indirection as
+`write_file`). `write_data` for `Parts::Vector` calls `vector_append(&val, ...)` which reads
+`store.get_int(val.rec, val.pos)` expecting a vector record int, but at that location there was the
+first 4 bytes of the inner DbRef (store_nr + padding), which resolved to 0. `vector_append` with
+`vec_rec == 0` claimed a new record but the variable was never connected to it.
+
+**Interpreter fix (applied):** Before calling `write_data` for a vector type, dereference `val` to
+the inner DbRef with `*self.database.store(&val).addr::<DbRef>(val.rec, val.pos)` — matching the
+same pattern already used in `write_file`.
+
+**Native fix (pending):** Implement `file_from_bytes` in `src/codegen_runtime.rs` for `DbRef` vector
+types — iterate over `data.len() / elem_size` elements, calling `vector_append` + `write_data` for
+each element, mirroring the interpreter fix.  Until fixed, `12-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
+
+---
+
+### 87. Native codegen: text method call inside format interpolation emits `String` instead of `&str`
+
+**Severity:** Medium — native (`--native`) compilation fails; interpreter path is unaffected.
+
+**Location:** `src/generation.rs` — format-string expression emission.
+
+**Symptom:** A format string containing a text method call such as `"{tag.to_lowercase()}"` causes a
+`rustc` type error in the generated `.rs` file:
+```
+error[E0308]: mismatched types
+    ops::format_text(&mut work, (&var_tag).to_lowercase(), ...)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    expected `&str`, found `String`
+```
+
+**Root cause:** The native emitter generates the method call inline as `(&var_tag).to_lowercase()`,
+which returns a `String`. The `ops::format_text` function expects `&str`. For pre-assigned variables,
+`&var_x` coerces `&String` → `&str`, but a temporary `String` cannot be implicitly borrowed to `&str`
+in the same expression.
+
+**Workaround:** Compute the text method result before the format string and interpolate the variable:
+```loft
+// Instead of: msg = "hello {tag.to_lowercase()}"
+low_tag = tag.to_lowercase();
+msg = "hello {low_tag}";
+```
+
+**Fix path:** In `generation.rs`, when a text-returning method call appears in a format interpolation
+position, emit a `let _tmp_N = ...; ` let-binding before the format expression and use `&_tmp_N` in
+the `format_text` call.
+
+**Effort:** Small.
+
+---
+
+### 88. Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument
+
+**Severity:** Medium — native (`--native`) compilation fails; interpreter path works correctly.
+
+**Location:** `src/generation.rs` — native emission for `Stores::os_directory`, `Stores::os_home`,
+`Stores::os_executable`.
+
+**Symptom:** Calling `directory()`, `user_directory()`, or `program_directory()` causes a `rustc`
+type error in the generated `.rs` file:
+```
+error[E0308]: mismatched types
+    let mut var_cwd: String = Stores::os_directory((_pre_N)).to_string();
+                              ------------------- ^^^^^^^^^ expected `&mut String`, found `()`
+```
+The `_pre_N` binding is an empty block `{ }` that evaluates to `()`, but `os_directory` requires
+a `&mut String` scratch buffer.
+
+**Root cause:** These functions use the A8 destination-passing convention (they write into a
+`&mut String` provided by the caller and return a `Str` view). The native emitter does not correctly
+generate the scratch-buffer setup for them.
+
+**Workaround:** Avoid calling `directory()`, `user_directory()`, and `program_directory()` in code
+compiled with `--native`. They work correctly in the interpreter.
+
+**Fix path:** Identify where `generation.rs` emits the argument for these calls and generate
+`&mut work_N` (the pre-allocated scratch string) instead of an empty block.
+
+**Effort:** Small.
+
+---
+
+### 89. Optional `& text` parameter causes subtract-with-overflow panic at call site
+
+**Severity:** High — interpreter panics when any function with an optional `& text` parameter is
+called with an argument.
+
+**Location:** `src/state/codegen.rs` — `create_stack` arithmetic for optional reference parameters.
+
+**Symptom:** Calling `directory("sub")` (where `directory` has an optional `& text` path parameter)
+panics with:
+```
+thread 'main' panicked ... attempt to subtract with overflow
+```
+The panic occurs at call-site stack setup, not at function entry.
+
+**Root cause:** The `create_stack` size calculation for optional reference (`& text`) parameters
+underflows when the optional argument is supplied. The stack slot for an optional reference is
+sized or offset incorrectly compared to what `create_stack` expects.
+
+**Workaround:** Do not pass arguments to functions with optional `& text` parameters; call them
+without the optional argument (e.g., `directory()` instead of `directory("path")`).
+
+**Fix path:** Audit `create_stack` in `src/state/codegen.rs` for the optional-reference parameter
+size/offset calculation and ensure the slot reserved for an optional `& T` argument matches the
+expected stack layout.
+
+**Effort:** Small.
 
 ---
 

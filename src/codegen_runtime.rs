@@ -604,7 +604,14 @@ pub trait FileVal {
     /// Serialise `self` into bytes that will be appended to the file.
     fn file_to_bytes(&self, stores: &Stores, db_tp: i32, little_endian: bool) -> Vec<u8>;
     /// Deserialise `bytes` (already read from the file) into `self`.
-    fn file_from_bytes(&mut self, stores: &Stores, db_tp: i32, little_endian: bool, bytes: &[u8]);
+    /// Receives `&mut Stores` so that collection types (e.g. `vector<T>`) can append elements.
+    fn file_from_bytes(
+        &mut self,
+        stores: &mut Stores,
+        db_tp: i32,
+        little_endian: bool,
+        bytes: &[u8],
+    );
 }
 
 impl FileVal for i32 {
@@ -645,7 +652,13 @@ impl FileVal for i32 {
         out
     }
 
-    fn file_from_bytes(&mut self, stores: &Stores, db_tp: i32, little_endian: bool, bytes: &[u8]) {
+    fn file_from_bytes(
+        &mut self,
+        stores: &mut Stores,
+        db_tp: i32,
+        little_endian: bool,
+        bytes: &[u8],
+    ) {
         match db_tp {
             0 | 6 => {
                 if bytes.len() >= 4 {
@@ -701,7 +714,7 @@ impl FileVal for i64 {
     }
     fn file_from_bytes(
         &mut self,
-        _stores: &Stores,
+        _stores: &mut Stores,
         _db_tp: i32,
         little_endian: bool,
         bytes: &[u8],
@@ -726,7 +739,7 @@ impl FileVal for f32 {
     }
     fn file_from_bytes(
         &mut self,
-        _stores: &Stores,
+        _stores: &mut Stores,
         _db_tp: i32,
         little_endian: bool,
         bytes: &[u8],
@@ -751,7 +764,7 @@ impl FileVal for f64 {
     }
     fn file_from_bytes(
         &mut self,
-        _stores: &Stores,
+        _stores: &mut Stores,
         _db_tp: i32,
         little_endian: bool,
         bytes: &[u8],
@@ -772,7 +785,7 @@ impl FileVal for String {
     }
     fn file_from_bytes(
         &mut self,
-        _stores: &Stores,
+        _stores: &mut Stores,
         _db_tp: i32,
         _little_endian: bool,
         bytes: &[u8],
@@ -814,13 +827,30 @@ impl FileVal for DbRef {
 
     fn file_from_bytes(
         &mut self,
-        _stores: &Stores,
-        _db_tp: i32,
-        _little_endian: bool,
-        _bytes: &[u8],
+        stores: &mut Stores,
+        db_tp: i32,
+        little_endian: bool,
+        bytes: &[u8],
     ) {
-        // Reading directly into a DbRef vector is not currently used by any loft script test.
-        // Implement when a test exercises `f#read(n) as vector<T>`.
+        use crate::database::Parts;
+        if let Some(tp_info) = stores.types.get(db_tp as usize) {
+            if let Parts::Vector(elem_tp) = tp_info.parts.clone() {
+                let elem_size = u32::from(stores.size(elem_tp));
+                if elem_size == 0 || bytes.is_empty() {
+                    return;
+                }
+                let n_elems = bytes.len() / elem_size as usize;
+                for i in 0..n_elems {
+                    let slice = &bytes[i * elem_size as usize..(i + 1) * elem_size as usize];
+                    let elem_ref =
+                        crate::vector::vector_append(self, elem_size, &mut stores.allocations);
+                    stores.write_data(&elem_ref, elem_tp, little_endian, slice);
+                    crate::vector::vector_finish(self, &mut stores.allocations);
+                }
+            } else {
+                stores.write_data(self, db_tp as u16, little_endian, bytes);
+            }
+        }
     }
 }
 

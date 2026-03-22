@@ -99,4 +99,29 @@ fn main() {
   // === env_variable: returns empty text for unknown variable ===
   missing = env_variable("LOFT_TEST_NONEXISTENT_VAR_XYZ");
   assert(missing == "", "env_variable of unknown name returns empty string");
+  // === mkdir and mkdir_all ===
+  // Use a file inside the dir to verify existence, since delete() only removes files.
+  mkdir("test_loft_dir_xyz");            // idempotent pre-clean: ignore result
+  delete("test_loft_dir_xyz/sentinel.txt");
+  assert(mkdir_all("test_loft_dir_xyz"), "mkdir_all on existing dir returns true");
+  assert(exists("test_loft_dir_xyz"), "dir exists after mkdir");
+  assert(!mkdir("test_loft_dir_xyz"), "mkdir returns false if already exists");
+  // Write a sentinel file then clean up via file delete
+ {sentinel = file("test_loft_dir_xyz/sentinel.txt");
+  sentinel += "x";
+ }
+  assert(exists("test_loft_dir_xyz/sentinel.txt"), "sentinel file created");
+  assert(delete("test_loft_dir_xyz/sentinel.txt"), "sentinel deleted");
+  // mkdir_all creates nested directories
+  assert(mkdir_all("test_loft_dir_xyz/a/b"), "mkdir_all creates nested dirs");
+  assert(exists("test_loft_dir_xyz/a/b"), "nested leaf exists");
+  // mkdir outside project is rejected
+  assert(!mkdir("../loft_outside_test"), "mkdir outside project rejected");
+  // === directory(), user_directory(), program_directory() ===
+  cwd = directory();
+  assert(len(cwd) > 0, "directory() is non-empty");
+  home = user_directory();
+  assert(len(home) > 0, "user_directory() is non-empty");
+  prog = program_directory();
+  assert(len(prog) > 0, "program_directory() is non-empty");
 }

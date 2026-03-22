@@ -321,6 +321,37 @@ impl Stores {
         }
         crate::keys::Str::new(s)
     }
+
+    /// Native-codegen variant of `os_directory` that returns an owned `String`.
+    /// Used by the `--native` backend where a scratch-buffer `&mut String` is not available.
+    #[must_use]
+    pub fn os_directory_native() -> String {
+        let mut s = String::new();
+        if let Ok(v) = std::env::current_dir() {
+            s += v.to_str().unwrap();
+        }
+        s
+    }
+
+    /// Native-codegen variant of `os_home` that returns an owned `String`.
+    #[must_use]
+    pub fn os_home_native() -> String {
+        let mut s = String::new();
+        if let Some(v) = dirs::home_dir() {
+            s += v.to_str().unwrap();
+        }
+        s
+    }
+
+    /// Native-codegen variant of `os_executable` that returns an owned `String`.
+    #[must_use]
+    pub fn os_executable_native() -> String {
+        let mut s = String::new();
+        if let Ok(v) = std::env::current_exe() {
+            s += v.to_str().unwrap();
+        }
+        s
+    }
 }
 
 impl Debug for ShowDb<'_> {
