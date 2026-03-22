@@ -298,6 +298,8 @@ Used for explicit type casts and conversions:
 | Null             | `null`                              |
 | String           | `"hello world"`                     |
 | Function ref     | `fn double_score`                   |
+| Lambda (long)    | `fn(x: integer) -> integer { x * 2 }` |
+| Lambda (short)   | `\|x\| { x * 2 }`                    |
 
 A **function reference** (`fn <name>`) produces a `Type::Function` value whose runtime representation is the definition number of the named function.  The compiler resolves the name at **compile time** and errors if it does not exist or is not a function.  The value is 4 bytes (same as `integer`).
 
@@ -315,9 +317,31 @@ fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
 result = apply(fn double_it, 5)
 ```
 
+**Lambda expressions** produce an inline anonymous function at the expression level.
+Two syntactic forms are available:
+
+```loft
+// Long form — all types explicit; always valid
+fn(x: integer) -> integer { x * 2 }
+fn(x: integer, y: integer) -> integer { x + y }
+
+// Short form — types inferred from call-site context
+|x| { x * 2 }
+|x, y| { x + y }
+|| { 0 }                        // zero parameters: uses the || token
+
+// Short form with explicit annotations (when no context is available)
+transform: fn(integer) -> integer = |x: integer| -> integer { x * 2 }
+```
+
+Short-form parameter types are inferred from the expected `fn(T1, T2) -> R` type at the
+call site.  If inference is impossible (no context, no annotation), the compiler errors:
+*"cannot infer type for lambda parameter 'x'; add an explicit type annotation"*.
+
 Its primary use is with the higher-order functions `map`, `filter`, and `reduce`, as well as the `par(...)` for-loop clause:
 
 ```loft
+// Named fn-ref
 fn double(x: integer) -> integer { x * 2 }
 fn is_pos(x: integer) -> boolean { x > 0 }
 fn add(a: integer, b: integer) -> integer { a + b }
@@ -325,6 +349,12 @@ fn add(a: integer, b: integer) -> integer { a + b }
 doubled  = map(nums, fn double);        // [2, 4, 6, ...]
 positive = filter(nums, fn is_pos);     // only positive elements
 total    = reduce(nums, 0, fn add);     // sum
+
+// Equivalent using lambdas (short form, types inferred)
+doubled  = map(nums, |x| { x * 2 });
+positive = filter(nums, |x| { x > 0 });
+total    = reduce(nums, 0, |a, b| { a + b });
+
 for a in items par(b=double(a), 4) { results += [b] }
 ```
 
