@@ -142,6 +142,7 @@ give each item a traceable history.
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [OPTIMISATIONS.md](doc/claude/OPTIMISATIONS.md) | Planned and implemented runtime/compiler optimisations |
+| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmark results, root-cause analysis vs Python and Rust, improvement plan |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
