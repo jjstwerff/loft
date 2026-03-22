@@ -92,7 +92,7 @@ pub fn init(state: &mut State) {{
     }
     drop(into);
     let _ = std::process::Command::new("rustfmt")
-        .args(["--edition", "2024", "tests/generated/fill.rs"])
+        .args(["--edition", "2024", "tests/generated/text.rs"])
         .status();
     Ok(())
 }

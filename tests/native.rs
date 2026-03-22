@@ -59,6 +59,54 @@ fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
     Some((rlib, debug_deps))
 }
 
+/// On Windows MSVC, locate build-script output directories that contain `.lib` files.
+///
+/// When linking against `libloft.rlib` with standalone `rustc`, crates like `windows-sys`
+/// that emit native import libraries via their build scripts (e.g. `windows.0.48.5.lib`)
+/// are not automatically found.  Cargo normally passes the build-script output dirs as
+/// `-L native=…` linker arguments; we replicate that here by scanning `target/{profile}/build/`
+/// for `out/` subdirectories that contain at least one `.lib` file.
+fn find_native_lib_dirs(rlib_info: &Option<(PathBuf, PathBuf)>) -> Vec<PathBuf> {
+    #[cfg(not(windows))]
+    {
+        let _ = rlib_info;
+        return Vec::new();
+    }
+    #[cfg(windows)]
+    {
+        let Some((rlib, _)) = rlib_info else {
+            return Vec::new();
+        };
+        // rlib is at target/{profile}/libloft.rlib or target/{profile}/deps/libloft-*.rlib.
+        // Walk up to find the profile directory (release/ or debug/).
+        let profile_dir = rlib.parent().and_then(|p| {
+            if p.file_name().map(|n| n == "deps").unwrap_or(false) {
+                p.parent()
+            } else {
+                Some(p)
+            }
+        });
+        let Some(profile_dir) = profile_dir else {
+            return Vec::new();
+        };
+        let build_dir = profile_dir.join("build");
+        let Ok(entries) = std::fs::read_dir(&build_dir) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().join("out"))
+            .filter(|out| {
+                out.is_dir()
+                    && std::fs::read_dir(out).ok().map_or(false, |it| {
+                        it.filter_map(|f| f.ok())
+                            .any(|f| f.path().extension().map_or(false, |ext| ext == "lib"))
+                    })
+            })
+            .collect()
+    }
+}
+
 /// Paths for one native compilation job.
 struct NativeJob {
     stem: String,
@@ -190,6 +238,12 @@ fn compile_native_job(
             .arg(format!("loft={}", rlib.display()))
             .arg("-L")
             .arg(deps_dir);
+    }
+    // On Windows MSVC, build-script output dirs holding native import libs (e.g.
+    // `windows.0.48.5.lib` from `windows-sys`) must be passed explicitly to standalone
+    // rustc — cargo adds them automatically via `cargo:rustc-link-search`, but we don't.
+    for dir in find_native_lib_dirs(rlib_info) {
+        cmd.arg("-L").arg(dir);
     }
     let compile_out = match cmd.output() {
         Ok(o) => o,
