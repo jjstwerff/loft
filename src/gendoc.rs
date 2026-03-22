@@ -712,7 +712,9 @@ fn generate_print_page(
     } else {
         ""
     };
-    content.push_str("<section class=\"print-section\" id=\"00-performance\">\n<h1>Performance</h1>\n");
+    content.push_str(
+        "<section class=\"print-section\" id=\"00-performance\">\n<h1>Performance</h1>\n",
+    );
     content.push_str(article_body);
     content.push_str("</section>\n");
 
