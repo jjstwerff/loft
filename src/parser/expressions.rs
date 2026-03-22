@@ -5,9 +5,9 @@
 #![allow(clippy::cast_sign_loss)]
 
 use super::{
-    DefType, Function, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS, OUTPUT_DEFAULT,
-    OutputState, Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format,
-    field_id, rename, to_default, v_block, v_if, v_loop, v_set,
+    Argument, DefType, Function, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS,
+    OUTPUT_DEFAULT, OutputState, Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value,
+    diagnostic_format, field_id, rename, to_default, v_block, v_if, v_loop, v_set,
 };
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
@@ -1329,6 +1329,12 @@ use a separate collection or add after the loop"
             } else {
                 self.parse_fn_ref(val)
             }
+        } else if self.lexer.has_token("||") {
+            // Zero-parameter short lambda: || { body } — `||` already consumed, no closing `|`
+            self.parse_lambda_short(val, false)
+        } else if self.lexer.has_token("|") {
+            // Short lambda with parameters: |x: T, …| { body } — opening `|` consumed
+            self.parse_lambda_short(val, true)
         } else if self.lexer.has_token("sizeof") {
             self.lexer.token("(");
             self.parse_size(val)
@@ -1491,6 +1497,174 @@ use a separate collection or add after the loop"
         Type::Function(arg_types, Box::new(ret_type))
     }
 
+    // <short-lambda> ::= '||' ['->' type] block              (expect_close=false)
+    //                  | '|' [param {',' param}] '|' ['->' type] block  (expect_close=true)
+    // param ::= ident [':' type]
+    // `expect_close` is true when the opening `|` was consumed (params may follow);
+    // false when `||` was consumed (zero params, no closing `|`).
+    // Types are inferred from `lambda_hint` (set by the call-site parser) when omitted.
+    // Produces Type::Function; runtime representation is d_nr as i32, same as fn-ref.
+    #[allow(clippy::too_many_lines)] // single context save/restore spans the whole body; splitting would need unsafe borrowing
+    pub(crate) fn parse_lambda_short(&mut self, code: &mut Value, expect_close: bool) -> Type {
+        let lambda_name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+        let stored_name = format!("n_{lambda_name}");
+
+        // Capture hint types before entering the new context.
+        let hint_params_ret = self.lambda_hint.clone();
+        let hint_params: Vec<Type> = if let Type::Function(pts, _) = &hint_params_ret {
+            pts.clone()
+        } else {
+            Vec::new()
+        };
+
+        // Parse parameter list from `|p1 [: T], p2 [: T], …|`.
+        // When expect_close=false (`||` was consumed), there are no params and no closing `|`.
+        let mut param_names: Vec<String> = Vec::new();
+        let mut param_types: Vec<Type> = Vec::new();
+        if expect_close {
+            while !self.lexer.peek_token("|") && !self.lexer.peek_token("{") {
+                let Some(pname) = self.lexer.has_identifier() else {
+                    break;
+                };
+                let idx = param_names.len();
+                let tp = if self.lexer.has_token(":") {
+                    // Explicit annotation — parse type in the outer context.
+                    if let Some(type_name) = self.lexer.has_identifier() {
+                        self.parse_type(self.context, &type_name, false)
+                            .unwrap_or(Type::Unknown(0))
+                    } else {
+                        Type::Unknown(0)
+                    }
+                } else {
+                    // Infer from hint.
+                    hint_params.get(idx).cloned().unwrap_or(Type::Unknown(0))
+                };
+                param_names.push(pname);
+                param_types.push(tp);
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token("|"); // consume closing `|`
+        }
+
+        // Build Argument list for function registration.
+        let arguments: Vec<Argument> = param_names
+            .iter()
+            .zip(param_types.iter())
+            .map(|(n, t)| Argument {
+                name: n.clone(),
+                typedef: t.clone(),
+                default: Value::Null,
+                constant: false,
+            })
+            .collect();
+
+        // Error on second pass for any parameter whose type is still Unknown.
+        if !self.first_pass {
+            for a in &arguments {
+                if a.typedef.is_unknown() {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot infer type for lambda parameter '{}'; add an explicit ': type' annotation or pass the lambda where the expected type is known",
+                        a.name
+                    );
+                }
+            }
+        }
+
+        let outer_context = self.context;
+        let outer_vars = std::mem::replace(
+            &mut self.vars,
+            Function::new(&lambda_name, &self.lexer.pos().file),
+        );
+        let outer_loop = self.in_loop;
+        self.in_loop = false;
+
+        self.context = if self.first_pass {
+            self.data.add_fn(&mut self.lexer, &lambda_name, &arguments)
+        } else {
+            self.data.def_nr(&stored_name)
+        };
+        if self.context == u32::MAX {
+            self.context = outer_context;
+            self.vars = outer_vars;
+            self.in_loop = outer_loop;
+            return Type::Unknown(0);
+        }
+        let d_nr = self.context;
+
+        // Parse optional return-type annotation.
+        let has_arrow = self.lexer.has_token("->");
+        let result = if has_arrow {
+            if let Some(type_name) = self.lexer.has_identifier() {
+                self.parse_type(d_nr, &type_name, true)
+                    .unwrap_or(Type::Void)
+            } else {
+                Type::Void
+            }
+        } else if let Type::Function(_, ret) = &hint_params_ret {
+            *ret.clone()
+        } else {
+            Type::Void
+        };
+        if self.first_pass {
+            // On first pass, hint is unavailable — store Void when no annotation.
+            self.data.set_returned(
+                d_nr,
+                if has_arrow {
+                    result.clone()
+                } else {
+                    Type::Void
+                },
+            );
+        } else if !result.is_unknown() && !matches!(result, Type::Void) {
+            // On second pass, force-update the return type from hint or annotation.
+            self.data.definitions[d_nr as usize].returned = result.clone();
+        }
+
+        self.vars
+            .append(&mut self.data.definitions[d_nr as usize].variables);
+        for (a_nr, a) in arguments.iter().enumerate() {
+            if self.first_pass {
+                let v_nr = self.create_var(&a.name, &a.typedef);
+                if v_nr != u16::MAX {
+                    self.vars.become_argument(v_nr);
+                    self.var_usages(v_nr, false);
+                }
+            } else {
+                self.change_var_type(a_nr as u16, &a.typedef);
+                // Force-update the data definition with the inferred type.
+                // `set_attr_type` panics on non-unknown, so write directly.
+                // (First pass stored Unknown(0); typedef.rs may have resolved that to a
+                // concrete type before the second pass, so we can't rely on is_unknown().)
+                if !a.typedef.is_unknown() {
+                    self.data.definitions[d_nr as usize].attributes[a_nr].typedef =
+                        a.typedef.clone();
+                }
+            }
+        }
+
+        self.parse_code();
+        self.data.op_code(d_nr);
+        self.data.definitions[d_nr as usize]
+            .variables
+            .append(&mut self.vars);
+
+        self.context = outer_context;
+        self.vars = outer_vars;
+        self.in_loop = outer_loop;
+
+        self.data.def_used(d_nr);
+        *code = Value::Int(d_nr as i32);
+        let n_args = self.data.attributes(d_nr);
+        let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
+        let ret_type = self.data.def(d_nr).returned.clone();
+        Type::Function(arg_types, Box::new(ret_type))
+    }
+
     // <for-vector> ::= 'for' <id> 'in' <range> ['if' <cond>] '{' <expr> '}'
     // Implements [for n in range { body }] vector comprehensions.
     #[allow(clippy::too_many_arguments)] // parser helper threading IR-construction params alongside &mut self; no sensible grouping reduces the count
@@ -1598,7 +1772,6 @@ use a separate collection or add after the loop"
     /// Build the second-pass bytecode for a `[for ... { body }]` vector comprehension.
     // parser helper threading IR-construction params alongside &mut self; no sensible grouping reduces the count
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::large_types_passed_by_value)] // Option<u16> is Copy; ref adds noise at call sites
     pub(crate) fn build_comprehension_code(
         &mut self,
         vec: u16,

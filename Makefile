@@ -4,6 +4,31 @@ all:
 	rustfmt src/*.rs --edition 2024
 	RUSTFLAGS=-g cargo build --release
 
+check-targets:
+	@missing=""; \
+	for target in wasm32-wasip2; do \
+		if ! rustup target list --installed | grep -q "^$$target$$"; then \
+			missing="$$missing $$target"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: missing rustup target(s):$$missing"; \
+		echo "Fix with:$$missing" | sed 's/ / rustup target add /g'; \
+		exit 1; \
+	fi
+
+install: check-targets all
+	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
+	sudo install -d /usr/local/share/loft/deps
+	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
+	sudo cp -r default /usr/local/share/loft/
+	sudo install -m 644 target/release/libloft.rlib /usr/local/share/loft/
+	sudo cp target/release/deps/*.rlib /usr/local/share/loft/deps/
+	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
+	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
+	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
+		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
+	fi
 install: all
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
 	sudo install -d /usr/local/share/loft/deps
@@ -107,7 +132,9 @@ test-native:
 test-wasm:
 	@cargo build --release -q
 	@WASMTIME=$$(which wasmtime 2>/dev/null); \
-	if [ -n "$$WASMTIME" ]; then echo "Running wasm tests with wasmtime"; else echo "wasmtime not found — compile-only (install via: brew install wasmtime)"; fi; \
+	if [ -z "$$WASMTIME" ] && [ -x "$$HOME/.cargo/bin/wasmtime" ]; then WASMTIME="$$HOME/.cargo/bin/wasmtime"; fi; \
+	if [ -z "$$WASMTIME" ] && [ -x "$$HOME/.wasmtime/bin/wasmtime" ]; then WASMTIME="$$HOME/.wasmtime/bin/wasmtime"; fi; \
+	if [ -n "$$WASMTIME" ]; then echo "Running wasm tests with wasmtime"; else echo "wasmtime not found — compile-only (install via: cargo install wasmtime-cli)"; fi; \
 	failed=0; \
 	for f in tests/docs/*.loft tests/scripts/*.loft; do \
 		printf "  %-45s" "$$f"; \

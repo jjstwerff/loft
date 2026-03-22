@@ -364,7 +364,8 @@ pub fn op_exclusive_or_long(v1: i64, v2: i64) -> i64 {
 
 #[inline]
 #[must_use]
-#[allow(clippy::missing_panics_doc)] // debug-only assertion
+/// # Panics
+/// In debug builds, panics if `v2` is outside `0..64`.
 pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
         #[cfg(debug_assertions)]
@@ -524,7 +525,8 @@ pub fn op_exclusive_or_int(v1: i32, v2: i32) -> i32 {
 
 #[inline]
 #[must_use]
-#[allow(clippy::missing_panics_doc)] // debug-only assertion
+/// # Panics
+/// In debug builds, panics if `v2` is outside `0..32`.
 pub fn op_shift_left_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN {
         #[cfg(debug_assertions)]

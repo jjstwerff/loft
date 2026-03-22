@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #![allow(clippy::cast_possible_truncation)]
-#![allow(dead_code)]
-#![allow(clippy::large_types_passed_by_value)]
 use crate::data::{Context, Data, Type, Value};
 use crate::diagnostics::{Level, diagnostic_format};
 use crate::keys::DbRef;
@@ -72,7 +70,6 @@ pub struct Variable {
 pub struct Function {
     pub name: String,
     pub file: String,
-    steps: Vec<u8>,
     unique: u16,
     current_loop: u16,
     loops: Vec<Iterator>,
@@ -125,7 +122,6 @@ impl Function {
         Function {
             name: name.to_string(),
             file: file.to_string(),
-            steps: Vec::new(),
             unique: 0,
             current_loop: u16::MAX,
             loops: Vec::new(),
@@ -178,7 +174,6 @@ impl Function {
             name: other.name.clone(),
             file: other.file.clone(),
             current_loop: u16::MAX,
-            steps: Vec::new(),
             unique: 0,
             loops: other.loops.clone(),
             variables: other.variables.clone(),
@@ -340,14 +335,6 @@ impl Function {
         u16::MAX
     }
 
-    pub fn counter(&mut self) -> u16 {
-        self.loops[self.current_loop as usize].counter
-    }
-
-    pub fn needs_counter(&mut self, counter: u16) {
-        self.loops[self.current_loop as usize].counter = counter;
-    }
-
     /// Number of variables declared in this function (arguments + locals).
     #[must_use]
     pub fn count(&self) -> u16 {
@@ -380,6 +367,7 @@ impl Function {
     }
 
     /// Returns true if `scope` is a loop-body scope (variables freed by `OpFreeStack`).
+    #[allow(dead_code)] // used from integration tests (tests/testing.rs)
     pub fn is_loop_scope(&self, scope: u16) -> bool {
         self.loop_scopes.contains(&scope)
     }
@@ -388,14 +376,6 @@ impl Function {
     /// Called by `compute_intervals` when it finishes traversing a `Value::Loop`.
     pub fn record_loop_range(&mut self, scope: u16, seq_start: u32, seq_end: u32) {
         self.loop_seq_ranges.insert(scope, (seq_start, seq_end));
-    }
-
-    /// Returns the `seq_end` for a loop scope (the sequence number immediately after the
-    /// last statement inside the loop body), or None if the scope was not recorded.
-    /// Variables with `first_def` < `seq_end` are inside the loop body; their iteration's
-    /// `FreeStack` has NOT yet fired at that point.
-    pub fn loop_seq_end(&self, scope: u16) -> Option<u32> {
-        self.loop_seq_ranges.get(&scope).map(|&(_, end)| end)
     }
 
     pub fn loop_seq_range(&self, scope: u16) -> Option<(u32, u32)> {
@@ -413,14 +393,17 @@ impl Function {
         self.scope_origins.entry(scope).or_insert(short);
     }
 
+    #[allow(dead_code)] // used from integration tests (tests/testing.rs)
     pub fn scope_origin(&self, scope: u16) -> &'static str {
         self.scope_origins.get(&scope).copied().unwrap_or("block")
     }
 
+    #[allow(dead_code)] // used from integration tests (tests/testing.rs)
     pub fn first_def(&self, var_nr: u16) -> u32 {
         self.variables[var_nr as usize].first_def
     }
 
+    #[allow(dead_code)] // used from integration tests (tests/testing.rs)
     pub fn last_use(&self, var_nr: u16) -> u32 {
         self.variables[var_nr as usize].last_use
     }
@@ -432,16 +415,7 @@ impl Function {
         self.variables[var_nr as usize].scope
     }
 
-    pub fn on_scope(&self, scopes: &HashSet<u16>) -> Vec<u16> {
-        let mut res = Vec::new();
-        for (v_nr, v) in self.variables.iter().enumerate() {
-            if scopes.contains(&v.scope) {
-                res.push(v_nr as u16);
-            }
-        }
-        res
-    }
-
+    #[allow(dead_code)] // used from integration tests (tests/testing.rs)
     pub fn size(&self, var_nr: u16, context: &Context) -> u16 {
         size(&self.variables[var_nr as usize].type_def, context)
     }
@@ -501,22 +475,6 @@ impl Function {
     /// `generate_set` was attempted and reverted — it broke the bridging invariant
     /// (compile-time `stack.position` diverged from the runtime stack pointer).  This
     /// function is correct; the problem was the call site, not the computation.
-    pub fn min_var_position(&self) -> u16 {
-        let mut max_end = 0u16;
-        for var in &self.variables {
-            if var.stack_pos == u16::MAX {
-                continue;
-            }
-            let end = var
-                .stack_pos
-                .saturating_add(size(&var.type_def, &Context::Variable));
-            if end > max_end {
-                max_end = end;
-            }
-        }
-        max_end
-    }
-
     pub fn set_stack(&mut self, var_nr: u16, pos: u16) {
         self.variables[var_nr as usize].stack_pos = pos;
     }
@@ -590,13 +548,6 @@ impl Function {
 
     pub fn name_exists(&self, name: &str) -> bool {
         self.names.contains_key(name)
-    }
-
-    pub fn get_variable(&self, name: &str) -> Option<&Variable> {
-        if let Some(nr) = self.names.get(name) {
-            return Some(&self.variables[*nr as usize]);
-        }
-        None
     }
 
     pub fn arguments(&self) -> Vec<u16> {
@@ -686,6 +637,7 @@ impl Function {
         v
     }
 
+    #[cfg(test)]
     pub fn add_unique(&mut self, prefix: &str, type_def: &Type, scope: u16) -> u16 {
         let v = self.variables.len() as u16;
         self.variables.push(Variable {

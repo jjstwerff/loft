@@ -12,8 +12,6 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 ## Contents
 - [Open Issues — Quick Reference](#open-issues--quick-reference)
 - [Unimplemented Features](#unimplemented-features)
-- [Database Engine](#database-engine)
-- [Parser / Compiler Bugs](#parser--compiler-bugs)
 - [Interpreter Robustness](#interpreter-robustness)
 - [Web Services Design Constraints](#web-services-design-constraints)
 
@@ -24,25 +22,14 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
-| 44 | Empty vector literal `[]` cannot be passed directly as a mutable vector argument | Medium | Assign to named variable first |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
-| 56 | `v += extra` via `&vector` ref-param panics in debug / silently fails in release | High | Use a return value instead of a ref-param for vector append |
-| 57 | Database type-dispatch panics on unrecognized types in search/io | ~~Fixed~~ | S3: exhaustive match arms in search.rs and io.rs |
 | 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
-| 59 | Unimplemented type combinations in binary file I/O | ~~Fixed~~ | S4: `read_data`/`write_data` now use `r.pos + f.position`; `binary_size()` helper advances slice; collection arms are `unreachable!()` |
 | 60 | No recursion depth limit in codegen and parser traversals | Medium | N/A — only affects adversarially deep ASTs |
 | 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
-| 63 | `todo!()` for sub-record type traversal in `format.rs` | ~~Fixed~~ | S4: `path()` now handles one-level nested structs, builds `"field.subfield[index]"` |
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
-| 65 | Type index out-of-bounds (`[]` indexing in `data.rs`) | ~~Fixed~~ | S6-65: get_type() helper in Stores panics with diagnostic |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
-| 67 | Silent early-return on store resize limit (no diagnostic) | ~~Fixed~~ | S6-67: saturating_mul + checked_add panic in store.rs |
-| 74 | Native codegen: `OpGetFileText`/`OpTruncateFile`/`OpSeekFile`/`OpSizeFile` missing from `codegen_runtime` | High | `--native` only; no workaround |
-| 75 | Native codegen: text variable (`String`) passed where `Str` expected in function calls | ~~Fixed~~ | N1: `append_text` uses `&*(val)`, `emit_content` uses `Str::new(&*(expr))` |
-| 76 | Native codegen: `OpFormatSingle`, `OpFormatStackText`, `OpRemove`, `OpHashRemove`, `OpAppendCopy` missing from `codegen_runtime` | ~~Fixed~~ | N1: `format_single` uses `ops::format_single`; others implemented in prior sessions |
 | 77 | Native codegen: `CallRef`/function-pointer calls not implemented | Medium | `--native` only; affects `06-function.loft` |
-| 78 | Native codegen: double-borrow of `stores` in some generated code | ~~Fixed~~ | N1: `output_if_with_subst` applies pre-eval substitution only to conditions |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
 | 82 | `string` is not a valid type name — use `text` | Medium | Replace `string` with `text` in all struct fields and signatures |
@@ -68,142 +55,6 @@ panics via `spacial<T>` anymore.  Test: `spacial_not_implemented` in `tests/pars
 missing.  Best way forward: implement one operation at a time in `database.rs` and `fill.rs`,
 starting with iteration, then remove, then copy.  The spacial index structure (radix tree or
 R-tree) is already allocated in the schema; the iteration traversal is the main missing piece.
-
----
-
----
-
-## Database Engine
-
-### 57. Database type-dispatch panics on unrecognized types
-
-**Severity:** Medium — triggered by schema evolution without corresponding code update.
-
-**Location:** `src/database/search.rs:30,93,224,401,455`, `src/database/io.rs:145,243`
-
-**Symptom:** Runtime panic if the database schema contains a type tag not covered by
-the match arms in the comparison, iteration, or I/O dispatch functions:
-```
-panic!("Undefined compare {a:?} vs {b:?}")
-panic!("Incorrect search")
-panic!("Undefined iterate on '{}'", ...)
-panic!("Not implemented type for file writing ...")
-```
-
-**Root cause:** Each dispatch function has a `_ => panic!(...)` catch-all arm.  Adding a
-new primitive type to the schema without updating all dispatch sites causes a panic at the
-first database operation that touches the new type.
-
-**Fix path:** When adding any new schema type, audit all catch-all arms in `search.rs`
-and `io.rs` and add the new case.  A compile-time exhaustiveness check (converting the
-`_` arms to explicit lists) would make omissions a compile error rather than a runtime panic.
-
-**Effort:** Low per type; Medium to convert all arms to exhaustive lists.
-
----
-
-### 59. Unimplemented type combinations in binary file I/O — ~~Fixed in S4~~
-
-**Severity:** Medium — triggers a panic on schemas using types not yet covered.
-
-**Location:** `src/database/io.rs` (fixed in commit S4)
-
-**Fix applied:** `read_data` and `write_data` now use `r.pos + u32::from(f.position)` for
-each struct field instead of the same `r.pos` for all fields.  A `binary_size()` helper
-advances the data slice between fields in `write_data`.  Collection-type arms
-(`Sorted`, `Hash`, `Index`, `Spacial`, `Array`, `Ordered`) are now `unreachable!()` with
-a message referencing the F57 compile-time guard; `Parts::Base` is likewise `unreachable!()`.
-Unit tests `read_data_struct_field_positions` and `write_data_struct_field_positions` in
-`database::io::tests` verify the fix.
-
----
-
-## Parser / Compiler Bugs
-
-
-### 44. Empty vector literal `[]` cannot be passed directly as a mutable vector argument
-
-**Symptom:** Passing `[]` directly as a function argument where the parameter is a mutable
-vector (`vector<T>`) fails at compile time or produces incorrect codegen:
-```loft
-assert(join([], "-") == "", ...);  // ← fails
-```
-In a debug build, the `generate_call` debug assertion fires:
-```
-mutable arg 0 (parts: Vector(...)) expected 12B on stack but generate(Insert([Null])) pushed 0B
-```
-
-**Root cause:** `parse_vector` in `expressions.rs` returns early with `Value::Insert([Null])`
-for an empty `[]` literal when the target is not an existing variable (`is_var = false`).  This
-path is reached when `[]` appears as a function call argument, because expression parsing uses
-`Type::Unknown(0)` as the initial type context.  With an unknown element type, no temporary
-variable is created and no `vector_db` initialisation ops are emitted.  The `Value::Insert([Null])`
-carries no stack presence, so the mutable-arg handler finds 0 bytes instead of the 12-byte
-`DbRef` it expects.
-
-By contrast, `my_vec = []` in an assignment statement works: on the second pass `my_vec` already
-has an inferred type, and `create_vector` (called from `parse_assign_op`) inserts the correct
-`vector_db` initialisation ops into the Insert.
-
-**Workaround:** Assign the empty vector to a named variable first; the type is then inferred
-from the subsequent call, and the second pass initialises the variable correctly:
-```loft
-join_empty = [];
-assert(join(join_empty, "-") == "", ...);
-```
-
-**Fix path:** In `parse_vector`, when the early-return `else` branch is taken (empty `[]`,
-not a Var, not a field), create a unique temporary variable, call `vector_db` to initialise it,
-push `Value::Var(vec)` as the block result, and wrap in `v_block` — matching what the non-empty
-path does when `block = true`.  The difficulty is that `assign_tp` (the element type) is
-`Type::Unknown(0)` at this point; `vector_db` must either tolerate Unknown gracefully on the
-second pass or this path must be deferred until the call-site type is known.
-
-**Effort:** Medium (parser change; requires careful handling of the Unknown element type)
-
----
-
-### 56. `v += extra` via `&vector` ref-param panics (debug) / silently fails (release)
-
-**Symptom:** A function that appends to a `&vector<T>` ref-param using `v += extra`
-panics in debug builds:
-```
-thread panicked at src/store.rs:785: Unknown record 5
-```
-In release builds the operation silently does nothing — the caller's vector is unchanged.
-Test: `ref_param_append_bug` in `tests/issues.rs`.
-
-**Root cause:** When `v += extra` is compiled for a `v: &vector<T>` ref-param, codegen
-emits `OpAppendVector` with the raw ref-param DbRef (a stack pointer into the caller's
-frame via `OpCreateStack`) rather than the actual vector DbRef.  `vector_append` calls
-`store.get_int(v.rec, v.pos)` to read the vector header; `v.rec` is the caller's stack
-frame record, which is not present in the current function's store `claims` — hence the
-`Unknown record` panic.  In release builds the `debug_assert` is elided, producing
-corrupt or no-op behaviour.
-
-**Fix path:** In codegen for `v += extra` where `v: RefVar(Vector)`:
-
-1. Emit `OpGetStackRef` to dereference the ref-param and load the actual vector DbRef.
-2. Emit `OpAppendVector` with the loaded DbRef.
-3. Emit `OpSetStackRef` to write back the (possibly reallocated) DbRef through the ref.
-
-The write-back is required because `vector_append` may resize the backing record and
-update the DbRef in-place; without writing back, the caller's variable would reference a
-stale record after the append.
-
-The same pattern is needed for any mutable collection operation on a ref-param
-(e.g. `v += [item]` for a single element, hash insert, etc.).
-
-**Workaround:** Return the modified vector and assign at the call site, or pass the
-vector by-value and reassign:
-```loft
-fn fill_ret(v: vector<Item>, extra: vector<Item>) -> vector<Item> { v += extra; v }
-buf = fill_ret(buf, extra);
-```
-
-**Effort:** Medium (codegen change in `src/state/codegen.rs`; requires identifying all
-collection-mutating operations on ref-params)
-**Target:** 0.8.2
 
 ---
 
@@ -263,63 +114,6 @@ exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arm
 
 ---
 
-### 63. `todo!()` for sub-record type traversal in `format.rs` — ~~Fixed in S4~~
-
-**Severity:** Medium — triggered by schemas that contain sub-records (nested struct types
-as fields).
-
-**Location:** `src/database/format.rs` (fixed in commit S4)
-
-**Fix applied:** The `// TODO if f_tp is sub_record/vector/sorted/enum` at line 109 is
-replaced with a one-level nested struct traversal.  When a parent struct's field has
-`Parts::Struct(_)` or `Parts::EnumValue(_, _)` and the sub-struct contains a collection
-of the child type, `path()` now builds `"field.subfield[index]"` by iterating the
-sub-fields, computing the nested `DbRef` at
-`8 + u32::from(f.position) + u32::from(sf.position)`, and walking the collection to find
-the index.
-
----
-
-
-### 65. Type index out-of-bounds access in `data.rs`
-
-**Severity:** Medium — triggered by an invalid type number; would panic with an
-unhelpful index-out-of-bounds message.
-
-**Location:** `src/data.rs` — `self.types[tp as usize]` and similar unchecked indexing
-
-**Symptom:** If a type number coming from a deserialized schema or codegen path is
-out of range, Rust's bounds check panics with a generic index-OOB message rather than a
-diagnostic naming the invalid type.
-
-**Fix path:** Introduce a `get_type(nr)` helper that panics with a message including
-the invalid index and the function name.  Replace all bare `self.types[tp as usize]`
-calls with `self.get_type(tp)`.
-
-**Effort:** Small (helper + search-replace; no logic change)
-
----
-
-
-### 67. Silent early-return on store resize limit
-
-**Severity:** Medium — large-dataset failures are invisible; the program continues with
-a truncated store rather than reporting an error.
-
-**Location:** `src/store.rs` — resize path
-
-**Symptom:** When the store reaches its size limit it returns early without allocating
-more space and without emitting a diagnostic.  Callers that check the return value may
-handle this, but callers that assume allocation always succeeds proceed silently with
-corrupt state.
-
-**Fix path:** Either return a `Result` from the resize path (propagating to all callers)
-or panic with a clear "store limit exceeded" message.  The latter is simpler and
-appropriate as long as the limit is large enough to never be reached in normal use.
-
-**Effort:** Small (change early-return to panic or Result propagation)
-
----
 
 ### 68. `first_set_in` does not descend into `Block` nodes — work-ref lazy init places null after first use
 
@@ -462,14 +256,6 @@ placement (tos_estimate=0, no live vars), which is safe.  The test now asserts s
 
 All 24 `tests/docs/*.loft` files fail to compile under `--native`.  The root causes are:
 
-### 74. `OpGetFileText` / `OpTruncateFile` / `OpSeekFile` / `OpSizeFile` missing from `codegen_runtime`
-
-**Status: FIXED** (see `src/codegen_runtime.rs`)
-
-`pub fn OpGetFileText`, `OpSeekFile`, `OpSizeFile`, and `OpTruncateFile` were added to
-`src/codegen_runtime.rs` with direct-call signatures. `13-file.loft` now passes in `native_dir`.
-`n_path_sep` was also added (needed by `11-files.loft`).
-
 ### 77. Function-pointer calls (`CallRef`) not implemented
 
 **Symptom:** `cannot find function CallRef` in `06-function.loft`.  Also `Int`/`Var` emitted
@@ -506,19 +292,137 @@ compiler emits frees in declaration order, but the store allocator requires LIFO
 `output_block` to sort free calls by store_nr descending, or fix in `allocation.rs` to accept
 non-LIFO frees (would require a free-list instead of a stack pointer).
 
-### 81. 17-libraries native runtime panic: "Stores must be freed in LIFO order" (same root as #80)
+---
 
-**Status: FIXED** (see `src/generation.rs` `output_set`)
+## Bugs Found During Benchmark Development (2026-03-22)
 
-**Root cause:** `__ref_*` inline-ref temporaries (compiler-generated work variables that are
-immediately overwritten by a function's return value) were initialised with `stores.null_named()`
-which allocated a real store.  That store was then orphaned when the variable was overwritten by
-the callee's returned `DbRef`, leaving a leaked store that broke the LIFO invariant.
+### 82. `string` is not a valid type name — use `text`
 
-**Fix:** In `output_set`, when a `__ref_*` variable is marked `is_inline_ref` (via
-`variables.is_inline_ref(var)`), emit `DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }` (the null
-sentinel) instead of `stores.null_named(...)`.  This matches the interpreter's `OpNullRefSentinel`
-path.  `17-libraries.loft` now passes in `native_dir`.
+**Severity:** Medium — silent or misleading error.
+
+**Symptom:** Using `string` as a type name in a struct field produces:
+```
+Error: Undefined type string
+Error: Invalid index key
+Error: Cannot write unknown(423) on field Foo.bar:text["..."]
+```
+
+**Root cause:** The canonical UTF-8 string type in loft is `text`. The name `string` is not
+defined anywhere in the stdlib or interpreter. Code coming from other languages (Python, Rust,
+Java) naturally reaches for `string`, which fails at runtime.
+
+**Workaround / Fix:** Replace every occurrence of `string` with `text` in struct field
+definitions and function signatures. The type behaves identically to what other languages call
+`string`.
+
+**Effort:** Trivial (rename).
+
+---
+
+### 83. Struct field named `key` in a hash collection causes "Allocating a used store" panic
+
+**Severity:** High — silent name collision causes a runtime panic.
+
+**Location:** `src/database/allocation.rs:31`
+
+**Symptom:** Declaring a struct used as a hash value with a field named `key` causes a panic
+when the hash is accessed:
+```
+thread 'main' panicked at src/database/allocation.rs:31:9: Allocating a used store
+```
+
+**Root cause:** `key` is a pseudo-field name reserved for hash iteration (`for kv in h { kv.key }`).
+When a real struct field is also named `key`, the name clashes with the hash machinery's internal
+field reference, corrupting store allocation.
+
+**Workaround:** Never name a struct field `key` when the struct is used as a hash value type.
+Use a descriptive name instead (`word`, `name`, `label`, `id`, etc.):
+```loft
+// WRONG
+struct Entry { key: text, count: integer }
+struct Db    { data: hash<Entry[key]> }
+
+// CORRECT
+struct Entry { word: text, count: integer }
+struct Db    { data: hash<Entry[word]> }
+```
+
+**Fix path:** The hash machinery should use an internal name that cannot conflict with user
+field names, or the compiler should emit an error when a hash-value struct has a field named
+`key`.
+
+**Effort:** Small (emit compile-time error); Medium (fix internal naming).
+
+---
+
+### 84. `for` loop in a function called from a recursive function panics: "Too few parameters on n_xxx"
+
+**Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
+
+**Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."`.
+**Location:** `src/state/codegen.rs:560` — `assert!(parameters.len() >= ...)`.
+
+**Symptom:** When function A is recursive (calls itself) and function A calls function B, and
+function B contains a `for` loop, the interpreter panics:
+```
+thread 'main' panicked at src/state/codegen.rs:560:9:
+Too few parameters on n_A
+```
+The panic occurs regardless of whether parameters are `const`, `&`, or by value.
+
+**Minimal reproduction:**
+```loft
+fn helper(v: vector<integer>) -> integer {
+  s = 0;
+  for h_i in 0..len(v) { s += v[h_i]; }  // ← this for loop triggers the bug
+  s
+}
+fn recurse(n: integer) -> integer {
+  if n <= 0 { return 0; }
+  v = [n];
+  helper(v) + recurse(n - 1)             // ← recursive call triggers the panic
+}
+fn main() { println("{recurse(5)}"); }
+```
+
+**Root cause:** `ref_return` in `src/parser/control.rs` adds extra attributes (work-ref buffer
+parameters) to a function while its body is being parsed. When the function is recursive,
+call sites parsed earlier in the body see the pre-update attribute count. By the time
+`ref_return` finishes (end of body), the function has more attributes than those recursive
+call sites were generated with. Codegen then panics because the call has too few arguments.
+
+More precisely: a vector-returning function F that allocates vectors internally triggers
+`ref_return`, which promotes internal work-ref variables to function attributes so callers
+pre-allocate result buffers (required for LIFO store ordering). When F is called from a
+recursive function G, `add_defaults` in G creates work-refs for the extra attributes. Those
+work-refs end up in the dep list of G's return type, causing G's own `ref_return` to add
+yet more attributes to G — AFTER the recursive calls to G in G's body were already parsed.
+
+**Workaround:** Use a non-recursive, in-place sorting algorithm (e.g. bubble sort or
+insertion sort) instead of recursive divide-and-conquer. In-place sorts do not return new
+vectors from recursive helpers, so `ref_return` is never triggered on the recursive
+function. The `bench/10_sort` benchmark uses bubble sort for this reason.
+
+**Fix path:** After parsing a function body (second pass), scan the IR tree for recursive
+calls with fewer arguments than the now-finalized attribute count, and patch them via
+`add_defaults`. This targeted post-parse fixup is significantly simpler than a full
+per-function variable scoping refactor.
+
+**Effort:** Medium (post-parse IR scan and call-site patching in `parse_function`).
+**Root cause:** Loft uses a flat global variable namespace — all loop variables across all
+functions in a file share the same slot-assignment table. The codegen for a `for` loop in the
+helper function corrupts the parameter count recorded for the recursive function, causing the
+assertion to fire when codegen processes the recursive call site.
+
+**Workaround:** Replace the `for` loop in the helper function with recursion, or restructure
+the algorithm so the recursive function and the looping helper are in separate files (if
+supported), or inline the loop body into the recursive function itself.
+
+**Fix path:** The flat namespace slot assignment must be replaced with per-function scope so
+that loop variable slots in one function do not interfere with parameter count tracking in
+another. This is a significant refactor of `src/variables.rs` and `src/state/codegen.rs`.
+
+**Effort:** High (requires per-function variable scoping).
 
 ---
 

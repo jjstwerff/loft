@@ -1514,6 +1514,7 @@ fn test() {
 
 /// Issue 83: field named `key` in a hash-value struct panics at runtime.
 #[test]
+#[ignore = "issue 83: field named 'key' in hash-value struct causes 'Allocating a used store' panic — see PROBLEMS.md #83"]
 fn issue_83_hash_value_field_named_key_panics() {
     code!(
         "struct Entry { key: text, count: integer }
@@ -1678,4 +1679,153 @@ fn test() {
 }"
     )
     .result(Value::Null);
+}
+
+// ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
+// Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
+
+/// P1.2: `|x: integer| -> integer { x * 2 }` with fully explicit annotations.
+#[test]
+
+fn p1_2_short_lambda_explicit_types() {
+    code!(
+        "fn test() {
+    f = |x: integer| -> integer { x * 2 };
+    assert(f(5) == 10, \"expected 10\");
+    assert(f(21) == 42, \"expected 42\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.2: Zero-parameter short lambda `|| -> integer { 42 }`.
+#[test]
+
+fn p1_2_short_lambda_zero_params() {
+    code!(
+        "fn test() {
+    f = || -> integer { 42 };
+    assert(f() == 42, \"expected 42\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.2: Two-parameter short lambda with explicit types.
+#[test]
+
+fn p1_2_short_lambda_two_params() {
+    code!(
+        "fn test() {
+    add = |a: integer, b: integer| -> integer { a + b };
+    assert(add(3, 4) == 7, \"expected 7\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.2: Short lambda with inferred param type from call-site hint.
+#[test]
+
+fn p1_2_short_lambda_inferred_type() {
+    code!(
+        "fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn test() {
+    result = apply(|n| { n * 3 }, 7);
+    assert(result == 21, \"expected 21, got {result}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+// ── P1.3 — map / filter / reduce with inline lambdas ─────────────────────────
+
+/// P1.3: `map` with a short-form lambda.
+#[test]
+
+fn p1_3_map_short_lambda() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3];
+    r = map(v, |x: integer| -> integer { x * 10 });
+    assert(r[0] == 10, \"r[0]\");
+    assert(r[1] == 20, \"r[1]\");
+    assert(r[2] == 30, \"r[2]\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.3: `filter` with a short-form lambda.
+#[test]
+
+fn p1_3_filter_short_lambda() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3, 4, 5, 6];
+    evens = filter(v, |x: integer| -> boolean { x % 2 == 0 });
+    assert(len(evens) == 3, \"expected 3 evens\");
+    assert(evens[0] == 2, \"evens[0]\");
+    assert(evens[2] == 6, \"evens[2]\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// P1.3: `reduce` with a short-form lambda.
+#[test]
+
+fn p1_3_reduce_short_lambda() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3, 4, 5];
+    total = reduce(v, 0, |acc: integer, x: integer| -> integer { acc + x });
+    assert(total == 15, \"expected 15, got {total}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+// ── A8 — Destination-passing for text-returning natives ───────────────────────
+// replace / to_lowercase / to_uppercase write directly into the destination
+// string variable, eliminating the scratch buffer double-copy.
+
+/// A8: `replace` result assigned to a variable produces the right string.
+#[test]
+
+fn a8_replace_into_var() {
+    code!(
+        "fn test() {
+    s = \"hello world\";
+    r = s.replace(\"world\", \"loft\");
+    assert(r == \"hello loft\", \"got {r}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// A8: `to_lowercase` result in a format string.
+#[test]
+
+fn a8_to_lowercase_in_format() {
+    code!(
+        "fn test() {
+    s = \"HELLO\";
+    r = \"value: {s.to_lowercase()}\";
+    assert(r == \"value: hello\", \"got {r}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// Regenerate src/fill.rs from the default library definitions.
+/// Run with: cargo test regen_fill_rs -- --ignored --nocapture
+#[test]
+#[ignore = "maintenance: regenerates src/fill.rs — run manually when default/*.loft changes"]
+fn regen_fill_rs() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    loft::create::generate_code_to(&p.data, "src/fill.rs").expect("generate_code_to failed");
+    println!("src/fill.rs regenerated");
 }

@@ -204,9 +204,9 @@ impl Stores {
             allocations,
             files: Vec::new(),
             max: self.max,
+            scratch: Vec::new(),
             parallel_ctx: None,
             logger: self.logger.clone(),
-            scratch: Vec::new(),
             had_fatal: false,
             start_time: self.start_time,
         }

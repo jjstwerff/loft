@@ -116,8 +116,17 @@ else
   echo "warning: rustc not found — rust target will be skipped"
 fi
 
-if command -v wasmtime > /dev/null 2>&1; then
+WASMTIME=""
+for _wt_candidate in "$(command -v wasmtime 2>/dev/null)" "$HOME/.cargo/bin/wasmtime" "$HOME/.wasmtime/bin/wasmtime"; do
+  if [[ -x "$_wt_candidate" ]]; then
+    WASMTIME="$_wt_candidate"
+    break
+  fi
+done
+if [[ -n "$WASMTIME" ]]; then
   HAS_WASMTIME=1
+else
+  echo "warning: wasmtime not found — loft-wasm column will show '-' (install via: cargo install wasmtime-cli  OR  brew install wasmtime)"
 fi
 
 # Build --path flag for loft if STDLIB_PATH is set
@@ -163,42 +172,47 @@ run_bench() {
     li_ms=$("$LOFT" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" 2>/dev/null | extract_ms || true)
   fi
 
+  local build_dir="$dir/.loft"
+
   # loft native
   if [[ $HAS_LOFT -eq 1 && $HAS_RUST -eq 1 && -n "$LOFT_LIB" && $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
-    native_rs="$dir/bench_native.rs"
+    mkdir -p "$build_dir"
+    native_rs="$build_dir/bench.rs"
     "$LOFT" --native-emit "$native_rs" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
     if [[ -f "$native_rs" ]]; then
       rustc -O --edition=2024 \
         --extern "loft=$LOFT_LIB/libloft.rlib" \
         -L "$LOFT_LIB/deps" \
-        -o "$dir/bench_bin" \
+        -o "$build_dir/bench_bin" \
         "$native_rs" > /dev/null 2>&1 || true
       rm -f "$native_rs"
     fi
   fi
-  if [[ -f "$dir/bench_bin" ]]; then
-    [[ $WARMUP -eq 1 ]] && "$dir/bench_bin" > /dev/null 2>&1 || true
-    ln_ms=$("$dir/bench_bin" 2>/dev/null | extract_ms || true)
+  if [[ -f "$build_dir/bench_bin" ]]; then
+    [[ $WARMUP -eq 1 ]] && "$build_dir/bench_bin" > /dev/null 2>&1 || true
+    ln_ms=$("$build_dir/bench_bin" 2>/dev/null | extract_ms || true)
   fi
 
   # loft wasm
   if [[ $SKIP_WASM -eq 0 && $HAS_LOFT -eq 1 ]]; then
     if [[ $NO_BUILD -eq 0 && -f "$dir/bench.loft" ]]; then
-      "$LOFT" --native-wasm "$dir/bench.wasm" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
+      mkdir -p "$build_dir"
+      "$LOFT" --native-wasm "$build_dir/bench.wasm" "${LOFT_PATH_FLAG[@]}" "$dir/bench.loft" > /dev/null 2>&1 || true
     fi
-    if [[ -f "$dir/bench.wasm" && $HAS_WASMTIME -eq 1 ]]; then
-      [[ $WARMUP -eq 1 ]] && wasmtime "$dir/bench.wasm" > /dev/null 2>&1 || true
-      lw_ms=$(wasmtime "$dir/bench.wasm" 2>/dev/null | extract_ms || true)
+    if [[ -f "$build_dir/bench.wasm" && $HAS_WASMTIME -eq 1 ]]; then
+      [[ $WARMUP -eq 1 ]] && "$WASMTIME" --dir . "$build_dir/bench.wasm" > /dev/null 2>&1 || true
+      lw_ms=$("$WASMTIME" --dir . "$build_dir/bench.wasm" 2>/dev/null | extract_ms || true)
     fi
   fi
 
   # Rust
   if [[ $HAS_RUST -eq 1 && $NO_BUILD -eq 0 && -f "$dir/bench.rs" ]]; then
-    rustc -O -o "$dir/bench_rs_bin" "$dir/bench.rs" > /dev/null 2>&1 || true
+    mkdir -p "$build_dir"
+    rustc -O -o "$build_dir/bench_rs_bin" "$dir/bench.rs" > /dev/null 2>&1 || true
   fi
-  if [[ $HAS_RUST -eq 1 && -f "$dir/bench_rs_bin" ]]; then
-    [[ $WARMUP -eq 1 ]] && "$dir/bench_rs_bin" > /dev/null 2>&1 || true
-    rs_ms=$("$dir/bench_rs_bin" 2>/dev/null | extract_ms || true)
+  if [[ $HAS_RUST -eq 1 && -f "$build_dir/bench_rs_bin" ]]; then
+    [[ $WARMUP -eq 1 ]] && "$build_dir/bench_rs_bin" > /dev/null 2>&1 || true
+    rs_ms=$("$build_dir/bench_rs_bin" 2>/dev/null | extract_ms || true)
   fi
 
   ms() { [[ -z "$1" ]] && echo "-" || echo "${1}ms"; }

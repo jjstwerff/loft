@@ -186,7 +186,9 @@ fn write_index(
         "      <a class=\"card card-featured\" href=\"00-vs-rust.html\">\
 <h2>vs Rust</h2><p>Key differences for developers coming from Rust.</p></a>\n\
       <a class=\"card card-featured\" href=\"00-vs-python.html\">\
-<h2>vs Python</h2><p>Key differences for developers coming from Python.</p></a>\n",
+<h2>vs Python</h2><p>Key differences for developers coming from Python.</p></a>\n\
+      <a class=\"card card-featured\" href=\"00-performance.html\">\
+<h2>Performance</h2><p>Benchmark results across interpreter, native, wasm, and Rust.</p></a>\n",
     );
     for topic in topics {
         if !topic.filename.starts_with("00-") {
@@ -733,6 +735,11 @@ pub fn build_nav(
         parts.push("<span class=\"cur\">vs Python</span>".to_string());
     } else {
         parts.push("<a href=\"00-vs-python.html\">vs Python</a>".to_string());
+    }
+    if active == "00-performance" {
+        parts.push("<span class=\"cur\">Performance</span>".to_string());
+    } else {
+        parts.push("<a href=\"00-performance.html\">Performance</a>".to_string());
     }
 
     for (filename, name) in topic_info {

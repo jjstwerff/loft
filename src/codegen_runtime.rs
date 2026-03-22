@@ -14,7 +14,6 @@
 #![allow(non_snake_case)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
-#![allow(clippy::doc_markdown)]
 
 use crate::database::{ShowDb, Stores};
 use crate::keys::{Content, DbRef, Key};
@@ -27,8 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Allocate a database root record for the given type.
 /// The generated code calls this as `OpDatabase(stores, var, tp)` where `var` is
-/// passed by value (DbRef).  The function allocates into the store referenced by
-/// `db`, then returns the updated DbRef.
+/// passed by value (`DbRef`).  The function allocates into the store referenced by
+/// `db`, then returns the updated `DbRef`.
 /// Bytecode equivalent: `OpDatabase` in `src/state/io.rs:319`.
 pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
     let db_tp = db_tp as u16;
@@ -261,7 +260,7 @@ fn pack_iter(cur: u32, finish: u32) -> i64 {
     ((u64::from(finish) << 32) | u64::from(cur)).cast_signed()
 }
 
-/// Build a minimal DbRef pointing at record `rec` with field offset `pos`.
+/// Build a minimal `DbRef` pointing at record `rec` with field offset `pos`.
 fn iter_ref(data: &DbRef, rec: u32, pos: u16) -> DbRef {
     DbRef {
         store_nr: data.store_nr,
@@ -1181,9 +1180,9 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
 /// For native code, the caller passes a closure that calls the right Rust function.
 /// Returns a `DbRef` to the result store; the caller frees it with `OpFreeRef`.
 /// Memory layout matches bytecode `n_parallel_for`:
-///   header_rec, pos=4 → i32 pointing to vec_rec
-///   vec_rec, pos=4    → element count (n)
-///   vec_rec, pos=8+i*S → element i  (S = 4 int / 8 long+float / 1 bool bytes)
+///   `header_rec`, `pos=4` → `i32` pointing to `vec_rec`
+///   `vec_rec`, `pos=4`    → element count (`n`)
+///   `vec_rec`, `pos=8+i*S` → element `i`  (`S` = 4 int / 8 long+float / 1 bool bytes)
 #[allow(clippy::cast_possible_wrap)]
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,

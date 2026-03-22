@@ -46,8 +46,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4text_rfind", t_4text_rfind),
     ("t_4text_contains", t_4text_contains),
     ("t_4text_replace", t_4text_replace),
+    ("t_4text_replace_dest", t_4text_replace_dest),
     ("t_4text_to_lowercase", t_4text_to_lowercase),
+    ("t_4text_to_lowercase_dest", t_4text_to_lowercase_dest),
     ("t_4text_to_uppercase", t_4text_to_uppercase),
+    ("t_4text_to_uppercase_dest", t_4text_to_uppercase_dest),
     ("t_4text_is_lowercase", t_4text_is_lowercase),
     ("t_9character_is_lowercase", t_9character_is_lowercase),
     ("t_4text_is_uppercase", t_4text_is_uppercase),
@@ -283,45 +286,56 @@ fn t_4text_replace(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<Str>(stack);
     let new_value = v_self.str().replace(v_value.str(), v_with.str());
     stores.scratch.push(new_value);
-    let s = stores
-        .scratch
-        .last()
-        .map(|s| Str {
-            ptr: s.as_ptr(),
-            len: s.len() as u32,
-        })
-        .unwrap();
+    let s = Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
+}
+
+fn t_4text_replace_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v_with = *stores.get::<Str>(stack);
+    let v_value = *stores.get::<Str>(stack);
+    let v_self = *stores.get::<Str>(stack);
+    let new_value = v_self.str().replace(v_value.str(), v_with.str());
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&new_value);
 }
 
 fn t_4text_to_lowercase(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<Str>(stack);
     let new_value = v_self.str().to_lowercase();
     stores.scratch.push(new_value);
-    let s = stores
-        .scratch
-        .last()
-        .map(|s| Str {
-            ptr: s.as_ptr(),
-            len: s.len() as u32,
-        })
-        .unwrap();
+    let s = Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
+}
+
+fn t_4text_to_lowercase_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v_self = *stores.get::<Str>(stack);
+    let new_value = v_self.str().to_lowercase();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&new_value);
 }
 
 fn t_4text_to_uppercase(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<Str>(stack);
     let new_value = v_self.str().to_uppercase();
     stores.scratch.push(new_value);
-    let s = stores
-        .scratch
-        .last()
-        .map(|s| Str {
-            ptr: s.as_ptr(),
-            len: s.len() as u32,
-        })
-        .unwrap();
+    let s = Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
+}
+
+fn t_4text_to_uppercase_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v_self = *stores.get::<Str>(stack);
+    let new_value = v_self.str().to_uppercase();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&new_value);
 }
 
 fn t_4text_is_lowercase(stores: &mut Stores, stack: &mut DbRef) {
