@@ -5,10 +5,14 @@ all:
 	RUSTFLAGS=-g cargo build --release
 
 install: all
+	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
 	sudo install -d /usr/local/share/loft/deps
+	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
 	sudo cp -r default /usr/local/share/loft/
 	sudo install -m 644 target/release/libloft.rlib /usr/local/share/loft/
 	sudo cp target/release/deps/*.rlib /usr/local/share/loft/deps/
+	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
+	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
 	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
 		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
 	fi

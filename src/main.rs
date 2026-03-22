@@ -310,7 +310,7 @@ fn main() {
             .arg("-o")
             .arg(wasm_out)
             .arg(&rs_path);
-        if let Some(lib_dir) = loft_lib_dir() {
+        if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-wasip2")) {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
             cmd.arg("-L").arg(lib_dir.join("deps"));
@@ -462,22 +462,50 @@ fn with_trailing_sep(p: &std::path::Path) -> String {
     s
 }
 
-/// Return the directory that contains `libloft.rlib` so that rustc invocations
-/// can find `extern crate loft` via `-L`.  Returns `None` when the binary path
-/// cannot be determined or the file is not present.
-fn loft_lib_dir() -> Option<std::path::PathBuf> {
-    let dir = env::current_exe().ok()?.parent()?.to_path_buf();
-    if dir.join("libloft.rlib").exists() {
-        return Some(dir);
+/// Return the directory that contains `libloft.rlib` for the given target triple.
+/// Pass `None` for the native target, `Some("wasm32-wasip2")` for WASM.
+/// Returns `None` when the rlib cannot be located.
+fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBuf> {
+    let exe_dir = env::current_exe().ok()?.parent()?.to_path_buf();
+    // Dev layout: <project>/target/release/loft  or  <project>/target/debug/loft
+    // The wasm rlib lives at <project>/target/wasm32-wasip2/release/
+    if let Some(triple) = target {
+        // Walk up to find a sibling target/<triple>/release directory.
+        let mut dir = exe_dir.clone();
+        loop {
+            let candidate = dir.join("target").join(triple).join("release");
+            if candidate.join("libloft.rlib").exists() {
+                return Some(candidate);
+            }
+            // Installed layout: <prefix>/share/loft/<triple>/
+            if dir.file_name().map_or(false, |n| n == "bin") {
+                let share = dir.parent()?.join("share").join("loft").join(triple);
+                if share.join("libloft.rlib").exists() {
+                    return Some(share);
+                }
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        return None;
     }
-    // When installed as <prefix>/bin/loft, look in <prefix>/share/loft/.
-    if dir.file_name()? == "bin" {
-        let share = dir.parent()?.join("share").join("loft");
+    // Native: look next to the binary first (dev build in target/release/).
+    if exe_dir.join("libloft.rlib").exists() {
+        return Some(exe_dir.clone());
+    }
+    // Installed as <prefix>/bin/loft — look in <prefix>/share/loft/.
+    if exe_dir.file_name()? == "bin" {
+        let share = exe_dir.parent()?.join("share").join("loft");
         if share.join("libloft.rlib").exists() {
             return Some(share);
         }
     }
     None
+}
+
+fn loft_lib_dir() -> Option<std::path::PathBuf> {
+    loft_lib_dir_for(None)
 }
 
 fn project_dir() -> String {
