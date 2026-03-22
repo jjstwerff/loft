@@ -49,6 +49,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | Issue 85 fix: `convert()` now uses `OpNullRefSentinel` for null→Reference; `eq_ref`/`ne_ref` treat `rec==0` as null |
 | 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | Use in-place (non-vector-returning) algorithms for recursive functions; `bench/10_sort` uses bubble sort as workaround |
 | 85 | Null-returning hash lookup before insert causes subsequent lookup to return null / "Allocating a used store" panic | ~~Fixed~~ | Root cause: `convert()` used `OpConvRefFromNull` (allocates a store) for `null`→`Reference` in comparisons; `eq_ref`/`ne_ref` did full `DbRef` comparison (not rec-only). Fix: `convert()` uses `OpNullRefSentinel` (no allocation, sentinel `{u16::MAX,0,0}`); `eq_ref`/`ne_ref` treat `rec==0` as null |
+| 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | High | Avoid naming hash-value struct fields `key`; use a different name (e.g. `word`, `name`) |
+| 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | No known workaround for mutual recursion; avoid `for` loops in functions called from recursive functions |
 
 ---
 
@@ -590,6 +592,7 @@ field names, or the compiler should emit an error when a hash-value struct has a
 **Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
 
 **Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."`.
+**Location:** `src/state/codegen.rs:560` — `assert!(parameters.len() >= ...)`.
 
 **Symptom:** When function A is recursive (calls itself) and function A calls function B, and
 function B contains a `for` loop, the interpreter panics:
@@ -638,6 +641,20 @@ calls with fewer arguments than the now-finalized attribute count, and patch the
 per-function variable scoping refactor.
 
 **Effort:** Medium (post-parse IR scan and call-site patching in `parse_function`).
+**Root cause:** Loft uses a flat global variable namespace — all loop variables across all
+functions in a file share the same slot-assignment table. The codegen for a `for` loop in the
+helper function corrupts the parameter count recorded for the recursive function, causing the
+assertion to fire when codegen processes the recursive call site.
+
+**Workaround:** Replace the `for` loop in the helper function with recursion, or restructure
+the algorithm so the recursive function and the looping helper are in separate files (if
+supported), or inline the loop body into the recursive function itself.
+
+**Fix path:** The flat namespace slot assignment must be replaced with per-function scope so
+that loop variable slots in one function do not interfere with parameter count tracking in
+another. This is a significant refactor of `src/variables.rs` and `src/state/codegen.rs`.
+
+**Effort:** High (requires per-function variable scoping).
 
 ---
 
