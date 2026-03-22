@@ -21,6 +21,11 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
+- [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
+- [28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax](#28-vector-slice-syntax-has-no-grammar-entry-and-diverges-from-range-syntax)
+- [29. `!value` Means "Null or False" for Boolean but "Null Only" for Integer](#29-value-means-null-or-false-for-boolean-but-null-only-for-integer)
+- [30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression](#30--is-both-anonymous-struct-initialisation-and-a-block-expression)
+- [31. Open-Ended Range Syntax in `for` Has No Documented Counterpart in `match`](#31-open-ended-range-syntax-in-for-has-no-documented-counterpart-in-match)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -203,6 +208,130 @@ exhaustiveness is not obvious from the syntax.
 
 ---
 
+## 27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action
+
+**Severity: Medium**
+
+```loft
+break           // exits the innermost loop — keyword
+x#break         // exits the loop whose variable is x — attribute expression
+```
+
+`break` and `continue` are reserved keywords that appear as statements. `x#break` uses
+the `#attribute` syntax on a loop variable to jump out of a named loop. The two forms
+look unrelated: a reader encountering `x#break` would guess it reads a property named
+`break` from `x`, not that it is a control-flow jump.
+
+There is also an asymmetry: `x#break` has no `x#continue` counterpart, so skipping the
+remainder of a named outer loop requires code restructuring.
+
+**Advice:** Consider replacing `x#break` and introducing `break x` / `continue x` as
+labelled-break forms, consistent with how other languages handle named loop exits
+(`break 'label` in Rust, `break label` in Java). The existing `#` notation could be
+kept for read-only loop metadata (`#first`, `#count`, `#index`) and `#remove`, which
+are genuine attribute reads.
+
+---
+
+## 28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax
+
+**Severity: Low**
+
+```loft
+v[start..end]   // slice — end exclusive (matches for-loop range)
+v[start..]      // open end  (also valid in for-loop)
+v[..end]        // open start — NO for-loop counterpart
+v[2..-1]        // negative index — NO for-loop counterpart
+v[1..=3]        // inclusive end — valid in for-loop and match; undocumented for slices
+```
+
+The grammar summary defines `range_expr` for `for` loops and `match` arms but does not
+include the slice forms `[..end]` and `[n..-1]`. Users cannot tell from the grammar
+whether `v[1..=3]` (inclusive slice) is supported.
+
+**Advice:** Add a `slice_expr` production to the grammar summary that enumerates all
+valid slice forms and documents which are shared with `range_expr`. Clarify whether
+`..=` is supported in slices.
+
+---
+
+## 29. `!value` Means "Null or False" for Boolean but "Null Only" for Integer
+
+**Severity: Low**
+
+```loft
+b: boolean = false
+if !b { }       // true — false IS the null sentinel for boolean
+
+n: integer = 0
+if !n { }       // false — 0 is not null; only i32::MIN triggers this
+```
+
+For `boolean`, the null sentinel is `false`, so `!b` is true for both absent and
+`false` values — there is no way to distinguish them. For `integer`, zero is a valid
+non-null value and `!n` only fires for `i32::MIN`. A programmer writing `if !count`
+expecting "zero or null" gets only the null check; `if !flag` expecting "false or null"
+gets both.
+
+The underlying cause is the in-band sentinel design, which is intentional. However the
+asymmetry is not documented and can produce silent logic errors when code is ported
+from a boolean guard to an integer guard (or vice versa).
+
+**Advice:** Add a note to the null sentinel table in LOFT.md and the Best Practices
+section explicitly stating that `!b` on boolean catches false and null, while `!n` on
+integer catches null only. Document `n == 0 or !n` as the idiomatic "zero or null"
+integer check.
+
+---
+
+## 30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression
+
+**Severity: Low**
+
+```loft
+point = { x: 1.0, y: 2.0 }     // anonymous struct init (type inferred from context)
+result = { compute(); value }   // block expression returning last value
+```
+
+The opening `{` alone does not indicate which form is being used. The parser resolves
+the ambiguity by looking ahead for `ident ':'` (struct field assignment). A typo such
+as `{ x, y }` (missing colons) silently becomes a block expression that evaluates `x`
+and `y` as separate statements and returns `y`.
+
+**Advice:** Consider requiring an explicit type name for anonymous struct init in
+contexts where a block expression is also valid, e.g. `Point { x: 1.0, y: 2.0 }`.
+Alternatively, document the lookahead rule prominently in the grammar summary so users
+know what to expect when `{` is ambiguous.
+
+---
+
+## 31. Open-Ended Range Syntax in `for` Has No Documented Counterpart in `match`
+
+**Severity: Low**
+
+```loft
+for i in 10.. { }          // valid — open-ended range (iterate from 10 upward)
+
+match score {
+    90..=100 => "A",        // valid two-sided inclusive range
+    80..90   => "B",        // valid two-sided exclusive range
+    10..     => "passing",  // undocumented — is this valid?
+    ..80     => "failing",  // undocumented — is this valid?
+    _        => "other"
+}
+```
+
+The grammar defines `range_expr` with an open-end form (`expr '..'`) for `for` loops,
+but the `pattern` production only lists `range` without specifying whether open-ended
+forms are allowed in `match` arms. Users writing match arms for "90 or above" must use
+`90..=i32::MAX` or a guard (`n if n >= 90`) instead of `90..`.
+
+**Advice:** Decide whether open-ended range patterns in `match` are supported and
+document the answer explicitly in the grammar. If not supported, document the
+`n if n >= threshold` idiom as the canonical alternative.
+
+---
+
 ## Summary by Severity
 
 ### High (silent wrong behaviour)
@@ -214,6 +343,7 @@ _All fixed — see CHANGELOG.md._
 | 3 | `#index` is byte-offset on text, element-position on vector |
 | 12 | Index range-query second-key boundary depends on undeclared sort direction |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required |
+| 27 | `break` keyword and `x#break` attribute are two mechanisms for the same action; no `x#continue` |
 
 ### Low (cosmetic or minor)
 | # | Issue |
@@ -223,6 +353,10 @@ _All fixed — see CHANGELOG.md._
 | 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
+| 28 | Vector slice forms `[..end]` and `[n..-1]` absent from grammar; `..=` undocumented for slices |
+| 29 | `!b` on boolean catches false and null; `!n` on integer catches null only |
+| 30 | `{...}` is both anonymous struct init and block expression; typos silently become blocks |
+| 31 | Open-ended range `10..` is valid in `for`; not documented for `match` arms |
 
 ---
 
