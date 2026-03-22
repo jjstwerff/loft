@@ -589,7 +589,7 @@ field names, or the compiler should emit an error when a hash-value struct has a
 
 **Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
 
-**Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."``.
+**Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."`.
 
 **Symptom:** When function A is recursive (calls itself) and function A calls function B, and
 function B contains a `for` loop, the interpreter panics:
