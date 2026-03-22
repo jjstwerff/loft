@@ -85,10 +85,6 @@ fn OpMkdir(path: text) -> boolean;
 #rust"std::fs::create_dir(@path).is_ok()"
 fn OpMkdirAll(path: text) -> boolean;
 #rust"std::fs::create_dir_all(@path).is_ok()"
-// Clear the temporary string buffer used by native text functions.
-// Emitted at statement boundaries by the compiler; not callable from user code.
-fn OpClearScratch();
-#rust"stores.scratch.clear();"
 // Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
 // Use for fast colour comparison or storage.
 pub fn value(self: Pixel) -> integer {
@@ -287,6 +283,9 @@ pub fn now() -> long;
 // Returns microseconds elapsed since program start (monotonic clock).
 // Unaffected by system clock adjustments. Use for benchmarks and frame timing.
 pub fn ticks() -> long;
+
+// Clears the scratch buffer used by text-returning native functions (A8).
+fn OpClearScratch();
 
 // --- Vector operations (T2-8, T2-5) ---
 // reverse(v) and sort(v) are compiler special-cased in parse_call.

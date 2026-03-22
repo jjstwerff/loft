@@ -958,10 +958,7 @@ extern crate loft;"
     /// expression to prevent simultaneous `&mut Stores` borrows.
     /// Returns `(var_name, expr_code)` pairs ordered innermost-first so each pre-eval
     /// can safely reference earlier ones.
-    fn collect_pre_evals(
-        &mut self,
-        v: &Value,
-    ) -> std::io::Result<Vec<PreEvalEntry>> {
+    fn collect_pre_evals(&mut self, v: &Value) -> std::io::Result<Vec<PreEvalEntry>> {
         let mut result = Vec::new();
         self.collect_pre_evals_inner(v, &mut result)?;
         Ok(result)

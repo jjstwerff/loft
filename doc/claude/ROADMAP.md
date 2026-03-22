@@ -10,14 +10,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 
 ---
 
-## 0.8.2 — Stability, efficiency, and native codegen
-
-| ID    | Title                                                        | Effort    | Depends on      | Source                      |
-|-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
-| S4    | Binary I/O type coverage (Issues 59, 63)                     | Small–Med |                 | PROBLEMS.md #59, #63        |
-| A8    | Destination-passing for text-returning natives               | Med–High  |                 | String arch review          |
-| P1    | **Lambda expressions** ✓ all phases complete                 | Med–High  |                 | Prototype goal              |
-
 ---
 
 ## 0.8.3 — Language syntax extensions

@@ -40,6 +40,15 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
 
 ### Improvements
 
+- **A8** — Destination-passing calling convention for the three text-returning native
+  functions (`replace`, `to_lowercase`, `to_uppercase`).  The compiler now detects
+  `r = text_fn(…)` and `r += text_fn(…)` patterns and emits `OpCreateStack` +
+  `OpStaticCall` to a `_dest` variant of the native, which writes the result string
+  directly into the destination variable via `push_str`.  The scratch buffer
+  (`Stores.scratch`) is retained for all other call paths (e.g. format string
+  interpolation `"{expr}"`) and cleared at statement boundaries by `OpClearScratch`.
+  (`src/native.rs`, `src/state/codegen.rs`, `src/fill.rs`, `default/02_images.loft`)
+
 - **S4** — `read_data` in `database/io.rs` now implements `Parts::Array` (indirect
   record reads by looping over element count and recursing per element).
   `Parts::Sorted | Ordered | Hash | Index | Spacial` now emits a clear panic

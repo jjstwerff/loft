@@ -366,8 +366,6 @@ impl State {
             data: data_ptr,
         }));
 
-        // T3-9: scratch is now cleared per-statement by OpClearScratch; no need to
-        // clear it at execute() start — the first OpClearScratch in the program will do it.
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
         self.stack_pos = 4;

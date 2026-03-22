@@ -63,8 +63,8 @@ generation.  No new language syntax.  Most items are independent and can be deve
 in parallel.
 
 **Correctness:**
-- **L4** — Empty `[]` literal as mutable vector argument: parser fix in `parse_vector`.
-- **L5** — `v += extra` via `&vector` ref-param panics: parser fix in `parse_append_vector`.
+- **L4** — Empty `[]` literal as mutable vector argument: fix in `call_nr()` in `parser/mod.rs`. ✓
+- **L5** — `v += extra` via `&vector` ref-param panics: fix in `generate_var()` in `state/codegen.rs`. ✓
 
 **Stack slot efficiency:**
 - **A13** — Float/Long dead-slot reuse: `can_reuse` guard raised to ≤ 8 bytes. ✓
@@ -72,9 +72,6 @@ in parallel.
 - **A15** — Exhaustive `inline_ref_set_in`: match now exhaustive; new compound variants are a compile error. ✓
 
 **Efficiency and packaging:**
-- **A8** — Destination-passing for string natives: eliminates the double-copy overhead on
-  `replace`, `to_lowercase`, `to_uppercase` and format expressions.
-
 **Prototype features:**
 - **P1** — Lambda expressions: moved from 0.8.3 for stability; callable fn-refs already
   exist, lambdas are needed before closures (A5) and aggregates (P3) can land.
