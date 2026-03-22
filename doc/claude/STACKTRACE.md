@@ -18,6 +18,7 @@ source locations, and live argument values at the point of the call.
 - [API](#api)
 - [Usage Examples](#usage-examples)
 - [Runtime Design](#runtime-design)
+- [Safety Concerns and Mitigations](#safety-concerns-and-mitigations)
 - [Implementation Phases](#implementation-phases)
 - [Known Limitations](#known-limitations)
 - [Non-Goals](#non-goals)
@@ -67,15 +68,16 @@ pub enum ArgValue {
 | `FloatVal` | `float` |
 | `SingleVal` | `single` |
 | `CharVal` | `character` |
-| `TextVal` | `text` — value deep-copied from the stack |
-| `RefVal` | `reference<T>`, struct-enum, `vector<T>`, collection — raw DbRef triple |
+| `TextVal` | `text` — content heap-allocated independently of the stack frame |
+| `RefVal` | `reference<T>`, struct-enum, `vector<T>`, collection — raw DbRef triple; valid at snapshot time only (see [SC-ST-6](#sc-st-6--refval-coordinates-silently-dangle)) |
 | `FnVal` | `fn(T) -> R` — definition number |
 | `OtherVal` | Iterator state or any type without a direct scalar representation; `description` holds the type name |
 
-`RefVal` exposes the raw `(store, rec, pos)` triple from the DbRef. The caller can use
-this to identify which store record is being referenced, but further dereferencing
-requires native code. The `description` field of `OtherVal` contains the loft type name
-as a text string (e.g. `"iterator<Item, integer>"`).
+`RefVal` exposes the raw `(store, rec, pos)` triple from the DbRef. The coordinates are
+valid only at the instant `stack_trace()` is called; they may point to a reallocated or
+freed record if the trace is retained after the source frame has returned (see
+[Known Limitations](#known-limitations)). The `description` field of `OtherVal` contains
+the loft type name as a text string (e.g. `"iterator<Item, integer>"`).
 
 ### `ArgInfo` — one function argument
 
@@ -198,8 +200,8 @@ per call, which is negligible compared with the function dispatch itself.
 struct CallFrame {
     d_nr:      u32,   // definition number of the called function
     call_pos:  u32,   // bytecode position of the call instruction (line-number lookup)
-    args_base: u32,   // stack_pos value at the start of this frame's arguments
-    args_size: u16,   // total byte size of all parameters
+    args_base: u32,   // stack_pos at the start of this frame's arguments
+    args_size: u16,   // total byte size of all parameters (sum of size_of each param type)
 }
 ```
 
@@ -209,10 +211,11 @@ struct CallFrame {
 call_stack: Vec<CallFrame>,
 ```
 
-`fn_call` is extended:
+`fn_call` is extended with two new explicit parameters (see [SC-ST-4](#sc-st-4--fn_calls-_size-is-not-args_size)):
 
 ```rust
-pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
+pub fn fn_call(&mut self, d_nr: u32, args_size: u16, local_size: u16, to: i32) {
+    // args have already been pushed; args_base is current stack top minus args
     let args_base = self.stack_pos - u32::from(args_size);
     self.call_stack.push(CallFrame { d_nr, call_pos: self.code_pos, args_base, args_size });
     self.put_stack(self.code_pos);
@@ -223,11 +226,12 @@ pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
 `fn_return` pops:
 
 ```rust
-// At the end of fn_return:
+// At the end of fn_return, after restoring code_pos:
 self.call_stack.pop();
 ```
 
-`fn_call_ref` already delegates to `fn_call`; it gains the `d_nr` it already reads.
+`fn_call_ref` already delegates to `fn_call`; it supplies `d_nr` from the value it
+reads and `args_size` from its existing `arg_size` parameter.
 Static calls (via `library`) are not loft functions and are not pushed.
 
 ### `OpStackTrace` — dedicated opcode
@@ -237,59 +241,220 @@ The native function table (`library`) only gives native functions access to
 which requires `&State`, `&Data` (definition table), and `&call_stack`.
 
 `stack_trace()` is therefore implemented as a **dedicated opcode** `OpStackTrace`
-(similar to `OpCallRef`, which also has direct `&mut self` access inside
-`fill.rs`/`state/mod.rs`):
+(following the same pattern as `OpCallRef`, which also has direct `&mut self` access):
 
 ```rust
 // In fill.rs or state/mod.rs:
 OpStackTrace => {
-    let frames = self.materialise_stack_trace(&data);
-    // push the vector<StackFrame> DbRef onto the stack
+    let result = self.materialise_stack_trace(&data);
+    self.put_stack(result);
 }
 ```
 
-`materialise_stack_trace` walks `self.call_stack` outermost-first, reads argument
-values from the raw stack bytes, and constructs the `vector<StackFrame>` in a store.
-
 ### Materialising argument values
 
-For each `CallFrame`, the function's parameters are read from `data.definitions[d_nr].attributes`
-(which holds name, type, and offset). The value at `stack_cur.pos + args_base + offset`
-is interpreted according to the parameter's `Type`:
+For each `CallFrame`, the function's parameters are read from
+`data.definitions[d_nr].attributes` (name, type, stack offset). Before any iteration,
+`call_stack` is **cloned into a local snapshot** (see [SC-ST-3](#sc-st-3--re-entrant-stack_trace-corrupts-call_stack-iteration)).
 
-| `Type` | Stack read | `ArgValue` variant |
-|---|---|---|
-| `Boolean` | `u8` at offset | `BoolVal` or `NullVal` |
-| `Integer(min, max, _)` | `i32` / `i16` / `i8` at offset (width from range) | `IntVal` or `NullVal` |
-| `Long` | `i64` at offset | `LongVal` or `NullVal` |
-| `Float` | `f64` at offset | `FloatVal` or `NullVal` (NaN) |
-| `Single` | `f32` at offset | `SingleVal` or `NullVal` (NaN) |
-| `Character` | `u32` at offset | `CharVal` or `NullVal` ('\0') |
-| `Text` | `String` at offset | deep-copy into `TextVal`; null pointer → `NullVal` |
-| `Reference`, `Vector`, collection | `DbRef` (12 bytes) at offset | `RefVal{store,rec,pos}` or `NullVal` |
-| `Function(_, _)` | `i32` d_nr at offset | `FnVal{d_nr}` |
-| anything else | — | `OtherVal{description: type.to_string()}` |
+For each parameter, the byte offset from `args_base` is computed and **bounds-checked**
+against `args_size` before any read (see [SC-ST-5](#sc-st-5--no-bounds-check-on-argument-reads)).
+If the offset overflows the argument region, `OtherVal { description: "read-out-of-bounds" }`
+is produced for that parameter.
 
-Null detection uses the same sentinels as the rest of the runtime:
-- `integer`: `i32::MIN`
-- `float`/`single`: NaN
-- `character`: `'\0'` (0)
-- `reference`/collection: `rec == 0`
-- `text`: null pointer (checked via `String::is_empty` after a null-pointer guard)
+| `Type` | Stack read | Null sentinel | `ArgValue` variant |
+|---|---|---|---|
+| `Boolean` | `u8` at offset | byte `0` or `255` (false) | `BoolVal` or `NullVal` |
+| `Integer(min, max, _)` | `i32`/`i16`/`i8` (width from range) | `i32::MIN` / `i16::MIN` / `i8::MIN` | `IntVal` or `NullVal` |
+| `Long` | `i64` at offset | `i64::MIN` | `LongVal` or `NullVal` |
+| `Float` | `f64` at offset | NaN | `FloatVal` or `NullVal` |
+| `Single` | `f32` at offset | NaN | `SingleVal` or `NullVal` |
+| `Character` | `u32` at offset | `0` (NUL) | `CharVal` or `NullVal` |
+| `Text` | `Str { ptr, len }` at offset | `ptr == STRING_NULL.as_ptr()` | heap-copy into `TextVal`; null → `NullVal` |
+| `Reference`, `Vector`, collection | `DbRef` (12 bytes) at offset | `rec == 0` | `RefVal{store,rec,pos}` or `NullVal` |
+| `Function(_, _)` | `i32` d_nr at offset | — | `FnVal{d_nr}` |
+| anything else | — | — | `OtherVal{description: type.to_string()}` |
+
+**Text null detection** (see [SC-ST-1](#sc-st-1--text-null-sentinel-is-strnewstring_null-not-a-null-pointer)):
+loft text on the stack is `Str { ptr: *const u8, len: u32 }` (12 bytes), not a Rust
+`String`. The null sentinel is `STRING_NULL: &str = "\0"` — a static byte — so null
+text is detected by `str.ptr == STRING_NULL.as_ptr()`, not by checking for a null
+pointer or an empty string.
+
+**Text deep-copy** (see [SC-ST-2](#sc-st-2--str-may-borrow-a-live-strings-buffer)):
+a `Str` may point into the static `text_code` pool (safe to copy) or into a dynamic
+`String`'s heap buffer (pointer becomes dangling after `OpFreeText`). To be safe in
+all cases, every non-null text argument is materialised into a freshly heap-allocated
+`String` via `str.str().to_owned()`. The owned `String` is then stored in the
+`TextVal{t}` field of the heap record. This cost is acceptable since `stack_trace()` is
+expected to be called only in diagnostic paths.
 
 ### Line number resolution
 
 `State.line_numbers: HashMap<u32, u32>` maps bytecode positions to 1-based source line
 numbers. `CallFrame.call_pos` is the code position **of the call instruction**, so
-`line_numbers[call_pos]` gives the call-site line. If no entry exists (e.g. for
-synthetic or inlined code), `line` is reported as `0`.
+`line_numbers.get(&call_pos).copied().unwrap_or(0)` gives the call-site line. If no
+entry exists (e.g. for synthetic or inlined code), `line` is reported as `0`.
 
 ### File name resolution
 
-`Definition.position.file` (or the equivalent field on the source position) holds the
-file path for each definition. `data.definitions[d_nr].position.file` gives the source
-file of the function, which is the correct file for the call-site line since both the
-call and the function live in the same compilation unit.
+`data.definitions[d_nr].position.file` holds the source file path of the function
+definition. This is used as-is for `StackFrame.file`.
+
+---
+
+## Safety Concerns and Mitigations
+
+### SC-ST-1 — Text null sentinel is `Str::new(STRING_NULL)`, not a null pointer
+
+**Problem:** The loft text type on the stack is `Str { ptr: *const u8, len: u32 }`
+(12 bytes), not a Rust `String`. The null sentinel is the static string
+`STRING_NULL = "\0"`, so null text is `Str { ptr: STRING_NULL.as_ptr(), len: 1 }`.
+The pointer is never truly null; `len` is 1 (the NUL byte). Checking `is_empty()`
+(len == 0) or a null-pointer guard misidentifies all null text arguments as valid
+`TextVal` entries containing garbage content.
+
+**Mitigation:** Null text detection in `materialise_stack_trace` must compare
+`str.ptr == STRING_NULL.as_ptr()`. No other check is correct.
+
+---
+
+### SC-ST-2 — `Str` may borrow a live `String`'s buffer; shallow copy produces a dangling pointer
+
+**Problem:** Static string literals are `Str` pointing into `text_code` (static
+lifetime — safe). Dynamically built strings use a Rust `String` on the stack; a text
+parameter receives a `Str` borrowing that `String`'s heap buffer. If materialisation
+copies only `(ptr, len)`, the `TextVal` record's pointer becomes dangling the moment
+`OpFreeText` frees the source `String`.
+
+**Mitigation:** Every non-null text argument is materialised into an independently
+heap-allocated `String` via `str.str().to_owned()`. The `Str`-vs-`String` distinction
+is irrelevant at the point of copy: `str.str()` yields a `&str` slice regardless of the
+backing source, and `.to_owned()` always allocates a fresh independent buffer.
+
+---
+
+### SC-ST-3 — Re-entrant `stack_trace()` corrupts `call_stack` iteration
+
+**Problem:** `materialise_stack_trace` iterates over `self.call_stack`. Any loft
+function call during materialisation (e.g. a format conversion, a store allocation
+callback) would `push` to `call_stack` while the iteration is live, invalidating the
+iterator and producing wrong frame counts or use-after-reallocate on the `Vec`.
+
+**Mitigation:** The first statement of `materialise_stack_trace` must clone `call_stack`
+into a local snapshot:
+
+```rust
+fn materialise_stack_trace(&mut self, data: &Data) -> DbRef {
+    let frames = self.call_stack.clone();   // snapshot — mandatory first step
+    for frame in &frames { ... }
+}
+```
+
+The live `self.call_stack` may then be freely mutated during materialisation without
+affecting the iteration.
+
+---
+
+### SC-ST-4 — `fn_call`'s `_size` parameter is not `args_size`; `args_base` would be wrong
+
+**Problem:** The current signature is `fn_call(&mut self, _size: u16, to: i32)` where
+`_size` is documented as *"the amount of stack space maximally needed for the new
+function"* — the local-variable reservation size. Using it as `args_size` to compute
+`args_base = stack_pos - _size` would yield the wrong base address, causing all
+argument reads to land at incorrect positions.
+
+**Mitigation:** `fn_call` is extended with two explicit, clearly named parameters:
+
+```rust
+pub fn fn_call(&mut self, d_nr: u32, args_size: u16, local_size: u16, to: i32)
+//                                   ^^^^^^^^^^^      ^^^^^^^^^^
+//                        sum of param sizes      max local var space (existing _size)
+```
+
+Every call site in `fill.rs` that currently passes `_size` must be audited:
+- `args_size` = sum of `size_of(param.typedef)` for each parameter in
+  `data.definitions[d_nr].attributes`; this is always known at the `OpCall` emission
+  site in codegen.
+- `local_size` = the existing `_size` value, passed through unchanged.
+
+`fn_call_ref` already has `arg_size: u16`; it maps directly to `args_size`.
+
+---
+
+### SC-ST-5 — No bounds check on argument reads; metadata mismatch causes UB memory access
+
+**Problem:** If `data.definitions[d_nr].attributes` is out of sync with the actual
+bytecode (first-pass vs. second-pass type mismatch, or a `default`-parameter count
+difference), the computed `offset + param_size` may exceed `args_size`, reading into the
+return-address slot or local variables above it — undefined behaviour in Rust.
+
+**Mitigation:** Before reading each parameter's bytes, assert:
+
+```rust
+if offset + param_size > usize::from(frame.args_size) {
+    // produce a safe sentinel instead of an OOB read
+    push ArgValue::OtherVal { description: "read-out-of-bounds".to_string() };
+    continue;
+}
+```
+
+This turns a potential UB memory access into a visible diagnostic value. A debug-build
+`debug_assert!` may additionally panic to surface the metadata mismatch early.
+
+---
+
+### SC-ST-6 — `RefVal` coordinates silently dangle after the source frame's stores are freed
+
+**Problem:** After a function returns and its store allocations are freed, a `RefVal` in
+a retained trace may show coordinates that now belong to a freshly reallocated record of
+an unrelated type. Since `RefVal` stores only integers (store, rec, pos), no memory
+safety violation occurs — but the numbers silently describe the wrong object, producing
+misleading diagnostics.
+
+**Mitigation:** Document prominently that `RefVal` coordinates are a **point-in-time
+snapshot**. Any code that retains a `vector<StackFrame>` across function returns must
+treat `RefVal` entries as historical identifiers, not live pointers:
+
+> `RefVal` coordinates are valid only at the instant `stack_trace()` is called.
+> If the traced function's stores are freed or reallocated before the trace is read,
+> the coordinates describe a different or invalid record. Never dereference them
+> via native code after the source frame has returned.
+
+---
+
+### SC-ST-7 — Trace result in a worker's stores cannot safely cross thread boundaries
+
+**Problem:** Each parallel worker (`par(...)` body) has its own `State` and `Stores`.
+A `vector<StackFrame>` produced by `stack_trace()` inside a worker lives in the
+worker's stores. If the worker appends it to a shared collection, the DbRef crosses
+thread boundaries. The main thread's `Stores` does not own those records; freeing the
+shared collection would not free the worker's stores (leak), or the worker's stores
+would be freed on worker exit while the main thread still holds the DbRefs
+(use-after-free in Rust store memory).
+
+**Mitigation:** The compiler must reject any assignment of a `stack_trace()` result
+to a cross-thread shared variable inside a `par(...)` body — the same rule that governs
+other store-owned values that must not cross thread boundaries. Until that check is
+implemented, document the restriction explicitly:
+
+> Do not assign the result of `stack_trace()` to a variable that is shared between
+> the parallel worker and the enclosing scope. Use it only within the same thread
+> (log it, assert on it, or discard it before the worker body ends).
+
+---
+
+### Summary of safety concerns
+
+| ID | Concern | Severity | Resolution in this design |
+|---|---|---|---|
+| SC-ST-1 | Text null is `ptr == STRING_NULL.as_ptr()`, not a null pointer or empty string | High | Null check corrected in materialisation table and SC-ST-1 section |
+| SC-ST-2 | `Str` may borrow a `String` buffer; shallow copy produces dangling pointer | High | Always `to_owned()` into a fresh heap buffer |
+| SC-ST-3 | Re-entrant loft calls during materialisation mutate `call_stack` under iteration | High | Mandatory `call_stack.clone()` snapshot as first step |
+| SC-ST-4 | `_size` in `fn_call` is local-var space, not args size; `args_base` would be wrong | Medium | `fn_call` extended with explicit `d_nr`, `args_size`, `local_size` parameters |
+| SC-ST-5 | No bounds guard on argument reads; metadata mismatch causes UB | Medium | Per-parameter `offset + size <= args_size` guard; OOB → `OtherVal` |
+| SC-ST-6 | `RefVal` coordinates dangle silently after source frame returns | Low | Documented; warning in Known Limitations |
+| SC-ST-7 | Trace result in worker stores cannot be shared with main thread | Low | Documented; compiler enforcement deferred |
 
 ---
 
@@ -297,11 +462,16 @@ call and the function live in the same compilation unit.
 
 ### Phase 1 — Shadow call-frame vector (`src/state/mod.rs`)
 
-1. Add `call_stack: Vec<CallFrame>` to `State`; define the `CallFrame` struct.
-2. Extend `fn_call` to accept `d_nr` and `args_size`; push a `CallFrame`.
-3. Extend `fn_return` to pop the top frame.
-4. Update all call sites in `fill.rs` that invoke `fn_call` to supply `d_nr` and
-   `args_size` (both are already known at those sites).
+1. Define `CallFrame { d_nr, call_pos, args_base, args_size }`.
+2. Add `call_stack: Vec<CallFrame>` to `State`.
+3. Extend `fn_call` to `fn_call(d_nr: u32, args_size: u16, local_size: u16, to: i32)`:
+   - compute `args_base = self.stack_pos - u32::from(args_size)`;
+   - push `CallFrame`; then write return address and jump as before.
+4. Extend `fn_return` to pop the top frame after restoring `code_pos`.
+5. Update all `fn_call` call sites in `fill.rs`: supply `d_nr` (from the emitted
+   `OpCall` operand) and `args_size` (computed from `data.definitions[d_nr].attributes`
+   at codegen time and encoded as a second `OpCall` operand); rename existing `_size` to
+   `local_size`.
 
 #### Tests — Phase 1
 
@@ -310,6 +480,8 @@ call and the function live in the same compilation unit.
 | `call_stack_depth` | `call_stack.len()` equals the expected nesting depth inside a known call chain |
 | `call_stack_pop` | depth returns to 0 after all functions return |
 | `call_stack_d_nr` | top frame's `d_nr` matches the currently executing function |
+| `call_stack_args_base` | `args_base` for a two-parameter function points to the first parameter byte |
+| `call_stack_args_size` | `args_size` matches the sum of `size_of` for all parameter types |
 
 ---
 
@@ -334,18 +506,24 @@ call and the function live in the same compilation unit.
 
 Implement `materialise_stack_trace(&data) -> DbRef`:
 
-1. Allocate a `vector<StackFrame>` store.
-2. For each `CallFrame` in `self.call_stack` (outermost first):
-   a. Look up `data.definitions[d_nr]` for the function name and source position.
-   b. Resolve the line number from `self.line_numbers[call_pos]`.
+1. **Snapshot** `self.call_stack` into a local `Vec<CallFrame>` (SC-ST-3).
+2. Allocate a `vector<StackFrame>` store.
+3. For each `CallFrame` in the snapshot (outermost first):
+   a. Look up `data.definitions[d_nr]` for function name and source position.
+   b. Resolve line number: `line_numbers.get(&call_pos).copied().unwrap_or(0)`.
    c. Allocate a `vector<ArgInfo>` store.
-   d. For each parameter (from `def.attributes` in declaration order):
-      - Compute its offset from `args_base`.
-      - Read and classify the raw bytes into an `ArgValue` variant.
-      - Deep-copy `text` arguments (the stack owns the buffer; the trace must not alias it).
+   d. For each parameter in `def.attributes` (declaration order):
+      - Compute `offset` = sum of `size_of(prev_param.typedef)` for all prior params.
+      - **Bounds-check**: if `offset + size_of(param.typedef) > args_size`, push
+        `OtherVal { description: "read-out-of-bounds" }` and continue (SC-ST-5).
+      - Read raw bytes from `stack_cur.pos + frame.args_base + offset`.
+      - **For `Text`**: check `str.ptr == STRING_NULL.as_ptr()` for null (SC-ST-1);
+        otherwise `str.str().to_owned()` into a fresh heap `String` (SC-ST-2).
+      - Classify into the appropriate `ArgValue` variant using the null sentinels in
+        the materialisation table.
       - Allocate an `ArgInfo` record and append to the argument vector.
-   e. Allocate a `StackFrame` record and append to the result vector.
-3. Push the result `DbRef` onto the stack.
+   e. Allocate a `StackFrame` record (function, file, line, arguments) and append.
+4. Push the result `DbRef` onto the stack.
 
 #### Tests — Phase 3
 
@@ -354,13 +532,17 @@ Implement `materialise_stack_trace(&data) -> DbRef`:
 | `trace_function_name` | innermost frame has the correct function name |
 | `trace_file_line` | `file` and `line` match the source of the `stack_trace()` call |
 | `trace_arg_int` | integer argument appears as `IntVal{n}` with the correct value |
-| `trace_arg_text` | text argument appears as `TextVal{t}`; modifying the trace copy does not affect the original |
-| `trace_arg_null` | null integer appears as `NullVal` |
+| `trace_arg_null_int` | null integer (`i32::MIN`) appears as `NullVal` |
+| `trace_arg_text` | text argument appears as `TextVal{t}`; modifying the copy does not affect the original |
+| `trace_arg_null_text` | null text (`STRING_NULL` sentinel) appears as `NullVal` |
 | `trace_arg_ref` | `reference<T>` argument appears as `RefVal{store, rec, pos}` |
+| `trace_arg_null_ref` | null reference (`rec == 0`) appears as `NullVal` |
 | `trace_depth` | `len(stack_trace())` equals the actual call depth |
 | `trace_ordering` | frame 0 is `main`; last frame is the direct caller |
 | `trace_no_args` | function with no parameters produces an empty `arguments` vector |
 | `trace_multi_arg` | three-parameter function shows all three in declaration order |
+| `trace_text_independent` | mutating the original text after `stack_trace()` does not change the captured `TextVal` |
+| `trace_reentrant_safe` | calling any loft function during a format operation on the trace result does not corrupt the frame list |
 
 ---
 
@@ -384,11 +566,11 @@ source position.
 
 | ID | Limitation | Workaround |
 |---|---|---|
-| ST-1 | `RefVal` exposes raw DbRef coordinates; further dereferencing requires native code | Use `description` in `OtherVal` for display; use `{:j}` JSON format on the variable before calling `stack_trace()` |
-| ST-2 | `text` arguments are deep-copied; large text values incur allocation cost at trace time | Call `stack_trace()` only in error paths, not on the hot path |
+| ST-1 | `RefVal` exposes raw DbRef coordinates; further dereferencing requires native code | Use `description` in `OtherVal` for display; format the variable as `{v:j}` before calling `stack_trace()` |
+| ST-2 | `RefVal` coordinates are a point-in-time snapshot — they may describe a reallocated or freed record if the trace is retained after the source frame returns | Read `RefVal` entries immediately; do not cache a `vector<StackFrame>` across scope exits of the traced functions |
 | ST-3 | Static native calls (via `library`) do not appear as frames | By design: native functions have no loft source location |
 | ST-4 | `line` is `0` for compiler-synthesised call sites (default parameter evaluation, `#iterator` wrappers) | Unavoidable without synthetic source positions |
-| ST-5 | Parallel worker threads each have their own `call_stack`; `stack_trace()` returns only the current thread's frames | Accepted: cross-thread trace would require synchronisation and is rarely needed |
+| ST-5 | `stack_trace()` inside a `par(...)` worker returns only the current worker's frames; the result must not be assigned to a variable shared with the enclosing scope — doing so causes a store-ownership violation (leak or use-after-free on worker exit) | Log or assert on the trace within the worker body; do not return it to the caller |
 
 ---
 
@@ -407,7 +589,8 @@ source position.
 ## See also
 
 - [INTERMEDIATE.md](INTERMEDIATE.md) — `State` layout, `fn_call`/`fn_return`, stack
-  frame layout, `line_numbers`, `fn_positions`, `text_positions` invariant
+  frame layout, `line_numbers`, `fn_positions`, `text_positions` invariant; `Str` vs
+  `String` text representations; `STRING_NULL` sentinel
 - [INTERNALS.md](INTERNALS.md) — native function registry, `library` call convention,
   `OpCallRef` as a precedent for opcodes with direct `&State` access
 - [LOGGER.md](LOGGER.md) — runtime logging (complement to stack traces for diagnostics)
