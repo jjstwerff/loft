@@ -24,6 +24,9 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | O1    | **Interpreter: superinstruction merging** — peephole pass, 6 merged opcodes (240–245) | Medium | | PERFORMANCE.md P1 |
 | O3    | Interpreter: verify integer paths carry no `long` null-sentinel | Low       |                 | PERFORMANCE.md P3           |
 | O6    | Native: remove `long` null-sentinel from local arithmetic (`_nn` variants) | Low   |                 | PERFORMANCE.md N3           |
+| A1    | **Parallel workers: extra args + value-struct + text/ref returns** *(2 ph)* | Med–High |    | THREADING deferred          |
+| A1.1  | ↳ Extra context args + value-struct returns (extend `execute_at_raw`, output buffer) | Medium | | collections.rs, parallel.rs |
+| A1.2  | ↳ Text/reference returns (dedicated result store per dispatch)   | Medium    | A1.1            | parallel.rs, store.rs       |
 
 ---
 
@@ -63,9 +66,6 @@ Full descriptions and Fix paths: [PLANNING.md](PLANNING.md).
 | ID    | Title                                                        | Effort    | Depends on      | Source                      |
 |-------|--------------------------------------------------------------|-----------|-----------------|-----------------------------|
 | L1    | Error recovery after token failures                          | Medium    |                 | DEVELOPERS.md Step 5        |
-| A1    | **Parallel workers: extra args + text/ref returns** *(2 ph)* | High      |                 | THREADING deferred          |
-| A1.1  | ↳ Extra context arguments (compile-time wrapper synthesis)   | Medium    |                 | collections.rs, parallel.rs |
-| A1.2  | ↳ Text/reference return types (merge worker-local stores)    | Medium    | A1.1            | parallel.rs, store.rs       |
 | A2    | **Logger: hot-reload, run-mode helpers, release + debug flags** *(4 ph)* | Medium |       | LOGGER.md § Remaining Work  |
 | A2.1  | ↳ Wire hot-reload (`check_reload` in n_log_* bodies)         | Small     |                 | native.rs                   |
 | A2.2  | ↳ `is_production()` + `is_debug()` + `RunMode` enum          | Small     |                 | native.rs, 01_code.loft     |

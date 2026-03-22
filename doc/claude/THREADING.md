@@ -225,17 +225,35 @@ fn main() {
 
 ## Deferred: Extra Worker Parameters
 
-Passing additional parameters beyond the row reference to the worker is not yet implemented.  The constraint is the bytecode generator: `generate_call` for library (native) functions only pushes parameters declared in the function's loft signature; extra `Value::Call` arguments are ignored.
+Passing additional parameters beyond the row reference to the worker is not yet implemented.  The validation infrastructure is already in place (`n_extra == n_worker_extra` check in `parse_parallel_for`); only the emission path is missing.
 
-Planned approach: when extra args are present, `parse_parallel_for` would synthesise a wrapper loft function that captures the extras and calls the real worker.  This requires IR-level function synthesis (non-trivial).
+**Planned approach — extend `execute_at_raw`** (no IR wrapper synthesis required):
 
-The validation infrastructure is already in place (`n_extra == n_worker_extra` check in `parse_parallel_for`).
+1. Add `extra_args: &[u64]` to `execute_at_raw` and push those values onto the call stack before the row ref, in declaration order.
+2. `run_parallel_raw` receives the captured extra arg values as a `Vec<u64>` (read-only constants, cloned to every worker).
+3. The compiler emits the extras as additional parameters in the `n_parallel_for` call.
+
+Supported extra arg types:
+- `integer`, `long`, `float`, `boolean` — fit directly in a `u64` slot.
+- `const Struct` — 12-byte DbRef; pass as an `Option<DbRef>` context alongside the row ref rather than folding into `u64`.
+- `text` — already readable from cloned stores via their DbRef; no special handling needed.
+
+This is planned for A1.1 (0.8.2).
 
 ---
 
-## Deferred: Text and Reference Return Types
+## Deferred: Value-Struct and Text/Reference Return Types
 
-`text` and `reference` return types require merging the worker's isolated store snapshot back into the main store.  This is architecturally non-trivial (stores are LIFO-freed) and is deferred to a future phase.
+**Value-struct returns (no heap pointers) — A1.1:**
+For worker return types where all fields are primitives (`integer`, `long`, `float`, `boolean`, `character`), the `Vec<u64>` result channel is replaced with a pre-allocated `Vec<u8>` output buffer of size `n_rows × result_byte_size`.  Workers write directly into non-overlapping per-row slices via `execute_at_struct(fn_pos, row_ref, out_slice: &mut [u8])`.  No store interaction needed.  Structs with `text` or `reference` fields use the approach below.
+
+**Text and reference return types — A1.2:**
+`text` and `reference` values are DbRefs that point into a specific store.  Worker stores are LIFO-locked snapshots; new allocations in a worker are invisible to the main thread after join, and ad-hoc merging is unsafe due to LIFO ordering constraints.
+
+*Planned approach — dedicated result store:*
+Before parallel dispatch the main thread calls `Stores::new_result_store()`, which allocates a fresh writable store not included in the workers' input snapshots.  `clone_for_worker` gives each worker mutable access to this result store, range-partitioned by row index.  Workers redirect text allocations to the result store.  After join, `Stores::adopt_result_store(idx)` incorporates the result store into the main store map.  Since the result store did not exist in any input snapshot, there are no LIFO conflicts.
+
+This is planned for A1.2 (0.8.2), dependent on A1.1.
 
 ---
 

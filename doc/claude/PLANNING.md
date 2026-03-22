@@ -51,6 +51,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
+  - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(0.8.2)*
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(1.1+ backlog)*
   - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(1.1+)*
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(1.1+)*
@@ -98,6 +99,10 @@ in parallel.
 - **O1** — Superinstruction merging: peephole pass, 6 merged opcodes 240–245.
 - **O3** — Verify integer paths carry no `long` null-sentinel.
 - **O6** — Native: `_nn` variants remove `long` null-sentinel from local arithmetic.
+
+*Parallel execution:*
+- **A1.1** — Extra context args + value-struct returns: extend `execute_at_raw`, output buffer.
+- **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1).
 
 ---
 
@@ -187,7 +192,7 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **P2** — REPL / interactive mode: `loft` with no arguments enters a persistent session.
 
 **Parallel execution completeness:**
-- **A1** — Parallel workers with extra context arguments and text/reference return types.
+- **A1** — Moved to 0.8.2 (see remaining work above).
 
 **Logging completeness:**
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
@@ -318,11 +323,14 @@ in a better state than it found it, with passing tests).
 4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
 5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
+**For 0.8.2 (remaining — parallel):**
+6. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
+7. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
+
 **For 0.9.0 (after 0.8.4 is tagged):**
 1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
 2. **A2** — logger remaining work; independent, small-medium; can land any time
-3. **A1** — parallel completeness; isolated change, touches parallel.rs only
-4. **P2** — REPL; high effort; land after L1 (needed for P2.4 error recovery)
+3. **P2** — REPL; high effort; land after L1 (needed for P2.4 error recovery)
 
 **For 1.0.0 (after 0.9.0 is tagged):**
 7. **R1** — workspace split; small change, unblocks all Tier W
@@ -735,28 +743,65 @@ the recompile overhead that caching was designed to address)
 
 ## A — Architecture
 
-### A1  Parallel workers: extra arguments and text/reference return types
+### A1  Parallel workers: extra arguments, value-struct returns, and text/reference returns
 **Sources:** [THREADING.md](THREADING.md) (deferred items)
-**Description:** Current limitation: all worker state must live in the input vector;
-returning text or references is unsupported.  These are two independent sub-problems.
+**Description:** Three related extensions to `par(...)` parallel for-loops.
+All worker state must currently live in the input vector; extra parameters, value-struct
+returns larger than 8 bytes, and text/reference returns are all unsupported.
+The three sub-problems share infrastructure but have different complexity.
 **Fix path:**
 
-**Phase 1 — Extra context arguments** (`src/parser/collections.rs`, `src/parallel.rs`):
-Synthesise an IR-level wrapper function that closes over the extra arguments and calls
-the original worker with `(element, extra_arg_1, extra_arg_2, ...)`.  The wrapper is
-generated at compile time; the runtime parallel dispatch is unchanged.
+**Phase 1 — Extra context args and value-struct returns** (`src/parser/collections.rs`, `src/parallel.rs`, `src/state/mod.rs`):
+
+*Extra context arguments (primitives and const struct refs):*
+Extend `execute_at_raw(fn_pos, arg, return_size) -> u64` to accept an extra
+`extra_args: &[u64]` slice; push those values onto the call stack before the row ref
+(in declaration order).  `run_parallel_raw` receives the captured extra arg values
+(cloned to every worker — they are read-only constants).  The compiler emits the
+extras as part of the `n_parallel_for` call.  No IR wrapper synthesis is needed for
+primitive extras.  For `const Struct` extras (DbRef, 12 bytes) add an
+`Option<DbRef>` context parameter alongside the row ref rather than folding it into
+`u64`.
+*Supported extra arg types:* `integer`, `long`, `float`, `boolean` (fit in u64);
+`const Struct` (passed as `Option<DbRef>` context).  Text extras are already readable
+from cloned stores via their DbRef — no special handling needed.
+
+*Value-struct returns (no heap pointers):*
+For worker return types where all fields are primitives (no `text`, no `reference`
+fields), replace the `Vec<u64>` result channel with a pre-allocated
+`Vec<u8>` output buffer of size `n_rows × result_byte_size`.  Divide it into
+non-overlapping per-row slices; each worker writes directly via
+`execute_at_struct(fn_pos, row_ref, out_slice: &mut [u8])`.  After join, interpret the
+buffer as a typed vector record in the store.  The compiler checks that the return type
+is "all-value" and computes `result_byte_size`.  DbRef (12 bytes) and any struct
+containing text/reference fields fall through to Phase 2.
+
 *Tests:* `par([1,2,3], fn worker, threshold)` where `worker(n: integer, t: integer) -> integer`
-correctly uses `threshold`; two-arg context test (currently in `tests/threading.rs` as
-`parallel_two_context_args`, marked `#[ignore]`) passes.
+correctly uses `threshold`; value-struct return test where `worker(s: Score) -> Pair`
+returns `Pair{lo: s.value, hi: s.value * 2}`; both marked `#[ignore]` in
+`tests/threading.rs` until this phase ships.
 
 **Phase 2 — Text/reference return types** (`src/parallel.rs`, `src/store.rs`):
-After all worker threads join, merge worker-local stores back into the main `Stores` so
-that text values and reference fields in the result vector point into live records.
-*Tests:* `par([1,2,3], fn label)` where `label(n: integer) -> text` returns a formatted
-string; the result vector contains correct, independent text values with no dangling pointers.
+Text and reference values are DbRefs pointing into a specific store.  Workers get
+locked store snapshots; new allocations in a worker are invisible to the main thread
+after join.  LIFO freeing makes ad-hoc store merging unsafe.
 
-**Effort:** High (parser.rs, parallel.rs, store.rs)
-**Target:** 0.9.0
+*Approach — dedicated result store:*
+Before dispatch, the main thread calls `Stores::new_result_store()` which allocates a
+fresh, writable store not included in the input snapshot.  `clone_for_worker` gives
+each worker a reference to this result store (mutable, range-partitioned by row).
+Workers write text/ref results into the result store via their local `State`'s text
+allocator redirected to the result store index.  After join, `Stores::adopt_result_store(idx)`
+unlocks the result store for use by the main thread; `n_parallel_for` builds the
+result vector from the result-store DbRefs.  Since the result store did not exist in
+any worker's input snapshot, there are no LIFO conflicts.
+
+*Tests:* `par([1,2,3], fn label)` where `label(n: integer) -> text` returns a formatted
+string; the result vector contains correct, independent text values with no dangling
+pointers.
+
+**Effort:** Med–High (parser.rs, parallel.rs, store.rs, state/mod.rs)
+**Target:** 0.8.2
 
 ---
 
