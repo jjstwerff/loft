@@ -10,7 +10,7 @@
 <header class="print-header">
 <h1>Loft Language Reference</h1>
 <p class="tagline">Complete language and standard library documentation</p>
-<p class="version">v0.8.0</p>
+<p class="version">v0.8.1</p>
 <p><a href="index.html">&#8592; Back to online documentation</a> &nbsp;|&nbsp; <a href="00-vs-rust.html">vs Rust comparison</a></p>
 </header>
 <nav class="print-toc">
@@ -54,6 +54,7 @@
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
 <li class="toc-indent"><a href="#stdlib-random">Random</a></li>
 <li class="toc-indent"><a href="#stdlib-time">Time</a></li>
+<li class="toc-indent"><a href="#stdlib-vector-operations-t2-8-t2-5">Vector operations (T2-8, T2-5)</a></li>
 </ul>
 </nav>
 <section class="print-section" id="01-keywords">
@@ -352,7 +353,7 @@
 }</code></pre>
 <h2 id="const-and-reference-parameters">Const and Reference Parameters</h2>
 <p>'const' on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. '&amp;' is the opposite promise: "this function will modify this value." Declaring '&amp;' without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">scale</span>(a: const <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: const <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+<pre><code><span class="kw">fn</span> <span class="fn-call">scale</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   a * factor
 }</code></pre>
 <h2 id="type-based-dispatch">Type-Based Dispatch</h2>
@@ -2115,6 +2116,8 @@
 <pre><code>pub fn ticks() -&gt; long</code></pre>
 <p>Returns microseconds elapsed since program start (monotonic clock). Unaffected by system clock adjustments. Use for benchmarks and frame timing.</p>
 </div>
+<h2 id="stdlib-vector-operations-t2-8-t2-5">Vector operations (T2-8, T2-5)</h2>
+<p class="section-desc">reverse(v) and sort(v) are compiler special-cased in parse_call.</p>
 </section>
 </body>
 </html>
