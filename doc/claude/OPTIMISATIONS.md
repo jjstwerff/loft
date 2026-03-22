@@ -59,5 +59,6 @@ if hundreds of parallel calls are made.
 ---
 
 ## See also
+- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results, root-cause analysis, and detailed designs for O1–O7 (superinstructions, stack pointer cache, native collection emit, purity analysis)
 - [PLANNING.md](PLANNING.md) — Priority-ordered backlog
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/store.rs`, `src/state/` implementation details

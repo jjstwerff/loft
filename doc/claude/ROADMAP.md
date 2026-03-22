@@ -159,5 +159,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 ## See also
 - [PLANNING.md](PLANNING.md) — Full descriptions, fix paths, and effort justifications for every item
+- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark data and full implementation designs for O1–O7 (interpreter/native optimisation items)
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Branch naming, commit sequence, and CI workflow for implementing an item
 - [RELEASE.md](RELEASE.md) — Gate criteria each milestone must satisfy before tagging

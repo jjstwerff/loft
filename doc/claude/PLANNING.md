@@ -1777,5 +1777,6 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [LOGGER.md](LOGGER.md) — Logger design (A2 detail)
 - [FORMATTER.md](FORMATTER.md) — Code formatter design (backlog item)
 - [NATIVE.md](NATIVE.md) — Native Rust code generation: root cause analysis, step details, verification (Tier N detail)
+- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and implementation designs for O1–O7 (interpreter and native performance improvements)
 - [WEB_IDE.md](WEB_IDE.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
 - [RELEASE.md](RELEASE.md) — 1.0 gate items, project structure changes, release artifacts checklist, post-1.0 versioning policy
