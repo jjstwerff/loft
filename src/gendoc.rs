@@ -670,6 +670,9 @@ fn generate_print_page(
     toc.push_str(
         "<li><a href=\"00-vs-python.html\">vs Python — Key Differences</a> <span class=\"toc-note\">(online only)</span></li>\n",
     );
+    toc.push_str(
+        "<li><a href=\"#00-performance\">Performance</a> — <span class=\"toc-desc\">Benchmark results across interpreter, native, wasm, and Rust</span></li>\n",
+    );
     for ts in topic_sources {
         toc.push_str(&format!(
             "<li><a href=\"#{fn}\">{name}</a> — <span class=\"toc-desc\">{title}</span></li>\n",
@@ -699,6 +702,19 @@ fn generate_print_page(
         content.push_str(&render_topic_body(&ts.source, link_map));
         content.push_str("</section>\n");
     }
+
+    // Embed the hand-maintained performance page as a print section.
+    let perf_html = fs::read_to_string("doc/00-performance.html").unwrap_or_default();
+    let article_body = if let (Some(start), Some(end)) =
+        (perf_html.find("<article>"), perf_html.find("</article>"))
+    {
+        &perf_html[start + "<article>".len()..end]
+    } else {
+        ""
+    };
+    content.push_str("<section class=\"print-section\" id=\"00-performance\">\n<h1>Performance</h1>\n");
+    content.push_str(article_body);
+    content.push_str("</section>\n");
 
     content
         .push_str("<section class=\"print-section\" id=\"stdlib\">\n<h1>Standard Library</h1>\n");
