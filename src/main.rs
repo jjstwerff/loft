@@ -478,7 +478,7 @@ fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBuf> {
                 return Some(candidate);
             }
             // Installed layout: <prefix>/share/loft/<triple>/
-            if dir.file_name().map_or(false, |n| n == "bin") {
+            if dir.file_name().is_some_and(|n| n == "bin") {
                 let share = dir.parent()?.join("share").join("loft").join(triple);
                 if share.join("libloft.rlib").exists() {
                     return Some(share);

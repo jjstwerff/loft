@@ -2567,6 +2567,7 @@ extern crate loft;"
 
     /// Use this to inline a `#rust` template operator by substituting `@param` placeholders
     /// with generated argument expressions.
+    #[allow(clippy::too_many_lines)]
     fn output_call_template(
         &mut self,
         w: &mut dyn Write,

@@ -602,4 +602,3 @@ fn test() {
     )
     .result(loft::data::Value::Null);
 }
-

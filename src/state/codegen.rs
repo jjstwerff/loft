@@ -559,14 +559,13 @@ impl State {
         let mut tps = Vec::new();
         let mut last = 0;
         let mut was_stack = u16::MAX;
-        if parameters.len() < stack.data.def(op).attributes.len() {
-            panic!(
-                "Too few parameters on {} (got {}, need {})",
-                stack.data.def(op).name,
-                parameters.len(),
-                stack.data.def(op).attributes.len(),
-            );
-        }
+        assert!(
+            parameters.len() >= stack.data.def(op).attributes.len(),
+            "Too few parameters on {} (got {}, need {})",
+            stack.data.def(op).name,
+            parameters.len(),
+            stack.data.def(op).attributes.len(),
+        );
         for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
             if a.mutable {
                 #[cfg(debug_assertions)]

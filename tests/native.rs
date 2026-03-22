@@ -74,7 +74,7 @@ fn find_native_lib_dirs(rlib_info: &Option<(PathBuf, PathBuf)>) -> Vec<PathBuf> 
     #[cfg(not(windows))]
     {
         let _ = rlib_info;
-        return Vec::new();
+        Vec::new()
     }
     #[cfg(windows)]
     {
@@ -224,17 +224,18 @@ fn binary_cache_valid(job: &NativeJob, rlib_info: &Option<(PathBuf, PathBuf)>) -
         Ok(t) => t,
         Err(_) => return false,
     };
-    if let Ok(t) = std::fs::metadata(&job.tmp_rs).and_then(|m| m.modified()) {
-        if bin_mtime < t {
-            return false;
-        }
+    if std::fs::metadata(&job.tmp_rs)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| bin_mtime < t)
+    {
+        return false;
     }
-    if let Some((rlib, _)) = rlib_info {
-        if let Ok(t) = std::fs::metadata(rlib).and_then(|m| m.modified()) {
-            if bin_mtime < t {
-                return false;
-            }
-        }
+    if rlib_info.as_ref().is_some_and(|(rlib, _)| {
+        std::fs::metadata(rlib)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| bin_mtime < t)
+    }) {
+        return false;
     }
     true
 }
