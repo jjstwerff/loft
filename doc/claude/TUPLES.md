@@ -502,10 +502,16 @@ two DbRefs to the list. Leaf elements are always primitive/owned types.
 1. Add `Type::Tuple(Vec<Type>)` to `data.rs`.
 2. Implement `size_of`, `depend()`, `depending()`, and `Display` for `Tuple`;
    both `depend()` and `depending()` recurse into nested `Tuple` elements.
-3. Extend `parse_type` to recognise `'(' type ',' ...` as a tuple type.
-4. In `typedef.rs`, reject `Type::Tuple` in any struct field position.
-5. In `typedef.rs`, reject `Type::RefVar` in any tuple element position.
-6. In `typedef.rs`, reject owned-element types (`text`, `reference`, `vector`,
+3. Expose three free functions in `data.rs` for reuse by closure records (A5)
+   and any future compound-type feature:
+   - `element_size(t: &Type) -> usize` — stack width of a single element type.
+   - `element_offsets(types: &[Type]) -> Vec<usize>` — byte offset of each element.
+   - `owned_elements(types: &[Type]) -> Vec<(usize, &Type)>` — `(offset, type)` pairs
+     for elements that require `OpFreeText` or `OpFreeRef` on scope exit.
+4. Extend `parse_type` to recognise `'(' type ',' ...` as a tuple type.
+5. In `typedef.rs`, reject `Type::Tuple` in any struct field position.
+6. In `typedef.rs`, reject `Type::RefVar` in any tuple element position.
+7. In `typedef.rs`, reject owned-element types (`text`, `reference`, `vector`,
    collection) inside `Type::RefVar(Tuple(...))` — enforced until Phase 5 lifts
    the restriction.
 
@@ -515,6 +521,8 @@ two DbRefs to the list. Leaf elements are always primitive/owned types.
 |---|---|
 | `error_tuple_in_struct` | compile error when a struct field type is a tuple |
 | `error_refvar_in_tuple` | compile error for `(&integer, text)` as element type |
+| `element_offsets_helper` | `element_offsets(&[Integer, Text, Float])` returns `[0, 4, 28]` |
+| `owned_elements_helper` | `owned_elements(&[Integer, Text, Reference<T>])` returns two entries (text at 4, ref at 28) |
 
 ---
 
@@ -824,3 +832,5 @@ a compile-time contract only and does not change the runtime null sentinel.
   `text_positions` invariant; `string_ref_mut` vs `GetStackText`; `generate_var` table
 - [SLOTS.md](SLOTS.md) — stack slot assignment (relevant for owned tuple elements)
 - [MATCH.md](MATCH.md) — pattern matching design (non-goal: tuple patterns in match)
+- [PLANNING.md § A5](PLANNING.md) — closure capture; reuses `element_size`, `element_offsets`,
+  and `owned_elements` from Phase 1 of this design for closure record layout and lifetime

@@ -769,15 +769,23 @@ defined inside the lambda are not flagged; non-capturing lambdas produce an empt
 **Phase 2 — Closure record layout** (`src/data.rs`, `src/typedef.rs`):
 For each capturing lambda, synthesise an anonymous struct type whose fields hold the
 captured variables; verify field offsets and total size.
+The element-size table and offset arithmetic introduced for tuples (see
+[TUPLES.md](TUPLES.md) § Memory Layout) are identical for closure record fields; use
+the shared helpers `element_size`, `element_offsets`, and `owned_elements` from
+`data.rs` rather than duplicating the logic.  The closure record is heap-allocated
+(a store record) and passed as a hidden trailing argument alongside the def-nr — it
+does not use the stack-only tuple layout.
 *Tests:* closure struct has the correct field count, types, and sizes; `sizeof` matches
-the expected layout.
+the expected layout; a record containing a `text` capture has `owned_elements` count 1.
 
 **Phase 3 — Capture at call site** (`src/state/codegen.rs`):
 At the point where a lambda expression is evaluated, emit code to allocate a closure
 record and copy the current values of the captured variables into it.  Pass the record
-as a hidden trailing argument alongside the def-nr.
+as a hidden trailing argument alongside the def-nr.  Copying a captured `text`
+variable into the record requires a deep copy (same rule as tuple text elements —
+see [TUPLES.md](TUPLES.md) § Copy Semantics).
 *Tests:* captured variable has the correct value when the lambda is called immediately
-after its definition.
+after its definition; captured `text` is independent of the original after capture.
 
 **Phase 4 — Closure body reads** (`src/state/codegen.rs`, `src/fill.rs`):
 Inside the compiled lambda function, redirect reads of captured variables to load from
@@ -787,9 +795,13 @@ modifying the original variable after capture does not affect the lambda's copy 
 semantics — mutable capture is out of scope for this item).
 
 **Phase 5 — Lifetime and cleanup** (`src/scopes.rs`):
-Emit `OpFreeRef` for the closure record at the end of the enclosing scope.
+Emit `OpFreeRef` for the closure record at the end of the enclosing scope.  When the
+record contains `text` or `reference` captures, free them in **reverse field index
+order** before releasing the record itself — the same LIFO invariant required by tuple
+scope exit (see [TUPLES.md](TUPLES.md) § Calling Convention, Scope exit order).  Use
+`owned_elements` from Phase 2 to enumerate the fields that need freeing.
 *Tests:* no store leak after a lambda goes out of scope; LIFO free order is respected
-when multiple closures are live simultaneously.
+when multiple closures are live simultaneously; a `text` capture is freed exactly once.
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1
