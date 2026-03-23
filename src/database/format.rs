@@ -324,6 +324,9 @@ impl Stores {
 
     /// Native-codegen variant of `os_directory` that returns an owned `String`.
     /// Used by the `--native` backend where a scratch-buffer `&mut String` is not available.
+    ///
+    /// # Panics
+    /// Panics if the current directory path contains non-UTF-8 characters.
     #[must_use]
     pub fn os_directory_native() -> String {
         let mut s = String::new();
@@ -334,6 +337,9 @@ impl Stores {
     }
 
     /// Native-codegen variant of `os_home` that returns an owned `String`.
+    ///
+    /// # Panics
+    /// Panics if the home directory path contains non-UTF-8 characters.
     #[must_use]
     pub fn os_home_native() -> String {
         let mut s = String::new();
@@ -344,6 +350,9 @@ impl Stores {
     }
 
     /// Native-codegen variant of `os_executable` that returns an owned `String`.
+    ///
+    /// # Panics
+    /// Panics if the executable path contains non-UTF-8 characters.
     #[must_use]
     pub fn os_executable_native() -> String {
         let mut s = String::new();

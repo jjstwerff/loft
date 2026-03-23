@@ -581,7 +581,6 @@ fn default_artifact_path(script_path: &str, ext: &str) -> std::path::PathBuf {
     loft_artifact_dir(script_path).join(format!("{stem}.{ext}"))
 }
 
-
 fn project_dir() -> String {
     let Ok(prog) = env::current_exe() else {
         return String::new();
