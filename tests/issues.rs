@@ -1485,11 +1485,12 @@ fn p1_1_lambda_void_body() {
 // Using `string` in a struct field produces "Undefined type string" and a
 // cascade of "Invalid index key" / "Cannot write unknown" errors.
 
-/// Issue 82: `string` in a struct field must produce a clear "Undefined type" error.
+/// Issue 82 / S7: `string` in a struct field must suggest `text`.
 #[test]
 fn issue_82_string_type_is_undefined() {
-    code!("struct Bad { x: string }")
-        .error("Undefined type string at issue_82_string_type_is_undefined:1:25");
+    code!("struct Bad { x: string }").error(
+        "Undefined type 'string' — did you mean 'text'? at issue_82_string_type_is_undefined:1:25",
+    );
 }
 
 /// Issue 82 positive: the same pattern with `text` must work correctly.
@@ -1512,7 +1513,7 @@ fn test() {
 // `key` is a pseudo-field used by hash iteration (`kv.key`) and conflicts with
 // the real struct field at the allocation level.
 
-/// Issue 83: field named `key` in a hash-value struct panics at runtime.
+/// Issue 83 / S8: field named `key` in a hash-value struct must be rejected at compile time.
 #[test]
 fn issue_83_hash_value_field_named_key_panics() {
     code!(
@@ -1526,7 +1527,10 @@ fn test() {
     assert(e.count == 1, \"count should be 1\");
 }"
     )
-    .result(Value::Null);
+    .error(
+        "Struct 'Entry' has a field named 'key' which is reserved for hash iteration \
+— rename the field at issue_83_hash_value_field_named_key_panics:1:15",
+    );
 }
 
 /// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
