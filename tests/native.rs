@@ -487,9 +487,8 @@ fn run_native_jobs(
     if !run_errors.is_empty() {
         println!("  run failures: {}", run_errors.join(", "));
     }
-    // Pass if at least some tests compiled and ran successfully.
-    // Compile failures are expected — native codegen has known gaps (Issue #61).
-    if run_ok == 0 && !jobs.is_empty() {
+    // Fail if any test failed to compile or run.
+    if compile_fail > 0 || !run_errors.is_empty() {
         return Err(Error::from(std::io::ErrorKind::Other));
     }
     Ok(())

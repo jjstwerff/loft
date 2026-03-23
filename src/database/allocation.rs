@@ -86,13 +86,17 @@ impl Stores {
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         debug_assert!(!self.allocations[al as usize].free, "Double free store");
-        debug_assert!(
-            al == self.max - 1,
-            "Stores must be freed in LIFO order: freeing store {al} but max is {}",
-            self.max
-        );
         self.allocations[al as usize].free = true;
-        self.max -= 1;
+        // Shrink max when freeing the top store, cascading through any
+        // lower stores that were already freed (non-LIFO order from native
+        // recursive calls where stores are allocated at call time rather
+        // than pre-allocated like the interpreter does).
+        if al == self.max - 1 {
+            self.max -= 1;
+            while self.max > 0 && self.allocations[(self.max - 1) as usize].free {
+                self.max -= 1;
+            }
+        }
     }
 
     /**

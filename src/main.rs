@@ -81,6 +81,13 @@ fn print_help() {
         "  --tests [dir]                 discover and run fn test*() functions in .loft files"
     );
     println!("                                recursively (default dir: current directory)");
+    println!("  --tests file.loft             run all tests in a single file");
+    println!("  --tests file.loft::name       run a single test function");
+    println!("  --tests file.loft::{{a,b}}      run specific test functions");
+    println!(
+        "  --tests --native              like --tests but compile each file to native Rust and"
+    );
+    println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings in --tests output");
 }
 
@@ -188,14 +195,25 @@ fn main() {
                 String::new() // sentinel: compute default from file_name later
             });
         } else if a == "--tests" {
-            // Optional directory: consume next arg only if it doesn't look like a flag
-            tests_dir = Some(if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                let p = argv[i].clone();
+            // Optional directory/file: consume next non-flag arg.
+            // Skip --native/--no-warnings that may appear between --tests and the path.
+            let mut path = ".".to_string();
+            while argv
+                .get(i)
+                .is_some_and(|s| s == "--native" || s == "--no-warnings")
+            {
+                if argv[i] == "--native" {
+                    native_mode = true;
+                } else if argv[i] == "--no-warnings" {
+                    no_warnings = true;
+                }
                 i += 1;
-                p
-            } else {
-                ".".to_string()
-            });
+            }
+            if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                path.clone_from(&argv[i]);
+                i += 1;
+            }
+            tests_dir = Some(path);
         } else if a == "--no-warnings" {
             no_warnings = true;
         } else if a == "--help" || a == "-h" || a == "-?" {
@@ -274,7 +292,14 @@ fn main() {
 
     // Handle --tests before requiring an input file
     if let Some(ref test_dir) = tests_dir {
-        let exit_code = run_tests(&dir, test_dir, no_warnings, &lib_dirs, project.as_deref());
+        let exit_code = run_tests(
+            &dir,
+            test_dir,
+            no_warnings,
+            &lib_dirs,
+            project.as_deref(),
+            native_mode,
+        );
         std::process::exit(exit_code);
     }
 
@@ -560,6 +585,7 @@ fn run_tests(
     no_warnings: bool,
     lib_dirs: &[String],
     project: Option<&str>,
+    native_mode: bool,
 ) -> i32 {
     use crate::data::DefType;
     use std::collections::BTreeMap;
@@ -826,19 +852,42 @@ fn run_tests(
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
 
-    let root = std::path::Path::new(root_dir);
-    if !root.is_dir() {
+    // Parse optional function filter: "file.loft::name" or "file.loft::{a,b}".
+    let (path_part, fn_filter): (&str, Option<Vec<String>>) = if let Some(pos) = root_dir.find("::")
+    {
+        let raw = &root_dir[pos + 2..];
+        let names: Vec<String> = if raw.starts_with('{') && raw.ends_with('}') {
+            raw[1..raw.len() - 1]
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
+        } else {
+            vec![raw.to_string()]
+        };
+        (&root_dir[..pos], Some(names))
+    } else {
+        (root_dir, None)
+    };
+
+    let root = std::path::Path::new(path_part);
+    let mut dirs: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
+    if root.is_file() {
+        // Single file mode: run tests in just this file.
+        let dir_key = root
+            .parent()
+            .map_or(".".to_string(), |p| p.to_string_lossy().to_string());
+        dirs.insert(dir_key, vec![root.to_path_buf()]);
+    } else if root.is_dir() {
+        collect_loft_files(root, &mut dirs);
+    } else {
         std::panic::set_hook(prev_hook);
-        println!("loft: --tests directory '{root_dir}' does not exist");
+        println!("loft: --tests path '{path_part}' does not exist");
         return 1;
     }
 
-    let mut dirs: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
-    collect_loft_files(root, &mut dirs);
-
     if dirs.is_empty() {
         std::panic::set_hook(prev_hook);
-        println!("loft: no .loft files found in '{root_dir}'");
+        println!("loft: no .loft files found in '{path_part}'");
         return 1;
     }
 
@@ -850,6 +899,23 @@ fn run_tests(
             .unwrap_or("")
             .to_string()
     });
+
+    // In native mode, ensure libloft.rlib exists and is up to date.
+    // `cargo run --bin loft` rebuilds the binary but may skip the library
+    // target, leaving native tests linking against stale code.
+    // Detect this by comparing source mtimes against the rlib and rebuild
+    // automatically when needed.
+    if native_mode {
+        ensure_rlib_fresh();
+        if loft_lib_dir().is_none() {
+            std::panic::set_hook(prev_hook);
+            println!(
+                "loft: --native requires libloft.rlib; \
+                 run `cargo build --lib` first"
+            );
+            return 1;
+        }
+    }
 
     let mut total_pass = 0u32;
     let mut total_fail = 0u32;
@@ -1152,6 +1218,11 @@ fn run_tests(
                 test_fns.push((d_nr, user_name.to_string()));
             }
 
+            // Apply function name filter (from "file.loft::name" syntax).
+            if let Some(ref filter) = fn_filter {
+                test_fns.retain(|(_, name)| filter.iter().any(|f| name == f));
+            }
+
             if test_fns.is_empty() {
                 // No callable functions found; skip this file silently.
                 continue;
@@ -1179,84 +1250,294 @@ fn run_tests(
 
             total_files += 1;
 
-            for (_, fn_name) in &test_fns {
-                // Per-function @IGNORE: skip without running.
-                if ann.ignore_fn.contains(fn_name.as_str()) {
-                    file_result
-                        .tests
-                        .push((fn_name.clone(), true, Some("ignored".to_string())));
-                    continue;
+            if native_mode {
+                // ── Native mode: generate Rust, compile, run ──────────────
+                // Native codegen requires byte_code compilation first.
+                let mut native_data = clean_data.clone();
+                let mut native_state = State::new(clean_db.clone());
+                compile::byte_code(&mut native_state, &mut native_data);
+                let native_db = native_state.database;
+                // Filter to functions that can run natively (skip @IGNORE,
+                // @EXPECT_ERROR, and @EXPECT_FAIL — native can't catch panics).
+                let mut native_fns: Vec<(u32, String)> = Vec::new();
+                for (d_nr, fn_name) in &test_fns {
+                    if ann.ignore_fn.contains(fn_name.as_str()) {
+                        file_result.tests.push((
+                            fn_name.clone(),
+                            true,
+                            Some("ignored".to_string()),
+                        ));
+                        continue;
+                    }
+                    if ann.expect_errors_fn.contains_key(fn_name.as_str()) {
+                        continue;
+                    }
+                    let should_fail = ann.expect_fail_fn.contains_key(fn_name.as_str())
+                        || !ann.expect_fail_file.is_empty();
+                    if should_fail {
+                        file_result.tests.push((
+                            fn_name.clone(),
+                            true,
+                            Some("skip-native".to_string()),
+                        ));
+                        continue;
+                    }
+                    native_fns.push((*d_nr, fn_name.clone()));
                 }
-                // Per-function @EXPECT_ERROR: already counted, don't execute.
-                if ann.expect_errors_fn.contains_key(fn_name.as_str()) {
-                    continue;
-                }
-                let fn_name_owned = fn_name.clone();
-                let user_args = ann.user_args.clone();
-                let production = ann.production;
-                let log_conf = ann.log_conf.clone();
-
-                // Build a fresh State + bytecode for every function so tests
-                // within a file cannot leak heap/store state into each other.
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut data_copy = clean_data.clone();
-                    let mut state = State::new(clean_db.clone());
-                    compile::byte_code(&mut state, &mut data_copy);
-
-                    // Set up logger if @ARGS requested --production or --log-conf.
-                    if production || log_conf.is_some() {
-                        let lg = if let Some(ref conf) = log_conf {
-                            let cp = std::path::PathBuf::from(conf);
-                            logger::Logger::from_config_file(&cp, &abs_file)
-                        } else {
-                            logger::Logger::production()
-                        };
-                        let mut lg = lg;
-                        if production {
-                            lg.config.production = true;
-                        }
-                        state.database.logger =
-                            Some(std::sync::Arc::new(std::sync::Mutex::new(lg)));
+                if native_fns.is_empty() {
+                    // Nothing to run natively — record as pass with note.
+                    if file_result.tests.is_empty() {
+                        file_result
+                            .tests
+                            .push(("(no native tests)".to_string(), true, None));
                     }
-
-                    state.execute_argv(&fn_name_owned, &data_copy, &user_args);
-                }));
-
-                // Evaluate pass/fail, respecting @EXPECT_FAIL annotations.
-                // A function "should fail" when it has a per-function
-                // @EXPECT_FAIL, or when a file-level @EXPECT_FAIL applies
-                // (and no per-function annotation overrides it).
-                let should_fail = ann.expect_fail_fn.contains_key(fn_name.as_str())
-                    || (!ann.expect_fail_file.is_empty()
-                        && !ann.expect_fail_fn.contains_key(fn_name.as_str()));
-                let (passed, fail_msg) = match result {
-                    Ok(()) => {
-                        if should_fail {
-                            (
-                                false,
-                                Some("expected panic but function returned cleanly".to_string()),
-                            )
-                        } else {
-                            (true, None)
-                        }
-                    }
-                    Err(payload) => {
-                        let msg = panic_message(&*payload);
-                        if should_fail && matches_expect_fail(&ann, fn_name, &msg) {
-                            (true, None) // expected failure — pass
-                        } else {
-                            (false, Some(msg))
-                        }
-                    }
-                };
-
-                file_result.tests.push((fn_name.clone(), passed, fail_msg));
-                if passed {
-                    dir_pass += 1;
                 } else {
-                    dir_fail += 1;
+                    // Generate Rust source.
+                    let end_def = native_data.definitions();
+                    let main_nr = native_data.def_nr("n_main");
+                    let has_main = main_nr < end_def && native_data.def(main_nr).name == "n_main";
+                    let entry_defs: Vec<u32> = if has_main {
+                        vec![main_nr]
+                    } else {
+                        native_fns.iter().map(|(d, _)| *d).collect()
+                    };
+                    let gen_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut buf: Vec<u8> = Vec::new();
+                        let mut out = generation::Output {
+                            data: &native_data,
+                            stores: &native_db,
+                            counter: 0,
+                            indent: 0,
+                            def_nr: 0,
+                            declared: HashSet::new(),
+                            reachable: HashSet::new(),
+                            loop_stack: Vec::new(),
+                        };
+                        out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
+                            .expect("native codegen write");
+                        // output_native_reachable emits fn main() when n_main
+                        // exists.  For test-only files (no n_main) we generate
+                        // a main() that calls each test function.
+                        if !has_main {
+                            use std::io::Write;
+                            writeln!(buf, "\nfn main() {{").unwrap();
+                            writeln!(buf, "    let mut stores = Stores::new();").unwrap();
+                            writeln!(buf, "    init(&mut stores);").unwrap();
+                            for (_, name) in &native_fns {
+                                writeln!(buf, "    n_{name}(&mut stores);").unwrap();
+                            }
+                            writeln!(buf, "}}").unwrap();
+                        }
+                        buf
+                    }));
+                    let buf = match gen_result {
+                        Ok(b) => b,
+                        Err(payload) => {
+                            let msg = panic_message(&*payload);
+                            for (_, fn_name) in &native_fns {
+                                file_result.tests.push((
+                                    fn_name.clone(),
+                                    false,
+                                    Some(format!("native codegen panic: {msg}")),
+                                ));
+                                dir_fail += 1;
+                            }
+                            // Skip compile+run phases.
+                            Vec::new()
+                        }
+                    };
+                    if !buf.is_empty() {
+                        let stem = std::path::Path::new(&abs_file)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .replace('-', "_");
+                        let tmp_rs =
+                            std::env::temp_dir().join(format!("loft_test_native_{stem}.rs"));
+                        let binary =
+                            std::env::temp_dir().join(format!("loft_test_native_{stem}_bin"));
+                        let key_file =
+                            std::env::temp_dir().join(format!("loft_test_native_{stem}_bin.key"));
+
+                        // Write .rs only when content changed (preserves cache).
+                        let existing = std::fs::read(&tmp_rs).unwrap_or_default();
+                        if existing != buf {
+                            let _ = std::fs::write(&tmp_rs, &buf);
+                        }
+
+                        // Check binary cache before compiling.
+                        let lib_dir = loft_lib_dir();
+                        let cached = binary.exists()
+                            && std::fs::read_to_string(&key_file).is_ok_and(|stored| {
+                                stored.trim()
+                                    == format!(
+                                        "{:016x}",
+                                        native_cache_key(&buf, lib_dir.as_deref())
+                                    )
+                            });
+
+                        let compile_ok = if cached {
+                            true
+                        } else {
+                            // Compile with rustc.
+                            let mut cmd = std::process::Command::new("rustc");
+                            cmd.arg("--edition=2024")
+                                .arg("-C")
+                                .arg("debuginfo=0")
+                                .arg("-C")
+                                .arg("opt-level=0")
+                                .arg("-o")
+                                .arg(&binary)
+                                .arg(&tmp_rs);
+                            if let Some(ref ld) = lib_dir {
+                                cmd.arg("--extern")
+                                    .arg(format!("loft={}", ld.join("libloft.rlib").display()));
+                                cmd.arg("-L").arg(ld.join("deps"));
+                            }
+                            let compile_result = cmd.output();
+                            let ok = compile_result
+                                .as_ref()
+                                .map(|o| o.status.success())
+                                .unwrap_or(false);
+                            if ok {
+                                // Write cache key sidecar.
+                                let key = native_cache_key(&buf, lib_dir.as_deref());
+                                let _ = std::fs::write(&key_file, format!("{key:016x}"));
+                            } else {
+                                let stderr_msg = compile_result.as_ref().ok().map_or_else(
+                                    || "rustc not found".to_string(),
+                                    |o| {
+                                        String::from_utf8_lossy(&o.stderr)
+                                            .lines()
+                                            .find(|l| l.starts_with("error"))
+                                            .unwrap_or("(unknown)")
+                                            .to_string()
+                                    },
+                                );
+                                let _ = std::fs::remove_file(&binary);
+                                let _ = std::fs::remove_file(&key_file);
+                                for (_, fn_name) in &native_fns {
+                                    file_result.tests.push((
+                                        fn_name.clone(),
+                                        false,
+                                        Some(format!("native compile: {stderr_msg}")),
+                                    ));
+                                    dir_fail += 1;
+                                }
+                            }
+                            ok
+                        };
+
+                        if compile_ok {
+                            // Run the compiled binary.
+                            let run_ok = std::process::Command::new(&binary)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if run_ok {
+                                for (_, fn_name) in &native_fns {
+                                    file_result.tests.push((fn_name.clone(), true, None));
+                                    dir_pass += 1;
+                                }
+                            } else {
+                                for (_, fn_name) in &native_fns {
+                                    file_result.tests.push((
+                                        fn_name.clone(),
+                                        false,
+                                        Some("native run failed".to_string()),
+                                    ));
+                                    dir_fail += 1;
+                                }
+                            }
+                        }
+                        // Keep .rs and binary on disk for caching.
+                    }
                 }
-            }
+            } else {
+                // ── Interpreter mode ──────────────────────────────────────────
+                for (_, fn_name) in &test_fns {
+                    // Per-function @IGNORE: skip without running.
+                    if ann.ignore_fn.contains(fn_name.as_str()) {
+                        file_result.tests.push((
+                            fn_name.clone(),
+                            true,
+                            Some("ignored".to_string()),
+                        ));
+                        continue;
+                    }
+                    // Per-function @EXPECT_ERROR: already counted, don't execute.
+                    if ann.expect_errors_fn.contains_key(fn_name.as_str()) {
+                        continue;
+                    }
+                    let fn_name_owned = fn_name.clone();
+                    let user_args = ann.user_args.clone();
+                    let production = ann.production;
+                    let log_conf = ann.log_conf.clone();
+
+                    // Build a fresh State + bytecode for every function so tests
+                    // within a file cannot leak heap/store state into each other.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut data_copy = clean_data.clone();
+                        let mut state = State::new(clean_db.clone());
+                        compile::byte_code(&mut state, &mut data_copy);
+
+                        // Set up logger if @ARGS requested --production or --log-conf.
+                        if production || log_conf.is_some() {
+                            let lg = if let Some(ref conf) = log_conf {
+                                let cp = std::path::PathBuf::from(conf);
+                                logger::Logger::from_config_file(&cp, &abs_file)
+                            } else {
+                                logger::Logger::production()
+                            };
+                            let mut lg = lg;
+                            if production {
+                                lg.config.production = true;
+                            }
+                            state.database.logger =
+                                Some(std::sync::Arc::new(std::sync::Mutex::new(lg)));
+                        }
+
+                        state.execute_argv(&fn_name_owned, &data_copy, &user_args);
+                    }));
+
+                    // Evaluate pass/fail, respecting @EXPECT_FAIL annotations.
+                    // A function "should fail" when it has a per-function
+                    // @EXPECT_FAIL, or when a file-level @EXPECT_FAIL applies
+                    // (and no per-function annotation overrides it).
+                    let should_fail = ann.expect_fail_fn.contains_key(fn_name.as_str())
+                        || (!ann.expect_fail_file.is_empty()
+                            && !ann.expect_fail_fn.contains_key(fn_name.as_str()));
+                    let (passed, fail_msg) = match result {
+                        Ok(()) => {
+                            if should_fail {
+                                (
+                                    false,
+                                    Some(
+                                        "expected panic but function returned cleanly".to_string(),
+                                    ),
+                                )
+                            } else {
+                                (true, None)
+                            }
+                        }
+                        Err(payload) => {
+                            let msg = panic_message(&*payload);
+                            if should_fail && matches_expect_fail(&ann, fn_name, &msg) {
+                                (true, None) // expected failure — pass
+                            } else {
+                                (false, Some(msg))
+                            }
+                        }
+                    };
+
+                    file_result.tests.push((fn_name.clone(), passed, fail_msg));
+                    if passed {
+                        dir_pass += 1;
+                    } else {
+                        dir_fail += 1;
+                    }
+                }
+            } // end interpreter mode
 
             // Per-file summary line.
             let ignored_count = file_result
@@ -1393,6 +1674,80 @@ fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBuf> {
 
 fn loft_lib_dir() -> Option<std::path::PathBuf> {
     loft_lib_dir_for(None)
+}
+
+/// Ensure `libloft.rlib` is at least as fresh as the newest `src/*.rs` file.
+/// If any source is newer, run `cargo build --lib` to rebuild it.
+fn ensure_rlib_fresh() {
+    let Some(lib_dir) = loft_lib_dir() else {
+        // No rlib found at all — try building from scratch.
+        let _ = std::process::Command::new("cargo")
+            .args(["build", "--lib"])
+            .status();
+        return;
+    };
+    let rlib = lib_dir.join("libloft.rlib");
+    let Ok(rlib_mtime) = std::fs::metadata(&rlib).and_then(|m| m.modified()) else {
+        return;
+    };
+    // Walk src/ for the newest .rs file.
+    let newest_src = newest_mtime_in("src");
+    // Also check default/*.loft — changes there affect codegen output.
+    let newest_default = newest_mtime_in("default");
+    let newest = newest_src.max(newest_default);
+    if newest.is_some_and(|t| t > rlib_mtime) {
+        eprintln!("loft: rebuilding libloft.rlib (source is newer)...");
+        let _ = std::process::Command::new("cargo")
+            .args(["build", "--lib"])
+            .status();
+    }
+}
+
+/// Return the newest modification time of any file under `dir` (recursive).
+fn newest_mtime_in(dir: &str) -> Option<std::time::SystemTime> {
+    fn walk(path: &std::path::Path, best: &mut Option<std::time::SystemTime>) {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, best);
+            } else if let Ok(m) = p.metadata().and_then(|m| m.modified()) {
+                *best = Some(best.map_or(m, |b: std::time::SystemTime| b.max(m)));
+            }
+        }
+    }
+    let mut best = None;
+    walk(std::path::Path::new(dir), &mut best);
+    best
+}
+
+/// FNV-1a 64-bit hash for native binary cache keys.
+fn fnv64(data: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for &b in data {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Build a cache key from generated Rust source and the rlib identity.
+fn native_cache_key(rs_content: &[u8], lib_dir: Option<&std::path::Path>) -> u64 {
+    let mut key = fnv64(rs_content);
+    if let Some(ld) = lib_dir {
+        let rlib = ld.join("libloft.rlib");
+        key ^= fnv64(rlib.to_string_lossy().as_bytes());
+        if let Ok(mtime) = std::fs::metadata(&rlib).and_then(|m| m.modified()) {
+            let d = mtime
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            key ^= fnv64(&d.as_secs().to_le_bytes());
+            key ^= fnv64(&d.subsec_nanos().to_le_bytes());
+        }
+    }
+    key
 }
 
 /// Return true if `s` looks like an explicit output path rather than a flag or loft source file.

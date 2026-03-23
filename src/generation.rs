@@ -54,6 +54,30 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
     }
 }
 
+/// Recursively collect all `Int` literals from a value tree that may represent
+/// fn-ref constants (e.g. inside `if`/`block` branches of a function-typed `Set`).
+fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
+    match val {
+        Value::Int(n) => {
+            if *n >= 0 {
+                calls.insert((*n).cast_unsigned());
+            }
+        }
+        Value::If(test, t, f) => {
+            collect_int_fn_refs(test, calls);
+            collect_int_fn_refs(t, calls);
+            collect_int_fn_refs(f, calls);
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                collect_int_fn_refs(op, calls);
+            }
+        }
+        Value::Return(v) | Value::Drop(v) => collect_int_fn_refs(v, calls),
+        _ => {}
+    }
+}
+
 /// Scan a definition's code for fn-ref literals:
 /// - `Set(var, Int(n))` where `var` has a `Function` or `Routine` type
 /// - `Call(d, args)` where a parameter of `d` is `Function`/`Routine` typed and the
@@ -68,10 +92,8 @@ fn collect_fn_ref_literals(
 ) {
     match val {
         Value::Set(var, inner) => {
-            if matches!(variables.tp(*var), Type::Function(_, _) | Type::Routine(_))
-                && let Value::Int(n) = inner.as_ref()
-            {
-                calls.insert((*n).cast_unsigned());
+            if matches!(variables.tp(*var), Type::Function(_, _) | Type::Routine(_)) {
+                collect_int_fn_refs(inner, calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls);
         }
@@ -83,9 +105,8 @@ fn collect_fn_ref_literals(
                         callee.attributes[idx].typedef,
                         Type::Function(_, _) | Type::Routine(_)
                     )
-                    && let Value::Int(n) = a
                 {
-                    calls.insert((*n).cast_unsigned());
+                    collect_int_fn_refs(a, calls);
                 }
                 collect_fn_ref_literals(a, data, variables, calls);
             }
@@ -231,7 +252,8 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
             "i16"
         }
         Type::Enum(_, false, _) => "u8",
-        Type::Integer(_, _) | Type::Character => "i32",
+        Type::Integer(_, _) | Type::Character | Type::Null => "i32",
+        // null is represented as the null sentinel of the target type
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
         Type::Text(_) => "Str",
@@ -250,6 +272,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Iterator(_, _) => "Iterator",
         Type::Keys => "&[Key]",
         Type::Void => "()",
+        Type::Rewritten(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
     }
     .to_string()
@@ -937,7 +960,8 @@ extern crate loft;"
                 }
             }
             // CallRef dispatches via match to user functions that take &mut Stores.
-            Value::Block(_) | Value::CallRef(_, _) => true,
+            // Block, Insert, and Iter contain statements that use stores.
+            Value::Block(_) | Value::CallRef(_, _) | Value::Insert(_) | Value::Iter(..) => true,
             Value::If(test, t, f) => {
                 self.needs_pre_eval(test) || self.needs_pre_eval(t) || self.needs_pre_eval(f)
             }
@@ -976,7 +1000,7 @@ extern crate loft;"
         if let Value::Set(_, rhs) = v {
             return self.collect_pre_evals_inner(rhs, result);
         }
-        if let Value::Drop(inner) = v {
+        if let Value::Drop(inner) | Value::Return(inner) = v {
             return self.collect_pre_evals_inner(inner, result);
         }
         if let Value::If(test, true_v, false_v) = v {
@@ -991,7 +1015,8 @@ extern crate loft;"
                 // (both cause double-borrow of stores if left inline).
                 for arg in vals {
                     let needs_pre = self.create_stack_var(arg).is_none()
-                        && (matches!(arg, Value::Block(_)) || self.needs_pre_eval(arg));
+                        && (matches!(arg, Value::Block(_) | Value::Insert(_))
+                            || self.needs_pre_eval(arg));
                     if needs_pre {
                         let name = format!("_pre_{}", self.counter);
                         self.counter += 1;
@@ -1006,9 +1031,6 @@ extern crate loft;"
                 // double-borrow of stores.
                 let block_count = vals.iter().filter(|a| matches!(a, Value::Block(_))).count();
                 let user_fn_count = vals.iter().filter(|a| self.needs_pre_eval(a)).count();
-                // Pre-eval when the template uses stores itself (any user-fn arg causes conflict)
-                // or when multiple user-fn args exist (they'd conflict with each other).
-                let template_uses_stores = def_fn.rust.contains("stores");
                 // Also pre-eval any arg whose template placeholder appears more than once
                 // (e.g., `#rust"!@v1.is_nan() && ... @v1 ..."` expands @v1 twice, causing
                 // double-borrow when @v1 is a user-fn call returning stores-backed data).
@@ -1018,6 +1040,7 @@ extern crate loft;"
                         && def_fn.rust.matches(placeholder.as_str()).count() > 1
                         && self.needs_pre_eval(&vals[i])
                 });
+                let template_uses_stores = def_fn.rust.contains("stores");
                 let needs_pre_eval_args = block_count > 0
                     || user_fn_count > 1
                     || (template_uses_stores && user_fn_count > 0)
@@ -1995,14 +2018,19 @@ extern crate loft;"
                     )?;
                 }
             }
+        } else if to == &Value::Null {
+            // Emit the null sentinel for the variable's type, not bare `()`.
+            let null_val = default_native_value(variables.tp(var));
+            write!(w, "{null_val}")?;
         } else {
             self.output_code_inner(w, to)?;
             if needs_to_string {
                 write!(w, ".to_string()")?;
             } else if matches!(variables.tp(var), Type::Function(_, _) | Type::Routine(_))
-                && matches!(to, Value::Int(_))
+                && !matches!(to, Value::Null)
             {
                 // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
+                // Also covers if-expressions that return fn-ref literals.
                 write!(w, " as u32")?;
             } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
                 // Variable is a narrow integer type (stored as i32), but the RHS expression
@@ -2088,6 +2116,8 @@ extern crate loft;"
             }
             "OpFreeRef" => {
                 // Emit OpFreeRef(stores, var, "var_name") so LOFT_STORE_LOG shows the loft name.
+                // After freeing, reset the variable to null so a subsequent OpDatabase
+                // knows to allocate a fresh store rather than reusing the freed one.
                 if let [ref db_val] = vals[..] {
                     let var_name = if let Value::Var(v) = db_val {
                         format!(
@@ -2100,6 +2130,10 @@ extern crate loft;"
                     write!(w, "OpFreeRef(stores, ")?;
                     self.output_code_inner(w, db_val)?;
                     write!(w, ", \"{var_name}\")")?;
+                    // Reset variable to null sentinel after free.
+                    if let Value::Var(_) = db_val {
+                        write!(w, "; {var_name}.store_nr = u16::MAX")?;
+                    }
                 }
                 return Ok(());
             }
