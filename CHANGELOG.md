@@ -144,6 +144,49 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   (`src/create.rs`, `default/01_code.loft`, `default/02_images.loft`,
    `src/fill.rs`, `tests/issues.rs`)
 
+- **N11 (fn-ref dispatch)** — Function-pointer references inside conditional branches
+  (`if flag { fn a } else { fn b }`) now generate correct match-dispatch arms.
+  `collect_fn_ref_literals` missed `Int(n)` values nested inside `If`/`Block` nodes.
+  New `collect_int_fn_refs` helper recursively extracts them.  PROBLEMS.md #77 fixed.
+  (`src/generation.rs`)
+
+- **N12 (non-LIFO store free)** — Recursive functions no longer cause use-after-free
+  in native mode.  Native codegen allocates stores at call time (unlike the interpreter
+  which pre-allocates), breaking the LIFO invariant.  `free_named` now allows non-LIFO
+  frees by cascading `max` downward through freed stores.  `OpFreeRef` codegen resets
+  `store_nr` to `u16::MAX` after free so subsequent `OpDatabase` allocates fresh.
+  PROBLEMS.md #80 fixed.  (`src/database/allocation.rs`, `src/generation.rs`)
+
+- **N13 (pre-eval extension)** — `needs_pre_eval` now covers `Value::Insert` and
+  `Value::Iter` to prevent double-borrow in complex expressions.
+  `collect_pre_evals_inner` also handles `Value::Return`.  (`src/generation.rs`)
+
+### CLI enhancements
+
+- **`--tests` file and function filtering** — `loft --tests file.loft` runs a single
+  file.  `loft --tests file.loft::name` runs one function.
+  `loft --tests 'file.loft::{a,b}'` runs multiple named functions.
+  (`src/main.rs`)
+
+- **`--tests --native`** — Compiles each test file to native Rust and runs the binary.
+  Files with `fn main()` use the loft main; test-only files get a generated `main()`
+  calling all test functions.  Skips `@EXPECT_FAIL` and `@EXPECT_ERROR` files.
+  (`src/main.rs`)
+
+- **Native binary cache** — Generated `.rs` and compiled binaries are kept in `/tmp/`.
+  An FNV-1a content hash (`.key` sidecar) prevents recompilation when source hasn't
+  changed.  Typical speedup: 8–10x on repeated runs.  (`src/main.rs`)
+
+- **Stale rlib auto-rebuild** — Before native compilation, `ensure_rlib_fresh` compares
+  `libloft.rlib` mtime against `src/` and `default/` source mtimes.  If any source is
+  newer, `cargo build --lib` runs automatically.  (`src/main.rs`)
+
+### CI
+
+- **Strict native test gate** — `tests/native.rs` now fails on any compile or runtime
+  failure (was: only fail when zero tests pass).  All 59 native tests (24 docs + 35
+  scripts) must pass.  (`tests/native.rs`)
+
 ### Bug fixes
 
 - **L4** — Passing an empty vector literal `[]` directly as a mutable `vector<T>`

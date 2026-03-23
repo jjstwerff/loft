@@ -12,6 +12,11 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 
 ## 0.8.2 — Native stability, slot correctness, and interpreter performance
 
+**Native test parity achieved (2026-03-23):** all 305 `.loft` tests pass in both
+interpreter and native mode.  Issues #77 (fn-ref dispatch) and #80 (LIFO store-free)
+are fixed.  `loft --tests --native` with binary caching, stale-rlib auto-rebuild,
+and `file.loft::fn` filtering is implemented.  CI now fails on any native regression.
+
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
 | S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
