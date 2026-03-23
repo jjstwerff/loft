@@ -401,7 +401,9 @@ use #count instead"
                     self.lexer,
                     Level::Error,
                     "'{}#remove' is only valid on a loop iteration variable (e.g. 'for {} in collection {{ {}#remove }}')",
-                    name, name, name
+                    name,
+                    name,
+                    name
                 );
                 *t = Type::Void;
                 return;

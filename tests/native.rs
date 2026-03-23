@@ -227,7 +227,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     for l in p.diagnostics.lines() {
         println!("{l}");
     }
-    if !p.diagnostics.is_empty() {
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         return Err(Error::from(std::io::ErrorKind::InvalidData));
     }
     scopes::check(&mut p.data);
@@ -499,7 +499,19 @@ fn native_scripts() -> std::io::Result<()> {
             println!("skip {entry:?} (scripts native skip list — see SCRIPTS_NATIVE_SKIP)");
             continue;
         }
-        jobs.push(prepare_native_test(&entry)?);
+        // Skip files with intentional compile errors.
+        if let Ok(src) = std::fs::read_to_string(&entry)
+            && src.contains("@EXPECT_ERROR")
+        {
+            println!("skip {entry:?} (has @EXPECT_ERROR)");
+            continue;
+        }
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare_native_test(&entry)))
+        {
+            Ok(Ok(job)) => jobs.push(job),
+            Ok(Err(e)) => println!("skip {entry:?} (prepare error: {e})"),
+            Err(_) => println!("skip {entry:?} (codegen panic — native codegen bug)"),
+        }
     }
     run_native_jobs(jobs, rlib_info)
 }

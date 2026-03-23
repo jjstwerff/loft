@@ -1377,9 +1377,7 @@ impl Data {
             Type::Unknown(_) => "unknown".to_string(),
             Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
-            Type::Integer(min, max)
-                if *min == i32::MIN + 1 && *max == i32::MAX as u32 =>
-            {
+            Type::Integer(min, max) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
                 "integer".to_string()
             }
             Type::Integer(_, _) => "integer".to_string(),
@@ -1390,9 +1388,7 @@ impl Data {
             Type::Character => "character".to_string(),
             Type::Text(_) => "text".to_string(),
             Type::Keys => "keys".to_string(),
-            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) => {
-                self.def(*d_nr).name.clone()
-            }
+            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) => self.def(*d_nr).name.clone(),
             Type::RefVar(inner) => format!("&{}", self.type_name_str(inner)),
             Type::Vector(inner, _) => format!("vector<{}>", self.type_name_str(inner)),
             Type::Sorted(d_nr, _, _) => format!("sorted<{}>", self.def(*d_nr).name),
@@ -1400,8 +1396,7 @@ impl Data {
             Type::Hash(d_nr, _, _) => format!("hash<{}>", self.def(*d_nr).name),
             Type::Routine(_) => "fn".to_string(),
             Type::Function(args, ret) => {
-                let args_s: Vec<String> =
-                    args.iter().map(|a| self.type_name_str(a)).collect();
+                let args_s: Vec<String> = args.iter().map(|a| self.type_name_str(a)).collect();
                 format!("fn({}) -> {}", args_s.join(", "), self.type_name_str(ret))
             }
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),

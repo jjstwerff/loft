@@ -6,3 +6,4 @@ tests/generated
 *.rlib
 .loft/
 .idea/
+.DS_Store

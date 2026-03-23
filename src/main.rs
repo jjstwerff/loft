@@ -742,10 +742,7 @@ fn run_tests(
                 }
             } else if t.starts_with('-') {
                 // Unknown flag — skip (and consume a value arg if present).
-                if tokens
-                    .get(i)
-                    .is_some_and(|s| !s.starts_with('-'))
-                {
+                if tokens.get(i).is_some_and(|s| !s.starts_with('-')) {
                     i += 1;
                 }
             } else {
@@ -808,18 +805,17 @@ fn run_tests(
     /// Check whether `msg` satisfies the expected-fail substrings for `fn_name`.
     /// Returns true when the panic message contains at least one required
     /// substring (file-level or per-function).
-    fn matches_expect_fail(
-        ann: &Annotations,
-        fn_name: &str,
-        msg: &str,
-    ) -> bool {
+    fn matches_expect_fail(ann: &Annotations, fn_name: &str, msg: &str) -> bool {
         // Per-function annotations take priority.
         if let Some(subs) = ann.expect_fail_fn.get(fn_name) {
             return subs.iter().any(|s| msg.contains(s.as_str()));
         }
         // Fall back to file-level.
         if !ann.expect_fail_file.is_empty() {
-            return ann.expect_fail_file.iter().any(|s| msg.contains(s.as_str()));
+            return ann
+                .expect_fail_file
+                .iter()
+                .any(|s| msg.contains(s.as_str()));
         }
         false
     }
@@ -991,14 +987,13 @@ fn run_tests(
                     .iter()
                     .filter(|e| {
                         // Consumed by a per-function annotation?
-                        let fn_consumed = ann.expect_errors_fn.values().any(|subs| {
-                            subs.iter().any(|s| e.contains(s.as_str()))
-                        });
+                        let fn_consumed = ann
+                            .expect_errors_fn
+                            .values()
+                            .any(|subs| subs.iter().any(|s| e.contains(s.as_str())));
                         // Consumed by file-level annotation?
-                        let file_consumed = ann
-                            .expect_errors
-                            .iter()
-                            .any(|s| e.contains(s.as_str()));
+                        let file_consumed =
+                            ann.expect_errors.iter().any(|s| e.contains(s.as_str()));
                         !fn_consumed && !file_consumed
                     })
                     .collect()
@@ -1022,9 +1017,7 @@ fn run_tests(
             }
             // File-level @EXPECT_ERROR: if set but no errors matched, fail.
             if has_expect_error && file_result.errors.is_empty() {
-                println!(
-                    "  FAIL  {display_name}  (expected parse error but file parsed cleanly)"
-                );
+                println!("  FAIL  {display_name}  (expected parse error but file parsed cleanly)");
                 dir_fail += 1;
                 total_files += 1;
                 continue;
@@ -1098,8 +1091,11 @@ fn run_tests(
                         dir_pass += 1;
                     }
                 }
-                let fn_names: Vec<&str> =
-                    file_result.tests.iter().map(|(n, _, _)| n.as_str()).collect();
+                let fn_names: Vec<&str> = file_result
+                    .tests
+                    .iter()
+                    .map(|(n, _, _)| n.as_str())
+                    .collect();
                 let fn_list = fn_names.join(", ");
                 let count = file_result.tests.len();
                 println!(
@@ -1110,18 +1106,14 @@ fn run_tests(
             }
             // File-level @EXPECT_ERROR set but no errors at all → fail.
             if has_expect_error {
-                println!(
-                    "  FAIL  {display_name}  (expected parse error but file parsed cleanly)"
-                );
+                println!("  FAIL  {display_name}  (expected parse error but file parsed cleanly)");
                 dir_fail += 1;
                 total_files += 1;
                 continue;
             }
             // Per-function @EXPECT_ERROR but no errors at all → fail.
             if has_fn_errors && fn_error_fail.is_empty() && fn_error_pass.is_empty() {
-                println!(
-                    "  FAIL  {display_name}  (expected errors but file parsed cleanly)"
-                );
+                println!("  FAIL  {display_name}  (expected errors but file parsed cleanly)");
                 dir_fail += 1;
                 total_files += 1;
                 continue;
@@ -1167,10 +1159,9 @@ fn run_tests(
 
             // Scope analysis — wrap in catch_unwind so a panic here doesn't
             // kill the entire runner.
-            let scopes_ok =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    scopes::check(&mut p.data);
-                }));
+            let scopes_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                scopes::check(&mut p.data);
+            }));
             if let Err(payload) = scopes_ok {
                 let msg = panic_message(&*payload);
                 println!("  FAIL  {display_name}  (scope check panic: {msg})");
@@ -1241,7 +1232,10 @@ fn run_tests(
                 let (passed, fail_msg) = match result {
                     Ok(()) => {
                         if should_fail {
-                            (false, Some("expected panic but function returned cleanly".to_string()))
+                            (
+                                false,
+                                Some("expected panic but function returned cleanly".to_string()),
+                            )
                         } else {
                             (true, None)
                         }

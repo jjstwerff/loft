@@ -1184,13 +1184,20 @@ fn n4_format_struct_enum_variant_shows_fields() {
     );
 }
 
-/// N9a: the auto-generated tests/generated/fill.rs must contain `use crate::ops;`
+/// N9a: the auto-generated fill.rs must contain `use crate::ops;`
 /// so it can be compiled as a crate-internal file and eventually replace src/fill.rs.
 #[test]
 fn n9a_generated_fill_has_ops_import() {
-    // generate_code() runs on every test via the testing harness — fill.rs exists.
-    let src = std::fs::read_to_string("tests/generated/fill.rs")
-        .expect("tests/generated/fill.rs not found — run any loft test first");
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    let tmp = format!(
+        "tests/generated/fill_n9a_{:?}.rs",
+        std::thread::current().id()
+    );
+    let _ = std::fs::create_dir_all("tests/generated");
+    let src = loft::create::generate_code_to(&p.data, &tmp).expect("generate_code_to failed");
+    let _ = std::fs::remove_file(&tmp);
     assert!(
         src.contains("use crate::ops;"),
         "generated fill.rs missing `use crate::ops;`"

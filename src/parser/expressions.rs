@@ -2414,6 +2414,7 @@ use a separate collection or add after the loop"
     }
 
     // <children> ::=
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
             diagnostic!(self.lexer, Level::Error, "Field of unknown variable");

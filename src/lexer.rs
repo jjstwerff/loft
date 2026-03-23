@@ -622,9 +622,7 @@ impl Lexer {
             }
             if c == '\\' {
                 self.next_char(); // consume '\'
-                if escaped_delim
-                    && let Some(&'"') = self.iter.peek()
-                {
+                if escaped_delim && let Some(&'"') = self.iter.peek() {
                     // Opened by \" → \" also closes.
                     self.next_char();
                     return LexResult::new(LexItem::CString(res), pos);
@@ -709,7 +707,8 @@ impl Lexer {
                             result.push('\n');
                         }
                         // Strip up to `strip` leading spaces.
-                        let stripped = if strip > 0 && line.len() >= strip
+                        let stripped = if strip > 0
+                            && line.len() >= strip
                             && line[..strip].chars().all(|c| c == ' ')
                         {
                             &line[strip..]
