@@ -1390,11 +1390,11 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
-### S6  Fix `for` loop in recursive function — "Too few parameters" panic
+### S6  Fix remaining "recursive call sees stale attribute count" cases
 **Sources:** PROBLEMS.md #84
-**Severity:** High — any algorithm combining recursion with a helper that contains a `for` loop panics
-**Description:** `ref_return` adds work-ref attributes to a function's IR while the body is still being parsed. When the function is recursive, call sites seen earlier in the body were compiled with the old (lower) attribute count. Codegen then asserts `parameters.len() >= expected` and panics.
-**Fix path:** After the second parse pass completes, scan the IR tree for recursive calls with fewer arguments than the now-finalised attribute count and patch them via `add_defaults`. Significantly simpler than a full per-function variable scoping refactor.
+**Severity:** Medium — the merge-sort use-after-free (the primary manifestation) was fixed in 0.8.2.  Complex mutual-recursion patterns that trigger `ref_return` on a function after its recursive call sites were already compiled may still produce wrong attribute counts.
+**Description:** `ref_return` adds work-ref attributes to a function's IR while the body is still being parsed.  When the function is recursive, call sites parsed before `ref_return` runs see the old (smaller) attribute count.  The merge-sort case was fixed by guarding `vector_needs_db` with `!is_argument` and injecting the return-ref in `parse_return`.  A general fix would scan the IR tree after the second parse pass and patch under-argument recursive calls via `add_defaults`.
+**Fix path:** Post-parse IR scan and call-site patching in `parse_function`.
 **Effort:** Medium
 **Target:** 1.1+
 

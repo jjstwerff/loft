@@ -368,7 +368,40 @@ impl Parser {
         if let Type::RefVar(ref_tp) = should
             && ref_tp.is_equal(is_type)
         {
-            *code = self.cl("OpCreateStack", std::slice::from_ref(code));
+            if matches!(**ref_tp, Type::Text(_)) {
+                // Text → & text: produce a stack-pointer reference to a text variable.
+                //
+                // When the source is already a plain variable (`Value::Var(v)`), use
+                // `OpCreateStack(v)` directly.  The reference then points to `v`'s own
+                // stack slot so any mutation inside the callee is immediately visible
+                // in the caller — the standard write-back behaviour (issue #89 fix A).
+                //
+                // When the source is a complex expression (field read, method call,
+                // …), we cannot create a direct stack reference to it.  Allocate a
+                // work-text variable, copy the expression in with OpAppendText, then
+                // reference the work variable.  Note: this path does NOT propagate
+                // mutations back to the original expression; it is only correct when
+                // the callee treats the parameter as read-only or initialises it fresh
+                // (issue #89 fix B / text_ref wrapper).
+                let orig = std::mem::replace(code, Value::Null);
+                if let Value::Var(_) = &orig {
+                    *code = self.cl("OpCreateStack", &[orig]);
+                } else {
+                    let wv = self.vars.work_text(&mut self.lexer);
+                    let mut ls = Vec::new();
+                    if orig != Value::Text(String::new()) {
+                        ls.push(self.cl("OpAppendText", &[Value::Var(wv), orig]));
+                    }
+                    ls.push(self.cl("OpCreateStack", &[Value::Var(wv)]));
+                    *code = v_block(
+                        ls,
+                        Type::Reference(self.data.def_nr("reference"), vec![wv]),
+                        "text_ref",
+                    );
+                }
+            } else {
+                *code = self.cl("OpCreateStack", std::slice::from_ref(code));
+            }
             return true;
         }
         let mut check_type = is_type;
@@ -971,6 +1004,12 @@ impl Parser {
     }
 
     fn add_defaults(&mut self, d_nr: u32, actual: &mut Vec<Value>, all_types: &mut Vec<Type>) {
+        // When filling extra attrs for a recursive self-call on the second pass, use a
+        // separate __rref_N counter so we don't consume __ref_N slots that the outer
+        // function's return-value work-ref needs to keep the same name it had on the
+        // first pass (allowing ref_return to find the name match instead of adding a
+        // new attribute and growing the function's attr count across passes).
+        let is_recursive_self = d_nr == self.context && !self.first_pass;
         if actual.len() < self.data.attributes(d_nr) {
             // Insert the default values for not given attributes
             for a_nr in actual.len()..self.data.attributes(d_nr) {
@@ -982,7 +1021,11 @@ impl Parser {
                         Value::Null,
                         "Expect a null default on database references"
                     );
-                    let vr = self.vars.work_refs(&tp, &mut self.lexer);
+                    let vr = if is_recursive_self {
+                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                    } else {
+                        self.vars.work_refs(&tp, &mut self.lexer)
+                    };
                     self.data.vector_def(&mut self.lexer, content);
                     all_types.push(Type::Vector(content.clone(), vec![vr]));
                     actual.push(Value::Var(vr));
@@ -992,7 +1035,11 @@ impl Parser {
                         Value::Null,
                         "Expect a null default on database references"
                     );
-                    let vr = self.vars.work_refs(&tp, &mut self.lexer);
+                    let vr = if is_recursive_self {
+                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                    } else {
+                        self.vars.work_refs(&tp, &mut self.lexer)
+                    };
                     all_types.push(Type::Reference(content, vec![vr]));
                     actual.push(Value::Var(vr));
                 } else if let Type::RefVar(vtp) = &tp {

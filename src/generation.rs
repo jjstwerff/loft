@@ -1782,29 +1782,42 @@ extern crate loft;"
             } else {
                 let is_return_expr =
                     !is_void_block && !has_trailing_void && return_idx == Some(vnr);
-                let wrap_result = is_return_expr && is_text_result;
-                let narrow_cast = if is_return_expr {
-                    narrow_int_cast(&bl.result)
+                // When OpCreateStack is the tail expression of a non-void block, the
+                // op itself emits nothing at runtime (it's a stack-slot no-op), but
+                // the block must return the mutable reference.  Emit `&mut var_<name>`
+                // directly rather than delegating to output_call which writes nothing.
+                if is_return_expr
+                    && let Value::Call(d_nr, args) = v
+                    && self.data.def(*d_nr).name == "OpCreateStack"
+                    && let [Value::Var(nr)] = args.as_slice()
+                {
+                    let vname = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+                    writeln!(w, "&mut var_{vname}")?;
                 } else {
-                    None
-                };
-                if wrap_result {
-                    write!(w, "Str::new(")?;
-                } else if narrow_cast.is_some() {
-                    write!(w, "(")?;
-                }
-                self.indent += 1;
-                self.output_code_with_subst(w, v, &pre_evals)?;
-                self.indent -= 1;
-                if wrap_result {
-                    write!(w, ")")?;
-                } else if let Some(cast) = narrow_cast {
-                    write!(w, ") as {cast}")?;
-                }
-                if is_return_expr {
-                    writeln!(w)?;
-                } else {
-                    writeln!(w, ";")?;
+                    let wrap_result = is_return_expr && is_text_result;
+                    let narrow_cast = if is_return_expr {
+                        narrow_int_cast(&bl.result)
+                    } else {
+                        None
+                    };
+                    if wrap_result {
+                        write!(w, "Str::new(")?;
+                    } else if narrow_cast.is_some() {
+                        write!(w, "(")?;
+                    }
+                    self.indent += 1;
+                    self.output_code_with_subst(w, v, &pre_evals)?;
+                    self.indent -= 1;
+                    if wrap_result {
+                        write!(w, ")")?;
+                    } else if let Some(cast) = narrow_cast {
+                        write!(w, ") as {cast}")?;
+                    }
+                    if is_return_expr {
+                        writeln!(w)?;
+                    } else {
+                        writeln!(w, ";")?;
+                    }
                 }
             }
             // Restore counter to the state after collect_pre_evals so the next

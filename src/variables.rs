@@ -76,6 +76,15 @@ pub struct Function {
     variables: Vec<Variable>,
     work_text: u16,
     work_ref: u16,
+    // Separate counter for work-refs allocated by `add_defaults` for recursive
+    // self-calls on second pass.  Uses `__rref_N` names so it does not consume
+    // `__ref_N` slots that the outer function's return-value work-ref needs.
+    work_rref: u16,
+    // Separate counter for vector-db work-refs created by `vector_db()`.
+    // `vector_db` only runs on the second pass (first_pass guard), so it cannot
+    // use the shared `work_ref` counter: that would shift the counter relative to
+    // the first pass and break `ref_return`'s name-based attr matching.
+    work_vdb: u16,
     // Work variables for texts
     work_texts: BTreeSet<u16>,
     // Work variables for stores
@@ -127,6 +136,8 @@ impl Function {
             loops: Vec::new(),
             work_text: 0,
             work_ref: 0,
+            work_rref: 0,
+            work_vdb: 0,
             variables: Vec::new(),
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
@@ -154,6 +165,8 @@ impl Function {
         }
         self.work_text = 0;
         self.work_ref = 0;
+        self.work_rref = 0;
+        self.work_vdb = 0;
         self.work_texts.clear();
         self.work_refs.clear();
         self.inline_ref_vars.clear();
@@ -179,6 +192,8 @@ impl Function {
             variables: other.variables.clone(),
             work_text: 0,
             work_ref: 0,
+            work_rref: 0,
+            work_vdb: 0,
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
@@ -807,6 +822,35 @@ impl Function {
             self.set_type(v, tp.clone());
             self.variables[v as usize].source = lexer.at();
         }
+        self.work_refs.insert(v);
+        v
+    }
+
+    /// Like `work_refs` but uses a separate `__rref_N` counter/namespace.
+    /// Used by `add_defaults` for work-refs allocated for recursive self-calls
+    /// on the second pass.  This prevents the `__ref_N` counter from being
+    /// consumed by those recursive-call temporaries, so the outer function's
+    /// return-value work-ref continues to receive the same `__ref_N` name it
+    /// got on the first pass — allowing `ref_return` to find the name match
+    /// and reuse the existing attribute instead of adding a new one.
+    pub fn work_refs_recursive(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
+        let n = format!("__rref_{}", self.work_rref + 1);
+        self.work_rref += 1;
+        let v = self.add_variable(&n, tp, lexer);
+        self.work_refs.insert(v);
+        v
+    }
+
+    /// Work-ref for `vector_db()` — uses a separate `__vdb_N` counter/namespace.
+    /// `vector_db` only runs on the second pass (it is guarded by `!first_pass`),
+    /// so it must NOT share the `work_ref` / `__ref_N` counter with `add_defaults`.
+    /// Using a distinct counter prevents the name-shift that would cause
+    /// `ref_return` to fail its name-based attr match and add a spurious attr.
+    /// These variables are inserted into `work_refs` so they receive null-inits.
+    pub fn work_vec_db(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
+        let n = format!("__vdb_{}", self.work_vdb + 1);
+        self.work_vdb += 1;
+        let v = self.add_variable(&n, tp, lexer);
         self.work_refs.insert(v);
         v
     }

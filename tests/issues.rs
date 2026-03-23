@@ -1514,7 +1514,6 @@ fn test() {
 
 /// Issue 83: field named `key` in a hash-value struct panics at runtime.
 #[test]
-#[ignore = "issue 83: field named 'key' in hash-value struct causes 'Allocating a used store' panic — see PROBLEMS.md #83"]
 fn issue_83_hash_value_field_named_key_panics() {
     code!(
         "struct Entry { key: text, count: integer }
@@ -1556,7 +1555,6 @@ fn test() {
 
 /// Issue 84: for loop in helper + recursive caller panics "Too few parameters".
 #[test]
-#[ignore = "issue 84: for loop in helper called from recursive function panics at codegen — see PROBLEMS.md #84"]
 fn issue_84_for_loop_in_helper_called_from_recursive_fn() {
     code!(
         "fn sum_vec(v: vector<integer>) -> integer {
@@ -1579,7 +1577,6 @@ fn test() {
 
 /// Issue 84: merge sort (index-bound) also triggers the same panic.
 #[test]
-#[ignore = "issue 84: merge sort with for loop in msort_merge panics 'Too few parameters on n_msort_range' — see PROBLEMS.md #84"]
 fn issue_84_merge_sort_too_few_parameters() {
     code!(
         "fn msort_merge(lp: vector<integer>, rp: vector<integer>) -> vector<integer> {
@@ -1676,6 +1673,26 @@ fn test() {
     e1 = db.freq[\"hello\"];
     assert(e1 != null, \"inserted word must be findable\");
     assert(e1.count == 1, \"count should be 1, got {e1.count}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── Issue 89 ──────────────────────────────────────────────────────────────────
+// Optional `& text` parameter panics with subtract-with-overflow when called
+// with an explicit argument.  `convert()` must allocate a work-text variable
+// and route through OpAppendText + OpCreateStack, not bare OpCreateStack(text).
+
+/// Issue 89: calling `directory("sub")` with an explicit text arg must not panic.
+#[test]
+fn issue_89_optional_ref_text_param_with_arg() {
+    // directory() has signature `pub fn directory(v: & text = "") -> text`.
+    // Calling it with an explicit string argument previously caused
+    // "attempt to subtract with overflow" in codegen (issue #89).
+    code!(
+        "fn test() {
+    d = directory(\"sub\");
+    assert(d.len() >= 0, \"directory returned something\");
 }"
     )
     .result(Value::Null);

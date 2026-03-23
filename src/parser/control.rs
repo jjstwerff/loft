@@ -1398,8 +1398,37 @@ impl Parser {
             } else if !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type);
             }
-            if let Type::Text(ls) = t {
-                self.text_return(&ls);
+            if let Type::Text(ls) = &t {
+                self.text_return(ls);
+            } else if !self.first_pass {
+                // When a function returns a vector and the caller provides an output
+                // buffer (__ref_1 as a function argument), an explicit `return expr`
+                // where `expr` is backed by a local __vdb_N store would return a
+                // dangling DbRef: __vdb_N is freed before the return.
+                //
+                // Fix: if __ref_1 is a function argument and the returned expression
+                // is NOT already backed by __ref_1 (dep does not contain ref1_var),
+                // inject OpAppendVector to copy the elements into __ref_1 and return
+                // __ref_1 instead.
+                if let Type::Vector(elm_tp, dep) = &t {
+                    let ref1_var = self.vars.var("__ref_1");
+                    if ref1_var != u16::MAX
+                        && self.vars.is_argument(ref1_var)
+                        && !dep.contains(&ref1_var)
+                    {
+                        let rec_tp =
+                            i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+                        let append = self.cl(
+                            "OpAppendVector",
+                            &[Value::Var(ref1_var), v, Value::Int(rec_tp)],
+                        );
+                        *val = Value::Insert(vec![
+                            append,
+                            Value::Return(Box::new(Value::Var(ref1_var))),
+                        ]);
+                        return;
+                    }
+                }
             }
         } else if !self.first_pass && r_type != Type::Void {
             diagnostic!(self.lexer, Level::Error, "Expect expression after return");

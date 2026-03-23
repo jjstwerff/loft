@@ -225,6 +225,14 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
 
 #[must_use]
 pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
+    #[cfg(debug_assertions)]
+    if db.store_nr != u16::MAX {
+        debug_assert!(
+            !stores[db.store_nr as usize].free,
+            "get_vector: use-after-free on store {} (rec={} pos={})",
+            db.store_nr, db.rec, db.pos
+        );
+    }
     let store = keys::store(db, stores);
     if from == i32::MIN {
         return DbRef {
