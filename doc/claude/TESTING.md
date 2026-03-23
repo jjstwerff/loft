@@ -808,6 +808,75 @@ Trace the expected element sequence manually before writing the assert.
 
 ---
 
+## Loft Test Runner (`--tests`)
+
+The `--tests` CLI flag provides a built-in test runner for loft programs.  It
+discovers and executes test functions in `.loft` files without requiring Rust
+or `cargo test`.
+
+### Writing tests
+
+Any zero-parameter function whose name starts with `test` is a test function:
+
+```loft
+fn test_addition() {
+    assert(1 + 2 == 3, "basic addition");
+    assert(10 + 20 == 30, "larger addition");
+}
+
+fn test_string_length() {
+    assert("hello".len() == 5, "text length");
+}
+```
+
+Test functions use `assert(condition, message)` to validate behaviour.  A
+failing assertion marks the test as failed; the runner continues with the
+remaining tests in the file.
+
+Helper functions, structs, and other definitions can coexist in the same file —
+only `fn test*()` functions (no parameters) are executed as tests.
+
+### Running tests
+
+```bash
+loft --tests                  # run tests in current directory (recursive)
+loft --tests tests/           # run tests in a specific directory
+loft --tests --no-warnings    # suppress warning output
+```
+
+The runner:
+1. Recursively discovers `.loft` files under the given directory (default: `.`).
+2. Parses each file and finds all `fn test*()` functions.
+3. Runs each test function independently.  A failed `assert` marks the test as
+   failed but does not abort the run.
+4. Reports per-file and per-directory summaries.
+5. Exits with code 0 if all tests pass, 1 if any fail.
+
+### Output format
+
+```
+  ok    tests/math.loft  (2 tests)
+  FAIL  tests/text.loft::test_empty_concat
+  FAIL  tests/text.loft  (1 failed, 3 passed)
+
+  tests/: 1 failed, 5 passed
+
+test result: FAILED. 1 failed; 5 passed; 6 total; 2 files
+```
+
+Files with no `fn test*()` functions are silently skipped.  Hidden directories
+(starting with `.`) and `.loft/` artifact directories are excluded from the
+recursive walk.
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| `--tests [dir]` | Discover and run test functions (default dir: `.`) |
+| `--no-warnings` | Suppress warning diagnostics in test output |
+
+---
+
 ## See also
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs, limitations, workarounds, and fix plans
 - [CLAUDE.md](../../CLAUDE.md) — Project orientation: execution path, key data structures, branch policy, documentation index
