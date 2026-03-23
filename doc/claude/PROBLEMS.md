@@ -256,6 +256,36 @@ placement (tos_estimate=0, no live vars), which is safe.  The test now asserts s
 
 ---
 
+### 72. `assign_slots` places block-return outer variable above TOS causing slot conflict (FIXED 2026-03-21)
+
+**Tests:** `map_integers`, `filter_integers` (issues.rs); `dir`, `loft_suite`, `map_filter_reduce`
+(wrap tests) — all produced "Slot conflict" panics in `validate_slots`.
+
+**Root cause:** In the pattern `Set(outer_var, Block([Set(inner_var, ...), Var(inner_var)]))`,
+`place_large_and_recurse` placed `outer_var` first (advancing `*tos` by `outer_var.size`), then
+recursed into the inner Block at the resulting higher TOS.  At codegen time the block evaluates
+first, so `inner_var` is allocated at the lower TOS (= `outer_var.stack_pos`).  `outer_var`'s
+pre-assigned slot was above the real stack top; codegen's `pos > stack.position` override fired,
+placing `outer_var` at the same slot as `inner_var`.
+
+**Why this happens:** `generate_block` is called with `to = outer_var.stack_pos`, so the block
+runs in-place at `outer_var`'s slot.  `outer_var` and `inner_var` share the block's result slot
+legally (non-overlapping live intervals in parent/child scopes), but `assign_slots` didn't model
+this sharing.
+
+**Fix (`src/variables.rs` — `place_large_and_recurse`):**
+In the `Value::Set(v_nr, inner)` arm, when `inner` is a `Value::Block` and `v` is a large
+non-Text type, call `process_scope(function, inner, v_slot, depth + 1)` with `frame_base = v_slot`
+(the outer var's pre-computed slot), then set `v.stack_pos = v_slot` and return without recursing
+further.  Text is excluded: `gen_set_first_text` emits `OpText` *before* the block runs, advancing
+`stack.position` by `v_size`, so for Text the frame_base at codegen is already `v_slot + v_size`.
+
+**Also:** `debug_assert!(pos <= stack.position)` added to `generate_set` before the override block
+as a regression guard (Step 8 guard).  Unconditional `assert!(pos != u16::MAX)` added after
+computing `pos` to catch variables that escape `assign_slots` entirely (Step 9 guard).
+
+---
+
 ## Native Codegen Blockers (discovered 2026-03-21 via `make test-native`)
 
 All 24 `tests/docs/*.loft` files fail to compile under `--native`.  The root causes are:

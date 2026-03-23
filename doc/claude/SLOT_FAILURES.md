@@ -1,5 +1,10 @@
 # Slot assignment failure analysis and design
 
+> **HISTORICAL** — All three bugs (A, B, C) documented here are fixed (A6.3a/b, two-zone redesign).
+> The failure matrix shows every listed test passing.
+> The current slot assignment design is in [SLOTS.md](SLOTS.md).
+> Issue 72 (block-return slot conflict) is documented in [PROBLEMS.md](PROBLEMS.md) § 72.
+
 ## Modes
 
 As of A6.3b, `assign_slots` (greedy interval colouring) is the unconditional default.
@@ -254,6 +259,55 @@ pre-assigned slot, `set_stack_pos(v, stack.position)` overrides the slot to curr
 TOS so direct placement fires correctly.  Advancing TOS via `max` (the earlier design)
 was incorrect: it advanced the compile-time watermark without filling the gap on the
 runtime stack, causing "Variable outside stack" panics.
+
+**1. `src/state/codegen.rs` — `generate_set` first-alloc path (line ~411)**
+
+```rust
+// BEFORE (A6.3b):
+stack.function.set_stack_allocated(v);
+if pos > stack.position {
+    // Pre-assigned slot is above current TOS (can happen after if-else branch
+    // restores stack.position).  Fall back to claim() so the slot matches TOS.
+    stack.function.claim(v, stack.position, &Context::Variable);
+}
+let pos = stack.function.stack(v);
+
+// AFTER (A6.4):
+stack.function.set_stack_allocated(v);
+// Trust the pre-assigned slot; advance TOS to cover it.
+stack.position = stack.position.max(pos.saturating_add(var_size));
+let pos = stack.function.stack(v);
+```
+
+`stack.position.max(pos + var_size)` is correct for all four cases:
+
+| Case | Condition | Effect on TOS | Then |
+|------|-----------|---------------|------|
+| Fresh slot (normal) | `pos == stack.position` | advances by `var_size` | direct placement (`pos == TOS`) |
+| Dead-slot reuse | `pos < stack.position` | TOS unchanged | OpPutX path (`pos < TOS`) |
+| TOS drop (if-else) | `pos > stack.position` | advances to `pos + var_size` | OpPutX path (`pos < new TOS`) |
+| Large types | always fresh, `pos == stack.position` | advances by `var_size` | direct placement |
+
+**TOS-drop case detail:** When an if-else restores `stack.position` to a value below
+`v`'s pre-assigned slot, `claim()` overrides the slot to the restored TOS.  After A6.4
+the slot is preserved and TOS is advanced past it instead.  The value is generated at
+the new TOS, then `OpPutX` copies it into the pre-assigned slot.  The
+`debug_assert!(pos < stack.position)` on the OpPutX path still holds because
+`pos < pos + var_size == new stack.position`.
+
+**`pos.saturating_add`** prevents overflow if `pos` were ever `u16::MAX`; the `max`
+then leaves TOS unchanged instead of wrapping.
+
+**2. `src/state/codegen.rs` — argument setup (~line 32)**
+
+```rust
+// BEFORE:
+stack.position = stack.function.claim(v, stack.position, &Context::Argument);
+
+// AFTER (inline what claim() did):
+stack.function.variables[v as usize].stack_pos = stack.position;
+stack.position += size(stack.function.tp(v), &Context::Argument);
+```
 
 **Deleted:** `pub fn claim(...)`, `pub fn assign_slots_safe(...)`, and
 `LOFT_DEBUG_SLOTS` debug blocks in both `variables.rs` and `codegen.rs`.
