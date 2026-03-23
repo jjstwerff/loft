@@ -98,8 +98,6 @@ Full language reference: [LOFT.md](doc/claude/LOFT.md) and [STDLIB.md](doc/claud
 All changes — features, bug fixes, refactors, documentation updates — must land on a
 feature branch and reach `main` only through a pull request.
 
-The **currently active development branch** is `benchmark`.
-
 ### Why
 
 `main` is the release branch. Every commit on `main` is expected to be releasable.
