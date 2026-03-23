@@ -29,11 +29,7 @@ const NATIVE_SKIP: &[&str] = &[];
 /// Script files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for issue numbers.
 /// Do NOT remove tests from this list by weakening the test — fix the native codegen instead.
-const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    "03-text.loft", // issue 87: text method call in format interpolation emits String not &str
-    "11-files.loft", // issue 88: directory()/user_directory()/program_directory() wrong arg gen
-    "12-binary.loft", // issue 86: f#read(n) as vector<T> — file_from_bytes stub not implemented for native
-];
+const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
 ///
