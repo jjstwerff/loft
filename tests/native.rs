@@ -146,6 +146,47 @@ struct NativeJob {
     stem: String,
     tmp_rs: PathBuf,
     binary: PathBuf,
+    /// Sidecar file that stores the cache key written at compile time.
+    /// Path: `{binary}.key`.  Content: hex-encoded 64-bit FNV-1a hash of the
+    /// `.rs` source bytes concatenated with the rlib identity bytes.
+    key_file: PathBuf,
+}
+
+/// FNV-1a 64-bit hash — deterministic, no external deps.
+fn fnv64(data: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for &b in data {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Build the cache key from the current `.rs` content and rlib identity.
+///
+/// The key captures both what was compiled (`.rs` bytes) and what it was
+/// linked against (rlib path + modification time).  If either changes the
+/// key changes and the binary is recompiled.
+fn cache_key(rs_content: &[u8], rlib_info: &Option<(PathBuf, PathBuf)>) -> u64 {
+    let mut key = fnv64(rs_content);
+    if let Some((rlib, _)) = rlib_info {
+        key ^= fnv64(rlib.to_string_lossy().as_bytes());
+        if let Ok(mtime) = std::fs::metadata(rlib).and_then(|m| m.modified()) {
+            // Mix in the rlib modification time so a recompiled rlib (same path,
+            // different binary) also invalidates the cache.
+            let nanos = mtime
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            let secs = mtime
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            key ^= fnv64(&secs.to_le_bytes());
+            key ^= fnv64(&nanos.to_le_bytes());
+        }
+    }
+    key
 }
 
 /// Phase 1 — parse the `.loft` file and generate its Rust source.
@@ -202,8 +243,8 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     }
 
     // Only write the .rs file when the content has changed.  This keeps the file's
-    // modification time stable across runs where the loft source hasn't changed,
-    // which allows the binary mtime cache in compile_native_job to remain valid.
+    // content stable across runs where the loft source hasn't changed, which
+    // means cache_key() produces the same hash and compile_native_job stays cached.
     let tmp_rs = std::env::temp_dir().join(format!("loft_native_{stem}.rs"));
     let existing = std::fs::read(&tmp_rs).unwrap_or_default();
     if existing != buf {
@@ -211,34 +252,35 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     }
 
     let binary = std::env::temp_dir().join(format!("loft_native_{stem}_bin"));
+    let key_file = std::env::temp_dir().join(format!("loft_native_{stem}_bin.key"));
     Ok(NativeJob {
         stem,
         tmp_rs,
         binary,
+        key_file,
     })
 }
 
-/// Return true if the cached binary is newer than both the `.rs` source and the rlib.
-/// When true, `compile_native_job` skips the rustc invocation.
+/// Return true if the cached binary is still valid for the current `.rs` content
+/// and rlib.  Uses a content-hash sidecar (`{binary}.key`) written at compile
+/// time — immune to clock skew and cross-machine binary copies.
 fn binary_cache_valid(job: &NativeJob, rlib_info: &Option<(PathBuf, PathBuf)>) -> bool {
-    let bin_mtime = match std::fs::metadata(&job.binary).and_then(|m| m.modified()) {
-        Ok(t) => t,
+    // Binary must exist.
+    if !job.binary.exists() {
+        return false;
+    }
+    // Read the stored key from the sidecar.
+    let stored = match std::fs::read_to_string(&job.key_file) {
+        Ok(s) => s.trim().to_string(),
         Err(_) => return false,
     };
-    if std::fs::metadata(&job.tmp_rs)
-        .and_then(|m| m.modified())
-        .is_ok_and(|t| bin_mtime < t)
-    {
-        return false;
-    }
-    if rlib_info.as_ref().is_some_and(|(rlib, _)| {
-        std::fs::metadata(rlib)
-            .and_then(|m| m.modified())
-            .is_ok_and(|t| bin_mtime < t)
-    }) {
-        return false;
-    }
-    true
+    // Recompute the key from the current .rs content and rlib.
+    let rs_content = match std::fs::read(&job.tmp_rs) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let current_key = cache_key(&rs_content, rlib_info);
+    stored == format!("{current_key:016x}")
 }
 
 /// Phase 2 — compile the generated `.rs` file to a native binary with `rustc`.
@@ -292,8 +334,13 @@ fn compile_native_job(
         let stderr = String::from_utf8_lossy(&compile_out.stderr);
         eprintln!("rustc failed for {}:\n{stderr}", job.stem);
         let _ = std::fs::remove_file(&job.binary);
+        let _ = std::fs::remove_file(&job.key_file);
         return Err(Error::from(std::io::ErrorKind::Other));
     }
+    // Write the cache key so future runs can skip recompilation when nothing changed.
+    let rs_content = std::fs::read(&job.tmp_rs).unwrap_or_default();
+    let key = cache_key(&rs_content, rlib_info);
+    let _ = std::fs::write(&job.key_file, format!("{key:016x}"));
     Ok(true)
 }
 
