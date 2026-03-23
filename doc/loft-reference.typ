@@ -121,6 +121,27 @@ fn main() {
 }
 ```
 
+=== Command-line flags
+
+Run `loft --help` for the full list. The most commonly used flags are:
+
+=== Running your program as a native binary
+
+The interpreter runs programs immediately, but for compute-heavy work you can compile to a native binary instead. This takes a few seconds the first time (it calls `rustc` in the background) but runs 10–50× faster:
+
+```
+loft --native myprogram.loft
+```
+
+To see the generated Rust code without running it:
+
+```
+loft --native-emit myprogram.rs
+cat myprogram.rs
+```
+
+Native compilation requires Rust 1.85 or later on your PATH. If `rustc` is not found, loft prints a clear error message telling you how to install it.
+
 === Standard library
 
 The standard library is a set of `.loft` files bundled alongside the loft binary. They are loaded automatically before your program runs — you do not need any `import` or `use` statement to call `println`, `assert`, or any other built-in function.
@@ -1541,6 +1562,10 @@ fn apply_fn(f:  fn(integer) -> integer, x: integer) -> integer {
 }
 ```
 
+=== Lambda Expressions
+
+A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -\> return_type { body } Use the short form (pipe-bar syntax) which is a bit shorter: |param: type| -\> return_type { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.
+
 ```rust
 fn main() {
 ```
@@ -1609,6 +1634,50 @@ Pass function references as arguments to higher-order functions.
 ```rust
   assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
   assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
+```
+
+Full-form lambda with fn(...) syntax.
+
+```rust
+  nums = [1, 2, 3, 4, 5];
+  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  assert(doubled[0] == 2, "lambda map first element");
+  assert(doubled[4] == 10, "lambda map last element");
+```
+
+Short-form lambda with |...| syntax — same thing, slightly shorter to write.
+
+```rust
+  tripled = map(nums, |x: integer| -> integer { x * 3 });
+  assert(tripled[0] == 3, "short lambda map first element");
+```
+
+filter keeps only elements where the lambda returns true.
+
+```rust
+  evens = filter(nums, |x: integer| -> boolean { x % 2 == 0 });
+  assert(evens[0] == 2, "filter evens first");
+  assert(evens[1] == 4, "filter evens second");
+```
+
+reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).
+
+```rust
+  total = reduce(nums, 0, |acc: integer, x: integer| -> integer { acc + x });
+  assert(total == 15, "reduce sum: {total}");
+```
+
+A lambda can also be stored in a variable and called later.
+
+```rust
+  negate = |x: integer| -> integer { -x };
+  assert(negate(7) == -7, "stored lambda: {negate(7)}");
+```
+
+A lambda passed to your own higher-order function (same as apply_fn above).
+
+```rust
+  assert(apply_fn(|x: integer| -> integer { x * x }, 6) == 36, "lambda as arg: 6^2");
 }
 ```
 
@@ -4526,6 +4595,8 @@ What works today:
 - Collections: `vector`, `sorted`, `index`, `hash`
 - Functions, default parameters, reference parameters (`&`), `const` parameters
 - Function references (`fn name`) and higher-order functions (`map`, `filter`, `reduce`)
+- Lambda expressions: inline functions with `fn(x: integer) -> integer { x * 2 }` or the short form `|x| { x * 2 }`
+- Native compilation: `loft --native file.loft` compiles to a fast native binary via `rustc`
 - File I/O: text, binary, directory listing
 - Parallel execution: `par(…)` for-loop clause and `parallel_for()`
 - Logging framework
@@ -4601,24 +4672,22 @@ The formatter is a token-stream pass that preserves all comments and produces a 
 
 === Version 1.1 — Ergonomics
 
-==== Lambda expressions planned
+==== Lambda expressions
 
-Today, passing a function to `map` or `filter` requires a named top-level function. Lambda expressions let you write the function body inline without giving it a name:
+Lambda expressions let you write a function inline without giving it a name. Two forms are available:
 
 ```
 nums = [1, 2, 3, 4, 5];
 
-// Today: requires a named function
-fn double(x: integer) -> integer { x * 2 }
-doubled = map(nums, fn double);
-
-// With lambdas: inline, no top-level declaration needed
+// Full form — fn(...) syntax with explicit types
 doubled = map(nums, fn(x: integer) -> integer { x * 2 });
-evens   = filter(nums, fn(x: integer) -> boolean { x % 2 == 0 });
-total   = reduce(nums, 0, fn(acc: integer, x: integer) -> integer { acc + x });
+
+// Short form — |...| syntax, slightly less to type
+evens   = filter(nums, |x: integer| -> boolean { x % 2 == 0 });
+total   = reduce(nums, 0, |acc: integer, x: integer| -> integer { acc + x });
 ```
 
-Lambdas do not capture surrounding variables in the first version — context must be passed explicitly. Closure capture is a longer-term item.
+Lambdas cannot capture variables from the surrounding scope yet — pass any needed values as extra arguments. Closure capture is planned for a future release. See Functions for more examples.
 
 ==== Interactive mode (REPL) planned
 

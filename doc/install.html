@@ -59,6 +59,28 @@ cargo build --release</code></pre>
     println("");
 }</code></pre>
 
+<h2 id="cli-flags">Command-line flags</h2>
+<p>Run <code>loft --help</code> for the full list. The most commonly used flags are:</p>
+<table class="bench-table">
+<thead><tr><th>Flag</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>--help</code></td><td>Show all available options</td></tr>
+<tr><td><code>--version</code></td><td>Print the loft version</td></tr>
+<tr><td><code>--path &lt;dir&gt;</code></td><td>Look for the <code>default/</code> standard library in <em>dir</em> instead of next to the binary</td></tr>
+<tr><td><code>--native [out]</code></td><td>Compile to a native binary via <code>rustc</code> and run it (requires Rust on PATH)</td></tr>
+<tr><td><code>--native-release [out]</code></td><td>Same as <code>--native</code> with full optimisations (slower to compile, fastest to run)</td></tr>
+<tr><td><code>--native-emit [out.rs]</code></td><td>Write the generated Rust source to a file without compiling it</td></tr>
+</tbody>
+</table>
+
+<h2 id="running-native">Running your program as a native binary</h2>
+<p>The interpreter runs programs immediately, but for compute-heavy work you can compile to a native binary instead. This takes a few seconds the first time (it calls <code>rustc</code> in the background) but runs 10–50× faster:</p>
+<pre><code>loft --native myprogram.loft</code></pre>
+<p>To see the generated Rust code without running it:</p>
+<pre><code>loft --native-emit myprogram.rs
+cat myprogram.rs</code></pre>
+<p>Native compilation requires Rust 1.85 or later on your PATH. If <code>rustc</code> is not found, loft prints a clear error message telling you how to install it.</p>
+
 <h2 id="standard-library">Standard library</h2>
 <p>The standard library is a set of <code>.loft</code> files bundled alongside the loft binary. They are loaded automatically before your program runs — you do not need any <code>import</code> or <code>use</code> statement to call <code>println</code>, <code>assert</code>, or any other built-in function.</p>
 <p>The full function reference is in the <a href="stdlib.html">Standard Library</a> section of these docs.</p>

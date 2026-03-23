@@ -21,6 +21,8 @@
 <li>Collections: <code>vector</code>, <code>sorted</code>, <code>index</code>, <code>hash</code></li>
 <li>Functions, default parameters, reference parameters (<code>&amp;</code>), <code>const</code> parameters</li>
 <li>Function references (<code>fn name</code>) and higher-order functions (<code>map</code>, <code>filter</code>, <code>reduce</code>)</li>
+<li>Lambda expressions: inline functions with <code>fn(x: integer) -&gt; integer { x * 2 }</code> or the short form <code>|x| { x * 2 }</code></li>
+<li>Native compilation: <code>loft --native file.loft</code> compiles to a fast native binary via <code>rustc</code></li>
 <li>File I/O: text, binary, directory listing</li>
 <li>Parallel execution: <code>par(…)</code> for-loop clause and <code>parallel_for()</code></li>
 <li>Logging framework</li>
@@ -73,19 +75,17 @@ loft --format src/                   # format every .loft file in a directory</c
 
 <h2 id="version-1-1">Version 1.1 — Ergonomics</h2>
 
-<h3 id="lambdas">Lambda expressions <span class="badge planned">planned</span></h3>
-<p>Today, passing a function to <code>map</code> or <code>filter</code> requires a named top-level function. Lambda expressions let you write the function body inline without giving it a name:</p>
+<h3 id="lambdas">Lambda expressions</h3>
+<p>Lambda expressions let you write a function inline without giving it a name. Two forms are available:</p>
 <pre><code>nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
 
-<span class="cm">// Today: requires a named function</span>
-<span class="kw">fn</span> <span class="fn-call">double</span>(x: <span class="ty">integer</span>) -&gt; <span class="ty">integer</span> { x * <span class="nm">2</span> }
-doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span> double);
-
-<span class="cm">// With lambdas: inline, no top-level declaration needed</span>
+<span class="cm">// Full form — fn(...) syntax with explicit types</span>
 doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty">integer</span>) -&gt; <span class="ty">integer</span> { x * <span class="nm">2</span> });
-evens   = <span class="fn-call">filter</span>(nums, <span class="kw">fn</span>(x: <span class="ty">integer</span>) -&gt; <span class="ty">boolean</span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
-total   = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, <span class="kw">fn</span>(acc: <span class="ty">integer</span>, x: <span class="ty">integer</span>) -&gt; <span class="ty">integer</span> { acc + x });</code></pre>
-<p>Lambdas do not capture surrounding variables in the first version — context must be passed explicitly. Closure capture is a longer-term item.</p>
+
+<span class="cm">// Short form — |...| syntax, slightly less to type</span>
+evens   = <span class="fn-call">filter</span>(nums, |x: <span class="ty">integer</span>| -&gt; <span class="ty">boolean</span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
+total   = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc: <span class="ty">integer</span>, x: <span class="ty">integer</span>| -&gt; <span class="ty">integer</span> { acc + x });</code></pre>
+<p>Lambdas cannot capture variables from the surrounding scope yet — pass any needed values as extra arguments. Closure capture is planned for a future release. See <a href="06-function.html">Functions</a> for more examples.</p>
 
 <h3 id="repl">Interactive mode (REPL) <span class="badge planned">planned</span></h3>
 <p>Running <code>loft</code> with no arguments will enter an interactive session where each expression is evaluated immediately and its result printed:</p>
