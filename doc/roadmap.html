@@ -10,82 +10,37 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <span class="cur">Roadmap</span> · <a href="report.html">Report a problem</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Roadmap</h1>
 <article>
-<p>This page describes the planned development path for Loft and loft. Features marked <strong>planned</strong> are not yet available — the code examples show the intended syntax once the feature ships.</p>
+<p>This page describes the development path for Loft. Features marked <strong>planned</strong> are not yet available — the code examples show the intended syntax once the feature ships.</p>
 
-<h2 id="current-status">Current status — version 0.x</h2>
+<h2 id="current-status">Current status — version 0.8</h2>
 <p>The language is under active development. All features documented on the language pages work correctly and are stable enough for real use, but the stability guarantee (no breaking changes) does not apply until version 1.0.</p>
 <p>What works today:</p>
 <ul>
-<li>All primitive types: <code>integer</code>, <code>long</code>, <code>float</code>, <code>boolean</code>, <code>text</code></li>
+<li>All primitive types: <code>integer</code>, <code>long</code>, <code>float</code>, <code>boolean</code>, <code>text</code>, <code>character</code></li>
 <li>Structs and struct-enums with methods</li>
 <li>Collections: <code>vector</code>, <code>sorted</code>, <code>index</code>, <code>hash</code></li>
 <li>Functions, default parameters, reference parameters (<code>&amp;</code>), <code>const</code> parameters</li>
 <li>Function references (<code>fn name</code>) and higher-order functions (<code>map</code>, <code>filter</code>, <code>reduce</code>)</li>
-<li>Lambda expressions: inline functions with <code>fn(x: integer) -&gt; integer { x * 2 }</code> or the short form <code>|x| { x * 2 }</code></li>
+<li>Lambda expressions: <code>fn(x: integer) -&gt; integer { x * 2 }</code> or <code>|x| { x * 2 }</code></li>
+<li>Match expressions with exhaustiveness checking</li>
 <li>Native compilation: <code>loft --native file.loft</code> compiles to a fast native binary via <code>rustc</code></li>
-<li>File I/O: text, binary, directory listing</li>
+<li>WebAssembly compilation: <code>loft --native-wasm file.loft</code></li>
+<li>Built-in test runner: <code>loft --tests</code> discovers and runs <code>fn test*()</code> functions</li>
+<li>Code formatter: <code>loft --format file.loft</code></li>
+<li>File I/O: text, binary, directory listing, PNG images</li>
 <li>Parallel execution: <code>par(…)</code> for-loop clause and <code>parallel_for()</code></li>
-<li>Logging framework</li>
-<li>Library system (<code>use mylib;</code>)</li>
-<li>Null safety: every type is nullable; <code>not null</code> annotation on struct fields</li>
-<li>Format strings with expression interpolation: <code>"{x * 2 + 1}"</code></li>
+<li>Logging framework with rate limiting</li>
+<li>Library system with wildcard imports (<code>use mylib::*;</code>)</li>
+<li>Null safety: every type is nullable; <code>not null</code> annotation on struct fields; <code>?? default</code> coalescing</li>
+<li>Format strings with expression interpolation and specifiers: <code>"{x:06.2}"</code></li>
 </ul>
 
-<h2 id="version-1-0">Version 1.0 — Language stability</h2>
-<p>Version 1.0 is a <em>stability contract</em>: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language surface — syntax, type system, documented standard library, command-line flags — is frozen at 1.0.</p>
-<p>The primary gate items are correctness fixes (no panics on valid programs) and infrastructure (correct project identity, CHANGELOG, release binaries). See the internal planning documents for the full gate list.</p>
-<p>The following features are <em>target</em> items for 1.0 — they are planned for the 1.0 release but will ship in 1.1 if they are not ready in time:</p>
+<h2 id="next">Next — version 0.9</h2>
 
-<h3 id="match">Match expressions <span class="badge planned">planned</span></h3>
-<p>A <code>match</code> expression dispatches on an enum value with compiler-checked exhaustiveness. If every variant is not covered and no wildcard arm is present, the compiler reports an error.</p>
-<pre><code><span class="cm">// Plain enum dispatch</span>
-direction = <span class="en">North</span>;
-label = <span class="kw">match</span> direction {
-    <span class="en">North</span> =&gt; <span class="st">"north"</span>
-    <span class="en">East</span>  =&gt; <span class="st">"east"</span>
-    <span class="en">South</span> =&gt; <span class="st">"south"</span>
-    <span class="en">West</span>  =&gt; <span class="st">"west"</span>
-};
-<span class="bi">assert</span>(label == <span class="st">"north"</span>, <span class="st">"match direction"</span>);</code></pre>
-<pre><code><span class="cm">// Struct-enum: each arm binds the variant's fields</span>
-area = <span class="kw">match</span> shape {
-    <span class="en">Circle</span> { radius }       =&gt; PI * radius * radius
-    <span class="en">Rect</span>   { width, height } =&gt; width * height
-};</code></pre>
-<pre><code><span class="cm">// Wildcard arm catches anything not listed above</span>
-description = <span class="kw">match</span> code {
-    <span class="nm">200</span> =&gt; <span class="st">"ok"</span>
-    <span class="nm">404</span> =&gt; <span class="st">"not found"</span>
-    _   =&gt; <span class="st">"unknown"</span>
-};</code></pre>
-<p>Today the same logic requires an if/else chain or a dispatched method. Match makes it shorter and adds exhaustiveness checking.</p>
-
-<h3 id="wildcard-imports">Wildcard and selective imports <span class="badge planned">planned</span></h3>
-<p>The current <code>use mylib;</code> import requires prefixing every name with <code>mylib::</code>. Two shorter forms are planned:</p>
-<pre><code><span class="kw">use</span> mylib::*;              <span class="cm">// bring all public names into scope</span>
-<span class="kw">use</span> mylib::Point, add;    <span class="cm">// bring specific names into scope</span></code></pre>
-<p>The compiler will report a collision error if a wildcard-imported name shadows a local definition.</p>
-
-<h3 id="formatter">Code formatter <span class="badge planned">planned</span></h3>
-<p>A canonical formatter enforces one consistent Loft style — 2-space indentation, opening braces on the same line, 80-column line wrapping. No configuration.</p>
-<pre><code class="lang-sh">loft --format my_program.loft       # format in-place
-loft --format-check my_program.loft  # exit 1 if formatting differs (CI)
-loft --format src/                   # format every .loft file in a directory</code></pre>
-<p>The formatter is a token-stream pass that preserves all comments and produces a deterministic output. It does not require the program to type-check successfully.</p>
-
-<h2 id="version-1-1">Version 1.1 — Ergonomics</h2>
-
-<h3 id="lambdas">Lambda expressions</h3>
-<p>Lambda expressions let you write a function inline without giving it a name. Two forms are available:</p>
-<pre><code>nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
-
-<span class="cm">// Full form — fn(...) syntax with explicit types</span>
-doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty">integer</span>) -&gt; <span class="ty">integer</span> { x * <span class="nm">2</span> });
-
-<span class="cm">// Short form — |...| syntax, slightly less to type</span>
-evens   = <span class="fn-call">filter</span>(nums, |x: <span class="ty">integer</span>| -&gt; <span class="ty">boolean</span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
-total   = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc: <span class="ty">integer</span>, x: <span class="ty">integer</span>| -&gt; <span class="ty">integer</span> { acc + x });</code></pre>
-<p>Lambdas cannot capture variables from the surrounding scope yet — pass any needed values as extra arguments. Closure capture is planned for a future release. See <a href="06-function.html">Functions</a> for more examples.</p>
+<h3 id="closures">Closure capture for lambdas <span class="badge planned">planned</span></h3>
+<p>Lambdas cannot capture variables from the surrounding scope yet — you must pass any needed values as extra arguments. Closure capture will allow lambdas to read outer variables directly:</p>
+<pre><code>factor = <span class="nm">10</span>;
+scaled = <span class="fn-call">map</span>(nums, |x| { x * factor });  <span class="cm">// captures 'factor' from outer scope</span></code></pre>
 
 <h3 id="repl">Interactive mode (REPL) <span class="badge planned">planned</span></h3>
 <p>Running <code>loft</code> with no arguments will enter an interactive session where each expression is evaluated immediately and its result printed:</p>
@@ -99,12 +54,59 @@ total   = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |
 3.0</code></pre>
 <p>Variable and type definitions persist across lines for the duration of the session. A parse error discards the failed line and continues the session.</p>
 
+<h3 id="http">HTTP client and JSON <span class="badge planned">planned</span></h3>
+<p>Built-in HTTP client and JSON serialization for web API integration:</p>
+<pre><code><span class="kw">use</span> http;
+
+<span class="cm">// Struct with #json annotation for automatic serialization</span>
+#json
+<span class="kw">struct</span> User { name: <span class="ty">text</span>, age: <span class="ty">integer</span> }
+
+resp = <span class="fn-call">http_get</span>(<span class="st">"https://api.example.com/users/1"</span>);
+<span class="kw">if</span> resp.ok() {
+    user = User.<span class="fn-call">from_json</span>(resp.body);
+    <span class="fn-call">println</span>(<span class="st">"{user.name} is {user.age}"</span>);
+}</code></pre>
+
+<h2 id="version-1-0">Version 1.0 — Language stability</h2>
+<p>Version 1.0 is a <em>stability contract</em>: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language surface — syntax, type system, documented standard library, command-line flags — is frozen at 1.0.</p>
+<p>The primary gate items are correctness fixes (no panics on valid programs) and infrastructure (correct project identity, CHANGELOG, release binaries).</p>
+
+<h2 id="version-1-1">Version 1.1+ — Backlog</h2>
+
+<h3 id="tuples">Tuple types <span class="badge planned">planned</span></h3>
+<p>Multi-value returns and lightweight grouping without defining a struct:</p>
+<pre><code><span class="kw">fn</span> <span class="fn-name">min_max</span>(v: <span class="ty">vector&lt;integer&gt;</span>) -&gt; (<span class="ty">integer</span>, <span class="ty">integer</span>) {
+    (<span class="fn-call">min</span>(v), <span class="fn-call">max</span>(v))
+}
+
+(lo, hi) = <span class="fn-call">min_max</span>([<span class="nm">3</span>, <span class="nm">1</span>, <span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">5</span>]);
+<span class="fn-call">assert</span>(lo == <span class="nm">1</span> &amp;&amp; hi == <span class="nm">5</span>, <span class="st">"min_max"</span>);</code></pre>
+
+<h3 id="coroutines">Coroutines <span class="badge planned">planned</span></h3>
+<p>Stackful coroutines with <code>yield</code> for lazy sequences:</p>
+<pre><code><span class="kw">fn</span> <span class="fn-name">fibonacci</span>() -&gt; <span class="ty">iterator&lt;integer&gt;</span> {
+    a = <span class="nm">0</span>; b = <span class="nm">1</span>;
+    <span class="kw">loop</span> {
+        <span class="kw">yield</span> a;
+        (a, b) = (b, a + b);
+    }
+}
+
+<span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">fibonacci</span>() {
+    <span class="kw">if</span> n &gt; <span class="nm">100</span> { <span class="kw">break</span>; }
+    <span class="fn-call">print</span>(<span class="st">"{n} "</span>);
+}</code></pre>
+
+<h3 id="stack-trace">Stack trace introspection <span class="badge planned">planned</span></h3>
+<p>Access the call stack at runtime for debugging and error reporting via <code>stack_trace()</code>.</p>
+
 <h2 id="web-ide">Web IDE — independent track</h2>
 <p>A fully serverless browser-based IDE for Loft is being developed in parallel with the interpreter. It will run the full loft interpreter as a WebAssembly module — no installation, no account, no server.</p>
 <p>Planned features:</p>
 <ul>
 <li>Syntax highlighting with the CodeMirror 6 editor</li>
-<li>Run button → console output and problems panel</li>
+<li>Run button with console output and problems panel</li>
 <li>Go-to-definition and find-usages (Ctrl+click)</li>
 <li>Multiple projects stored locally in the browser (IndexedDB)</li>
 <li>Documentation and example browser without leaving the IDE</li>
