@@ -35,29 +35,44 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
 ///
 /// Prefers `target/release/libloft.rlib` (clean single-version deps) over the debug
 /// test binary's `deps/` directory (which may have multiple versions of the same crate,
-/// causing rustc "multiple candidates" errors).  Falls back to debug if release is absent.
+/// Prefer the most recently modified libloft rlib so that stale release builds
+/// never shadow a fresher debug build (or vice versa).
 fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
     let target_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent()?.parent()?.parent().map(|d| d.to_path_buf()))?;
 
-    let release_rlib = target_dir.join("release").join("libloft.rlib");
-    if release_rlib.exists() {
-        let deps = target_dir.join("release").join("deps");
-        return Some((release_rlib, deps));
+    // Collect candidate (rlib, deps_dir) pairs from both profiles.
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf, PathBuf)> = Vec::new();
+
+    for profile in &["release", "debug"] {
+        let deps = target_dir.join(profile).join("deps");
+        // Named libloft.rlib (symlink / copy placed by cargo at the profile root).
+        let top = target_dir.join(profile).join("libloft.rlib");
+        if top.exists()
+            && let Ok(mtime) = top.metadata().and_then(|m| m.modified())
+        {
+            candidates.push((mtime, top, deps.clone()));
+        }
+        // Hashed libloft-<hash>.rlib files in deps/.
+        if let Ok(entries) = std::fs::read_dir(&deps) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("libloft-")
+                    && name.ends_with(".rlib")
+                    && let Ok(mtime) = entry.metadata().and_then(|m| m.modified())
+                {
+                    candidates.push((mtime, entry.path(), deps.clone()));
+                }
+            }
+        }
     }
 
-    let debug_deps = target_dir.join("debug").join("deps");
-    let rlib = std::fs::read_dir(&debug_deps)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .find(|e| {
-            let s = e.file_name();
-            let s = s.to_string_lossy();
-            s.starts_with("libloft") && s.ends_with(".rlib")
-        })
-        .map(|e| e.path())?;
-    Some((rlib, debug_deps))
+    // Pick the most recently modified rlib — that is always the current build.
+    candidates
+        .into_iter()
+        .max_by_key(|(mtime, _, _)| *mtime)
+        .map(|(_, rlib, deps)| (rlib, deps))
 }
 
 /// On Windows MSVC, locate build-script output directories for native import libraries.

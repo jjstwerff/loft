@@ -558,23 +558,26 @@ fn native_test_suite() {
 }
 
 fn find_loft_rlib() -> String {
-    // Find the loft rlib in target/debug/deps or target/debug
-    for path in &[
-        "target/debug/libloft.rlib",
-        "target/debug/deps/libloft.rlib",
-    ] {
-        if std::path::Path::new(path).exists() {
-            return path.to_string();
-        }
-    }
-    // Fallback: search deps directory
+    // Always prefer the most recently modified libloft-<hash>.rlib in deps/,
+    // which is the canonical artifact produced by the current cargo build.
+    // target/debug/libloft.rlib can be stale across rebuilds.
+    let mut best: Option<(std::time::SystemTime, String)> = None;
     if let Ok(entries) = std::fs::read_dir("target/debug/deps") {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("libloft-") && name.ends_with(".rlib") {
-                return entry.path().to_string_lossy().to_string();
+            if name.starts_with("libloft-")
+                && name.ends_with(".rlib")
+                && let Ok(mtime) = entry.metadata().and_then(|m| m.modified())
+            {
+                let path = entry.path().to_string_lossy().to_string();
+                if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                    best = Some((mtime, path));
+                }
             }
         }
+    }
+    if let Some((_, path)) = best {
+        return path;
     }
     "target/debug/libloft.rlib".to_string()
 }
