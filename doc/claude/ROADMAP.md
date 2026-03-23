@@ -23,6 +23,7 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 | S9     | Fix `character + character` codegen panic                | Small     |             | PROBLEMS.md #90    |
 | S10    | Allow `const` modifier in lambda parameters             | Small     |             | parser/expressions.rs |
 | S11    | Drop `fn` prefix for function references                | Small     |             | parser/expressions.rs |
+| S12    | Fix PNG loading — wrong dimensions and record panic     | Medium    |             | png_store.rs        |
 | L6     | Field constraints with `assert($.<field>)` syntax      | Medium    |             | definitions.rs     |
 | L6.1   | ↳ Parser: `assert(expr)` in field definition            | Small     |             | definitions.rs     |
 | L6.2   | ↳ Bytecode: emit check after every field write          | Medium    | L6.1        | codegen.rs, fill.rs |
