@@ -22,6 +22,7 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 | S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
 | S9     | Fix `character + character` codegen panic                | Small     |             | PROBLEMS.md #90    |
 | S10    | Allow `const` modifier in lambda parameters             | Small     |             | parser/expressions.rs |
+| S11    | Drop `fn` prefix for function references                | Small     |             | parser/expressions.rs |
 | O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
 | O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
 | A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
