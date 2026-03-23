@@ -1698,6 +1698,22 @@ fn issue_89_optional_ref_text_param_with_arg() {
     .result(Value::Null);
 }
 
+// ── S8 — Compile-time error when hash-value struct has field named `key` ──────
+// `key` is a pseudo-field reserved for hash iteration.  A struct with a real
+// field named `key` used as a hash value type must be rejected at compile time.
+
+/// S8: hash-value struct with a `key` field must produce a compile-time error.
+#[test]
+#[ignore = "S8: compile-time hash key-field check not yet implemented"]
+fn s8_hash_value_struct_key_field_rejected() {
+    code!(
+        "struct Item { key: text, value: integer }
+struct Container { data: hash<Item[key]> }
+fn test() { }"
+    )
+    .error("reserved for hash iteration");
+}
+
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
 // Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
 

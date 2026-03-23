@@ -815,4 +815,31 @@ mod test {
     fn sub_long_sentinel() {
         let _ = op_min_long(i64::MIN + 1, 1);
     }
+
+    /// O3: compile-time guard — `_int` functions must never reference `i64::MIN`.
+    /// Integer paths use `i32::MIN` as their null sentinel.  Any `i64::MIN` check
+    /// in an `_int` function would add an unnecessary branch on every integer op.
+    #[test]
+    #[ignore = "O3: compile-time i64::MIN audit guard not yet implemented"]
+    fn no_i64_sentinel_in_int_functions() {
+        let src = include_str!("ops.rs");
+        // Split the source into function bodies by scanning for `fn op_` / `fn format_`
+        // boundaries.  For every function whose name ends with `_int(`, assert that
+        // its body does not contain `i64::MIN`.
+        let mut in_int_fn = false;
+        let mut fn_name = String::new();
+        for line in src.lines() {
+            if let Some(rest) = line.strip_prefix("pub fn ") {
+                in_int_fn = rest.contains("_int(");
+                fn_name = rest.split('(').next().unwrap_or("").to_string();
+            }
+            if in_int_fn {
+                assert!(
+                    !line.contains("i64::MIN"),
+                    "O3 violation: `_int` function `{fn_name}` references i64::MIN — \
+                     integer paths must use i32::MIN, not the long sentinel"
+                );
+            }
+        }
+    }
 }
