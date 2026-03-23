@@ -7,10 +7,12 @@
 // Loft stores and manipulates text, how to measure it, slice it, search it,
 // and format it exactly the way you need.
 //
-// The key thing to know upfront: Loft stores text as UTF-8, the same encoding
-// used on the web and in most modern systems. Nearly all operations work in
-// bytes rather than in Unicode characters. That makes them fast and simple,
-// but you need to keep multi-byte characters in mind when you slice by position.
+// The key thing to know upfront: Loft stores text as a sequence of bytes using
+// UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits,
+// and punctuation each take exactly one byte. Accented letters, emoji, and many
+// non-Latin scripts take 2–4 bytes. Most operations count bytes rather than
+// visible characters. That makes them fast and simple, but you need to keep
+// multi-byte characters in mind when you slice by position.
 fn main() {
   // ## Joining and measuring text
   // Use '+' to join two pieces of text into one. The result is a new value —
@@ -31,7 +33,7 @@ fn main() {
   // ## Reading individual characters
   // Square brackets with a single byte index give you the character at that
   // position. For plain ASCII text every byte is one character, so indexing
-  // by position is straightforward. Loft will return the full Unicode character
+  // by position is straightforward. Loft will return the full character
   // even if it spans multiple bytes.
   s = "ABCDE";
   assert(s[0] == 'A', "Character at byte 0");
@@ -51,7 +53,7 @@ fn main() {
   txt = "12😊🙃45";
   assert(txt[2..- 1] == "😊🙃4", "UTF-8 sub-string by byte range");
   // ## Iterating over characters
-  // A 'for' loop over a text value visits one Unicode character at a time,
+  // A 'for' loop over a text value visits one character at a time,
   // even when characters span multiple bytes. Two loop helpers give you
   // position information without any extra code:
   // 'c#index' is the byte offset where the current character starts.

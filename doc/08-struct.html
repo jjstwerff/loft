@@ -17,7 +17,7 @@
   stock: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <h2 id="field-constraints">Field Constraints</h2>
-<p>You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' declares that zero is a meaningful value — without it, zero is treated as "no value" (null), which can cause surprising behaviour. Fields you omit in a constructor receive zero (null for nullable fields) by default. Here all three colour channels can be zero (black is a valid colour).</p>
+<p>You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Colour</span> {
   r: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
   g: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
@@ -33,13 +33,13 @@
   <span class="en">Colour</span> {r: self.r / <span class="nm">2</span>, g: self.g / <span class="nm">2</span>, b: self.b / <span class="nm">2</span> }
 }</code></pre>
 <h2 id="computed-fields">Computed Fields</h2>
-<p>A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a default evaluated at construction time. Inside that expression, '$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.</p>
+<p>A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a value computed when you create the struct. Inside that expression, '$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Item</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   name_length: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="bi"><a href="stdlib-text.html">len</a></span>($.name)
 }</code></pre>
 <h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
-<p>'Area' uses compact unsigned integer types (u16, u8) to keep each record small. This matters when you need millions of tiles in a game map.</p>
+<p>'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535, and 'u8' holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Area</span> {
   height: <span class="ty"><a href="stdlib-types.html">u16</a></span>,
   terrain: <span class="ty"><a href="stdlib-types.html">u8</a></span>,
@@ -59,7 +59,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(col.g == <span class="nm">0</span>, <span class="st">"omitted green channel defaults to zero"</span>);</code></pre>
 <p>Formatting a struct shows all fields compactly.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col}"</span> == <span class="st">"{{r:128,g:0,b:128}}"</span>, <span class="st">"Struct compact formatting"</span>);</code></pre>
-<p>':j' produces JSON output.</p>
+<p>':j' produces JSON output — a text format used by many web APIs and config tools.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col:j}"</span> == <span class="st">"{{\"</span>r\<span class="st">":128,\"</span>g\<span class="st">":0,\"</span>b\<span class="st">":128}}"</span>, <span class="st">"JSON format"</span>);</code></pre>
 <p>Call a method on a variable using dot notation.</p>
 <pre><code>  purple = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
@@ -71,7 +71,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.r == <span class="nm">64</span>, <span class="st">"dimmed r: {dark.r}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.b == <span class="nm">64</span>, <span class="st">"dimmed b: {dark.b}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.g == <span class="nm">0</span>, <span class="st">"dimmed g: {dark.g}"</span>);</code></pre>
-<p>Computed fields are filled automatically at construction time.</p>
+<p>Computed fields are filled in automatically when you create the struct.</p>
 <pre><code>  it = <span class="en">Item</span> {name: <span class="st">"hello"</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(it.name_length == <span class="nm">5</span>, <span class="st">"computed name_length: {it.name_length}"</span>);</code></pre>
 <p>Fill a vector with copies of the same struct using '; count' syntax. This creates 16 Area records, all with the same initial values.</p>

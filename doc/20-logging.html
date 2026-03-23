@@ -18,11 +18,11 @@
 <p>* 'log_error' — something went wrong and you need to investigate, but the program can continue (perhaps degraded). Example: "failed to save record", "unexpected null value".</p>
 <p>* 'log_fatal' — a condition so serious that normal operation is impossible. Example: "cannot open database", "required config file not found".</p>
 <h2 id="configuring-the-log-destination">Configuring the log destination</h2>
-<p>By default, log calls are silent no-ops — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.</p>
+<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.</p>
 <p>Generate a documented template with all defaults by running: loft --generate-log-config</p>
 <p>A minimal 'log.conf' looks like this:</p>
 <p>[log] file  = log.txt    # write messages here (relative to the .loft file) level = info       # minimum level to record; choices: info warn error fatal</p>
-<p>[rotation] max_size_mb = 500  # rotate after this many megabytes daily       = true # also rotate at midnight UTC max_files   = 10   # keep at most this many log files</p>
+<p>[rotation] max_size_mb = 500  # start a new log file after this many megabytes daily       = true # also start a new file at midnight UTC max_files   = 10   # keep at most this many log files (older ones are deleted)</p>
 <p>[rate_limit] per_site = 5       # suppress messages from the same source line after 5/minute</p>
 <p>[levels] # Override the global level for a specific file: # "debug_tool.loft" = info # "src/"            = error</p>
 <h2 id="production-mode">Production mode</h2>
@@ -30,7 +30,7 @@
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
 <p>Log messages are plain text, but you can embed any expression using the same '{...}' format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.</p>
+<p>Without a log.conf these calls do nothing — the tests below pass even though no output is produced.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_warn</a></span>(<span class="st">"this is a warning"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_error</a></span>(<span class="st">"something went wrong"</span>);

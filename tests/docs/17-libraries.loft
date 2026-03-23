@@ -4,8 +4,9 @@
 // @TITLE: Library system — importing and using external loft modules.
 // A library is a `.loft` file you can share across projects. Place it in a
 // `lib/` directory, import it with `use name;` at the top of your file, and
-// then refer to its types and functions using the `name::` prefix. Everything
-// in the library is always accessible — there is no private/public barrier.
+// then refer to its types and functions using the `name::` prefix. All types
+// and functions in a library are accessible — there is no way to mark something
+// as internal or hidden.
 // `use` statements must come before any `fn` or `struct` definition in your
 // file. Putting a `use` after a definition is a syntax error.
 use testlib;

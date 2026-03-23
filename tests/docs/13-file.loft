@@ -7,8 +7,10 @@
 // closes automatically when the handle goes out of scope.
 // ## Inspecting the File System
 // `file(path)` creates a File handle without opening anything yet.
-// `f#format` tells you what kind of path you are looking at: TextFile,
-// LittleEndian, BigEndian, Directory, or NotExists.
+// `f#format` tells you what kind of path you are looking at: TextFile (plain text),
+// LittleEndian (binary, bytes stored least-significant first — common on most PCs),
+// BigEndian (binary, bytes stored most-significant first — common in network protocols),
+// Directory, or NotExists.
 // `lines()` reads a text file and returns it as a vector of lines.
 // `exists(path)` is a convenience shorthand for checking that a path is not
 // NotExists. `delete(path)` removes a file and returns false if it was not
@@ -44,7 +46,7 @@ fn main() {
   // scalar value (u8, u16, i32, long, single, float, or text).
  {f = file("test.bin");
   assert(f#format == NotExists, "File should not exist yet.");
-  f#format = BigEndian;
+  f#format = BigEndian;  // BigEndian: most-significant byte written first.
   f += 0 as u8;
   f += 1 as u8;
   f += 0x203 as u16;

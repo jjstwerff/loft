@@ -3,8 +3,8 @@
 // @NAME: Float
 // @TITLE: Floating point operations and math functions
 // A 'float' stores a number with a decimal point, like 3.14 or -0.001.
-// It uses 64-bit precision (the same as f64 in Rust), which gives you about
-// 15 significant digits — enough for scientific work, games, and most real-world maths.
+// It gives you about 15 significant digits of precision — enough for scientific
+// work, games, and most real-world maths.
 // When you write a number with a decimal point in Loft, it is automatically a float.
 fn main() {
   // Write a decimal point in a literal and Loft treats the whole expression as a float.
@@ -12,9 +12,10 @@ fn main() {
   assert(1.5 + 0.5 == 2.0, "Float addition");
   assert(3.0 / 2.0 == 1.5, "Float division");
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
-  // The 'f' suffix selects single-precision (32-bit) floats.
-  // Single-precision takes half the memory of a regular float and is common in graphics
-  // and audio code where exact decimal values matter less than speed or size.
+  // The 'f' suffix selects single-precision floats, which take half the memory
+  // of a regular float but have fewer decimal digits of accuracy. This trade-off
+  // is common in graphics and audio code where exact decimal values matter less
+  // than speed or memory.
   x = 0.1f + 2 * 1.0f;
   assert(x == 2.1f, "Single precision float");
   // 'as float' converts an integer to a float so you can mix them in calculations.
@@ -43,8 +44,9 @@ fn main() {
   assert(log(pow(4.0, 5), 2) == 10.0, "log base 2 of 4^5");
   // 'sin' and 'cos' work in radians, not degrees.
   // A full circle is 2*PI radians; a half circle (180 degrees) is PI radians.
-  // sin(PI) is theoretically zero but floating-point gives a tiny rounding error,
-  // so we use ceil() to snap it up. cos(PI) is exactly -1, so the whole expression
+  // sin(PI) should be exactly zero but computers use approximations for decimal
+  // numbers, so you may get something like 0.0000000001 instead. We use ceil()
+  // to round it up to 0. cos(PI) is exactly -1, so the whole expression
   // ceil(~0 + -1 * 1000) lands at -1000.
   assert(ceil(sin(PI) + cos(PI) * 1000) == -1000.0, "sin and cos");
   // 'abs()' returns the absolute value — the distance from zero, always non-negative.

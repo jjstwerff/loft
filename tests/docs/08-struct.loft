@@ -16,10 +16,10 @@ struct Product {
 // ## Field Constraints
 // You can restrict what values a field may hold.
 // 'limit(min, max)' rejects any value outside that range at runtime.
-// 'not null' declares that zero is a meaningful value — without it, zero
-// is treated as "no value" (null), which can cause surprising behaviour.
-// Fields you omit in a constructor receive zero (null for nullable fields) by default.
-// Here all three colour channels can be zero (black is a valid colour).
+// 'not null' tells the field that zero is a real data value — without it, zero
+// is treated as "no value" (null). Colour channels can all be zero (pure black
+// is a valid colour), so all three need 'not null'.
+// Fields you omit in a constructor receive zero (or null for nullable fields) by default.
 
 struct Colour {
   r: integer limit(0, 255) not null,
@@ -44,7 +44,7 @@ fn dimmed(self: Colour) -> Colour {
 }
 // ## Computed Fields
 // A field can calculate its value from other fields in the same struct.
-// Write '= expression' after the type to set a default evaluated at construction time.
+// Write '= expression' after the type to set a value computed when you create the struct.
 // Inside that expression, '$' refers to the struct being built.
 // The 'name_length' field is filled automatically whenever you create an Item.
 
@@ -53,8 +53,9 @@ struct Item {
   name_length: integer = len($.name)
 }
 // ## Storing many structs in a vector
-// 'Area' uses compact unsigned integer types (u16, u8) to keep each record small.
-// This matters when you need millions of tiles in a game map.
+// 'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535,
+// and 'u8' holds values 0–255. This matters when you have millions of records
+// (such as tiles in a game map) and memory usage counts.
 
 struct Area {
   height: u16,
@@ -77,7 +78,7 @@ fn main() {
   assert(col.g == 0, "omitted green channel defaults to zero");
   // Formatting a struct shows all fields compactly.
   assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
-  // ':j' produces JSON output.
+  // ':j' produces JSON output — a text format used by many web APIs and config tools.
   assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
   // Call a method on a variable using dot notation.
   purple = Colour {r: 128, b: 128 };
@@ -90,7 +91,7 @@ fn main() {
   assert(dark.r == 64, "dimmed r: {dark.r}");
   assert(dark.b == 64, "dimmed b: {dark.b}");
   assert(dark.g == 0, "dimmed g: {dark.g}");
-  // Computed fields are filled automatically at construction time.
+  // Computed fields are filled in automatically when you create the struct.
   it = Item {name: "hello" };
   assert(it.name_length == 5, "computed name_length: {it.name_length}");
   // Fill a vector with copies of the same struct using '; count' syntax.

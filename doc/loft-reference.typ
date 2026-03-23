@@ -121,6 +121,27 @@ fn main() {
 }
 ```
 
+=== Command-line flags
+
+Run `loft --help` for the full list. The most commonly used flags are:
+
+=== Running your program as a native binary
+
+The interpreter runs programs immediately, but for compute-heavy work you can compile to a native binary instead. This takes a few seconds the first time (it calls `rustc` in the background) but runs 10–50× faster:
+
+```
+loft --native myprogram.loft
+```
+
+To see the generated Rust code without running it:
+
+```
+loft --native-emit myprogram.rs
+cat myprogram.rs
+```
+
+Native compilation requires Rust 1.85 or later on your PATH. If `rustc` is not found, loft prints a clear error message telling you how to install it.
+
 === Standard library
 
 The standard library is a set of `.loft` files bundled alongside the loft binary. They are loaded automatically before your program runs — you do not need any `import` or `use` statement to call `println`, `assert`, or any other built-in function.
@@ -941,7 +962,7 @@ fn main() {
   }
 ```
 
-Combine conditions with 'and' / 'or' (or their symbol equivalents '&&' / '||'). Note that '&' is the bitwise AND operator — it works on the individual bits of a number, which is different from the logical 'and' keyword. An 'if/else' chain picks exactly one branch to execute.
+Combine conditions with 'and' / 'or' (or their symbol equivalents '&&' / '||'). Note that '&' is the bitwise AND operator — it works on the individual 1s and 0s inside a number, which is different from the logical 'and' keyword that works on true/false values. An 'if/else' chain picks exactly one branch to execute.
 
 ```rust
   a = 12;
@@ -1050,7 +1071,7 @@ A for loop can appear inside a format string. The results are collected into a b
 
 Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.
 
-The key thing to know upfront: Loft stores text as UTF-8, the same encoding used on the web and in most modern systems. Nearly all operations work in bytes rather than in Unicode characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.
+The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.
 
 ```rust
 fn main() {
@@ -1076,7 +1097,7 @@ Use '+' to join two pieces of text into one. The result is a new value — neith
 
 === Reading individual characters
 
-Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full Unicode character even if it spans multiple bytes.
+Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.
 
 ```rust
   s = "ABCDE";
@@ -1104,7 +1125,7 @@ A negative end index counts backwards from the end of the text. '-1' means "stop
 
 === Iterating over characters
 
-A 'for' loop over a text value visits one Unicode character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c\#index' is the byte offset where the current character starts. 'c\#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.
+A 'for' loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c\#index' is the byte offset where the current character starts. 'c\#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.
 
 ```rust
   result = "";
@@ -1214,9 +1235,9 @@ a is now 0
   assert(!(12 / a), "Division by zero gives null");
 ```
 
-=== Compile-time warning for constant zero divisor
+=== Warning when you write a literal zero divisor
 
-When the divisor is a literal 0 in source code, loft emits a compile-time warning because a constant-zero divisor is almost certainly a bug: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still compiles and returns null at runtime — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
+When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still runs and returns null — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
 
 === Embedding integers in text
 
@@ -1289,7 +1310,7 @@ A comparison produces a boolean result directly. '!' flips a boolean: true → f
 
 === Logical operators: and / or
 
-'and' (also '&&') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both use short-circuit evaluation: the right side is only evaluated if the left side does not already determine the result. This matters when the right side could produce null or has a side effect.
+'and' (also '&&') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both skip the right side when the left side already determines the result. For example, 'false and X' is always false, so X is never evaluated. This matters when the right side could produce null or has a side effect.
 
 ```rust
   assert(1 > 0 and 2 > 1, "Both conditions true");
@@ -1365,7 +1386,7 @@ true
 
 = Float
 
-A 'float' stores a number with a decimal point, like 3.14 or -0.001. It uses 64-bit precision (the same as f64 in Rust), which gives you about 15 significant digits — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.
+A 'float' stores a number with a decimal point, like 3.14 or -0.001. It gives you about 15 significant digits of precision — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.
 
 ```rust
 fn main() {
@@ -1379,7 +1400,7 @@ Write a decimal point in a literal and Loft treats the whole expression as a flo
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
 ```
 
-The 'f' suffix selects single-precision (32-bit) floats. Single-precision takes half the memory of a regular float and is common in graphics and audio code where exact decimal values matter less than speed or size.
+The 'f' suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.
 
 ```rust
   x = 0.1f + 2 * 1.0f;
@@ -1418,7 +1439,7 @@ Put a colon after the value inside '{...}' to control how it looks. '{value:widt
   assert(log(pow(4.0, 5), 2) == 10.0, "log base 2 of 4^5");
 ```
 
-'sin' and 'cos' work in radians, not degrees. A full circle is 2\*PI radians; a half circle (180 degrees) is PI radians. sin(PI) is theoretically zero but floating-point gives a tiny rounding error, so we use ceil() to snap it up. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 \* 1000) lands at -1000.
+'sin' and 'cos' work in radians, not degrees. A full circle is 2\*PI radians; a half circle (180 degrees) is PI radians. sin(PI) should be exactly zero but computers use approximations for decimal numbers, so you may get something like 0.0000000001 instead. We use ceil() to round it up to 0. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 \* 1000) lands at -1000.
 
 ```rust
   assert(ceil(sin(PI) + cos(PI) * 1000) == -1000.0, "sin and cos");
@@ -1515,13 +1536,11 @@ fn describe_text(v: text) -> text {
 
 === Function References
 
-'fn \<name\>' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -\> return_type' and can be:
+'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -\> return_type' and can be:
 
 - stored in a variable,
 - called directly with 'f(args)', and
 - passed as a parameter to another function.
-
-The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.
 
 ```rust
 fn double_it(x: integer) -> integer {
@@ -1540,6 +1559,10 @@ fn apply_fn(f:  fn(integer) -> integer, x: integer) -> integer {
   f(x)
 }
 ```
+
+=== Lambda Expressions
+
+A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -\> return_type { body } Use the short form (pipe-bar syntax) which is a bit shorter: |param: type| -\> return_type { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.
 
 ```rust
 fn main() {
@@ -1609,17 +1632,61 @@ Pass function references as arguments to higher-order functions.
 ```rust
   assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
   assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
+```
+
+Full-form lambda with fn(...) syntax.
+
+```rust
+  nums = [1, 2, 3, 4, 5];
+  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  assert(doubled[0] == 2, "lambda map first element");
+  assert(doubled[4] == 10, "lambda map last element");
+```
+
+Short-form lambda with |...| syntax — same thing, slightly shorter to write.
+
+```rust
+  tripled = map(nums, |x: integer| -> integer { x * 3 });
+  assert(tripled[0] == 3, "short lambda map first element");
+```
+
+filter keeps only elements where the lambda returns true.
+
+```rust
+  evens = filter(nums, |x: integer| -> boolean { x % 2 == 0 });
+  assert(evens[0] == 2, "filter evens first");
+  assert(evens[1] == 4, "filter evens second");
+```
+
+reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).
+
+```rust
+  total = reduce(nums, 0, |acc: integer, x: integer| -> integer { acc + x });
+  assert(total == 15, "reduce sum: {total}");
+```
+
+A lambda can also be stored in a variable and called later.
+
+```rust
+  negate = |x: integer| -> integer { -x };
+  assert(negate(7) == -7, "stored lambda: {negate(7)}");
+```
+
+A lambda passed to your own higher-order function (same as apply_fn above).
+
+```rust
+  assert(apply_fn(|x: integer| -> integer { x * x }, 6) == 36, "lambda as arg: 6^2");
 }
 ```
 
 
 = Vector
 
-A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '\[1, 2, 3\]'. Under the hood Loft allocates exactly as much memory as needed, so vectors are efficient even when you do not know the size up front.
+A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '\[1, 2, 3\]'. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.
 
-=== Higher-order functions: map, filter, reduce
+=== Transforming vectors: map, filter, reduce
 
-'map', 'filter', and 'reduce' let you transform or summarise a vector by passing a function reference — written 'fn \<name\>' — as the first argument. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — fold all elements into a single value
+'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn \<name\>' to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value
 
 ```rust
 fn triple(x: integer) -> integer {
@@ -1785,7 +1852,7 @@ struct Product {
 
 === Field Constraints
 
-You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' declares that zero is a meaningful value — without it, zero is treated as "no value" (null), which can cause surprising behaviour. Fields you omit in a constructor receive zero (null for nullable fields) by default. Here all three colour channels can be zero (black is a valid colour).
+You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.
 
 ```rust
 struct Colour {
@@ -1815,7 +1882,7 @@ fn dimmed(self: Colour) -> Colour {
 
 === Computed Fields
 
-A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a default evaluated at construction time. Inside that expression, '\$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.
+A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a value computed when you create the struct. Inside that expression, '\$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.
 
 ```rust
 struct Item {
@@ -1826,7 +1893,7 @@ struct Item {
 
 === Storing many structs in a vector
 
-'Area' uses compact unsigned integer types (u16, u8) to keep each record small. This matters when you need millions of tiles in a game map.
+'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535, and 'u8' holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.
 
 ```rust
 struct Area {
@@ -1869,7 +1936,7 @@ Formatting a struct shows all fields compactly.
   assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
 ```
 
-':j' produces JSON output.
+':j' produces JSON output — a text format used by many web APIs and config tools.
 
 ```rust
   assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
@@ -1897,7 +1964,7 @@ You can call a method directly on a constructor expression.
   assert(dark.g == 0, "dimmed g: {dark.g}");
 ```
 
-Computed fields are filled automatically at construction time.
+Computed fields are filled in automatically when you create the struct.
 
 ```rust
   it = Item {name: "hello" };
@@ -1952,9 +2019,9 @@ enum Shape {
 }
 ```
 
-=== Polymorphic methods
+=== Methods that work on any variant
 
-Write the same function name for each variant, each taking 'self' of that variant's type. Loft picks the right version at runtime based on the actual variant — this is called polymorphic dispatch. It lets you call shape.area() without knowing which kind of shape it is.
+Write the same function name for each variant, each taking 'self' of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.
 
 ```rust
 fn area(self: Circle) -> float {
@@ -2137,7 +2204,7 @@ Character literals work in match arms.
 
 = Sorted
 
-A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
+A 'sorted' collection holds records in order by one or more fields you choose as the sort criteria (called "key fields"). You can look up a record by those fields instantly and iterate all records in that order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts A→Z / 0→9 (ascending), '-field' sorts Z→A / 9→0 (descending).
 
 ```rust
 struct Elm {
@@ -2411,7 +2478,7 @@ no-op; does not panic
 
 = Hash
 
-A 'hash' lets you find a record by its key in constant time, regardless of how many records you have. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
+A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
 
 ```rust
 struct Keyword {
@@ -2507,7 +2574,7 @@ no-op; does not panic
 
 === Why you cannot iterate a hash directly
 
-A hash has no stable element order — hash bucket positions depend on key hashes and the internal load factor, so there is no meaningful \#index or sequential position. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.
+A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.
 
 ```rust
 }
@@ -2520,7 +2587,7 @@ A file handle lets you read and write files without worrying about when the OS o
 
 === Inspecting the File System
 
-`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.
+`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.
 
 ```rust
 fn cleanup() {
@@ -2565,7 +2632,7 @@ Wrapping the file handle in a block ensures the file closes the moment the block
 ```rust
  {f = file("test.bin");
   assert(f#format == NotExists, "File should not exist yet.");
-  f#format = BigEndian;
+  f#format = BigEndian;  // BigEndian: most-significant byte written first.
   f += 0 as u8;
   f += 1 as u8;
   f += 0x203 as u16;
@@ -2709,9 +2776,9 @@ w = img\#width h = img\#height println("image is {w} x {h} pixels — {w \* h} p
 
 === Accessing Individual Pixels
 
-Index the image with two integer coordinates \[x, y\] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel carries four channels, all in the range 0–255:
+Index the image with two integer coordinates \[x, y\] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel has four values (called channels), all in the range 0–255:
 
-px = img\[x, y\] r  = px\#red     // red channel g  = px\#green   // green channel b  = px\#blue    // blue channel a  = px\#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
+px = img\[x, y\] r  = px\#red     // how much red   (0 = none, 255 = full) g  = px\#green   // how much green b  = px\#blue    // how much blue a  = px\#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
 
 A pixel from outside the image bounds is null.
 
@@ -2735,11 +2802,11 @@ fn main() {
 
 = Lexer
 
-The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, identifiers, operators, and string literals. You tell the lexer which multi-character sequences count as single tokens and which words are reserved, and it handles the rest.
+The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.
 
 === Setting Up the Lexer
 
-Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `\>\>` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being returned as plain identifiers — the lexer will report them exactly as written so your parser can treat them specially.
+Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `\>\>` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being treated as ordinary names — the lexer will report them exactly as written so your parser can treat them specially.
 
 ```rust
 use lexer;
@@ -2773,7 +2840,7 @@ fn main() {
 
 === String Literals and Comments
 
-`constant_text()` reads a double-quoted string literal and unescapes any escape sequences inside it. `constant_character()` reads a single-quoted character literal and returns it as text.
+`constant_text()` reads a double-quoted string and handles special codes like \\n (newline) and \\\\ (backslash). `constant_character()` reads a single-quoted character literal and returns it as text.
 
 ```rust
   l.parse_string("Texts", "\"123\" + '4'");
@@ -2827,7 +2894,7 @@ If the source is invalid, parse() emits a diagnostic error and the call returns 
 
 === What the parser understands
 
-The parser handles the complete Loft grammar: \* 'struct Name { field: type \[= default\] }' — named-field aggregates \* 'enum Name { Variant \[{ field: type }\] }' — tagged unions with optional fields \* 'fn name(params) \[-\> type\] { body }' — functions with a block body \* 'fn name(params) \[-\> type\]; \#rust "template"' — operator templates backed by Rust \* 'use module;' — module imports \* Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals \* Type expressions: plain names, generic types like 'vector\<T\>', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+The parser handles all Loft syntax: \* 'struct Name { field: type \[= default\] }' — data containers with named fields \* 'enum Name { Variant \[{ field: type }\] }' — named choices, each with optional data \* 'fn name(params) \[-\> type\] { body }' — functions with a block body \* 'fn name(params) \[-\> type\]; \#rust "template"' — operator templates backed by Rust \* 'use module;' — module imports \* Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals \* Type expressions: plain names, generic types like 'vector\<T\>', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
 
 ```rust
 use parser;
@@ -2872,7 +2939,7 @@ If your application lets users write Loft snippets (for scripting or configurati
 
 snippet = read_user_input(); parser::parse("user_code", snippet); // If parse() emits errors, the snippet was invalid — show them to the user.
 
-Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate the whole grammar.
+Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate all of the syntax.
 
 ```rust
   println("parser test passed");
@@ -2882,7 +2949,7 @@ Combine this with the lexer (see the Lexer page) when you need to extract indivi
 
 = Libraries
 
-A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. Everything in the library is always accessible — there is no private/public barrier. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
+A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. All types and functions in a library are accessible — there is no way to mark something as internal or hidden. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
 
 ```rust
 use testlib;
@@ -3144,7 +3211,7 @@ Two worker call forms are supported. Form 1 calls a global or user-defined funct
 
 Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }
 
-The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────
+The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────
 
 ```rust
 struct Score {
@@ -3360,7 +3427,7 @@ Choose the level that matches how serious the event is:
 
 === Configuring the log destination
 
-By default, log calls are silent no-ops — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.
+By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.
 
 Generate a documented template with all defaults by running: loft --generate-log-config
 
@@ -3368,7 +3435,7 @@ A minimal 'log.conf' looks like this:
 
 \[log\] file  = log.txt    \# write messages here (relative to the .loft file) level = info       \# minimum level to record; choices: info warn error fatal
 
-\[rotation\] max_size_mb = 500  \# rotate after this many megabytes daily       = true \# also rotate at midnight UTC max_files   = 10   \# keep at most this many log files
+\[rotation\] max_size_mb = 500  \# start a new log file after this many megabytes daily       = true \# also start a new file at midnight UTC max_files   = 10   \# keep at most this many log files (older ones are deleted)
 
 \[rate_limit\] per_site = 5       \# suppress messages from the same source line after 5/minute
 
@@ -3386,7 +3453,7 @@ Log messages are plain text, but you can embed any expression using the same '{.
 fn main() {
 ```
 
-Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.
+Without a log.conf these calls do nothing — the tests below pass even though no output is produced.
 
 ```rust
   log_info("starting up");
@@ -3597,26 +3664,26 @@ Loft catches many errors at compile time, but a few surprises remain at runtime.
 fn main() {
 ```
 
-=== Null sentinels
+=== Null values — hidden reserved values
 
-Every type uses a special in-band value to represent null. The value depends on the type:
+Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:
 
-- `boolean` uses `false`
-- `integer` uses `i32::MIN` (-2 147 483 648)
-- `long` uses `i64::MIN`
-- `float` and `single` use `NaN`
-- `character` uses the NUL character
-- `text` uses an internal null pointer
-- `reference` uses record 0
-- plain `enum` uses byte 255 (limits enums to 255 variants)
+- `boolean`         — `false` is the null value
+- `integer`         — the most negative 32-bit integer (-2 147 483 648) is null
+- `long`            — the most negative 64-bit integer is null
+- `float`/`single`  — `NaN` (Not a Number) is null
+- `character`       — the NUL character (code point 0) is null
+- `text`            — an empty internal reference is null
+- `reference`       — record 0 is null
+- plain `enum`      — byte value 255 is null (limits enums to 255 variants)
 
-This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:
+This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:
 
 ```rust
   zero = 0;
   n = 1 / zero;
   assert(!n, "div-by-zero is null");
-  assert(n != 0, "null sentinel is not zero; it is i32::MIN");
+  assert(n != 0, "null is not zero; it is -2 147 483 648");
   assert(n < 0, "i32::MIN is the most negative 32-bit integer");
 ```
 
@@ -3626,7 +3693,7 @@ Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
 ```
 
-Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.
+Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.
 
 === Integer overflow wraps silently
 
@@ -3702,7 +3769,7 @@ Text \#index is a byte offset, not a character count:
 
 === `??` evaluates the left side twice for complex expressions
 
-The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.
+The `??` operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.
 
 === Text indexing and slicing return different types
 
@@ -4526,6 +4593,8 @@ What works today:
 - Collections: `vector`, `sorted`, `index`, `hash`
 - Functions, default parameters, reference parameters (`&`), `const` parameters
 - Function references (`fn name`) and higher-order functions (`map`, `filter`, `reduce`)
+- Lambda expressions: inline functions with `fn(x: integer) -> integer { x * 2 }` or the short form `|x| { x * 2 }`
+- Native compilation: `loft --native file.loft` compiles to a fast native binary via `rustc`
 - File I/O: text, binary, directory listing
 - Parallel execution: `par(…)` for-loop clause and `parallel_for()`
 - Logging framework
@@ -4601,24 +4670,22 @@ The formatter is a token-stream pass that preserves all comments and produces a 
 
 === Version 1.1 — Ergonomics
 
-==== Lambda expressions planned
+==== Lambda expressions
 
-Today, passing a function to `map` or `filter` requires a named top-level function. Lambda expressions let you write the function body inline without giving it a name:
+Lambda expressions let you write a function inline without giving it a name. Two forms are available:
 
 ```
 nums = [1, 2, 3, 4, 5];
 
-// Today: requires a named function
-fn double(x: integer) -> integer { x * 2 }
-doubled = map(nums, fn double);
-
-// With lambdas: inline, no top-level declaration needed
+// Full form — fn(...) syntax with explicit types
 doubled = map(nums, fn(x: integer) -> integer { x * 2 });
-evens   = filter(nums, fn(x: integer) -> boolean { x % 2 == 0 });
-total   = reduce(nums, 0, fn(acc: integer, x: integer) -> integer { acc + x });
+
+// Short form — |...| syntax, slightly less to type
+evens   = filter(nums, |x: integer| -> boolean { x % 2 == 0 });
+total   = reduce(nums, 0, |acc: integer, x: integer| -> integer { acc + x });
 ```
 
-Lambdas do not capture surrounding variables in the first version — context must be passed explicitly. Closure capture is a longer-term item.
+Lambdas cannot capture variables from the surrounding scope yet — pass any needed values as extra arguments. Closure capture is planned for a future release. See Functions for more examples.
 
 ==== Interactive mode (REPL) planned
 

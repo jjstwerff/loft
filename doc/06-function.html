@@ -46,13 +46,12 @@
   <span class="st">"text:{v}"</span>
 }</code></pre>
 <h2 id="function-references">Function References</h2>
-<p>'fn &lt;name&gt;' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
+<p>'fn &lt;name&gt;' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
 <ul>
 <li>stored in a variable,</li>
 <li>called directly with 'f(args)', and</li>
 <li>passed as a parameter to another function.</li>
 </ul>
-<p>The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">2</span>
 }</code></pre>
@@ -62,6 +61,8 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">apply_fn</span>(f:  <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   <span class="fn-call">f</span>(x)
 }</code></pre>
+<h2 id="lambda-expressions">Lambda Expressions</h2>
+<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) which is a bit shorter: |param: type| -&gt; return_type { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Passing both arguments explicitly overrides the default.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
@@ -88,7 +89,27 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"fn-ref stored and called: {f(5)}"</span>);</code></pre>
 <p>Pass function references as arguments to higher-order functions.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);</code></pre>
+<p>Full-form lambda with fn(...) syntax.</p>
+<pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+  doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"lambda map first element"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">4</span>] == <span class="nm">10</span>, <span class="st">"lambda map last element"</span>);</code></pre>
+<p>Short-form lambda with |...| syntax — same thing, slightly shorter to write.</p>
+<pre><code>  tripled = <span class="fn-call">map</span>(nums, |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">3</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tripled[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"short lambda map first element"</span>);</code></pre>
+<p>filter keeps only elements where the lambda returns true.</p>
+<pre><code>  evens = <span class="fn-call">filter</span>(nums, |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"filter evens first"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"filter evens second"</span>);</code></pre>
+<p>reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).</p>
+<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { acc + x });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);</code></pre>
+<p>A lambda can also be stored in a variable and called later.</p>
+<pre><code>  negate = |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">negate</span>(<span class="nm">7</span>) == -<span class="nm">7</span>, <span class="st">"stored lambda: {negate(7)}"</span>);</code></pre>
+<p>A lambda passed to your own higher-order function (same as apply_fn above).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(|x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);
 }</code></pre>
 
   </article>

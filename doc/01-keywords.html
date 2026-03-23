@@ -17,7 +17,7 @@
 <pre><code>  <span class="kw">if</span> <span class="nm">2</span> &gt; <span class="nm">5</span> {
     <span class="bi"><a href="stdlib-output-and-diagnostics.html">panic</a></span>(<span class="st">"Incorrect test"</span>);
   }</code></pre>
-<p>Combine conditions with 'and' / 'or' (or their symbol equivalents '&amp;&amp;' / '||'). Note that '&amp;' is the bitwise AND operator — it works on the individual bits of a number, which is different from the logical 'and' keyword. An 'if/else' chain picks exactly one branch to execute.</p>
+<p>Combine conditions with 'and' / 'or' (or their symbol equivalents '&amp;&amp;' / '||'). Note that '&amp;' is the bitwise AND operator — it works on the individual 1s and 0s inside a number, which is different from the logical 'and' keyword that works on true/false values. An 'if/else' chain picks exactly one branch to execute.</p>
 <pre><code>  a = <span class="nm">12</span>;
   <span class="kw">if</span> a &gt; <span class="nm">10</span> <span class="kw">and</span> a &amp; <span class="nm">7</span> == <span class="nm">4</span> {
     a += <span class="nm">1</span>;

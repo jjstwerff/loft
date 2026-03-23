@@ -17,9 +17,9 @@ fn main() {
   // ## Logical operators: and / or
   // 'and' (also '&&') is true only when both sides are true.
   // 'or'  (also '||') is true when at least one side is true.
-  // Both use short-circuit evaluation: the right side is only evaluated
-  // if the left side does not already determine the result. This matters
-  // when the right side could produce null or has a side effect.
+  // Both skip the right side when the left side already determines the result.
+  // For example, 'false and X' is always false, so X is never evaluated.
+  // This matters when the right side could produce null or has a side effect.
   assert(1 > 0 and 2 > 1, "Both conditions true");
   assert(1 > 2 or 3 > 2, "Second condition true");
   assert(!(1 > 2 && 3 > 2), "First false → whole 'and' is false");

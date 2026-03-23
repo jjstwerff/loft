@@ -41,6 +41,8 @@ distance: 5.0
 - **Parallel for** — `for a in items par(b=worker(a), threads) { ... }` distributes work across CPU cores
 - **Structured logging** — `log_info` / `log_warn` / `log_error` with source location and rate limiting
 - **File I/O** — read, write, seek, directory listing, PNG images
+- **Lambda expressions** — write a function inline with `fn(x: integer) -> integer { x * 2 }` or the short form `|x| { x * 2 }`; pass directly to `map`, `filter`, and `reduce`
+- **Native compilation** — `loft --native file.loft` compiles your program to a native binary via `rustc` for maximum speed; `--native-emit out.rs` saves the generated Rust source
 - **Rust integration** — emit typed Rust code from loft type definitions via `gendoc`
 
 ---
@@ -75,9 +77,12 @@ Download a release binary from the [Releases](https://github.com/jjstwerff/loft/
 loft [options] <file.loft>
 
 Options:
-  --help       Show this help
-  --version    Print version
-  --path <dir> Override the project root (where default/ is found)
+  --help                 Show this help
+  --version              Print version
+  --path <dir>           Override the project root (where default/ is found)
+  --native [out]         Compile to a native binary via rustc and run it
+  --native-release [out] Same as --native but with full optimisations (-O)
+  --native-emit [out.rs] Write the generated Rust source to a file (do not compile)
 ```
 
 The interpreter loads the standard library from `default/` relative to the binary, then
@@ -119,7 +124,7 @@ To build locally: run `cargo run --bin gendoc`, then open `doc/index.html`.
 
 ## Known limitations (0.8.x)
 
-- **No lambda expressions** — anonymous functions are planned for 1.1
+- **No closure capture** — lambdas work but cannot read variables from the surrounding scope; pass needed values as extra arguments
 - **No REPL** — interactive mode is planned for 1.1
 - **No in-place vector sort** — `sorted<T>` keeps insertion order; a `sort()` function is planned for 1.1
 

@@ -67,7 +67,7 @@
 <pre><code>  <span class="kw">if</span> <span class="nm">2</span> &gt; <span class="nm">5</span> {
     <span class="bi"><a href="stdlib-output-and-diagnostics.html">panic</a></span>(<span class="st">"Incorrect test"</span>);
   }</code></pre>
-<p>Combine conditions with 'and' / 'or' (or their symbol equivalents '&amp;&amp;' / '||'). Note that '&amp;' is the bitwise AND operator — it works on the individual bits of a number, which is different from the logical 'and' keyword. An 'if/else' chain picks exactly one branch to execute.</p>
+<p>Combine conditions with 'and' / 'or' (or their symbol equivalents '&amp;&amp;' / '||'). Note that '&amp;' is the bitwise AND operator — it works on the individual 1s and 0s inside a number, which is different from the logical 'and' keyword that works on true/false values. An 'if/else' chain picks exactly one branch to execute.</p>
 <pre><code>  a = <span class="nm">12</span>;
   <span class="kw">if</span> a &gt; <span class="nm">10</span> <span class="kw">and</span> a &amp; <span class="nm">7</span> == <span class="nm">4</span> {
     a += <span class="nm">1</span>;
@@ -134,7 +134,7 @@
 <section class="print-section" id="02-text">
 <h1>Texts</h1>
 <p>Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.</p>
-<p>The key thing to know upfront: Loft stores text as UTF-8, the same encoding used on the web and in most modern systems. Nearly all operations work in bytes rather than in Unicode characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
+<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="joining-and-measuring-text">Joining and measuring text</h2>
 <p>Use '+' to join two pieces of text into one. The result is a new value — neither of the originals is modified. Placing a value name inside curly braces inside a format string inserts the value as text. You can also control the width: '{a:4}' pads the value on the right to at least 4 characters.</p>
@@ -146,7 +146,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">3</span>, <span class="st">"Heart byte length"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII byte length"</span>);</code></pre>
 <h2 id="reading-individual-characters">Reading individual characters</h2>
-<p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full Unicode character even if it spans multiple bytes.</p>
+<p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.</p>
 <pre><code>  s = <span class="st">"ABCDE"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s[<span class="nm">0</span>] == <span class="ch">'A'</span>, <span class="st">"Character at byte 0"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s[<span class="nm">2</span>] == <span class="ch">'C'</span>, <span class="st">"Character at byte 2"</span>);</code></pre>
@@ -160,7 +160,7 @@
 <pre><code>  txt = <span class="st">"12😊🙃45"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span>- <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
 <h2 id="iterating-over-characters">Iterating over characters</h2>
-<p>A 'for' loop over a text value visits one Unicode character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c#index' is the byte offset where the current character starts. 'c#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
+<p>A 'for' loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c#index' is the byte offset where the current character starts. 'c#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
 <pre><code>  result = <span class="st">""</span>;
   positions =[];
   nexts =[];
@@ -219,8 +219,8 @@
   a -= <span class="nm">4</span>;</code></pre>
 <p>a is now 0</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / a), <span class="st">"Division by zero gives null"</span>);</code></pre>
-<h2 id="compile-time-warning-for-constant-zero-divisor">Compile-time warning for constant zero divisor</h2>
-<p>When the divisor is a literal 0 in source code, loft emits a compile-time warning because a constant-zero divisor is almost certainly a bug: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still compiles and returns null at runtime — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.</p>
+<h2 id="warning-when-you-write-a-literal-zero-divisor">Warning when you write a literal zero divisor</h2>
+<p>When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still runs and returns null — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.</p>
 <h2 id="embedding-integers-in-text">Embedding integers in text</h2>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{12}b"</span> == <span class="st">"a12b"</span>, <span class="st">"Integer in format string"</span>);</code></pre>
 <p>A full expression can appear inside '{...}', not just a variable name.</p>
@@ -255,7 +255,7 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">3</span> &gt; <span class="nm">2</span> + <span class="nm">4</span>), <span class="st">"3 is not greater than 6"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">text</a></span> == <span class="st">"true"</span>, <span class="st">"Convert boolean to text"</span>);</code></pre>
 <h2 id="logical-operators-and-or">Logical operators: and / or</h2>
-<p>'and' (also '&amp;&amp;') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both use short-circuit evaluation: the right side is only evaluated if the left side does not already determine the result. This matters when the right side could produce null or has a side effect.</p>
+<p>'and' (also '&amp;&amp;') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both skip the right side when the left side already determines the result. For example, 'false and X' is always false, so X is never evaluated. This matters when the right side could produce null or has a side effect.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> &gt; <span class="nm">0</span> <span class="kw">and</span> <span class="nm">2</span> &gt; <span class="nm">1</span>, <span class="st">"Both conditions true"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> &gt; <span class="nm">2</span> <span class="kw">or</span> <span class="nm">3</span> &gt; <span class="nm">2</span>, <span class="st">"Second condition true"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> &amp;&amp; <span class="nm">3</span> &gt; <span class="nm">2</span>), <span class="st">"First false → whole 'and' is false"</span>);
@@ -292,13 +292,13 @@
 </section>
 <section class="print-section" id="05-float">
 <h1>Float</h1>
-<p>A 'float' stores a number with a decimal point, like 3.14 or -0.001. It uses 64-bit precision (the same as f64 in Rust), which gives you about 15 significant digits — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.</p>
+<p>A 'float' stores a number with a decimal point, like 3.14 or -0.001. It gives you about 15 significant digits of precision — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Write a decimal point in a literal and Loft treats the whole expression as a float. The usual arithmetic operators (+, -, *, /) all work the way you would expect.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1.5</span> + <span class="nm">0.5</span> == <span class="nm">2.0</span>, <span class="st">"Float addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3.0</span> / <span class="nm">2.0</span> == <span class="nm">1.5</span>, <span class="st">"Float division"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2.0</span> * <span class="nm">1.5</span> == <span class="nm">3.0</span>, <span class="st">"Float multiplication"</span>);</code></pre>
-<p>The 'f' suffix selects single-precision (32-bit) floats. Single-precision takes half the memory of a regular float and is common in graphics and audio code where exact decimal values matter less than speed or size.</p>
+<p>The 'f' suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.</p>
 <pre><code>  x = <span class="nm">0.1f</span> + <span class="nm">2</span> * <span class="nm">1.0f</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x == <span class="nm">2.1f</span>, <span class="st">"Single precision float"</span>);</code></pre>
 <p>'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float' parses the text back to a number.</p>
@@ -315,7 +315,7 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">round</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="nm">1000.0</span>) == <span class="nm">3142.0</span>, <span class="st">"PI constant"</span>);</code></pre>
 <p>'pow(base, exponent)' raises a number to a power — this is exponentiation. Note: '^' in Loft is bitwise XOR, NOT exponentiation. Always use pow() for powers. 'log(value, base)' is the inverse: log(x, b) answers "b to the what power equals x?" Here: 4^5 = 1024, and log(1024, 2) = 10 because 2^10 = 1024.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">log</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">4.0</span>, <span class="nm">5</span>), <span class="nm">2</span>) == <span class="nm">10.0</span>, <span class="st">"log base 2 of 4^5"</span>);</code></pre>
-<p>'sin' and 'cos' work in radians, not degrees. A full circle is 2*PI radians; a half circle (180 degrees) is PI radians. sin(PI) is theoretically zero but floating-point gives a tiny rounding error, so we use ceil() to snap it up. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 * 1000) lands at -1000.</p>
+<p>'sin' and 'cos' work in radians, not degrees. A full circle is 2*PI radians; a half circle (180 degrees) is PI radians. sin(PI) should be exactly zero but computers use approximations for decimal numbers, so you may get something like 0.0000000001 instead. We use ceil() to round it up to 0. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 * 1000) lands at -1000.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">ceil</a></span>(<span class="bi"><a href="stdlib-math.html">sin</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span>) + <span class="bi"><a href="stdlib-math.html">cos</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span>) * <span class="nm">1000</span>) == -<span class="nm">1000.0</span>, <span class="st">"sin and cos"</span>);</code></pre>
 <p>'abs()' returns the absolute value — the distance from zero, always non-negative. Useful any time you care about magnitude but not direction.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2.5</span>) == <span class="nm">2.5</span>, <span class="st">"Absolute value of float"</span>);</code></pre>
@@ -366,13 +366,12 @@
   <span class="st">"text:{v}"</span>
 }</code></pre>
 <h2 id="function-references">Function References</h2>
-<p>'fn &lt;name&gt;' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
+<p>'fn &lt;name&gt;' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
 <ul>
 <li>stored in a variable,</li>
 <li>called directly with 'f(args)', and</li>
 <li>passed as a parameter to another function.</li>
 </ul>
-<p>The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">2</span>
 }</code></pre>
@@ -382,6 +381,8 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">apply_fn</span>(f:  <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   <span class="fn-call">f</span>(x)
 }</code></pre>
+<h2 id="lambda-expressions">Lambda Expressions</h2>
+<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) which is a bit shorter: |param: type| -&gt; return_type { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Passing both arguments explicitly overrides the default.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
@@ -408,14 +409,34 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"fn-ref stored and called: {f(5)}"</span>);</code></pre>
 <p>Pass function references as arguments to higher-order functions.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);</code></pre>
+<p>Full-form lambda with fn(...) syntax.</p>
+<pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+  doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"lambda map first element"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">4</span>] == <span class="nm">10</span>, <span class="st">"lambda map last element"</span>);</code></pre>
+<p>Short-form lambda with |...| syntax — same thing, slightly shorter to write.</p>
+<pre><code>  tripled = <span class="fn-call">map</span>(nums, |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">3</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tripled[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"short lambda map first element"</span>);</code></pre>
+<p>filter keeps only elements where the lambda returns true.</p>
+<pre><code>  evens = <span class="fn-call">filter</span>(nums, |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"filter evens first"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"filter evens second"</span>);</code></pre>
+<p>reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).</p>
+<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { acc + x });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);</code></pre>
+<p>A lambda can also be stored in a variable and called later.</p>
+<pre><code>  negate = |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">negate</span>(<span class="nm">7</span>) == -<span class="nm">7</span>, <span class="st">"stored lambda: {negate(7)}"</span>);</code></pre>
+<p>A lambda passed to your own higher-order function (same as apply_fn above).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(|x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="07-vector">
 <h1>Vector</h1>
-<p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '[1, 2, 3]'. Under the hood Loft allocates exactly as much memory as needed, so vectors are efficient even when you do not know the size up front.</p>
-<h2 id="higher-order-functions-map-filter-reduce">Higher-order functions: map, filter, reduce</h2>
-<p>'map', 'filter', and 'reduce' let you transform or summarise a vector by passing a function reference — written 'fn &lt;name&gt;' — as the first argument. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — fold all elements into a single value</p>
+<p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '[1, 2, 3]'. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.</p>
+<h2 id="transforming-vectors-map-filter-reduce">Transforming vectors: map, filter, reduce</h2>
+<p>'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn &lt;name&gt;' to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">triple</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">3</span>
 }</code></pre>
@@ -506,7 +527,7 @@
   stock: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <h2 id="field-constraints">Field Constraints</h2>
-<p>You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' declares that zero is a meaningful value — without it, zero is treated as "no value" (null), which can cause surprising behaviour. Fields you omit in a constructor receive zero (null for nullable fields) by default. Here all three colour channels can be zero (black is a valid colour).</p>
+<p>You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Colour</span> {
   r: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
   g: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
@@ -522,13 +543,13 @@
   <span class="en">Colour</span> {r: self.r / <span class="nm">2</span>, g: self.g / <span class="nm">2</span>, b: self.b / <span class="nm">2</span> }
 }</code></pre>
 <h2 id="computed-fields">Computed Fields</h2>
-<p>A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a default evaluated at construction time. Inside that expression, '$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.</p>
+<p>A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a value computed when you create the struct. Inside that expression, '$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Item</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   name_length: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="bi"><a href="stdlib-text.html">len</a></span>($.name)
 }</code></pre>
 <h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
-<p>'Area' uses compact unsigned integer types (u16, u8) to keep each record small. This matters when you need millions of tiles in a game map.</p>
+<p>'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535, and 'u8' holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Area</span> {
   height: <span class="ty"><a href="stdlib-types.html">u16</a></span>,
   terrain: <span class="ty"><a href="stdlib-types.html">u8</a></span>,
@@ -548,7 +569,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(col.g == <span class="nm">0</span>, <span class="st">"omitted green channel defaults to zero"</span>);</code></pre>
 <p>Formatting a struct shows all fields compactly.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col}"</span> == <span class="st">"{{r:128,g:0,b:128}}"</span>, <span class="st">"Struct compact formatting"</span>);</code></pre>
-<p>':j' produces JSON output.</p>
+<p>':j' produces JSON output — a text format used by many web APIs and config tools.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col:j}"</span> == <span class="st">"{{\"</span>r\<span class="st">":128,\"</span>g\<span class="st">":0,\"</span>b\<span class="st">":128}}"</span>, <span class="st">"JSON format"</span>);</code></pre>
 <p>Call a method on a variable using dot notation.</p>
 <pre><code>  purple = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
@@ -560,7 +581,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.r == <span class="nm">64</span>, <span class="st">"dimmed r: {dark.r}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.b == <span class="nm">64</span>, <span class="st">"dimmed b: {dark.b}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.g == <span class="nm">0</span>, <span class="st">"dimmed g: {dark.g}"</span>);</code></pre>
-<p>Computed fields are filled automatically at construction time.</p>
+<p>Computed fields are filled in automatically when you create the struct.</p>
 <pre><code>  it = <span class="en">Item</span> {name: <span class="st">"hello"</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(it.name_length == <span class="nm">5</span>, <span class="st">"computed name_length: {it.name_length}"</span>);</code></pre>
 <p>Fill a vector with copies of the same struct using '; count' syntax. This creates 16 Area records, all with the same initial values.</p>
@@ -593,8 +614,8 @@
   <span class="en">Circle</span> {radius: <span class="ty"><a href="stdlib-types.html">float</a></span> },
   <span class="en">Rect</span> {width: <span class="ty"><a href="stdlib-types.html">float</a></span>, height: <span class="ty"><a href="stdlib-types.html">float</a></span> }
 }</code></pre>
-<h2 id="polymorphic-methods">Polymorphic methods</h2>
-<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft picks the right version at runtime based on the actual variant — this is called polymorphic dispatch. It lets you call shape.area() without knowing which kind of shape it is.</p>
+<h2 id="methods-that-work-on-any-variant">Methods that work on any variant</h2>
+<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">area</span>(self: <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {
   <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call"><a href="stdlib-math.html">pow</a></span>(self.radius, <span class="nm">2</span>)
 }</code></pre>
@@ -698,7 +719,7 @@
 </section>
 <section class="print-section" id="10-sorted">
 <h1>Sorted</h1>
-<p>A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.</p>
+<p>A 'sorted' collection holds records in order by one or more fields you choose as the sort criteria (called "key fields"). You can look up a record by those fields instantly and iterate all records in that order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts A→Z / 0→9 (ascending), '-field' sorts Z→A / 9→0 (descending).</p>
 <pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
   key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
@@ -856,7 +877,7 @@
 </section>
 <section class="print-section" id="12-hash">
 <h1>Hash</h1>
-<p>A 'hash' lets you find a record by its key in constant time, regardless of how many records you have. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash&lt;Type[field]&gt;'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.</p>
+<p>A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash&lt;Type[field]&gt;'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Keyword</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>
 }</code></pre>
@@ -910,14 +931,14 @@
   d.h[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
 <p>no-op; does not panic</p>
 <h2 id="why-you-cannot-iterate-a-hash-directly">Why you cannot iterate a hash directly</h2>
-<p>A hash has no stable element order — hash bucket positions depend on key hashes and the internal load factor, so there is no meaningful #index or sequential position. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.</p>
+<p>A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="13-file">
 <h1>File</h1>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p>`file(path)` creates a File handle without opening anything yet. `f#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
+<p>`file(path)` creates a File handle without opening anything yet. `f#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>);
@@ -941,7 +962,7 @@
 <p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value (u8, u16, i32, long, single, float, or text).</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test.bin"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#format == <span class="en">NotExists</span>, <span class="st">"File should not exist yet."</span>);
-  f#format = <span class="en">BigEndian</span>;
+  f#format = <span class="en">BigEndian</span>;  <span class="cm">// BigEndian: most-significant byte written first.</span>
   f += <span class="nm">0</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">0x203</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u16</a></span>;
@@ -1024,8 +1045,8 @@
 <p>Once loaded, 'img#width' and 'img#height' give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.</p>
 <p>w = img#width h = img#height println("image is {w} x {h} pixels — {w * h} pixels total")</p>
 <h2 id="accessing-individual-pixels">Accessing Individual Pixels</h2>
-<p>Index the image with two integer coordinates [x, y] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel carries four channels, all in the range 0–255:</p>
-<p>px = img[x, y] r  = px#red     // red channel g  = px#green   // green channel b  = px#blue    // blue channel a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)</p>
+<p>Index the image with two integer coordinates [x, y] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel has four values (called channels), all in the range 0–255:</p>
+<p>px = img[x, y] r  = px#red     // how much red   (0 = none, 255 = full) g  = px#green   // how much green b  = px#blue    // how much blue a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)</p>
 <p>A pixel from outside the image bounds is null.</p>
 <h2 id="iterating-over-all-pixels">Iterating Over All Pixels</h2>
 <p>A 'for' loop over an image visits every pixel from top-left to bottom-right, row by row. This is the easiest way to scan or analyse the whole image.</p>
@@ -1038,9 +1059,9 @@
 </section>
 <section class="print-section" id="15-lexer">
 <h1>Lexer</h1>
-<p>The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, identifiers, operators, and string literals. You tell the lexer which multi-character sequences count as single tokens and which words are reserved, and it handles the rest.</p>
+<p>The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.</p>
 <h2 id="setting-up-the-lexer">Setting Up the Lexer</h2>
-<p>Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `&gt;&gt;` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being returned as plain identifiers — the lexer will report them exactly as written so your parser can treat them specially.</p>
+<p>Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `&gt;&gt;` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being treated as ordinary names — the lexer will report them exactly as written so your parser can treat them specially.</p>
 <pre><code><span class="kw">use</span> lexer;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {
   l = lexer::<span class="en">Lexer</span> { };
@@ -1063,7 +1084,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"&gt;&gt;"</span>), <span class="st">"Incorrect logical shift"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:18"</span>, <span class="st">"Incorrect position {l.position()}"</span>);</code></pre>
 <h2 id="string-literals-and-comments">String Literals and Comments</h2>
-<p>`constant_text()` reads a double-quoted string literal and unescapes any escape sequences inside it. `constant_character()` reads a single-quoted character literal and returns it as text.</p>
+<p>`constant_text()` reads a double-quoted string and handles special codes like \n (newline) and \\ (backslash). `constant_character()` reads a single-quoted character literal and returns it as text.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);
@@ -1100,7 +1121,7 @@
 <p>'parse(name, source)' is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.</p>
 <p>If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.</p>
 <h2 id="what-the-parser-understands">What the parser understands</h2>
-<p>The parser handles the complete Loft grammar: * 'struct Name { field: type [= default] }' — named-field aggregates * 'enum Name { Variant [{ field: type }] }' — tagged unions with optional fields * 'fn name(params) [-&gt; type] { body }' — functions with a block body * 'fn name(params) [-&gt; type]; #rust "template"' — operator templates backed by Rust * 'use module;' — module imports * Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals * Type expressions: plain names, generic types like 'vector&lt;T&gt;', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'</p>
+<p>The parser handles all Loft syntax: * 'struct Name { field: type [= default] }' — data containers with named fields * 'enum Name { Variant [{ field: type }] }' — named choices, each with optional data * 'fn name(params) [-&gt; type] { body }' — functions with a block body * 'fn name(params) [-&gt; type]; #rust "template"' — operator templates backed by Rust * 'use module;' — module imports * Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals * Type expressions: plain names, generic types like 'vector&lt;T&gt;', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'</p>
 <pre><code><span class="kw">use</span> parser;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
@@ -1118,13 +1139,13 @@
 <h2 id="practical-use-validating-user-supplied-code">Practical use: validating user-supplied code</h2>
 <p>If your application lets users write Loft snippets (for scripting or configuration), you can parse them before executing:</p>
 <p>snippet = read_user_input(); parser::parse("user_code", snippet); // If parse() emits errors, the snippet was invalid — show them to the user.</p>
-<p>Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate the whole grammar.</p>
+<p>Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate all of the syntax.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"parser test passed"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="17-libraries">
 <h1>Libraries</h1>
-<p>A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. Everything in the library is always accessible — there is no private/public barrier. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.</p>
+<p>A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. All types and functions in a library are accessible — there is no way to mark something as internal or hidden. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.</p>
 <pre><code><span class="kw">use</span> testlib;</code></pre>
 <h2 id="constants-and-enums">Constants and Enums</h2>
 <p>Library constants and enum variants are accessed with the `libname::` prefix. You can compare, order, and convert enum values exactly as you would with enums defined in the same file.</p>
@@ -1255,7 +1276,7 @@
 <p>The full syntax is: for a in &lt;vector&gt; par(b=&lt;worker_call&gt;, &lt;threads&gt;) { body }</p>
 <p>Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }</p>
 <p>Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }</p>
-<p>The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
+<p>The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -1382,11 +1403,11 @@
 <p>* 'log_error' — something went wrong and you need to investigate, but the program can continue (perhaps degraded). Example: "failed to save record", "unexpected null value".</p>
 <p>* 'log_fatal' — a condition so serious that normal operation is impossible. Example: "cannot open database", "required config file not found".</p>
 <h2 id="configuring-the-log-destination">Configuring the log destination</h2>
-<p>By default, log calls are silent no-ops — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.</p>
+<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.</p>
 <p>Generate a documented template with all defaults by running: loft --generate-log-config</p>
 <p>A minimal 'log.conf' looks like this:</p>
 <p>[log] file  = log.txt    # write messages here (relative to the .loft file) level = info       # minimum level to record; choices: info warn error fatal</p>
-<p>[rotation] max_size_mb = 500  # rotate after this many megabytes daily       = true # also rotate at midnight UTC max_files   = 10   # keep at most this many log files</p>
+<p>[rotation] max_size_mb = 500  # start a new log file after this many megabytes daily       = true # also start a new file at midnight UTC max_files   = 10   # keep at most this many log files (older ones are deleted)</p>
 <p>[rate_limit] per_site = 5       # suppress messages from the same source line after 5/minute</p>
 <p>[levels] # Override the global level for a specific file: # "debug_tool.loft" = info # "src/"            = error</p>
 <h2 id="production-mode">Production mode</h2>
@@ -1394,7 +1415,7 @@
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
 <p>Log messages are plain text, but you can embed any expression using the same '{...}' format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.</p>
+<p>Without a log.conf these calls do nothing — the tests below pass even though no output is produced.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_warn</a></span>(<span class="st">"this is a warning"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_error</a></span>(<span class="st">"something went wrong"</span>);
@@ -1506,27 +1527,27 @@
 <h1>Safety</h1>
 <p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="null-sentinels">Null sentinels</h2>
-<p>Every type uses a special in-band value to represent null. The value depends on the type:</p>
+<h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
+<p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
 <ul>
-<li>`boolean` uses `false`</li>
-<li>`integer` uses `i32::MIN` (-2 147 483 648)</li>
-<li>`long` uses `i64::MIN`</li>
-<li>`float` and `single` use `NaN`</li>
-<li>`character` uses the NUL character</li>
-<li>`text` uses an internal null pointer</li>
-<li>`reference` uses record 0</li>
-<li>plain `enum` uses byte 255 (limits enums to 255 variants)</li>
+<li>`boolean`         — `false` is the null value</li>
+<li>`integer`         — the most negative 32-bit integer (-2 147 483 648) is null</li>
+<li>`long`            — the most negative 64-bit integer is null</li>
+<li>`float`/`single`  — `NaN` (Not a Number) is null</li>
+<li>`character`       — the NUL character (code point 0) is null</li>
+<li>`text`            — an empty internal reference is null</li>
+<li>`reference`       — record 0 is null</li>
+<li>plain `enum`      — byte value 255 is null (limits enums to 255 variants)</li>
 </ul>
-<p>This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:</p>
+<p>This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:</p>
 <pre><code>  zero = <span class="nm">0</span>;
   n = <span class="nm">1</span> / zero;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!n, <span class="st">"div-by-zero is null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null sentinel is not zero; it is i32::MIN"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null is not zero; it is -2 147 483 648"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
-<p>Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.</p>
+<p>Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
 <p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;
@@ -1566,7 +1587,7 @@
   <span class="kw">for</span> c <span class="kw">in</span> t { byte_pos = c#<span class="ty">index</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(byte_pos == <span class="nm">1</span>, <span class="st">"text #index: byte offset of 'é' (byte 1, not char 1)"</span>);</code></pre>
 <h2 id="evaluates-the-left-side-twice-for-complex-expressions">`??` evaluates the left side twice for complex expressions</h2>
-<p>The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.</p>
+<p>The `??` operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.</p>
 <h2 id="text-indexing-and-slicing-return-different-types">Text indexing and slicing return different types</h2>
 <p>`txt[i]` returns a `character` (a single Unicode scalar value). `txt[i..j]` returns `text` (a UTF-8 string). These are different types.</p>
 <pre><code>  txt = <span class="st">"hello"</span>;
@@ -1740,7 +1761,7 @@
 <p>The four loft execution modes have very different performance profiles depending on what the program does.</p>
 
 <h3>loft interpreter vs Python</h3>
-<p>The loft interpreter is a tree-walking bytecode evaluator. For tight numeric loops it is <strong>slower than CPython</strong> — typically 1.4–10× — because CPython's inner loop is a highly optimised C switch table while loft's is a Rust <code>match</code> over a flat bytecode stream with additional type-dispatch overhead. The gap is largest for integer-heavy workloads (sum loop: 9×). For float arithmetic the gap narrows (Mandelbrot: 2.5×). Notably, <strong>string building is faster</strong> in the loft interpreter (61 ms vs Python's 70 ms) because loft's format-string concatenation avoids Python's object allocation churn.</p>
+<p>The loft interpreter runs your program directly without a separate compilation step. For tight numeric loops it is <strong>slower than CPython</strong> — typically 1.4–10× — because CPython's core is written in highly-optimised C while loft's is Rust and must also determine the type of each value before acting on it. The gap is largest for integer-heavy workloads (sum loop: 9×). For float arithmetic the gap narrows (Mandelbrot: 2.5×). Notably, <strong>string building is faster</strong> in the loft interpreter (61 ms vs Python's 70 ms) because loft's format-string concatenation creates fewer temporary objects.</p>
 
 <h3>loft native vs Rust</h3>
 <p>The native pipeline compiles loft source to Rust via <code>--native</code> or <code>--native-release</code>, then invokes <code>rustc -O</code>. For pure <strong>floating-point workloads</strong> the generated Rust is essentially as fast as hand-written Rust (Newton sqrt: 159 ms vs 152 ms, Mandelbrot: 7 ms vs 6 ms). For integer arithmetic the gap is 1.8–2.5×, and for <strong>data-structure workloads</strong> (word count, matrix, sort) the gap is 7–16×. The bottleneck in those cases is the <code>codegen_runtime</code> layer: the generated code calls runtime helpers (hash lookup, text comparison, vector index) that carry more overhead than the idiomatic Rust equivalents.</p>
@@ -1752,7 +1773,7 @@
 
 <div class="bottleneck">
   <strong>Interpreter — bytecode dispatch overhead</strong>
-  The interpreter executes one opcode at a time from a flat <code>Vec&lt;u8&gt;</code> stream. Each opcode reads operands, performs type checks, and dispatches to the next. There is no JIT, no superinstruction merging, and no specialisation for integer vs float paths. Tight inner loops visit the dispatch table on every iteration, which is the dominant cost for sum-loop and Collatz.
+  The interpreter executes one instruction at a time and must check the type of each value before every operation. There is no just-in-time compiler (JIT) or other technique to speed up code that runs repeatedly. Each iteration of a tight loop pays this per-instruction cost, which is the dominant overhead for sum-loop and Collatz.
 </div>
 
 <div class="bottleneck">

@@ -16,9 +16,9 @@
 // returns without producing a value.
 // ## What the parser understands
 //
-// The parser handles the complete Loft grammar:
-// * 'struct Name { field: type [= default] }' — named-field aggregates
-// * 'enum Name { Variant [{ field: type }] }' — tagged unions with optional fields
+// The parser handles all Loft syntax:
+// * 'struct Name { field: type [= default] }' — data containers with named fields
+// * 'enum Name { Variant [{ field: type }] }' — named choices, each with optional data
 // * 'fn name(params) [-> type] { body }' — functions with a block body
 // * 'fn name(params) [-> type]; #rust "template"' — operator templates backed by Rust
 // * 'use module;' — module imports
@@ -52,6 +52,6 @@ fn main() {
   //   // If parse() emits errors, the snippet was invalid — show them to the user.
   //
   // Combine this with the lexer (see the Lexer page) when you need to extract
-  // individual tokens from the source rather than validate the whole grammar.
+  // individual tokens from the source rather than validate all of the syntax.
   println("parser test passed");
 }
