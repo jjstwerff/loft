@@ -396,6 +396,16 @@ use #count instead"
         } else if self.lexer.has_keyword("remove") {
             // For sorted/index/spacial loops the packed i64 state is in {name}#iter_state;
             // for other loops (vector) the state is the plain i32 {name}#index.
+            if !self.first_pass && *self.vars.loop_value(index_var) == Value::Null {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}#remove' is only valid on a loop iteration variable (e.g. 'for {} in collection {{ {}#remove }}')",
+                    name, name, name
+                );
+                *t = Type::Void;
+                return;
+            }
             let on = self.vars.loop_on(index_var);
             let state_name = if on & 63 >= 1 && on & 63 <= 3 {
                 let state_key = format!("{name}#iter_state");

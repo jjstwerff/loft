@@ -22,6 +22,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
+| 90 | `character + character` codegen panic — stack size mismatch | Medium | Assign to text first: `r = "" + c + d` |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
@@ -529,6 +530,28 @@ size/offset calculation and ensure the slot reserved for an optional `& T` argum
 expected stack layout.
 
 **Effort:** Small.
+
+---
+
+### #90 — `character + character` codegen panic: stack size mismatch
+
+**Symptom:** `c = 'h'; d = 'i'; r = c + d;` panics in debug builds with
+"generate_call: mutable arg 1 (v1: Text([])) expected 16B on stack but
+generate(Var(0)) pushed 4B".  Also affects `a[0] + a[1]` where `a` is text.
+
+**Root cause:** `parse_append_text` emits `OpAppendCharacter(work_var, char_expr)`.
+The codegen resolves the call and finds arg 1 typed as `Text` (16B) instead of
+`Character` (4B).  The operator definition lookup may resolve to the wrong
+overload, or the work-text variable's type context confuses the argument
+type checker.
+
+**Workaround:** Prefix with an empty text: `r = "" + c + d` makes the first
+operand text, so `parse_append_text` uses `OpAppendText` for the first part
+and `OpAppendCharacter` for subsequent parts — no mismatch.
+
+**Effort:** Medium — requires tracing the operator definition lookup in
+`parse_append_text` to find why the codegen sees `Text` instead of `Character`
+for the `OpAppendCharacter` argument.
 
 ---
 
