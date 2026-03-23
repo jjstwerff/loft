@@ -1708,14 +1708,13 @@ fn issue_89_optional_ref_text_param_with_arg() {
 
 /// S8: hash-value struct with a `key` field must produce a compile-time error.
 #[test]
-#[ignore = "S8: compile-time hash key-field check not yet implemented"]
 fn s8_hash_value_struct_key_field_rejected() {
     code!(
         "struct Item { key: text, value: integer }
 struct Container { data: hash<Item[key]> }
 fn test() { }"
     )
-    .error("reserved for hash iteration");
+    .error("Struct 'Item' has a field named 'key' which is reserved for hash iteration — rename the field at s8_hash_value_struct_key_field_rejected:1:14");
 }
 
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────

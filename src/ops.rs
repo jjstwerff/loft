@@ -820,7 +820,6 @@ mod test {
     /// Integer paths use `i32::MIN` as their null sentinel.  Any `i64::MIN` check
     /// in an `_int` function would add an unnecessary branch on every integer op.
     #[test]
-    #[ignore = "O3: compile-time i64::MIN audit guard not yet implemented"]
     fn no_i64_sentinel_in_int_functions() {
         let src = include_str!("ops.rs");
         // Split the source into function bodies by scanning for `fn op_` / `fn format_`
@@ -830,7 +829,9 @@ mod test {
         let mut fn_name = String::new();
         for line in src.lines() {
             if let Some(rest) = line.strip_prefix("pub fn ") {
-                in_int_fn = rest.contains("_int(");
+                // Conversion functions (op_conv_*_from_int) correctly map i32::MIN → i64::MIN
+                // or i32::MIN → f64::NAN.  Exclude them from the audit.
+                in_int_fn = rest.contains("_int(") && !rest.contains("_from_int(");
                 fn_name = rest.split('(').next().unwrap_or("").to_string();
             }
             if in_int_fn {
