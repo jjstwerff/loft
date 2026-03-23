@@ -35,8 +35,8 @@
   a -= <span class="nm">4</span>;</code></pre>
 <p>a is now 0</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / a), <span class="st">"Division by zero gives null"</span>);</code></pre>
-<h2 id="compile-time-warning-for-constant-zero-divisor">Compile-time warning for constant zero divisor</h2>
-<p>When the divisor is a literal 0 in source code, loft emits a compile-time warning because a constant-zero divisor is almost certainly a bug: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still compiles and returns null at runtime — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.</p>
+<h2 id="warning-when-you-write-a-literal-zero-divisor">Warning when you write a literal zero divisor</h2>
+<p>When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still runs and returns null — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.</p>
 <h2 id="embedding-integers-in-text">Embedding integers in text</h2>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{12}b"</span> == <span class="st">"a12b"</span>, <span class="st">"Integer in format string"</span>);</code></pre>
 <p>A full expression can appear inside '{...}', not just a variable name.</p>

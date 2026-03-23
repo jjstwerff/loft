@@ -22,7 +22,7 @@
 <p>Generate a documented template with all defaults by running: loft --generate-log-config</p>
 <p>A minimal 'log.conf' looks like this:</p>
 <p>[log] file  = log.txt    # write messages here (relative to the .loft file) level = info       # minimum level to record; choices: info warn error fatal</p>
-<p>[rotation] max_size_mb = 500  # rotate after this many megabytes daily       = true # also rotate at midnight UTC max_files   = 10   # keep at most this many log files</p>
+<p>[rotation] max_size_mb = 500  # start a new log file after this many megabytes daily       = true # also start a new file at midnight UTC max_files   = 10   # keep at most this many log files (older ones are deleted)</p>
 <p>[rate_limit] per_site = 5       # suppress messages from the same source line after 5/minute</p>
 <p>[levels] # Override the global level for a specific file: # "debug_tool.loft" = info # "src/"            = error</p>
 <h2 id="production-mode">Production mode</h2>

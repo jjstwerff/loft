@@ -962,7 +962,7 @@ fn main() {
   }
 ```
 
-Combine conditions with 'and' / 'or' (or their symbol equivalents '&&' / '||'). Note that '&' is the bitwise AND operator — it works on the individual bits of a number, which is different from the logical 'and' keyword. An 'if/else' chain picks exactly one branch to execute.
+Combine conditions with 'and' / 'or' (or their symbol equivalents '&&' / '||'). Note that '&' is the bitwise AND operator — it works on the individual 1s and 0s inside a number, which is different from the logical 'and' keyword that works on true/false values. An 'if/else' chain picks exactly one branch to execute.
 
 ```rust
   a = 12;
@@ -1235,9 +1235,9 @@ a is now 0
   assert(!(12 / a), "Division by zero gives null");
 ```
 
-=== Compile-time warning for constant zero divisor
+=== Warning when you write a literal zero divisor
 
-When the divisor is a literal 0 in source code, loft emits a compile-time warning because a constant-zero divisor is almost certainly a bug: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still compiles and returns null at runtime — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
+When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still runs and returns null — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
 
 === Embedding integers in text
 
@@ -1310,7 +1310,7 @@ A comparison produces a boolean result directly. '!' flips a boolean: true → f
 
 === Logical operators: and / or
 
-'and' (also '&&') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both use short-circuit evaluation: the right side is only evaluated if the left side does not already determine the result. This matters when the right side could produce null or has a side effect.
+'and' (also '&&') is true only when both sides are true. 'or'  (also '||') is true when at least one side is true. Both skip the right side when the left side already determines the result. For example, 'false and X' is always false, so X is never evaluated. This matters when the right side could produce null or has a side effect.
 
 ```rust
   assert(1 > 0 and 2 > 1, "Both conditions true");
@@ -1386,7 +1386,7 @@ true
 
 = Float
 
-A 'float' stores a number with a decimal point, like 3.14 or -0.001. It uses 64-bit precision (the same as f64 in Rust), which gives you about 15 significant digits — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.
+A 'float' stores a number with a decimal point, like 3.14 or -0.001. It gives you about 15 significant digits of precision — enough for scientific work, games, and most real-world maths. When you write a number with a decimal point in Loft, it is automatically a float.
 
 ```rust
 fn main() {
@@ -1400,7 +1400,7 @@ Write a decimal point in a literal and Loft treats the whole expression as a flo
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
 ```
 
-The 'f' suffix selects single-precision (32-bit) floats. Single-precision takes half the memory of a regular float and is common in graphics and audio code where exact decimal values matter less than speed or size.
+The 'f' suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.
 
 ```rust
   x = 0.1f + 2 * 1.0f;
@@ -1439,7 +1439,7 @@ Put a colon after the value inside '{...}' to control how it looks. '{value:widt
   assert(log(pow(4.0, 5), 2) == 10.0, "log base 2 of 4^5");
 ```
 
-'sin' and 'cos' work in radians, not degrees. A full circle is 2\*PI radians; a half circle (180 degrees) is PI radians. sin(PI) is theoretically zero but floating-point gives a tiny rounding error, so we use ceil() to snap it up. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 \* 1000) lands at -1000.
+'sin' and 'cos' work in radians, not degrees. A full circle is 2\*PI radians; a half circle (180 degrees) is PI radians. sin(PI) should be exactly zero but computers use approximations for decimal numbers, so you may get something like 0.0000000001 instead. We use ceil() to round it up to 0. cos(PI) is exactly -1, so the whole expression ceil(~0 + -1 \* 1000) lands at -1000.
 
 ```rust
   assert(ceil(sin(PI) + cos(PI) * 1000) == -1000.0, "sin and cos");
@@ -1682,11 +1682,11 @@ A lambda passed to your own higher-order function (same as apply_fn above).
 
 = Vector
 
-A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '\[1, 2, 3\]'. Under the hood Loft allocates exactly as much memory as needed, so vectors are efficient even when you do not know the size up front.
+A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '\[1, 2, 3\]'. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.
 
-=== Higher-order functions: map, filter, reduce
+=== Transforming vectors: map, filter, reduce
 
-'map', 'filter', and 'reduce' let you transform or summarise a vector by passing a function reference — written 'fn \<name\>' — as the first argument. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — fold all elements into a single value
+'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn \<name\>' to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value
 
 ```rust
 fn triple(x: integer) -> integer {
@@ -1882,7 +1882,7 @@ fn dimmed(self: Colour) -> Colour {
 
 === Computed Fields
 
-A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a default evaluated at construction time. Inside that expression, '\$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.
+A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a value computed when you create the struct. Inside that expression, '\$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.
 
 ```rust
 struct Item {
@@ -1964,7 +1964,7 @@ You can call a method directly on a constructor expression.
   assert(dark.g == 0, "dimmed g: {dark.g}");
 ```
 
-Computed fields are filled automatically at construction time.
+Computed fields are filled in automatically when you create the struct.
 
 ```rust
   it = Item {name: "hello" };
@@ -2204,7 +2204,7 @@ Character literals work in match arms.
 
 = Sorted
 
-A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts A→Z / 0→9 (ascending), '-field' sorts Z→A / 9→0 (descending).
+A 'sorted' collection holds records in order by one or more fields you choose as the sort criteria (called "key fields"). You can look up a record by those fields instantly and iterate all records in that order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts A→Z / 0→9 (ascending), '-field' sorts Z→A / 9→0 (descending).
 
 ```rust
 struct Elm {
@@ -2776,9 +2776,9 @@ w = img\#width h = img\#height println("image is {w} x {h} pixels — {w \* h} p
 
 === Accessing Individual Pixels
 
-Index the image with two integer coordinates \[x, y\] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel carries four channels, all in the range 0–255:
+Index the image with two integer coordinates \[x, y\] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel has four values (called channels), all in the range 0–255:
 
-px = img\[x, y\] r  = px\#red     // red channel g  = px\#green   // green channel b  = px\#blue    // blue channel a  = px\#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
+px = img\[x, y\] r  = px\#red     // how much red   (0 = none, 255 = full) g  = px\#green   // how much green b  = px\#blue    // how much blue a  = px\#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
 
 A pixel from outside the image bounds is null.
 
@@ -2802,11 +2802,11 @@ fn main() {
 
 = Lexer
 
-The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, identifiers, operators, and string literals. You tell the lexer which multi-character sequences count as single tokens and which words are reserved, and it handles the rest.
+The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.
 
 === Setting Up the Lexer
 
-Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `\>\>` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being returned as plain identifiers — the lexer will report them exactly as written so your parser can treat them specially.
+Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `\>\>` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being treated as ordinary names — the lexer will report them exactly as written so your parser can treat them specially.
 
 ```rust
 use lexer;
@@ -2840,7 +2840,7 @@ fn main() {
 
 === String Literals and Comments
 
-`constant_text()` reads a double-quoted string literal and unescapes any escape sequences inside it. `constant_character()` reads a single-quoted character literal and returns it as text.
+`constant_text()` reads a double-quoted string and handles special codes like \\n (newline) and \\\\ (backslash). `constant_character()` reads a single-quoted character literal and returns it as text.
 
 ```rust
   l.parse_string("Texts", "\"123\" + '4'");
@@ -2894,7 +2894,7 @@ If the source is invalid, parse() emits a diagnostic error and the call returns 
 
 === What the parser understands
 
-The parser handles the complete Loft grammar: \* 'struct Name { field: type \[= default\] }' — named-field aggregates \* 'enum Name { Variant \[{ field: type }\] }' — tagged unions with optional fields \* 'fn name(params) \[-\> type\] { body }' — functions with a block body \* 'fn name(params) \[-\> type\]; \#rust "template"' — operator templates backed by Rust \* 'use module;' — module imports \* Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals \* Type expressions: plain names, generic types like 'vector\<T\>', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+The parser handles all Loft syntax: \* 'struct Name { field: type \[= default\] }' — data containers with named fields \* 'enum Name { Variant \[{ field: type }\] }' — named choices, each with optional data \* 'fn name(params) \[-\> type\] { body }' — functions with a block body \* 'fn name(params) \[-\> type\]; \#rust "template"' — operator templates backed by Rust \* 'use module;' — module imports \* Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals \* Type expressions: plain names, generic types like 'vector\<T\>', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
 
 ```rust
 use parser;
@@ -2939,7 +2939,7 @@ If your application lets users write Loft snippets (for scripting or configurati
 
 snippet = read_user_input(); parser::parse("user_code", snippet); // If parse() emits errors, the snippet was invalid — show them to the user.
 
-Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate the whole grammar.
+Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate all of the syntax.
 
 ```rust
   println("parser test passed");
@@ -3435,7 +3435,7 @@ A minimal 'log.conf' looks like this:
 
 \[log\] file  = log.txt    \# write messages here (relative to the .loft file) level = info       \# minimum level to record; choices: info warn error fatal
 
-\[rotation\] max_size_mb = 500  \# rotate after this many megabytes daily       = true \# also rotate at midnight UTC max_files   = 10   \# keep at most this many log files
+\[rotation\] max_size_mb = 500  \# start a new log file after this many megabytes daily       = true \# also start a new file at midnight UTC max_files   = 10   \# keep at most this many log files (older ones are deleted)
 
 \[rate_limit\] per_site = 5       \# suppress messages from the same source line after 5/minute
 
@@ -3769,7 +3769,7 @@ Text \#index is a byte offset, not a character count:
 
 === `??` evaluates the left side twice for complex expressions
 
-The null-coalescing operator `??` checks if the left side is null and returns the right side if so. For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.
+The `??` operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.
 
 === Text indexing and slicing return different types
 

@@ -44,7 +44,7 @@ fn dimmed(self: Colour) -> Colour {
 }
 // ## Computed Fields
 // A field can calculate its value from other fields in the same struct.
-// Write '= expression' after the type to set a default evaluated at construction time.
+// Write '= expression' after the type to set a value computed when you create the struct.
 // Inside that expression, '$' refers to the struct being built.
 // The 'name_length' field is filled automatically whenever you create an Item.
 
@@ -91,7 +91,7 @@ fn main() {
   assert(dark.r == 64, "dimmed r: {dark.r}");
   assert(dark.b == 64, "dimmed b: {dark.b}");
   assert(dark.g == 0, "dimmed g: {dark.g}");
-  // Computed fields are filled automatically at construction time.
+  // Computed fields are filled in automatically when you create the struct.
   it = Item {name: "hello" };
   assert(it.name_length == 5, "computed name_length: {it.name_length}");
   // Fill a vector with copies of the same struct using '; count' syntax.

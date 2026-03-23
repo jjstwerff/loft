@@ -28,12 +28,12 @@
 //
 // Index the image with two integer coordinates [x, y] to get a pixel value.
 // x = 0 is the left column; y = 0 is the top row.
-// Each pixel carries four channels, all in the range 0–255:
+// Each pixel has four values (called channels), all in the range 0–255:
 //
 //   px = img[x, y]
-//   r  = px#red     // red channel
-//   g  = px#green   // green channel
-//   b  = px#blue    // blue channel
+//   r  = px#red     // how much red   (0 = none, 255 = full)
+//   g  = px#green   // how much green
+//   b  = px#blue    // how much blue
 //   a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
 //
 // A pixel from outside the image bounds is null.

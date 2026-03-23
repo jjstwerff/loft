@@ -16,8 +16,9 @@ fn main() {
     panic("Incorrect test");
   }
   // Combine conditions with 'and' / 'or' (or their symbol equivalents '&&' / '||').
-  // Note that '&' is the bitwise AND operator — it works on the individual bits
-  // of a number, which is different from the logical 'and' keyword.
+  // Note that '&' is the bitwise AND operator — it works on the individual
+  // 1s and 0s inside a number, which is different from the logical 'and' keyword
+  // that works on true/false values.
   // An 'if/else' chain picks exactly one branch to execute.
   a = 12;
   if a > 10 and a & 7 == 4 {

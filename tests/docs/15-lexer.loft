@@ -3,15 +3,15 @@
 // @NAME: Lexer
 // @TITLE: Lexer library.
 // The lexer library breaks a text into tokens so your program can understand
-// its structure. Tokens are the smallest meaningful pieces: numbers,
-// identifiers, operators, and string literals. You tell the lexer which
-// multi-character sequences count as single tokens and which words are
-// reserved, and it handles the rest.
+// its structure. Tokens are the smallest meaningful pieces: numbers, names
+// (like variable and function names), operators, and quoted strings. You tell
+// the lexer which multi-character sequences count as one token and which words
+// are reserved keywords, and it handles the rest.
 // ## Setting Up the Lexer
 // Create a `lexer::Lexer` and register your language's rules before you parse
 // anything. `set_tokens` ensures operators like `+=` or `>>` are scanned as
 // one token instead of two separate characters. `set_keywords` prevents
-// reserved words from being returned as plain identifiers — the lexer will
+// reserved words from being treated as ordinary names — the lexer will
 // report them exactly as written so your parser can treat them specially.
 use lexer;
 fn main() {
@@ -43,8 +43,8 @@ fn main() {
   assert(l.matches(">>"), "Incorrect logical shift");
   assert(l.position() == "Tokens:1:18", "Incorrect position {l.position()}");
   // ## String Literals and Comments
-  // `constant_text()` reads a double-quoted string literal and unescapes any
-  // escape sequences inside it. `constant_character()` reads a
+  // `constant_text()` reads a double-quoted string and handles special codes
+  // like \n (newline) and \\ (backslash). `constant_character()` reads a
   // single-quoted character literal and returns it as text.
   l.parse_string("Texts", "\"123\" + '4'");
   assert(l.constant_text() == "123", "Incorrect text literal");

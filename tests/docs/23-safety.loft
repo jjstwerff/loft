@@ -93,10 +93,9 @@ fn main() {
   assert(byte_pos == 1, "text #index: byte offset of 'é' (byte 1, not char 1)");
 
   // ## `??` evaluates the left side twice for complex expressions
-  // The null-coalescing operator `??` checks if the left side is null and
-  // returns the right side if so. For a simple variable this is fine, but
-  // for a function call or complex expression the left side is evaluated
-  // once for the null check and once for the result.
+  // The `??` operator means "use this value, or if it is null, use the right side instead".
+  // For a simple variable this is fine, but for a function call or complex expression
+  // the left side is evaluated once for the null check and once for the result.
   // Mitigation: Assign complex expressions to a temporary variable first.
   // For example, instead of `result = expensive_call() ?? default` (which
   // calls the function twice), write `temp = expensive_call()` on one line

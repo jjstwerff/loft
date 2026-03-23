@@ -145,7 +145,7 @@
 <p>The four loft execution modes have very different performance profiles depending on what the program does.</p>
 
 <h3>loft interpreter vs Python</h3>
-<p>The loft interpreter is a tree-walking bytecode evaluator. For tight numeric loops it is <strong>slower than CPython</strong> — typically 1.4–10× — because CPython's inner loop is a highly optimised C switch table while loft's is a Rust <code>match</code> over a flat bytecode stream with additional type-dispatch overhead. The gap is largest for integer-heavy workloads (sum loop: 9×). For float arithmetic the gap narrows (Mandelbrot: 2.5×). Notably, <strong>string building is faster</strong> in the loft interpreter (61 ms vs Python's 70 ms) because loft's format-string concatenation avoids Python's object allocation churn.</p>
+<p>The loft interpreter runs your program directly without a separate compilation step. For tight numeric loops it is <strong>slower than CPython</strong> — typically 1.4–10× — because CPython's core is written in highly-optimised C while loft's is Rust and must also determine the type of each value before acting on it. The gap is largest for integer-heavy workloads (sum loop: 9×). For float arithmetic the gap narrows (Mandelbrot: 2.5×). Notably, <strong>string building is faster</strong> in the loft interpreter (61 ms vs Python's 70 ms) because loft's format-string concatenation creates fewer temporary objects.</p>
 
 <h3>loft native vs Rust</h3>
 <p>The native pipeline compiles loft source to Rust via <code>--native</code> or <code>--native-release</code>, then invokes <code>rustc -O</code>. For pure <strong>floating-point workloads</strong> the generated Rust is essentially as fast as hand-written Rust (Newton sqrt: 159 ms vs 152 ms, Mandelbrot: 7 ms vs 6 ms). For integer arithmetic the gap is 1.8–2.5×, and for <strong>data-structure workloads</strong> (word count, matrix, sort) the gap is 7–16×. The bottleneck in those cases is the <code>codegen_runtime</code> layer: the generated code calls runtime helpers (hash lookup, text comparison, vector index) that carry more overhead than the idiomatic Rust equivalents.</p>
@@ -157,7 +157,7 @@
 
 <div class="bottleneck">
   <strong>Interpreter — bytecode dispatch overhead</strong>
-  The interpreter executes one opcode at a time from a flat <code>Vec&lt;u8&gt;</code> stream. Each opcode reads operands, performs type checks, and dispatches to the next. There is no JIT, no superinstruction merging, and no specialisation for integer vs float paths. Tight inner loops visit the dispatch table on every iteration, which is the dominant cost for sum-loop and Collatz.
+  The interpreter executes one instruction at a time and must check the type of each value before every operation. There is no just-in-time compiler (JIT) or other technique to speed up code that runs repeatedly. Each iteration of a tight loop pays this per-instruction cost, which is the dominant overhead for sum-loop and Collatz.
 </div>
 
 <div class="bottleneck">

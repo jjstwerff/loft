@@ -33,7 +33,7 @@
   <span class="en">Colour</span> {r: self.r / <span class="nm">2</span>, g: self.g / <span class="nm">2</span>, b: self.b / <span class="nm">2</span> }
 }</code></pre>
 <h2 id="computed-fields">Computed Fields</h2>
-<p>A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a default evaluated at construction time. Inside that expression, '$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.</p>
+<p>A field can calculate its value from other fields in the same struct. Write '= expression' after the type to set a value computed when you create the struct. Inside that expression, '$' refers to the struct being built. The 'name_length' field is filled automatically whenever you create an Item.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Item</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   name_length: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="bi"><a href="stdlib-text.html">len</a></span>($.name)
@@ -71,7 +71,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.r == <span class="nm">64</span>, <span class="st">"dimmed r: {dark.r}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.b == <span class="nm">64</span>, <span class="st">"dimmed b: {dark.b}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.g == <span class="nm">0</span>, <span class="st">"dimmed g: {dark.g}"</span>);</code></pre>
-<p>Computed fields are filled automatically at construction time.</p>
+<p>Computed fields are filled in automatically when you create the struct.</p>
 <pre><code>  it = <span class="en">Item</span> {name: <span class="st">"hello"</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(it.name_length == <span class="nm">5</span>, <span class="st">"computed name_length: {it.name_length}"</span>);</code></pre>
 <p>Fill a vector with copies of the same struct using '; count' syntax. This creates 16 Area records, all with the same initial values.</p>

@@ -19,8 +19,8 @@
 <p>Once loaded, 'img#width' and 'img#height' give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.</p>
 <p>w = img#width h = img#height println("image is {w} x {h} pixels — {w * h} pixels total")</p>
 <h2 id="accessing-individual-pixels">Accessing Individual Pixels</h2>
-<p>Index the image with two integer coordinates [x, y] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel carries four channels, all in the range 0–255:</p>
-<p>px = img[x, y] r  = px#red     // red channel g  = px#green   // green channel b  = px#blue    // blue channel a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)</p>
+<p>Index the image with two integer coordinates [x, y] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel has four values (called channels), all in the range 0–255:</p>
+<p>px = img[x, y] r  = px#red     // how much red   (0 = none, 255 = full) g  = px#green   // how much green b  = px#blue    // how much blue a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)</p>
 <p>A pixel from outside the image bounds is null.</p>
 <h2 id="iterating-over-all-pixels">Iterating Over All Pixels</h2>
 <p>A 'for' loop over an image visits every pixel from top-left to bottom-right, row by row. This is the easiest way to scan or analyse the whole image.</p>
