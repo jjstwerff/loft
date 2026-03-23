@@ -1,5 +1,10 @@
 # Stack Slot Assignment
 
+> **HISTORICAL** — This document records the P1/P2 design proposals and intermediate bug
+> analyses from before the two-zone redesign (A6.3a/b, 2026-03-20).
+> The current design is in [SLOTS.md](SLOTS.md).
+> Bug analyses for the three slot-assignment bugs (A, B, C) are in [SLOT_FAILURES.md](SLOT_FAILURES.md).
+
 ## Contents
 - [Resolved Issues](#resolved-issues)
 - [Open Issues](#open-issues)

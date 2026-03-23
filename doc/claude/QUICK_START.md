@@ -218,9 +218,8 @@ default/03_text.loft    — text utilities
 | [STACKTRACE.md](STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](NATIVE.md) | Native code generation (`src/generation.rs`) design and fix plans |
 | [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
-| [BYTECODE_CACHE.md](BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
+| [BYTECODE_CACHE.md](BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred — superseded by native codegen) |
 | [DEBUG.md](DEBUG.md) | Debugging utilities and tools |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Contribution workflow — branch → phases → structured commit sequence |
 | [RELEASE.md](RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](WEB_IDE.md) | Web IDE integration design notes |
 | [../PROMPTS.md](../PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
@@ -239,6 +238,9 @@ default/03_text.loft    — text utilities
 | Set up logging in a loft program | `STDLIB.md § Logging`, then [LOGGER.md](LOGGER.md) |
 | Understand the heap / memory model | [DATABASE.md](DATABASE.md), then `INTERMEDIATE.md § DbRef` |
 | Improve the test suite | [TESTING.md](TESTING.md), then `tests/scripts/` and `tests/docs/` |
+| Debug slot conflicts / understand stack layout | [SLOTS.md](SLOTS.md) — two-zone design, `validate_slots`, `LOFT_ASSIGN_LOG` |
+| Format a loft source file | [FORMATTER.md](FORMATTER.md) — `loft --format`; rules and golden tests |
+| Understand native Rust codegen | [NATIVE.md](NATIVE.md) — `generation.rs`, `fill.rs` auto-gen, open N items |
 
 ## Debug logging — `LOFT_LOG` quick reference
 

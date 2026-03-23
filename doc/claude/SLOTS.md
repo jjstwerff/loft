@@ -64,15 +64,7 @@ cargo test -p loft --test vectors    # 45/45
 
 ### Two-zone design — implementation status
 
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | `Block.var_size` field | ✅ done |
-| 2 | `OpReserveFrame` opcode + interpreter | ✅ done |
-| 3 | New `assign_slots` / `process_scope` / `place_large_and_recurse` | ✅ done |
-| 4 | `generate_block` emits `OpReserveFrame` | ✅ done |
-| 5 | Enable `slots.rs` `#[ignore]` tests | ✅ done — all 3/3 enabled |
-| 6 | Replace override branches with debug assertions | ⚠️ partial — `pos > TOS` override retained as safety net (debug_assert guards regression); `pos < TOS + large_type` retained for `&vector<T>` args |
-| 7 | Remove `running_tos` / `eager_slots` / `assign_slots_old` machinery | ✅ done |
+All steps complete except Step 10.  See [Implementation Status](#implementation-status) for detail.
 
 ---
 
@@ -217,111 +209,57 @@ walk never misses a placement.
 
 ## Implementation Details
 
-### 1. `Block.var_size`
+All steps complete.  Code details are in commit history and CHANGELOG.md.
+The summaries below describe the design intent of each component.
 
-**File:** `src/data.rs` — **Done.**
+### 1. `Block.var_size` (`src/data.rs`)
 
-```rust
-pub struct Block {
-    pub name: &'static str,
-    pub operators: Vec<Value>,
-    pub result: Type,
-    pub scope: u16,
-    pub var_size: u16,   // zone1 bytes to pre-claim at block entry (default 0)
-}
-```
+`u16` field added to `Block`.  Stores the zone-1 pre-claim size in bytes (0 until
+`assign_slots` runs).  Default-initialised to 0 in all Block constructors.
 
-### 2. `OpReserveFrame`
+### 2. `OpReserveFrame` (`default/01_code.loft`, `src/fill.rs`, `src/state/mod.rs`)
 
-**Files:** `default/01_code.loft`, `src/fill.rs`, `src/state/mod.rs` — **Done.**
+New opcode inserted at index 7 in the `OPERATORS` table.  At runtime, advances
+`stack.stack_pos` by its `size: u16` operand.  This is the only change to `fill.rs`
+and the interpreter — no structural change to the bytecode format.
 
-`OpReserveFrame(size: u16)` advances `stack_pos` by `size` bytes at runtime.
-Inserted at index 7 in the `OPERATORS` table (after `free_stack`).
+### 3. `assign_slots` — new algorithm (`src/variables.rs`)
 
-```
-fn OpReserveFrame(size: const u16);
-#rust"s.reserve_frame(@size);"
-```
+Signature: `assign_slots(function, code: &mut Value, local_start)`.
 
-```rust
-pub fn reserve_frame(&mut self, size: u16) {
-    self.stack_pos += u32::from(size);
-}
-```
+Entry: `process_scope(function, code, local_start, 0)`.
 
-### 3. `assign_slots` — new algorithm
+`process_scope` — colours small variables (≤ 8 B) within `[frame_base, frame_base + zone1_size)`,
+stores `zone1_size` in `bl.var_size`, then walks the block via `place_large_and_recurse`.
 
-**File:** `src/variables.rs` — **Done.**  Signature:
+`place_large_and_recurse` — places large variables (> 8 B) at the running `*tos` in IR-walk
+order (matching codegen order).  Recurses into child Blocks/Loops via `process_scope`
+(child `*tos` unchanged after — child has its own `OpFreeStack`).  If/else arms each
+start from a saved `branch_tos` that is restored after both arms.
+Special case: `Set(v, Block)` for non-Text large `v` — calls `process_scope` on the Block
+with `frame_base = v.stack_pos` (the block runs in-place at v's slot at codegen time).
 
-```rust
-pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
-```
+### 4. `generate_block` — emit `OpReserveFrame` (`src/state/codegen.rs`)
 
-Entry point calls `process_scope(function, code, local_start, 0)`.
-
-`process_scope(function, block_val, frame_base, depth)`:
-1. Collect all small vars (size ≤ 8) in `bl_scope`, sort by `first_def`.
-2. Greedy interval colouring within `[frame_base, frame_base + zone1_size)`.
-   Dead-slot reuse only when sizes match exactly.
-3. Store `zone1_size` in `bl.var_size`.
-4. Walk block operators via `place_large_and_recurse` to place large vars and recurse
-   into child scopes.
-
-`place_large_and_recurse(function, val, scope, tos, depth)`:
-- `Value::Set(v, inner)` where `v.scope == scope` and `v` large: `v.stack_pos = *tos`,
-  `*tos += size(v)`.  Always recurse into `inner`.
-- `Value::Block(_)` / `Value::Loop(_)`: call `process_scope(child, *tos, depth+1)`.
-  `*tos` unchanged after (child has its own `OpFreeStack`).
-- `Value::If(cond, then, else)`: process condition; save `branch_tos = *tos`;
-  process each arm from `branch_tos`; restore `*tos = branch_tos`.
-- `Value::Insert`, `Value::Call`, `Value::CallRef`, `Value::Drop`, `Value::Return`:
-  recurse into sub-expressions.
-- All other leaf nodes: no-op.
-
-The old algorithm is preserved as `assign_slots_old` (`#[allow(dead_code)]`).
-
-### 4. `generate_block` — emit `OpReserveFrame`
-
-**File:** `src/state/codegen.rs` — **Done.**
-
-```rust
-pub(super) fn generate_block(&mut self, stack: &mut Stack, block: &Block, top: bool) -> Type {
-    if block.operators.is_empty() { return Type::Void; }
-    let to = stack.position;
-    if block.var_size > 0 {
-        stack.add_op("OpReserveFrame", self);
-        self.code_add(block.var_size);
-        stack.position += block.var_size;
-    }
-    // ... rest unchanged ...
-    // OpFreeStack at exit uses `to` (pre-OpReserveFrame), correctly freeing zone1+zone2.
-}
-```
+Before the first operator, if `block.var_size > 0`, emits `OpReserveFrame(var_size)` and
+advances `stack.position` by `var_size`.  `OpFreeStack` at block exit uses the
+pre-`OpReserveFrame` `to` value, correctly freeing both zones.
 
 ### 5. `scopes.rs` call site
 
-**File:** `src/scopes.rs` — **Done.**
+`assign_slots(&mut d.variables, &mut d.code, local_start)` called once per function after
+scope analysis.
 
-```rust
-{
-    let d = &mut data.definitions[d_nr as usize];
-    assign_slots(&mut d.variables, &mut d.code, local_start);
-}
-```
-
-### 6. `validate_slots` — scope ancestry check
-
-**File:** `src/variables.rs` — **Done.**
+### 6. `validate_slots` — scope ancestry check (`src/variables.rs`)
 
 `find_conflict` skips variable pairs in sibling execution branches (neither scope is an
 ancestor of the other).  `build_scope_parents` builds a parent map from the IR tree;
-`scopes_can_conflict(sa, sb, parents)` returns `false` when the scopes are siblings.
+`scopes_can_conflict(sa, sb, parents)` returns `false` for siblings.
 
 **Known limitation:** variables with `scope == u16::MAX` (no scope assigned) are treated
-as always-conflicting.  Some synthetic temp variables (`_read_N`) created by
-`vars.unique(...)` in expressions.rs retain `scope = u16::MAX` if their `Value::Set` is
-elided by `scan_set`'s early-return for already-seen variables.  This causes false-positive
-conflicts in `validate_slots` for the B-binary test (see Open Issues).
+as always-conflicting.  Currently safe because all such synthetics (`_read_N`) are
+created without user-facing Set nodes in sibling branches (see Open Issues for latent
+`Value::Iter` risk).
 
 ---
 
@@ -443,46 +381,26 @@ variable.  Immaterial on desktop targets.
 
 ---
 
-## Remaining Steps
+## Implementation Status
 
-**Step 5:** ✅ All three `#[ignore]`d tests in `tests/slots.rs` are now enabled and passing.
+| Step | Description | Status |
+|------|-------------|--------|
+| 1 | `Block.var_size` field | ✅ |
+| 2 | `OpReserveFrame` opcode + interpreter | ✅ |
+| 3 | New `assign_slots` / `process_scope` / `place_large_and_recurse` | ✅ |
+| 4 | `generate_block` emits `OpReserveFrame` | ✅ |
+| 5 | Enable `slots.rs` regression tests | ✅ all 3/3 |
+| 6 | Replace override branches with debug assertions | ⚠️ partial — `pos > TOS` guarded by `debug_assert`; `pos < TOS + large_type` retained for `&vector<T>` args |
+| 7 | Remove `eager_slots` / `assign_slots_old` dead machinery | ✅ |
+| 8 | Fix `Set(v, Block)` ordering in `place_large_and_recurse` (Issue 72) | ✅ |
+| 9 | `pos != u16::MAX` release guard + `pos <= stack.position` regression assert | ✅ |
+| 10 | Audit `build_scope_parents` for missing IR variants; fix scope-cycle root cause | ⏳ open |
 
-**Step 6:** ⚠️ Partial — override branches remain, with clearer documentation.
-
-Two overrides still exist in `generate_set` for large-type slot mismatches:
-- **`pos > TOS`**: `assign_slots` over-estimates TOS in the "block-return = outer var" pattern
-  (`Set(outer, Block([Set(inner, ...), Var(inner)]))`). `place_large_and_recurse` places
-  `outer` first (advancing TOS), then processes the inner block at the higher TOS. At codegen
-  time the block evaluates first so `inner` lands at the lower TOS. To fix: process the inner
-  block before placing `outer_var` in `place_large_and_recurse`.
-- **`pos < TOS + large_type`**: A mutable `&vector<T>` argument pushes an `OpCreateStack` DbRef
-  to the eval stack before the block's large var is allocated, raising codegen TOS above the
-  pre-assigned slot. Retained because the debug_assert for this case fires in `append_vector`.
-
-**Step 7:** ✅ Dead machinery removed:
-- `eager_slots: bool` field, `eager_slots()` getter, and all usages removed from `Function`
-- `assign_slots_old` function (~200 lines) deleted from `variables.rs`
-- `testing.rs` reference to `eager_slots` removed
-
-**Step 8 — Complete Step 6 (`pos > TOS` override):**
-Fix `Set(v, Block)` ordering in `place_large_and_recurse`.  In the `Value::Set(v_nr, inner)`
-arm, detect when `inner` is a `Value::Block`, process the Block first (at the current `*tos`),
-then assign `v.stack_pos = *tos` **without advancing** `*tos`.  Outer_var and inner_var share
-the block's result slot legally (non-overlapping live intervals, parent+child scopes).  After
-this fix, add `debug_assert!(pos <= stack.position)` to the first override branch in
-`generate_set` and verify it never fires.
-
-**Step 9:** ✅ `pos != u16::MAX` unconditional assert added to `generate_set` after
-computing `pos`.  Also added `debug_assert!(pos <= stack.position)` before the override block
-to guard against any Step-8 regression (case 1: `pos > TOS` should never fire).
-Comments on both override cases updated to reflect current status.
-
-**Step 10 — Audit `build_scope_parents` for missing IR variants:**
-Cross-check `build_scope_parents` against `scan_inner`: every Value variant that contains a
-nested Block should be handled in both.  Missing arms mean nested scopes don't get correct
-parent entries → `scopes_can_conflict` false-positives.  Also investigate why any scope ends
-up mapping to itself in the parent map (the root cause of the `is_scope_ancestor` cycle), and
-fix at the source rather than relying solely on the step-counter guard.
+**Step 10 detail:** Cross-check `build_scope_parents` against `scan_inner`: every `Value`
+variant that contains a nested `Block` should be handled in both.  Missing arms produce wrong
+`scope_parents` entries → `scopes_can_conflict` false-positives.  Also investigate why a scope
+can map to itself in the parent map (root cause of the `is_scope_ancestor` cycle guard); fix
+at source rather than relying solely on the step-counter guard.
 
 ---
 
