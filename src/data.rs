@@ -1370,6 +1370,46 @@ impl Data {
         }
     }
 
+    /// Return a user-facing type name string for use by `type_name()`.
+    #[must_use]
+    pub fn type_name_str(&self, tp: &Type) -> String {
+        match tp {
+            Type::Unknown(_) => "unknown".to_string(),
+            Type::Null => "null".to_string(),
+            Type::Void => "void".to_string(),
+            Type::Integer(min, max)
+                if *min == i32::MIN + 1 && *max == i32::MAX as u32 =>
+            {
+                "integer".to_string()
+            }
+            Type::Integer(_, _) => "integer".to_string(),
+            Type::Boolean => "boolean".to_string(),
+            Type::Long => "long".to_string(),
+            Type::Float => "float".to_string(),
+            Type::Single => "single".to_string(),
+            Type::Character => "character".to_string(),
+            Type::Text(_) => "text".to_string(),
+            Type::Keys => "keys".to_string(),
+            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) => {
+                self.def(*d_nr).name.clone()
+            }
+            Type::RefVar(inner) => format!("&{}", self.type_name_str(inner)),
+            Type::Vector(inner, _) => format!("vector<{}>", self.type_name_str(inner)),
+            Type::Sorted(d_nr, _, _) => format!("sorted<{}>", self.def(*d_nr).name),
+            Type::Index(d_nr, _, _) => format!("index<{}>", self.def(*d_nr).name),
+            Type::Hash(d_nr, _, _) => format!("hash<{}>", self.def(*d_nr).name),
+            Type::Routine(_) => "fn".to_string(),
+            Type::Function(args, ret) => {
+                let args_s: Vec<String> =
+                    args.iter().map(|a| self.type_name_str(a)).collect();
+                format!("fn({}) -> {}", args_s.join(", "), self.type_name_str(ret))
+            }
+            Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
+            Type::Rewritten(inner) => self.type_name_str(inner),
+            Type::Spacial(d_nr, _, _) => format!("spacial<{}>", self.def(*d_nr).name),
+        }
+    }
+
     /**
     Return the rust type for definitions.
     # Panics
