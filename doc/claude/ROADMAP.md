@@ -20,6 +20,7 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
 | S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
+| S9     | Fix `character + character` codegen panic                | Small     |             | PROBLEMS.md #90    |
 | O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
 | O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
 | A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
@@ -105,7 +106,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID     | Title                                                   | Effort    | Depends on  | Source               |
 |--------|---------------------------------------------------------|-----------|-------------|----------------------|
-| S6     | Fix `for` loop scoping in recursive functions           | High      |             | PROBLEMS.md #84      |
 | A5     | Closure capture for lambdas                             | Very High | P1          | PLANNING.md A5       |
 | A5.1   | ↳ Capture analysis (identify free variables)            | Small     | P1          | scopes.rs            |
 | A5.2   | ↳ Closure record layout                                 | Small     | A5.1        | data.rs, typedef.rs  |
