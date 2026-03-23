@@ -524,6 +524,62 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 
 ---
 
+### L6  Field constraints — `assert($.field op ...)` on struct fields
+
+**Sources:** Language design discussion 2026-03-23
+**Severity:** Low — enhancement, not a bug fix
+**Description:** Allow boolean constraint expressions on struct fields that are checked
+at runtime whenever the field is written.  The `$` token refers to the struct instance,
+allowing cross-field constraints.
+
+**Syntax:**
+
+```loft
+struct Color {
+    r: integer limit(0, 255) not null assert($.r >= $.b),
+    g: integer limit(0, 255) not null,
+    b: integer limit(0, 255) not null
+}
+
+struct Range {
+    lo: integer assert($.lo <= $.hi),
+    hi: integer assert($.hi >= $.lo)
+}
+```
+
+`assert(expr)` appears after other field modifiers (`limit`, `not null`).  The expression
+is a boolean condition that must hold after every write to that field.  `$` is the struct
+instance; `$.field` accesses any field of the same struct.
+
+**Semantics:**
+
+- **Checked on:** Every field write — constructor fields, `p.r = x` assignment.
+- **On violation:** Panic: `"field constraint failed on Color.r: $.r >= $.b (r=10, b=200)"`.
+- **Null fields:** A null value in `$.field` bypasses the check (constraint applies to
+  non-null values only).  Combine with `not null` if the constraint must always hold.
+- **Constructor order:** Fields are initialised in declaration order.  A constraint that
+  references a later field sees its default value (0 / null) during construction.
+  The final state is re-checked after all fields are set.
+- **Relationship to `limit()`:** `limit(min, max)` is a storage optimisation (narrows to
+  1–2 bytes).  `assert()` is a runtime check with no storage effect.  They compose freely.
+
+**Implementation:**
+
+- **L6.1 — Parser:** In `parse_field`, after `not null` / `limit()` / defaults, check for
+  `assert(`.  Parse the boolean expression with a synthetic `$` variable bound to the
+  struct's `DbRef`.  `$.field` resolves to `OpGetField($, field_offset)`.  Store the
+  constraint as `Attribute.check: Option<Value>`.
+- **L6.2 — Bytecode:** At every `OpSetField` site and at the end of struct constructors,
+  emit the check expression + conditional panic.  Reuse the existing `assert` panic
+  machinery.
+- **L6.3 — Native codegen:** Emit `assert!(expr, "constraint message")` after each
+  field write in generated Rust code.
+
+**Effort:** Medium (parser + codegen + native; no type system changes)
+**Target:** 0.8.2
+
+---
+
 ## P — Prototype Features
 
 ### P1  Lambda / anonymous function expressions
