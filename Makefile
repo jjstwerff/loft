@@ -65,7 +65,14 @@ profile:
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
 
+fill:
+	@cargo build --release -q
+	@echo "Regenerating src/fill.rs from default/*.loft ..."
+	@cargo test --test issues regen_fill_rs -- --ignored --nocapture > /dev/null 2>&1
+	@echo "Done. Review with: git diff src/fill.rs"
+
 ci:
+	-rm -rf tests/generated
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
 	cargo test >> result.txt 2>&1

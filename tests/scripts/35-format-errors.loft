@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Format string error tests: bad specifiers, use-before-assign.
+
+// @EXPECT_ERROR: Unknown variable 'z'
+fn test_bare_specifier_z() {
+  n = 42;
+  s = "{n:z}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: z
+fn test_width_then_unknown_z() {
+  n = 42;
+  s = "{n:5z}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: z
+fn test_zero_pad_then_unknown() {
+  n = 42;
+  s = "{n:05z}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: B
+fn test_uppercase_b() {
+  n = 42;
+  s = "{n:5B}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: O
+fn test_uppercase_o() {
+  n = 42;
+  s = "{n:5O}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: z
+fn test_int_literal_bad_specifier() {
+  s = "{42:5z}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: z
+fn test_float_literal_bad_specifier() {
+  s = "{3.14:5z}";
+}
+
+// @EXPECT_ERROR: Unexpected formatting type: z
+fn test_float_var_bad_specifier() {
+  f = 3.14;
+  s = "{f:5z}";
+}
+
+// @EXPECT_ERROR: Unknown variable 'cd'
+fn test_format_use_before_assign() {
+  s = "{cd}";
+  cd = 5;
+}

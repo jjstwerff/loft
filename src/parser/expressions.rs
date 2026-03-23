@@ -513,9 +513,33 @@ use a separate collection or add after the loop"
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
-        let f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
+        let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);
+        }
+        // Type annotation: `v: type = expr`
+        // Only attempt outside format-string expressions (where `:` is used for
+        // format specifiers like `{c:#}`).  Consume `: type` only when `=`
+        // follows, confirming this is an annotated declaration.
+        if let Value::Var(v_nr) = code
+            && self.vars.exists(*v_nr)
+            && !self.in_format_expr
+            && self.lexer.peek_token(":")
+        {
+            let lnk = self.lexer.link();
+            self.lexer.cont(); // consume ":"
+            let mut got_annotation = false;
+            if let Some(type_name) = self.lexer.has_identifier()
+                && let Some(tp) = self.parse_type(u32::MAX, &type_name, false)
+                && self.lexer.peek_token("=")
+            {
+                self.change_var_type(*v_nr, &tp);
+                f_type = tp;
+                got_annotation = true;
+            }
+            if !got_annotation {
+                self.lexer.revert(lnk);
+            }
         }
         let to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
@@ -1338,6 +1362,9 @@ use a separate collection or add after the loop"
         } else if self.lexer.has_token("sizeof") {
             self.lexer.token("(");
             self.parse_size(val)
+        } else if self.lexer.has_token("type_name") {
+            self.lexer.token("(");
+            self.parse_type_name(val)
         } else if self.lexer.has_token("assert") {
             self.lexer.token("(");
             self.parse_intrinsic_call(val, "assert")
@@ -2387,6 +2414,7 @@ use a separate collection or add after the loop"
     }
 
     // <children> ::=
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
             diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
@@ -2436,6 +2464,32 @@ use a separate collection or add after the loop"
                     *code = self.get_field(found_d_nr, found_fnr, code.clone());
                     self.data.attr_used(found_d_nr, found_fnr);
                     return t;
+                }
+                // map/filter/reduce as method syntax on vectors:
+                // v.map(fn) → map(v, fn)
+                if matches!(t, Type::Vector(_, _))
+                    && matches!(field.as_str(), "map" | "filter" | "reduce")
+                    && self.lexer.has_token("(")
+                {
+                    let vec_val = code.clone();
+                    let mut list = vec![vec_val];
+                    let mut types = vec![t.clone()];
+                    loop {
+                        let mut p = Value::Null;
+                        let pt = self.expression(&mut p);
+                        list.push(p);
+                        types.push(pt);
+                        if !self.lexer.has_token(",") {
+                            break;
+                        }
+                    }
+                    self.lexer.token(")");
+                    return match field.as_str() {
+                        "map" => self.parse_map(code, &list, &types),
+                        "filter" => self.parse_filter(code, &list, &types),
+                        "reduce" => self.parse_reduce(code, &list, &types),
+                        _ => unreachable!(),
+                    };
                 }
                 diagnostic!(
                     self.lexer,
@@ -2870,6 +2924,8 @@ pair the hash with a vector to iterate in insertion order"
         if self.lexer.has_token("(") {
             if name == "sizeof" {
                 t = self.parse_size(code);
+            } else if name == "type_name" {
+                t = self.parse_type_name(code);
             } else if name == "typedef" {
                 let mut p = Value::Null;
                 let et = self.expression(&mut p);
@@ -3190,11 +3246,14 @@ pair the hash with a vector to iterate in insertion order"
         while self.lexer.mode() == Mode::Formatting {
             self.lexer.set_mode(Mode::Code);
             let mut format = Value::Null;
+            let saved_in_fmt = self.in_format_expr;
+            self.in_format_expr = true;
             let mut tp = if self.lexer.has_token("for") {
                 self.iter_for(&mut format, &mut append_value)
             } else {
                 self.expression(&mut format)
             };
+            self.in_format_expr = saved_in_fmt;
             self.un_ref(&mut tp, &mut format);
             if !self.first_pass && tp.is_unknown() {
                 diagnostic!(

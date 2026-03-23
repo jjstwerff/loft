@@ -514,7 +514,7 @@ fn test() {
 fn file_exists_true() {
     code!(
         "fn test() {
-    f = file(\"tests/scripts/11-files.loft\");
+    f = file(\"tests/scripts/19-files.loft\");
     assert(f#exists, \"expected exists to be true\");
 }"
     )
@@ -1184,13 +1184,20 @@ fn n4_format_struct_enum_variant_shows_fields() {
     );
 }
 
-/// N9a: the auto-generated tests/generated/fill.rs must contain `use crate::ops;`
+/// N9a: the auto-generated fill.rs must contain `use crate::ops;`
 /// so it can be compiled as a crate-internal file and eventually replace src/fill.rs.
 #[test]
 fn n9a_generated_fill_has_ops_import() {
-    // generate_code() runs on every test via the testing harness — fill.rs exists.
-    let src = std::fs::read_to_string("tests/generated/fill.rs")
-        .expect("tests/generated/fill.rs not found — run any loft test first");
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    let tmp = format!(
+        "tests/generated/fill_n9a_{:?}.rs",
+        std::thread::current().id()
+    );
+    let _ = std::fs::create_dir_all("tests/generated");
+    let src = loft::create::generate_code_to(&p.data, &tmp).expect("generate_code_to failed");
+    let _ = std::fs::remove_file(&tmp);
     assert!(
         src.contains("use crate::ops;"),
         "generated fill.rs missing `use crate::ops;`"
@@ -1485,11 +1492,12 @@ fn p1_1_lambda_void_body() {
 // Using `string` in a struct field produces "Undefined type string" and a
 // cascade of "Invalid index key" / "Cannot write unknown" errors.
 
-/// Issue 82: `string` in a struct field must produce a clear "Undefined type" error.
+/// Issue 82 / S7: `string` in a struct field must suggest `text`.
 #[test]
 fn issue_82_string_type_is_undefined() {
-    code!("struct Bad { x: string }")
-        .error("Undefined type string at issue_82_string_type_is_undefined:1:25");
+    code!("struct Bad { x: string }").error(
+        "Undefined type 'string' — did you mean 'text'? at issue_82_string_type_is_undefined:1:25",
+    );
 }
 
 /// Issue 82 positive: the same pattern with `text` must work correctly.
@@ -1512,7 +1520,7 @@ fn test() {
 // `key` is a pseudo-field used by hash iteration (`kv.key`) and conflicts with
 // the real struct field at the allocation level.
 
-/// Issue 83: field named `key` in a hash-value struct panics at runtime.
+/// Issue 83 / S8: field named `key` in a hash-value struct must be rejected at compile time.
 #[test]
 fn issue_83_hash_value_field_named_key_panics() {
     code!(
@@ -1526,7 +1534,10 @@ fn test() {
     assert(e.count == 1, \"count should be 1\");
 }"
     )
-    .result(Value::Null);
+    .error(
+        "Struct 'Entry' has a field named 'key' which is reserved for hash iteration \
+— rename the field at issue_83_hash_value_field_named_key_panics:1:15",
+    );
 }
 
 /// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
@@ -1696,6 +1707,21 @@ fn issue_89_optional_ref_text_param_with_arg() {
 }"
     )
     .result(Value::Null);
+}
+
+// ── S8 — Compile-time error when hash-value struct has field named `key` ──────
+// `key` is a pseudo-field reserved for hash iteration.  A struct with a real
+// field named `key` used as a hash value type must be rejected at compile time.
+
+/// S8: hash-value struct with a `key` field must produce a compile-time error.
+#[test]
+fn s8_hash_value_struct_key_field_rejected() {
+    code!(
+        "struct Item { key: text, value: integer }
+struct Container { data: hash<Item[key]> }
+fn test() { }"
+    )
+    .error("Struct 'Item' has a field named 'key' which is reserved for hash iteration — rename the field at s8_hash_value_struct_key_field_rejected:1:14");
 }
 
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────

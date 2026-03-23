@@ -22,6 +22,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
+| 90 | `character + character` codegen panic — stack size mismatch | Medium | Assign to text first: `r = "" + c + d` |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
@@ -32,8 +33,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 77 | Native codegen: `CallRef`/function-pointer calls not implemented | Medium | `--native` only; affects `06-function.loft` |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
-| 82 | `string` is not a valid type name — use `text` | Medium | Replace `string` with `text` in all struct fields and signatures |
-| 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | Issue 85 fix: `convert()` now uses `OpNullRefSentinel` for null→Reference; `eq_ref`/`ne_ref` treat `rec==0` as null |
+| 82 | `string` is not a valid type name — use `text` | ~~Fixed~~ | S7: typedef.rs now emits "did you mean 'text'?" |
+| 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | S8: compile-time error in typedef.rs; runtime fix via Issue 85 |
 | 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | ~~Fixed~~ | Root cause: `vector_needs_db` created a new local store for argument vectors on second pass; `parse_return` emitted dangling return for locally-backed work-refs. Fixed by checking `is_argument` in `vector_needs_db` and injecting `OpAppendVector` + `Return(Var(__ref_1))` in `parse_return` for explicit returns. |
 | 85 | Null-returning hash lookup before insert causes subsequent lookup to return null / "Allocating a used store" panic | ~~Fixed~~ | Root cause: `convert()` used `OpConvRefFromNull` (allocates a store) for `null`→`Reference` in comparisons; `eq_ref`/`ne_ref` did full `DbRef` comparison (not rec-only). Fix: `convert()` uses `OpNullRefSentinel` (no allocation, sentinel `{u16::MAX,0,0}`); `eq_ref`/`ne_ref` treat `rec==0` as null |
 | 86 | `f#read(n) as vector<T>` silently returned an empty vector | Medium | **Fixed** — interpreter and native both fixed in 0.8.2 |
@@ -529,6 +530,28 @@ size/offset calculation and ensure the slot reserved for an optional `& T` argum
 expected stack layout.
 
 **Effort:** Small.
+
+---
+
+### #90 — `character + character` codegen panic: stack size mismatch
+
+**Symptom:** `c = 'h'; d = 'i'; r = c + d;` panics in debug builds with
+"generate_call: mutable arg 1 (v1: Text([])) expected 16B on stack but
+generate(Var(0)) pushed 4B".  Also affects `a[0] + a[1]` where `a` is text.
+
+**Root cause:** `parse_append_text` emits `OpAppendCharacter(work_var, char_expr)`.
+The codegen resolves the call and finds arg 1 typed as `Text` (16B) instead of
+`Character` (4B).  The operator definition lookup may resolve to the wrong
+overload, or the work-text variable's type context confuses the argument
+type checker.
+
+**Workaround:** Prefix with an empty text: `r = "" + c + d` makes the first
+operand text, so `parse_append_text` uses `OpAppendText` for the first part
+and `OpAppendCharacter` for subsequent parts — no mismatch.
+
+**Effort:** Medium — requires tracing the operator definition lookup in
+`parse_append_text` to find why the codegen sees `Text` instead of `Character`
+for the `OpAppendCharacter` argument.
 
 ---
 

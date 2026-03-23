@@ -1,0 +1,75 @@
+// Copyright (c) 2021-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Expression evaluation: arithmetic, function calls, control flow, recursion.
+
+// @EXPECT_WARNING: Division by constant zero
+fn test_div_by_const_zero() {
+  r = 2 / 0;
+}
+
+// @EXPECT_WARNING: Modulo by constant zero
+fn test_rem_by_const_zero() {
+  r = 5 % 0;
+}
+
+fn append_ch(ch: character) -> text { "abc_de" + ch }
+
+fn test_append_fn() {
+  // Uses text + character (workaround for #90: text first)
+  assert(append_ch('x') == "abc_dex", "append fn");
+}
+
+fn append_str(ch: character) -> text {
+  s = "abc_de";
+  s += ch;
+  s
+}
+
+fn test_append_str() {
+  assert(append_str('x') == "abc_dex", "append str");
+}
+
+fn routine() -> integer {
+  b = 0;
+  for a in 0..10 {
+    if a == 2 { continue }
+    if a > 5 { return b }
+    b += a;
+  }
+  b
+}
+
+fn test_continue_loop() {
+  assert(routine() == 13, "continue loop");
+}
+
+// @EXPECT_WARNING: Parameter a is never read
+fn void_routine(a: integer) { return; }
+
+fn test_inner_loop() {
+  s = "";
+  for i in 0..10 {
+    for j in 0..10 {
+      if j > i { i#continue }
+      s += "{i}{j},";
+      if len(s) > 100 { i#break }
+    }
+  }
+  assert(s == "00,10,11,20,21,22,30,31,32,33,40,41,42,43,44,50,51,52,53,54,55,60,61,62,63,64,65,66,70,71,72,73,74,75,",
+    "inner loop");
+}
+
+enum ExState { ExStart, ExOngoing, ExHalt }
+
+fn first(s: ExState, c: integer) -> integer {
+  if s == ExStart { s = ExOngoing; } else if c > 10 { s = ExHalt; }
+  second(s, c)
+}
+
+fn second(s: ExState, c: integer) -> integer {
+  if s != ExHalt { first(s, c + 1) } else { 1 + c }
+}
+
+fn test_recursion() {
+  assert(first(ExStart, 0) == 12, "recursion");
+}

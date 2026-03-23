@@ -45,8 +45,6 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
-  - [S7 — `string` type name diagnostic](#s7--add-diagnostic-error-for-string-type-name----should-be-text) *(0.8.2)*
-  - [S8 — `key` field in hash struct](#s8--compile-time-error-when-hash-value-struct-has-field-named-key) *(0.8.2)*
 - [P — Prototype Features](#p--prototype-features)
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
@@ -88,17 +86,17 @@ in parallel.
 - **N6** — Text method in format interpolation: emit `&str` not `String`. ✓
 - **N7** — `directory()` / `user_directory()` / `program_directory()` scratch buffer. ✓
 - **N9** — fill.rs auto-generation (rustfmt, six `#rust` templates, byte-exact match). ✓
+- **S7** — `string` type name diagnostic ("did you mean 'text'?"). ✓
+- **S8** — Compile-time error for `key` field in hash-value struct. ✓
+- **O3** — Verified integer paths carry no `long` null-sentinel + guard test. ✓
 
 **Remaining for 0.8.2:**
 
 *Stability:*
 - **S5** — Fix optional `& text` parameter subtract-with-overflow panic (Issue 89).
-- **S7** — Add diagnostic error for `string` type name (Issue 82).
-- **S8** — Compile-time error when hash-value struct has field named `key` (Issue 83).
 
 *Interpreter performance:*
 - **O1** — Superinstruction merging: peephole pass, 6 merged opcodes 240–245.
-- **O3** — Verify integer paths carry no `long` null-sentinel.
 - **O6** — Native: `_nn` variants remove `long` null-sentinel from local arithmetic.
 
 *Parallel execution:*
@@ -1400,24 +1398,6 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
-### S7  Add diagnostic error for `string` type name — should be `text`
-**Sources:** PROBLEMS.md #82
-**Severity:** Trivial — users from other languages write `string` and receive confusing cascading errors
-**Description:** `string` is not a valid loft type. Writing it produces "Undefined type string" + "Invalid index key" rather than a helpful suggestion to use `text`.
-**Fix path:** In the type resolver (`src/typedef.rs`) or early parse pass, detect `string` used as a type name and emit "Unknown type 'string' — did you mean 'text'?" before any other error.
-**Effort:** Trivial
-**Target:** 0.8.2
-
----
-
-### S8  Compile-time error when hash-value struct has field named `key`
-**Sources:** PROBLEMS.md #83
-**Severity:** High — silent store-allocation corruption at runtime with no useful error message
-**Description:** `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`). When a user struct used as a hash value type has a real field named `key`, the name clash corrupts store allocation, producing a late "Allocating a used store" panic.
-**Fix path:** In the struct-declaration validator, detect any field named `key` in a type used as a hash value; emit a compile-time error pointing to the field declaration.
-**Effort:** Small
-**Target:** 0.8.2
-
 ---
 
 ## N — Native Codegen
@@ -1483,11 +1463,6 @@ Planned interpreter and native-codegen performance improvements. Full designs wi
 
 ---
 
-### O3  Verify integer paths carry no `long` null-sentinel checks
-**Sources:** PERFORMANCE.md § P3
-**Description:** Grep audit of `src/ops.rs` confirming that `*_int` functions never check `i64::MIN`. Add a compile-time string-search test. If violations exist, move the check to `*_long` paths only.
-**Expected gain:** 2–5% on pure integer benchmarks if violations exist; zero cost if already clean.
-**Effort:** Low
 **Target:** 0.8.2
 
 ---

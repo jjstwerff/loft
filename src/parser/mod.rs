@@ -58,6 +58,9 @@ pub struct Parser {
     pub lexer: Lexer,
     /// Are we currently allowing break/continue statements?
     in_loop: bool,
+    /// True while parsing an expression inside a format string `{…}`.
+    /// Prevents the `v: type = expr` annotation from consuming `:`.
+    pub(crate) in_format_expr: bool,
     /// The current file number that is being parsed
     file: u32,
     pub diagnostics: Diagnostics,
@@ -206,6 +209,7 @@ impl Parser {
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
+            in_format_expr: false,
             file: 1,
             diagnostics: Diagnostics::new(),
             default: false,

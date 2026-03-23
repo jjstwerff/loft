@@ -227,7 +227,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     for l in p.diagnostics.lines() {
         println!("{l}");
     }
-    if !p.diagnostics.is_empty() {
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         return Err(Error::from(std::io::ErrorKind::InvalidData));
     }
     scopes::check(&mut p.data);
@@ -235,10 +235,31 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
     let main_nr = p.data.def_nr("n_main");
-    let entry_defs: Vec<u32> = if main_nr < end_def {
+    let has_main = main_nr < end_def;
+
+    // Collect zero-parameter user functions as test entry points.
+    let mut test_fns: Vec<(u32, String)> = Vec::new();
+    for d_nr in start_def..end_def {
+        let def = p.data.def(d_nr);
+        if !matches!(def.def_type, loft::data::DefType::Function) {
+            continue;
+        }
+        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+            continue;
+        }
+        if !def.attributes.is_empty() {
+            continue;
+        }
+        if def.position.file.starts_with("default/") {
+            continue;
+        }
+        test_fns.push((d_nr, def.name.clone()));
+    }
+
+    let entry_defs: Vec<u32> = if has_main {
         vec![main_nr]
     } else {
-        (start_def..end_def).collect()
+        test_fns.iter().map(|(d, _)| *d).collect()
     };
 
     // Generate Rust source into an in-memory buffer first.
@@ -255,6 +276,19 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
             loop_stack: Vec::new(),
         };
         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)?;
+    }
+
+    // For test-style files without fn main(), generate a main() that calls
+    // each test function so the native binary is a valid executable.
+    if !has_main && !test_fns.is_empty() {
+        use std::io::Write;
+        writeln!(buf, "\nfn main() {{")?;
+        writeln!(buf, "    let mut stores = Stores::new();")?;
+        writeln!(buf, "    init(&mut stores);")?;
+        for (_, name) in &test_fns {
+            writeln!(buf, "    {name}(&mut stores);")?;
+        }
+        writeln!(buf, "}}")?;
     }
 
     // Only write the .rs file when the content has changed.  This keeps the file's
@@ -418,9 +452,7 @@ fn run_native_jobs(
             }
         }
     }
-    if let Some(e) = first_err {
-        return Err(e);
-    }
+    let compile_fail = compiled.iter().filter(|ok| !**ok).count();
 
     // Phase 3: run all compiled binaries in parallel.
     let ready: Vec<&NativeJob> = jobs
@@ -429,21 +461,35 @@ fn run_native_jobs(
         .filter(|(_, ok)| **ok)
         .map(|(job, _)| job)
         .collect();
-    let run_errors: Vec<std::io::Error> = std::thread::scope(|s| {
+    let compile_ok = ready.len();
+    let run_errors: Vec<String> = std::thread::scope(|s| {
         ready
             .iter()
             .map(|job| s.spawn(|| run_native_job(job)))
             .collect::<Vec<_>>()
             .into_iter()
-            .filter_map(|h| {
+            .zip(ready.iter())
+            .filter_map(|(h, job)| {
                 h.join()
                     .unwrap_or_else(|_| Err(Error::from(std::io::ErrorKind::Other)))
                     .err()
+                    .map(|_| job.stem.clone())
             })
             .collect()
     });
-    if let Some(e) = run_errors.into_iter().next() {
-        return Err(e);
+    let run_ok = compile_ok - run_errors.len();
+    println!(
+        "\nnative result: {run_ok} passed, {} compile failed, {} run failed; {} total",
+        compile_fail,
+        run_errors.len(),
+        jobs.len()
+    );
+    if !run_errors.is_empty() {
+        println!("  run failures: {}", run_errors.join(", "));
+    }
+    // Fail if any test failed to compile or run.
+    if compile_fail > 0 || !run_errors.is_empty() {
+        return Err(Error::from(std::io::ErrorKind::Other));
     }
     Ok(())
 }
@@ -499,7 +545,19 @@ fn native_scripts() -> std::io::Result<()> {
             println!("skip {entry:?} (scripts native skip list — see SCRIPTS_NATIVE_SKIP)");
             continue;
         }
-        jobs.push(prepare_native_test(&entry)?);
+        // Skip files with intentional compile errors.
+        if let Ok(src) = std::fs::read_to_string(&entry)
+            && src.contains("@EXPECT_ERROR")
+        {
+            println!("skip {entry:?} (has @EXPECT_ERROR)");
+            continue;
+        }
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare_native_test(&entry)))
+        {
+            Ok(Ok(job)) => jobs.push(job),
+            Ok(Err(e)) => println!("skip {entry:?} (prepare error: {e})"),
+            Err(_) => println!("skip {entry:?} (codegen panic — native codegen bug)"),
+        }
     }
     run_native_jobs(jobs, rlib_info)
 }

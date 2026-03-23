@@ -1,0 +1,51 @@
+// Copyright (c) 2022-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Compile-time warning detection tests.
+
+// @EXPECT_WARNING: Not all code paths return
+fn pe_classify(n: integer) -> text not null {
+  if n > 0 { return "pos"; }
+}
+
+// --- Unused loop variable warnings ---
+
+// @EXPECT_WARNING: Variable i is never read
+fn test_unused_loop_var_range() {
+  total = 0;
+  for i in 0..3 { total += 1; }
+  assert(total == 3, "t");
+}
+
+// @EXPECT_WARNING: Variable item is never read
+fn test_unused_loop_var_vector() {
+  items = [1, 2, 3];
+  total = 0;
+  for item in items { total += 1; }
+  assert(total == 3, "t");
+}
+
+// --- Unreachable code warnings ---
+
+// @EXPECT_WARNING: Unreachable code after return
+fn pe_unreachable_return() -> integer {
+  return 1;
+  x = 2;
+  x
+}
+
+// @EXPECT_WARNING: Unreachable code after break
+fn test_unreachable_after_break() {
+  for _i in 1..5 {
+    break;
+    assert(false, "unreachable");
+  }
+}
+
+// @EXPECT_WARNING: Unreachable code after continue
+fn test_unreachable_after_continue() {
+  for _i in 1..5 {
+    continue;
+    assert(false, "unreachable");
+  }
+}
+

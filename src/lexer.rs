@@ -106,6 +106,10 @@ pub struct Lexer {
     /// True while the lexer is inside a `{...}` format expression of a string literal.
     /// Allows `"` (and `\"`) to open a nested string literal instead of closing the outer one.
     in_format_expr: bool,
+    /// True when the current format expression belongs to a backtick string.
+    /// After `}` closes the expression, resume with `backtick_string_resume()`
+    /// instead of `string()`.
+    in_backtick: bool,
     diagnostics: Diagnostics,
 }
 
@@ -226,6 +230,7 @@ impl Default for Lexer {
             keywords: HashSet::new(),
             mode: Mode::Code,
             in_format_expr: false,
+            in_backtick: false,
             diagnostics: Diagnostics::new(),
         };
         for s in TOKENS {
@@ -264,6 +269,7 @@ impl Lexer {
             keywords: HashSet::new(),
             mode: Mode::Code,
             in_format_expr: false,
+            in_backtick: false,
             diagnostics: Diagnostics::new(),
         };
         for s in TOKENS {
@@ -328,10 +334,14 @@ impl Lexer {
                 '"' => {
                     self.next_char();
                     if self.in_format_expr {
-                        self.string_nested()
+                        self.string_nested(false)
                     } else {
                         self.string()
                     }
+                }
+                '`' => {
+                    self.next_char();
+                    self.backtick_string()
                 }
                 '\'' => {
                     self.next_char();
@@ -352,7 +362,12 @@ impl Lexer {
                                 LexResult::new(LexItem::Token(double), pos)
                             } else if self.mode == Mode::Formatting && single == "}" {
                                 self.in_format_expr = false;
-                                self.string()
+                                if self.in_backtick {
+                                    self.in_backtick = false;
+                                    self.backtick_string_resume()
+                                } else {
+                                    self.string()
+                                }
                             } else {
                                 LexResult::new(LexItem::Token(single), pos)
                             }
@@ -365,7 +380,7 @@ impl Lexer {
                         if let Some(&nc) = self.iter.peek() {
                             if nc == '"' {
                                 self.next_char(); // consume '"'
-                                self.string_nested()
+                                self.string_nested(true)
                             } else {
                                 self.err(
                                     Level::Error,
@@ -459,7 +474,12 @@ impl Lexer {
         if mode == Mode::Formatting && self.peek_token("}") {
             self.in_format_expr = false;
             self.mode = mode;
-            self.peek = self.string();
+            self.peek = if self.in_backtick {
+                self.in_backtick = false;
+                self.backtick_string_resume()
+            } else {
+                self.string()
+            };
         } else {
             self.mode = mode;
         }
@@ -582,31 +602,33 @@ impl Lexer {
     }
 
     /// Scan a string literal that appears as an expression inside a `{...}` format slot.
-    /// Called after the opening `"` (or `\"`) has been consumed.
-    /// Uses `"` or `\"` as the closing delimiter; does not recurse into `{...}`.
-    /// Mode is left unchanged (stays Code so the caller can continue parsing the specifier).
-    fn string_nested(&mut self) -> LexResult {
+    ///
+    /// When `escaped_delim` is false (opened by bare `"`), the string closes on
+    /// a bare `"` and `\"` is a normal escape producing a literal quote.  This
+    /// is the path used by `.loft` source files: `"text {"inner \"quoted\""}"`.
+    ///
+    /// When `escaped_delim` is true (opened by `\"`), the string closes on `\"`
+    /// as well as bare `"`.  This preserves backward compatibility with Rust
+    /// test macros where the source already has the outer quotes escaped:
+    /// `"text {\"inner\"}"`.
+    fn string_nested(&mut self, escaped_delim: bool) -> LexResult {
         let pos = self.position.clone();
         let mut res = String::new();
         while let Some(&c) = self.iter.peek() {
             if c == '"' {
-                // Bare " closes the nested string literal.
+                // Bare " always closes the nested string literal.
                 self.next_char();
                 return LexResult::new(LexItem::CString(res), pos);
             }
             if c == '\\' {
                 self.next_char(); // consume '\'
-                if let Some(&nc) = self.iter.peek() {
-                    if nc == '"' {
-                        // \" closes the nested string literal.
-                        self.next_char(); // consume '"'
-                        return LexResult::new(LexItem::CString(res), pos);
-                    }
-                    // Other escape sequences (\n, \t, \\, ...).
-                    if !self.escape_seq(&mut res) {
-                        break;
-                    }
-                } else {
+                if escaped_delim && let Some(&'"') = self.iter.peek() {
+                    // Opened by \" → \" also closes.
+                    self.next_char();
+                    return LexResult::new(LexItem::CString(res), pos);
+                }
+                // Normal escape sequence (including \" when !escaped_delim).
+                if !self.escape_seq(&mut res) {
                     break;
                 }
             } else if c == '\n' {
@@ -621,6 +643,202 @@ impl Lexer {
             "Nested string literal not correctly terminated",
         );
         Lexer::none()
+    }
+
+    /// Advance to the next source line inside a multi-line backtick string.
+    /// Returns false at end-of-file.
+    fn advance_line(&mut self) -> bool {
+        if let Some(line_result) = self.lines.next() {
+            match line_result {
+                Ok(ln) => {
+                    self.iter = ln.chars().collect::<Vec<_>>().into_iter().peekable();
+                    self.position.line += 1;
+                    self.position.pos = 1;
+                    true
+                }
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Scan a backtick string literal: `` `...` ``.
+    ///
+    /// Multi-line, supports `{expr}` interpolation and `{{`/`}}` escaping.
+    /// Bare `"` is literal (no escaping needed).  `\` escapes work as usual.
+    /// Closes on the next `` ` ``.
+    ///
+    /// **Indent stripping:** the column of the closing `` ` `` defines the base
+    /// indentation.  That many leading spaces are removed from every line of the
+    /// content.  The first line (on the same line as the opening `` ` ``) and the
+    /// last line (on the same line as the closing `` ` ``) are trimmed if they
+    /// contain only whitespace.
+    fn backtick_string(&mut self) -> LexResult {
+        let pos = self.position.clone();
+        let mut lines: Vec<String> = Vec::new();
+        let mut cur = String::new();
+
+        loop {
+            match self.iter.peek() {
+                Some(&'`') => {
+                    // Closing backtick — record its column for indent stripping.
+                    let close_col = self.position.pos;
+                    self.next_char();
+                    lines.push(cur);
+
+                    // Strip indentation: remove up to (close_col - 1) leading spaces
+                    // from each line.
+                    let strip = (close_col - 1) as usize;
+                    let mut result = String::new();
+                    for (i, line) in lines.iter().enumerate() {
+                        if i == 0 {
+                            // First line: content after opening backtick on same line.
+                            if !line.trim().is_empty() {
+                                result += line;
+                            }
+                            continue;
+                        }
+                        // Last line before closing backtick: skip if whitespace-only.
+                        if i == lines.len() - 1 && line.trim().is_empty() {
+                            continue;
+                        }
+                        if !result.is_empty() {
+                            result.push('\n');
+                        }
+                        // Strip up to `strip` leading spaces.
+                        let stripped = if strip > 0
+                            && line.len() >= strip
+                            && line[..strip].chars().all(|c| c == ' ')
+                        {
+                            &line[strip..]
+                        } else {
+                            line
+                        };
+                        result += stripped;
+                    }
+                    self.mode = Mode::Code;
+                    return LexResult::new(LexItem::CString(result), pos);
+                }
+                Some(&'{') => {
+                    self.next_char();
+                    if let Some('{') = self.iter.peek() {
+                        cur.push('{');
+                    } else {
+                        // Enter format interpolation — return what we have so far.
+                        lines.push(std::mem::take(&mut cur));
+                        let mut result = String::new();
+                        for (i, line) in lines.iter().enumerate() {
+                            if i == 0 && line.trim().is_empty() {
+                                continue;
+                            }
+                            if !result.is_empty() {
+                                result.push('\n');
+                            }
+                            result += line;
+                        }
+                        self.mode = Mode::Formatting;
+                        self.in_format_expr = true;
+                        self.in_backtick = true;
+                        return LexResult::new(LexItem::CString(result), pos);
+                    }
+                }
+                Some(&'}') => {
+                    self.next_char();
+                    if let Some('}') = self.iter.peek() {
+                        cur.push('}');
+                    } else {
+                        self.err(Level::Warning, "Expected two '}' tokens");
+                    }
+                }
+                Some(&'\\') => {
+                    self.next_char();
+                    if !self.escape_seq(&mut cur) {
+                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+                        return Lexer::none();
+                    }
+                }
+                Some(&c) => {
+                    cur.push(c);
+                }
+                None => {
+                    // End of line — advance to next line.
+                    lines.push(std::mem::take(&mut cur));
+                    if !self.advance_line() {
+                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+                        return Lexer::none();
+                    }
+                    // Read the full line into cur to get accurate column positions.
+                    // But first, capture the raw line for indent tracking.
+                    let mut line_content = String::new();
+                    while let Some(&c) = self.iter.peek() {
+                        if c == '`' || c == '{' || c == '}' || c == '\\' {
+                            break;
+                        }
+                        line_content.push(c);
+                        self.next_char();
+                    }
+                    cur = line_content;
+                    continue; // don't call next_char — we're positioned at the special char
+                }
+            }
+            self.next_char();
+        }
+    }
+
+    /// Resume a backtick string after a `}` closes a format expression.
+    /// Called from the `}` token handler when the backtick string owns the
+    /// format context.
+    fn backtick_string_resume(&mut self) -> LexResult {
+        let pos = self.position.clone();
+        let mut cur = String::new();
+        loop {
+            match self.iter.peek() {
+                Some(&'`') => {
+                    self.next_char();
+                    self.mode = Mode::Code;
+                    return LexResult::new(LexItem::CString(cur), pos);
+                }
+                Some(&'{') => {
+                    self.next_char();
+                    if let Some('{') = self.iter.peek() {
+                        cur.push('{');
+                    } else {
+                        self.mode = Mode::Formatting;
+                        self.in_format_expr = true;
+                        self.in_backtick = true;
+                        return LexResult::new(LexItem::CString(cur), pos);
+                    }
+                }
+                Some(&'}') => {
+                    self.next_char();
+                    if let Some('}') = self.iter.peek() {
+                        cur.push('}');
+                    } else {
+                        self.err(Level::Warning, "Expected two '}' tokens");
+                    }
+                }
+                Some(&'\\') => {
+                    self.next_char();
+                    if !self.escape_seq(&mut cur) {
+                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+                        return Lexer::none();
+                    }
+                }
+                Some(&c) => {
+                    cur.push(c);
+                }
+                None => {
+                    cur.push('\n');
+                    if !self.advance_line() {
+                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+                        return Lexer::none();
+                    }
+                    continue;
+                }
+            }
+            self.next_char();
+        }
     }
 
     fn next_char(&mut self) {

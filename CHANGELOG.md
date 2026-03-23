@@ -38,6 +38,23 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   `fn(…) -> …` now propagates the type hint so that untyped lambda params can
   be inferred.  (`src/parser/control.rs`)
 
+### Diagnostics
+
+- **S7** — Using `string` as a type name now produces "Undefined type 'string' —
+  did you mean 'text'?" instead of a generic "Undefined type" error followed by
+  confusing cascading errors.  (`src/typedef.rs`)
+
+- **S8** — A struct with a field named `key` used as a hash value type now produces
+  a compile-time error.  `key` is a pseudo-field reserved for hash iteration;
+  the naming conflict previously caused confusing runtime behavior.
+  (`src/typedef.rs`)
+
+### Performance
+
+- **O3** — Audited all `_int` functions in `src/ops.rs`: none reference `i64::MIN`.
+  Added a compile-time guard test to prevent future regressions.  Integer paths
+  use only `i32::MIN` as their null sentinel.  (`src/ops.rs`)
+
 ### Improvements
 
 - **A8** — Destination-passing calling convention for the three text-returning native

@@ -1,0 +1,74 @@
+// Copyright (c) 2023-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// sizeof() operator on primitives, enums, structs, and collections.
+
+fn test_sizeof_integer() {
+  a = 1;
+  assert(sizeof(1+2+3) + sizeof(integer) + 10 * sizeof(a) == 48, "int sizes");
+}
+
+fn test_sizeof_float() {
+  a = 1.1;
+  assert(sizeof(float) + 10 * sizeof(a) == 88, "float sizes");
+}
+
+enum SzEn { V1, V2, V3 }
+
+fn test_sizeof_enum() {
+  assert(sizeof(SzEn) + 10 * sizeof(V1) == 11, "enum sizes");
+}
+
+enum SzVal {
+  Small { n: u8 },
+  Large { n: long }
+}
+
+fn get_sz_size(v: SzVal) -> integer { sizeof(v) }
+
+fn test_sizeof_enum_structs() {
+  assert(get_sz_size(Small { n: 1 }) != get_sz_size(Large { n: 42l }),
+    "polymorphic enum variants should have different sizes");
+}
+
+fn test_sizeof_packed_integer_types() {
+  assert(sizeof(u8) + 10 * sizeof(u16) + 100 * sizeof(i32) == 421, "packed sizes");
+}
+
+enum SzEn2 { W1, W2 }
+struct SzS { a: integer, b: long, c: SzEn2 }
+
+fn test_sizeof_struct() {
+  assert(sizeof(SzS) == 13, "struct size");
+}
+
+struct SzHS { a: integer, b: long, c: integer }
+struct SzHMain { s: hash<SzHS[b]> }
+
+fn test_sizeof_hash_member() {
+  assert(sizeof(SzHS) + 100 * sizeof(SzHMain) == 416, "hash member sizes");
+}
+
+struct SzIS { a: integer, b: long, c: integer }
+struct SzIMain { s: index<SzIS[a, -c]> }
+
+fn test_sizeof_index_member() {
+  m = SzIMain {};
+  assert(sizeof(SzIS) + 100 * sizeof(m) == 425, "index member sizes");
+}
+
+struct SzRS { a: integer, b: integer, c: integer }
+struct SzRMain { s: vector<SzRS>, biggest: reference<SzRS> }
+
+fn test_sizeof_reference_field() {
+  assert(sizeof(SzRS) + 100 * sizeof(SzRMain) + 10000 * sizeof(vector<SzRS>) == 121612,
+    "reference field sizes");
+}
+
+struct SzVS { a: integer, b: integer, c: integer }
+struct SzVMain { s: vector<SzVS> }
+
+fn test_sizeof_vector() {
+  m = SzVMain {};
+  assert(sizeof(SzVS) + 100 * sizeof(SzVMain) + 10000 * sizeof(m) + 100000 * sizeof(vector<SzVS>) == 1240412,
+    "vector sizes");
+}

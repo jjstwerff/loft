@@ -88,11 +88,13 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
     for d in start_def..data.definitions() {
         match data.def_type(d) {
             DefType::Unknown => {
-                lexer.pos_diagnostic(
-                    Level::Error,
-                    &data.def(d).position,
-                    &format!("Error: Undefined type {}", data.def(d).name),
-                );
+                let name = &data.def(d).name;
+                let msg = if name == "string" {
+                    "Error: Undefined type 'string' — did you mean 'text'?".to_string()
+                } else {
+                    format!("Error: Undefined type {name}")
+                };
+                lexer.pos_diagnostic(Level::Error, &data.def(d).position, &msg);
             }
             DefType::Function => {
                 copy_unknown_fields(data, d);
@@ -134,6 +136,27 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                         "Error: Struct '{}' contains itself (directly or indirectly) — use reference<{}> to break the cycle",
                         data.def(d_nr).name,
                         data.def(d_nr).name,
+                    ),
+                );
+            }
+        }
+    }
+    // S8: reject hash-value structs that have a field named `key`.
+    // `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`).
+    for d_nr in start_def..data.definitions() {
+        if !matches!(data.def_type(d_nr), DefType::Struct) {
+            continue;
+        }
+        for a_nr in 0..data.attributes(d_nr) {
+            if let Type::Hash(c_nr, _, _) = data.attr_type(d_nr, a_nr)
+                && data.attr(c_nr, "key") != usize::MAX
+            {
+                lexer.pos_diagnostic(
+                    Level::Error,
+                    &data.def(c_nr).position,
+                    &format!(
+                        "Error: Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
+                        data.def(c_nr).name,
                     ),
                 );
             }

@@ -221,8 +221,9 @@ impl Drop for Test {
         if p.diagnostics.level() >= Level::Error {
             return;
         }
-        #[cfg(debug_assertions)]
-        create::generate_code(&p.data).unwrap();
+        // generate_code (fill.rs) is now done via `make fill` to avoid
+        // file-write races during parallel test execution.  Per-test native
+        // codegen output still goes to tests/generated/<test>.rs below.
         create::generate_lib(&p.data).unwrap();
         let mut state = State::new(p.database);
         byte_code(&mut state, &mut p.data);

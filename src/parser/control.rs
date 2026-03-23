@@ -1813,6 +1813,38 @@ impl Parser {
         I32.clone()
     }
 
+    /// `type_name(expr)` — compile-time intrinsic that returns the static type
+    /// of `expr` as a text constant.  Works on both type names and expressions:
+    /// `type_name(integer)`, `type_name(my_var)`, `type_name(1 + 2)`.
+    pub(crate) fn parse_type_name(&mut self, val: &mut Value) -> Type {
+        // Try parsing as a type name first (like sizeof does).
+        let mut found = false;
+        let lnk = self.lexer.link();
+        if let Some(id) = self.lexer.has_identifier() {
+            let d_nr = self.data.def_nr(&id);
+            if d_nr != u32::MAX && self.data.def_type(d_nr) != DefType::EnumValue {
+                if !self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
+                    found = true;
+                } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
+                    found = true;
+                    if !self.first_pass {
+                        *val = Value::Text(self.data.type_name_str(&tp));
+                    }
+                }
+            }
+        }
+        if !found {
+            let mut drop = Value::Null;
+            self.lexer.revert(lnk);
+            let tp = self.expression(&mut drop);
+            if !self.first_pass {
+                *val = Value::Text(self.data.type_name_str(&tp));
+            }
+        }
+        self.lexer.token(")");
+        Type::Text(Vec::new())
+    }
+
     // <call> ::= [ <expression> { ',' <expression> } ] ')'
     pub(crate) fn parse_method(&mut self, val: &mut Value, md_nr: u32, on: Type) -> Type {
         let mut list = vec![val.clone()];

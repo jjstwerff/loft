@@ -127,6 +127,26 @@ impl Logger {
         logger
     }
 
+    /// Build a production-mode logger that suppresses panics (assert/panic set `had_fatal`
+    /// instead of aborting).  Does not write to any log file.
+    #[must_use]
+    pub fn production() -> Self {
+        let config = RuntimeLogConfig {
+            production: true,
+            ..RuntimeLogConfig::default()
+        };
+        Logger {
+            config,
+            config_path: None,
+            config_mtime: None,
+            last_config_check: Instant::now(),
+            file: None,
+            current_size: 0,
+            current_ymd: (0, 0, 0),
+            rate_map: HashMap::new(),
+        }
+    }
+
     /// Build a `Logger` from a config file path (or defaults if the file doesn't exist).
     ///
     /// `main_loft_file` is used to determine the default log directory.

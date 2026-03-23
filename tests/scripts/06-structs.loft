@@ -145,3 +145,133 @@ fn main() {
   const fixed = Counter { };
   assert(fixed.count == 0, "const local struct: field readable");
 }
+
+struct PObj { a: integer, bb: text, ccc: boolean }
+
+fn obj() -> PObj { PObj { a: 12, bb: "hi", ccc: false } }
+
+fn test_print_object() {
+  o = obj();
+  o.bb += '!';
+  compact = "{o}";
+  assert(compact == `{{a:12,bb:"hi!",ccc:false}}`, "compact format");
+  pretty = "{o:#}";
+  assert(pretty.contains("a: 12"), "pretty has a");
+  assert(pretty.contains(`"hi!"`), "pretty has quoted bb");
+}
+
+enum SGender { Male, Female, Fluid }
+struct SObj { a: vector<integer>, b: SGender }
+
+fn sum_sobj(o: SObj) -> integer {
+  r = 0;
+  for v in o.a { r += v; }
+  r
+}
+
+fn test_special_fields() {
+  o = SObj { a: [1,4,3], b: Fluid };
+  o.a += [sum_sobj(o)];
+  assert("{o}" == `{{a:[1,4,3,8],b:Fluid}}`, "special fields");
+}
+
+struct CPoint {
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
+}
+
+fn value(self: CPoint) -> integer {
+  self.r * 0x10000 + self.g * 0x100 + self.b
+}
+
+fn test_colours() {
+  points = [ CPoint { r: 128, b: 128 }, CPoint { b: 255 } ];
+  result = "size:{sizeof(CPoint)} purple:{points[0]} value:{points[0].value():x} blue:{points[1]}";
+  assert(result == `size:3 purple:{{r:128,g:0,b:128}} value:800080 blue:{{r:0,g:0,b:255}}`, "colours");
+}
+
+struct MData {
+  num: integer,
+  values: vector<integer>
+}
+
+fn m_add(r: &MData = null, val: integer) {
+  if !r {
+    r = MData { num: 0 };
+  }
+  r.num += val;
+  r.values += [val];
+}
+
+fn test_mutable_reference() {
+  v = MData { num: 1 };
+  m_add(v, 2);
+  m_add(v, 3);
+  assert("{v}" == `{{num:6,values:[2,3]}}`, "mutable reference");
+}
+
+fn vec_add(r: &vector<integer> = [], val: integer) {
+  r += [val];
+}
+
+fn test_mutable_vector() {
+  v = [1];
+  vec_add(v, 2);
+  vec_add(v, 3);
+  assert("{v}" == "[1,2,3]", "mutable vector");
+}
+
+fn vec_sum(r: vector<integer>) -> integer {
+  res = 0;
+  for v in r {
+    res += v;
+  }
+  res
+}
+
+fn test_vector_argument() {
+  assert(vec_sum([1,2,3,4,5]) + 100 * vec_sum([1,2,3] + [4,5]) == 1515, "vector argument");
+}
+
+struct RTData {
+  name: text,
+  number: integer
+}
+
+fn rt_data(n: text) -> text {
+  res = RTData { name: n };
+  res.name
+}
+
+fn test_return_text() {
+  assert(rt_data("test") == "test", "return text");
+}
+
+struct ATObj { a: text }
+
+fn test_assign_text() {
+  o = ATObj { a: "a" };
+  o.a = "b";
+  o.a += "c";
+  o.a += "d" + "e";
+  o.a = "{o.a}f";
+  assert("{o}" == `{{a:"bcdef"}}`, "assign text");
+}
+
+struct IST { name: text }
+
+fn test_independent_strings() {
+  a = IST { name: "hello" };
+  b = a;
+  b.name += " world";
+  assert(a.name == "hello", "independent strings");
+}
+
+struct MCPt { x: integer, y: integer }
+
+fn dist2(self: MCPt) -> integer { self.x * self.x + self.y * self.y }
+
+fn test_method_on_constructor() {
+  assert(MCPt { x: 3, y: 4 }.dist2() == 25, "method on constructor");
+}

@@ -393,6 +393,7 @@ impl Function {
         self.loop_seq_ranges.insert(scope, (seq_start, seq_end));
     }
 
+    #[cfg(any(debug_assertions, test))]
     pub fn loop_seq_range(&self, scope: u16) -> Option<(u32, u32)> {
         self.loop_seq_ranges.get(&scope).copied()
     }
@@ -1177,6 +1178,7 @@ fn short_type(tp: &Type) -> String {
 
 /// Build a map from each scope number → its parent scope number, by walking the IR tree.
 /// Scopes with no parent (e.g. the root block) are not in the map.
+#[cfg(any(debug_assertions, test))]
 fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>) {
     match val {
         Value::Block(bl) | Value::Loop(bl) => {
@@ -1208,6 +1210,7 @@ fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>
 }
 
 /// Returns true if `ancestor` is a strict ancestor of `child` in the scope tree.
+#[cfg(any(debug_assertions, test))]
 fn is_scope_ancestor(ancestor: u16, child: u16, parents: &HashMap<u16, u16>) -> bool {
     let mut cur = child;
     let mut steps = 0u32;
@@ -1231,6 +1234,7 @@ fn is_scope_ancestor(ancestor: u16, child: u16, parents: &HashMap<u16, u16>) -> 
 /// Returns true if scope SA and scope SB can be physically concurrent, i.e., one is an
 /// ancestor of the other (or they are equal).  Variables in sibling branches of the IR tree
 /// cannot be simultaneously on the stack, so byte-range overlap between them is allowed.
+#[cfg(any(debug_assertions, test))]
 fn scopes_can_conflict(sa: u16, sb: u16, parents: &HashMap<u16, u16>) -> bool {
     // u16::MAX = "no scope" (global or argument) — always treat as possible conflict.
     if sa == u16::MAX || sb == u16::MAX {
@@ -1242,6 +1246,7 @@ fn scopes_can_conflict(sa: u16, sb: u16, parents: &HashMap<u16, u16>) -> bool {
 /// Scan `vars` for the first pair of variables whose stack slots AND live intervals both
 /// overlap AND whose scopes are in the same execution branch (i.e. one scope is an ancestor
 /// of the other).  Variables in sibling branches cannot be simultaneously on the stack.
+#[cfg(any(debug_assertions, test))]
 fn find_conflict(
     vars: &[Variable],
     scope_parents: &HashMap<u16, u16>,
@@ -1290,12 +1295,11 @@ fn find_conflict(
 }
 
 /// Assert that no two variables with overlapping live intervals occupy the same stack slot.
-/// Gated on `debug_assertions`; a no-op in release builds.
+/// Only compiled in debug/test builds; the call site in `codegen.rs` is gated on
+/// `#[cfg(debug_assertions)]`.
 /// On failure, logs the full variable table and IR code before panicking.
+#[cfg(any(debug_assertions, test))]
 pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
     // Build scope parent map from the IR tree so find_conflict can skip sibling-branch conflicts.
     let mut scope_parents: HashMap<u16, u16> = HashMap::new();
     build_scope_parents(&data.def(def_nr).code, u16::MAX, &mut scope_parents);
