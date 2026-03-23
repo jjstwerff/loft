@@ -258,6 +258,13 @@ fn loft_suite() -> std::io::Result<()> {
             p.extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
         })
+        // Only run files that have fn main() (01-22 doc/demo scripts).
+        // Test-style scripts (fn test_*) are exercised by `loft --tests`.
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|s| s.contains("\nfn main("))
+                .unwrap_or(false)
+        })
         .collect();
     files.sort();
     for entry in files {
@@ -280,22 +287,23 @@ script_test!(integers, "tests/scripts/01-integers.loft");
 script_test!(floats, "tests/scripts/02-floats.loft");
 script_test!(text, "tests/scripts/03-text.loft");
 script_test!(booleans, "tests/scripts/04-booleans.loft");
-script_test!(control_flow, "tests/scripts/05-control-flow.loft");
-script_test!(functions, "tests/scripts/06-functions.loft");
-script_test!(structs, "tests/scripts/07-structs.loft");
-script_test!(enums, "tests/scripts/08-enums.loft");
-script_test!(vectors, "tests/scripts/09-vectors.loft");
-script_test!(collections, "tests/scripts/10-collections.loft");
-script_test!(files, "tests/scripts/11-files.loft");
-script_test!(binary, "tests/scripts/12-binary.loft");
-script_test!(binary_ops, "tests/scripts/13-binary-ops.loft");
+script_test!(enums, "tests/scripts/05-enums.loft");
+script_test!(structs, "tests/scripts/06-structs.loft");
+script_test!(control_flow, "tests/scripts/07-control-flow.loft");
+script_test!(functions, "tests/scripts/08-functions.loft");
+script_test!(lambdas, "tests/scripts/09-lambdas.loft");
+script_test!(vectors, "tests/scripts/11-vectors.loft");
+script_test!(collections, "tests/scripts/12-collections.loft");
+script_test!(map_filter_reduce, "tests/scripts/13-map-filter-reduce.loft");
 script_test!(formatting, "tests/scripts/14-formatting.loft");
-script_test!(script_threading, "tests/scripts/15-threading.loft");
-script_test!(stress, "tests/scripts/16-stress.loft");
-script_test!(map_filter_reduce, "tests/scripts/17-map-filter-reduce.loft");
-script_test!(random, "tests/scripts/18-random.loft");
-script_test!(min_max_clamp, "tests/scripts/19-min-max-clamp.loft");
-script_test!(math_functions, "tests/scripts/20-math-functions.loft");
+script_test!(random, "tests/scripts/15-random.loft");
+script_test!(min_max_clamp, "tests/scripts/17-min-max-clamp.loft");
+script_test!(math_functions, "tests/scripts/18-math-functions.loft");
+script_test!(files, "tests/scripts/19-files.loft");
+script_test!(binary, "tests/scripts/20-binary.loft");
+script_test!(binary_ops, "tests/scripts/21-binary-ops.loft");
+script_test!(script_threading, "tests/scripts/22-threading.loft");
+script_test!(stress, "tests/scripts/37-stress.loft");
 
 /// Quick iteration test: run only the final suite file (`16-parser.loft`) without
 /// regenerating documentation.  Use this during active development on the parser

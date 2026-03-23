@@ -514,7 +514,7 @@ fn test() {
 fn file_exists_true() {
     code!(
         "fn test() {
-    f = file(\"tests/scripts/11-files.loft\");
+    f = file(\"tests/scripts/19-files.loft\");
     assert(f#exists, \"expected exists to be true\");
 }"
     )
