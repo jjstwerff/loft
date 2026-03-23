@@ -294,11 +294,47 @@ fn to_anchor_id(text: &str) -> String {
         .join("-")
 }
 
+/// Convert inline markdown in already-escaped HTML text:
+/// `**bold**` → `<strong>bold</strong>`, `'code'` → `<code>code</code>`.
+fn inline_format(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c == '*'
+            && s[i + 1..].starts_with('*')
+            && let Some(end) = s[i + 2..].find("**")
+        {
+            out.push_str("<strong>");
+            out.push_str(&s[i + 2..i + 2 + end]);
+            out.push_str("</strong>");
+            // Skip past the closing **
+            let skip_to = i + 2 + end + 2;
+            while chars.peek().is_some_and(|(j, _)| *j < skip_to) {
+                chars.next();
+            }
+        } else if (c == '\'' || c == '`')
+            && let Some(end) = s[i + 1..].find(c)
+            && end > 0
+        {
+            out.push_str("<code>");
+            out.push_str(&s[i + 1..i + 1 + end]);
+            out.push_str("</code>");
+            let skip_to = i + 1 + end + 1;
+            while chars.peek().is_some_and(|(j, _)| *j < skip_to) {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn flush_para(para: &mut Vec<String>, body: &mut String) {
     if !para.is_empty() {
         let text = para.join(" ");
         body.push_str("<p>");
-        body.push_str(&html_esc(&text));
+        body.push_str(&inline_format(&html_esc(&text)));
         body.push_str("</p>\n");
         para.clear();
     }
@@ -311,37 +347,94 @@ fn flush_list(in_list: &mut bool, body: &mut String) {
     }
 }
 
+fn flush_indented(block: &mut Vec<String>, body: &mut String) {
+    if block.is_empty() {
+        return;
+    }
+    body.push_str("<pre><code>");
+    for line in block.iter() {
+        body.push_str(&html_esc(line));
+        body.push('\n');
+    }
+    body.push_str("</code></pre>\n");
+    block.clear();
+}
+
+fn flush_list_item(item: &mut Vec<String>, body: &mut String) {
+    if item.is_empty() {
+        return;
+    }
+    let text = item.join(" ");
+    let _ = writeln!(body, "<li>{}</li>", inline_format(&html_esc(&text)));
+    item.clear();
+}
+
 /// Render prose lines into HTML, supporting `## Heading`, `### Sub-heading`,
-/// `- list item`, and regular paragraph text.
+/// `- list item` (with 2-space continuation), indented code blocks (2+ leading
+/// spaces outside lists), and regular paragraph text.
 fn render_prose_lines(lines: &[String], body: &mut String) {
     let mut para: Vec<String> = Vec::new();
     let mut in_list = false;
+    let mut list_item: Vec<String> = Vec::new();
+    let mut indented: Vec<String> = Vec::new();
     for line in lines {
         if let Some(heading) = line.strip_prefix("## ") {
+            flush_indented(&mut indented, body);
+            flush_list_item(&mut list_item, body);
             flush_list(&mut in_list, body);
             flush_para(&mut para, body);
             let id = to_anchor_id(heading);
-            let _ = writeln!(body, "<h2 id=\"{id}\">{}</h2>", html_esc(heading));
+            let _ = writeln!(
+                body,
+                "<h2 id=\"{id}\">{}</h2>",
+                inline_format(&html_esc(heading))
+            );
         } else if let Some(heading) = line.strip_prefix("### ") {
+            flush_indented(&mut indented, body);
+            flush_list_item(&mut list_item, body);
             flush_list(&mut in_list, body);
             flush_para(&mut para, body);
             let id = to_anchor_id(heading);
-            let _ = writeln!(body, "<h3 id=\"{id}\">{}</h3>", html_esc(heading));
-        } else if let Some(item) = line.strip_prefix("- ") {
+            let _ = writeln!(
+                body,
+                "<h3 id=\"{id}\">{}</h3>",
+                inline_format(&html_esc(heading))
+            );
+        } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            flush_indented(&mut indented, body);
+            flush_list_item(&mut list_item, body);
             flush_para(&mut para, body);
             if !in_list {
                 body.push_str("<ul>\n");
                 in_list = true;
             }
-            let _ = writeln!(body, "<li>{}</li>", html_esc(item));
+            list_item.push(item.to_string());
+        } else if let Some(rest) = line.strip_prefix("  ") {
+            if in_list {
+                // Continuation of the current list item.
+                list_item.push(rest.trim_start().to_string());
+            } else if !para.is_empty() && indented.is_empty() {
+                // Continuation of the current paragraph.
+                para.push(rest.trim_start().to_string());
+            } else {
+                // Indented code block (only after an empty line / heading).
+                flush_para(&mut para, body);
+                indented.push(rest.to_string());
+            }
         } else if line.is_empty() {
+            flush_indented(&mut indented, body);
+            flush_list_item(&mut list_item, body);
             flush_list(&mut in_list, body);
             flush_para(&mut para, body);
         } else {
+            flush_indented(&mut indented, body);
+            flush_list_item(&mut list_item, body);
             flush_list(&mut in_list, body);
             para.push(line.clone());
         }
     }
+    flush_indented(&mut indented, body);
+    flush_list_item(&mut list_item, body);
     flush_list(&mut in_list, body);
     flush_para(&mut para, body);
 }
@@ -363,12 +456,27 @@ fn code_to_typst(code: &str) -> String {
     format!("```rust\n{code}\n```\n\n")
 }
 
+fn flush_typst_indented(block: &mut Vec<String>, result: &mut String) {
+    if block.is_empty() {
+        return;
+    }
+    result.push_str("```\n");
+    for line in block.iter() {
+        result.push_str(line);
+        result.push('\n');
+    }
+    result.push_str("```\n\n");
+    block.clear();
+}
+
 fn prose_to_typst(lines: &[String]) -> String {
     let mut result = String::new();
     let mut para: Vec<String> = Vec::new();
     let mut in_list = false;
+    let mut indented: Vec<String> = Vec::new();
     for line in lines {
         if let Some(heading) = line.strip_prefix("## ") {
+            flush_typst_indented(&mut indented, &mut result);
             if in_list {
                 result.push('\n');
                 in_list = false;
@@ -380,6 +488,7 @@ fn prose_to_typst(lines: &[String]) -> String {
             }
             let _ = write!(result, "=== {}\n\n", typst_escape(heading));
         } else if let Some(heading) = line.strip_prefix("### ") {
+            flush_typst_indented(&mut indented, &mut result);
             if in_list {
                 result.push('\n');
                 in_list = false;
@@ -390,7 +499,8 @@ fn prose_to_typst(lines: &[String]) -> String {
                 para.clear();
             }
             let _ = write!(result, "==== {}\n\n", typst_escape(heading));
-        } else if let Some(item) = line.strip_prefix("- ") {
+        } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            flush_typst_indented(&mut indented, &mut result);
             if !para.is_empty() {
                 result.push_str(&para.join(" "));
                 result.push_str("\n\n");
@@ -398,7 +508,19 @@ fn prose_to_typst(lines: &[String]) -> String {
             }
             in_list = true;
             let _ = writeln!(result, "- {}", typst_escape(item));
+        } else if let Some(rest) = line.strip_prefix("  ") {
+            if in_list {
+                result.push('\n');
+                in_list = false;
+            }
+            if !para.is_empty() {
+                result.push_str(&para.join(" "));
+                result.push_str("\n\n");
+                para.clear();
+            }
+            indented.push(rest.to_string());
         } else if line.is_empty() {
+            flush_typst_indented(&mut indented, &mut result);
             if in_list {
                 result.push('\n');
                 in_list = false;
@@ -409,6 +531,7 @@ fn prose_to_typst(lines: &[String]) -> String {
                 para.clear();
             }
         } else {
+            flush_typst_indented(&mut indented, &mut result);
             if in_list {
                 result.push('\n');
                 in_list = false;
@@ -416,6 +539,7 @@ fn prose_to_typst(lines: &[String]) -> String {
             para.push(typst_escape(line));
         }
     }
+    flush_typst_indented(&mut indented, &mut result);
     if in_list {
         result.push('\n');
     }
@@ -452,7 +576,12 @@ fn parse_sections(source: &str) -> Vec<DocSection> {
             if !code.is_empty() {
                 sections.push(DocSection::Code(std::mem::take(&mut code)));
             }
-            let text = trimmed.strip_prefix("//").unwrap_or("").trim().to_string();
+            let after_slashes = trimmed.strip_prefix("//").unwrap_or("");
+            // Strip at most one leading space to preserve indentation.
+            let text = after_slashes
+                .strip_prefix(' ')
+                .unwrap_or(after_slashes)
+                .to_string();
             prose.push(text);
         } else if trimmed.is_empty() {
             if !prose.is_empty() {

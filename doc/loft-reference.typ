@@ -1237,7 +1237,14 @@ a is now 0
 
 === Warning when you write a literal zero divisor
 
-When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still runs and returns null — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
+When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake:
+
+```
+n / 0   // warning: Division by constant zero
+n % 0   // warning: Modulo by constant zero
+```
+
+The expression still runs and returns null — the warning is informational, not an error. Use a variable (like 'a' above) when you intentionally want null-on-zero division without a warning.
 
 === Embedding integers in text
 
@@ -1253,7 +1260,16 @@ A full expression can appear inside '{...}', not just a variable name.
 
 === Number format specifiers
 
-After a ':' inside '{...}' you can control how a number is displayed: \#x  — hexadecimal with '0x' prefix o   — octal b   — binary +   — always show a sign (+ or -) N   — minimum field width (space-padded on the left) 0N  — minimum field width (zero-padded on the left)
+After a ':' inside '{...}' you can control how a number is displayed:
+
+```
+#x  — hexadecimal with '0x' prefix
+o   — octal
+b   — binary
++   — always show a sign (+ or -)
+N   — minimum field width (space-padded on the left)
+0N  — minimum field width (zero-padded on the left)
+```
 
 ```rust
   assert("a{1+2+32:#x}b" == "a0x23b", "Hex format with 0x prefix");
@@ -1321,7 +1337,11 @@ A comparison produces a boolean result directly. '!' flips a boolean: true → f
 
 === Null in boolean context
 
-Division by zero (and other failed operations) produce null. Null in a boolean context is treated as false, so '!' is true. This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... }
+Division by zero (and other failed operations) produce null. Null in a boolean context is treated as false, so '!' is true. This lets you write guard clauses without a separate null-check syntax:
+
+```
+if !result { ... handle missing value ... }
+```
 
 ```rust
   zero = 0;
@@ -1333,7 +1353,12 @@ Division by zero (and other failed operations) produce null. Null in a boolean c
 
 While 'and'/'or' work on true/false values, bitwise operators work on the individual bits of an integer. They are useful for flags, masks, and low-level data manipulation.
 
-'&'  — keeps only bits set in BOTH operands (AND) '|'  — keeps bits set in EITHER operand (OR) '\<\<' — shift bits left N positions  (×2^N) '\>\>' — shift bits right N positions (÷2^N)
+```
+'&'  — keeps only bits set in BOTH operands (AND)
+'|'  — keeps bits set in EITHER operand (OR)
+'<<' — shift bits left N positions  (×2^N)
+'>>' — shift bits right N positions (÷2^N)
+```
 
 Tip: '&' binds less tightly than comparison operators. Use parentheses when you mix bitwise and comparison expressions in the same condition.
 
@@ -1538,9 +1563,11 @@ fn describe_text(v: text) -> text {
 
 'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -\> return_type' and can be:
 
+```
 - stored in a variable,
 - called directly with 'f(args)', and
 - passed as a parameter to another function.
+```
 
 ```rust
 fn double_it(x: integer) -> integer {
@@ -1562,7 +1589,19 @@ fn apply_fn(f:  fn(integer) -> integer, x: integer) -> integer {
 
 === Lambda Expressions
 
-A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -\> return_type { body } Use the short form (pipe-bar syntax) which is a bit shorter: |param: type| -\> return_type { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.
+A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types:
+
+```
+fn(param: type) -> return_type { body }
+```
+
+Use the short form (pipe-bar syntax) which is a bit shorter:
+
+```
+|param: type| -> return_type { body }
+```
+
+Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.
 
 ```rust
 fn main() {
@@ -1686,7 +1725,13 @@ A vector is an ordered list of values that can grow and shrink while your progra
 
 === Transforming vectors: map, filter, reduce
 
-'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn \<name\>' to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value
+'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn \<name\>' to refer to a named function by name.
+
+```
+map(v, fn f)          — apply f to every element; returns a new vector
+filter(v, fn pred)    — keep only elements for which pred returns true
+reduce(v, fn f, init) — combine all elements into a single value
+```
 
 ```rust
 fn triple(x: integer) -> integer {
@@ -1716,7 +1761,12 @@ fn mul_acc(acc: integer, x: integer) -> integer {
 fn main() {
 ```
 
-Create a vector with a literal and loop over it with 'for'. Two special loop annotations help when you need to know where you are: 'v\#first'  is true only on the very first iteration — useful for skipping separators. 'v\#index'  holds the zero-based position of the current element.
+Create a vector with a literal and loop over it with 'for'. Two special loop annotations help when you need to know where you are:
+
+```
+'v#first'  is true only on the very first iteration — useful for skipping separators.
+'v#index'  holds the zero-based position of the current element.
+```
 
 ```rust
   x =[1, 3, 6, 9];
@@ -1730,7 +1780,14 @@ Create a vector with a literal and loop over it with 'for'. Two special loop ann
   assert(b == "0:1 1:3 2:6 3:9", "result {b}");
 ```
 
-'+=' appends another vector to the end of an existing one. You can filter and delete elements in a single pass: Add 'if condition' after 'in vector' to visit only matching elements. Write 'v\#remove' inside the loop body to delete the current element. Here we keep only multiples of 3 by removing everything else. Note: you cannot append to a vector (v += \[...\]) while iterating over it — that is a compile error because the loop would then visit the new elements too, which could loop forever.
+'+=' appends another vector to the end of an existing one. You can filter and delete elements in a single pass:
+
+```
+Add 'if condition' after 'in vector' to visit only matching elements.
+Write 'v#remove' inside the loop body to delete the current element.
+```
+
+Here we keep only multiples of 3 by removing everything else. Note: you cannot append to a vector (v += \[...\]) while iterating over it — that is a compile error because the loop would then visit the new elements too, which could loop forever.
 
 ```rust
   x +=[12, 14, 15];
@@ -1801,7 +1858,32 @@ Wrap a range in 'rev()' to step through elements from the last index to the firs
   assert(c == 8421, "Reverse sub-vector iteration");
 ```
 
-You can fill a vector with many copies of the same value using '; count' syntax: \[SomeStruct { field: value }; 16\] This creates 16 identical copies in one expression. See 08-struct.loft for examples. To append to a vector inside a function and have the caller see the change, mark the parameter with '&': fn append_one(v: &vector\<integer\>, x: integer) { v += \[x\]; } Without '&', appending is local to the function and the caller's vector stays the same. Mutations to existing elements (e.g. v\[0\] = 99) are always visible to the caller even without '&', because the vector's storage is shared.
+You can fill a vector with many copies of the same value using '; count' syntax:
+
+```
+[SomeStruct { field: value }; 16]
+```
+
+This creates 16 identical copies in one expression. See 08-struct.loft for examples.
+
+=== Passing vectors to functions
+
+When you pass a vector to a function, the function receives a \*\*slice\*\* — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with '+=' inside the function creates a local copy that the caller never sees.
+
+To let a function append to the caller's vector, mark the parameter with '&'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.
+
+```
+fn append_one(v: &vector<integer>, x: integer) { v += [x]; }
+```
+
+Without '&', only element-level mutations are visible to the caller:
+
+```
+fn set_first(v: vector<integer>, x: integer) { v[0] = x; }  // caller sees the change
+fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT see the append
+```
+
+The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.
 
 === Higher-order functions
 
@@ -2120,7 +2202,13 @@ describe() uses format strings with field access inside each variant's method.
 
 === Stubs for missing implementations
 
-If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it: fn area(self: SomeVariant) -\> float { } A stub returns null at runtime and suppresses the warning.
+If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it:
+
+```
+fn area(self: SomeVariant) -> float { }
+```
+
+A stub returns null at runtime and suppresses the warning.
 
 === Match expressions on enums
 
@@ -2764,7 +2852,9 @@ Loft has a built-in Image type for loading PNG files and inspecting their pixels
 
 Pass a File handle to the 'png()' function to load a PNG into memory. The entire file is read and decoded at this point. After the call you can access pixels as many times as you like with no further I/O.
 
+```
 img = png(file("photo.png"))
+```
 
 If the file does not exist or is not a valid PNG, 'img' will be null and you can check for that with '!' before proceeding.
 
@@ -2772,13 +2862,23 @@ If the file does not exist or is not a valid PNG, 'img' will be null and you can
 
 Once loaded, 'img\#width' and 'img\#height' give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.
 
-w = img\#width h = img\#height println("image is {w} x {h} pixels — {w \* h} pixels total")
+```
+w = img#width
+h = img#height
+println("image is {w} x {h} pixels — {w * h} pixels total")
+```
 
 === Accessing Individual Pixels
 
 Index the image with two integer coordinates \[x, y\] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel has four values (called channels), all in the range 0–255:
 
-px = img\[x, y\] r  = px\#red     // how much red   (0 = none, 255 = full) g  = px\#green   // how much green b  = px\#blue    // how much blue a  = px\#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
+```
+px = img[x, y]
+r  = px#red     // how much red   (0 = none, 255 = full)
+g  = px#green   // how much green
+b  = px#blue    // how much blue
+a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
+```
 
 A pixel from outside the image bounds is null.
 
@@ -2786,13 +2886,34 @@ A pixel from outside the image bounds is null.
 
 A 'for' loop over an image visits every pixel from top-left to bottom-right, row by row. This is the easiest way to scan or analyse the whole image.
 
-bright_red = 0; for px in img { if px\#red \> 200 and px\#green \< 50 and px\#blue \< 50 { bright_red += 1; } } println("found {bright_red} bright-red pixels")
+```
+bright_red = 0;
+for px in img {
+    if px#red > 200 and px#green < 50 and px#blue < 50 {
+        bright_red += 1;
+    }
+}
+println("found {bright_red} bright-red pixels")
+```
 
 === Practical example: average brightness
 
 Here is how you would compute the average brightness of an image. Brightness is often approximated as (r + g + b) / 3, or the more perceptually accurate formula (0.299\*r + 0.587\*g + 0.114\*b).
 
-total = 0; count = 0; for px in img { total += px\#red + px\#green + px\#blue; count += 1; } if count \> 0 { avg = total / (count \* 3); println("average brightness: {avg} / 255") } Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.
+```
+total = 0;
+count = 0;
+for px in img {
+    total += px#red + px#green + px#blue;
+    count += 1;
+}
+if count > 0 {
+    avg = total / (count * 3);
+    println("average brightness: {avg} / 255")
+}
+```
+
+Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.
 
 ```rust
 fn main() {
@@ -2886,7 +3007,11 @@ Loft string literals can embed expressions with `{expr}`. The lexer exposes a pr
 
 = Parser
 
-The 'parser' library lets a Loft program read and validate other Loft source code at runtime. This is useful when you want to: \* validate configuration files written in the Loft syntax \* build tools that inspect or transform Loft source \* write a test that checks whether a generated code snippet is syntactically correct
+The 'parser' library lets a Loft program read and validate other Loft source code at runtime. This is useful when you want to:
+
+- validate configuration files written in the Loft syntax
+- build tools that inspect or transform Loft source
+- write a test that checks whether a generated code snippet is syntactically correct
 
 'parse(name, source)' is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.
 
@@ -2894,7 +3019,24 @@ If the source is invalid, parse() emits a diagnostic error and the call returns 
 
 === What the parser understands
 
-The parser handles all Loft syntax: \* 'struct Name { field: type \[= default\] }' — data containers with named fields \* 'enum Name { Variant \[{ field: type }\] }' — named choices, each with optional data \* 'fn name(params) \[-\> type\] { body }' — functions with a block body \* 'fn name(params) \[-\> type\]; \#rust "template"' — operator templates backed by Rust \* 'use module;' — module imports \* Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals \* Type expressions: plain names, generic types like 'vector\<T\>', keyed collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+The parser handles all Loft syntax:
+
+- 'struct Name { field: type \[= default\] }' — data containers with named fields
+- 'enum Name { Variant \[{ field: type }\] }' — named choices, each with optional data
+- 'fn name(params) \[-\> type\] { body }' — functions with a block body
+- 'fn name(params) \[-\> type\]; \#rust "template"' — operator templates backed by Rust
+- 'use module;' — module imports
+- Expressions: binary operators with precedence, function calls, field access,
+
+```
+index expressions, if/else, for loops, blocks, and formatted string literals
+```
+
+- Type expressions: plain names, generic types like 'vector\<T\>', keyed
+
+```
+collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+```
 
 ```rust
 use parser;
@@ -2937,7 +3079,11 @@ This exercises the expression parser and range syntax.
 
 If your application lets users write Loft snippets (for scripting or configuration), you can parse them before executing:
 
-snippet = read_user_input(); parser::parse("user_code", snippet); // If parse() emits errors, the snippet was invalid — show them to the user.
+```
+snippet = read_user_input();
+parser::parse("user_code", snippet);
+// If parse() emits errors, the snippet was invalid — show them to the user.
+```
 
 Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate all of the syntax.
 
@@ -3080,21 +3226,46 @@ Importing the same library twice is silently ignored. A library can itself impor
 
 A library can be distributed as a directory package instead of a single flat file. The packaged directory layout is:
 
-mylib/ loft.toml           optional manifest src/ mylib.loft        library source (default entry)
+```
+mylib/
+  loft.toml           optional manifest
+  src/
+    mylib.loft        library source (default entry)
+```
 
 When the interpreter searches a lib directory and finds `\<dir\>/mylib/` it looks for `\<dir\>/mylib/src/mylib.loft` automatically.
 
 The optional `loft.toml` manifest supports two settings:
 
-\[package\] loft = "\>=1.0"        minimum interpreter version required
+```
+[package]
+loft = ">=1.0"        minimum interpreter version required
+```
 
-\[library\] entry = "src/mylib.loft"   override the default entry path
+```
+[library]
+entry = "src/mylib.loft"   override the default entry path
+```
 
 If the interpreter version is below the stated minimum, loading the library produces a fatal compile error describing the version mismatch. If no manifest is present, the default entry `src/\<name\>.loft` is used.
 
 === Limitations
 
-These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error: fn foo() {} use testlib;   // ERROR: Syntax error By default, names from a library must be written with the `name::` prefix. You can avoid the prefix by importing specific names or everything: use mylib::Point, add;     import specific names use mylib::\*;              import all names from mylib After a wildcard or selective import, `Point {}` and `add(1, 2)` work without the prefix. Local definitions shadow imported names silently. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
+These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error:
+
+```
+fn foo() {}
+use testlib;   // ERROR: Syntax error
+```
+
+By default, names from a library must be written with the `name::` prefix. You can avoid the prefix by importing specific names or everything:
+
+```
+use mylib::Point, add;     import specific names
+use mylib::*;              import all names from mylib
+```
+
+After a wildcard or selective import, `Point {}` and `add(1, 2)` work without the prefix. Local definitions shadow imported names silently. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
 
 ```rust
 }
@@ -3105,9 +3276,20 @@ These are the current rough edges to keep in mind. `use` must appear before all 
 
 Loft gives you two separate ways to protect a value from accidental changes:
 
-1. \*\*Compile-time const\*\*: mark a variable or parameter with 'const' and the compiler refuses to compile any code that tries to reassign it. The check happens before the program even runs — zero runtime cost.
+1. \*\*Compile-time const\*\*: mark a variable or parameter with 'const' and the
 
-2. \*\*Runtime lock\*\*: the '\#lock' attribute on a reference lets you lock a store at runtime so that any write attempt panics immediately, even across function boundaries. This is useful for debugging: turn it on when you suspect an unexpected mutation.
+```
+ compiler refuses to compile any code that tries to reassign it. The check
+ happens before the program even runs — zero runtime cost.
+```
+
+2. \*\*Runtime lock\*\*: the '\#lock' attribute on a reference lets you lock a
+
+```
+ store at runtime so that any write attempt panics immediately, even across
+ function boundaries. This is useful for debugging: turn it on when you
+ suspect an unexpected mutation.
+```
 
 ```rust
 struct Counter {
@@ -3190,7 +3372,20 @@ You can still read from a locked store — only writes are blocked.
 
 === When to use each approach
 
-\* Use 'const' on parameters and locals to express your design intent and get compile-time safety at zero cost. \* Use '\#lock = true' when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to panic with a precise location rather than corrupt silently. get_store_lock() is the function form of the \#lock attribute. Both return the same boolean.
+- Use 'const' on parameters and locals to express your design intent
+
+```
+and get compile-time safety at zero cost.
+```
+
+- Use '\#lock = true' when you want a runtime tripwire: you suspect some
+
+```
+code path is mutating a value it should not touch, and you want the
+program to panic with a precise location rather than corrupt silently.
+```
+
+get_store_lock() is the function form of the \#lock attribute. Both return the same boolean.
 
 ```rust
   e = Counter {value: 99 };
@@ -3205,11 +3400,23 @@ You can still read from a locked store — only writes are blocked.
 
 The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body. Use it when you have a large collection and a CPU-intensive per-element calculation: the work is spread across the requested number of threads and the results come back in the original order.
 
-The full syntax is: for a in \<vector\> par(b=\<worker_call\>, \<threads\>) { body }
+The full syntax is:
 
-Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }
+```
+for a in <vector> par(b=<worker_call>, <threads>) { body }
+```
 
-Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }
+Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument:
+
+```
+for a in items par(b=my_func(a), 4) { ... }
+```
+
+Form 2 calls a method on the element itself:
+
+```
+for a in items par(b=a.my_method(), 4) { ... }
+```
 
 The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────
 
@@ -3417,33 +3624,77 @@ Printing everything to the console is fine during development, but in a real app
 
 Choose the level that matches how serious the event is:
 
-\* 'log_info'  — routine progress; fine to see during development but often silenced in production to keep log files small. Example: "processing file X", "connected to database".
+- 'log_info'  — routine progress; fine to see during development but often
 
-\* 'log_warn'  — something unexpected happened but the program recovered. Example: "config key missing, using default", "retrying after timeout".
+```
+silenced in production to keep log files small.
+Example: "processing file X", "connected to database".
+```
 
-\* 'log_error' — something went wrong and you need to investigate, but the program can continue (perhaps degraded). Example: "failed to save record", "unexpected null value".
+- 'log_warn'  — something unexpected happened but the program recovered.
 
-\* 'log_fatal' — a condition so serious that normal operation is impossible. Example: "cannot open database", "required config file not found".
+```
+Example: "config key missing, using default", "retrying after timeout".
+```
+
+- 'log_error' — something went wrong and you need to investigate, but the
+
+```
+program can continue (perhaps degraded).
+Example: "failed to save record", "unexpected null value".
+```
+
+- 'log_fatal' — a condition so serious that normal operation is impossible.
+
+```
+Example: "cannot open database", "required config file not found".
+```
 
 === Configuring the log destination
 
 By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.
 
-Generate a documented template with all defaults by running: loft --generate-log-config
+Generate a documented template with all defaults by running:
+
+```
+loft --generate-log-config
+```
 
 A minimal 'log.conf' looks like this:
 
-\[log\] file  = log.txt    \# write messages here (relative to the .loft file) level = info       \# minimum level to record; choices: info warn error fatal
+```
+[log]
+file  = log.txt    # write messages here (relative to the .loft file)
+level = info       # minimum level to record; choices: info warn error fatal
+```
 
-\[rotation\] max_size_mb = 500  \# start a new log file after this many megabytes daily       = true \# also start a new file at midnight UTC max_files   = 10   \# keep at most this many log files (older ones are deleted)
+```
+[rotation]
+max_size_mb = 500  # start a new log file after this many megabytes
+daily       = true # also start a new file at midnight UTC
+max_files   = 10   # keep at most this many log files (older ones are deleted)
+```
 
-\[rate_limit\] per_site = 5       \# suppress messages from the same source line after 5/minute
+```
+[rate_limit]
+per_site = 5       # suppress messages from the same source line after 5/minute
+```
 
-\[levels\] \# Override the global level for a specific file: \# "debug_tool.loft" = info \# "src/"            = error
+```
+[levels]
+# Override the global level for a specific file:
+# "debug_tool.loft" = info
+# "src/"            = error
+```
 
 === Production mode
 
-When 'production = true' is set in log.conf: \* 'panic()' becomes a fatal log entry instead of aborting the process. \* A failing 'assert()' becomes an error log entry instead of aborting. The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down.
+When 'production = true' is set in log.conf:
+
+- 'panic()' becomes a fatal log entry instead of aborting the process.
+- A failing 'assert()' becomes an error log entry instead of aborting.
+
+The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down.
 
 === Using format strings in log messages
 
@@ -3462,7 +3713,18 @@ Without a log.conf these calls do nothing — the tests below pass even though n
   log_fatal("critical failure");
 ```
 
-A true assert never logs anything — it is only the false case that logs.
+=== Example log.txt output
+
+When a 'log.conf' is present with 'level = info', the four calls above produce entries like this in 'log.txt':
+
+```
+2026-03-24 09:15:00 INFO   app.loft:3  starting up
+2026-03-24 09:15:00 WARN   app.loft:4  this is a warning
+2026-03-24 09:15:00 ERROR  app.loft:5  something went wrong
+2026-03-24 09:15:00 FATAL  app.loft:6  critical failure
+```
+
+Each line contains: timestamp, severity level, source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. A true assert never logs anything — it is only the false case that logs.
 
 ```rust
   assert(true, "this should never fail");
@@ -3472,7 +3734,17 @@ A true assert never logs anything — it is only the false case that logs.
 
 In a real program you would write something like:
 
-fn process(item: Item) { log_info("processing item {item.id}"); result = do_work(item); if !result { log_error("work failed for item {item.id}"); return; } log_info("finished item {item.id} successfully"); }
+```
+fn process(item: Item) {
+    log_info("processing item {item.id}");
+    result = do_work(item);
+    if !result {
+        log_error("work failed for item {item.id}");
+        return;
+    }
+    log_info("finished item {item.id} successfully");
+}
+```
 
 The log messages give you a record of exactly what the program did and where it went wrong, without cluttering the terminal during normal runs.
 
@@ -3486,7 +3758,11 @@ The log messages give you a record of exactly what the program did and where it 
 
 Loft provides three functions for randomness:
 
-rand(lo, hi)      — a random integer in \[lo, hi\] inclusive. rand_seed(seed)   — seed the random number generator for reproducible results. rand_indices(n)   — a vector of n integers \[0..n-1\] in a random order.
+```
+rand(lo, hi)      — a random integer in [lo, hi] inclusive.
+rand_seed(seed)   — seed the random number generator for reproducible results.
+rand_indices(n)   — a vector of n integers [0..n-1] in a random order.
+```
 
 The generator is a fast PCG64 algorithm. Without an explicit seed the generator starts from a fixed default seed, so results are reproducible across runs unless you seed with a time-based value.
 
@@ -3586,7 +3862,10 @@ Take the first 3 items in random order.
 
 Loft provides two time functions:
 
-now()     — milliseconds since the Unix epoch (wall-clock time). ticks()   — microseconds elapsed since program start (monotonic clock).
+```
+now()     — milliseconds since the Unix epoch (wall-clock time).
+ticks()   — microseconds elapsed since program start (monotonic clock).
+```
 
 Both return a 'long'.
 
@@ -3627,7 +3906,10 @@ Two successive calls return non-decreasing values.
 
 Subtract two 'ticks()' values to get the duration in microseconds. Divide by 1000 to convert to milliseconds.
 
-elapsed_us  = end_ticks - start_ticks elapsed_ms  = elapsed_us / 1000l
+```
+elapsed_us  = end_ticks - start_ticks
+elapsed_ms  = elapsed_us / 1000l
+```
 
 Example: measure how long a loop takes.
 
@@ -3645,11 +3927,25 @@ Example: measure how long a loop takes.
 
 === Common patterns
 
-Timestamp a log entry (seconds since epoch): seconds = now() / 1000l
+Timestamp a log entry (seconds since epoch):
 
-Seed the random number generator with the current time: rand_seed(now() as integer)
+```
+seconds = now() / 1000l
+```
 
-Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000l} ms")
+Seed the random number generator with the current time:
+
+```
+rand_seed(now() as integer)
+```
+
+Simple stopwatch:
+
+```
+start = ticks()
+... do work ...
+log_info("Done in {(ticks() - start) / 1000l} ms")
+```
 
 ```rust
 }
@@ -3697,7 +3993,13 @@ Mitigation: Use `long` when you need the full 32-bit integer range, or declare s
 
 === Integer overflow wraps silently
 
-32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.
+32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build:
+
+```
+big = 2000000000; big + big  →  negative number
+```
+
+Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.
 
 ```rust
   big = 2000000000;
@@ -4382,10 +4684,6 @@ Writes v to standard output without a newline. Use for progress output and build
 pub fn println(v1: text)
 ```
 
-== Parallel
-
-Internal: run a loft function over every element of a vector in parallel. Not part of the public API — use the `par(b=worker(a), N)` for-loop clause instead.
-
 == File System
 
 ```rust
@@ -4573,10 +4871,6 @@ pub fn ticks() -> long
 ```
 
 Returns microseconds elapsed since program start (monotonic clock). Unaffected by system clock adjustments. Use for benchmarks and frame timing.
-
-== Vector operations (T2-8, T2-5)
-
-reverse(v) and sort(v) are compiler special-cased in parse\_call.
 
 = Roadmap
 

@@ -51,6 +51,7 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
 | P3     | Vector aggregates (sum, min_of, any, all, count_if)     | Low–Med   | P1          | Stdlib audit 2026-03-15 |
+| T2     | `size(t)` — character count for text                    | Small     |             | User request 2026-03-24 |
 | L2     | Nested patterns in field positions                      | Medium    |             | MATCH.md L2             |
 | L3     | `FileResult` enum for mutating fs operations            | Small     |             | User request 2026-03-19 |
 | L3.1   | ↳ `FileResult` enum + `io_result` helper                | Small     |             | database/io.rs          |

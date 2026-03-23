@@ -72,6 +72,19 @@ fn main() {
   log_warn("this is a warning");
   log_error("something went wrong");
   log_fatal("critical failure");
+  // ## Example log.txt output
+  //
+  // When a 'log.conf' is present with 'level = info', the four calls above
+  // produce entries like this in 'log.txt':
+  //
+  //   2026-03-24 09:15:00 INFO   app.loft:3  starting up
+  //   2026-03-24 09:15:00 WARN   app.loft:4  this is a warning
+  //   2026-03-24 09:15:00 ERROR  app.loft:5  something went wrong
+  //   2026-03-24 09:15:00 FATAL  app.loft:6  critical failure
+  //
+  // Each line contains: timestamp, severity level, source file and line
+  // number, then the message. This makes it easy to search the file for
+  // errors or trace back to the exact line that produced a message.
   // A true assert never logs anything — it is only the false case that logs.
   assert(true, "this should never fail");
   // ## Typical usage pattern

@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <span class="cur">Safety</span> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <span class="cur">Safety</span> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Safety</h1>
 <article>
 <p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.</p>
@@ -15,14 +15,14 @@
 <h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
 <p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
 <ul>
-<li>`boolean`         — `false` is the null value</li>
-<li>`integer`         — the most negative 32-bit integer (-2 147 483 648) is null</li>
-<li>`long`            — the most negative 64-bit integer is null</li>
-<li>`float`/`single`  — `NaN` (Not a Number) is null</li>
-<li>`character`       — the NUL character (code point 0) is null</li>
-<li>`text`            — an empty internal reference is null</li>
-<li>`reference`       — record 0 is null</li>
-<li>plain `enum`      — byte value 255 is null (limits enums to 255 variants)</li>
+<li><code>boolean</code>         — <code>false</code> is the null value</li>
+<li><code>integer</code>         — the most negative 32-bit integer (-2 147 483 648) is null</li>
+<li><code>long</code>            — the most negative 64-bit integer is null</li>
+<li><code>float</code>/<code>single</code>  — <code>NaN</code> (Not a Number) is null</li>
+<li><code>character</code>       — the NUL character (code point 0) is null</li>
+<li><code>text</code>            — an empty internal reference is null</li>
+<li><code>reference</code>       — record 0 is null</li>
+<li>plain <code>enum</code>      — byte value 255 is null (limits enums to 255 variants)</li>
 </ul>
 <p>This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:</p>
 <pre><code>  zero = <span class="nm">0</span>;
@@ -32,9 +32,9 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
-<p>Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.</p>
+<p>Mitigation: Use <code>long</code> when you need the full 32-bit integer range, or declare struct fields as <code>not null</code> so that reserved value can be used as data.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
-<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
+<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use <code>long</code> (64-bit) when multiplying or summing large values: <code>big as long + big as long</code> avoids the wrap.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> + big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> == <span class="nm">4000000000l</span>, <span class="st">"long avoids wrap"</span>);</code></pre>
 <h2 id="bitwise-operators-with-zero">Bitwise operators with zero</h2>
@@ -45,23 +45,23 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &lt;&lt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &gt;&gt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
 <h2 id="float-null-is-nan">Float null is NaN</h2>
-<p>Floats represent null as `NaN` (Not a Number). Null floats behave consistently with other null types: null is not equal to anything (including itself), and null is not-equal to everything.</p>
+<p>Floats represent null as <code>NaN</code> (Not a Number). Null floats behave consistently with other null types: null is not equal to anything (including itself), and null is not-equal to everything.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"NaN is falsy — this is how you detect null floats"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(bad == bad), <span class="st">"null == null is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != bad, <span class="st">"null != null is true"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != <span class="nm">0.0</span>, <span class="st">"null != 0.0 is true"</span>);</code></pre>
-<p>Use `!f` or `f ?? default` to check for null floats.</p>
+<p>Use <code>!f</code> or <code>f ?? default</code> to check for null floats.</p>
 <h2 id="text-length-counts-bytes-not-characters">Text length counts bytes, not characters</h2>
-<p>`len()` on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.</p>
+<p><code>len()</code> on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.</p>
 <pre><code>  emoji = <span class="st">"Hi 😊!"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"5 visible chars but 8 bytes (emoji is 4 bytes)"</span>);</code></pre>
-<p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use `for c in text` to iterate by character. Use `c#index` and `c#next` to get the byte boundaries of each character.</p>
+<p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use <code>for c in text</code> to iterate by character. Use <code>c#index</code> and <code>c#next</code> to get the byte boundaries of each character.</p>
 <pre><code>  count = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> emoji { count += <span class="nm">1</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(count == <span class="nm">5</span>, <span class="st">"for-loop iterates by character, not byte"</span>);</code></pre>
-<h2 id="index-means-different-things-on-text-and-vectors">`#index` means different things on text and vectors</h2>
-<p>On a text loop, `c#index` is the byte offset of the current character. On a vector loop, `v#index` is the 0-based element position. Both are called `#index` but represent different units.</p>
+<h2 id="index-means-different-things-on-text-and-vectors"><code>#index</code> means different things on text and vectors</h2>
+<p>On a text loop, <code>c#index</code> is the byte offset of the current character. On a vector loop, <code>v#index</code> is the 0-based element position. Both are called <code>#index</code> but represent different units.</p>
 <pre><code>  v = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>];
   idx = <span class="nm">0</span>;
   <span class="kw">for</span> x <span class="kw">in</span> v { idx = x#<span class="ty">index</span>; }
@@ -71,10 +71,10 @@
   byte_pos = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> t { byte_pos = c#<span class="ty">index</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(byte_pos == <span class="nm">1</span>, <span class="st">"text #index: byte offset of 'é' (byte 1, not char 1)"</span>);</code></pre>
-<h2 id="evaluates-the-left-side-twice-for-complex-expressions">`??` evaluates the left side twice for complex expressions</h2>
-<p>The `??` operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.</p>
+<h2 id="evaluates-the-left-side-twice-for-complex-expressions"><code>??</code> evaluates the left side twice for complex expressions</h2>
+<p>The <code>??</code> operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of <code>result = expensive_call() ?? default</code> (which calls the function twice), write <code>temp = expensive_call()</code> on one line and then <code>result = temp ?? default</code> on the next.</p>
 <h2 id="text-indexing-and-slicing-return-different-types">Text indexing and slicing return different types</h2>
-<p>`txt[i]` returns a `character` (a single Unicode scalar value). `txt[i..j]` returns `text` (a UTF-8 string). These are different types.</p>
+<p><code>txt[i]</code> returns a <code>character</code> (a single Unicode scalar value). <code>txt[i..j]</code> returns <code>text</code> (a UTF-8 string). These are different types.</p>
 <pre><code>  txt = <span class="st">"hello"</span>;
   ch = txt[<span class="nm">0</span>];
   slice = txt[<span class="nm">0..1</span>];
@@ -85,25 +85,25 @@
   <span class="kw">for</span> c <span class="kw">in</span> <span class="st">"abc"</span> { result += <span class="st">"{c}"</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(result == <span class="st">"abc"</span>, <span class="st">"characters must be formatted into text"</span>);</code></pre>
 <h2 id="format-strings-braces-are-always-interpreted">Format strings: braces are always interpreted</h2>
-<p>Every string literal in loft is a format string. Literal braces must be escaped as `{{` and `}}`:</p>
+<p>Every string literal in loft is a format string. Literal braces must be escaped as <code>{{</code> and <code>}}</code>:</p>
 <pre><code>  n = <span class="nm">42</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n}"</span> == <span class="st">"42"</span>, <span class="st">"single braces: format expression"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"{{}}"</span>) == <span class="nm">2</span>, <span class="st">"double braces produce literal brace chars"</span>);</code></pre>
 <p>Forgetting to escape braces in expected output is a common mistake in assertions and comparisons.</p>
 <h2 id="hash-collections-cannot-be-iterated">Hash collections cannot be iterated</h2>
-<p>Hashes are lookup structures, not ordered collections. You cannot write `for item in my_hash { }`. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.</p>
+<p>Hashes are lookup structures, not ordered collections. You cannot write <code>for item in my_hash { }</code>. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.</p>
 <h2 id="mutation-guard-blocks-appending-during-iteration">Mutation guard blocks appending during iteration</h2>
-<p>The compiler prevents `v += [x]` inside `for e in v`. This protects against infinite loops. The guard also catches field access: `for e in db.items { db.items += [x]; }` is blocked too. The only allowed mutation is `e#remove` inside a filtered loop.</p>
+<p>The compiler prevents <code>v += [x]</code> inside <code>for e in v</code>. This protects against infinite loops. The guard also catches field access: <code>for e in db.items { db.items += [x]; }</code> is blocked too. The only allowed mutation is <code>e#remove</code> inside a filtered loop.</p>
 <h2 id="if-expression-requires-else-when-used-as-a-value">If-expression requires else when used as a value</h2>
-<p>Using `if` as a value expression without an `else` clause is a compile error. This prevents accidental null values from missing branches. If-statements (where the body has no value) do not need else. For example, `x = if cond { 1 }` is an error; write `x = if cond { 1 } else { 0 }`.</p>
+<p>Using <code>if</code> as a value expression without an <code>else</code> clause is a compile error. This prevents accidental null values from missing branches. If-statements (where the body has no value) do not need else. For example, <code>x = if cond { 1 }</code> is an error; write <code>x = if cond { 1 } else { 0 }</code>.</p>
 <h2 id="match-guards-do-not-prove-a-variant-is-handled">Match guards do not prove a variant is handled</h2>
-<p>A guarded arm like `Red if cond =&gt; ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `_` or an unguarded arm so the compiler knows every case is covered.</p>
+<p>A guarded arm like <code>Red if cond =&gt; ...</code> does not count as handling the <code>Red</code> variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard <code>_</code> or an unguarded arm so the compiler knows every case is covered.</p>
 <h2 id="ref-parameter-semantics">Ref-parameter semantics</h2>
-<p>Without `&amp;`, appending to a vector parameter is local — the caller's vector does not grow. With `&amp;`, the caller sees the new elements. Field-level mutations (e.g. `v[i].field = x`) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use `&amp;vector&lt;T&gt;` when the function needs to grow the vector. Use plain `vector&lt;T&gt;` when the function only reads or modifies existing elements.</p>
+<p>Without <code>&amp;</code>, appending to a vector parameter is local — the caller's vector does not grow. With <code>&amp;</code>, the caller sees the new elements. Field-level mutations (e.g. <code>v[i].field = x</code>) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use <code>&amp;vector&lt;T&gt;</code> when the function needs to grow the vector. Use plain <code>vector&lt;T&gt;</code> when the function only reads or modifies existing elements.</p>
 <h2 id="file-i-o-assumes-utf-8">File I/O assumes UTF-8</h2>
 <p>All file reading in loft assumes the file content is valid UTF-8. Reading a binary file or a file in a different encoding (e.g. Latin-1) will crash the program at runtime. There is currently no way to read raw bytes. Mitigation: Only read files you know to be UTF-8. If you need to process binary data, convert it to UTF-8 externally before passing it to loft.</p>
-<h2 id="xor-is-not-exponentiation">XOR is `^`, not exponentiation</h2>
-<p>Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. Use the `pow()` function for exponentiation.</p>
+<h2 id="xor-is-not-exponentiation">XOR is <code>^</code>, not exponentiation</h2>
+<p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. Use the <code>pow()</code> function for exponentiation.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"use pow() for power"</span>);
 }</code></pre>

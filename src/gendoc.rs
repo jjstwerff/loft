@@ -46,7 +46,10 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let sections = build_sections(&entries);
+    let sections: Vec<SectionFull> = build_sections(&entries)
+        .into_iter()
+        .filter(|s| s.items.iter().any(|(sig, _)| !sig.is_empty()))
+        .collect();
     let link_map = build_link_map(&sections);
 
     let stdlib_info: Vec<StdlibSection> = sections

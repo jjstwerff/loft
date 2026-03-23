@@ -7,12 +7,12 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <span class="cur">Vector</span> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <span class="cur">Vector</span> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Vector</h1>
 <article>
-<p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: '[1, 2, 3]'. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.</p>
+<p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: <code>[1, 2, 3]</code>. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.</p>
 <h2 id="transforming-vectors-map-filter-reduce">Transforming vectors: map, filter, reduce</h2>
-<p>'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn &lt;name&gt;' to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value</p>
+<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function using <code>fn &lt;name&gt;</code> to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">triple</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">3</span>
 }</code></pre>
@@ -26,7 +26,7 @@
   acc * x
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>Create a vector with a literal and loop over it with 'for'. Two special loop annotations help when you need to know where you are: 'v#first'  is true only on the very first iteration — useful for skipping separators. 'v#index'  holds the zero-based position of the current element.</p>
+<p>Create a vector with a literal and loop over it with <code>for</code>. Two special loop annotations help when you need to know where you are: <code>v#first</code>  is true only on the very first iteration — useful for skipping separators. <code>v#index</code>  holds the zero-based position of the current element.</p>
 <pre><code>  x =[<span class="nm">1</span>, <span class="nm">3</span>, <span class="nm">6</span>, <span class="nm">9</span>];
   b = <span class="st">""</span>;
   <span class="kw">for</span> v <span class="kw">in</span> x {
@@ -36,28 +36,28 @@
     b += <span class="st">"{v#index}:{v}"</span>
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b == <span class="st">"0:1 1:3 2:6 3:9"</span>, <span class="st">"result {b}"</span>);</code></pre>
-<p>'+=' appends another vector to the end of an existing one. You can filter and delete elements in a single pass: Add 'if condition' after 'in vector' to visit only matching elements. Write 'v#remove' inside the loop body to delete the current element. Here we keep only multiples of 3 by removing everything else. Note: you cannot append to a vector (v += [...]) while iterating over it — that is a compile error because the loop would then visit the new elements too, which could loop forever.</p>
+<p><code>+=</code> appends another vector to the end of an existing one. You can filter and delete elements in a single pass: Add <code>if condition</code> after <code>in vector</code> to visit only matching elements. Write <code>v#remove</code> inside the loop body to delete the current element. Here we keep only multiples of 3 by removing everything else. Note: you cannot append to a vector (v += [...]) while iterating over it — that is a compile error because the loop would then visit the new elements too, which could loop forever.</p>
 <pre><code>  x +=[<span class="nm">12</span>, <span class="nm">14</span>, <span class="nm">15</span>];
   <span class="kw">for</span> v <span class="kw">in</span> x <span class="kw">if</span> v % <span class="nm">3</span> != <span class="nm">0</span> {
     v#remove;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{x}"</span> == <span class="st">"[3,6,9,12,15]"</span>, <span class="st">"result {x}"</span>);</code></pre>
 <h2 id="clearing">Clearing</h2>
-<p>'v.clear()' removes all elements, setting the length to 0. The underlying storage is kept so appending afterwards is efficient.</p>
+<p><code>v.clear()</code> removes all elements, setting the length to 0. The underlying storage is kept so appending afterwards is efficient.</p>
 <pre><code>  x.<span class="fn-call"><a href="stdlib-collections.html">clear</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"clear empties the vector"</span>);
   x += [<span class="nm">99</span>];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"append after clear works"</span>);</code></pre>
 <h2 id="slicing">Slicing</h2>
-<p>A slice gives you a window into part of a vector without copying it. 'v[a..b]' contains elements at positions a, a+1, ..., b-1 (b is excluded). 'v[a..]'  goes from position a to the very last element. 'v[..b]'  goes from the beginning up to (but not including) position b.</p>
+<p>A slice gives you a window into part of a vector without copying it. <code>v[a..b]</code> contains elements at positions a, a+1, ..., b-1 (b is excluded). <code>v[a..]</code>  goes from position a to the very last element. <code>v[..b]</code>  goes from the beginning up to (but not including) position b.</p>
 <pre><code>  pows =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">4</span>, <span class="nm">8</span>, <span class="nm">16</span>];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{pows[1..3]}"</span> == <span class="st">"[2,4]"</span>, <span class="st">"Sub-vector"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{pows[3..]}"</span> == <span class="st">"[8,16]"</span>, <span class="st">"Open-ended sub-vector"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{pows[..3]}"</span> == <span class="st">"[1,2,4]"</span>, <span class="st">"Open-start sub-vector"</span>);</code></pre>
-<p>Accessing an index that does not exist is safe: Loft returns null instead of crashing. You can check for null with '!' (logical not) because null is falsy.</p>
+<p>Accessing an index that does not exist is safe: Loft returns null instead of crashing. You can check for null with <code>!</code> (logical not) because null is falsy.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!pows[<span class="nm">10</span>], <span class="st">"Out-of-bounds access returns null"</span>);</code></pre>
 <h2 id="comprehensions">Comprehensions</h2>
-<p>A comprehension is a concise way to build a new vector from a formula. Syntax: '[for variable in range { expression }]' Add 'if condition' to include only elements that satisfy the condition. This is much shorter than creating an empty vector and appending in a loop.</p>
+<p>A comprehension is a concise way to build a new vector from a formula. Syntax: <code>[for variable in range { expression }]</code> Add <code>if condition</code> to include only elements that satisfy the condition. This is much shorter than creating an empty vector and appending in a loop.</p>
 <pre><code>  evens =[<span class="kw">for</span> n <span class="kw">in</span> <span class="nm">1..10</span> <span class="kw">if</span> n % <span class="nm">2</span> == <span class="nm">0</span> {
     n
   }];
@@ -66,25 +66,35 @@
     n * <span class="nm">2</span>
   }];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{doubled}"</span> == <span class="st">"[2,4,6,8,10]"</span>, <span class="st">"Doubled comprehension"</span>);</code></pre>
-<p>Embedding a for loop directly inside a format string '{...}' produces a formatted list. The format specifier after ':' is applied to every element in the result. ':02' means "at least 2 digits wide, padded with zeros on the left".</p>
+<p>Embedding a for loop directly inside a format string <code>{...}</code> produces a formatted list. The format specifier after <code>:</code> is applied to every element in the result. <code>:02</code> means "at least 2 digits wide, padded with zeros on the left".</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{for n in 1..7 {n*2}:02}"</span> == <span class="st">"[02,04,06,08,10,12]"</span>, <span class="st">"Formatted vector loop"</span>);</code></pre>
 <h2 id="reverse-iteration">Reverse Iteration</h2>
-<p>Wrap a range in 'rev()' to step through elements from the last index to the first. 'rev(0..=3)' covers indices 0, 1, 2, 3 — the '=' makes the upper end inclusive. Here we visit pows[3]=8, pows[2]=4, pows[1]=2, pows[0]=1, building 8421 digit by digit.</p>
+<p>Wrap a range in <code>rev()</code> to step through elements from the last index to the first. <code>rev(0..=3)</code> covers indices 0, 1, 2, 3 — the <code>=</code> makes the upper end inclusive. Here we visit pows[3]=8, pows[2]=4, pows[1]=2, pows[0]=1, building 8421 digit by digit.</p>
 <pre><code>  c = <span class="nm">0</span>;
   <span class="kw">for</span> e <span class="kw">in</span> pows[<span class="bi">rev</span>(<span class="nm">0..</span>=<span class="nm">3</span>)] {
     c = c * <span class="nm">10</span> + e;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c == <span class="nm">8421</span>, <span class="st">"Reverse sub-vector iteration"</span>);</code></pre>
-<p>You can fill a vector with many copies of the same value using '; count' syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples. To append to a vector inside a function and have the caller see the change, mark the parameter with '&amp;': fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; } Without '&amp;', appending is local to the function and the caller's vector stays the same. Mutations to existing elements (e.g. v[0] = 99) are always visible to the caller even without '&amp;', because the vector's storage is shared.</p>
+<p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
+<h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
+<p>When you pass a vector to a function, the function receives a <strong>slice</strong> — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with <code>+=</code> inside the function creates a local copy that the caller never sees.</p>
+<p>To let a function append to the caller<code>s vector, mark the parameter with </code>&amp;'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
+<pre><code>fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
+</code></pre>
+<p>Without <code>&amp;</code>, only element-level mutations are visible to the caller:</p>
+<pre><code>fn set_first(v: vector&lt;integer&gt;, x: integer) { v[0] = x; }  // caller sees the change
+fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does NOT see the append
+</code></pre>
+<p>The same rule applies to slices: <code>v[2..5]</code> passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.</p>
 <h2 id="higher-order-functions">Higher-order functions</h2>
-<p>'map' applies a function to every element and returns a new vector.</p>
+<p><code>map</code> applies a function to every element and returns a new vector.</p>
 <pre><code>  nums =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
   tripled = <span class="fn-call">map</span>(nums,  <span class="kw">fn</span> triple);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{tripled}"</span> == <span class="st">"[3,6,9,12,15]"</span>, <span class="st">"map triple: {tripled}"</span>);</code></pre>
-<p>'filter' keeps only elements for which the predicate returns true.</p>
+<p><code>filter</code> keeps only elements for which the predicate returns true.</p>
 <pre><code>  evens2 = <span class="fn-call">filter</span>(nums,  <span class="kw">fn</span> is_even_n);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{evens2}"</span> == <span class="st">"[2,4]"</span>, <span class="st">"filter evens: {evens2}"</span>);</code></pre>
-<p>'reduce' folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial_value, fn combiner).</p>
+<p><code>reduce</code> folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial_value, fn combiner).</p>
 <pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>,  <span class="kw">fn</span> sum_acc);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);
   product = <span class="fn-call">reduce</span>(nums, <span class="nm">1</span>,  <span class="kw">fn</span> mul_acc);

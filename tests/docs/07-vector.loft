@@ -104,11 +104,29 @@ fn main() {
   // You can fill a vector with many copies of the same value using '; count' syntax:
   //   [SomeStruct { field: value }; 16]
   // This creates 16 identical copies in one expression. See 08-struct.loft for examples.
-  // To append to a vector inside a function and have the caller see the change,
-  // mark the parameter with '&': fn append_one(v: &vector<integer>, x: integer) { v += [x]; }
-  // Without '&', appending is local to the function and the caller's vector stays the same.
-  // Mutations to existing elements (e.g. v[0] = 99) are always visible to the caller
-  // even without '&', because the vector's storage is shared.
+  // ## Passing vectors to functions
+  //
+  // When you pass a vector to a function, the function receives a **slice** — a
+  // start position and a length inside the storage of the caller. This is efficient
+  // because no data is copied, but it has an important consequence: the function
+  // can read and modify existing elements (because it shares the same storage),
+  // but it cannot grow or shrink the vector. Appending with '+=' inside the
+  // function creates a local copy that the caller never sees.
+  //
+  // To let a function append to the caller's vector, mark the parameter with
+  // '&'. This tells the compiler to propagate structural changes (appends,
+  // clears) back to the caller when the function returns.
+  //
+  //   fn append_one(v: &vector<integer>, x: integer) { v += [x]; }
+  //
+  // Without '&', only element-level mutations are visible to the caller:
+  //
+  //   fn set_first(v: vector<integer>, x: integer) { v[0] = x; }  // caller sees the change
+  //   fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT see the append
+  //
+  // The same rule applies to slices: 'v[2..5]' passed to a function is a
+  // narrower window into the same storage, so element writes are visible but
+  // appends are not.
   // ## Higher-order functions
   // 'map' applies a function to every element and returns a new vector.
   nums =[1, 2, 3, 4, 5];

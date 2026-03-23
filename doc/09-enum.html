@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <span class="cur">Enums</span> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <span class="cur">Enums</span> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Enums</h1>
 <article>
 <p>An enum defines a fixed set of named choices. Instead of using raw numbers like 0 = north, 1 = east — which nobody can read six months later — you give each option a name. The compiler then checks every comparison and conversion, so a typo becomes a compile error instead of a silent wrong answer. Plain enums are just names that can be compared, ordered, and converted to and from text. Their order matches their declaration order.</p>
@@ -18,13 +18,13 @@
   <span class="en">West</span>
 }</code></pre>
 <h2 id="enums-that-carry-data">Enums that carry data</h2>
-<p>Sometimes different choices have different shapes of data. A 'Circle' needs one number (radius); a 'Rect' needs two (width and height). Struct enums let each variant carry its own fields, keeping all the shape kinds in one type while still letting you work with each variant naturally.</p>
+<p>Sometimes different choices have different shapes of data. A <code>Circle</code> needs one number (radius); a <code>Rect</code> needs two (width and height). Struct enums let each variant carry its own fields, keeping all the shape kinds in one type while still letting you work with each variant naturally.</p>
 <pre><code><span class="kw">enum</span> <span class="en">Shape</span> {
   <span class="en">Circle</span> {radius: <span class="ty"><a href="stdlib-types.html">float</a></span> },
   <span class="en">Rect</span> {width: <span class="ty"><a href="stdlib-types.html">float</a></span>, height: <span class="ty"><a href="stdlib-types.html">float</a></span> }
 }</code></pre>
 <h2 id="methods-that-work-on-any-variant">Methods that work on any variant</h2>
-<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.</p>
+<p>Write the same function name for each variant, each taking <code>self</code> of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">area</span>(self: <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {
   <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call"><a href="stdlib-math.html">pow</a></span>(self.radius, <span class="nm">2</span>)
 }</code></pre>
@@ -39,7 +39,7 @@
   <span class="st">"rect {self.width} by {self.height}"</span>
 }</code></pre>
 <h2 id="enum-methods">Enum methods</h2>
-<p>Plain enum variants can also have methods. The 'self' parameter carries the current direction value, and the method can return any type. Here 'opposite()' flips North↔South and East↔West.</p>
+<p>Plain enum variants can also have methods. The <code>self</code> parameter carries the current direction value, and the method can return any type. Here <code>opposite()</code> flips North↔South and East↔West.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">opposite</span>(self: <span class="en">Direction</span>) -&gt; <span class="en">Direction</span> {
   <span class="kw">if</span> self == <span class="en">North</span> {
     <span class="en">South</span>
@@ -78,7 +78,7 @@
 <h2 id="stubs-for-missing-implementations">Stubs for missing implementations</h2>
 <p>If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } A stub returns null at runtime and suppresses the warning.</p>
 <h2 id="match-expressions-on-enums">Match expressions on enums</h2>
-<p>Match picks a code path based on the active variant. You must handle every variant, or include a `_` wildcard arm that catches the rest.</p>
+<p>Match picks a code path based on the active variant. You must handle every variant, or include a <code>_</code> wildcard arm that catches the rest.</p>
 <pre><code>  axis = match d {
     <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="st">"vertical"</span>,
     <span class="en">East</span> | <span class="en">West</span> =&gt; <span class="st">"horizontal"</span>
@@ -91,14 +91,14 @@
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"r=1"</span>, <span class="st">"field destructuring in match arm"</span>);</code></pre>
 <h2 id="guard-clauses">Guard clauses</h2>
-<p>An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Because the guard can fail, a guarded arm alone does not prove the variant is handled — you still need a wildcard `_` or an unguarded arm for that variant.</p>
+<p>An arm can have an <code>if</code> guard after the pattern. If the guard fails, matching falls through to the next arm. Because the guard can fail, a guarded arm alone does not prove the variant is handled — you still need a wildcard <code>_</code> or an unguarded arm for that variant.</p>
 <pre><code>  area = match c {
     <span class="en">Circle</span> { radius } <span class="kw">if</span> radius &gt; <span class="nm">0.0</span> =&gt; <span class="en"><a href="stdlib-math.html">PI</a></span> * radius * radius,
     _ =&gt; <span class="nm">0.0</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-math.html">round</a></span>(area * <span class="nm">1000</span>) == <span class="bi"><a href="stdlib-math.html">round</a></span>(<span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="nm">1000</span>), <span class="st">"guarded match on Circle"</span>);</code></pre>
 <h2 id="scalar-match">Scalar match</h2>
-<p>Match also works on integers, text, floats, booleans, and characters. Arms can be literals, ranges, `null`, or `_`.</p>
+<p>Match also works on integers, text, floats, booleans, and characters. Arms can be literals, ranges, <code>null</code>, or <code>_</code>.</p>
 <pre><code>  grade = match <span class="nm">85</span> {
     <span class="nm">90..</span>=<span class="nm">100</span> =&gt; <span class="st">"A"</span>,
     <span class="nm">80..90</span>   =&gt; <span class="st">"B"</span>,
@@ -111,7 +111,7 @@
     _         =&gt; <span class="st">"high"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"low"</span>, <span class="st">"scalar or-pattern"</span>);</code></pre>
-<p>A `null` pattern matches when the value is absent (e.g. division by zero).</p>
+<p>A <code>null</code> pattern matches when the value is absent (e.g. division by zero).</p>
 <pre><code>  zero = <span class="nm">0</span>;
   check = match <span class="nm">1</span> / zero {
     <span class="kw">null</span> =&gt; <span class="st">"absent"</span>,

@@ -782,6 +782,31 @@ special-case in `parse_call` for `any`/`all`/`count_if` (same level of effort as
 
 ---
 
+### T2  `size(t)` — character count for text
+
+**Sources:** User request 2026-03-24
+**Severity:** Small — `len()` returns byte length, but there is no stdlib function
+to get the number of Unicode characters (code points).  Users working with multi-byte
+text (emoji, CJK, accented characters) need this regularly.
+**Description:** Add a `size` function on `text` that returns the number of Unicode
+code points:
+```loft
+pub fn size(both: text) -> integer {
+  OpSizeText(both)
+}
+```
+`size("hello")` → 5, `size("héllo")` → 5, `size("")` → 0.
+Requires a new `OpSizeText` opcode backed by Rust's `.chars().count()`.
+**Fix path:**
+1. Add `OpSizeText` declaration + `#rust` body in `default/01_code.loft`.
+2. Implement `op_size_text` in `src/fill.rs`.
+3. Native codegen: emit `.chars().count() as i32` in `src/generation.rs`.
+4. Add tests in `tests/docs/02-text.loft` covering ASCII, multi-byte, and empty text.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
 ### P4  Bytecode cache (`.loftc`)
 **Sources:** [BYTECODE_CACHE.md](BYTECODE_CACHE.md)
 **Severity:** Medium — repeated runs of an unchanged script re-parse and re-compile every
