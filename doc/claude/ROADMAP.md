@@ -15,10 +15,7 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
 | S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
-| S7     | Diagnostic error for `string` type name                 | Trivial   |             | PROBLEMS.md #82    |
-| S8     | Compile-time error for `key` field in hash struct       | Small     |             | PROBLEMS.md #83    |
 | O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
-| O3     | Verify no `long` sentinel on integer paths              | Low       |             | PERFORMANCE.md P3  |
 | O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
 | A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
 | A1.1   | ↳ Extra args + value-struct returns                     | Medium    |             | parallel.rs        |
