@@ -27,6 +27,7 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 | L6.1   | ↳ Parser: `assert(expr)` in field definition            | Small     |             | definitions.rs     |
 | L6.2   | ↳ Bytecode: emit check after every field write          | Medium    | L6.1        | codegen.rs, fill.rs |
 | L6.3   | ↳ Native codegen: emit `assert!` after field write      | Small     | L6.2        | generation.rs      |
+| L6.4   | ↳ `validate()` builtin: non-panicking constraint check  | Small     | L6.2        | 01_code.loft       |
 | O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
 | O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
 | A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
