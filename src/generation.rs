@@ -2423,14 +2423,11 @@ extern crate loft;"
         {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
-            // User-defined functions returning text produce `Str`; `format_text` expects `&str`.
-            // Wrap with `&*` to deref `Str` → `&str` (deref coercion via Deref<Target=str>).
-            // Also wrap template functions whose rust string contains `Str::new(` (e.g.
-            // OpCastTextFromEnum), since those also produce `Str` rather than `&str`.
+            // All text-returning calls produce either `Str` or `String` (never `&str`).
+            // Wrap with `&*` so `format_text` (which expects `&str`) always gets the right type.
+            // `&*Str` and `&*String` both deref to `&str` via their `Deref<Target=str>` impls.
             let val_str = if let Value::Call(d, _) = val
                 && matches!(self.data.def(*d).returned, Type::Text(_))
-                && (self.data.def(*d).rust.is_empty()
-                    || self.data.def(*d).rust.contains("Str::new("))
             {
                 format!("&*({val_expr})")
             } else {
@@ -2645,12 +2642,11 @@ extern crate loft;"
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
-                // Text-typed parameters: a user-defined function returning text produces `Str`,
-                // but templates expect `&str`. Deref `Str` → `&str` with `&*`.
+                // Text-typed parameters: all text-returning calls produce `Str` or `String`,
+                // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
                 if matches!(a.typedef, Type::Text(_))
                     && let Value::Call(d, _) = &vals[a_nr]
                     && matches!(self.data.def(*d).returned, Type::Text(_))
-                    && self.data.def(*d).rust.is_empty()
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(&*({inner}))"));

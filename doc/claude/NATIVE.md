@@ -802,6 +802,7 @@ before the N2–N9 planning items were completed (PR #36, 2026-03-18).
 ---
 
 ## See also
+- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and detailed designs for O4 (direct collection emit), O5 (pure function `stores` omission), O6 (`long` sentinel removal) — the native-codegen performance items
 - [COMPILER.md](COMPILER.md) — Compiler pipeline: lexer, parser, IR, bytecode
 - [INTERMEDIATE.md](INTERMEDIATE.md) — IR Value tree structure
 - [DESIGN.md](DESIGN.md) — Algorithm analysis for major subsystems

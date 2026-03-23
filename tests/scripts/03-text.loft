@@ -169,4 +169,36 @@ fn main() {
   assert(!("" as float), "parse empty text to float yields null");
   assert("3.14" as float == 3.14, "parse valid float text");
   assert("-2.5" as float == -2.5, "parse negative float text");
+  // --- split ---
+  parts = "a,b,c".split(',');
+  assert(len(parts) == 3, "split 3 parts: len={len(parts)}");
+  assert(parts[0] == "a", "split [0]={parts[0]}");
+  assert(parts[1] == "b", "split [1]={parts[1]}");
+  assert(parts[2] == "c", "split [2]={parts[2]}");
+  nosep = "hello".split(',');
+  assert(len(nosep) == 0, "split no separator: len={len(nosep)}");
+  words = "one two three".split(' ');
+  assert(len(words) == 3, "split by space: len={len(words)}");
+  assert(words[0] == "one", "split by space [0]={words[0]}");
+  assert(words[2] == "three", "split by space [2]={words[2]}");
+  // --- A8: destination-passing — assign result to variable ---
+  s = "Hello World";
+  lo = s.to_lowercase();
+  assert(lo == "hello world", "to_lowercase assign: {lo}");
+  up = s.to_uppercase();
+  assert(up == "HELLO WORLD", "to_uppercase assign: {up}");
+  rep = s.replace("World", "Loft");
+  assert(rep == "Hello Loft", "replace assign: {rep}");
+  // A8: append via += (destination-passing path)
+  buf = "prefix: ";
+  buf += "mixed".to_uppercase();
+  assert(buf == "prefix: MIXED", "to_uppercase append: {buf}");
+  buf2 = "result: ";
+  buf2 += "foo bar".replace("foo", "baz");
+  assert(buf2 == "result: baz bar", "replace append: {buf2}");
+  // A8: format string interpolation uses scratch-buffer path
+  tag = "WORLD";
+  everyone = s.replace("World", "everyone");
+  msg = "hello {tag.to_lowercase()} and {everyone}";
+  assert(msg == "hello world and Hello everyone", "format with text fns: {msg}");
 }

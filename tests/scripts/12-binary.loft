@@ -145,4 +145,50 @@ fn main() {
   assert(f#next == f#size, "#next at end == #size");
  }
   assert(delete("test_loft_a.bin"), "delete after mixed test");
+  // === vector<float> binary I/O ===
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  fv = [1.5, 2.5, 3.5];
+  f += fv;
+  assert(f#size == 24l, "vector<float> write size (3*8 bytes)={f#size}");
+ }
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  rv = f#read(24) as vector<float>;
+  assert(len(rv) == 3, "vector<float> read len={len(rv)}");
+  assert(rv[0] == 1.5, "vector<float> [0]={rv[0]}");
+  assert(rv[1] == 2.5, "vector<float> [1]={rv[1]}");
+  assert(rv[2] == 3.5, "vector<float> [2]={rv[2]}");
+ }
+  assert(delete("test_loft_a.bin"), "delete after vector<float> test");
+  // === vector<single> binary I/O ===
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  sv = [10.0f, 20.0f, 30.0f];
+  f += sv;
+  assert(f#size == 12l, "vector<single> write size (3*4 bytes)={f#size}");
+ }
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  rsv = f#read(12) as vector<single>;
+  assert(len(rsv) == 3, "vector<single> read len={len(rsv)}");
+  assert(rsv[0] == 10.0f, "vector<single> [0]={rsv[0]}");
+  assert(rsv[2] == 30.0f, "vector<single> [2]={rsv[2]}");
+ }
+  assert(delete("test_loft_a.bin"), "delete after vector<single> test");
+  // === multiple vectors round-trip in one file ===
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  f += [1, 2, 3];
+  f += [100l, 200l];
+ }
+ {f = file("test_loft_a.bin");
+  f#format = LittleEndian;
+  ri = f#read(12) as vector<integer>;
+  rl = f#read(16) as vector<long>;
+  assert(ri[2] == 3, "multi-vector int [2]={ri[2]}");
+  assert(rl[0] == 100l, "multi-vector long [0]={rl[0]}");
+  assert(rl[1] == 200l, "multi-vector long [1]={rl[1]}");
+ }
+  assert(delete("test_loft_a.bin"), "delete after multi-vector test");
 }

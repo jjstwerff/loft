@@ -84,3 +84,12 @@ fn test() {
 |---|---|---|---|
 | Slot-conflict after sequential loops | `src/variables.rs` | 22 (8 Rust + 14 script) | High — blocks entire `wrap` test suite |
 | `&vector<T>` append via ref-param | `src/state/codegen.rs` | 1 | Medium — silently corrupts in release |
+
+---
+
+## See also
+- [PROBLEMS.md](PROBLEMS.md) — Canonical open-issue tracker with fix paths and severities
+- [SLOTS.md](SLOTS.md) — Two-zone slot design that resolved the slot-conflict root cause
+- [ASSIGNMENT.md](ASSIGNMENT.md) — Full history of the A6 slot-assignment redesign
+- [SLOT_FAILURES.md](SLOT_FAILURES.md) — Detailed A/B/C bug-category analysis for the slot failures
+- [TESTING.md](TESTING.md) — How to reproduce failures and use `LOFT_LOG` for diagnosis

@@ -30,7 +30,7 @@ release gate criteria, project structure changes, and release artifact checklist
 Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
 creates noise and makes the document harder to scan for remaining work.
 
-Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [BYTECODE_CACHE.md](BYTECODE_CACHE.md)
+Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [BYTECODE_CACHE.md](BYTECODE_CACHE.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
 
 ---
 
@@ -43,10 +43,22 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
 - [S — Stability Hardening](#s--stability-hardening)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
+  - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
+  - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
+  - [S7 — `string` type name diagnostic](#s7--add-diagnostic-error-for-string-type-name----should-be-text) *(0.8.2)*
+  - [S8 — `key` field in hash struct](#s8--compile-time-error-when-hash-value-struct-has-field-named-key) *(0.8.2)*
 - [P — Prototype Features](#p--prototype-features)
+  - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
+  - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
-  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(1.1+ backlog)*
+  - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(0.8.2)*
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(0.8.2)*
+  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(0.8.2)*
+  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(1.1+)*
 - [N — Native Codegen](#n--native-codegen)
+  - [N2–N7 — Native codegen bug fixes](#n2--implement-callref--function-pointer-calls-in-native-codegen) *(0.8.2 / 1.1+)*
+- [O — Performance Optimisations](#o--performance-optimisations)
+  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(0.8.2 / 1.1+)*
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
@@ -56,35 +68,52 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Version Milestones
 
-### Version 0.8.2 — Stability, efficiency, and native codegen (planned)
+### Version 0.8.2 — Stability, native codegen, and slot correctness (in progress)
 
-Goal: harden the interpreter, improve runtime efficiency, and ship working native code
-generation.  No new language syntax.  Most items are independent and can be developed
+Goal: harden the interpreter, complete native code generation, fix slot assignment, and
+improve runtime efficiency.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
-**Correctness:**
-- **L4** — Empty `[]` literal as mutable vector argument: fix in `call_nr()` in `parser/mod.rs`. ✓
-- **L5** — `v += extra` via `&vector` ref-param panics: fix in `generate_var()` in `state/codegen.rs`. ✓
+**Completed in 0.8.2:**
+- **L4** — Empty `[]` literal as mutable vector argument. ✓
+- **L5** — `v += extra` via `&vector` ref-param. ✓
+- **A13/A14/A15** *(old numbering)* — slot efficiency (can_reuse guard, skip_free flag, exhaustive inline_ref_set_in). ✓
+- **S3** — Database dispatch exhaustiveness. ✓
+- **S4** — Binary I/O type coverage (Issues 59, 63). ✓
+- **P1** — Lambda expressions (`fn(params) -> ret { body }`). ✓
+- **N9** — fill.rs auto-generation (rustfmt, six `#rust` templates, byte-exact match). ✓
+- **N1** — `--native` / `--native-emit` CLI flags. ✓
 
-**Stack slot efficiency:**
-- **A13** — Float/Long dead-slot reuse: `can_reuse` guard raised to ≤ 8 bytes. ✓
-- **A14** — `skip_free` flag: `clean_work_refs` sets `skip_free` instead of mutating type. ✓
-- **A15** — Exhaustive `inline_ref_set_in`: match now exhaustive; new compound variants are a compile error. ✓
+**Remaining for 0.8.2:**
 
-**Efficiency and packaging:**
-**Prototype features:**
-- **P1** — Lambda expressions: moved from 0.8.3 for stability; callable fn-refs already
-  exist, lambdas are needed before closures (A5) and aggregates (P3) can land.
+*Stability:*
+- **S5** — Fix optional `& text` parameter subtract-with-overflow panic (Issue 89).
+- **S7** — Add diagnostic error for `string` type name (Issue 82).
+- **S8** — Compile-time error when hash-value struct has field named `key` (Issue 83).
 
-**Stability hardening (S1–S6):**
-- **S3** — Database dispatch exhaustiveness: explicit variant arms in `search.rs`/`io.rs`. ✓
-- **S4** — Binary I/O type coverage: implement missing arms in `read_data`/`write_data` and sub-record traversal in `format.rs` (Issues 59, 63). ✓
+*Native codegen fixes (small):*
+- **N6** — Text method in format interpolation: emit `&str` not `String` (Issue 87).
+- **N7** — `directory()` / `user_directory()` / `program_directory()` scratch buffer (Issue 88).
 
-**Native code generation (Tier N):**
-- N2–N9, N6.3, and N1 all completed in 0.8.2.  N9 (N20b/N20d): rustfmt added, six
-  missing `#rust` templates added, `src/fill.rs` replaced by the auto-generated
-  version.  N1: `--native` / `--native-emit` CLI flags land the end-to-end native
-  pipeline.  All Tier N items for 0.8.2 are done.
+*Interpreter performance:*
+- **O1** — Superinstruction merging: peephole pass, 6 merged opcodes 240–245.
+- **O3** — Verify integer paths carry no `long` null-sentinel.
+- **O6** — Native: `_nn` variants remove `long` null-sentinel from local arithmetic.
+
+*Parallel execution:*
+- **A1.1** — Extra context args + value-struct returns: extend `execute_at_raw`, output buffer.
+- **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1).
+
+*Native codegen completeness:*
+- **N2** — `CallRef` / function-pointer dispatch in generated Rust.
+- **N3** — Resolve `external` crate reference for random/FFI.
+- **N4** — Fix LIFO store-free order in generated frees.
+- **N5** — `file_from_bytes` for `DbRef` vector types.
+- **N9** — Exhaustive IR pattern matching; remove `panic!` catch-alls (after N2–N7).
+
+*Interpreter slot correctness:*
+- **A12.1–A12.3 + A12** — Fix Issues 68–70, then enable lazy work-variable init.
+- **A13.1–A13.3** — Complete two-zone slot assignment (Steps 8 and 10).
 
 ---
 
@@ -174,7 +203,7 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **P2** — REPL / interactive mode: `loft` with no arguments enters a persistent session.
 
 **Parallel execution completeness:**
-- **A1** — Parallel workers with extra context arguments and text/reference return types.
+- **A1** — Moved to 0.8.2 (see remaining work above).
 
 **Logging completeness:**
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
@@ -286,11 +315,12 @@ at once" failure mode where half-finished features interact and regressions are 
 Ordered by unblocking impact and the small-steps principle (each item leaves the codebase
 in a better state than it found it, with passing tests).
 
-**For 0.8.2:**
-1. **A6** — slot pre-pass; High, independent
-4. **A8** — destination-passing; Med–High, independent efficiency win
-5. **N9** — ✓ completed: rustfmt, #rust templates, fill.rs replaced
-6. **N1** — ✓ completed: `--native` / `--native-emit` CLI flags
+**For 0.8.2 (remaining):**
+1. **S5**, **S7**, **S8** — small stability fixes; independent, no dependencies
+2. **O3** — integer sentinel verification; Low effort, zero risk
+3. **N6**, **N7** — small native codegen fixes; independent
+4. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation.rs`
+5. **O1** — superinstruction merging; Medium effort, highest impact
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
@@ -304,11 +334,21 @@ in a better state than it found it, with passing tests).
 4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
 5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
+**For 0.8.2 (remaining — parallel and native):**
+6. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
+7. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
+8. **N3** — external crate ref; Low; independent; fastest native fix
+9. **N4** — LIFO store-free order; Medium; independent; prevents heap corruption
+10. **N2** — `CallRef` dispatch; Medium; independent; enables function-pointer tests
+11. **N5** — `file_from_bytes`; Medium; independent; unblocks binary tests in native
+12. **N9** — exhaustive IR matching; Medium; after N2–N7 are complete
+13. **A12.1** → **A12.2** → **A12.3** → **A12** — sequential; each unblocks the next
+14. **A13.1** → **A13.2** → **A13.3** — sequential; completes two-zone slot design
+
 **For 0.9.0 (after 0.8.4 is tagged):**
 1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
 2. **A2** — logger remaining work; independent, small-medium; can land any time
-3. **A1** — parallel completeness; isolated change, touches parallel.rs only
-4. **P2** — REPL; high effort; land after L1 (needed for P2.4 error recovery)
+3. **P2** — REPL; high effort; land after L1 (needed for P2.4 error recovery)
 
 **For 1.0.0 (after 0.9.0 is tagged):**
 7. **R1** — workspace split; small change, unblocks all Tier W
@@ -685,30 +725,101 @@ the recompile overhead that caching was designed to address)
 
 ---
 
+### T1  Tuple types
+**Sources:** TUPLES.md
+**Description:** Multi-value returns and stack-allocated `(A, B, C)` compound values. Enables functions to return more than one value without heap allocation. Seven implementation phases; full design in [TUPLES.md](TUPLES.md).
+
+- **T1.1** — Type system: `Type::Tuple`, element offsets, `element_size` helpers (`src/data.rs`, `src/typedef.rs`).
+- **T1.2** — Parser: type notation `(A, B)`, literal syntax, destructuring assignment (`src/parser/`).
+- **T1.3** — Scope analysis: tuple variable intervals, text/ref element lifetimes (`src/scopes.rs`).
+- **T1.4** — Bytecode codegen: slot allocation, element read/write opcodes (`src/state/codegen.rs`).
+- **T1.5** — SC-4: Reference-tuple parameters with owned elements.
+- **T1.6** — SC-8: Tuple-aware mutation guard.
+- **T1.7** — SC-7: `not null` annotation for tuple integer elements.
+
+**Effort:** Very High
+**Target:** 1.1+
+
+---
+
+### CO1  Coroutines
+**Sources:** COROUTINE.md
+**Description:** Stackful `yield`, `iterator<T>` return type, and `yield from` delegation. Enables lazy sequences and producer/consumer patterns without explicit state machines. Six implementation phases; full design in [COROUTINE.md](COROUTINE.md).
+
+- **CO1.1** — `iterator<T>` type + `CoroutineStatus` enum in `default/05_coroutine.loft`.
+- **CO1.2** — `OpCoroutineCreate` + `OpCoroutineNext`: frame construction and advance.
+- **CO1.3** — `OpYield`: serialise live stack to heap frame, return to caller.
+- **CO1.4** — `yield from`: sub-generator delegation.
+- **CO1.5** — `for item in generator`: iterator protocol integration.
+- **CO1.6** — `next()` / `exhausted()` stdlib functions.
+
+**Effort:** Very High
+**Depends:** TR1
+**Target:** 1.1+
+
+---
+
 ## A — Architecture
 
-### A1  Parallel workers: extra arguments and text/reference return types
+### A1  Parallel workers: extra arguments, value-struct returns, and text/reference returns
 **Sources:** [THREADING.md](THREADING.md) (deferred items)
-**Description:** Current limitation: all worker state must live in the input vector;
-returning text or references is unsupported.  These are two independent sub-problems.
+**Description:** Three related extensions to `par(...)` parallel for-loops.
+All worker state must currently live in the input vector; extra parameters, value-struct
+returns larger than 8 bytes, and text/reference returns are all unsupported.
+The three sub-problems share infrastructure but have different complexity.
 **Fix path:**
 
-**Phase 1 — Extra context arguments** (`src/parser/collections.rs`, `src/parallel.rs`):
-Synthesise an IR-level wrapper function that closes over the extra arguments and calls
-the original worker with `(element, extra_arg_1, extra_arg_2, ...)`.  The wrapper is
-generated at compile time; the runtime parallel dispatch is unchanged.
+**Phase 1 — Extra context args and value-struct returns** (`src/parser/collections.rs`, `src/parallel.rs`, `src/state/mod.rs`):
+
+*Extra context arguments (primitives and const struct refs):*
+Extend `execute_at_raw(fn_pos, arg, return_size) -> u64` to accept an extra
+`extra_args: &[u64]` slice; push those values onto the call stack before the row ref
+(in declaration order).  `run_parallel_raw` receives the captured extra arg values
+(cloned to every worker — they are read-only constants).  The compiler emits the
+extras as part of the `n_parallel_for` call.  No IR wrapper synthesis is needed for
+primitive extras.  For `const Struct` extras (DbRef, 12 bytes) add an
+`Option<DbRef>` context parameter alongside the row ref rather than folding it into
+`u64`.
+*Supported extra arg types:* `integer`, `long`, `float`, `boolean` (fit in u64);
+`const Struct` (passed as `Option<DbRef>` context).  Text extras are already readable
+from cloned stores via their DbRef — no special handling needed.
+
+*Value-struct returns (no heap pointers):*
+For worker return types where all fields are primitives (no `text`, no `reference`
+fields), replace the `Vec<u64>` result channel with a pre-allocated
+`Vec<u8>` output buffer of size `n_rows × result_byte_size`.  Divide it into
+non-overlapping per-row slices; each worker writes directly via
+`execute_at_struct(fn_pos, row_ref, out_slice: &mut [u8])`.  After join, interpret the
+buffer as a typed vector record in the store.  The compiler checks that the return type
+is "all-value" and computes `result_byte_size`.  DbRef (12 bytes) and any struct
+containing text/reference fields fall through to Phase 2.
+
 *Tests:* `par([1,2,3], fn worker, threshold)` where `worker(n: integer, t: integer) -> integer`
-correctly uses `threshold`; two-arg context test (currently in `tests/threading.rs` as
-`parallel_two_context_args`, marked `#[ignore]`) passes.
+correctly uses `threshold`; value-struct return test where `worker(s: Score) -> Pair`
+returns `Pair{lo: s.value, hi: s.value * 2}`; both marked `#[ignore]` in
+`tests/threading.rs` until this phase ships.
 
 **Phase 2 — Text/reference return types** (`src/parallel.rs`, `src/store.rs`):
-After all worker threads join, merge worker-local stores back into the main `Stores` so
-that text values and reference fields in the result vector point into live records.
-*Tests:* `par([1,2,3], fn label)` where `label(n: integer) -> text` returns a formatted
-string; the result vector contains correct, independent text values with no dangling pointers.
+Text and reference values are DbRefs pointing into a specific store.  Workers get
+locked store snapshots; new allocations in a worker are invisible to the main thread
+after join.  LIFO freeing makes ad-hoc store merging unsafe.
 
-**Effort:** High (parser.rs, parallel.rs, store.rs)
-**Target:** 0.9.0
+*Approach — dedicated result store:*
+Before dispatch, the main thread calls `Stores::new_result_store()` which allocates a
+fresh, writable store not included in the input snapshot.  `clone_for_worker` gives
+each worker a reference to this result store (mutable, range-partitioned by row).
+Workers write text/ref results into the result store via their local `State`'s text
+allocator redirected to the result store index.  After join, `Stores::adopt_result_store(idx)`
+unlocks the result store for use by the main thread; `n_parallel_for` builds the
+result vector from the result-store DbRefs.  Since the result store did not exist in
+any worker's input snapshot, there are no LIFO conflicts.
+
+*Tests:* `par([1,2,3], fn label)` where `label(n: integer) -> text` returns a formatted
+string; the result vector contains correct, independent text values with no dangling
+pointers.
+
+**Effort:** Med–High (parser.rs, parallel.rs, store.rs, state/mod.rs)
+**Target:** 0.8.2
 
 ---
 
@@ -1219,7 +1330,34 @@ use.
 **Tests:** `assign_slots_sequential_text_reuse` in `src/variables.rs` (currently
 `#[ignore]` — pending Issue 69 fix).
 **Effort:** Medium (three inter-related blockers; Issues 68–70)
-**Target:** 0.8.3
+**Target:** 0.8.2
+
+---
+
+### A13  Complete two-zone slot assignment (Steps 8 and 10)
+**Sources:** SLOTS.md Steps 8, 10 and § Open Issues
+**Description:** Three remaining steps to finish the two-zone design. Full details in [SLOTS.md](SLOTS.md).
+
+- **Step 8** — Fix `Set(v, Block)` ordering in `place_large_and_recurse`: when the inner block evaluates first (e.g. `outer = { inner = …; inner }`), process the inner block before placing `outer` so both share the block's result slot legally. After this, replace the `pos > TOS` override branch in `generate_set` with a `debug_assert`.
+- **Step 10a** — Audit `build_scope_parents` against `scan_inner`: every IR variant containing a nested block should be handled in both. Missing arms cause `scopes_can_conflict` false-positives in `validate_slots`. Also investigate why any scope maps to itself in the parent map (root cause of the `is_scope_ancestor` cycle guard).
+- **Step 10b** — Add a `Value::Iter` arm to `scan_inner` in `src/scopes.rs`, recursing into all three sub-expressions, mirroring the existing arm in `compute_intervals`. Currently safe because parser-synthesised Iter nodes contain no user-defined `Set`; becomes a latent false-positive risk if a parser change ever places a `Set` inside an Iter sub-expression.
+
+**Effort:** Medium per step
+**Target:** 0.8.2
+
+---
+
+### TR1  Stack trace introspection
+**Sources:** STACKTRACE.md
+**Description:** `stack_trace()` stdlib function returning `vector<StackFrame>`, where each frame exposes function name, source file, and line number. Full design in [STACKTRACE.md](STACKTRACE.md). Prerequisite for CO1 (coroutines use the frame vector for yield/resume).
+
+- **TR1.1** — Shadow call-frame vector: push/pop a `(fn_name, line)` entry on each function call/return in `src/state/mod.rs`.
+- **TR1.2** — Type declarations: `ArgValue` enum and `StackFrame` struct in `default/04_stacktrace.loft`.
+- **TR1.3** — Materialisation: `stack_trace()` native function builds `vector<StackFrame>` from the shadow vector.
+- **TR1.4** — Call-site line numbers: track source position in the call frame for accurate per-frame line reporting.
+
+**Effort:** Medium
+**Target:** 1.1+
 
 ---
 
@@ -1252,6 +1390,46 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
   does for `Parts::Struct` at line 351.
 
 **Effort:** Small (each remaining arm is isolated)
+**Target:** 0.8.2
+
+---
+
+### S5  Fix optional `& text` parameter subtract-with-overflow panic
+**Sources:** PROBLEMS.md #89
+**Severity:** High — interpreter panics at call site when any optional `& text` argument is supplied
+**Description:** `create_stack` size calculation for optional `& text` parameters underflows when the argument is provided, causing a subtract-with-overflow panic before the function body is entered.
+**Fix path:** Audit `create_stack` in `src/state/codegen.rs` for the optional-reference slot size/offset calculation; ensure the slot reserved for `& T` matches the stack layout.
+**Effort:** Small
+**Target:** 0.8.2
+
+---
+
+### S6  Fix `for` loop in recursive function — "Too few parameters" panic
+**Sources:** PROBLEMS.md #84
+**Severity:** High — any algorithm combining recursion with a helper that contains a `for` loop panics
+**Description:** `ref_return` adds work-ref attributes to a function's IR while the body is still being parsed. When the function is recursive, call sites seen earlier in the body were compiled with the old (lower) attribute count. Codegen then asserts `parameters.len() >= expected` and panics.
+**Fix path:** After the second parse pass completes, scan the IR tree for recursive calls with fewer arguments than the now-finalised attribute count and patch them via `add_defaults`. Significantly simpler than a full per-function variable scoping refactor.
+**Effort:** Medium
+**Target:** 1.1+
+
+---
+
+### S7  Add diagnostic error for `string` type name — should be `text`
+**Sources:** PROBLEMS.md #82
+**Severity:** Trivial — users from other languages write `string` and receive confusing cascading errors
+**Description:** `string` is not a valid loft type. Writing it produces "Undefined type string" + "Invalid index key" rather than a helpful suggestion to use `text`.
+**Fix path:** In the type resolver (`src/typedef.rs`) or early parse pass, detect `string` used as a type name and emit "Unknown type 'string' — did you mean 'text'?" before any other error.
+**Effort:** Trivial
+**Target:** 0.8.2
+
+---
+
+### S8  Compile-time error when hash-value struct has field named `key`
+**Sources:** PROBLEMS.md #83
+**Severity:** High — silent store-allocation corruption at runtime with no useful error message
+**Description:** `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`). When a user struct used as a hash value type has a real field named `key`, the name clash corrupts store allocation, producing a late "Allocating a used store" panic.
+**Fix path:** In the struct-declaration validator, detect any field named `key` in a type used as a hash value; emit a compile-time error pointing to the field declaration.
+**Effort:** Small
 **Target:** 0.8.2
 
 ---
@@ -1292,6 +1470,137 @@ replaces the hand-maintained `src/fill.rs`.
 
 **Effort:** Medium (completed)
 **Target:** 0.8.2 ✓
+
+---
+
+### N2  Implement `CallRef` / function-pointer calls in native codegen
+**Sources:** PROBLEMS.md #77
+**Severity:** Medium — function-pointer call sites produce invalid generated Rust
+**Description:** `Value::CallRef` is not handled in `output_code_inner`; any loft program that calls a function by reference fails to produce correct native output. Affects `tests/scripts/06-function.loft`.
+**Fix path:** Add a `Value::CallRef` arm to `output_code_inner` in `src/generation.rs`; emit an indirect call using the function-pointer value, following the same ABI as direct calls.
+**Effort:** Medium
+**Target:** 0.8.2
+
+---
+
+### N3  Resolve `external` crate reference in native codegen
+**Sources:** PROBLEMS.md #79
+**Severity:** Low — random/FFI extensions produce unresolved-module compile errors
+**Description:** The native codegen emits references to an `external` module for random/FFI functions that has no corresponding crate in the generated build.
+**Fix path:** Bundle the required symbols into `codegen_runtime`, or emit a proper `extern` block; update `src/generation.rs` accordingly.
+**Effort:** Low
+**Target:** 0.8.2
+
+---
+
+### N4  Fix LIFO store-free order in generated native code
+**Sources:** PROBLEMS.md #80
+**Severity:** Medium — stores freed in declaration order; allocator requires LIFO
+**Description:** `OpFreeRef` calls are emitted in declaration order. The loft store allocator requires LIFO deallocation; out-of-order frees corrupt the heap on the third call to any function with multiple stores.
+**Fix path:** In `output_block` in `src/generation.rs`, collect all `OpFreeRef` emissions and sort them by `store_nr` descending before writing to the output.
+**Effort:** Medium
+**Target:** 0.8.2
+
+---
+
+### N5  Implement `file_from_bytes` for `DbRef` vector types in `codegen_runtime.rs`
+**Sources:** PROBLEMS.md #86
+**Severity:** Medium — `f#read(n) as vector<T>` returns empty vector in native-compiled programs
+**Description:** The interpreter fix for `read_file` is in place; the native-path `FileVal::file_from_bytes` implementation in `src/codegen_runtime.rs` remains a stub returning an empty vector.
+**Fix path:** Port the interpreter fix: iterate `data.len() / elem_size` elements, call `vector_append` + `write_data` for each element. Until fixed, `12-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
+**Effort:** Medium
+**Target:** 0.8.2
+
+---
+
+### N6  Fix text method call in format interpolation — emit `&str` not `String`
+**Sources:** PROBLEMS.md #87
+**Severity:** Small — format strings containing text method calls produce a type-mismatch compile error in generated Rust
+**Description:** Text methods return `String`, but `format_text` expects `&str`. The emitter passes the `String` value directly, which the Rust compiler rejects.
+**Fix path:** In the format-string emission logic in `src/generation.rs`, bind the method result to a `let _tmp = ...;` temporary and pass `&_tmp` to `format_text`.
+**Effort:** Small
+**Target:** 0.8.2
+
+---
+
+### N7  Fix `directory()`/`user_directory()`/`program_directory()` scratch buffer argument
+**Sources:** PROBLEMS.md #88
+**Severity:** Small — directory query functions emit `()` instead of `&mut work_N` in generated Rust
+**Description:** Destination-passing text functions require a `&mut String` scratch buffer. The native emitter generates an empty block `()` instead.
+**Fix path:** In `src/generation.rs`, detect destination-passing text function calls and emit the pre-allocated scratch buffer `&mut work_N` as the first argument.
+**Effort:** Small
+**Target:** 0.8.2
+
+---
+
+## O — Performance Optimisations
+
+Planned interpreter and native-codegen performance improvements. Full designs with benchmark data and expected gains in [PERFORMANCE.md](PERFORMANCE.md). Priority order per that file: O1 > O4 > O2 > O5 > O6 > O3 > O7.
+
+---
+
+### O1  Superinstruction merging
+**Sources:** PERFORMANCE.md § P1
+**Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes 240–245. Six new entries added to the `OPERATORS` array in `src/fill.rs`. Operands encoded in the same byte count as the replaced sequence, so branch targets need no relocation.
+**Expected gain:** 2–4× on tight integer loops; benefits every loop in the interpreter.
+**Effort:** Medium
+**Target:** 0.8.2
+
+---
+
+### O2  Stack raw pointer cache
+**Sources:** PERFORMANCE.md § P2
+**Description:** Add `stack_base: *mut u8` to `State`; refresh once per function call/return; eliminate the `database.store()` lookup on every push/pop. A `stack_dirty` flag, set by allocation ops, triggers a refresh at the top of the dispatch loop.
+**Expected gain:** 20–50% across all interpreter benchmarks.
+**Effort:** High
+**Target:** 1.1+
+
+---
+
+### O3  Verify integer paths carry no `long` null-sentinel checks
+**Sources:** PERFORMANCE.md § P3
+**Description:** Grep audit of `src/ops.rs` confirming that `*_int` functions never check `i64::MIN`. Add a compile-time string-search test. If violations exist, move the check to `*_long` paths only.
+**Expected gain:** 2–5% on pure integer benchmarks if violations exist; zero cost if already clean.
+**Effort:** Low
+**Target:** 0.8.2
+
+---
+
+### O4  Native: direct-emit local collections
+**Sources:** PERFORMANCE.md § N1
+**Description:** Escape analysis pass marks collection variables as `Local` when they never leave the function (not ref-passed, not stored in a struct field). For `Local` variables, emit `Vec<T>` / `HashMap` directly, bypassing `codegen_runtime` helpers and `DbRef` indirection entirely.
+**Expected gain:** 5–15× on data-structure benchmarks (word frequency 16×, dot product 12×, insertion sort 7×).
+**Effort:** High
+**Target:** 1.1+
+
+---
+
+### O5  Native: omit `stores` param from pure functions
+**Sources:** PERFORMANCE.md § N2
+**Description:** Purity analysis identifies functions whose IR contains no store reads or writes, no IO, no format ops. These emit a `_pure` variant without the `stores: &mut Stores` parameter; the outer wrapper with `stores` delegates to `_pure`. Enables `rustc -O` to inline across recursive calls.
+**Expected gain:** 10–30% on recursive compute benchmarks.
+**Effort:** High
+**Depends:** O4
+**Target:** 1.1+
+
+---
+
+### O6  Native: remove `long` null-sentinel from local arithmetic
+**Sources:** PERFORMANCE.md § N3
+**Description:** Add `op_add_long_nn`, `op_sub_long_nn`, etc. (`_nn` = non-nullable) to `src/ops.rs`. When escape analysis confirms both operands are local (definitely assigned) `long` variables, the native emitter uses `_nn` variants, eliminating the `i64::MIN` check on the hot path.
+**Expected gain:** 1.3–1.5× on Collatz and `long`-heavy native benchmarks.
+**Effort:** Low
+**Target:** 0.8.2
+
+---
+
+### O7  wasm: pre-allocate string buffers in format path
+**Sources:** PERFORMANCE.md § W1
+**Description:** Pre-allocate the result string with `String::with_capacity` before format-string loops in generated wasm code, and use `push_str` instead of `+` to avoid intermediate allocations through wasm's linear-memory allocator.
+**Expected gain:** Reduces wasm/native string-building gap from 2× to <1.3×.
+**Effort:** Medium
+**Depends:** W1
+**Target:** 1.1+
 
 ---
 
@@ -1777,5 +2086,6 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [LOGGER.md](LOGGER.md) — Logger design (A2 detail)
 - [FORMATTER.md](FORMATTER.md) — Code formatter design (backlog item)
 - [NATIVE.md](NATIVE.md) — Native Rust code generation: root cause analysis, step details, verification (Tier N detail)
+- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and implementation designs for O1–O7 (interpreter and native performance improvements)
 - [WEB_IDE.md](WEB_IDE.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
 - [RELEASE.md](RELEASE.md) — 1.0 gate items, project structure changes, release artifacts checklist, post-1.0 versioning policy

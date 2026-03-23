@@ -709,3 +709,11 @@ folder is omitted from the ZIP.
 Each milestone is independently testable and deployable; later milestones do not
 break earlier ones.  M1 and M2 can be developed in parallel once the Rust WASM
 build produces a valid `.wasm` file.
+
+---
+
+## See also
+- [ROADMAP.md](ROADMAP.md) — W1–W6 milestone table with effort estimates and dependencies
+- [RELEASE.md](RELEASE.md) — 1.0.0 gate criteria the IDE must satisfy
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Branch naming and commit workflow for implementing W items
+- [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — R1 workspace split is a prerequisite for the `cdylib` WASM target
