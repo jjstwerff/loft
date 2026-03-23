@@ -524,6 +524,102 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 
 ---
 
+### L6  Field constraints — `assert($.field op ...)` on struct fields
+
+**Sources:** Language design discussion 2026-03-23
+**Severity:** Low — enhancement, not a bug fix
+**Description:** Allow boolean constraint expressions on struct fields that are checked
+at runtime whenever the field is written.  The `$` token refers to the struct instance,
+allowing cross-field constraints.
+
+**Syntax:**
+
+```loft
+struct Color {
+    r: integer limit(0, 255) not null assert($.r >= $.b, "red must be >= blue"),
+    g: integer limit(0, 255) not null,
+    b: integer limit(0, 255) not null
+}
+
+struct Range {
+    lo: integer assert($.lo <= $.hi),
+    hi: integer assert($.hi >= $.lo, "hi must be >= lo, got {$.hi} < {$.lo}")
+}
+```
+
+`assert(condition)` or `assert(condition, message)` appears after other field modifiers
+(`limit`, `not null`).  The expression is a boolean condition that must hold after every
+write to that field.  `$` is the struct instance; `$.field` accesses any field of the
+same struct.  The optional message is a format string that can interpolate field values.
+
+**Semantics:**
+
+- **Checked on:** Every field write — constructor fields, `p.r = x` assignment,
+  deserialization (`from_json`, `f#read`).
+- **Two modes:**
+  - **Direct writes** (constructor, assignment): panic on violation, like `assert()`.
+  - **Parsing / deserialization:** collect violations into a `vector<text>` error list
+    instead of panicking; the caller decides what to do.
+- **On violation (direct):** With message: panic with the user-provided text (format
+  strings supported).  Without message: panic with auto-generated text:
+  `"field constraint failed on Color.r: $.r >= $.b (r=10, b=200)"`.
+- **On violation (parsing):** Append the error message to the parse-error vector.
+  The struct is still populated (with the invalid value) so the caller can inspect it.
+  The caller checks `errors.len() > 0` to decide whether to use or discard the result.
+- **Null fields:** A null value in `$.field` bypasses the check (constraint applies to
+  non-null values only).  Combine with `not null` if the constraint must always hold.
+- **Constructor order:** Fields are initialised in declaration order.  A constraint that
+  references a later field sees its default value (0 / null) during construction.
+  The final state is re-checked after all fields are set.
+- **Relationship to `limit()`:** `limit(min, max)` is a storage optimisation (narrows to
+  1–2 bytes).  `assert()` is a runtime check with no storage effect.  They compose freely.
+
+**Validation API:**
+
+```loft
+// Validate an existing struct — returns all violated constraints:
+errors = validate(color)
+if len(errors) > 0 {
+    for msg in errors { log_error(msg) }
+}
+
+// Parsing with validation (future — depends on H3 from_json):
+user = User.from_json(body)
+errors = validate(user)
+if len(errors) > 0 {
+    // handle bad input without panicking
+}
+```
+
+`validate(record) -> vector<text>` evaluates all `assert()` constraints on the struct
+and returns a list of failure messages (empty = all constraints pass).  This is the
+non-panicking entry point for deserialization, user input, and any context where bad
+data should be reported, not fatal.
+
+Direct field writes (`p.r = x`) still panic — the programmer controls what values they
+assign, so a violation is a bug.  Parsing from external data uses `validate()` because
+the input is untrusted.
+
+**Implementation:**
+
+- **L6.1 — Parser:** In `parse_field`, after `not null` / `limit()` / defaults, check for
+  `assert(`.  Parse the boolean expression with a synthetic `$` variable bound to the
+  struct's `DbRef`.  `$.field` resolves to `OpGetField($, field_offset)`.  Store the
+  constraint as `Attribute.check: Option<(Value, Option<Value>)>` (condition, message).
+- **L6.2 — Bytecode:** At every `OpSetField` site and at the end of struct constructors,
+  emit the check expression + conditional panic.  Reuse the existing `assert` panic
+  machinery.
+- **L6.3 — Native codegen:** Emit `assert!(expr, "constraint message")` after each
+  field write in generated Rust code.
+- **L6.4 — `validate()` builtin:** A stdlib function that evaluates all constraints on
+  a struct record and returns `vector<text>` of failure messages.  Implemented as a
+  generated function per struct type (like `to_json` / `from_json`).
+
+**Effort:** Medium (parser + codegen + native + validate builtin)
+**Target:** 0.8.2
+
+---
+
 ## P — Prototype Features
 
 ### P1  Lambda / anonymous function expressions

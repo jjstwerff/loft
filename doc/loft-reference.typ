@@ -549,10 +549,10 @@ x = "oops"      // compile error: cannot assign text to integer
 ```
 
 ```python
-x = 42           # int inferred; can be rebound to any type
-x += 1
-name = "Bob"
-x = "oops"       # fine — x is now a str
+x = <span class="nm">42</span>           <span class="cm"># int inferred; can be rebound to any type</span>
+x += <span class="nm">1</span>
+name = <span class="st">"Bob"</span>
+x = <span class="st">"oops"</span>       <span class="cm"># fine — x is now a str</span>
 ```
 
 Upside Type errors are caught before the program runs. Renaming or reshaping data structures surfaces mismatches immediately. There is no equivalent of Python's runtime TypeError, AttributeError, or "NoneType has no attribute X" crash — those classes of bug are detected at compile time.
@@ -572,18 +572,18 @@ u.age = null;  // compile error: age is not null
 ```
 
 ```python
-from dataclasses import dataclass
-from typing import Optional
+<span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+<span class="kw">from</span> typing <span class="kw">import</span> Optional
 
-@dataclass
-class User:
-    age: int
-    email: Optional[str] = None  # explicit Optional
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">User</span>:
+    age: <span class="bi">int</span>
+    email: Optional[<span class="bi">str</span>] = <span class="kw">None</span>  <span class="cm"># explicit Optional</span>
 
-u = User(age=30)
-if u.email is None:
-    print("no email")
-u.age = None  # allowed at runtime; mypy catches this
+u = <span class="fn-call">User</span>(age=<span class="nm">30</span>)
+<span class="kw">if</span> u.email <span class="kw">is</span> <span class="kw">None</span>:
+    <span class="bi">print</span>(<span class="st">"no email"</span>)
+u.age = <span class="kw">None</span>  <span class="cm"># allowed at runtime; mypy catches this</span>
 ```
 
 Upside Nullability is part of the struct definition — readable at a glance. not null fields are enforced by the compiler and additionally locked at runtime in debug builds, catching accidental null writes early in development. No Optional\[T\] wrapping needed; the comparison v == null is natural.
@@ -605,20 +605,20 @@ fn distance(self: const Point) - float {
 ```
 
 ```python
-from dataclasses import dataclass
-import math
+<span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+<span class="kw">import</span> math
 
-@dataclass
-class Point:
-    x: float
-    y: float
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">Point</span>:
+    x: <span class="bi">float</span>
+    y: <span class="bi">float</span>
 
-    def distance(self) -> float:
-        return math.sqrt(self.x**2 + self.y**2)
+    <span class="kw">def</span> <span class="fn-call">distance</span>(self) -> <span class="bi">float</span>:
+        <span class="kw">return</span> math.<span class="fn-call">sqrt</span>(self.x**<span class="nm">2</span> + self.y**<span class="nm">2</span>)
 
-p = Point(x=1.0, y=2.0)
-p.z        # AttributeError at runtime (or dict: KeyError)
-p.x = "hi" # allowed at runtime; mypy catches this
+p = <span class="fn-call">Point</span>(x=<span class="nm">1.0</span>, y=<span class="nm">2.0</span>)
+p.z        <span class="cm"># AttributeError at runtime (or dict: KeyError)</span>
+p.x = <span class="st">"hi"</span> <span class="cm"># allowed at runtime; mypy catches this</span>
 ```
 
 Upside Field access is checked at compile time — typos in field names are caught before any code runs. Struct memory layout is fixed and unboxed; integer and float fields live directly in memory with no heap allocation overhead. Methods are ordinary named functions — they can be added from any file, at any time, without modifying the struct definition.
@@ -643,11 +643,11 @@ for _ in 0..2147483647 {
 ```
 
 ```python
-while not ready():
-    step()
+<span class="kw">while</span> <span class="kw">not</span> <span class="fn-call">ready</span>():
+    <span class="fn-call">step</span>()
 
-while queue:
-    process(queue.pop(0))
+<span class="kw">while</span> queue:
+    <span class="fn-call">process</span>(queue.<span class="fn-call">pop</span>(<span class="nm">0</span>))
 ```
 
 Upside Every loop has an iteration variable, making it easy to add a cycle limit or index tracking without restructuring. The break fires long before the range limit in practice. Filtered loops (for x in v if pred(x)) and loop attributes (x\#first, x\#count) are only available on for, so a single loop construct covers all cases.
@@ -668,22 +668,22 @@ s.area()   // dispatches on the runtime variant
 ```
 
 ```python
-import math
-from dataclasses import dataclass
+<span class="kw">import</span> math
+<span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
 
-@dataclass
-class Circle: r: float
-@dataclass
-class Rect:   w: float; h: float
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">Circle</span>: r: <span class="bi">float</span>
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">Rect</span>:   w: <span class="bi">float</span>; h: <span class="bi">float</span>
 
-def area(s):
-    if isinstance(s, Circle): return math.pi * s.r ** 2
-    if isinstance(s, Rect):   return s.w * s.h
+<span class="kw">def</span> <span class="fn-call">area</span>(s):
+    <span class="kw">if</span> <span class="bi">isinstance</span>(s, Circle): <span class="kw">return</span> math.pi * s.r ** <span class="nm">2</span>
+    <span class="kw">if</span> <span class="bi">isinstance</span>(s, Rect):   <span class="kw">return</span> s.w * s.h
 
-# Python 3.10+ structural pattern matching:
-match s:
-    case Circle(r=r): return math.pi * r ** 2
-    case Rect(w=w, h=h): return w * h
+<span class="cm"># Python 3.10+ structural pattern matching:</span>
+<span class="kw">match</span> s:
+    <span class="kw">case</span> <span class="en">Circle</span>(r=r): <span class="kw">return</span> math.pi * r ** <span class="nm">2</span>
+    <span class="kw">case</span> <span class="en">Rect</span>(w=w, h=h): <span class="kw">return</span> w * h
 ```
 
 Upside Each variant's behaviour lives in its own small, named function — easy to read, easy to navigate in an editor. Adding a new shape only requires a new fn area(self: NewShape) with no changes to existing code or a central dispatch function. The compiler warns when a variant has no implementation for a called method.
@@ -700,11 +700,11 @@ pad  = "{value:08}"               // zero-padded
 ```
 
 ```python
-msg  = f"Hi {name}, score: {score:+8.2f}"
-hex  = f"{n:#x}"
-# no loop in f-string; use a join:
-lst  = ",".join(str(x*2) for x in range(1, 4))  # "2,4,6"
-pad  = f"{value:08}"
+msg  = <span class="st">f"Hi {name}, score: {score:+8.2f}"</span>
+hex  = <span class="st">f"{n:#x}"</span>
+<span class="cm"># no loop in f-string; use a join:</span>
+lst  = <span class="st">","</span>.<span class="fn-call">join</span>(<span class="bi">str</span>(x*<span class="nm">2</span>) <span class="kw">for</span> x <span class="kw">in</span> <span class="bi">range</span>(<span class="nm">1</span>, <span class="nm">4</span>))  <span class="cm"># "2,4,6"</span>
+pad  = <span class="st">f"{value:08}"</span>
 ```
 
 Upside All loft strings are implicitly format strings — no f prefix needed. Inline for loops inside {} produce comma-separated output without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (\#x, \#o, b) all work.
@@ -725,16 +725,16 @@ nums += ["x"];  // compile error: expected integer
 ```
 
 ```python
-nums   = [1, 2, 3]          # list — any element type
-lookup = {}                 # dict — any key/value type
-lookup["key"] = "value"
+nums   = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>]          <span class="cm"># list — any element type</span>
+lookup = {}                 <span class="cm"># dict — any key/value type</span>
+lookup[<span class="st">"key"</span>] = <span class="st">"value"</span>
 
-# sorted dict requires an external package:
-from sortedcontainers import SortedDict
-scores = SortedDict()
-scores[user] = 95
+<span class="cm"># sorted dict requires an external package:</span>
+<span class="kw">from</span> sortedcontainers <span class="kw">import</span> SortedDict
+scores = <span class="fn-call">SortedDict</span>()
+scores[user] = <span class="nm">95</span>
 
-nums.append("x")            # allowed at runtime
+nums.<span class="fn-call">append</span>(<span class="st">"x"</span>)            <span class="cm"># allowed at runtime</span>
 ```
 
 Upside All collection types — vector, hash, and sorted map — are built in; no extra import or install needed. Element types are checked at compile time. The same \[\] indexing syntax works on all three. for x in v if pred(x) { v\#remove; } safely removes the current element while iterating — something Python requires careful index management for.
@@ -758,20 +758,20 @@ total   = reduce(nums, 0, fn add);
 ```
 
 ```python
-double  = lambda x: x * 2
-is_even = lambda x: x % 2 == 0
+double  = <span class="kw">lambda</span> x: x * <span class="nm">2</span>
+is_even = <span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>
 
 f = double
-assert f(5) == 10
+<span class="kw">assert</span> <span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>
 
-nums = [1, 2, 3, 4, 5]
-doubled = list(map(lambda x: x * 2, nums))
-evens   = list(filter(lambda x: x % 2 == 0, nums))
-total   = sum(nums)
+nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>]
+doubled = <span class="bi">list</span>(<span class="bi">map</span>(<span class="kw">lambda</span> x: x * <span class="nm">2</span>, nums))
+evens   = <span class="bi">list</span>(<span class="bi">filter</span>(<span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>, nums))
+total   = <span class="bi">sum</span>(nums)
 
-# capture context freely:
-offset = 10
-shifted = [x + offset for x in nums]
+<span class="cm"># capture context freely:</span>
+offset = <span class="nm">10</span>
+shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> nums]
 ```
 
 Upside Simpler mental model — no capture modes, no scope surprises. The fn&nbsp;\<name\> expression gives a compile-checked reference to any named function; the compiler verifies the name exists and has a matching signature before emitting code. Higher-order functions (map, filter, reduce) accept fn-refs directly.
@@ -793,21 +793,21 @@ if f == null { print("file not found"); }
 ```
 
 ```python
-def divide(a: float, b: float) -> float:
-    if b == 0:
-        raise ValueError("division by zero")
-    return a / b
+<span class="kw">def</span> <span class="fn-call">divide</span>(a: <span class="bi">float</span>, b: <span class="bi">float</span>) -> <span class="bi">float</span>:
+    <span class="kw">if</span> b == <span class="nm">0</span>:
+        <span class="kw">raise</span> <span class="fn-call">ValueError</span>(<span class="st">"division by zero"</span>)
+    <span class="kw">return</span> a / b
 
-try:
-    result = divide(x, y)
-except ValueError as e:
-    print(f"error: {e}")
+<span class="kw">try</span>:
+    result = <span class="fn-call">divide</span>(x, y)
+<span class="kw">except</span> ValueError <span class="kw">as</span> e:
+    <span class="bi">print</span>(<span class="st">f"error: {e}"</span>)
 
-try:
-    with open("data.txt") as f:
-        data = f.read()
-except FileNotFoundError:
-    print("file not found")
+<span class="kw">try</span>:
+    <span class="kw">with</span> <span class="bi">open</span>(<span class="st">"data.txt"</span>) <span class="kw">as</span> f:
+        data = f.<span class="fn-call">read</span>()
+<span class="kw">except</span> FileNotFoundError:
+    <span class="bi">print</span>(<span class="st">"file not found"</span>)
 ```
 
 Upside No exception hierarchy to learn, no accidental exception swallowing, no overhead from unwinding the stack. File and I/O operations signal failure by returning null, which is explicit and cheap to check. The control flow of a loft function is always straightforward — there are no hidden exit paths.
@@ -826,16 +826,16 @@ for item in records par(s=score(item), 4) {
 ```
 
 ```python
-from concurrent.futures import ProcessPoolExecutor
+<span class="kw">from</span> concurrent.futures <span class="kw">import</span> ProcessPoolExecutor
 
-def score(item): return item.value * 2
+<span class="kw">def</span> <span class="fn-call">score</span>(item): <span class="kw">return</span> item.value * <span class="nm">2</span>
 
-# ProcessPoolExecutor: bypasses GIL via separate processes
-with ProcessPoolExecutor(max_workers=4) as ex:
-    results = list(ex.map(score, records))
-total = sum(results)
+<span class="cm"># ProcessPoolExecutor: bypasses GIL via separate processes</span>
+<span class="kw">with</span> <span class="fn-call">ProcessPoolExecutor</span>(max_workers=<span class="nm">4</span>) <span class="kw">as</span> ex:
+    results = <span class="bi">list</span>(ex.<span class="fn-call">map</span>(score, records))
+total = <span class="bi">sum</span>(results)
 
-# ThreadPoolExecutor: simpler but GIL limits CPU-bound work
+<span class="cm"># ThreadPoolExecutor: simpler but GIL limits CPU-bound work</span>
 ```
 
 Upside Built into the language — no import, no boilerplate. The GIL does not apply; worker threads run on separate OS threads inside the same process. Results arrive in the original vector order. The compiler validates the worker function signature at the call site. The thread count is set per call, making it easy to tune for the hardware.
@@ -855,15 +855,15 @@ fn max_float(a: float, b: float) - float {
 ```
 
 ```python
-# Duck typing: works for any T that supports >
-def max_val(a, b):
-    return a if a > b else b
+<span class="cm"># Duck typing: works for any T that supports ></span>
+<span class="kw">def</span> <span class="fn-call">max_val</span>(a, b):
+    <span class="kw">return</span> a <span class="kw">if</span> a > b <span class="kw">else</span> b
 
-# With type hints (Python 3.12+):
-from typing import TypeVar
-T = TypeVar("T")
-def max_val(a: T, b: T) -> T:
-    return a if a > b else b
+<span class="cm"># With type hints (Python 3.12+):</span>
+<span class="kw">from</span> typing <span class="kw">import</span> TypeVar
+T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
+<span class="kw">def</span> <span class="fn-call">max_val</span>(a: T, b: T) -> T:
+    <span class="kw">return</span> a <span class="kw">if</span> a > b <span class="kw">else</span> b
 ```
 
 Upside Nothing to learn about type parameters, bounds, variance, or protocols. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.
@@ -881,14 +881,14 @@ connect("localhost", 8080);      // compile error: wrong argument count
 ```
 
 ```python
-def connect(host: str, port: int = 80, timeout: int = 30):
+<span class="kw">def</span> <span class="fn-call">connect</span>(host: <span class="bi">str</span>, port: <span class="bi">int</span> = <span class="nm">80</span>, timeout: <span class="bi">int</span> = <span class="nm">30</span>):
     ...
 
-connect("localhost")            # uses defaults
-connect("localhost", 8080)      # overrides port only
-connect("localhost", timeout=5) # keyword arg — skips port
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>)            <span class="cm"># uses defaults</span>
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>, <span class="nm">8080</span>)      <span class="cm"># overrides port only</span>
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>, timeout=<span class="nm">5</span>) <span class="cm"># keyword arg — skips port</span>
 
-def log(*args, **kwargs): ...   # variadic
+<span class="kw">def</span> <span class="fn-call">log</span>(*args, **kwargs): ...   <span class="cm"># variadic</span>
 ```
 
 Upside Every call site is explicit — there are no hidden default values to look up. The number and order of arguments is always visible at the call site, making code easier to follow without jumping to the function definition.
@@ -907,14 +907,14 @@ Downside No default parameter values means wrapper overloads must be written by 
 ```
 
 ```python
-import numpy as np          # numerical arrays / SIMD
-import pandas as pd         # dataframes
-import requests             # HTTP
-import flask                # web framework
-import sqlalchemy           # database ORM
-import scikit_learn         # machine learning
-# 500 000+ packages on PyPI, installable with:
-#   pip install <package>
+<span class="kw">import</span> numpy <span class="kw">as</span> np          <span class="cm"># numerical arrays / SIMD</span>
+<span class="kw">import</span> pandas <span class="kw">as</span> pd         <span class="cm"># dataframes</span>
+<span class="kw">import</span> requests             <span class="cm"># HTTP</span>
+<span class="kw">import</span> flask                <span class="cm"># web framework</span>
+<span class="kw">import</span> sqlalchemy           <span class="cm"># database ORM</span>
+<span class="kw">import</span> scikit_learn         <span class="cm"># machine learning</span>
+<span class="cm"># 500 000+ packages on PyPI, installable with:</span>
+<span class="cm">#   pip install <package></span>
 ```
 
 Upside Zero external dependencies — the interpreter is a single self-contained binary. Deployment is copying one file. There is no requirements.txt, no virtual environment, no version conflict, and no supply-chain risk. The built-in library covers text manipulation, math, file I/O, typed collections, parallel execution, image handling, and a full lexer/parser framework.
@@ -931,12 +931,12 @@ cube  = pow(x, 3.0)       // cube root: pow(x, 1.0/3.0)
 ```
 
 ```python
-import math
-area  = math.pi * r ** 2   # ** is exponentiation
-bits  = a | b              # bitwise OR
-xor   = a ^ b              # bitwise XOR
-cube  = x ** 3             # integer cube — exact
-cube  = x ** (1/3)         # cube root as float
+<span class="kw">import</span> math
+area  = math.pi * r ** <span class="nm">2</span>   <span class="cm"># ** is exponentiation</span>
+bits  = a | b              <span class="cm"># bitwise OR</span>
+xor   = a ^ b              <span class="cm"># bitwise XOR</span>
+cube  = x ** <span class="nm">3</span>             <span class="cm"># integer cube — exact</span>
+cube  = x ** (<span class="nm">1</span>/<span class="nm">3</span>)         <span class="cm"># cube root as float</span>
 ```
 
 Upside ^ behaves as bitwise XOR in both loft and Python — no mismatch. Bitwise operator precedence matches: | (loose) → ^ → & → shifts → arithmetic (tight). The pow() function is explicit, avoiding any ambiguity about whether ^ means XOR or exponentiation.
@@ -1362,9 +1362,9 @@ Booleans can be embedded in a format string like any other value. The '^' alignm
   assert("{false}" == "false", "Plain boolean format");
 ```
 
-=== Common pitfall: '&' vs 'and'
+=== '&' vs 'and'
 
-'&' is bitwise AND on integers; 'and' (or '&&') is logical AND on booleans. Writing 'a & b' when you mean 'a and b' usually compiles but gives wrong results because it operates on the numeric representation of the booleans. Always use 'and' / '&&' for boolean logic.
+'&' is bitwise AND on integers; 'and' (or '&&') is logical AND on booleans. Writing 'a & b' where both sides are booleans is a compile error — the compiler requires 'and' or '&&' for boolean logic.
 
 ```rust
   flag_a = 3 > 1;
@@ -4580,116 +4580,52 @@ reverse(v) and sort(v) are compiler special-cased in parse\_call.
 
 = Roadmap
 
-This page describes the planned development path for Loft and loft. Features marked *planned* are not yet available — the code examples show the intended syntax once the feature ships.
+Loft is under active development. Everything documented on the language pages works today. This page shows what is coming next. Code examples show the intended syntax — they do not work yet.
 
-=== Current status — version 0.x
+=== Closure capture
 
-The language is under active development. All features documented on the language pages work correctly and are stable enough for real use, but the stability guarantee (no breaking changes) does not apply until version 1.0.
-
-What works today:
-
-- All primitive types: `integer`, `long`, `float`, `boolean`, `text`
-- Structs and struct-enums with methods
-- Collections: `vector`, `sorted`, `index`, `hash`
-- Functions, default parameters, reference parameters (`&`), `const` parameters
-- Function references (`fn name`) and higher-order functions (`map`, `filter`, `reduce`)
-- Lambda expressions: inline functions with `fn(x: integer) -> integer { x * 2 }` or the short form `|x| { x * 2 }`
-- Native compilation: `loft --native file.loft` compiles to a fast native binary via `rustc`
-- File I/O: text, binary, directory listing
-- Parallel execution: `par(…)` for-loop clause and `parallel_for()`
-- Logging framework
-- Library system (`use mylib;`)
-- Null safety: every type is nullable; `not null` annotation on struct fields
-- Format strings with expression interpolation: `"{x * 2 + 1}"`
-
-=== Version 1.0 — Language stability
-
-Version 1.0 is a stability contract: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language surface — syntax, type system, documented standard library, command-line flags — is frozen at 1.0.
-
-The primary gate items are correctness fixes (no panics on valid programs) and infrastructure (correct project identity, CHANGELOG, release binaries). See the internal planning documents for the full gate list.
-
-The following features are target items for 1.0 — they are planned for the 1.0 release but will ship in 1.1 if they are not ready in time:
-
-==== Match expressions planned
-
-A `match` expression dispatches on an enum value with compiler-checked exhaustiveness. If every variant is not covered and no wildcard arm is present, the compiler reports an error.
+Lambdas will be able to read variables from the surrounding scope without passing them as extra arguments:
 
 ```
-// Plain enum dispatch
-direction = North;
-label = match direction {
-    North => "north"
-    East  => "east"
-    South => "south"
-    West  => "west"
-};
-assert(label == "north", "match direction");
+factor = 10;
+scaled = map(nums, |x| { x * factor });  // captures 'factor'
 ```
 
-```
-// Struct-enum: each arm binds the variant's fields
-area = match shape {
-    Circle { radius }       => PI * radius * radius
-    Rect   { width, height } => width * height
-};
-```
+Today you must pass `factor` explicitly. Closure capture removes that boilerplate for any read-only use of outer variables.
+
+=== Tuple types
+
+Return multiple values from a function and destructure them at the call site — no struct definition needed:
 
 ```
-// Wildcard arm catches anything not listed above
-description = match code {
-    200 => "ok"
-    404 => "not found"
-    _   => "unknown"
-};
+fn min_max(v: vector<integer>) -> (integer, integer) {
+    (min(v), max(v))
+}
+
+(lo, hi) = min_max([3, 1, 4, 1, 5]);
+assert(lo == 1 && hi == 5, "min_max");
 ```
 
-Today the same logic requires an if/else chain or a dispatched method. Match makes it shorter and adds exhaustiveness checking.
+=== HTTP client and JSON
 
-==== Wildcard and selective imports planned
-
-The current `use mylib;` import requires prefixing every name with `mylib::`. Two shorter forms are planned:
+Built-in HTTP requests and automatic JSON serialization:
 
 ```
-use mylib::*;              // bring all public names into scope
-use mylib::Point, add;    // bring specific names into scope
+#json
+struct User { name: text, age: integer }
+
+resp = http_get("https://api.example.com/users/1");
+if resp.ok() {
+    user = User.from_json(resp.body);
+    println("{user.name} is {user.age}");
+}
 ```
 
-The compiler will report a collision error if a wildcard-imported name shadows a local definition.
+The `#json` annotation generates `to_json` and `from_json` methods automatically for any struct.
 
-==== Code formatter planned
+=== Interactive mode
 
-A canonical formatter enforces one consistent Loft style — 2-space indentation, opening braces on the same line, 80-column line wrapping. No configuration.
-
-```
-loft --format my_program.loft       # format in-place
-loft --format-check my_program.loft  # exit 1 if formatting differs (CI)
-loft --format src/                   # format every .loft file in a directory
-```
-
-The formatter is a token-stream pass that preserves all comments and produces a deterministic output. It does not require the program to type-check successfully.
-
-=== Version 1.1 — Ergonomics
-
-==== Lambda expressions
-
-Lambda expressions let you write a function inline without giving it a name. Two forms are available:
-
-```
-nums = [1, 2, 3, 4, 5];
-
-// Full form — fn(...) syntax with explicit types
-doubled = map(nums, fn(x: integer) -> integer { x * 2 });
-
-// Short form — |...| syntax, slightly less to type
-evens   = filter(nums, |x: integer| -> boolean { x % 2 == 0 });
-total   = reduce(nums, 0, |acc: integer, x: integer| -> integer { acc + x });
-```
-
-Lambdas cannot capture variables from the surrounding scope yet — pass any needed values as extra arguments. Closure capture is planned for a future release. See Functions for more examples.
-
-==== Interactive mode (REPL) planned
-
-Running `loft` with no arguments will enter an interactive session where each expression is evaluated immediately and its result printed:
+Running `loft` with no arguments will start an interactive session:
 
 ```
 $ loft
@@ -4702,26 +4638,44 @@ $ loft
 3.0
 ```
 
-Variable and type definitions persist across lines for the duration of the session. A parse error discards the failed line and continues the session.
+Definitions persist across lines. A syntax error discards the failed line and continues.
 
-=== Web IDE — independent track
+=== Coroutines
 
-A fully serverless browser-based IDE for Loft is being developed in parallel with the interpreter. It will run the full loft interpreter as a WebAssembly module — no installation, no account, no server.
+Lazy sequences with `yield` — generate values on demand without building a collection:
 
-Planned features:
+```
+fn fibonacci() -> iterator<integer> {
+    a = 0; b = 1;
+    loop {
+        yield a;
+        (a, b) = (b, a + b);
+    }
+}
 
-- Syntax highlighting with the CodeMirror 6 editor
-- Run button → console output and problems panel
-- Go-to-definition and find-usages (Ctrl+click)
-- Multiple projects stored locally in the browser (IndexedDB)
-- Documentation and example browser without leaving the IDE
-- One-click ZIP export with a structure ready for local `loft` development
-- Works offline after first load (PWA service worker)
+for n in fibonacci() {
+    if n > 100 { break; }
+    print("{n} ");
+}
+```
 
-The web IDE does not depend on interpreter version 1.0 and will be released on its own timeline.
+=== Web IDE
+
+A browser-based IDE that runs the full Loft interpreter as WebAssembly — no installation, no server:
+
+- Syntax highlighting and error markers (CodeMirror 6)
+- Run button with console output
+- Go-to-definition and find-usages
+- Multiple projects stored locally (IndexedDB)
+- Documentation browser built in
+- Works offline (PWA)
+
+=== Version 1.0 — stability contract
+
+Version 1.0 means: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language syntax, type system, standard library, and command-line flags are frozen. Until then, breaking changes are possible between minor versions.
 
 === Following progress
 
-Development is tracked in the GitHub repository. The internal planning documents describe each item in detail, including implementation notes and effort estimates.
+Development is tracked in the GitHub repository.
 
 

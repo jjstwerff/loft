@@ -30,9 +30,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
-| 77 | Native codegen: `CallRef`/function-pointer calls not implemented | Medium | `--native` only; affects `06-function.loft` |
+| 77 | ~~Native codegen: `CallRef`/function-pointer calls not implemented~~ | ~~Fixed~~ | Fixed 2026-03-23: recursive `collect_int_fn_refs` for conditional fn-refs |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
-| 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
+| 80 | ~~Native codegen: LIFO store-free panic in recursive functions~~ | ~~Fixed~~ | Fixed 2026-03-23: non-LIFO free cascade + null sentinel reset after OpFreeRef |
 | 82 | `string` is not a valid type name — use `text` | ~~Fixed~~ | S7: typedef.rs now emits "did you mean 'text'?" |
 | 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | S8: compile-time error in typedef.rs; runtime fix via Issue 85 |
 | 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | ~~Fixed~~ | Root cause: `vector_needs_db` created a new local store for argument vectors on second pass; `parse_return` emitted dangling return for locally-backed work-refs. Fixed by checking `is_argument` in `vector_needs_db` and injecting `OpAppendVector` + `Return(Var(__ref_1))` in `parse_return` for explicit returns. |

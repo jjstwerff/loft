@@ -12,9 +12,24 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 
 ## 0.8.2 — Native stability, slot correctness, and interpreter performance
 
+**Native test parity achieved (2026-03-23):** all 305 `.loft` tests pass in both
+interpreter and native mode.  Issues #77 (fn-ref dispatch) and #80 (LIFO store-free)
+are fixed.  `loft --tests --native` with binary caching, stale-rlib auto-rebuild,
+and `file.loft::fn` filtering is implemented.  CI now fails on any native regression.
+
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
 | S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
+| S9     | Fix `character + character` codegen panic                | Small     |             | PROBLEMS.md #90    |
+| S10    | Allow `const` modifier in lambda parameters             | Small     |             | parser/expressions.rs |
+| S11    | Drop `fn` prefix for function references                | Small     |             | parser/expressions.rs |
+| S12    | Fix PNG loading — wrong dimensions and record panic     | Medium    |             | png_store.rs        |
+| S13    | Enforce `pub` visibility — non-pub items leak across files | Small    |             | parser/mod.rs       |
+| L6     | Field constraints with `assert($.<field>)` syntax      | Medium    |             | definitions.rs     |
+| L6.1   | ↳ Parser: `assert(expr)` in field definition            | Small     |             | definitions.rs     |
+| L6.2   | ↳ Bytecode: emit check after every field write          | Medium    | L6.1        | codegen.rs, fill.rs |
+| L6.3   | ↳ Native codegen: emit `assert!` after field write      | Small     | L6.2        | generation.rs      |
+| L6.4   | ↳ `validate()` builtin: non-panicking constraint check  | Small     | L6.2        | 01_code.loft       |
 | O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
 | O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
 | A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
@@ -100,7 +115,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID     | Title                                                   | Effort    | Depends on  | Source               |
 |--------|---------------------------------------------------------|-----------|-------------|----------------------|
-| S6     | Fix `for` loop scoping in recursive functions           | High      |             | PROBLEMS.md #84      |
 | A5     | Closure capture for lambdas                             | Very High | P1          | PLANNING.md A5       |
 | A5.1   | ↳ Capture analysis (identify free variables)            | Small     | P1          | scopes.rs            |
 | A5.2   | ↳ Closure record layout                                 | Small     | A5.1        | data.rs, typedef.rs  |

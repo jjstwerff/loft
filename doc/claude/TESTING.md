@@ -841,16 +841,51 @@ only `fn test*()` functions (no parameters) are executed as tests.
 ```bash
 loft --tests                  # run tests in current directory (recursive)
 loft --tests tests/           # run tests in a specific directory
+loft --tests file.loft        # run all tests in a single file
+loft --tests file.loft::name  # run a single test function
+loft --tests 'file.loft::{a,b}'  # run specific test functions
 loft --tests --no-warnings    # suppress warning output
 ```
 
 The runner:
 1. Recursively discovers `.loft` files under the given directory (default: `.`).
-2. Parses each file and finds all `fn test*()` functions.
-3. Runs each test function independently.  A failed `assert` marks the test as
+   When given a single `.loft` file, runs only that file.
+2. Parses each file and finds all callable functions (zero-parameter, or
+   single `vector<text>` parameter when `@ARGS` provides argv).
+3. Applies the optional `::name` or `::{a,b}` filter to select specific functions.
+4. Runs each test function independently.  A failed `assert` marks the test as
    failed but does not abort the run.
-4. Reports per-file and per-directory summaries.
-5. Exits with code 0 if all tests pass, 1 if any fail.
+5. Reports per-file and per-directory summaries.
+6. Exits with code 0 if all tests pass, 1 if any fail.
+
+### Native mode (`--tests --native`)
+
+```bash
+loft --tests --native tests/scripts     # compile and run all scripts natively
+loft --tests --native file.loft         # single file
+loft --tests --native file.loft::name   # single function
+```
+
+When `--native` is combined with `--tests`, each file is compiled to a native
+Rust binary via `output_native_reachable` + `rustc`, then executed:
+
+1. Generate Rust source with all selected test functions called from a
+   generated `main()`.  Files with `fn main()` use the loft main directly.
+2. Compile with `rustc` (links against `libloft.rlib`).
+3. Run the binary and check exit status.
+
+**Binary cache:** Generated `.rs` files and compiled binaries are kept in
+`/tmp/loft_test_native_*`.  An FNV-1a content hash (`.key` sidecar) prevents
+recompilation when the source hasn't changed.  Typical speedup: 8–10x on
+repeated runs.
+
+**Stale rlib detection:** Before native compilation, the runner compares
+`libloft.rlib` mtime against `src/` and `default/` source mtimes.  If any
+source is newer, `cargo build --lib` runs automatically.
+
+**Limitations:**
+- `@EXPECT_FAIL` tests are skipped (native can't catch panics for matching).
+- `@EXPECT_ERROR` files are skipped (can't compile intentionally broken code).
 
 ### Output format
 
@@ -872,7 +907,10 @@ recursive walk.
 
 | Flag | Effect |
 |------|--------|
-| `--tests [dir]` | Discover and run test functions (default dir: `.`) |
+| `--tests [dir\|file]` | Discover and run test functions (default dir: `.`) |
+| `--tests file::name` | Run a single test function in a file |
+| `--tests file::{a,b}` | Run specific test functions in a file |
+| `--native` | Compile to native Rust instead of interpreting (with `--tests`) |
 | `--no-warnings` | Suppress warning diagnostics in test output |
 
 ---

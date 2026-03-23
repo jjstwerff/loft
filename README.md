@@ -75,18 +75,37 @@ Download a release binary from the [Releases](https://github.com/jjstwerff/loft/
 
 ```
 loft [options] <file.loft>
+loft --tests [dir | file.loft | file.loft::name]
 
 Options:
-  --help                 Show this help
-  --version              Print version
-  --path <dir>           Override the project root (where default/ is found)
-  --native [out]         Compile to a native binary via rustc and run it
-  --native-release [out] Same as --native but with full optimisations (-O)
-  --native-emit [out.rs] Write the generated Rust source to a file (do not compile)
+  --help                    Show this help
+  --version                 Print version
+  --path <dir>              Override the project root (where default/ is found)
+  --project <dir>           Sandbox file I/O and search lib/ for imports
+  --lib <dir>               Add a 'use' import search path (repeatable)
+  --native                  Compile to a native binary via rustc and run it
+  --native-release          Like --native with full optimisations (-O)
+  --native-emit [out.rs]    Write the generated Rust source (do not compile)
+  --native-wasm [out.wasm]  Compile to WebAssembly (wasm32-wasip2)
+  --tests [dir|file]        Discover and run fn test*() functions
+  --tests --native          Same but compile to native Rust first
+  --format <file>           Format a .loft file in-place
+  --no-warnings             Suppress warnings in --tests output
 ```
 
 The interpreter loads the standard library from `default/` relative to the binary, then
 parses and executes `<file.loft>`. The entry point is `fn main()`.
+
+### Test runner
+
+```sh
+loft --tests                          # all .loft files in current dir (recursive)
+loft --tests tests/scripts            # specific directory
+loft --tests file.loft                # single file
+loft --tests file.loft::test_name     # single function
+loft --tests 'file.loft::{a,b}'      # multiple functions
+loft --tests --native tests/scripts   # compile to native and run
+```
 
 ---
 
@@ -125,8 +144,7 @@ To build locally: run `cargo run --bin gendoc`, then open `doc/index.html`.
 ## Known limitations (0.8.x)
 
 - **No closure capture** — lambdas work but cannot read variables from the surrounding scope; pass needed values as extra arguments
-- **No REPL** — interactive mode is planned for 1.1
-- **No in-place vector sort** — `sorted<T>` keeps insertion order; a `sort()` function is planned for 1.1
+- **No REPL** — interactive mode is planned for 0.9.0
 
 ---
 

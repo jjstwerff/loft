@@ -58,11 +58,10 @@ fn main() {
   // '<' aligns left, '>' aligns right (right-alignment is the default).
   assert("1{true:^7}2" == "1 true  2", "Centred boolean in field of width 7");
   assert("{false}" == "false", "Plain boolean format");
-  // ## Common pitfall: '&' vs 'and'
+  // ## '&' vs 'and'
   // '&' is bitwise AND on integers; 'and' (or '&&') is logical AND on booleans.
-  // Writing 'a & b' when you mean 'a and b' usually compiles but gives wrong
-  // results because it operates on the numeric representation of the booleans.
-  // Always use 'and' / '&&' for boolean logic.
+  // Writing 'a & b' where both sides are booleans is a compile error — the
+  // compiler requires 'and' or '&&' for boolean logic.
   flag_a = 3 > 1;
   // true
   flag_b = 4 > 2;

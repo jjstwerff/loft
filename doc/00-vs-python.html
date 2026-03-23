@@ -23,10 +23,10 @@ x = <span class="st">"oops"</span>      <span class="cm">// compile error: canno
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>x = 42           # int inferred; can be rebound to any type
-x += 1
-name = "Bob"
-x = "oops"       # fine — x is now a str</code></pre>
+  <pre class="python-pre"><code>x = <span class="nm">42</span>           <span class="cm"># int inferred; can be rebound to any type</span>
+x += <span class="nm">1</span>
+name = <span class="st">"Bob"</span>
+x = <span class="st">"oops"</span>       <span class="cm"># fine — x is now a str</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -48,18 +48,18 @@ u.age = <span class="kw">null</span>;  <span class="cm">// compile error: age is
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>from dataclasses import dataclass
-from typing import Optional
+  <pre class="python-pre"><code><span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+<span class="kw">from</span> typing <span class="kw">import</span> Optional
 
-@dataclass
-class User:
-    age: int
-    email: Optional[str] = None  # explicit Optional
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">User</span>:
+    age: <span class="bi">int</span>
+    email: Optional[<span class="bi">str</span>] = <span class="kw">None</span>  <span class="cm"># explicit Optional</span>
 
-u = User(age=30)
-if u.email is None:
-    print("no email")
-u.age = None  # allowed at runtime; mypy catches this</code></pre>
+u = <span class="fn-call">User</span>(age=<span class="nm">30</span>)
+<span class="kw">if</span> u.email <span class="kw">is</span> <span class="kw">None</span>:
+    <span class="bi">print</span>(<span class="st">"no email"</span>)
+u.age = <span class="kw">None</span>  <span class="cm"># allowed at runtime; mypy catches this</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -83,20 +83,20 @@ p.x = <span class="st">"hi"</span>; <span class="cm">// compile error: cannot as
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>from dataclasses import dataclass
-import math
+  <pre class="python-pre"><code><span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+<span class="kw">import</span> math
 
-@dataclass
-class Point:
-    x: float
-    y: float
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">Point</span>:
+    x: <span class="bi">float</span>
+    y: <span class="bi">float</span>
 
-    def distance(self) -> float:
-        return math.sqrt(self.x**2 + self.y**2)
+    <span class="kw">def</span> <span class="fn-call">distance</span>(self) -&gt; <span class="bi">float</span>:
+        <span class="kw">return</span> math.<span class="fn-call">sqrt</span>(self.x**<span class="nm">2</span> + self.y**<span class="nm">2</span>)
 
-p = Point(x=1.0, y=2.0)
-p.z        # AttributeError at runtime (or dict: KeyError)
-p.x = "hi" # allowed at runtime; mypy catches this</code></pre>
+p = <span class="fn-call">Point</span>(x=<span class="nm">1.0</span>, y=<span class="nm">2.0</span>)
+p.z        <span class="cm"># AttributeError at runtime (or dict: KeyError)</span>
+p.x = <span class="st">"hi"</span> <span class="cm"># allowed at runtime; mypy catches this</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -123,11 +123,11 @@ p.x = "hi" # allowed at runtime; mypy catches this</code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>while not ready():
-    step()
+  <pre class="python-pre"><code><span class="kw">while</span> <span class="kw">not</span> <span class="fn-call">ready</span>():
+    <span class="fn-call">step</span>()
 
-while queue:
-    process(queue.pop(0))</code></pre>
+<span class="kw">while</span> queue:
+    <span class="fn-call">process</span>(queue.<span class="fn-call">pop</span>(<span class="nm">0</span>))</code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -150,22 +150,22 @@ s.<span class="fn-call">area</span>()   <span class="cm">// dispatches on the ru
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>import math
-from dataclasses import dataclass
+  <pre class="python-pre"><code><span class="kw">import</span> math
+<span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
 
-@dataclass
-class Circle: r: float
-@dataclass
-class Rect:   w: float; h: float
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">Circle</span>: r: <span class="bi">float</span>
+<span class="en">@dataclass</span>
+<span class="kw">class</span> <span class="en">Rect</span>:   w: <span class="bi">float</span>; h: <span class="bi">float</span>
 
-def area(s):
-    if isinstance(s, Circle): return math.pi * s.r ** 2
-    if isinstance(s, Rect):   return s.w * s.h
+<span class="kw">def</span> <span class="fn-call">area</span>(s):
+    <span class="kw">if</span> <span class="bi">isinstance</span>(s, Circle): <span class="kw">return</span> math.pi * s.r ** <span class="nm">2</span>
+    <span class="kw">if</span> <span class="bi">isinstance</span>(s, Rect):   <span class="kw">return</span> s.w * s.h
 
-# Python 3.10+ structural pattern matching:
-match s:
-    case Circle(r=r): return math.pi * r ** 2
-    case Rect(w=w, h=h): return w * h</code></pre>
+<span class="cm"># Python 3.10+ structural pattern matching:</span>
+<span class="kw">match</span> s:
+    <span class="kw">case</span> <span class="en">Circle</span>(r=r): <span class="kw">return</span> math.pi * r ** <span class="nm">2</span>
+    <span class="kw">case</span> <span class="en">Rect</span>(w=w, h=h): <span class="kw">return</span> w * h</code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -184,11 +184,11 @@ pad  = <span class="st">"{value:08}"</span>               <span class="cm">// ze
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>msg  = f"Hi {name}, score: {score:+8.2f}"
-hex  = f"{n:#x}"
-# no loop in f-string; use a join:
-lst  = ",".join(str(x*2) for x in range(1, 4))  # "2,4,6"
-pad  = f"{value:08}"</code></pre>
+  <pre class="python-pre"><code>msg  = <span class="st">f"Hi {name}, score: {score:+8.2f}"</span>
+hex  = <span class="st">f"{n:#x}"</span>
+<span class="cm"># no loop in f-string; use a join:</span>
+lst  = <span class="st">","</span>.<span class="fn-call">join</span>(<span class="bi">str</span>(x*<span class="nm">2</span>) <span class="kw">for</span> x <span class="kw">in</span> <span class="bi">range</span>(<span class="nm">1</span>, <span class="nm">4</span>))  <span class="cm"># "2,4,6"</span>
+pad  = <span class="st">f"{value:08}"</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -211,16 +211,16 @@ nums += [<span class="st">"x"</span>];  <span class="cm">// compile error: expec
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>nums   = [1, 2, 3]          # list — any element type
-lookup = {}                 # dict — any key/value type
-lookup["key"] = "value"
+  <pre class="python-pre"><code>nums   = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>]          <span class="cm"># list — any element type</span>
+lookup = {}                 <span class="cm"># dict — any key/value type</span>
+lookup[<span class="st">"key"</span>] = <span class="st">"value"</span>
 
-# sorted dict requires an external package:
-from sortedcontainers import SortedDict
-scores = SortedDict()
-scores[user] = 95
+<span class="cm"># sorted dict requires an external package:</span>
+<span class="kw">from</span> sortedcontainers <span class="kw">import</span> SortedDict
+scores = <span class="fn-call">SortedDict</span>()
+scores[user] = <span class="nm">95</span>
 
-nums.append("x")            # allowed at runtime</code></pre>
+nums.<span class="fn-call">append</span>(<span class="st">"x"</span>)            <span class="cm"># allowed at runtime</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -246,20 +246,20 @@ total   = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, <
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>double  = lambda x: x * 2
-is_even = lambda x: x % 2 == 0
+  <pre class="python-pre"><code>double  = <span class="kw">lambda</span> x: x * <span class="nm">2</span>
+is_even = <span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>
 
 f = double
-assert f(5) == 10
+<span class="kw">assert</span> <span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>
 
-nums = [1, 2, 3, 4, 5]
-doubled = list(map(lambda x: x * 2, nums))
-evens   = list(filter(lambda x: x % 2 == 0, nums))
-total   = sum(nums)
+nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>]
+doubled = <span class="bi">list</span>(<span class="bi">map</span>(<span class="kw">lambda</span> x: x * <span class="nm">2</span>, nums))
+evens   = <span class="bi">list</span>(<span class="bi">filter</span>(<span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>, nums))
+total   = <span class="bi">sum</span>(nums)
 
-# capture context freely:
-offset = 10
-shifted = [x + offset for x in nums]</code></pre>
+<span class="cm"># capture context freely:</span>
+offset = <span class="nm">10</span>
+shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> nums]</code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -283,21 +283,21 @@ f = <span class="fn-call">open</span>(<span class="st">"data.txt"</span>);
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>def divide(a: float, b: float) -> float:
-    if b == 0:
-        raise ValueError("division by zero")
-    return a / b
+  <pre class="python-pre"><code><span class="kw">def</span> <span class="fn-call">divide</span>(a: <span class="bi">float</span>, b: <span class="bi">float</span>) -&gt; <span class="bi">float</span>:
+    <span class="kw">if</span> b == <span class="nm">0</span>:
+        <span class="kw">raise</span> <span class="fn-call">ValueError</span>(<span class="st">"division by zero"</span>)
+    <span class="kw">return</span> a / b
 
-try:
-    result = divide(x, y)
-except ValueError as e:
-    print(f"error: {e}")
+<span class="kw">try</span>:
+    result = <span class="fn-call">divide</span>(x, y)
+<span class="kw">except</span> ValueError <span class="kw">as</span> e:
+    <span class="bi">print</span>(<span class="st">f"error: {e}"</span>)
 
-try:
-    with open("data.txt") as f:
-        data = f.read()
-except FileNotFoundError:
-    print("file not found")</code></pre>
+<span class="kw">try</span>:
+    <span class="kw">with</span> <span class="bi">open</span>(<span class="st">"data.txt"</span>) <span class="kw">as</span> f:
+        data = f.<span class="fn-call">read</span>()
+<span class="kw">except</span> FileNotFoundError:
+    <span class="bi">print</span>(<span class="st">"file not found"</span>)</code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -318,16 +318,16 @@ total = <span class="nm">0</span>;
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>from concurrent.futures import ProcessPoolExecutor
+  <pre class="python-pre"><code><span class="kw">from</span> concurrent.futures <span class="kw">import</span> ProcessPoolExecutor
 
-def score(item): return item.value * 2
+<span class="kw">def</span> <span class="fn-call">score</span>(item): <span class="kw">return</span> item.value * <span class="nm">2</span>
 
-# ProcessPoolExecutor: bypasses GIL via separate processes
-with ProcessPoolExecutor(max_workers=4) as ex:
-    results = list(ex.map(score, records))
-total = sum(results)
+<span class="cm"># ProcessPoolExecutor: bypasses GIL via separate processes</span>
+<span class="kw">with</span> <span class="fn-call">ProcessPoolExecutor</span>(max_workers=<span class="nm">4</span>) <span class="kw">as</span> ex:
+    results = <span class="bi">list</span>(ex.<span class="fn-call">map</span>(score, records))
+total = <span class="bi">sum</span>(results)
 
-# ThreadPoolExecutor: simpler but GIL limits CPU-bound work</code></pre>
+<span class="cm"># ThreadPoolExecutor: simpler but GIL limits CPU-bound work</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -349,15 +349,15 @@ total = sum(results)
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code># Duck typing: works for any T that supports >
-def max_val(a, b):
-    return a if a > b else b
+  <pre class="python-pre"><code><span class="cm"># Duck typing: works for any T that supports &gt;</span>
+<span class="kw">def</span> <span class="fn-call">max_val</span>(a, b):
+    <span class="kw">return</span> a <span class="kw">if</span> a &gt; b <span class="kw">else</span> b
 
-# With type hints (Python 3.12+):
-from typing import TypeVar
-T = TypeVar("T")
-def max_val(a: T, b: T) -> T:
-    return a if a > b else b</code></pre>
+<span class="cm"># With type hints (Python 3.12+):</span>
+<span class="kw">from</span> typing <span class="kw">import</span> TypeVar
+T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
+<span class="kw">def</span> <span class="fn-call">max_val</span>(a: T, b: T) -&gt; T:
+    <span class="kw">return</span> a <span class="kw">if</span> a &gt; b <span class="kw">else</span> b</code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -377,14 +377,14 @@ def max_val(a: T, b: T) -> T:
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>def connect(host: str, port: int = 80, timeout: int = 30):
+  <pre class="python-pre"><code><span class="kw">def</span> <span class="fn-call">connect</span>(host: <span class="bi">str</span>, port: <span class="bi">int</span> = <span class="nm">80</span>, timeout: <span class="bi">int</span> = <span class="nm">30</span>):
     ...
 
-connect("localhost")            # uses defaults
-connect("localhost", 8080)      # overrides port only
-connect("localhost", timeout=5) # keyword arg — skips port
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>)            <span class="cm"># uses defaults</span>
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>, <span class="nm">8080</span>)      <span class="cm"># overrides port only</span>
+<span class="fn-call">connect</span>(<span class="st">"localhost"</span>, timeout=<span class="nm">5</span>) <span class="cm"># keyword arg — skips port</span>
 
-def log(*args, **kwargs): ...   # variadic</code></pre>
+<span class="kw">def</span> <span class="fn-call">log</span>(*args, **kwargs): ...   <span class="cm"># variadic</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -405,14 +405,14 @@ def log(*args, **kwargs): ...   # variadic</code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>import numpy as np          # numerical arrays / SIMD
-import pandas as pd         # dataframes
-import requests             # HTTP
-import flask                # web framework
-import sqlalchemy           # database ORM
-import scikit_learn         # machine learning
-# 500 000+ packages on PyPI, installable with:
-#   pip install &lt;package&gt;</code></pre>
+  <pre class="python-pre"><code><span class="kw">import</span> numpy <span class="kw">as</span> np          <span class="cm"># numerical arrays / SIMD</span>
+<span class="kw">import</span> pandas <span class="kw">as</span> pd         <span class="cm"># dataframes</span>
+<span class="kw">import</span> requests             <span class="cm"># HTTP</span>
+<span class="kw">import</span> flask                <span class="cm"># web framework</span>
+<span class="kw">import</span> sqlalchemy           <span class="cm"># database ORM</span>
+<span class="kw">import</span> scikit_learn         <span class="cm"># machine learning</span>
+<span class="cm"># 500 000+ packages on PyPI, installable with:</span>
+<span class="cm">#   pip install &lt;package&gt;</span></code></pre>
 </div>
 </div>
 <div class="verdict">
@@ -431,12 +431,12 @@ cube  = <span class="fn-call">pow</span>(x, <span class="nm">3.0</span>)       <
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>import math
-area  = math.pi * r ** 2   # ** is exponentiation
-bits  = a | b              # bitwise OR
-xor   = a ^ b              # bitwise XOR
-cube  = x ** 3             # integer cube — exact
-cube  = x ** (1/3)         # cube root as float</code></pre>
+  <pre class="python-pre"><code><span class="kw">import</span> math
+area  = math.pi * r ** <span class="nm">2</span>   <span class="cm"># ** is exponentiation</span>
+bits  = a | b              <span class="cm"># bitwise OR</span>
+xor   = a ^ b              <span class="cm"># bitwise XOR</span>
+cube  = x ** <span class="nm">3</span>             <span class="cm"># integer cube — exact</span>
+cube  = x ** (<span class="nm">1</span>/<span class="nm">3</span>)         <span class="cm"># cube root as float</span></code></pre>
 </div>
 </div>
 <div class="verdict">
