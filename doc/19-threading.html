@@ -7,14 +7,14 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <span class="cur">Parallel execution</span> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <span class="cur">Parallel execution</span> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Parallel execution</h1>
 <article>
-<p>The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body. Use it when you have a large collection and a CPU-intensive per-element calculation: the work is spread across the requested number of threads and the results come back in the original order.</p>
+<p>The <code>par(b=worker_call, threads)</code> clause on a <code>for</code> loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body. Use it when you have a large collection and a CPU-intensive per-element calculation: the work is spread across the requested number of threads and the results come back in the original order.</p>
 <p>The full syntax is: for a in &lt;vector&gt; par(b=&lt;worker_call&gt;, &lt;threads&gt;) { body }</p>
 <p>Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }</p>
 <p>Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }</p>
-<p>The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
+<p>The worker function must take a read-only reference to the element type (marked <code>const</code> to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -61,7 +61,7 @@
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="running-a-global-function-in-parallel">Running a Global Function in Parallel</h2>
-<p>Each Score's value is doubled by `double_score`. With 1 thread the work is sequential; with 4 threads it runs concurrently. Both must produce the same total because results are delivered in the original order.</p>
+<p>Each Score's value is doubled by <code>double_score</code>. With 1 thread the work is sequential; with 4 threads it runs concurrently. Both must produce the same total because results are delivered in the original order.</p>
 <pre><code>  q = <span class="fn-call">make_scores</span>();
   sum = <span class="nm">0</span>;
   <span class="kw">for</span> a <span class="kw">in</span> q.items <span class="fn-call">par</span>(b = <span class="fn-call">double_score</span>(a), <span class="nm">1</span>) {
@@ -75,7 +75,7 @@
     sum2 += b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">120</span>, <span class="st">"form-1 integer (4 threads): sum == 120"</span>);</code></pre>
-<p>`span` works on a two-field struct. The element size is inferred from the struct layout so you do not need to specify it.</p>
+<p><code>span</code> works on a two-field struct. The element size is inferred from the struct layout so you do not need to specify it.</p>
 <pre><code>  r = <span class="fn-call">make_ranges</span>();
   span_sum = <span class="nm">0</span>;
   <span class="kw">for</span> a <span class="kw">in</span> r.items <span class="fn-call">par</span>(b = <span class="fn-call">span</span>(a), <span class="nm">2</span>) {
@@ -89,7 +89,7 @@
     fcount += <span class="nm">1</span>;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fcount == <span class="nm">3</span>, <span class="st">"form-1 float return: 3 elements processed"</span>);</code></pre>
-<p>Workers can return boolean. Use `if b` in the body to act on the result.</p>
+<p>Workers can return boolean. Use <code>if b</code> in the body to act on the result.</p>
 <pre><code>  q4 = <span class="fn-call">make_scores</span>();
   pos = <span class="nm">0</span>;
   <span class="kw">for</span> a <span class="kw">in</span> q4.items <span class="fn-call">par</span>(b = <span class="fn-call">score_positive</span>(a), <span class="nm">1</span>) {
@@ -106,7 +106,7 @@
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty_sum == <span class="nm">0</span>, <span class="st">"form-1 empty: body executes 0 times"</span>);</code></pre>
 <h2 id="running-a-method-in-parallel">Running a Method in Parallel</h2>
-<p>Form 2 calls the worker as a method on each element. The syntax `b=a.get_value()` tells the compiler to dispatch `get_value` on every element in parallel and bind each result to `b` in the loop body.</p>
+<p>Form 2 calls the worker as a method on each element. The syntax <code>b=a.get_value()</code> tells the compiler to dispatch <code>get_value</code> on every element in parallel and bind each result to <code>b</code> in the loop body.</p>
 <pre><code>  q5 = <span class="fn-call">make_scores</span>();
   sum3 = <span class="nm">0</span>;
   <span class="kw">for</span> a <span class="kw">in</span> q5.items <span class="fn-call">par</span>(b = a.<span class="fn-call">get_value</span>(), <span class="nm">1</span>) {
