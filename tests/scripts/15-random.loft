@@ -75,3 +75,81 @@ fn main() {
   }
   assert(same, "rand_indices: same seed gives same order");
 }
+
+fn test_rand_in_range() {
+  rand_seed(42);
+  ok = true;
+  for _i in 0..200 {
+    r = rand(10, 20);
+    if r < 10 || r > 20 { ok = false }
+  }
+  assert(ok, "rand out of range");
+}
+
+fn test_rand_single_value() {
+  assert(rand(7, 7) == 7, "single value");
+}
+
+fn test_rand_invalid_range() {
+  assert(!rand(10, 5), "invalid range should be null");
+}
+
+fn test_rand_seed_reproducible() {
+  rand_seed(99);
+  a = rand(0, 1000);
+  b = rand(0, 1000);
+  rand_seed(99);
+  assert(rand(0, 1000) == a, "first value must match");
+  assert(rand(0, 1000) == b, "second value must match");
+}
+
+fn test_rand_different_seeds() {
+  rand_seed(1);
+  a = rand(0, 1000000);
+  rand_seed(2);
+  b = rand(0, 1000000);
+  assert(a != b, "different seeds should give different values");
+}
+
+fn test_rand_indices_length() {
+  rand_seed(7);
+  v = rand_indices(10);
+  assert(len(v) == 10, "size {len(v)}");
+}
+
+fn test_rand_indices_permutation() {
+  rand_seed(42);
+  n = 20;
+  v = rand_indices(n);
+  assert(len(v) == n, "wrong size");
+  for expected in 0..n {
+    found = false;
+    for x in v { if x == expected { found = true } }
+    assert(found, "missing {expected}");
+  }
+}
+
+fn test_rand_indices_zero() {
+  v = rand_indices(0);
+  assert(len(v) == 0, "expected empty vector");
+}
+
+fn test_rand_indices_different_orderings() {
+  rand_seed(1);
+  a = rand_indices(10);
+  rand_seed(9999);
+  b = rand_indices(10);
+  diff = false;
+  for i in 0..10 { if a[i] != b[i] { diff = true } }
+  assert(diff, "expected different orderings");
+}
+
+fn test_rand_indices_reproducible() {
+  rand_seed(123);
+  a = rand_indices(8);
+  rand_seed(123);
+  b = rand_indices(8);
+  same = true;
+  for i in 0..8 { if a[i] != b[i] { same = false } }
+  assert(same, "seeded rand_indices should be reproducible");
+}

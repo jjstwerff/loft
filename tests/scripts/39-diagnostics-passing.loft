@@ -1,0 +1,117 @@
+// Copyright (c) 2022-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests that verify specific patterns compile and run without errors/warnings.
+// --- Passing tests (no error/warning expected) ---
+
+fn test_remove_from_iterated_allowed() {
+  v = [1, 2, 3];
+  for e in v if e > 1 { e#remove; }
+  assert(v.len() == 1, "len");
+}
+
+fn test_unused_loop_var_underscore_suppressed() {
+  items = [1, 2, 3];
+  total = 0;
+  for _item in items { total += 1; }
+  assert(total == 3, "t");
+}
+
+fn test_unused_loop_var_used_is_silent() {
+  items = [1, 2, 3];
+  total = 0;
+  for item in items { total += item; }
+  assert(total == 6, "t");
+}
+
+fn pe_branch_compute(x: integer) -> integer {
+  if x > 0 { return x }
+  0
+}
+
+fn test_no_unreachable_after_branch_return() {
+  assert(pe_branch_compute(5) == 5, "ok");
+}
+
+fn pe_classify_int(n: integer) -> integer {
+  if n > 0 { return 1 } else { return -1 }
+}
+
+fn test_all_paths_return_if_else() {
+  assert(pe_classify_int(5) == 1, "ok");
+}
+
+fn pe_always() -> integer not null {
+  return 42;
+}
+
+fn test_direct_return_not_null() {
+  assert(pe_always() == 42, "ok");
+}
+
+fn pe_dbl(n: integer) -> integer not null {
+  n * 2
+}
+
+fn test_implicit_return_not_null() {
+  assert(pe_dbl(3) == 6, "ok");
+}
+
+fn test_shadow_same_type_ok() {
+  x = 10;
+  v = [1, 2, 3];
+  for x in v { }
+  println("{x}");
+}
+
+fn test_if_expr_with_else_ok() {
+  x = if true { 42 } else { 0 };
+  assert(x == 42, "ok");
+}
+
+fn test_if_statement_without_else_ok() {
+  x = 10;
+  if x > 5 { println("{x}"); }
+}
+
+struct PEInner { x: integer }
+struct PEOuter { i: PEInner, y: integer }
+
+fn test_non_cyclic_nested_struct_ok() {
+  o = PEOuter { i: PEInner { x: 1 }, y: 2 };
+  assert(o.i.x == 1, "nested");
+}
+
+// --- File operations ---
+
+fn test_file_exists_true() {
+  f = file("tests/scripts/19-files.loft");
+  assert(f#exists, "expected exists");
+}
+
+fn test_file_exists_false() {
+  f = file("tests/scripts/no-such-file.loft");
+  assert(!f#exists, "expected not exists");
+}
+
+fn test_file_write_error_does_not_panic() {
+  f = file("/no_such_dir/output.txt");
+  f += "hello";
+  assert(true, "should not panic");
+}
+
+// --- Issue 82 positive: text type works ---
+
+struct DPWord { wkey: text, count: integer }
+
+fn test_text_type_works() {
+  w = DPWord { wkey: "hello", count: 1 };
+  assert(w.wkey == "hello", "key");
+  assert(w.count == 1, "count");
+}
+
+// --- Issue 89: optional & text param ---
+
+fn test_optional_ref_text_param() {
+  d = directory("sub");
+  assert(d.len() >= 0, "directory returned something");
+}

@@ -158,3 +158,100 @@ fn main() {
   second_r = mixed[1] as Rect;
   assert(second_r.width == 4.0, "variant cast as Rect: width={second_r.width}");
 }
+
+enum Content {
+  CLong { v: long },
+  CFloat { v: float },
+  CSingle { v: single },
+  CText { v: text }
+}
+
+struct Container {
+  name: text,
+  content: Content,
+  list: vector<Content>
+}
+
+fn fill() -> Container {
+  Container {
+    name: "testing",
+    content: CSingle { v: 1234.56f },
+    list: [
+      CLong { v: 9876543210l },
+      CText { v: "An example sentence of text" },
+      CFloat { v: 3.141592653589793 }
+    ]
+  }
+}
+
+fn test_enum_field() {
+  c = fill();
+  s = "Container: {c:#}";
+  assert(s.contains("testing"), "contains testing");
+  assert(s.contains("CSingle"), "contains Single variant");
+  assert(s.contains("1234.56"), "contains single value");
+  assert(s.contains("9876543210"), "contains long value");
+  assert(s.contains("3.141592653589793"), "contains float value");
+}
+
+enum Code {
+  CNull,
+  CLine { line: i32 },
+  CInteger { i_value: i32 },
+  CEnum { e_value: u8, tp: u16 },
+  CBoolean { b_value: boolean },
+  CCodeFloat { f_value: float },
+  CCodeText { t_value: text },
+  CCall { function: text, parameters: u8 },
+  CBlock { name: text, tp: u16, size: u16 },
+  CLoop { name: text, tp: u16, size: u16 },
+  CContinue { loops: u8 },
+  CBreak { loops: u8 },
+  CReturn,
+  CSet,
+  CVar,
+  CIf,
+  CDrop
+}
+
+fn test_define_enum() {
+  v = `CCall {{ function: "foo", parameters: 2 }}` as Code;
+  expected = `CCall {{function:"foo",parameters:2}}`;
+  assert("{v}" == expected, "enum parse and format");
+}
+
+enum BVal {
+  BA { n: integer },
+  BB { n: integer }
+}
+
+fn get_n(v: BVal) -> integer { v.n }
+
+fn test_base_field() {
+  assert(get_n(BA { n: 42 }) == 42, "base field access");
+}
+
+enum TVal {
+  TS { data: sorted<TSort[nr]> },
+  TI { data: index<TInd[nr]> },
+  TH { data: hash<TElm[name]> }
+}
+
+struct TSort {
+  nr: i32,
+  d: TVal
+}
+
+struct TInd {
+  nr: i32,
+  d: TVal
+}
+
+struct TElm {
+  name: text,
+  d: TVal
+}
+
+fn test_enum_collection_types() {
+  assert(1 == 1, "enum with collection types compiles");
+}

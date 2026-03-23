@@ -1,0 +1,225 @@
+// Copyright (c) 2022-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Compile-time error detection tests.
+
+// --- Type errors ---
+
+// @EXPECT_ERROR: should be integer on call to
+fn test_wrong_parameter() {
+  pe_def(true);
+}
+fn pe_def(i: integer) { }
+
+// @EXPECT_ERROR: Unknown variable 'a'
+fn test_unknown_var() {
+  a == 1;
+}
+
+// @EXPECT_ERROR: Unknown variable 'cound'
+fn test_typo_var_name() {
+  count = 0;
+  cound + 1;
+}
+
+// @EXPECT_ERROR: Unknown variable 'a'
+fn test_use_before_define() {
+  if a == 1 { panic("x"); }
+  a = 1;
+}
+
+// @EXPECT_ERROR: should be integer on return
+fn pe_wrong_ret(a: integer) -> integer {
+  if a > 4 { return "a" }
+  2
+}
+
+// @EXPECT_ERROR: Expect expression after return
+fn pe_empty_ret(a: integer) -> integer {
+  if a > 4 { return }
+  1
+}
+
+// @EXPECT_ERROR: Expect no expression after return
+fn pe_wrong_void(a: integer) {
+  if a > 4 { return 12 }
+}
+
+// @EXPECT_ERROR: Cannot break outside a loop
+fn test_wrong_break() {
+  break;
+}
+
+// @EXPECT_ERROR: Cannot continue outside a loop
+fn test_wrong_continue() {
+  continue;
+}
+
+// @EXPECT_ERROR: Double attribute
+fn test_double_field(a: integer, b: integer, a: integer) {
+  if a > b { }
+}
+
+// @EXPECT_ERROR: No matching operator '+'
+fn test_wrong_plus() {
+  r = 1 + "a";
+}
+
+// @EXPECT_ERROR: should be integer on else
+fn test_wrong_if() {
+  if 1 > 0 { 2 } else { "a" };
+}
+
+enum PEType { PEV1 }
+
+// @EXPECT_ERROR: cannot change type
+fn test_wrong_assign() {
+  a = 1;
+  a = PEV1;
+}
+
+// @EXPECT_ERROR: Unknown cast
+fn test_wrong_cast() {
+  PEV1 as float;
+}
+
+// @EXPECT_ERROR: Undefined type V
+fn test_undefined_type(v: V) -> V { v }
+
+// @EXPECT_ERROR: Undefined type V
+fn test_undefined_return(v: integer) -> V { v }
+
+// @EXPECT_ERROR: Undefined type V
+fn test_undefined_as(v: integer) -> long { v as V }
+
+// @EXPECT_ERROR: Indexing a non vector
+fn test_index_non_indexable() {
+  v = 5;
+  v[1];
+}
+
+// @EXPECT_ERROR: did you mean 'text'
+fn test_string_type_undefined() {
+  x: string = "hello";
+}
+
+struct PEBadKV { pkey: integer, value: text }
+
+// @EXPECT_ERROR: reserved for hash
+fn test_hash_key_field_clash() {
+  h: hash<PEBadKV[pkey]> = [];
+}
+
+// --- Boolean/enum type errors ---
+
+enum PEEType { PEVal }
+enum PENext { PEVal2 }
+
+// @EXPECT_ERROR: should be PEEType on call to
+fn test_wrong_boolean() {
+  pe_typed_fn(true);
+}
+fn pe_typed_fn(t: PEEType) {}
+
+// @EXPECT_ERROR: No matching operator '=='
+fn test_wrong_compare() {
+  PEVal == PEVal2;
+}
+
+// @EXPECT_ERROR: should be PENext on call to
+fn test_mixed_enums() {
+  pe_next_fn(PEVal);
+}
+fn pe_next_fn(v: PENext) -> PENext { v }
+
+// --- Field and key errors ---
+
+struct PEFieldT { v: u8 }
+
+// @EXPECT_ERROR: Cannot write integer
+fn test_field_type() {
+  r = PEFieldT { v: "a" };
+}
+
+struct PEKeyT { n: text, v: u16 }
+struct PEKeyN { d: vector<PEKeyT>, h: hash<PEKeyT[n]> }
+
+// @EXPECT_ERROR: Cannot write to key field
+fn test_key_field() {
+  s = PEKeyN { d: [PEKeyT {n: "a", v: 12}] };
+  s.d[0].v = 13;
+  s.d[0].n = "b";
+}
+
+// @EXPECT_ERROR: Unknown variable
+fn test_undefined_enum() {
+  v: PEEType = PEVal;
+  v > PEUnknown;
+}
+
+// @EXPECT_ERROR: Expect a variable or type after sizeof
+fn test_unknown_sizeof() {
+  sizeof(PEUnknownType);
+}
+
+fn pe_helper_fn() {}
+
+// @EXPECT_ERROR: Undefined type
+fn pe_bad_param(v: pe_helper_fn) {}
+
+// --- Loop mutation guards ---
+
+// @EXPECT_ERROR: Cannot add elements
+fn test_add_to_iterated_vector() {
+  v = [1, 2, 3];
+  for _e in v { v += [4]; }
+}
+
+// @EXPECT_ERROR: Cannot add elements
+fn test_add_to_outer_loop() {
+  v = [1, 2, 3];
+  for _e in v { for n in 1..3 { v += [n]; } }
+}
+
+// --- Shadowing and if-expression errors ---
+
+// @EXPECT_ERROR: loop variable 'x' has type integer but was previously used as float
+fn test_shadow_different_type() {
+  x = 1.5;
+  v = [1, 2, 3];
+  for x in v { }
+}
+
+// @EXPECT_ERROR: If-expression produces a value but has no else
+fn test_if_expr_without_else() {
+  x = if true { 42 };
+  println("{x}");
+}
+
+// --- Type cycles ---
+
+struct PENode { val: integer, next: PENode }
+
+// @EXPECT_ERROR: contains itself
+fn test_type_cycle_self() {
+  _n = PENode { val: 1 };
+}
+
+struct PECycA { val: integer, b: PECycB }
+struct PECycB { val: integer, a: PECycA }
+
+// @EXPECT_ERROR: contains itself
+fn test_type_cycle_indirect() {
+  _a = PECycA { val: 1 };
+}
+
+// --- spacial not implemented ---
+
+struct PEPoint { x: integer, y: integer }
+struct PEWorld { pts: spacial<PEPoint, x, y> }
+
+// @EXPECT_ERROR: spacial<T> is not yet implemented
+fn test_spacial_not_implemented() {
+  _w = PEWorld { pts: [] };
+}
+
+// --- Return path warnings ---
