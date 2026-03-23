@@ -12,27 +12,27 @@
 <article>
 <p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="null-sentinels">Null sentinels</h2>
-<p>Every type uses a special in-band value to represent null. The value depends on the type:</p>
+<h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
+<p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
 <ul>
-<li>`boolean` uses `false`</li>
-<li>`integer` uses `i32::MIN` (-2 147 483 648)</li>
-<li>`long` uses `i64::MIN`</li>
-<li>`float` and `single` use `NaN`</li>
-<li>`character` uses the NUL character</li>
-<li>`text` uses an internal null pointer</li>
-<li>`reference` uses record 0</li>
-<li>plain `enum` uses byte 255 (limits enums to 255 variants)</li>
+<li>`boolean`         — `false` is the null value</li>
+<li>`integer`         — the most negative 32-bit integer (-2 147 483 648) is null</li>
+<li>`long`            — the most negative 64-bit integer is null</li>
+<li>`float`/`single`  — `NaN` (Not a Number) is null</li>
+<li>`character`       — the NUL character (code point 0) is null</li>
+<li>`text`            — an empty internal reference is null</li>
+<li>`reference`       — record 0 is null</li>
+<li>plain `enum`      — byte value 255 is null (limits enums to 255 variants)</li>
 </ul>
-<p>This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:</p>
+<p>This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:</p>
 <pre><code>  zero = <span class="nm">0</span>;
   n = <span class="nm">1</span> / zero;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!n, <span class="st">"div-by-zero is null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null sentinel is not zero; it is i32::MIN"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null is not zero; it is -2 147 483 648"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
-<p>Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.</p>
+<p>Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
 <p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;

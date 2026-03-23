@@ -1071,7 +1071,7 @@ A for loop can appear inside a format string. The results are collected into a b
 
 Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.
 
-The key thing to know upfront: Loft stores text as UTF-8, the same encoding used on the web and in most modern systems. Nearly all operations work in bytes rather than in Unicode characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.
+The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.
 
 ```rust
 fn main() {
@@ -1097,7 +1097,7 @@ Use '+' to join two pieces of text into one. The result is a new value — neith
 
 === Reading individual characters
 
-Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full Unicode character even if it spans multiple bytes.
+Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.
 
 ```rust
   s = "ABCDE";
@@ -1125,7 +1125,7 @@ A negative end index counts backwards from the end of the text. '-1' means "stop
 
 === Iterating over characters
 
-A 'for' loop over a text value visits one Unicode character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c\#index' is the byte offset where the current character starts. 'c\#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.
+A 'for' loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c\#index' is the byte offset where the current character starts. 'c\#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.
 
 ```rust
   result = "";
@@ -1536,13 +1536,11 @@ fn describe_text(v: text) -> text {
 
 === Function References
 
-'fn \<name\>' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -\> return_type' and can be:
+'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -\> return_type' and can be:
 
 - stored in a variable,
 - called directly with 'f(args)', and
 - passed as a parameter to another function.
-
-The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.
 
 ```rust
 fn double_it(x: integer) -> integer {
@@ -1854,7 +1852,7 @@ struct Product {
 
 === Field Constraints
 
-You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' declares that zero is a meaningful value — without it, zero is treated as "no value" (null), which can cause surprising behaviour. Fields you omit in a constructor receive zero (null for nullable fields) by default. Here all three colour channels can be zero (black is a valid colour).
+You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.
 
 ```rust
 struct Colour {
@@ -1895,7 +1893,7 @@ struct Item {
 
 === Storing many structs in a vector
 
-'Area' uses compact unsigned integer types (u16, u8) to keep each record small. This matters when you need millions of tiles in a game map.
+'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535, and 'u8' holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.
 
 ```rust
 struct Area {
@@ -1938,7 +1936,7 @@ Formatting a struct shows all fields compactly.
   assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
 ```
 
-':j' produces JSON output.
+':j' produces JSON output — a text format used by many web APIs and config tools.
 
 ```rust
   assert("{col:j}" == "{{\"r\":128,\"g\":0,\"b\":128}}", "JSON format");
@@ -2021,9 +2019,9 @@ enum Shape {
 }
 ```
 
-=== Polymorphic methods
+=== Methods that work on any variant
 
-Write the same function name for each variant, each taking 'self' of that variant's type. Loft picks the right version at runtime based on the actual variant — this is called polymorphic dispatch. It lets you call shape.area() without knowing which kind of shape it is.
+Write the same function name for each variant, each taking 'self' of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.
 
 ```rust
 fn area(self: Circle) -> float {
@@ -2206,7 +2204,7 @@ Character literals work in match arms.
 
 = Sorted
 
-A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
+A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts A→Z / 0→9 (ascending), '-field' sorts Z→A / 9→0 (descending).
 
 ```rust
 struct Elm {
@@ -2480,7 +2478,7 @@ no-op; does not panic
 
 = Hash
 
-A 'hash' lets you find a record by its key in constant time, regardless of how many records you have. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
+A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
 
 ```rust
 struct Keyword {
@@ -2576,7 +2574,7 @@ no-op; does not panic
 
 === Why you cannot iterate a hash directly
 
-A hash has no stable element order — hash bucket positions depend on key hashes and the internal load factor, so there is no meaningful \#index or sequential position. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.
+A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.
 
 ```rust
 }
@@ -2589,7 +2587,7 @@ A file handle lets you read and write files without worrying about when the OS o
 
 === Inspecting the File System
 
-`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.
+`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.
 
 ```rust
 fn cleanup() {
@@ -2634,7 +2632,7 @@ Wrapping the file handle in a block ensures the file closes the moment the block
 ```rust
  {f = file("test.bin");
   assert(f#format == NotExists, "File should not exist yet.");
-  f#format = BigEndian;
+  f#format = BigEndian;  // BigEndian: most-significant byte written first.
   f += 0 as u8;
   f += 1 as u8;
   f += 0x203 as u16;
@@ -2951,7 +2949,7 @@ Combine this with the lexer (see the Lexer page) when you need to extract indivi
 
 = Libraries
 
-A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. Everything in the library is always accessible — there is no private/public barrier. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
+A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. All types and functions in a library are accessible — there is no way to mark something as internal or hidden. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
 
 ```rust
 use testlib;
@@ -3213,7 +3211,7 @@ Two worker call forms are supported. Form 1 calls a global or user-defined funct
 
 Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }
 
-The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────
+The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────
 
 ```rust
 struct Score {
@@ -3429,7 +3427,7 @@ Choose the level that matches how serious the event is:
 
 === Configuring the log destination
 
-By default, log calls are silent no-ops — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.
+By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.
 
 Generate a documented template with all defaults by running: loft --generate-log-config
 
@@ -3455,7 +3453,7 @@ Log messages are plain text, but you can embed any expression using the same '{.
 fn main() {
 ```
 
-Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.
+Without a log.conf these calls do nothing — the tests below pass even though no output is produced.
 
 ```rust
   log_info("starting up");
@@ -3666,26 +3664,26 @@ Loft catches many errors at compile time, but a few surprises remain at runtime.
 fn main() {
 ```
 
-=== Null sentinels
+=== Null values — hidden reserved values
 
-Every type uses a special in-band value to represent null. The value depends on the type:
+Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:
 
-- `boolean` uses `false`
-- `integer` uses `i32::MIN` (-2 147 483 648)
-- `long` uses `i64::MIN`
-- `float` and `single` use `NaN`
-- `character` uses the NUL character
-- `text` uses an internal null pointer
-- `reference` uses record 0
-- plain `enum` uses byte 255 (limits enums to 255 variants)
+- `boolean`         — `false` is the null value
+- `integer`         — the most negative 32-bit integer (-2 147 483 648) is null
+- `long`            — the most negative 64-bit integer is null
+- `float`/`single`  — `NaN` (Not a Number) is null
+- `character`       — the NUL character (code point 0) is null
+- `text`            — an empty internal reference is null
+- `reference`       — record 0 is null
+- plain `enum`      — byte value 255 is null (limits enums to 255 variants)
 
-This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:
+This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:
 
 ```rust
   zero = 0;
   n = 1 / zero;
   assert(!n, "div-by-zero is null");
-  assert(n != 0, "null sentinel is not zero; it is i32::MIN");
+  assert(n != 0, "null is not zero; it is -2 147 483 648");
   assert(n < 0, "i32::MIN is the most negative 32-bit integer");
 ```
 
@@ -3695,7 +3693,7 @@ Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
 ```
 
-Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.
+Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.
 
 === Integer overflow wraps silently
 

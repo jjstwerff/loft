@@ -12,7 +12,7 @@
 <article>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p>`file(path)` creates a File handle without opening anything yet. `f#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
+<p>`file(path)` creates a File handle without opening anything yet. `f#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>);
@@ -36,7 +36,7 @@
 <p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value (u8, u16, i32, long, single, float, or text).</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test.bin"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#format == <span class="en">NotExists</span>, <span class="st">"File should not exist yet."</span>);
-  f#format = <span class="en">BigEndian</span>;
+  f#format = <span class="en">BigEndian</span>;  <span class="cm">// BigEndian: most-significant byte written first.</span>
   f += <span class="nm">0</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">0x203</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u16</a></span>;

@@ -18,7 +18,8 @@
 // Form 2 calls a method on the element itself:
 //   for a in items par(b=a.my_method(), 4) { ... }
 //
-// The worker function must take a `const` reference to the element type and
+// The worker function must take a read-only reference to the element type (marked
+// `const` to tell the compiler the function will not modify the element) and
 // return a single primitive value (integer, float, or boolean).
 // ── Shared struct definitions ────────────────────────────────────────────────
 struct Score {

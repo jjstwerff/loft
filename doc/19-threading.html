@@ -14,7 +14,7 @@
 <p>The full syntax is: for a in &lt;vector&gt; par(b=&lt;worker_call&gt;, &lt;threads&gt;) { body }</p>
 <p>Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }</p>
 <p>Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }</p>
-<p>The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
+<p>The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>

@@ -63,13 +63,12 @@ fn describe_text(v: text) -> text {
   "text:{v}"
 }
 // ## Function References
-// 'fn <name>' produces a compile-checked reference to a named function.
+// 'fn <name>' creates a reference to a named function that you can store or pass around.
+// The compiler checks that the name exists and is a function — a typo is a compile error.
 // The result has type 'fn(param_types) -> return_type' and can be:
 //   - stored in a variable,
 //   - called directly with 'f(args)', and
 //   - passed as a parameter to another function.
-// The compiler resolves the name at the 'fn' expression and reports an error
-// if the function does not exist or the name is not a function.
 
 fn double_it(x: integer) -> integer {
   x * 2

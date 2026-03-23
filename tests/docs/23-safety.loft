@@ -7,30 +7,31 @@
 // code from day one. Each section includes a live example that proves the
 // described behavior.
 fn main() {
-  // ## Null sentinels
-  // Every type uses a special in-band value to represent null. The value
-  // depends on the type:
-  // - `boolean` uses `false`
-  // - `integer` uses `i32::MIN` (-2 147 483 648)
-  // - `long` uses `i64::MIN`
-  // - `float` and `single` use `NaN`
-  // - `character` uses the NUL character
-  // - `text` uses an internal null pointer
-  // - `reference` uses record 0
-  // - plain `enum` uses byte 255 (limits enums to 255 variants)
+  // ## Null values — hidden reserved values
+  // Every type reserves one special value to mean "nothing here" (null).
+  // That reserved value looks like any other value, so be aware of what it
+  // is for each type:
+  // - `boolean`         — `false` is the null value
+  // - `integer`         — the most negative 32-bit integer (-2 147 483 648) is null
+  // - `long`            — the most negative 64-bit integer is null
+  // - `float`/`single`  — `NaN` (Not a Number) is null
+  // - `character`       — the NUL character (code point 0) is null
+  // - `text`            — an empty internal reference is null
+  // - `reference`       — record 0 is null
+  // - plain `enum`      — byte value 255 is null (limits enums to 255 variants)
   //
   // This means there is one value per type that you cannot distinguish from
-  // null. For integers, that value is `i32::MIN`. Division by zero also
-  // produces `i32::MIN`, so both paths look the same to your code:
+  // null. For integers, that is -2 147 483 648. Division by zero also
+  // produces this same value, so both paths look the same to your code:
   zero = 0;
   n = 1 / zero;
   assert(!n, "div-by-zero is null");
-  assert(n != 0, "null sentinel is not zero; it is i32::MIN");
+  assert(n != 0, "null is not zero; it is -2 147 483 648");
   assert(n < 0, "i32::MIN is the most negative 32-bit integer");
   // Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
-  // Mitigation: Use `long` when you need the full 32-bit range, or
-  // declare struct fields as `not null` to reclaim the sentinel value.
+  // Mitigation: Use `long` when you need the full 32-bit integer range, or
+  // declare struct fields as `not null` so that reserved value can be used as data.
 
   // ## Integer overflow wraps silently
   // 32-bit integers wrap when they exceed roughly 2 billion. There is no

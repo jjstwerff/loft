@@ -25,8 +25,8 @@
 //   Example: "cannot open database", "required config file not found".
 // ## Configuring the log destination
 //
-// By default, log calls are silent no-ops — no file is written, no console
-// output is produced. To switch logging on, place a 'log.conf' file in the
+// By default, log calls do nothing — no file is written, no console output
+// is produced. To switch logging on, place a 'log.conf' file in the
 // same directory as your '.loft' file, or pass '--log-conf path/to/log.conf'
 // on the command line.
 //
@@ -66,7 +66,7 @@
 // configured level is higher than the call, the string is never evaluated
 // (no performance cost for suppressed messages).
 fn main() {
-  // Without a log.conf these are all silent no-ops — the tests below pass
+  // Without a log.conf these calls do nothing — the tests below pass
   // even though no output is produced.
   log_info("starting up");
   log_warn("this is a warning");

@@ -134,7 +134,7 @@
 <section class="print-section" id="02-text">
 <h1>Texts</h1>
 <p>Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.</p>
-<p>The key thing to know upfront: Loft stores text as UTF-8, the same encoding used on the web and in most modern systems. Nearly all operations work in bytes rather than in Unicode characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
+<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="joining-and-measuring-text">Joining and measuring text</h2>
 <p>Use '+' to join two pieces of text into one. The result is a new value — neither of the originals is modified. Placing a value name inside curly braces inside a format string inserts the value as text. You can also control the width: '{a:4}' pads the value on the right to at least 4 characters.</p>
@@ -146,7 +146,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">3</span>, <span class="st">"Heart byte length"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII byte length"</span>);</code></pre>
 <h2 id="reading-individual-characters">Reading individual characters</h2>
-<p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full Unicode character even if it spans multiple bytes.</p>
+<p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.</p>
 <pre><code>  s = <span class="st">"ABCDE"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s[<span class="nm">0</span>] == <span class="ch">'A'</span>, <span class="st">"Character at byte 0"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s[<span class="nm">2</span>] == <span class="ch">'C'</span>, <span class="st">"Character at byte 2"</span>);</code></pre>
@@ -160,7 +160,7 @@
 <pre><code>  txt = <span class="st">"12😊🙃45"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span>- <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
 <h2 id="iterating-over-characters">Iterating over characters</h2>
-<p>A 'for' loop over a text value visits one Unicode character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c#index' is the byte offset where the current character starts. 'c#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
+<p>A 'for' loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: 'c#index' is the byte offset where the current character starts. 'c#next' is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
 <pre><code>  result = <span class="st">""</span>;
   positions =[];
   nexts =[];
@@ -366,13 +366,12 @@
   <span class="st">"text:{v}"</span>
 }</code></pre>
 <h2 id="function-references">Function References</h2>
-<p>'fn &lt;name&gt;' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
+<p>'fn &lt;name&gt;' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
 <ul>
 <li>stored in a variable,</li>
 <li>called directly with 'f(args)', and</li>
 <li>passed as a parameter to another function.</li>
 </ul>
-<p>The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">2</span>
 }</code></pre>
@@ -528,7 +527,7 @@
   stock: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <h2 id="field-constraints">Field Constraints</h2>
-<p>You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' declares that zero is a meaningful value — without it, zero is treated as "no value" (null), which can cause surprising behaviour. Fields you omit in a constructor receive zero (null for nullable fields) by default. Here all three colour channels can be zero (black is a valid colour).</p>
+<p>You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Colour</span> {
   r: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
   g: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
@@ -550,7 +549,7 @@
   name_length: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="bi"><a href="stdlib-text.html">len</a></span>($.name)
 }</code></pre>
 <h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
-<p>'Area' uses compact unsigned integer types (u16, u8) to keep each record small. This matters when you need millions of tiles in a game map.</p>
+<p>'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535, and 'u8' holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Area</span> {
   height: <span class="ty"><a href="stdlib-types.html">u16</a></span>,
   terrain: <span class="ty"><a href="stdlib-types.html">u8</a></span>,
@@ -570,7 +569,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(col.g == <span class="nm">0</span>, <span class="st">"omitted green channel defaults to zero"</span>);</code></pre>
 <p>Formatting a struct shows all fields compactly.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col}"</span> == <span class="st">"{{r:128,g:0,b:128}}"</span>, <span class="st">"Struct compact formatting"</span>);</code></pre>
-<p>':j' produces JSON output.</p>
+<p>':j' produces JSON output — a text format used by many web APIs and config tools.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col:j}"</span> == <span class="st">"{{\"</span>r\<span class="st">":128,\"</span>g\<span class="st">":0,\"</span>b\<span class="st">":128}}"</span>, <span class="st">"JSON format"</span>);</code></pre>
 <p>Call a method on a variable using dot notation.</p>
 <pre><code>  purple = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
@@ -615,8 +614,8 @@
   <span class="en">Circle</span> {radius: <span class="ty"><a href="stdlib-types.html">float</a></span> },
   <span class="en">Rect</span> {width: <span class="ty"><a href="stdlib-types.html">float</a></span>, height: <span class="ty"><a href="stdlib-types.html">float</a></span> }
 }</code></pre>
-<h2 id="polymorphic-methods">Polymorphic methods</h2>
-<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft picks the right version at runtime based on the actual variant — this is called polymorphic dispatch. It lets you call shape.area() without knowing which kind of shape it is.</p>
+<h2 id="methods-that-work-on-any-variant">Methods that work on any variant</h2>
+<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">area</span>(self: <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {
   <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call"><a href="stdlib-math.html">pow</a></span>(self.radius, <span class="nm">2</span>)
 }</code></pre>
@@ -720,7 +719,7 @@
 </section>
 <section class="print-section" id="10-sorted">
 <h1>Sorted</h1>
-<p>A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.</p>
+<p>A 'sorted' collection holds records in order by one or more key fields. You can look up a record by key instantly and iterate all records in key order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: 'field' sorts A→Z / 0→9 (ascending), '-field' sorts Z→A / 9→0 (descending).</p>
 <pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
   key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
@@ -878,7 +877,7 @@
 </section>
 <section class="print-section" id="12-hash">
 <h1>Hash</h1>
-<p>A 'hash' lets you find a record by its key in constant time, regardless of how many records you have. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash&lt;Type[field]&gt;'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.</p>
+<p>A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash&lt;Type[field]&gt;'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Keyword</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>
 }</code></pre>
@@ -932,14 +931,14 @@
   d.h[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
 <p>no-op; does not panic</p>
 <h2 id="why-you-cannot-iterate-a-hash-directly">Why you cannot iterate a hash directly</h2>
-<p>A hash has no stable element order — hash bucket positions depend on key hashes and the internal load factor, so there is no meaningful #index or sequential position. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.</p>
+<p>A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="13-file">
 <h1>File</h1>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p>`file(path)` creates a File handle without opening anything yet. `f#format` tells you what kind of path you are looking at: TextFile, LittleEndian, BigEndian, Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
+<p>`file(path)` creates a File handle without opening anything yet. `f#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>);
@@ -963,7 +962,7 @@
 <p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value (u8, u16, i32, long, single, float, or text).</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test.bin"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#format == <span class="en">NotExists</span>, <span class="st">"File should not exist yet."</span>);
-  f#format = <span class="en">BigEndian</span>;
+  f#format = <span class="en">BigEndian</span>;  <span class="cm">// BigEndian: most-significant byte written first.</span>
   f += <span class="nm">0</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">0x203</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u16</a></span>;
@@ -1146,7 +1145,7 @@
 </section>
 <section class="print-section" id="17-libraries">
 <h1>Libraries</h1>
-<p>A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. Everything in the library is always accessible — there is no private/public barrier. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.</p>
+<p>A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. All types and functions in a library are accessible — there is no way to mark something as internal or hidden. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.</p>
 <pre><code><span class="kw">use</span> testlib;</code></pre>
 <h2 id="constants-and-enums">Constants and Enums</h2>
 <p>Library constants and enum variants are accessed with the `libname::` prefix. You can compare, order, and convert enum values exactly as you would with enums defined in the same file.</p>
@@ -1277,7 +1276,7 @@
 <p>The full syntax is: for a in &lt;vector&gt; par(b=&lt;worker_call&gt;, &lt;threads&gt;) { body }</p>
 <p>Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }</p>
 <p>Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }</p>
-<p>The worker function must take a `const` reference to the element type and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
+<p>The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -1404,7 +1403,7 @@
 <p>* 'log_error' — something went wrong and you need to investigate, but the program can continue (perhaps degraded). Example: "failed to save record", "unexpected null value".</p>
 <p>* 'log_fatal' — a condition so serious that normal operation is impossible. Example: "cannot open database", "required config file not found".</p>
 <h2 id="configuring-the-log-destination">Configuring the log destination</h2>
-<p>By default, log calls are silent no-ops — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.</p>
+<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.</p>
 <p>Generate a documented template with all defaults by running: loft --generate-log-config</p>
 <p>A minimal 'log.conf' looks like this:</p>
 <p>[log] file  = log.txt    # write messages here (relative to the .loft file) level = info       # minimum level to record; choices: info warn error fatal</p>
@@ -1416,7 +1415,7 @@
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
 <p>Log messages are plain text, but you can embed any expression using the same '{...}' format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>Without a log.conf these are all silent no-ops — the tests below pass even though no output is produced.</p>
+<p>Without a log.conf these calls do nothing — the tests below pass even though no output is produced.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_warn</a></span>(<span class="st">"this is a warning"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_error</a></span>(<span class="st">"something went wrong"</span>);
@@ -1528,27 +1527,27 @@
 <h1>Safety</h1>
 <p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="null-sentinels">Null sentinels</h2>
-<p>Every type uses a special in-band value to represent null. The value depends on the type:</p>
+<h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
+<p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
 <ul>
-<li>`boolean` uses `false`</li>
-<li>`integer` uses `i32::MIN` (-2 147 483 648)</li>
-<li>`long` uses `i64::MIN`</li>
-<li>`float` and `single` use `NaN`</li>
-<li>`character` uses the NUL character</li>
-<li>`text` uses an internal null pointer</li>
-<li>`reference` uses record 0</li>
-<li>plain `enum` uses byte 255 (limits enums to 255 variants)</li>
+<li>`boolean`         — `false` is the null value</li>
+<li>`integer`         — the most negative 32-bit integer (-2 147 483 648) is null</li>
+<li>`long`            — the most negative 64-bit integer is null</li>
+<li>`float`/`single`  — `NaN` (Not a Number) is null</li>
+<li>`character`       — the NUL character (code point 0) is null</li>
+<li>`text`            — an empty internal reference is null</li>
+<li>`reference`       — record 0 is null</li>
+<li>plain `enum`      — byte value 255 is null (limits enums to 255 variants)</li>
 </ul>
-<p>This means there is one value per type that you cannot distinguish from null. For integers, that value is `i32::MIN`. Division by zero also produces `i32::MIN`, so both paths look the same to your code:</p>
+<p>This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:</p>
 <pre><code>  zero = <span class="nm">0</span>;
   n = <span class="nm">1</span> / zero;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!n, <span class="st">"div-by-zero is null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null sentinel is not zero; it is i32::MIN"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null is not zero; it is -2 147 483 648"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
-<p>Mitigation: Use `long` when you need the full 32-bit range, or declare struct fields as `not null` to reclaim the sentinel value.</p>
+<p>Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
 <p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;

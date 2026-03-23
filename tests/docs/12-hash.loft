@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Hash
 // @TITLE: Instant key lookup with a hash table
-// A 'hash' lets you find a record by its key in constant time, regardless of how many records you have.
+// A 'hash' lets you find a record by its key in the same time whether you have 10 records or
+// 10 million — there is no searching through a list, just a direct jump to the answer.
 // Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups.
 // List the key fields in brackets: 'hash<Type[field]>'.
 // Combine a hash with a vector when you want both fast lookup and a stable iteration order.
@@ -69,8 +70,8 @@ fn main() {
   d.h["missing"] = null;
   // no-op; does not panic
   // ## Why you cannot iterate a hash directly
-  // A hash has no stable element order — hash bucket positions depend on key hashes
-  // and the internal load factor, so there is no meaningful #index or sequential position.
+  // A hash has no stable element order — internally, each record is placed in a slot
+  // chosen by a number computed from the key, so iteration order is unpredictable.
   // 'for item in c.lookup' is therefore a compile error.
   // Always pair a hash with a vector when you need both fast lookup and ordered iteration.
 }

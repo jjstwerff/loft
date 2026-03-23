@@ -46,13 +46,12 @@
   <span class="st">"text:{v}"</span>
 }</code></pre>
 <h2 id="function-references">Function References</h2>
-<p>'fn &lt;name&gt;' produces a compile-checked reference to a named function. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
+<p>'fn &lt;name&gt;' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -&gt; return_type' and can be:</p>
 <ul>
 <li>stored in a variable,</li>
 <li>called directly with 'f(args)', and</li>
 <li>passed as a parameter to another function.</li>
 </ul>
-<p>The compiler resolves the name at the 'fn' expression and reports an error if the function does not exist or the name is not a function.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">2</span>
 }</code></pre>

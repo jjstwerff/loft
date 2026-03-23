@@ -23,8 +23,8 @@
   <span class="en">Circle</span> {radius: <span class="ty"><a href="stdlib-types.html">float</a></span> },
   <span class="en">Rect</span> {width: <span class="ty"><a href="stdlib-types.html">float</a></span>, height: <span class="ty"><a href="stdlib-types.html">float</a></span> }
 }</code></pre>
-<h2 id="polymorphic-methods">Polymorphic methods</h2>
-<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft picks the right version at runtime based on the actual variant — this is called polymorphic dispatch. It lets you call shape.area() without knowing which kind of shape it is.</p>
+<h2 id="methods-that-work-on-any-variant">Methods that work on any variant</h2>
+<p>Write the same function name for each variant, each taking 'self' of that variant's type. Loft automatically picks the right version at runtime based on which variant is actually stored in the variable. This lets you call shape.area() without caring which kind of shape it is.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">area</span>(self: <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {
   <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call"><a href="stdlib-math.html">pow</a></span>(self.radius, <span class="nm">2</span>)
 }</code></pre>
