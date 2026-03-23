@@ -536,25 +536,28 @@ allowing cross-field constraints.
 
 ```loft
 struct Color {
-    r: integer limit(0, 255) not null assert($.r >= $.b),
+    r: integer limit(0, 255) not null assert($.r >= $.b, "red must be >= blue"),
     g: integer limit(0, 255) not null,
     b: integer limit(0, 255) not null
 }
 
 struct Range {
     lo: integer assert($.lo <= $.hi),
-    hi: integer assert($.hi >= $.lo)
+    hi: integer assert($.hi >= $.lo, "hi must be >= lo, got {$.hi} < {$.lo}")
 }
 ```
 
-`assert(expr)` appears after other field modifiers (`limit`, `not null`).  The expression
-is a boolean condition that must hold after every write to that field.  `$` is the struct
-instance; `$.field` accesses any field of the same struct.
+`assert(condition)` or `assert(condition, message)` appears after other field modifiers
+(`limit`, `not null`).  The expression is a boolean condition that must hold after every
+write to that field.  `$` is the struct instance; `$.field` accesses any field of the
+same struct.  The optional message is a format string that can interpolate field values.
 
 **Semantics:**
 
 - **Checked on:** Every field write — constructor fields, `p.r = x` assignment.
-- **On violation:** Panic: `"field constraint failed on Color.r: $.r >= $.b (r=10, b=200)"`.
+- **On violation:** With message: panic with the user-provided text (format strings
+  supported).  Without message: panic with auto-generated text:
+  `"field constraint failed on Color.r: $.r >= $.b (r=10, b=200)"`.
 - **Null fields:** A null value in `$.field` bypasses the check (constraint applies to
   non-null values only).  Combine with `not null` if the constraint must always hold.
 - **Constructor order:** Fields are initialised in declaration order.  A constraint that
