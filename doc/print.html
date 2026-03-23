@@ -281,8 +281,8 @@
 <p>Booleans can be embedded in a format string like any other value. The '^' alignment specifier centres the value in a field of given width. '&lt;' aligns left, '&gt;' aligns right (right-alignment is the default).</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1{true:^7}2"</span> == <span class="st">"1 true  2"</span>, <span class="st">"Centred boolean in field of width 7"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"Plain boolean format"</span>);</code></pre>
-<h2 id="common-pitfall-vs-and">Common pitfall: '&amp;' vs 'and'</h2>
-<p>'&amp;' is bitwise AND on integers; 'and' (or '&amp;&amp;') is logical AND on booleans. Writing 'a &amp; b' when you mean 'a and b' usually compiles but gives wrong results because it operates on the numeric representation of the booleans. Always use 'and' / '&amp;&amp;' for boolean logic.</p>
+<h2 id="vs-and">'&amp;' vs 'and'</h2>
+<p>'&amp;' is bitwise AND on integers; 'and' (or '&amp;&amp;') is logical AND on booleans. Writing 'a &amp; b' where both sides are booleans is a compile error — the compiler requires 'and' or '&amp;&amp;' for boolean logic.</p>
 <pre><code>  flag_a = <span class="nm">3</span> &gt; <span class="nm">1</span>;</code></pre>
 <p>true</p>
 <pre><code>  flag_b = <span class="nm">4</span> &gt; <span class="nm">2</span>;</code></pre>
