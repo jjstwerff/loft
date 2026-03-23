@@ -17,19 +17,12 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 | S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
 | S7     | Diagnostic error for `string` type name                 | Trivial   |             | PROBLEMS.md #82    |
 | S8     | Compile-time error for `key` field in hash struct       | Small     |             | PROBLEMS.md #83    |
-| N6     | Fix text method in format interpolation (`&str` emit)   | Small     |             | PROBLEMS.md #87    |
-| N7     | Fix `directory()` scratch buffer argument               | Small     |             | PROBLEMS.md #88    |
 | O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
 | O3     | Verify no `long` sentinel on integer paths              | Low       |             | PERFORMANCE.md P3  |
 | O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
 | A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
 | A1.1   | ↳ Extra args + value-struct returns                     | Medium    |             | parallel.rs        |
 | A1.2   | ↳ Text/reference returns (dedicated result store)       | Medium    | A1.1        | parallel.rs        |
-| N2     | Fix `CallRef` dispatch in native codegen                | Medium    |             | PROBLEMS.md #77    |
-| N3     | Fix `external` crate reference in native codegen        | Low       |             | PROBLEMS.md #79    |
-| N4     | Fix LIFO store-free order in native codegen             | Medium    |             | PROBLEMS.md #80    |
-| N5     | Fix `file_from_bytes` for `DbRef` vector types          | Medium    |             | PROBLEMS.md #86    |
-| N9     | Exhaustive IR pattern matching (remove `panic!` guards) | Medium    | N2–N7       | PROBLEMS.md #61    |
 | A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12    |
 | A12.1  | ↳ Fix `first_set_in` Block/Loop descent                 | Small     |             | PROBLEMS.md #68    |
 | A12.2  | ↳ Text slot reuse: require exact size match             | Small–Med | A12.1       | PROBLEMS.md #69    |

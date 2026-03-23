@@ -70,11 +70,20 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   through to the template handler which produced broken `OpFormatFloat(stores, …)` code.
   (`src/generation.rs` `output_call` + new `format_float` helper)
 
-- **N5** — `output_call` now emits `if var.rec != 0 { vector::clear_vector(…) }` for
+- **N5a** — `output_call` now emits `if var.rec != 0 { vector::clear_vector(…) }` for
   `OpClearVector` instead of an unconditional call.  `stores.null()` returns a DbRef
   with a real `store_nr` but `rec == 0`; the bare call caused a panic
   ("Unknown record 2147483648") when a vector-returning function initialised its result
   from null.  (`src/generation.rs` `output_call`)
+
+- **N5b** — `FileVal::file_from_bytes` for `DbRef` (native path) now correctly reads
+  `f#read(n) as vector<T>`.  The generated code initialises the destination as a null
+  sentinel (`store_nr=u16::MAX, rec=0, pos=8`).  `file_from_bytes` now detects this
+  sentinel, allocates a 12-byte store record with `stores.database(12)`, and zeros the
+  vector header slot (`set_int(rec, pos, 0)`) so that `vector_append` sees an empty
+  vector rather than a garbage record index.  Previously, `vector_append` indexed
+  `stores[u16::MAX]` causing an out-of-bounds panic.  `12-binary.loft` removed from
+  `SCRIPTS_NATIVE_SKIP`.  (`src/codegen_runtime.rs` `FileVal for DbRef::file_from_bytes`)
 
 - **N4** — `output_enum` now registers struct-enum variants with their actual struct
   `known_type` instead of `u16::MAX`.  `ShowDb` uses this type to dispatch to variant

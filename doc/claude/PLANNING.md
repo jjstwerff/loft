@@ -56,7 +56,6 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(0.8.2)*
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(1.1+)*
 - [N — Native Codegen](#n--native-codegen)
-  - [N2–N7 — Native codegen bug fixes](#n2--implement-callref--function-pointer-calls-in-native-codegen) *(0.8.2 / 1.1+)*
 - [O — Performance Optimisations](#o--performance-optimisations)
   - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(0.8.2 / 1.1+)*
 - [H — HTTP / Web Services](#h--http--web-services)
@@ -81,8 +80,14 @@ in parallel.
 - **S3** — Database dispatch exhaustiveness. ✓
 - **S4** — Binary I/O type coverage (Issues 59, 63). ✓
 - **P1** — Lambda expressions (`fn(params) -> ret { body }`). ✓
-- **N9** — fill.rs auto-generation (rustfmt, six `#rust` templates, byte-exact match). ✓
 - **N1** — `--native` / `--native-emit` CLI flags. ✓
+- **N2** — `CallRef` / function-pointer dispatch in generated Rust. ✓
+- **N3** — Resolve `external` crate reference for random/FFI. ✓
+- **N4** — Fix LIFO store-free order in generated frees. ✓
+- **N5** — `file_from_bytes` for `DbRef` vector types. ✓
+- **N6** — Text method in format interpolation: emit `&str` not `String`. ✓
+- **N7** — `directory()` / `user_directory()` / `program_directory()` scratch buffer. ✓
+- **N9** — fill.rs auto-generation (rustfmt, six `#rust` templates, byte-exact match). ✓
 
 **Remaining for 0.8.2:**
 
@@ -90,10 +95,6 @@ in parallel.
 - **S5** — Fix optional `& text` parameter subtract-with-overflow panic (Issue 89).
 - **S7** — Add diagnostic error for `string` type name (Issue 82).
 - **S8** — Compile-time error when hash-value struct has field named `key` (Issue 83).
-
-*Native codegen fixes (small):*
-- **N6** — Text method in format interpolation: emit `&str` not `String` (Issue 87).
-- **N7** — `directory()` / `user_directory()` / `program_directory()` scratch buffer (Issue 88).
 
 *Interpreter performance:*
 - **O1** — Superinstruction merging: peephole pass, 6 merged opcodes 240–245.
@@ -103,13 +104,6 @@ in parallel.
 *Parallel execution:*
 - **A1.1** — Extra context args + value-struct returns: extend `execute_at_raw`, output buffer.
 - **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1).
-
-*Native codegen completeness:*
-- **N2** — `CallRef` / function-pointer dispatch in generated Rust.
-- **N3** — Resolve `external` crate reference for random/FFI.
-- **N4** — Fix LIFO store-free order in generated frees.
-- **N5** — `file_from_bytes` for `DbRef` vector types.
-- **N9** — Exhaustive IR pattern matching; remove `panic!` catch-alls (after N2–N7).
 
 *Interpreter slot correctness:*
 - **A12.1–A12.3 + A12** — Fix Issues 68–70, then enable lazy work-variable init.
@@ -318,9 +312,12 @@ in a better state than it found it, with passing tests).
 **For 0.8.2 (remaining):**
 1. **S5**, **S7**, **S8** — small stability fixes; independent, no dependencies
 2. **O3** — integer sentinel verification; Low effort, zero risk
-3. **N6**, **N7** — small native codegen fixes; independent
-4. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation.rs`
-5. **O1** — superinstruction merging; Medium effort, highest impact
+3. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation.rs`
+4. **O1** — superinstruction merging; Medium effort, highest impact
+5. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
+6. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
+7. **A12.1** → **A12.2** → **A12.3** → **A12** — sequential; each unblocks the next
+8. **A13.1** → **A13.2** → **A13.3** — sequential; completes two-zone slot design
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
@@ -333,17 +330,6 @@ in a better state than it found it, with passing tests).
 3. **H3** — `from_json` scalar codegen; Medium, depends on H1 + H2; verify `Type.from_json` as fn-ref
 4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
 5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
-
-**For 0.8.2 (remaining — parallel and native):**
-6. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
-7. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
-8. **N3** — external crate ref; Low; independent; fastest native fix
-9. **N4** — LIFO store-free order; Medium; independent; prevents heap corruption
-10. **N2** — `CallRef` dispatch; Medium; independent; enables function-pointer tests
-11. **N5** — `file_from_bytes`; Medium; independent; unblocks binary tests in native
-12. **N9** — exhaustive IR matching; Medium; after N2–N7 are complete
-13. **A12.1** → **A12.2** → **A12.3** → **A12** — sequential; each unblocks the next
-14. **A13.1** → **A13.2** → **A13.3** — sequential; completes two-zone slot design
 
 **For 0.9.0 (after 0.8.4 is tagged):**
 1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
@@ -978,7 +964,7 @@ Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
 
 ---
 
-### A8  Destination-passing for text-returning native functions
+### A8  Destination-passing for text-returning native functions ✓ DONE
 **Sources:** String architecture review 2026-03-16
 **Severity:** Low — eliminates the scratch buffer entirely; also removes one intermediate
 `String` allocation per format-string expression by letting natives write directly into the
@@ -1470,66 +1456,6 @@ replaces the hand-maintained `src/fill.rs`.
 
 **Effort:** Medium (completed)
 **Target:** 0.8.2 ✓
-
----
-
-### N2  Implement `CallRef` / function-pointer calls in native codegen
-**Sources:** PROBLEMS.md #77
-**Severity:** Medium — function-pointer call sites produce invalid generated Rust
-**Description:** `Value::CallRef` is not handled in `output_code_inner`; any loft program that calls a function by reference fails to produce correct native output. Affects `tests/scripts/06-function.loft`.
-**Fix path:** Add a `Value::CallRef` arm to `output_code_inner` in `src/generation.rs`; emit an indirect call using the function-pointer value, following the same ABI as direct calls.
-**Effort:** Medium
-**Target:** 0.8.2
-
----
-
-### N3  Resolve `external` crate reference in native codegen
-**Sources:** PROBLEMS.md #79
-**Severity:** Low — random/FFI extensions produce unresolved-module compile errors
-**Description:** The native codegen emits references to an `external` module for random/FFI functions that has no corresponding crate in the generated build.
-**Fix path:** Bundle the required symbols into `codegen_runtime`, or emit a proper `extern` block; update `src/generation.rs` accordingly.
-**Effort:** Low
-**Target:** 0.8.2
-
----
-
-### N4  Fix LIFO store-free order in generated native code
-**Sources:** PROBLEMS.md #80
-**Severity:** Medium — stores freed in declaration order; allocator requires LIFO
-**Description:** `OpFreeRef` calls are emitted in declaration order. The loft store allocator requires LIFO deallocation; out-of-order frees corrupt the heap on the third call to any function with multiple stores.
-**Fix path:** In `output_block` in `src/generation.rs`, collect all `OpFreeRef` emissions and sort them by `store_nr` descending before writing to the output.
-**Effort:** Medium
-**Target:** 0.8.2
-
----
-
-### N5  Implement `file_from_bytes` for `DbRef` vector types in `codegen_runtime.rs`
-**Sources:** PROBLEMS.md #86
-**Severity:** Medium — `f#read(n) as vector<T>` returns empty vector in native-compiled programs
-**Description:** The interpreter fix for `read_file` is in place; the native-path `FileVal::file_from_bytes` implementation in `src/codegen_runtime.rs` remains a stub returning an empty vector.
-**Fix path:** Port the interpreter fix: iterate `data.len() / elem_size` elements, call `vector_append` + `write_data` for each element. Until fixed, `12-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
-**Effort:** Medium
-**Target:** 0.8.2
-
----
-
-### N6  Fix text method call in format interpolation — emit `&str` not `String`
-**Sources:** PROBLEMS.md #87
-**Severity:** Small — format strings containing text method calls produce a type-mismatch compile error in generated Rust
-**Description:** Text methods return `String`, but `format_text` expects `&str`. The emitter passes the `String` value directly, which the Rust compiler rejects.
-**Fix path:** In the format-string emission logic in `src/generation.rs`, bind the method result to a `let _tmp = ...;` temporary and pass `&_tmp` to `format_text`.
-**Effort:** Small
-**Target:** 0.8.2
-
----
-
-### N7  Fix `directory()`/`user_directory()`/`program_directory()` scratch buffer argument
-**Sources:** PROBLEMS.md #88
-**Severity:** Small — directory query functions emit `()` instead of `&mut work_N` in generated Rust
-**Description:** Destination-passing text functions require a `&mut String` scratch buffer. The native emitter generates an empty block `()` instead.
-**Fix path:** In `src/generation.rs`, detect destination-passing text function calls and emit the pre-allocated scratch buffer `&mut work_N` as the first argument.
-**Effort:** Small
-**Target:** 0.8.2
 
 ---
 
