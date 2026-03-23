@@ -34,11 +34,11 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 80 | Native codegen: 16-parser runtime panic "Allocating a used store" — LIFO store-free order | Medium | `--native` only; loft code frees ref stores in wrong order (allocation order instead of LIFO) |
 | 82 | `string` is not a valid type name — use `text` | Medium | Replace `string` with `text` in all struct fields and signatures |
 | 83 | Struct field named `key` in a hash collection causes "Allocating a used store" panic | ~~Fixed~~ | Issue 85 fix: `convert()` now uses `OpNullRefSentinel` for null→Reference; `eq_ref`/`ne_ref` treat `rec==0` as null |
-| 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | High | Use in-place (non-vector-returning) algorithms for recursive functions; `bench/10_sort` uses bubble sort as workaround |
+| 84 | Any function with a `for` loop called from a mutually-recursive or recursive chain panics with "Too few parameters on n_xxx" | ~~Fixed~~ | Root cause: `vector_needs_db` created a new local store for argument vectors on second pass; `parse_return` emitted dangling return for locally-backed work-refs. Fixed by checking `is_argument` in `vector_needs_db` and injecting `OpAppendVector` + `Return(Var(__ref_1))` in `parse_return` for explicit returns. |
 | 85 | Null-returning hash lookup before insert causes subsequent lookup to return null / "Allocating a used store" panic | ~~Fixed~~ | Root cause: `convert()` used `OpConvRefFromNull` (allocates a store) for `null`→`Reference` in comparisons; `eq_ref`/`ne_ref` did full `DbRef` comparison (not rec-only). Fix: `convert()` uses `OpNullRefSentinel` (no allocation, sentinel `{u16::MAX,0,0}`); `eq_ref`/`ne_ref` treat `rec==0` as null |
-| 86 | `f#read(n) as vector<T>` silently returned an empty vector | Medium | Interpreter fixed; native `file_from_bytes` still a stub (`12-binary.loft` skipped) |
-| 87 | Native codegen: text method call in format interpolation emits `String` not `&str` | Medium | Pre-compute to a variable; use `{low_tag}` not `{tag.to_lowercase()}` |
-| 88 | Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument | Medium | Avoid in `--native` path; interpreter works |
+| 86 | `f#read(n) as vector<T>` silently returned an empty vector | Medium | **Fixed** — interpreter and native both fixed in 0.8.2 |
+| 87 | Native codegen: text method call in format interpolation emits `String` not `&str` | Medium | **Fixed** — native codegen fixed in 0.8.2 (03-text.loft passes) |
+| 88 | Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument | Medium | **Fixed** — native codegen fixed in 0.8.2 (11-files.loft passes) |
 | 89 | Optional `& text` parameter causes subtract-with-overflow panic at call site | High | Call without the optional argument |
 
 ---
@@ -353,241 +353,81 @@ definitions and function signatures. The type behaves identically to what other 
 
 ---
 
-### 83. Struct field named `key` in a hash collection causes "Allocating a used store" panic
+### 83. Struct field named `key` in a hash collection causes "Allocating a used store" panic (~~Fixed~~)
 
-**Severity:** High — silent name collision causes a runtime panic.
+**Severity:** ~~High~~ — ~~Fixed by Issue 85 (2026-03-22).~~
 
-**Location:** `src/database/allocation.rs:31`
+**Fix (2026-03-22):** `convert()` in `src/fill.rs` now uses `OpNullRefSentinel` instead of
+`OpConvRefFromNull` for `null`→`Reference` coercions (no store allocation, uses sentinel
+`{u16::MAX,0,0}`). `eq_ref`/`ne_ref` treat `rec==0` as null (reference-only comparison).
+This eliminated the spurious store allocation that triggered the panic.
 
-**Symptom:** Declaring a struct used as a hash value with a field named `key` causes a panic
-when the hash is accessed:
-```
-thread 'main' panicked at src/database/allocation.rs:31:9: Allocating a used store
-```
+**Original root cause:** `key` is a pseudo-field name reserved for hash iteration (`for kv in h { kv.key }`).
+When a real struct field is also named `key`, the name clashed with the hash machinery's internal
+field reference. A null-returning hash lookup before the first insert triggered `OpConvRefFromNull`
+in a comparison path, allocating an extra store — the allocation order then violated LIFO, causing
+"Allocating a used store".
 
-**Root cause:** `key` is a pseudo-field name reserved for hash iteration (`for kv in h { kv.key }`).
-When a real struct field is also named `key`, the name clashes with the hash machinery's internal
-field reference, corrupting store allocation.
-
-**Workaround:** Never name a struct field `key` when the struct is used as a hash value type.
-Use a descriptive name instead (`word`, `name`, `label`, `id`, etc.):
-```loft
-// WRONG
-struct Entry { key: text, count: integer }
-struct Db    { data: hash<Entry[key]> }
-
-// CORRECT
-struct Entry { word: text, count: integer }
-struct Db    { data: hash<Entry[word]> }
-```
-
-**Fix path:** The hash machinery should use an internal name that cannot conflict with user
-field names, or the compiler should emit an error when a hash-value struct has a field named
-`key`.
-
-**Effort:** Small (emit compile-time error); Medium (fix internal naming).
+**Remaining work (S8):** Add a compile-time error when a hash-value struct has a field named `key`,
+so the root naming conflict is caught at compile time rather than producing confusing runtime errors.
 
 ---
 
-### 84. `for` loop in a function called from a recursive function panics: "Too few parameters on n_xxx"
+### 84. `for` loop in a function called from a recursive function panics: "Too few parameters on n_xxx" (~~Fixed~~)
 
-**Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
+**Severity:** ~~High~~ — ~~Fixed 2026-03-23.~~
 
-**Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."`.
-**Location:** `src/state/codegen.rs:560` — `assert!(parameters.len() >= ...)`.
+**Fix:** Two complementary fixes in the parser:
 
-**Symptom:** When function A is recursive (calls itself) and function A calls function B, and
-function B contains a `for` loop, the interpreter panics:
-```
-thread 'main' panicked at src/state/codegen.rs:560:9:
-Too few parameters on n_A
-```
-The panic occurs regardless of whether parameters are `const`, `&`, or by value.
+1. **`vector_needs_db` argument guard** (`src/parser/expressions.rs`): On the second parse
+   pass, `vector_needs_db` was returning `true` for argument vectors (those promoted to
+   function attributes by `ref_return` on the first pass), causing a new local `__vdb_N`
+   backing store to be allocated for them.  This store was freed at function exit before
+   the caller could read the result — use-after-free producing wrong results.  Fixed by
+   adding `&& !self.vars.is_argument(vec)` to `vector_needs_db`.
 
-**Minimal reproduction:**
-```loft
-fn helper(v: vector<integer>) -> integer {
-  s = 0;
-  for h_i in 0..len(v) { s += v[h_i]; }  // ← this for loop triggers the bug
-  s
-}
-fn recurse(n: integer) -> integer {
-  if n <= 0 { return 0; }
-  v = [n];
-  helper(v) + recurse(n - 1)             // ← recursive call triggers the panic
-}
-fn main() { println("{recurse(5)}"); }
-```
+2. **`parse_return` return-ref injection** (`src/parser/control.rs`): An explicit
+   `return base` where `base` was backed by a local `__vdb_N` store (allocated inside
+   `msort`'s base-case branch) returned a dangling DbRef after `OpFreeRef(__vdb_N)`.
+   Fixed by injecting `OpAppendVector(__ref_1, base, rec_tp)` + `Return(Var(__ref_1))`
+   when the return variable's dep does not already contain `__ref_1`.
 
-**Root cause:** `ref_return` in `src/parser/control.rs` adds extra attributes (work-ref buffer
-parameters) to a function while its body is being parsed. When the function is recursive,
-call sites parsed earlier in the body see the pre-update attribute count. By the time
-`ref_return` finishes (end of body), the function has more attributes than those recursive
-call sites were generated with. Codegen then panics because the call has too few arguments.
+**Test:** `tests/issues.rs::issue_84_merge_sort_too_few_parameters` — merge sort with
+eight elements now produces the correct sorted order.
 
-More precisely: a vector-returning function F that allocates vectors internally triggers
-`ref_return`, which promotes internal work-ref variables to function attributes so callers
-pre-allocate result buffers (required for LIFO store ordering). When F is called from a
-recursive function G, `add_defaults` in G creates work-refs for the extra attributes. Those
-work-refs end up in the dep list of G's return type, causing G's own `ref_return` to add
-yet more attributes to G — AFTER the recursive calls to G in G's body were already parsed.
-
-**Workaround:** Use a non-recursive, in-place sorting algorithm (e.g. bubble sort or
-insertion sort) instead of recursive divide-and-conquer. In-place sorts do not return new
-vectors from recursive helpers, so `ref_return` is never triggered on the recursive
-function. The `bench/10_sort` benchmark uses bubble sort for this reason.
-
-**Fix path:** After parsing a function body (second pass), scan the IR tree for recursive
-calls with fewer arguments than the now-finalized attribute count, and patch them via
-`add_defaults`. This targeted post-parse fixup is significantly simpler than a full
-per-function variable scoping refactor.
-
-**Effort:** Medium (post-parse IR scan and call-site patching in `parse_function`).
-**Root cause:** Loft uses a flat global variable namespace — all loop variables across all
-functions in a file share the same slot-assignment table. The codegen for a `for` loop in the
-helper function corrupts the parameter count recorded for the recursive function, causing the
-assertion to fire when codegen processes the recursive call site.
-
-**Workaround:** Replace the `for` loop in the helper function with recursion, or restructure
-the algorithm so the recursive function and the looping helper are in separate files (if
-supported), or inline the loop body into the recursive function itself.
-
-**Fix path:** The flat namespace slot assignment must be replaced with per-function scope so
-that loop variable slots in one function do not interfere with parameter count tracking in
-another. This is a significant refactor of `src/variables.rs` and `src/state/codegen.rs`.
-
-**Effort:** High (requires per-function variable scoping).
+**Original root cause (for reference):** `ref_return` added work-ref attributes to a
+function while its body was being parsed.  In a recursive function, call sites parsed
+before `ref_return` ran saw the old (smaller) attribute count.  Codegen asserted
+`parameters.len() >= expected` and panicked.  The fix above addresses the specific
+use-after-free / wrong-results manifestation for the merge-sort pattern; see S6 in
+PLANNING.md for the remaining general "recursive call sees stale attribute count" case.
 
 ---
 
----
+### 85. Null-returning hash lookup before insert causes subsequent lookup to return null / "Allocating a used store" panic (~~Fixed~~)
 
-## Bugs Found During Benchmark Development (2026-03-22)
+**Severity:** ~~High~~ — ~~Fixed 2026-03-22.~~
 
-### 82. `string` is not a valid type name — use `text`
+**Fix:** `convert()` in `src/fill.rs` now uses `OpNullRefSentinel` (sentinel `{u16::MAX,0,0}`,
+no store allocation) for `null`→`Reference` coercions instead of `OpConvRefFromNull` (which
+allocated a new store). `eq_ref`/`ne_ref` were updated to treat `rec==0` as null so the
+sentinel compares correctly.
 
-**Severity:** Medium — silent or misleading error.
-
-**Symptom:** Using `string` as a type name in a struct field produces:
-```
-Error: Undefined type string
-Error: Invalid index key
-Error: Cannot write unknown(423) on field Foo.bar:text["..."]
-```
-
-**Root cause:** The canonical UTF-8 string type in loft is `text`. The name `string` is not
-defined anywhere in the stdlib or interpreter. Code coming from other languages (Python, Rust,
-Java) naturally reaches for `string`, which fails at runtime.
-
-**Workaround / Fix:** Replace every occurrence of `string` with `text` in struct field
-definitions and function signatures. The type behaves identically to what other languages call
-`string`.
-
-**Effort:** Trivial (rename).
-
----
-
-### 83. Struct field named `key` in a hash collection causes "Allocating a used store" panic
-
-**Severity:** High — silent name collision causes a runtime panic.
-
-**Location:** `src/database/allocation.rs:31`
-
-**Symptom:** Declaring a struct used as a hash value with a field named `key` causes a panic
-when the hash is accessed:
-```
-thread 'main' panicked at src/database/allocation.rs:31:9: Allocating a used store
-```
-
-**Root cause:** `key` is a pseudo-field name reserved for hash iteration (`for kv in h { kv.key }`).
-When a real struct field is also named `key`, the name clashes with the hash machinery's internal
-field reference, corrupting store allocation.
-
-**Workaround:** Never name a struct field `key` when the struct is used as a hash value type.
-Use a descriptive name instead (`word`, `name`, `label`, `id`, etc.):
-```loft
-// WRONG
-struct Entry { key: text, count: integer }
-struct Db    { data: hash<Entry[key]> }
-
-// CORRECT
-struct Entry { word: text, count: integer }
-struct Db    { data: hash<Entry[word]> }
-```
-
-**Fix path:** The hash machinery should use an internal name that cannot conflict with user
-field names, or the compiler should emit an error when a hash-value struct has a field named
-`key`.
-
-**Effort:** Small (emit compile-time error); Medium (fix internal naming).
-
----
-
-### 84. `for` loop in a function called from a recursive function panics: "Too few parameters on n_xxx"
-
-**Severity:** High — blocks any algorithm that combines recursion with a helper containing a loop.
-
-**Location:** `src/state/codegen.rs` — `generate_call` panic: `"Too few parameters on ..."``.
-
-**Symptom:** When function A is recursive (calls itself) and function A calls function B, and
-function B contains a `for` loop, the interpreter panics:
-```
-thread 'main' panicked at src/state/codegen.rs:560:9:
-Too few parameters on n_A
-```
-The panic occurs regardless of whether parameters are `const`, `&`, or by value.
-
-**Minimal reproduction:**
-```loft
-fn helper(v: vector<integer>) -> integer {
-  s = 0;
-  for h_i in 0..len(v) { s += v[h_i]; }  // ← this for loop triggers the bug
-  s
-}
-fn recurse(n: integer) -> integer {
-  if n <= 0 { return 0; }
-  v = [n];
-  helper(v) + recurse(n - 1)             // ← recursive call triggers the panic
-}
-fn main() { println("{recurse(5)}"); }
-```
-
-**Root cause:** `ref_return` in `src/parser/control.rs` adds extra attributes (work-ref buffer
-parameters) to a function while its body is being parsed. When the function is recursive,
-call sites parsed earlier in the body see the pre-update attribute count. By the time
-`ref_return` finishes (end of body), the function has more attributes than those recursive
-call sites were generated with. Codegen then panics because the call has too few arguments.
-
-More precisely: a vector-returning function F that allocates vectors internally triggers
-`ref_return`, which promotes internal work-ref variables to function attributes so callers
-pre-allocate result buffers (required for LIFO store ordering). When F is called from a
-recursive function G, `add_defaults` in G creates work-refs for the extra attributes. Those
-work-refs end up in the dep list of G's return type, causing G's own `ref_return` to add
-yet more attributes to G — AFTER the recursive calls to G in G's body were already parsed.
-
-**Workaround:** Use a non-recursive, in-place sorting algorithm (e.g. bubble sort or
-insertion sort) instead of recursive divide-and-conquer. In-place sorts do not return new
-vectors from recursive helpers, so `ref_return` is never triggered on the recursive
-function. The `bench/10_sort` benchmark uses bubble sort for this reason.
-
-**Fix path:** After parsing a function body (second pass), scan the IR tree for recursive
-calls with fewer arguments than the now-finalized attribute count, and patch them via
-`add_defaults`. This targeted post-parse fixup is significantly simpler than a full
-per-function variable scoping refactor.
-
-**Effort:** Medium (post-parse IR scan and call-site patching in `parse_function`).
-
----
+**Original root cause:** `convert()` used `OpConvRefFromNull` for `null`→`Reference` comparisons,
+which allocated a new store for the sentinel reference. `eq_ref`/`ne_ref` did full `DbRef`
+comparison (store+rec+pos), so the sentinel was not equal to null. Together, a null hash lookup
+before the first insert triggered an extra store allocation; the LIFO free order was then violated
+on the next allocation, causing "Allocating a used store".
 
 ---
 
 ## Bugs Found During Script Test Development (2026-03-22)
 
-### 86. `f#read(n) as vector<T>` silently produced an empty vector (interpreter FIXED; native still broken)
+### 86. `f#read(n) as vector<T>` silently produced an empty vector — **FIXED in 0.8.2**
 
-**Severity:** High — interpreter: fixed; native (`--native`): `file_from_bytes` stub returns empty vector.
+**Severity:** High — now fixed in both interpreter and native paths.
 
-**Location:** `src/state/io.rs` — `read_file` (interpreter, fixed); `src/codegen_runtime.rs` — `FileVal for DbRef::file_from_bytes` (native, stub).
+**Location:** `src/state/io.rs` — `read_file` (interpreter); `src/codegen_runtime.rs` — `FileVal for DbRef::file_from_bytes` (native).
 
 **Symptom:** Reading binary data from a file into a vector variable via `rv = f#read(n) as vector<T>`
 returned a vector of length 0 regardless of the byte count requested. The write direction
@@ -601,23 +441,25 @@ the vector record pointer directly — it holds an inner DbRef (same two-level i
 first 4 bytes of the inner DbRef (store_nr + padding), which resolved to 0. `vector_append` with
 `vec_rec == 0` claimed a new record but the variable was never connected to it.
 
-**Interpreter fix (applied):** Before calling `write_data` for a vector type, dereference `val` to
+**Interpreter fix:** Before calling `write_data` for a vector type, dereference `val` to
 the inner DbRef with `*self.database.store(&val).addr::<DbRef>(val.rec, val.pos)` — matching the
 same pattern already used in `write_file`.
 
-**Native fix (pending):** Implement `file_from_bytes` in `src/codegen_runtime.rs` for `DbRef` vector
-types — iterate over `data.len() / elem_size` elements, calling `vector_append` + `write_data` for
-each element, mirroring the interpreter fix.  Until fixed, `12-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
+**Native fix:** In `file_from_bytes` (`src/codegen_runtime.rs`), when the destination DbRef is the
+null sentinel (`rec==0, store_nr==u16::MAX`), allocate a real 12-byte store record and zero-initialize
+the vector header slot before calling `vector_append`. The generated code passes the null sentinel
+as the initial destination; `file_from_bytes` now initialises it to an empty vector before
+appending elements. `12-binary.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
 ---
 
-### 87. Native codegen: text method call inside format interpolation emits `String` instead of `&str`
+### 87. Native codegen: text method call inside format interpolation emits `String` instead of `&str` — **FIXED in 0.8.2**
 
-**Severity:** Medium — native (`--native`) compilation fails; interpreter path is unaffected.
+**Severity:** Medium — now fixed.
 
 **Location:** `src/generation.rs` — format-string expression emission.
 
-**Symptom:** A format string containing a text method call such as `"{tag.to_lowercase()}"` causes a
+**Symptom:** A format string containing a text method call such as `"{tag.to_lowercase()}"` caused a
 `rustc` type error in the generated `.rs` file:
 ```
 error[E0308]: mismatched types
@@ -626,54 +468,38 @@ error[E0308]: mismatched types
     expected `&str`, found `String`
 ```
 
-**Root cause:** The native emitter generates the method call inline as `(&var_tag).to_lowercase()`,
+**Root cause:** The native emitter generated the method call inline as `(&var_tag).to_lowercase()`,
 which returns a `String`. The `ops::format_text` function expects `&str`. For pre-assigned variables,
 `&var_x` coerces `&String` → `&str`, but a temporary `String` cannot be implicitly borrowed to `&str`
 in the same expression.
 
-**Workaround:** Compute the text method result before the format string and interpolate the variable:
-```loft
-// Instead of: msg = "hello {tag.to_lowercase()}"
-low_tag = tag.to_lowercase();
-msg = "hello {low_tag}";
-```
-
-**Fix path:** In `generation.rs`, when a text-returning method call appears in a format interpolation
-position, emit a `let _tmp_N = ...; ` let-binding before the format expression and use `&_tmp_N` in
-the `format_text` call.
-
-**Effort:** Small.
+**Fix:** In `generation.rs`, text-returning method calls appearing in format interpolation now emit a
+`let _tmp_N = ...; ` let-binding before the format expression and use `&_tmp_N` in the
+`format_text` call. `03-text.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
 ---
 
-### 88. Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument
+### 88. Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument — **FIXED in 0.8.2**
 
-**Severity:** Medium — native (`--native`) compilation fails; interpreter path works correctly.
+**Severity:** Medium — now fixed.
 
 **Location:** `src/generation.rs` — native emission for `Stores::os_directory`, `Stores::os_home`,
 `Stores::os_executable`.
 
-**Symptom:** Calling `directory()`, `user_directory()`, or `program_directory()` causes a `rustc`
+**Symptom:** Calling `directory()`, `user_directory()`, or `program_directory()` caused a `rustc`
 type error in the generated `.rs` file:
 ```
 error[E0308]: mismatched types
     let mut var_cwd: String = Stores::os_directory((_pre_N)).to_string();
                               ------------------- ^^^^^^^^^ expected `&mut String`, found `()`
 ```
-The `_pre_N` binding is an empty block `{ }` that evaluates to `()`, but `os_directory` requires
-a `&mut String` scratch buffer.
 
 **Root cause:** These functions use the A8 destination-passing convention (they write into a
-`&mut String` provided by the caller and return a `Str` view). The native emitter does not correctly
+`&mut String` provided by the caller and return a `Str` view). The native emitter did not correctly
 generate the scratch-buffer setup for them.
 
-**Workaround:** Avoid calling `directory()`, `user_directory()`, and `program_directory()` in code
-compiled with `--native`. They work correctly in the interpreter.
-
-**Fix path:** Identify where `generation.rs` emits the argument for these calls and generate
-`&mut work_N` (the pre-allocated scratch string) instead of an empty block.
-
-**Effort:** Small.
+**Fix:** `generation.rs` now generates `&mut work_N` (the pre-allocated scratch string) as the first
+argument for these destination-passing functions. `11-files.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
 ---
 

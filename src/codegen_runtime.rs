@@ -839,6 +839,15 @@ impl FileVal for DbRef {
                 if elem_size == 0 || bytes.is_empty() {
                     return;
                 }
+                // The generated code initialises the destination as a null sentinel
+                // (store_nr=u16::MAX, rec=0).  Allocate a real store before the first
+                // vector_append, which indexes stores[store_nr] and would panic on u16::MAX.
+                if self.rec == 0 {
+                    *self = stores.database(12);
+                    // Zero-init the vector header slot so vector_append sees
+                    // vec_rec=0 (no storage yet) instead of garbage memory.
+                    stores.store_mut(self).set_int(self.rec, self.pos, 0);
+                }
                 let n_elems = bytes.len() / elem_size as usize;
                 for i in 0..n_elems {
                     let slice = &bytes[i * elem_size as usize..(i + 1) * elem_size as usize];

@@ -1,6 +1,11 @@
 # Test Failures
 
-Recorded 2026-03-20. Two distinct root-cause bugs produce all 23 failures.
+> **HISTORICAL** — Recorded 2026-03-20. Both bugs documented here are now fixed.
+> Bug 1 (slot conflict) was resolved by the two-zone slot assignment redesign (A6.3a/b, A13/A14/A15).
+> Bug 2 (`ref_param_append_bug`) was fixed by the S4/binary I/O work in 0.8.2.
+> All 23 tests that were failing now pass. See [SLOT_FAILURES.md](SLOT_FAILURES.md) for the slot analysis.
+
+Recorded 2026-03-20. Two distinct root-cause bugs produced all 23 failures.
 
 ---
 

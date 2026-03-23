@@ -429,6 +429,8 @@ fn generated_code_compiles() {
     if !std::path::Path::new(file).exists() {
         return; // Skip if generated files not present (e.g. release build)
     }
+    let out_dir = std::path::Path::new(".loft");
+    let _ = std::fs::create_dir_all(out_dir);
     let output = std::process::Command::new("rustc")
         .args([
             "--edition",
@@ -436,6 +438,8 @@ fn generated_code_compiles() {
             "--crate-type",
             "lib",
             file,
+            "--out-dir",
+            out_dir.to_str().unwrap(),
             "-L",
             "target/debug/deps",
             "--extern",
@@ -494,7 +498,8 @@ fn native_test_suite() {
         let stem = src.file_stem().unwrap().to_string_lossy().to_string();
         let bin = tmp_dir.join(&stem);
 
-        // Compile as test binary
+        // Compile as test binary; --out-dir keeps auxiliary rlibs inside tmp_dir
+        // instead of the project root.
         let compile = std::process::Command::new("rustc")
             .args([
                 "--edition",
@@ -503,6 +508,8 @@ fn native_test_suite() {
                 src.to_str().unwrap(),
                 "-o",
                 bin.to_str().unwrap(),
+                "--out-dir",
+                tmp_dir.to_str().unwrap(),
                 "-L",
                 "target/debug/deps",
                 "--extern",
@@ -551,23 +558,26 @@ fn native_test_suite() {
 }
 
 fn find_loft_rlib() -> String {
-    // Find the loft rlib in target/debug/deps or target/debug
-    for path in &[
-        "target/debug/libloft.rlib",
-        "target/debug/deps/libloft.rlib",
-    ] {
-        if std::path::Path::new(path).exists() {
-            return path.to_string();
-        }
-    }
-    // Fallback: search deps directory
+    // Always prefer the most recently modified libloft-<hash>.rlib in deps/,
+    // which is the canonical artifact produced by the current cargo build.
+    // target/debug/libloft.rlib can be stale across rebuilds.
+    let mut best: Option<(std::time::SystemTime, String)> = None;
     if let Ok(entries) = std::fs::read_dir("target/debug/deps") {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("libloft-") && name.ends_with(".rlib") {
-                return entry.path().to_string_lossy().to_string();
+            if name.starts_with("libloft-")
+                && name.ends_with(".rlib")
+                && let Ok(mtime) = entry.metadata().and_then(|m| m.modified())
+            {
+                let path = entry.path().to_string_lossy().to_string();
+                if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                    best = Some((mtime, path));
+                }
             }
         }
+    }
+    if let Some((_, path)) = best {
+        return path;
     }
     "target/debug/libloft.rlib".to_string()
 }

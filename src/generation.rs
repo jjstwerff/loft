@@ -1782,29 +1782,42 @@ extern crate loft;"
             } else {
                 let is_return_expr =
                     !is_void_block && !has_trailing_void && return_idx == Some(vnr);
-                let wrap_result = is_return_expr && is_text_result;
-                let narrow_cast = if is_return_expr {
-                    narrow_int_cast(&bl.result)
+                // When OpCreateStack is the tail expression of a non-void block, the
+                // op itself emits nothing at runtime (it's a stack-slot no-op), but
+                // the block must return the mutable reference.  Emit `&mut var_<name>`
+                // directly rather than delegating to output_call which writes nothing.
+                if is_return_expr
+                    && let Value::Call(d_nr, args) = v
+                    && self.data.def(*d_nr).name == "OpCreateStack"
+                    && let [Value::Var(nr)] = args.as_slice()
+                {
+                    let vname = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+                    writeln!(w, "&mut var_{vname}")?;
                 } else {
-                    None
-                };
-                if wrap_result {
-                    write!(w, "Str::new(")?;
-                } else if narrow_cast.is_some() {
-                    write!(w, "(")?;
-                }
-                self.indent += 1;
-                self.output_code_with_subst(w, v, &pre_evals)?;
-                self.indent -= 1;
-                if wrap_result {
-                    write!(w, ")")?;
-                } else if let Some(cast) = narrow_cast {
-                    write!(w, ") as {cast}")?;
-                }
-                if is_return_expr {
-                    writeln!(w)?;
-                } else {
-                    writeln!(w, ";")?;
+                    let wrap_result = is_return_expr && is_text_result;
+                    let narrow_cast = if is_return_expr {
+                        narrow_int_cast(&bl.result)
+                    } else {
+                        None
+                    };
+                    if wrap_result {
+                        write!(w, "Str::new(")?;
+                    } else if narrow_cast.is_some() {
+                        write!(w, "(")?;
+                    }
+                    self.indent += 1;
+                    self.output_code_with_subst(w, v, &pre_evals)?;
+                    self.indent -= 1;
+                    if wrap_result {
+                        write!(w, ")")?;
+                    } else if let Some(cast) = narrow_cast {
+                        write!(w, ") as {cast}")?;
+                    }
+                    if is_return_expr {
+                        writeln!(w)?;
+                    } else {
+                        writeln!(w, ";")?;
+                    }
                 }
             }
             // Restore counter to the state after collect_pre_evals so the next
@@ -1930,35 +1943,38 @@ extern crate loft;"
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
         {
-            // _elm variables are loop-iterator element pointers: they are always overwritten by
-            // OpNewRecord (which returns a pointer into a collection store, not a standalone
-            // store) before any field access, and they are NEVER freed with OpFreeRef.
-            // Using stores.null() for them would allocate a real store that leaks the moment
-            // OpNewRecord overwrites the variable.  Use the null-sentinel instead.
-            //
-            // `__ref_*` compiler-generated work-ref variables are Vector result buffers:
-            // they are pre-allocated here (null_named + OpDatabase for Vector types) and
-            // freed with OpFreeRef at the end.  The OpDatabase call sets rec=1 so that
-            // vector_append inside the callee does not return early (it checks rec == 0).
-            //
-            // All other DbRef variables (user-facing names like `more`, `items2`, `p`,
-            // etc.) are either plain aliases that immediately get assigned to point at
-            // a `__ref_*` store, or struct values that will be allocated by OpDatabase
-            // when it sees the null sentinel (store_nr == u16::MAX).  Using null_named
-            // for those would allocate a real store that is then either orphaned (alias
-            // case) or redundantly pre-allocated before OpDatabase replaces it.  Both
-            // cases create stores that outlive their logical scope and break the LIFO
-            // invariant enforced by free_named.  Use the null sentinel instead.
             let var_raw_name = variables.name(var);
             let is_elm = var_raw_name.starts_with("_elm");
-            let is_ref_buf = var_raw_name.starts_with("__ref_");
-            if is_elm || !is_ref_buf {
+            // The interpreter pre-allocates a store for every DbRef variable during
+            // pre-init (ConvRefFromNull → stores.null()).  Store numbers are assigned
+            // in pre-init order, and OpFreeRef later frees them in reverse pre-init
+            // order — correct LIFO.
+            //
+            // Native code must match this: variables that own their store (empty
+            // dependency list — these are the ones freed by OpFreeRef) need
+            // stores.null_named() so they get a store number in the same pre-init
+            // order.  Using the null sentinel instead would defer allocation to
+            // OpDatabase call time (execution order), which differs from pre-init
+            // order and breaks the LIFO free invariant.
+            //
+            // Variables that do NOT own their store:
+            // - `_elm` loop-iterator pointers: overwritten by OpNewRecord, never freed
+            // - inline_ref temporaries: overwritten by a function return, never freed
+            // - alias variables (non-empty dep): point into another variable's store
+            // All of these use the null sentinel to avoid allocating orphaned stores.
+            let owns_store = match variables.tp(var) {
+                Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
+                    dep.is_empty()
+                }
+                _ => false,
+            };
+            if is_elm || variables.is_inline_ref(var) || !owns_store {
                 write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
             } else {
-                // __ref_* variables are Vector result buffers passed into functions that return
-                // vector<T>.  The interpreter's gen_set_first_vector_null emits OpDatabase which
-                // sets rec=1; native code must do the same so that vector_append works correctly
-                // inside the called function (it returns early when db.rec == 0).
+                // Pre-allocate a store matching the interpreter's ConvRefFromNull.
+                // `__ref_*` Vector result buffers additionally need an immediate
+                // OpDatabase call to set rec=1, so that vector_append inside the
+                // callee does not return early (it checks rec == 0).
                 let ref_buf_type_id = {
                     let var_tp = variables.tp(var).clone();
                     if let Type::Vector(elm_tp, _) = &var_tp {
@@ -1968,20 +1984,15 @@ extern crate loft;"
                         u16::MAX
                     }
                 };
-                if ref_buf_type_id != u16::MAX {
+                if ref_buf_type_id == u16::MAX {
+                    write!(w, "stores.null_named(\"var_{name}\")")?;
+                } else {
                     writeln!(w, "stores.null_named(\"var_{name}\");")?;
                     self.indent(w)?;
                     write!(
                         w,
                         "var_{name} = OpDatabase(stores, var_{name}, {ref_buf_type_id}_i32)"
                     )?;
-                } else if variables.is_inline_ref(var) {
-                    // Inline-ref temporaries are immediately overwritten by a function return
-                    // value (like the interpreter's OpNullRefSentinel).  Using null_named here
-                    // would allocate a real store that is never freed, breaking LIFO order.
-                    write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
-                } else {
-                    write!(w, "stores.null_named(\"var_{name}\")")?;
                 }
             }
         } else {

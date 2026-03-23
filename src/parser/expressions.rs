@@ -2022,6 +2022,9 @@ use a separate collection or add after the loop"
             && *in_t != Type::Void
             && self.vars.tp(vec).depend().is_empty()
             && !matches!(self.vars.tp(vec), Type::RefVar(_))
+            // Argument vectors already have a caller-provided backing store; do not
+            // allocate a local __vdb_N store that would be freed before the return.
+            && !self.vars.is_argument(vec)
     }
 
     pub(crate) fn unique_elm_var(&mut self, parent_tp: &Type, assign_tp: &Type, vec: u16) -> u16 {
@@ -2269,7 +2272,7 @@ use a separate collection or add after the loop"
             let vec_def = self.data.vector_def(&mut self.lexer, assign_tp);
             let db = self
                 .vars
-                .work_refs(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
+                .work_vec_db(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
             self.vars.depend(vec, db);
             let tp = self.data.def(vec_def).known_type;
             debug_assert_ne!(
@@ -2297,9 +2300,18 @@ use a separate collection or add after the loop"
     ) -> u16 {
         // determine the element size by the resulting type
         let vec_def = self.data.vector_def(&mut self.lexer, in_t);
+        // Use work_vec_db (separate __vdb_N counter) so that these calls do NOT
+        // consume __ref_N counter slots.  Both vector_db and insert_new contribute
+        // to the __vdb_N namespace; at any given vector site exactly one of them
+        // runs per pass (vector_db is guarded by !first_pass; insert_new is called
+        // on first pass when vector_db has not yet created a dep, but on second pass
+        // vector_needs_db returns false after vector_db ran, so insert_new is
+        // skipped).  The __ref_N counter is reserved exclusively for add_defaults
+        // and other return-value work-refs, ensuring ref_return can match the same
+        // name across both passes.
         let db = self
             .vars
-            .work_refs(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
+            .work_vec_db(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
         self.vars.depend(elm, db);
         self.vars.depend(vec, db);
         let known = Value::Int(i32::from(self.data.def(vec_def).known_type));
