@@ -429,6 +429,8 @@ fn generated_code_compiles() {
     if !std::path::Path::new(file).exists() {
         return; // Skip if generated files not present (e.g. release build)
     }
+    let out_dir = std::path::Path::new(".loft");
+    let _ = std::fs::create_dir_all(out_dir);
     let output = std::process::Command::new("rustc")
         .args([
             "--edition",
@@ -436,6 +438,8 @@ fn generated_code_compiles() {
             "--crate-type",
             "lib",
             file,
+            "--out-dir",
+            out_dir.to_str().unwrap(),
             "-L",
             "target/debug/deps",
             "--extern",
@@ -494,7 +498,8 @@ fn native_test_suite() {
         let stem = src.file_stem().unwrap().to_string_lossy().to_string();
         let bin = tmp_dir.join(&stem);
 
-        // Compile as test binary
+        // Compile as test binary; --out-dir keeps auxiliary rlibs inside tmp_dir
+        // instead of the project root.
         let compile = std::process::Command::new("rustc")
             .args([
                 "--edition",
@@ -503,6 +508,8 @@ fn native_test_suite() {
                 src.to_str().unwrap(),
                 "-o",
                 bin.to_str().unwrap(),
+                "--out-dir",
+                tmp_dir.to_str().unwrap(),
                 "-L",
                 "target/debug/deps",
                 "--extern",
