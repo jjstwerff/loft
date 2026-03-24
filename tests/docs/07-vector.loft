@@ -10,9 +10,9 @@
 // ## Transforming vectors: map, filter, reduce
 // 'map', 'filter', and 'reduce' each take a function and apply it to the vector.
 // Pass the function using 'fn <name>' to refer to a named function by name.
-//   map(v, fn f)          — apply f to every element; returns a new vector
-//   filter(v, fn pred)    — keep only elements for which pred returns true
-//   reduce(v, fn f, init) — combine all elements into a single value
+//   map(v, f)          — apply f to every element; returns a new vector
+//   filter(v, pred)    — keep only elements for which pred returns true
+//   reduce(v, f, init) — combine all elements into a single value
 fn triple(x: integer) -> integer {
   x * 3
 }
@@ -130,18 +130,18 @@ fn main() {
   // ## Higher-order functions
   // 'map' applies a function to every element and returns a new vector.
   nums =[1, 2, 3, 4, 5];
-  tripled = map(nums,  fn triple);
+  tripled = map(nums,  triple);
   assert("{tripled}" == "[3,6,9,12,15]", "map triple: {tripled}");
   // 'filter' keeps only elements for which the predicate returns true.
-  evens2 = filter(nums,  fn is_even_n);
+  evens2 = filter(nums,  is_even_n);
   assert("{evens2}" == "[2,4]", "filter evens: {evens2}");
   // 'reduce' folds all elements into a single value, starting from an initial accumulator.
-  // Argument order: reduce(vector, initial_value, fn combiner).
-  total = reduce(nums, 0,  fn sum_acc);
+  // Argument order: reduce(vector, initial_value, combiner).
+  total = reduce(nums, 0,  sum_acc);
   assert(total == 15, "reduce sum: {total}");
-  product = reduce(nums, 1,  fn mul_acc);
+  product = reduce(nums, 1,  mul_acc);
   assert(product == 120, "reduce product: {product}");
   // You can chain these calls: filter first, then map, then reduce.
-  result = reduce(map(filter(nums,  fn is_even_n),  fn triple), 0,  fn sum_acc);
+  result = reduce(map(filter(nums,  is_even_n),  triple), 0,  sum_acc);
   assert(result == 18, "filter+map+reduce: {result}");
 }

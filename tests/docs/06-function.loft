@@ -119,11 +119,11 @@ fn main() {
   assert(describe_text("hi") == "text:hi", "Text describe");
   // A function reference is stored in a variable with type 'fn(...) -> ...'.
   // Calling it looks exactly like a regular function call.
-  f = fn double_it;
+  f = double_it;
   assert(f(5) == 10, "fn-ref stored and called: {f(5)}");
   // Pass function references as arguments to higher-order functions.
-  assert(apply_fn(fn double_it, 7) == 14, "fn-ref as arg (double)");
-  assert(apply_fn(fn negate_it, 3) == -3, "fn-ref as arg (negate)");
+  assert(apply_fn(double_it, 7) == 14, "fn-ref as arg (double)");
+  assert(apply_fn(negate_it, 3) == -3, "fn-ref as arg (negate)");
 
   // Full-form lambda with fn(...) syntax.
   nums = [1, 2, 3, 4, 5];

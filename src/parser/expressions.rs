@@ -1367,6 +1367,12 @@ use a separate collection or add after the loop"
             if self.lexer.peek_token("(") {
                 self.parse_lambda(val)
             } else {
+                // S11: function references use the bare name, not 'fn name'.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Use the function name directly, without 'fn' prefix"
+                );
                 self.parse_fn_ref(val)
             }
         } else if self.lexer.has_token("||") {
@@ -2949,6 +2955,7 @@ pair the hash with a vector to iterate in insertion order"
     }
 
     // <var> ::= <object> | [ <call> | <var> | <enum> ] <children> }
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_var(&mut self, code: &mut Value, name: &str, parent_tp: &mut Type) -> Type {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
@@ -3040,12 +3047,43 @@ pair the hash with a vector to iterate in insertion order"
         {
             *code = self.data.attr_value(*enr, *a_nr);
             t = parent_tp.clone();
-        } else if !self.first_pass {
-            diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
-            t = Type::Unknown(0);
         } else {
-            *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-            t = Type::Unknown(0);
+            // S11: try resolving as a bare function reference.
+            // On the first pass, only do this when the identifier is NOT followed
+            // by '=' (assignment position), so that `double = 5` still creates a
+            // local variable that shadows the function name.
+            let fn_d_nr = {
+                let prefixed = format!("n_{nm}");
+                let nr = self.data.def_nr(&prefixed);
+                if nr == u32::MAX {
+                    self.data.def_nr(&nm)
+                } else {
+                    nr
+                }
+            };
+            if fn_d_nr != u32::MAX && matches!(self.data.def_type(fn_d_nr), DefType::Function) {
+                if self.lexer.peek_token("=") && !self.lexer.peek_token("==") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot redefine function '{nm}' as a variable"
+                    );
+                }
+                *code = Value::Int(fn_d_nr as i32);
+                self.data.def_used(fn_d_nr);
+                let n_args = self.data.attributes(fn_d_nr);
+                let arg_types: Vec<Type> = (0..n_args)
+                    .map(|a| self.data.attr_type(fn_d_nr, a))
+                    .collect();
+                let ret_type = self.data.def(fn_d_nr).returned.clone();
+                t = Type::Function(arg_types, Box::new(ret_type));
+            } else if !self.first_pass {
+                diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                t = Type::Unknown(0);
+            } else {
+                *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
+                t = Type::Unknown(0);
+            }
         }
         t
     }

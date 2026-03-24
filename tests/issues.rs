@@ -537,13 +537,13 @@ fn file_exists_false() {
 // `fn <name>` produces a Value::Int(d_nr) with Type::Function(args, ret).
 // Calling `f(args)` where `f` is a local fn-ref variable emits OpCallRef.
 
-/// Basic fn-ref: store `fn double` and call it through the reference.
+/// Basic fn-ref: store `double` and call it through the reference.
 #[test]
 fn fn_ref_basic_call() {
     code!(
         "fn double(n: integer) -> integer { n * 2 }
 fn test() {
-    f = fn double;
+    f = double;
     result = f(21);
     assert(result == 42, \"expected 42, got {result}\");
 }"
@@ -557,7 +557,7 @@ fn fn_ref_two_args() {
     code!(
         "fn add(a: integer, b: integer) -> integer { a + b }
 fn test() {
-    f = fn add;
+    f = add;
     result = f(10, 32);
     assert(result == 42, \"expected 42, got {result}\");
 }"
@@ -573,7 +573,7 @@ fn fn_ref_conditional_call() {
 fn dec(n: integer) -> integer { n - 1 }
 fn test() {
     flag = true;
-    f = if flag { fn inc } else { fn dec };
+    f = if flag { inc } else { dec };
     result = f(41);
     assert(result == 42, \"expected 42, got {result}\");
 }"
@@ -588,7 +588,7 @@ fn fn_ref_as_parameter() {
         "fn square(n: integer) -> integer { n * n }
 fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
 fn test() {
-    result = apply(fn square, 7);
+    result = apply(square, 7);
     assert(result == 49, \"expected 49, got {result}\");
 }"
     )
@@ -603,7 +603,7 @@ fn map_integers() {
         "fn double(x: integer) -> integer { x * 2 }
 fn test() {
     v = [1, 2, 3, 4, 5];
-    r = map(v, fn double);
+    r = map(v, double);
     s = 0;
     for x in r {
         s += x;
@@ -620,7 +620,7 @@ fn filter_integers() {
         "fn is_even(x: integer) -> boolean { x % 2 == 0 }
 fn test() {
     v = [1, 2, 3, 4, 5, 6];
-    r = filter(v, fn is_even);
+    r = filter(v, is_even);
     s = 0;
     for x in r {
         s += x;
@@ -637,7 +637,7 @@ fn reduce_sum() {
         "fn add(acc: integer, x: integer) -> integer { acc + x }
 fn test() {
     v = [1, 2, 3, 4, 5];
-    s = reduce(v, 0, fn add);
+    s = reduce(v, 0, add);
     assert(s == 15, \"expected 15, got {s}\");
 }"
     )
@@ -1918,4 +1918,34 @@ fn s10_short_lambda_type_annotation_rejected() {
 }"
     )
     .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) -> <ret> { ... } instead at s10_short_lambda_type_annotation_rejected:3:27");
+}
+
+// ── S11 — Bare function references (no fn prefix) ────────────────────────────
+
+/// S11: bare `double` resolves as a function reference without `fn` prefix.
+#[test]
+fn s11_bare_fn_ref() {
+    code!(
+        "fn double(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn test() {
+    assert(apply(double, 7) == 14, \"bare fn ref\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// S11: bare fn-ref with map.
+#[test]
+fn s11_bare_fn_ref_map() {
+    code!(
+        "fn triple(x: integer) -> integer { x * 3 }
+fn test() {
+    v = [1, 2, 3];
+    r = map(v, triple);
+    assert(r[0] == 3);
+    assert(r[1] == 6);
+}"
+    )
+    .result(Value::Null);
 }

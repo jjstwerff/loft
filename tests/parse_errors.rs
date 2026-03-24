@@ -235,9 +235,9 @@ fn parallel_for_missing_context_arg() {
     code!(
         "struct Item { v: integer } \
          fn scale(r: const Item, m: integer) -> integer { r.v * m } \
-         fn test() { items = [Item{v:1}]; parallel_for(fn scale, items, 1); }"
+         fn test() { items = [Item{v:1}]; parallel_for(scale, items, 1); }"
     )
-    .error("parallel_for: wrong number of extra arguments: worker expects 1, got 0 at parallel_for_missing_context_arg:1:153");
+    .error("parallel_for: wrong number of extra arguments: worker expects 1, got 0 at parallel_for_missing_context_arg:1:150");
 }
 
 #[test]
@@ -246,9 +246,9 @@ fn parallel_for_unexpected_context_arg() {
     code!(
         "struct Item { v: integer } \
          fn id(r: const Item) -> integer { r.v } \
-         fn test() { items = [Item{v:1}]; mult = 3; parallel_for(fn id, items, 1, mult); }"
+         fn test() { items = [Item{v:1}]; mult = 3; parallel_for(id, items, 1, mult); }"
     )
-    .error("parallel_for: wrong number of extra arguments: worker expects 0, got 1 at parallel_for_unexpected_context_arg:1:147");
+    .error("parallel_for: wrong number of extra arguments: worker expects 0, got 1 at parallel_for_unexpected_context_arg:1:144");
 }
 
 #[test]
@@ -257,9 +257,9 @@ fn parallel_for_too_many_context_args() {
     code!(
         "struct Item { v: integer } \
          fn scale(r: const Item, m: integer) -> integer { r.v * m } \
-         fn test() { items = [Item{v:1}]; a = 2; b = 3; parallel_for(fn scale, items, 1, a, b); }"
+         fn test() { items = [Item{v:1}]; a = 2; b = 3; parallel_for(scale, items, 1, a, b); }"
     )
-    .error("parallel_for: wrong number of extra arguments: worker expects 1, got 2 at parallel_for_too_many_context_args:1:173");
+    .error("parallel_for: wrong number of extra arguments: worker expects 1, got 2 at parallel_for_too_many_context_args:1:170");
 }
 
 // --- For-loop mutation guards ---
