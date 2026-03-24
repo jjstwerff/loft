@@ -23,22 +23,6 @@ use std::sync::{Arc, Mutex};
 // but enum_fn only runs in the first pass, so the Dynamic dispatch IR still calls
 // with only [Var(0)] despite each variant now needing extra text-buffer arguments.
 
-#[test]
-fn polymorphic_text_method_on_enum() {
-    code!(
-        "enum Shape {
-    Circle { radius: float },
-    Rect   { width: float, height: float }
-}
-fn describe(self: Circle) -> text { \"circle r={self.radius}\" }
-fn describe(self: Rect)   -> text { \"rect {self.width}x{self.height}\" }
-fn test() {
-    c = Circle { radius: 3.0 };
-    assert(c.describe() == \"circle r=3\", \"got: {c.describe()}\");
-}"
-    );
-}
-
 // ── Issue 5 ──────────────────────────────────────────────────────────────────
 // Scalar `+=` on an empty (null) vector struct field has no effect.
 // Expected: the scalar is appended and len == 1.
@@ -46,50 +30,10 @@ fn test() {
 /// `b.items += [1]` (bracket form) on a null field — this is the WORKING baseline.
 /// The bracket form goes through parse_vector with is_field=true and uses
 /// OpNewRecord / OpFinishRecord to allocate the element in place.
-#[test]
-fn vec_field_append_bracket_scalar_works() {
-    code!(
-        "struct Box { items: vector<integer> }
-fn test() {
-    b = Box {};
-    b.items += [1];
-    assert(len(b.items) == 1, \"len after += [1]: {len(b.items)}\");
-    assert(b.items[0] == 1,   \"value after += [1]: {b.items[0]}\");
-}"
-    );
-}
-
 /// `b.items += [3, 5]` on a null field — multiple elements with bracket form.
-#[test]
-fn vec_field_append_bracket_multi_works() {
-    code!(
-        "struct Box { items: vector<integer> }
-fn test() {
-    b = Box {};
-    b.items += [3, 5];
-    assert(len(b.items) == 2, \"len: {len(b.items)}\");
-    assert(b.items[0] == 3, \"[0]: {b.items[0]}\");
-    assert(b.items[1] == 5, \"[1]: {b.items[1]}\");
-}"
-    );
-}
-
 /// `b.items += 1` (bare scalar, no brackets) on a null field — FIXED.
 /// Parser now routes through new_record so the field is allocated in place.
 /// Was tracked as Issue 5 in doc/claude/PROBLEMS.md.
-#[test]
-fn vec_field_append_scalar() {
-    code!(
-        "struct Box { items: vector<integer> }
-fn test() {
-    b = Box {};
-    b.items += 1;
-    assert(len(b.items) == 1, \"len after += 1: {len(b.items)}\");
-    assert(b.items[0] == 1,   \"value after += 1: {b.items[0]}\");
-}"
-    );
-}
-
 // ── Issue 1 ──────────────────────────────────────────────────────────────────
 // A method whose return type is a NEW struct record crashes at database.rs:1494
 // because the DbRef returned by the method has a garbage store_nr.
@@ -97,19 +41,6 @@ fn test() {
 /// Minimal reproducer: `fn double(self: Color) -> Color { Color { r: self.r * 2 } }`
 /// Calling `c.double()` crashes with "index out of bounds: the len is N but index is M".
 /// Tracked as Issue 1 in doc/claude/PROBLEMS.md.
-#[test]
-fn method_returns_new_struct_record() {
-    code!(
-        "struct Color { r: integer not null }
-fn double(self: Color) -> Color { Color { r: self.r * 2 } }
-fn test() {
-    c = Color { r: 3 };
-    d = c.double();
-    assert(d.r == 6, \"d.r after double: {d.r}\");
-}"
-    );
-}
-
 // ── Issue 2 ──────────────────────────────────────────────────────────────────
 // A borrowed reference first assigned inside a branch gets a garbage store_nr=8
 // DbRef at runtime, crashing at database.rs:1462.
@@ -118,40 +49,11 @@ fn test() {
 /// Borrowed ref first assigned INSIDE an `if` branch — FIXED.
 /// Was tracked as Issue 2 in doc/claude/PROBLEMS.md; now passes after
 /// the Option A sub-3 pre-init work in scopes.rs.
-#[test]
-fn ref_inside_branch_borrowed() {
-    code!(
-        "struct Item { val: integer }
-fn test() {
-    items = [Item { val: 10 }, Item { val: 20 }];
-    result = 0;
-    if items[0].val > 0 {
-        r = items[0];
-        result = r.val;
-    };
-    assert(result == 10, \"result: {result}\");
-}"
-    );
-}
-
 // ── Issue 4 ──────────────────────────────────────────────────────────────────
 // `v += items` inside a function that takes `v` as a `&vector<T>` ref-param
 // has no visible effect on the caller's variable after the call returns.
 
 /// Baseline: field mutation through a ref-param WORKS (e.g. `v[0].val = x`).
-#[test]
-fn ref_param_field_mutation_works() {
-    code!(
-        "struct Item { val: integer }
-fn set_first(v: &vector<Item>, x: integer) { v[0].val = x; }
-fn test() {
-    buf = [Item { val: 1 }];
-    set_first(buf, 42);
-    assert(buf[0].val == 42, \"buf[0].val: {buf[0].val}\");
-}"
-    );
-}
-
 // ── Issue 44 — L4: Empty `[]` literal as a mutable vector argument ───────────
 // Fixed in parser/mod.rs call_nr(): when Value::Insert([Null]) (or empty Insert)
 // appears where a vector parameter is expected, a temp variable is created with
@@ -160,49 +62,9 @@ fn test() {
 // the call-site type-check regardless of call nesting.
 
 /// Baseline: `join([], "-")` — empty `vector<text>` arg via call_nr fix.
-#[test]
-fn empty_vector_as_mutable_arg() {
-    code!(
-        "fn test() {
-    result = join([], \"-\");
-    assert(result == \"\", \"join([]): {result}\");
-}"
-    );
-}
-
 /// L4 edge: `[]` passed to a user-defined function taking `vector<integer>`.
 /// Exercises the same call_nr path for a non-text element type.
-#[test]
-fn l4_empty_int_vector_arg() {
-    code!(
-        "fn sum_vec(v: vector<integer>) -> integer {
-    r = 0;
-    for x in v { r += x; }
-    r
-}
-fn test() {
-    assert(sum_vec([]) == 0, \"sum_vec([])\");
-    assert(sum_vec([3, 4]) == 7, \"sum_vec([3,4])\");
-}"
-    );
-}
-
 /// L4 edge: `[]` as second argument, not first — verifies argument index handling.
-#[test]
-fn l4_empty_vector_second_arg() {
-    code!(
-        "fn pick(prefix: text, parts: vector<text>) -> text {
-    result = prefix;
-    for p in parts { result += p; }
-    result
-}
-fn test() {
-    assert(pick(\"x\", []) == \"x\", \"pick with empty vector\");
-    assert(pick(\"a\", [\"b\", \"c\"]) == \"abc\", \"pick with two parts\");
-}"
-    );
-}
-
 // ── Issue 56 — L5: `v += extra` via `&vector` ref-param ──────────────────────
 // Fixed in state/codegen.rs generate_var(): RefVar(Vector) now emits OpGetStackRef
 // to dereference the ref-param and load the actual vector DbRef before OpAppendVector.
@@ -210,52 +72,8 @@ fn test() {
 // DbRef into the caller's local-variable record, so the caller sees the updated vector.
 
 /// Baseline: `v += extra` via ref-param appends elements to the caller's vector.
-#[test]
-fn ref_param_append_bug() {
-    code!(
-        "struct Item { name: text, value: integer }
-fn fill(v: &vector<Item>, extra: vector<Item>) { v += extra; }
-fn test() {
-    buf = [Item { name: \"a\", value: 1 }];
-    fill(buf, [Item { name: \"b\", value: 2 }]);
-    assert(len(buf) == 2, \"len after fill: {len(buf)}\");
-    assert(buf[1].value == 2, \"buf[1].value: {buf[1].value}\");
-}"
-    );
-}
-
 /// L5 edge: append integers via ref-param; verify values and length.
-#[test]
-fn l5_ref_param_append_int_vec() {
-    code!(
-        "fn append_ints(v: &vector<integer>, extra: vector<integer>) { v += extra; }
-fn test() {
-    nums = [1, 2, 3];
-    append_ints(nums, [4, 5]);
-    assert(len(nums) == 5, \"len: {len(nums)}\");
-    assert(nums[3] == 4, \"nums[3]: {nums[3]}\");
-    assert(nums[4] == 5, \"nums[4]: {nums[4]}\");
-}"
-    );
-}
-
 /// L5 edge: multiple sequential ref-param appends grow the vector correctly.
-#[test]
-fn l5_ref_param_multiple_appends() {
-    code!(
-        "fn push_one(v: &vector<integer>, x: integer) { v += [x]; }
-fn test() {
-    nums = [0];
-    push_one(nums, 10);
-    push_one(nums, 20);
-    push_one(nums, 30);
-    assert(len(nums) == 4, \"len: {len(nums)}\");
-    assert(nums[1] == 10, \"nums[1]: {nums[1]}\");
-    assert(nums[3] == 30, \"nums[3]: {nums[3]}\");
-}"
-    );
-}
-
 // ── Issue 11 ─────────────────────────────────────────────────────────────────
 // Field-name overlap between two structs in the same file must NOT cause wrong
 // field offsets in key lookups or tree traversal.
@@ -274,77 +92,14 @@ fn test() {
 /// `IdxElm  { nr: integer, key: text, value: integer }` (key is field 1, offset 4)
 /// Key lookups and iteration on `IdxElm` must use key's offset in IdxElm (4),
 /// not in SortElm (0).  Confirmed working — field offsets are type-scoped.
-#[test]
-fn field_name_overlap_range_query() {
-    code!(
-        "struct SortElm { key: text, value: integer }
-struct IdxElm  { nr: integer, key: text, value: integer }
-struct Db {
-    srt: sorted<SortElm[-key]>,
-    idx: index<IdxElm[nr, -key]>
-}
-fn test() {
-    db = Db {
-        srt: [
-            SortElm { key: \"One\",   value: 1 },
-            SortElm { key: \"Two\",   value: 2 },
-            SortElm { key: \"Three\", value: 3 }
-        ],
-        idx: [
-            IdxElm { nr: 10, key: \"A\", value: 100 },
-            IdxElm { nr: 10, key: \"B\", value: 200 },
-            IdxElm { nr: 20, key: \"C\", value: 300 }
-        ]
-    };
-    // Direct key lookup in sorted (must find correct field offset for SortElm)
-    srt_val = db.srt[\"Two\"].value;
-    assert(srt_val == 2, \"srt lookup: {srt_val}\");
-    // Direct key lookup in index (must find correct field offsets for IdxElm)
-    idx_val = db.idx[10, \"B\"].value;
-    assert(idx_val == 200, \"idx lookup: {idx_val}\");
-    // Range: [10..20, \"B\"] = up to (not including) the element at (nr=20, key=B).
-    // In descending key order: (20,C) comes before (20,B), so it IS in range.
-    // Correct sum = 200 + 100 + 300 = 600.
-    sum = 0;
-    for e in db.idx[10..20, \"B\"] { sum += e.value };
-    assert(sum == 600, \"range sum: {sum}\");
-}"
-    );
-}
-
 // ── Issue 28 ─────────────────────────────────────────────────────────────────
 // validate_slots could panic in debug builds when the same variable name is reused
 // in sequential `{ }` blocks in the same function (both get the same slot but
 // different live-interval entries).  Fixed: find_conflict() exempts same-name+same-slot pairs.
 
 /// Same variable name in sequential blocks — the core Issue 28 case (fixed).
-#[test]
-fn sequential_blocks_same_varname_workaround() {
-    code!(
-        "fn test() {
-    total = 0;
-    { n = 1; total += n; }
-    { n = 2; total += n; }
-    { n = 3; total += n; }
-    assert(total == 6, \"total: {total}\");
-}"
-    );
-}
-
 /// Different variable names in sequential blocks — validate_slots must not panic.
 /// Each block is fully self-contained; variables don't escape their block.
-#[test]
-fn sequential_blocks_different_varnames() {
-    code!(
-        "fn test() {
-    total = 0;
-    { a = 10; total += a; }
-    { b = 20; total += b; }
-    assert(total == 30, \"total: {total}\");
-}"
-    );
-}
-
 // ── Issue 29 ─────────────────────────────────────────────────────────────────
 // validate_slots false positive: two differently-named owned (Reference) variables
 // that share a slot but have non-overlapping actual live ranges trigger a conflict
@@ -353,39 +108,10 @@ fn sequential_blocks_different_varnames() {
 
 /// Two differently-named struct variables in sequential blocks — each in its own
 /// `{ }` scope so their lifetimes don't overlap.  validate_slots must not panic.
-#[test]
-fn sequential_blocks_different_ref_varnames() {
-    code!(
-        "struct Rec { x: integer }
-fn test() {
-    total = 0;
-    { a = Rec { x: 10 }; total += a.x; }
-    { b = Rec { x: 20 }; total += b.x; }
-    assert(total == 30, \"total: {total}\");
-}"
-    );
-}
-
 /// The real issue 29 pattern: same variable name `f` reused across many sequential
 /// blocks; a differently-named reference variable `c` is introduced between some of
 /// those blocks.  validate_slots must not panic (c.first_def may fall between two
 /// of f's live ranges, which are separate Variable entries sharing the same slot).
-#[test]
-fn issue_29_reused_refname_with_later_different_var() {
-    code!(
-        "struct Rec { x: integer }
-fn test() {
-    total = 0;
-    { f = Rec { x: 1 }; total += f.x; }
-    { f = Rec { x: 2 }; total += f.x; }
-    c = Rec { x: 99 };
-    { f = Rec { x: 3 }; total += f.x; }
-    total += c.x;
-    assert(total == 6 + 99, \"total: {total}\");
-}"
-    );
-}
-
 // ── T1-1: Non-zero exit code on runtime error (production mode) ───────────────
 // In normal mode a failing assert/panic aborts via Rust panic!().
 // In production mode (--production flag) the error is logged and execution
@@ -782,36 +508,7 @@ fn test() {
 // non-collection) types.
 
 /// sorted[key] = null removes the entry.
-#[test]
-fn sorted_key_null_removes_entry() {
-    code!(
-        "struct Elm { key: integer, val: integer }
-struct Db { s: sorted<Elm[key]> }"
-    )
-    .expr(
-        "db = Db { s: [Elm{key:1,val:10}, Elm{key:2,val:20}] };
-db.s[1] = null;
-assert(!db.s[1], \"key 1 removed\");
-assert(db.s[2].val == 20, \"key 2 still present: {db.s[2].val}\");",
-    );
-}
-
 /// hash[key] = null removes the entry.
-#[test]
-fn hash_key_null_removes_entry() {
-    code!(
-        "struct Keyword { name: text }
-struct Data { h: hash<Keyword[name]> }"
-    )
-    .expr(
-        "c = Data {};
-c.h = [{ name: \"one\" }, { name: \"two\" }];
-c.h[\"one\"] = null;
-assert(!c.h[\"one\"], \"one removed\");
-assert(!!c.h[\"two\"], \"two still present\");",
-    );
-}
-
 // ── PROBLEMS #39 (T0-4): `v += other_vec` shallow copy — text fields dangle ───
 // vector_add() used a raw copy_block without calling copy_claims().  Both the
 // source and destination vectors ended up with the same string-record indices;
@@ -870,113 +567,18 @@ fn test() {
 /// copy_claims path: a struct with an index<T[key]> field is added to a vector
 /// (triggering OpCopyRecord → copy_claims → copy_claims_index_body).
 /// Before the fix this panicked with "Not implemented".
-#[test]
-fn index_field_copy_claims_via_vector() {
-    code!(
-        "struct Item { key: integer, val: integer }
-struct Container { items: index<Item[key]> }
-fn test() {
-    c = Container {
-        items: [Item { key: 1, val: 10 }, Item { key: 2, val: 20 }]
-    };
-    bag = [c];
-    assert(bag[0].items[1].val == 10, \"key 1 val: {bag[0].items[1].val}\");
-    assert(bag[0].items[2].val == 20, \"key 2 val: {bag[0].items[2].val}\");
-}"
-    );
-}
-
 /// copy_claims on index with text fields: text records must be deep-copied so
 /// source and destination are independent.
-#[test]
-fn index_field_copy_claims_text_elements() {
-    code!(
-        "struct Tag { key: integer, label: text }
-struct Bag { tags: index<Tag[key]> }
-fn test() {
-    b = Bag {
-        tags: [Tag { key: 1, label: \"alpha\" }, Tag { key: 2, label: \"beta\" }]
-    };
-    copy = [b];
-    assert(copy[0].tags[1].label == \"alpha\", \"label 1: {copy[0].tags[1].label}\");
-    assert(copy[0].tags[2].label == \"beta\",  \"label 2: {copy[0].tags[2].label}\");
-}"
-    );
-}
-
 /// remove_claims path for Parts::Index: reassigning a struct that holds an
 /// index<T> field triggers database() → clear() → remove_claims on the index.
 /// Before the fix this panicked with "Not implemented".
-#[test]
-fn index_field_remove_claims_on_reassign() {
-    code!(
-        "struct Node { key: integer, score: integer }
-struct Graph { nodes: index<Node[key]> }
-fn test() {
-    g = Graph {
-        nodes: [Node { key: 1, score: 100 }, Node { key: 2, score: 200 }]
-    };
-    assert(g.nodes[1].score == 100, \"score before: {g.nodes[1].score}\");
-    g = Graph {
-        nodes: [Node { key: 3, score: 300 }]
-    };
-    assert(g.nodes[3].score == 300, \"score after reassign: {g.nodes[3].score}\");
-    assert(!g.nodes[1], \"key 1 gone after reassign\");
-}"
-    );
-}
-
 // ── PROBLEMS #41 (T0-6): inline ref-returning call leaks store → LIFO panic ───
 // `p.method().field` where method() returns an owned ref must wrap the temporary
 // in a work-ref variable so scopes.rs emits OpFreeRef at end-of-scope.
 
 /// Single field access on an inline ref-returning call must not leak the store.
-#[test]
-fn inline_ref_call_field_access() {
-    code!(
-        "struct Point { x: float, y: float }
-fn shifted(self: Point, dx: float, dy: float) -> Point {
-    Point { x: self.x + dx, y: self.y + dy }
-}
-fn test() {
-    p = Point { x: 1.0, y: 2.0 };
-    assert(p.shifted(1.0, 0.0).x == 2.0, \"shifted x: {p.shifted(1.0, 0.0).x}\");
-    assert(p.shifted(0.0, 2.0).y == 4.0, \"shifted y: {p.shifted(0.0, 2.0).y}\");
-}"
-    );
-}
-
 /// Two chained inline calls (shifted().shifted().x) must not leak either store.
-#[test]
-fn inline_ref_call_double_chain() {
-    code!(
-        "struct Point { x: float, y: float }
-fn shifted(self: Point, dx: float, dy: float) -> Point {
-    Point { x: self.x + dx, y: self.y + dy }
-}
-fn test() {
-    p = Point { x: 1.0, y: 2.0 };
-    assert(p.shifted(1.0, 0.0).shifted(0.0, 3.0).x == 2.0, \"double chain x\");
-    assert(p.shifted(1.0, 0.0).shifted(0.0, 3.0).y == 5.0, \"double chain y\");
-}"
-    );
-}
-
 /// index[key] = null removes the entry.
-#[test]
-fn index_key_null_removes_entry() {
-    code!(
-        "struct Elm { nr: integer, key: text, val: integer }
-struct Db { map: index<Elm[nr,-key]> }"
-    )
-    .expr(
-        "db = Db { map: [Elm{nr:1,key:\"a\",val:10}, Elm{nr:2,key:\"b\",val:20}] };
-db.map[1] = null;
-assert(!db.map[1], \"nr 1 removed\");
-assert(db.map[2].val == 20, \"nr 2 still present: {db.map[2].val}\");",
-    );
-}
-
 /// T2-7: mkdir creates a directory, mkdir_all creates nested directories.
 #[test]
 fn mkdir_and_mkdir_all() {
@@ -1010,37 +612,7 @@ fn mkdir_and_mkdir_all() {
 // The fix snapshots the source bytes into a Vec<u8> before any resize.
 
 /// `v += v` on an integer vector: result must be a doubled vector with correct values.
-#[test]
-fn vector_self_append_integers() {
-    code!(
-        "fn test() {
-    v = [1, 2, 3];
-    v += v;
-    assert(len(v) == 6, \"len: {len(v)}\");
-    assert(v[0] == 1, \"v[0]: {v[0]}\");
-    assert(v[1] == 2, \"v[1]: {v[1]}\");
-    assert(v[2] == 3, \"v[2]: {v[2]}\");
-    assert(v[3] == 1, \"v[3]: {v[3]}\");
-    assert(v[4] == 2, \"v[4]: {v[4]}\");
-    assert(v[5] == 3, \"v[5]: {v[5]}\");
-}"
-    );
-}
-
 /// `v += v` on a single-element vector: result must have two equal elements.
-#[test]
-fn vector_self_append_single() {
-    code!(
-        "fn test() {
-    v = [42];
-    v += v;
-    assert(len(v) == 2, \"len: {len(v)}\");
-    assert(v[0] == 42, \"v[0]: {v[0]}\");
-    assert(v[1] == 42, \"v[1]: {v[1]}\");
-}"
-    );
-}
-
 // ── T1-32: File I/O errors are no longer silently discarded ──────────────────
 // write_file/read_file/seek_file used unwrap_or_default() / unwrap_or(0),
 // swallowing OS errors with no diagnostic output.  The fix logs to stderr via
