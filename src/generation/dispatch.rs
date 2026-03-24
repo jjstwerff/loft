@@ -469,8 +469,11 @@ impl Output<'_> {
                         self.output_code_inner(w, &vals[5 + i])?;
                         write!(w, "; ")?;
                     }
+                    let is_ref = matches!(&worker_ret, Type::Reference(_, _));
                     let par_fn = if matches!(&worker_ret, Type::Text(_)) {
                         "n_parallel_for_text_native"
+                    } else if is_ref {
+                        "n_parallel_for_ref_native"
                     } else {
                         "n_parallel_for_native"
                     };
@@ -479,8 +482,19 @@ impl Output<'_> {
                     write!(w, ", ")?;
                     self.output_code_inner(w, &vals[1])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[2])?;
-                    write!(w, ", ")?;
+                    if is_ref {
+                        // For ref mode, pass struct_size and known_type instead of return_size.
+                        let (struct_size, known_type) = if let Type::Reference(d_nr, _) = &worker_ret {
+                            let kt = self.data.def(*d_nr).known_type;
+                            (i32::from(self.stores.size(kt)), kt as i32)
+                        } else {
+                            (0, 0)
+                        };
+                        write!(w, "{struct_size}, {known_type}, ")?;
+                    } else {
+                        self.output_code_inner(w, &vals[2])?;
+                        write!(w, ", ")?;
+                    }
                     self.output_code_inner(w, &vals[3])?;
                     // Build the extra arg list for the worker call inside the closure.
                     #[allow(clippy::format_push_string)]
@@ -496,6 +510,10 @@ impl Output<'_> {
                         Type::Text(_) => write!(
                             w,
                             ", |stores, elm| {{ let mut _w = String::new(); {worker_name}(stores, elm{extras}, &mut _w); _w }})"
+                        )?,
+                        Type::Reference(_, _) => write!(
+                            w,
+                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}) }})"
                         )?,
                         Type::Float | Type::Single => write!(
                             w,

@@ -759,6 +759,8 @@ extern crate loft;"
             "n_parallel_get_long",
             "n_parallel_get_float",
             "n_parallel_get_bool",
+            "n_parallel_for_ref_native",
+            "n_parallel_get_ref",
             "n_path_sep",
         ];
         self.start_fn(def_nr);

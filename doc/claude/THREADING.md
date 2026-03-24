@@ -182,15 +182,16 @@ for b#index in 0..par_len {
 
 ### Supported return types
 
-`integer`, `long`, `float`, `single`, `boolean`, inline `enum`, and `text`.
+`integer`, `long`, `float`, `single`, `boolean`, inline `enum`, `text`, and `struct`/reference types.
 Extra context arguments are forwarded to workers: `par(b = scale(a, mult), N)`.
+Struct returns use deep-copy (`copy_block` + `copy_claims`) to transfer worker-created
+data inline into the result vector; field access on the loop variable works directly.
 
 ### Limitations
 
 - Input must be a `vector<T>`; integer ranges (`1..10`) are not supported.
 - Form 3 (`c.method(a)` — captured receiver) is not yet supported.
 - The worker function may not write to shared state.
-- Reference/struct return types (12-byte DbRef) are not yet supported.
 
 ### Element Size
 

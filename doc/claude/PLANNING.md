@@ -49,13 +49,13 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
-  - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(0.8.2)*
-  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(0.8.2)*
-  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(0.8.2)*
-  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(1.1+)*
+  - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(completed 0.8.3)*
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(deferred to 1.1+)*
+  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(completed 0.8.3)*
+  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
-  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(0.8.2 / 1.1+)*
+  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(deferred to 1.1+)*
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
@@ -71,11 +71,11 @@ Goal: harden the interpreter, complete native code generation, fix slot assignme
 improve runtime efficiency.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
-**Remaining for 0.8.2:**
+**Remaining for 0.8.2:** *(none — all items completed or deferred)*
 
-- **O1** — Superinstruction peephole rewriting pass (opcodes registered, needs stack-relative operand design).
-- **A12** — Lazy work-variable initialization (blocked by text slot reuse SIGSEGV).
-- **A13** — Two-zone slot assignment: codegen override can create overlaps with child-scope variables.
+**Deferred from 0.8.2 (too complex / disruptive for stability):**
+- **O1** — Superinstruction peephole rewriting pass — deferred to 1.1+.
+- **A12** — Lazy work-variable initialization — deferred to 1.1+ (also blocked by Issues 68–70).
 
 ---
 
@@ -168,9 +168,10 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
 
 **Deferred from 0.9.0:**
-- A12 (lazy work-variable init) — Blocked by Issues 68–70; deferred to 1.1+.
+- O1 (superinstruction merging) — Too complex and disruptive for stability; deferred to 1.1+.
+- A12 (lazy work-variable init) — Too complex and disruptive; also blocked by Issues 68–70; deferred to 1.1+.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
-- A7 (native extension libraries) — Useful after the ecosystem exists; 1.1+.
+- A7 (native extension libraries) — Moved to 0.9.0.
 
 ---
 
@@ -278,11 +279,11 @@ in a better state than it found it, with passing tests).
 1. **S5**, **S7**, **S8** — small stability fixes; independent, no dependencies
 2. **O3** — integer sentinel verification; Low effort, zero risk
 3. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation/`
-4. **O1** — superinstruction merging; Medium effort, highest impact
-5. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
-6. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
-7. **A12.1** → **A12.2** → **A12.3** → **A12** — sequential; each unblocks the next
-8. **A13.1** → **A13.2** → **A13.3** — sequential; completes two-zone slot design
+4. ~~**O1** — superinstruction merging~~ *(deferred to 1.1+ — too disruptive for stability)*
+5. ~~**A1.1** — extra args + value-struct returns~~ *(done)*
+6. ~~**A1.2** — text/ref returns~~ *(done — interpreter + native codegen)*
+7. ~~**A12.1** → **A12.2** → **A12.3** → **A12**~~ *(deferred to 1.1+ — too complex, blocked by Issues 68–70)*
+8. ~~**A13.1** → **A13.2** → **A13.3**~~ *(done — two-zone slot assignment complete)*
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
@@ -648,14 +649,12 @@ the recompile overhead that caching was designed to address)
 
 ## A — Architecture
 
-### A1  Parallel workers: struct/reference return types
+### A1  Parallel workers: struct/reference return types *(completed 0.8.3)*
 
-Extra context arguments (A1.1) and text/enum/single returns (A1.2) are completed.
-Remaining: struct and reference return types (12-byte DbRef) where worker-local store
-data must be copied to a shared result store after thread join.
-
-**Effort:** Medium
-**Target:** 0.8.3
+All parallel worker return types are now supported: primitives, text, enum, and
+struct/reference.  Struct returns use deep-copy (`copy_block` + `copy_claims`) in
+the bytecode interpreter and `n_parallel_for_ref_native` in native codegen.
+The native skip for `40-par-ref-return` has been removed.
 
 ---
 
@@ -810,7 +809,7 @@ Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl
 Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
 **Effort:** High (parser, compiler, extensions loader, plugin API crate)
 **Depends on:** —
-**Target:** 1.1+ (useful after the ecosystem exists; not needed for 1.0.0)
+**Target:** 0.9.0
 
 ---
 
@@ -989,7 +988,7 @@ the generic type-mismatch message.
 ---
 
 ### A12  Lazy work-variable initialization
-**Status: deferred to 1.1+ — blocked by Issues 68–70 (see PROBLEMS.md)**
+**Status: deferred to 1.1+ — too complex and disruptive for stability; also blocked by Issues 68–70 (see PROBLEMS.md)**
 **Sources:** Stack efficiency evaluation 2026-03-20
 **Description:** Work text variables (`__work_N`) are currently initialized at function
 start via `Set(wt, Text(""))` inserted at index 0 of the body block.  This forces
@@ -1067,16 +1066,14 @@ use.
 
 ---
 
-### A13  Complete two-zone slot assignment (Steps 8 and 10)
-**Sources:** SLOTS.md Steps 8, 10 and § Open Issues
-**Description:** Three remaining steps to finish the two-zone design. Full details in [SLOTS.md](SLOTS.md).
+### A13  Complete two-zone slot assignment (Steps 8 and 10) *(completed 0.8.3)*
 
-- **Step 8** — Fix `Set(v, Block)` ordering in `place_large_and_recurse`: when the inner block evaluates first (e.g. `outer = { inner = …; inner }`), process the inner block before placing `outer` so both share the block's result slot legally. After this, replace the `pos > TOS` override branch in `generate_set` with a `debug_assert`.
-- **Step 10a** — Audit `build_scope_parents` against `scan_inner`: every IR variant containing a nested block should be handled in both. Missing arms cause `scopes_can_conflict` false-positives in `validate_slots`. Also investigate why any scope maps to itself in the parent map (root cause of the `is_scope_ancestor` cycle guard).
-- **Step 10b** — Add a `Value::Iter` arm to `scan_inner` in `src/scopes.rs`, recursing into all three sub-expressions, mirroring the existing arm in `compute_intervals`. Currently safe because parser-synthesised Iter nodes contain no user-defined `Set`; becomes a latent false-positive risk if a parser change ever places a `Set` inside an Iter sub-expression.
-
-**Effort:** Medium per step
-**Target:** 0.8.2
+All steps done.  Step 8 was completed earlier.  Step 10:
+- **10a** — Full cross-check (2026-03-24) confirmed `build_scope_parents`, `scan_inner`,
+  and `compute_intervals` all handle every `Value` variant with nested expressions.
+- **10b** — `Value::Iter` arm already present in `scan_inner` (added earlier).
+- **Scope-cycle root cause** — Fixed: `build_scope_parents` now uses `entry().or_insert()`
+  to keep the first-seen parent and skips self-loops (`bl.scope == parent`).
 
 ---
 
@@ -1090,7 +1087,7 @@ use.
 - **TR1.4** — Call-site line numbers: track source position in the call frame for accurate per-frame line reporting.
 
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -1123,11 +1120,12 @@ Full design in [NATIVE.md](NATIVE.md).
 ---
 
 ### O1  Superinstruction merging
+**Status: deferred to 1.1+ — too complex and disruptive for current release stability**
 **Sources:** PERFORMANCE.md § P1
 **Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes 240–245. Six new entries added to the `OPERATORS` array in `src/fill.rs`. Operands encoded in the same byte count as the replaced sequence, so branch targets need no relocation.
 **Expected gain:** 2–4× on tight integer loops; benefits every loop in the interpreter.
 **Effort:** Medium
-**Target:** 0.8.2
+**Target:** 1.1+
 
 ---
 

@@ -1340,6 +1340,76 @@ where
     }
 }
 
+/// Reference/struct-returning variant of `n_parallel_for_native`.  The worker closure
+/// returns a `DbRef` pointing to a newly created struct.  Each result is deep-copied
+/// (raw bytes + owned sub-fields) inline into the result vector so that `OpGetVector`
+/// returns a `DbRef` that supports field access without extra indirection.
+///
+/// `struct_size` is the inline byte size of the struct (from `stores.size(known_type)`).
+/// `known_type` is the struct's type id for `copy_block` / `copy_claims`.
+pub fn n_parallel_for_ref_native<F>(
+    stores: &mut Stores,
+    input: DbRef,
+    elem_size: i32,
+    struct_size: i32,
+    known_type: i32,
+    _threads: i32,
+    mut worker: F,
+) -> DbRef
+where
+    F: FnMut(&mut Stores, DbRef) -> DbRef,
+{
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let sz = struct_size as u32;
+    let kt = known_type as u16;
+    let result_db = stores.null();
+    let vec_words = ((n as u32) * sz + 15) / 8;
+    let vec_cr = stores.claim(&result_db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = stores.claim(&result_db, 1);
+    let header_rec = header_cr.rec;
+    for i in 0..n {
+        let elm = {
+            let v_rec = crate::keys::store(&input, &stores.allocations)
+                .get_int(input.rec, input.pos) as u32;
+            DbRef {
+                store_nr: input.store_nr,
+                rec: v_rec,
+                pos: 8 + (i as u32) * (elem_size as u32),
+            }
+        };
+        let src_ref = worker(stores, elm);
+        let dest = DbRef {
+            store_nr: result_db.store_nr,
+            rec: vec_rec,
+            pos: 8 + (i as u32) * sz,
+        };
+        stores.copy_block(&src_ref, &dest, sz);
+        stores.copy_claims(&src_ref, &dest, kt);
+    }
+    {
+        let store = stores.store_mut(&result_db);
+        store.set_int(vec_rec, 4, n as i32);
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+    DbRef {
+        store_nr: result_db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
+}
+
+/// Read a struct/reference result element from a `n_parallel_for_ref_native` result vector.
+/// Returns a `DbRef` pointing to the inline struct data at the given index.
+pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: i32) -> DbRef {
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    DbRef {
+        store_nr: r.store_nr,
+        rec: v_rec,
+        pos: 8 + (idx as u32) * (struct_size as u32),
+    }
+}
+
 /// Read an integer result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
     let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;

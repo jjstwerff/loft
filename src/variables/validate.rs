@@ -42,11 +42,18 @@ fn short_type(tp: &Type) -> String {
 
 /// Build a map from each scope number → its parent scope number, by walking the IR tree.
 /// Scopes with no parent (e.g. the root block) are not in the map.
+///
+/// If a scope number appears more than once in the tree (e.g. a synthetic block sharing
+/// a scope number with an outer block), keep the first-seen parent — it is the
+/// structurally outermost one.  Never insert a self-loop (`scope == parent`).
 #[cfg(any(debug_assertions, test))]
 fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>) {
     match val {
         Value::Block(bl) | Value::Loop(bl) => {
-            parents.insert(bl.scope, parent);
+            // Guard: never insert a self-loop; keep the first-seen parent.
+            if bl.scope != parent {
+                parents.entry(bl.scope).or_insert(parent);
+            }
             for op in &bl.operators {
                 build_scope_parents(op, bl.scope, parents);
             }

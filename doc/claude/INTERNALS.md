@@ -368,6 +368,7 @@ Dispatches a compiled worker function over every row of an input vector using OS
 | `run_parallel_direct` | writes to `*mut u8` | Direct pointer write (≥4-byte returns) |
 | `run_parallel_raw` | `Vec<u64>` | Channel-based (1-byte bool/enum returns) |
 | `run_parallel_text` | `Vec<String>` | Workers copy `Str` to owned `String` |
+| `run_parallel_ref` | `Vec<(usize, DbRef)>` + worker `Stores` | Deep-copy struct data via `copy_from_worker` |
 | `run_parallel_int` | `Vec<i32>` | Channel-based (legacy integer-only API) |
 
 All variants distribute rows evenly across threads, clone stores via `clone_for_worker`,

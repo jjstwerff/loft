@@ -20,7 +20,8 @@
 //
 // The worker function must take a read-only reference to the element type (marked
 // `const` to tell the compiler the function will not modify the element) and
-// return a single primitive value (integer, float, or boolean).
+// return a value (integer, long, float, single, boolean, enum, text, or a struct).
+// Extra context arguments are forwarded to each worker: `par(b=scale(a, mult), N)`.
 // ── Shared struct definitions ────────────────────────────────────────────────
 struct Score {
   value: integer
@@ -55,6 +56,15 @@ fn score_as_float(r: const Score) -> float {
 
 fn score_positive(r: const Score) -> boolean {
   r.value > 0
+}
+
+struct DoubledScore {
+  label: text,
+  doubled: integer
+}
+
+fn make_doubled(r: const Score) -> DoubledScore {
+  DoubledScore { label: "v{r.value}", doubled: r.value * 2 }
 }
 // Methods on Score (Form 2)
 
@@ -129,6 +139,19 @@ fn main() {
     empty_sum += b;
   }
   assert(empty_sum == 0, "form-1 empty: body executes 0 times");
+  // ## Returning a Struct from a Parallel Worker
+  // Workers can return a struct. Each worker creates its own struct instance
+  // and the runtime deep-copies the result (including text fields) into a
+  // shared result vector so field access works in the loop body.
+  q8 = make_scores();
+  dtotal = 0;
+  dlabels = "";
+  for sa in q8.items par(ds = make_doubled(sa), 1) {
+    dtotal += ds.doubled;
+    dlabels += "{ds.label},";
+  }
+  assert(dtotal == 120, "form-1 struct return: dtotal == 120");
+  assert(dlabels == "v10,v20,v30,", "form-1 struct labels: {dlabels}");
   // ## Running a Method in Parallel
   // Form 2 calls the worker as a method on each element. The syntax
   // `b=a.get_value()` tells the compiler to dispatch `get_value` on every
