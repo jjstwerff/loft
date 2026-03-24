@@ -526,14 +526,12 @@ use a separate collection or add after the loop"
                     let check = self.data.def(sd).attributes[a_nr].check.clone();
                     let ref_val = to_args[0].clone();
                     let bound = Self::replace_record_ref(check, &ref_val);
-                    let msg = if self.data.def(sd).attributes[a_nr].check_message == Value::Null {
-                        Value::Text(format!(
+                    let msg = match &self.data.def(sd).attributes[a_nr].check_message {
+                        Value::Text(s) => Value::Text(s.clone()),
+                        _ => Value::Text(format!(
                             "field constraint failed on {}.{nm}",
                             self.data.def(sd).name
-                        ))
-                    } else {
-                        let m = self.data.def(sd).attributes[a_nr].check_message.clone();
-                        Self::replace_record_ref(m, &ref_val)
+                        )),
                     };
                     let assert_dnr = self.data.def_nr("n_assert");
                     let pos = self.lexer.pos();
@@ -3740,7 +3738,12 @@ pair the hash with a vector to iterate in insertion order"
         list: &mut Vec<Value>,
         found_fields: &mut HashSet<String>,
     ) -> bool {
-        let Some(field) = self.lexer.has_identifier() else {
+        // Accept both bare identifiers and JSON-style quoted strings as field names.
+        let field = if let Some(id) = self.lexer.has_identifier() {
+            id
+        } else if let Some(s) = self.lexer.has_cstring() {
+            s
+        } else {
             return false;
         };
         if !self.lexer.has_token(":") {
@@ -3860,15 +3863,12 @@ pair the hash with a vector to iterate in insertion order"
                 if check != Value::Null {
                     let bound = Self::replace_record_ref(check, code);
                     let nm = self.data.attr_name(td_nr, a_nr);
-                    let msg = if self.data.def(td_nr).attributes[a_nr].check_message == Value::Null
-                    {
-                        Value::Text(format!(
+                    let msg = match &self.data.def(td_nr).attributes[a_nr].check_message {
+                        Value::Text(s) => Value::Text(s.clone()),
+                        _ => Value::Text(format!(
                             "field constraint failed on {}.{nm}",
                             self.data.def(td_nr).name
-                        ))
-                    } else {
-                        let m = self.data.def(td_nr).attributes[a_nr].check_message.clone();
-                        Self::replace_record_ref(m, code)
+                        )),
                     };
                     let pos = self.lexer.pos();
                     list.push(Value::Call(
@@ -3920,6 +3920,18 @@ pair the hash with a vector to iterate in insertion order"
                 scope: bl.scope,
                 var_size: 0,
             })),
+            Value::Set(v, inner) => {
+                Value::Set(v, Box::new(Self::replace_record_ref(*inner, record)))
+            }
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|v| Self::replace_record_ref(v, record))
+                    .collect(),
+            ),
+            Value::Return(inner) => {
+                Value::Return(Box::new(Self::replace_record_ref(*inner, record)))
+            }
+            Value::Drop(inner) => Value::Drop(Box::new(Self::replace_record_ref(*inner, record))),
             other => other,
         }
     }

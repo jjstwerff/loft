@@ -1965,3 +1965,142 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// ── L6 — Field constraints and JSON-style struct literals ─────────────────────
+
+/// L6: basic field constraint — valid construction.
+#[test]
+fn l6_constraint_valid_construction() {
+    code!(
+        "struct Score {
+    value: integer assert($.value >= 0, \"value must be >= 0\"),
+    max: integer assert($.max >= $.value, \"max must be >= value\")
+}
+fn test() {
+    s = Score { value: 5, max: 10 };
+    assert(s.value == 5);
+    assert(s.max == 10);
+    s.value = 8;
+    assert(s.value == 8);
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: field constraint fires on invalid assignment.
+#[test]
+#[should_panic(expected = "value must be >= 0")]
+fn l6_constraint_violation_on_assign() {
+    code!(
+        "struct Score {
+    value: integer assert($.value >= 0, \"value must be >= 0\")
+}
+fn test() {
+    s = Score { value: 5 };
+    s.value = -1;
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: cross-field constraint fires on invalid construction.
+#[test]
+#[should_panic(expected = "lo must be <= hi")]
+fn l6_cross_field_constraint_violation() {
+    code!(
+        "struct Range {
+    lo: integer assert($.lo <= $.hi, \"lo must be <= hi\"),
+    hi: integer
+}
+fn test() {
+    r = Range { lo: 20, hi: 10 };
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: JSON-style quoted field names in struct literals.
+#[test]
+fn l6_json_quoted_field_names() {
+    code!(
+        "struct Point { x: integer, y: integer }
+fn test() {
+    p = Point { \"x\": 3, \"y\": 4 };
+    assert(p.x == 3, \"x={p.x}\");
+    assert(p.y == 4, \"y={p.y}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: constraint with auto-generated message.
+#[test]
+#[should_panic(expected = "field constraint failed on Pos.x")]
+fn l6_constraint_auto_message() {
+    code!(
+        "struct Pos {
+    x: integer assert($.x >= 0)
+}
+fn test() {
+    p = Pos { x: 5 };
+    p.x = -1;
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: vector literal input parsed like JSON array.
+#[test]
+fn l6_vector_literal_as_json_array() {
+    code!(
+        "fn test() {
+    v = [12, 34, 56];
+    assert(len(v) == 3, \"len={len(v)}\");
+    assert(v[0] == 12);
+    assert(v[1] == 34);
+    assert(v[2] == 56);
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: validate a vector of constrained structs with format-string message.
+#[test]
+fn l6_validate_vector_of_structs() {
+    code!(
+        "struct Item {
+    name: text,
+    qty: integer assert($.qty > 0, \"qty must be > 0 for '{$.name}'\")
+}
+fn test() {
+    items = [
+        Item { name: \"apple\", qty: 3 },
+        Item { name: \"banana\", qty: 5 }
+    ];
+    total = 0;
+    for it in items {
+        total += it.qty;
+    }
+    assert(total == 8, \"total={total}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: constraint violation with format-string message (falls back to auto-generated).
+#[test]
+#[should_panic(expected = "field constraint failed on Item.qty")]
+fn l6_vector_struct_constraint_violation() {
+    code!(
+        "struct Item {
+    name: text,
+    qty: integer assert($.qty > 0, \"qty must be > 0 for '{$.name}'\")
+}
+fn test() {
+    items = [
+        Item { name: \"bad\", qty: 0 }
+    ];
+}"
+    )
+    .result(Value::Null);
+}

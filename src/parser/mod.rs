@@ -827,15 +827,17 @@ impl Parser {
         if let Some(ref_val) = ref_for_check {
             let check = self.data.def(d_nr).attributes[f_nr].check.clone();
             let bound = Self::replace_record_ref(check, &ref_val);
-            let msg = if self.data.def(d_nr).attributes[f_nr].check_message == Value::Null {
+            // Only plain Value::Text messages are safe to use — complex messages
+            // (format strings) contain work-text variables from the struct definition
+            // scope that don't exist in the calling function.
+            let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes[f_nr].check_message {
+                Value::Text(s.clone())
+            } else {
                 Value::Text(format!(
                     "field constraint failed on {}.{}",
                     self.data.def(d_nr).name,
                     nm
                 ))
-            } else {
-                let m = self.data.def(d_nr).attributes[f_nr].check_message.clone();
-                Self::replace_record_ref(m, &ref_val)
             };
             let assert_dnr = self.data.def_nr("n_assert");
             let pos = self.lexer.pos();
