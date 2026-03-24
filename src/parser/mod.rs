@@ -814,7 +814,6 @@ impl Parser {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, false)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn set_field_check(
         &mut self,
         d_nr: u32,
@@ -907,37 +906,35 @@ impl Parser {
                 }
             }
         };
-        // L6.2: emit constraint check after every constrained field write.
-        if let Some(ref_val) = ref_for_check {
-            let check = self.data.def(d_nr).attributes[f_nr].check.clone();
-            let bound = Self::replace_record_ref(check, &ref_val);
-            // Only plain Value::Text messages are safe to use — complex messages
-            // (format strings) contain work-text variables from the struct definition
-            // scope that don't exist in the calling function.
-            let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes[f_nr].check_message {
-                Value::Text(s.clone())
-            } else {
-                Value::Text(format!(
-                    "field constraint failed on {}.{}",
-                    self.data.def(d_nr).name,
-                    nm
-                ))
-            };
-            let assert_dnr = self.data.def_nr("n_assert");
-            let pos = self.lexer.pos();
-            let assert_call = Value::Call(
-                assert_dnr,
-                vec![
-                    bound,
-                    msg,
-                    Value::Text(pos.file.clone()),
-                    Value::Int(pos.line as i32),
-                ],
-            );
-            Value::Insert(vec![set_op, assert_call])
+        self.emit_field_constraint(set_op, ref_for_check, d_nr, f_nr, &nm)
+    }
+
+    /// Wrap a set operation with a constraint assertion if the field has one.
+    fn emit_field_constraint(
+        &mut self,
+        set_op: Value,
+        ref_for_check: Option<Value>,
+        d_nr: u32,
+        f_nr: usize,
+        field_name: &str,
+    ) -> Value {
+        let Some(ref_val) = ref_for_check else {
+            return set_op;
+        };
+        let check = self.data.def(d_nr).attributes[f_nr].check.clone();
+        let bound = Self::replace_record_ref(check, &ref_val);
+        let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes[f_nr].check_message {
+            Value::Text(s.clone())
         } else {
-            set_op
-        }
+            Value::Text(format!("field constraint failed on {}.{field_name}", self.data.def(d_nr).name))
+        };
+        let assert_dnr = self.data.def_nr("n_assert");
+        let pos = self.lexer.pos();
+        let assert_call = Value::Call(
+            assert_dnr,
+            vec![bound, msg, Value::Text(pos.file.clone()), Value::Int(pos.line as i32)],
+        );
+        Value::Insert(vec![set_op, assert_call])
     }
 
     fn cl(&mut self, op: &str, list: &[Value]) -> Value {
@@ -994,7 +991,6 @@ impl Parser {
     }
 
     /// Call a specific definition
-    #[allow(clippy::too_many_lines)] // P44: empty-vector-arg handling adds necessary dispatch
     fn call_nr(
         &mut self,
         code: &mut Value,
@@ -1027,91 +1023,86 @@ impl Parser {
             );
         } else if !matches!(self.data.def_type(d_nr), DefType::Function) {
             if report {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Unknown definition {}",
-                    self.data.def(d_nr).name
-                );
+                diagnostic!(self.lexer, Level::Error, "Unknown definition {}", self.data.def(d_nr).name);
             }
             return Type::Null;
         }
-        let mut actual: Vec<Value> = Vec::new();
-        if !types.is_empty() {
-            if list.len() > self.data.attributes(d_nr) {
-                if report {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Too many parameters for {}",
-                        self.data.def(d_nr).name
-                    );
-                }
-                return Type::Null;
-            }
-            for (nr, a_code) in list.iter().enumerate() {
-                let tp = self.data.attr_type(d_nr, nr);
-                if let Some(actual_type) = types.get(nr) {
-                    let mut actual_code = a_code.clone();
-                    // When encountered a subtype reference, find the actual corresponding type
-                    if let (Type::Vector(to_tp, _), Type::Vector(a_tp, _)) = (&tp, actual_type)
-                        && a_tp.is_unknown()
-                        && !to_tp.is_unknown()
-                    {
-                        self.change_var(&actual_code, &tp);
-                        actual.push(actual_code);
-                        continue;
-                    }
-                    // P44: empty `[]` literal passed as a vector argument produces
-                    // Value::Insert([Null]) with no stack presence.  Create a temp
-                    // vector variable with OpDatabase here where the parameter type
-                    // is known.
-                    if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
-                        && let Type::Vector(elm_tp, dep) = &tp
-                    {
-                        let vec =
-                            self.create_unique("vec", &Type::Vector(elm_tp.clone(), dep.clone()));
-                        let mut ls = self.vector_db(elm_tp, vec);
-                        ls.push(Value::Var(vec));
-                        actual.push(v_block(ls, tp.clone(), "empty_vector_arg"));
-                        all_types[nr] = tp.clone();
-                        continue;
-                    }
-                    if actual_type.is_unknown()
-                        && let Type::Vector(_, _) = &tp
-                    {
-                        self.change_var(&actual_code, &tp);
-                        actual.push(actual_code);
-                        continue;
-                    }
-                    if let (Type::Integer(_, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
-                        // An enum with a structure is normally a reference to the data.
-                        // But for compares we can expect to be a constant Enum value.
-                        let cd = if matches!(actual_code, Value::Enum(_, _)) {
-                            actual_code
-                        } else {
-                            self.cl("OpGetEnum", &[actual_code, Value::Int(0)])
-                        };
-                        actual.push(self.cl("OpConvIntFromEnum", &[cd]));
-                        continue;
-                    }
-                    if !self.convert(&mut actual_code, actual_type, &tp) {
-                        if report {
-                            let context =
-                                format!("call to {}", self.data.def(d_nr).original_name());
-                            self.validate_convert(&context, actual_type, &tp);
-                        } else if !self.can_convert(actual_type, &tp) {
-                            return Type::Null;
-                        }
-                    }
-                    actual.push(actual_code);
-                }
-            }
+        let mut actual = self.process_call_args(d_nr, list, types, &mut all_types, report);
+        if actual.is_empty() && !types.is_empty() {
+            return Type::Null;
         }
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
         tp
+    }
+
+    /// Convert and validate each positional argument for a call.
+    fn process_call_args(
+        &mut self,
+        d_nr: u32,
+        list: &[Value],
+        types: &[Type],
+        all_types: &mut Vec<Type>,
+        report: bool,
+    ) -> Vec<Value> {
+        let mut actual = Vec::new();
+        if types.is_empty() {
+            return actual;
+        }
+        if list.len() > self.data.attributes(d_nr) {
+            if report {
+                diagnostic!(self.lexer, Level::Error, "Too many parameters for {}", self.data.def(d_nr).name);
+            }
+            return actual;
+        }
+        for (nr, a_code) in list.iter().enumerate() {
+            let tp = self.data.attr_type(d_nr, nr);
+            let Some(actual_type) = types.get(nr) else { continue };
+            let mut actual_code = a_code.clone();
+            if let (Type::Vector(to_tp, _), Type::Vector(a_tp, _)) = (&tp, actual_type) {
+                if a_tp.is_unknown() && !to_tp.is_unknown() {
+                    self.change_var(&actual_code, &tp);
+                    actual.push(actual_code);
+                    continue;
+                }
+            }
+            // P44: empty `[]` literal → create temp vector where parameter type is known.
+            if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
+                && let Type::Vector(elm_tp, dep) = &tp
+            {
+                let vec = self.create_unique("vec", &Type::Vector(elm_tp.clone(), dep.clone()));
+                let mut ls = self.vector_db(elm_tp, vec);
+                ls.push(Value::Var(vec));
+                actual.push(v_block(ls, tp.clone(), "empty_vector_arg"));
+                all_types[nr] = tp.clone();
+                continue;
+            }
+            if actual_type.is_unknown() && matches!(&tp, Type::Vector(_, _)) {
+                self.change_var(&actual_code, &tp);
+                actual.push(actual_code);
+                continue;
+            }
+            if let (Type::Integer(_, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
+                let cd = if matches!(actual_code, Value::Enum(_, _)) {
+                    actual_code
+                } else {
+                    self.cl("OpGetEnum", &[actual_code, Value::Int(0)])
+                };
+                actual.push(self.cl("OpConvIntFromEnum", &[cd]));
+                continue;
+            }
+            if !self.convert(&mut actual_code, actual_type, &tp) {
+                if report {
+                    let context = format!("call to {}", self.data.def(d_nr).original_name());
+                    self.validate_convert(&context, actual_type, &tp);
+                } else if !self.can_convert(actual_type, &tp) {
+                    return Vec::new();
+                }
+            }
+            actual.push(actual_code);
+        }
+        actual
     }
 
     // Gather depended on variables from arguments of the given called routine.

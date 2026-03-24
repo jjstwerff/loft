@@ -334,15 +334,7 @@ use a separate collection or add after the loop"
         if op == "=" && var_nr != u16::MAX && !self.first_pass && self.vars.exists(var_nr) {
             self.vars.track_write(var_nr, &mut self.lexer);
         }
-        // An untyped null literal (`null` keyword) produces Type::Null with Value::Null.
-        // For scalar field assignments (e.g. `self.cur_def = null`), convert it to the
-        // appropriate typed null constant (OpConvIntFromNull, OpConvLongFromNull, etc.)
-        // so that the stack argument is actually pushed before the set-operator executes.
-        // Without this, `generate(Value::Null)` emits nothing, leaving the stack short by
-        // one argument and causing the operator to read garbage bytes as the value.
-        //
-        // Do NOT convert for reference/collection types: `collection[key] = null` must
-        // reach towards_set_hash_remove with Value::Null intact so it can emit OpHashRemove.
+        // Convert untyped null to typed null for scalar assignments (not collections).
         if s_type == Type::Null
             && op == "="
             && !matches!(
