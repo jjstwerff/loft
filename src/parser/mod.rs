@@ -207,7 +207,11 @@ impl Parser {
         // Register internal-only functions (i_ prefix) that are never visible to user code.
         // These are resolved by the compiler via data.def_nr("i_...") and mapped to native
         // Rust implementations in native.rs.
-        let pos = Position { file: String::new(), line: 0, pos: 0 };
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
         let d = data.add_def("i_parse_errors", &pos, DefType::Function);
         data.definitions[d as usize].returned = Type::Text(Vec::new());
         let d = data.add_def("i_parse_error_push", &pos, DefType::Function);
@@ -667,11 +671,7 @@ impl Parser {
             let idx = self.data.attr(d_nr, name);
             if idx == usize::MAX {
                 if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Unknown parameter '{name}'"
-                    );
+                    diagnostic!(self.lexer, Level::Error, "Unknown parameter '{name}'");
                 }
                 continue;
             }
@@ -926,13 +926,21 @@ impl Parser {
         let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes[f_nr].check_message {
             Value::Text(s.clone())
         } else {
-            Value::Text(format!("field constraint failed on {}.{field_name}", self.data.def(d_nr).name))
+            Value::Text(format!(
+                "field constraint failed on {}.{field_name}",
+                self.data.def(d_nr).name
+            ))
         };
         let assert_dnr = self.data.def_nr("n_assert");
         let pos = self.lexer.pos();
         let assert_call = Value::Call(
             assert_dnr,
-            vec![bound, msg, Value::Text(pos.file.clone()), Value::Int(pos.line as i32)],
+            vec![
+                bound,
+                msg,
+                Value::Text(pos.file.clone()),
+                Value::Int(pos.line as i32),
+            ],
         );
         Value::Insert(vec![set_op, assert_call])
     }
@@ -1023,7 +1031,12 @@ impl Parser {
             );
         } else if !matches!(self.data.def_type(d_nr), DefType::Function) {
             if report {
-                diagnostic!(self.lexer, Level::Error, "Unknown definition {}", self.data.def(d_nr).name);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown definition {}",
+                    self.data.def(d_nr).name
+                );
             }
             return Type::Null;
         }
@@ -1043,7 +1056,7 @@ impl Parser {
         d_nr: u32,
         list: &[Value],
         types: &[Type],
-        all_types: &mut Vec<Type>,
+        all_types: &mut [Type],
         report: bool,
     ) -> Vec<Value> {
         let mut actual = Vec::new();
@@ -1052,20 +1065,28 @@ impl Parser {
         }
         if list.len() > self.data.attributes(d_nr) {
             if report {
-                diagnostic!(self.lexer, Level::Error, "Too many parameters for {}", self.data.def(d_nr).name);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Too many parameters for {}",
+                    self.data.def(d_nr).name
+                );
             }
             return actual;
         }
         for (nr, a_code) in list.iter().enumerate() {
             let tp = self.data.attr_type(d_nr, nr);
-            let Some(actual_type) = types.get(nr) else { continue };
+            let Some(actual_type) = types.get(nr) else {
+                continue;
+            };
             let mut actual_code = a_code.clone();
-            if let (Type::Vector(to_tp, _), Type::Vector(a_tp, _)) = (&tp, actual_type) {
-                if a_tp.is_unknown() && !to_tp.is_unknown() {
-                    self.change_var(&actual_code, &tp);
-                    actual.push(actual_code);
-                    continue;
-                }
+            if let (Type::Vector(to_tp, _), Type::Vector(a_tp, _)) = (&tp, actual_type)
+                && a_tp.is_unknown()
+                && !to_tp.is_unknown()
+            {
+                self.change_var(&actual_code, &tp);
+                actual.push(actual_code);
+                continue;
             }
             // P44: empty `[]` literal → create temp vector where parameter type is known.
             if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)

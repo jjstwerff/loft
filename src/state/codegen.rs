@@ -579,12 +579,10 @@ impl State {
         }
     }
 
-    /// A8: destination-passing for text-producing natives inside OpAppendText.
+    /// A8: destination-passing for text-producing natives inside `OpAppendText`.
     /// Returns true if the optimisation was applied (caller should return Void).
     fn try_text_dest_pass(&mut self, stack: &mut Stack, op: u32, parameters: &[Value]) -> bool {
-        if stack.data.def(op).name != "OpAppendText"
-            || parameters.len() < 2
-        {
+        if stack.data.def(op).name != "OpAppendText" || parameters.len() < 2 {
             return false;
         }
         let (Value::Var(dest_var), Value::Call(inner_op, inner_args)) =
@@ -604,7 +602,12 @@ impl State {
         let inner_op = *inner_op;
         let inner_args = inner_args.clone();
         let inner_attrs: Vec<Type> = stack
-            .data.def(inner_op).attributes.iter().map(|a| a.typedef.clone()).collect();
+            .data
+            .def(inner_op)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect();
         for arg_val in &inner_args {
             self.generate(arg_val, stack, false);
         }
@@ -620,6 +623,7 @@ impl State {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_call(
         &mut self,
         stack: &mut Stack,

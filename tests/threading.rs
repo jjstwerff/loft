@@ -451,4 +451,3 @@ fn label(r: const Num) -> text { "v{r.v}" }
         "text results"
     );
 }
-

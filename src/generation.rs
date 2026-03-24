@@ -813,7 +813,10 @@ extern crate loft;"
             if def.name == "i_parse_errors" {
                 writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
             } else if def.name == "i_parse_error_push" {
-                writeln!(w, "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)")?;
+                writeln!(
+                    w,
+                    "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
+                )?;
             } else if def.returned != Type::Void {
                 writeln!(w, "  todo!(\"native function {}\")", def.name)?;
             }

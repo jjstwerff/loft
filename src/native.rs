@@ -667,11 +667,24 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     let n = vector::length_vector(&v_input, &stores.allocations) as usize;
     // return_size == 0 signals text mode; otherwise clamp to [1, 8].
     let is_text = v_return_size == 0;
-    let return_size = if is_text { 4u32 } else { v_return_size.clamp(1, 8) as u32 };
+    let return_size = if is_text {
+        4u32
+    } else {
+        v_return_size.clamp(1, 8) as u32
+    };
 
     let result_ref = parallel_execute_and_collect(
-        stores, program, fn_pos, &v_input, element_size, return_size, is_text, n_threads,
-        &extra_args, n, n_hidden_text,
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        return_size,
+        is_text,
+        n_threads,
+        &extra_args,
+        n,
+        n_hidden_text,
     );
     stores.put(stack, result_ref);
 }
@@ -698,11 +711,21 @@ fn parallel_execute_and_collect(
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
     stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
-    stores.store_mut(&result_db).set_int(header_rec, 4, vec_rec as i32);
+    stores
+        .store_mut(&result_db)
+        .set_int(header_rec, 4, vec_rec as i32);
 
     if is_text {
         let strings = run_parallel_text(
-            stores, program, fn_pos, input, element_size, n_threads, extra_args, n, n_hidden_text,
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            n_threads,
+            extra_args,
+            n,
+            n_hidden_text,
         );
         let store = stores.store_mut(&result_db);
         for (i, s) in strings.iter().enumerate() {
@@ -712,12 +735,27 @@ fn parallel_execute_and_collect(
     } else if return_size >= 4 {
         let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
         run_parallel_direct(
-            stores, program, fn_pos, input, element_size, return_size, n_threads, extra_args,
-            out_ptr, n,
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            return_size,
+            n_threads,
+            extra_args,
+            out_ptr,
+            n,
         );
     } else {
         let results = run_parallel_raw(
-            stores, program, fn_pos, input, element_size, return_size, n_threads, extra_args,
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            return_size,
+            n_threads,
+            extra_args,
         );
         let store = stores.store_mut(&result_db);
         let mut fld = 8u32;
@@ -726,7 +764,11 @@ fn parallel_execute_and_collect(
             fld += 1;
         }
     }
-    DbRef { store_nr: result_db.store_nr, rec: header_rec, pos: 4 }
+    DbRef {
+        store_nr: result_db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
 }
 
 // ── parallel_get_* ────────────────────────────────────────────────────────────

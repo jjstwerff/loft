@@ -312,7 +312,7 @@ use a separate collection or add after the loop"
     /// Apply the operator `op` to an already-parsed LHS and parse the RHS,
     /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,

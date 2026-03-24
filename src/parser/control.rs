@@ -1568,7 +1568,7 @@ impl Parser {
             if let Some(arg_name) = self.lexer.peek_named_arg() {
                 in_named = true;
                 self.lexer.has_identifier(); // consume name
-                self.lexer.has_token(":");   // consume :
+                self.lexer.has_token(":"); // consume :
                 let mut p = Value::Null;
                 let t = self.expression(&mut p);
                 named_args.push((arg_name, p, t));
@@ -1630,7 +1630,8 @@ impl Parser {
     }
 
     /// Dispatch a parsed call to the appropriate handler: diagnostics, special
-    /// forms (map/filter/reduce/sort/parallel_for), fn-ref calls, or normal calls.
+    /// forms (`map/filter/reduce/sort/parallel_for`), fn-ref calls, or normal calls.
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_call(
         &mut self,
         val: &mut Value,
