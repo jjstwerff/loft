@@ -44,31 +44,11 @@ impl State {
         println!("{}", String::from_utf8(buf).unwrap());
     }
 
-    // ---------------------------------------------------------------- validate_stack
-
-    /// Validate the interpreter stack and write a diagnostic report.
-    ///
-    /// Checks performed regardless of `level`:
-    /// - Stack pointer in bounds (does not exceed the allocated store).
-    /// - Stack pointer 4-byte aligned.
-    /// - Compile-time vs runtime stack-depth match (when `code_pos` is known).
-    /// - All 16-byte-aligned windows on the stack that could be a [`DbRef`] are
-    ///   checked for an out-of-range `store_nr`.
-    ///
-    /// # Parameters
-    /// - `code_pos` — bytecode position used to look up compile-time metadata.
-    ///   Pass `u32::MAX` when unavailable.
-    /// - `data` — definition table; required for variable-name annotations in
-    ///   [`StackDiagLevel::Full`] mode, ignored otherwise.
-    /// - `level` — verbosity (see [`StackDiagLevel`]).
-    /// - `extras` — optional byte-range labels `(from, to, label)` overlaid on
-    ///   the hex dump to highlight regions of interest (e.g. a known-bad `DbRef`).
-    ///   Pass `&[]` when not needed.
-    ///
-    /// Returns the number of anomalies detected.
+    /// Validate the interpreter stack and write a diagnostic hex dump.
+    /// Returns the number of anomalies (bounds, alignment, stale `DbRef`).
     ///
     /// # Errors
-    /// Propagates I/O errors from `f`.
+    /// Propagates I/O errors from the writer.
     #[allow(clippy::too_many_lines)]
     pub fn validate_stack(
         &self,
@@ -944,7 +924,7 @@ impl State {
                     return format!("ref({},{},{})", val.store_nr, val.rec, val.pos);
                 }
                 // Guard: the record must be live (positive fld-0 header) before we
-                // dereference.  A stale DbRef can point to a store that was re-initialised
+                // dereference.  A stale `DbRef` can point to a store that was re-initialised
                 // (init() sets fld 0 negative) but not yet re-claimed — show coords only.
                 if val.rec != 0 {
                     let hdr =

@@ -268,29 +268,21 @@ fn area(s: &amp;Shape) -&gt; f64 {
 <p class="down"><strong>Downside</strong> Rust's <code>match</code> is exhaustive: the compiler forces you to handle every variant. In loft, leaving a variant without an implementation emits a compiler warning but does not stop compilation. To suppress the warning and produce a null return, write an explicit empty-body stub: <code>fn area(self: NewShape) -&gt; float { }</code>. Exhaustiveness is enforced by discipline, not the type system.</p>
 </div>
 
-<h2 id="closures">11. No closures — but compile-checked function references</h2>
+<h2 id="closures">11. Lambdas without closure capture</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// fn &lt;name&gt; produces a compile-time-checked function reference</span>
-<span class="kw">fn</span> <span class="fn-call">double</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> }
-<span class="kw">fn</span> <span class="fn-call">is_even</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x % <span class="nm">2</span> == <span class="nm">0</span> }
+  <pre><code><span class="cm">// Lambda expressions — long and short form:</span>
+doubled = <span class="fn-call">map</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
+evens   = <span class="fn-call">filter</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>], |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
+
+<span class="cm">// Named function references also work:</span>
 <span class="kw">fn</span> <span class="fn-call">add</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { a + b }
+total = <span class="fn-call">reduce</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="nm">0</span>, <span class="kw">fn</span> add);
 
-<span class="cm">// Store, call, or pass a fn-ref like any other value:</span>
-f = <span class="kw">fn</span> double;
-assert(f(<span class="nm">5</span>) == <span class="nm">10</span>);
-
-<span class="cm">// Higher-order functions use fn-refs directly:</span>
-nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
-doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span> double);
-evens  = <span class="fn-call">filter</span>(nums, <span class="kw">fn</span> is_even);
-total  = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, <span class="kw">fn</span> add);
-
-<span class="cm">// Parallel dispatch — worker result collected per element:</span>
-<span class="kw">for</span> item <span class="kw">in</span> scores <span class="kw">par</span>(result=<span class="fn-call">score_fn</span>(item), <span class="nm">4</span>) {
-    total += result;
-}</code></pre>
+<span class="cm">// But lambdas cannot capture surrounding variables:</span>
+offset = <span class="nm">10</span>;
+<span class="cm">// shifted = map(nums, |x| { x + offset });  // error: offset not in scope</span></code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
@@ -307,8 +299,8 @@ let shifted: Vec&lt;i32&gt; = v.iter()
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Simpler mental model. No capture modes (<code>move</code> vs borrow), no <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> trait bounds, no lifetime constraints on captured variables. The <code>fn &lt;name&gt;</code> expression gives a compile-checked reference to any named function — the compiler verifies the name exists and has a matching signature before emitting any code.</p>
-<p class="down"><strong>Downside</strong> No closures or lambdas. A <code>fn &lt;name&gt;</code> reference cannot capture surrounding variables — context must be embedded in the data or passed as an explicit parameter. Indirect calls are supported (<code>f(args)</code> where <code>f</code> holds a fn-ref), but fn-refs cannot be compared, printed, or used in arithmetic. Rust's <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> traits give far more flexibility for callbacks that need local state.</p>
+<p class="up"><strong>Upside</strong> Simpler mental model. No capture modes (<code>move</code> vs borrow), no <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> trait bounds, no lifetime constraints on captured variables. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported, with type inference from call-site context. Named function references (<code>fn name</code>) are compile-checked.</p>
+<p class="down"><strong>Downside</strong> No closure capture. Lambdas and function references cannot read variables from the surrounding scope — context must be embedded in the data or passed as an explicit parameter. Rust's <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> traits give far more flexibility for callbacks that need local state.</p>
 </div>
 
 <h2 id="generics">12. No generic functions or trait system</h2>
@@ -388,7 +380,7 @@ let sum: i32 = scores.par_iter()
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Built into the language — no external crate, no <code>Cargo.toml</code> edit. The compiler validates the worker function signature at the call site. Results are delivered in the original vector order. The thread count is set per call, making it easy to tune for the hardware at hand.</p>
-<p class="down"><strong>Downside</strong> The worker must return a primitive (<code>integer</code>, <code>long</code>, <code>float</code>, or <code>boolean</code>) — returning <code>text</code> or a struct reference is not yet supported. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use <code>map()</code> / <code>filter()</code> / <code>reduce()</code> sequentially — each stage allocates a new intermediate vector.</p>
+<p class="down"><strong>Downside</strong> Workers can return primitives (<code>integer</code>, <code>long</code>, <code>float</code>, <code>boolean</code>), <code>text</code>, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use <code>map()</code> / <code>filter()</code> / <code>reduce()</code> sequentially — each stage allocates a new intermediate vector.</p>
 </div>
 
 </article>

@@ -10,7 +10,7 @@
 <header class="print-header">
 <h1>Loft Language Reference</h1>
 <p class="tagline">Complete language and standard library documentation</p>
-<p class="version">v0.8.1</p>
+<p class="version">v0.8.2</p>
 <p><a href="index.html">&#8592; Back to online documentation</a> &nbsp;|&nbsp; <a href="00-vs-rust.html">vs Rust comparison</a></p>
 </header>
 <nav class="print-toc">
@@ -42,6 +42,7 @@
 <li><a href="#21-random">Random</a> — <span class="toc-desc">Random numbers and random ordering</span></li>
 <li><a href="#22-time">Time</a> — <span class="toc-desc">Wall-clock time and elapsed time</span></li>
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
+<li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-math">Math</a></li>
@@ -338,6 +339,11 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">greet</span>(name: <span class="ty"><a href="stdlib-types.html">text</a></span>, greeting: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"Hello"</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   greeting + <span class="st">", "</span> + name + <span class="st">"!"</span>
 }</code></pre>
+<h2 id="named-arguments">Named Arguments</h2>
+<p>When a function has several parameters with defaults, you can skip middle ones by naming the arguments you want to provide. Positional arguments come first; once you use a name, all remaining arguments must also be named.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">connect</span>(host: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">8080</span>, tls: <span class="ty"><a href="stdlib-types.html">boolean</a></span> = <span class="kw">true</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"{host}:{port}:{tls}"</span>
+}</code></pre>
 <h2 id="reference-parameters-and-defaults">Reference Parameters and Defaults</h2>
 <p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller<code>s variable and can read or write it. Without </code>&amp;<code>, Loft copies the value in, so changes inside the function stay local. Default values (written </code>= value' after the type) are substituted when the caller omits that argument.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a:  &amp; <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
@@ -379,7 +385,7 @@
   <span class="fn-call">f</span>(x)
 }</code></pre>
 <h2 id="lambda-expressions">Lambda Expressions</h2>
-<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) which is a bit shorter: |param: type| -&gt; return_type { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.</p>
+<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) when the call site already knows the types: |param| { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce.  The short form does not allow type annotations; use the full fn(…) form when you need explicit types. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Passing both arguments explicitly overrides the default.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
@@ -402,38 +408,44 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_int</span>(<span class="nm">42</span>) == <span class="st">"integer:42"</span>, <span class="st">"Integer describe"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_text</span>(<span class="st">"hi"</span>) == <span class="st">"text:hi"</span>, <span class="st">"Text describe"</span>);</code></pre>
 <p>A function reference is stored in a variable with type <code>fn(...) -&gt; ...</code>. Calling it looks exactly like a regular function call.</p>
-<pre><code>  f = <span class="kw">fn</span> double_it;
+<pre><code>  f = double_it;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"fn-ref stored and called: {f(5)}"</span>);</code></pre>
 <p>Pass function references as arguments to higher-order functions.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span> negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);</code></pre>
 <p>Full-form lambda with fn(...) syntax.</p>
 <pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
   doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"lambda map first element"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">4</span>] == <span class="nm">10</span>, <span class="st">"lambda map last element"</span>);</code></pre>
-<p>Short-form lambda with |...| syntax — same thing, slightly shorter to write.</p>
-<pre><code>  tripled = <span class="fn-call">map</span>(nums, |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">3</span> });
+<p>Short-form lambda with |...| syntax — types are inferred from the call site.</p>
+<pre><code>  tripled = <span class="fn-call">map</span>(nums, |x| { x * <span class="nm">3</span> });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tripled[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"short lambda map first element"</span>);</code></pre>
 <p>filter keeps only elements where the lambda returns true.</p>
-<pre><code>  evens = <span class="fn-call">filter</span>(nums, |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
+<pre><code>  evens = <span class="fn-call">filter</span>(nums, |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"filter evens first"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"filter evens second"</span>);</code></pre>
 <p>reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).</p>
-<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { acc + x });
+<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc, x| { acc + x });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);</code></pre>
 <p>A lambda can also be stored in a variable and called later.</p>
-<pre><code>  negate = |x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x };
+<pre><code>  negate = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">negate</span>(<span class="nm">7</span>) == -<span class="nm">7</span>, <span class="st">"stored lambda: {negate(7)}"</span>);</code></pre>
 <p>A lambda passed to your own higher-order function (same as apply_fn above).</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(|x: <span class="ty"><a href="stdlib-types.html">integer</a></span>| -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);</code></pre>
+<p>--- Named arguments ---</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>) == <span class="st">"example.com:8080:true"</span>, <span class="st">"all defaults"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"skip port"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(host: <span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"all named"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, port: <span class="nm">443</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:443:false"</span>, <span class="st">"mixed"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(name: <span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"named with default greeting"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="07-vector">
 <h1>Vector</h1>
 <p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: <code>[1, 2, 3]</code>. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.</p>
 <h2 id="transforming-vectors-map-filter-reduce">Transforming vectors: map, filter, reduce</h2>
-<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function using <code>fn &lt;name&gt;</code> to refer to a named function by name. map(v, fn f)          — apply f to every element; returns a new vector filter(v, fn pred)    — keep only elements for which pred returns true reduce(v, fn f, init) — combine all elements into a single value</p>
+<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function using <code>fn &lt;name&gt;</code> to refer to a named function by name. map(v, f)          — apply f to every element; returns a new vector filter(v, pred)    — keep only elements for which pred returns true reduce(v, f, init) — combine all elements into a single value</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">triple</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">3</span>
 }</code></pre>
@@ -510,18 +522,18 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <h2 id="higher-order-functions">Higher-order functions</h2>
 <p><code>map</code> applies a function to every element and returns a new vector.</p>
 <pre><code>  nums =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
-  tripled = <span class="fn-call">map</span>(nums,  <span class="kw">fn</span> triple);
+  tripled = <span class="fn-call">map</span>(nums,  triple);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{tripled}"</span> == <span class="st">"[3,6,9,12,15]"</span>, <span class="st">"map triple: {tripled}"</span>);</code></pre>
 <p><code>filter</code> keeps only elements for which the predicate returns true.</p>
-<pre><code>  evens2 = <span class="fn-call">filter</span>(nums,  <span class="kw">fn</span> is_even_n);
+<pre><code>  evens2 = <span class="fn-call">filter</span>(nums,  is_even_n);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{evens2}"</span> == <span class="st">"[2,4]"</span>, <span class="st">"filter evens: {evens2}"</span>);</code></pre>
-<p><code>reduce</code> folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial_value, fn combiner).</p>
-<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>,  <span class="kw">fn</span> sum_acc);
+<p><code>reduce</code> folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial_value, combiner).</p>
+<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>,  sum_acc);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);
-  product = <span class="fn-call">reduce</span>(nums, <span class="nm">1</span>,  <span class="kw">fn</span> mul_acc);
+  product = <span class="fn-call">reduce</span>(nums, <span class="nm">1</span>,  mul_acc);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(product == <span class="nm">120</span>, <span class="st">"reduce product: {product}"</span>);</code></pre>
 <p>You can chain these calls: filter first, then map, then reduce.</p>
-<pre><code>  result = <span class="fn-call">reduce</span>(<span class="fn-call">map</span>(<span class="fn-call">filter</span>(nums,  <span class="kw">fn</span> is_even_n),  <span class="kw">fn</span> triple), <span class="nm">0</span>,  <span class="kw">fn</span> sum_acc);
+<pre><code>  result = <span class="fn-call">reduce</span>(<span class="fn-call">map</span>(<span class="fn-call">filter</span>(nums,  is_even_n),  triple), <span class="nm">0</span>,  sum_acc);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(result == <span class="nm">18</span>, <span class="st">"filter+map+reduce: {result}"</span>);
 }</code></pre>
 </section>
@@ -549,11 +561,15 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code><span class="kw">fn</span> <span class="fn-call">dimmed</span>(self: <span class="en">Colour</span>) -&gt; <span class="en">Colour</span> {
   <span class="en">Colour</span> {r: self.r / <span class="nm">2</span>, g: self.g / <span class="nm">2</span>, b: self.b / <span class="nm">2</span> }
 }</code></pre>
-<h2 id="computed-fields">Computed Fields</h2>
-<p>A field can calculate its value from other fields in the same struct. Write <code>= expression</code> after the type to set a value computed when you create the struct. Inside that expression, <code>$</code> refers to the struct being built. The <code>name_length</code> field is filled automatically whenever you create an Item.</p>
+<h2 id="defaults-and-computed-fields">Defaults and Computed Fields</h2>
+<p>Write <code>= expression</code> after the type to set a stored default, filled at construction. Use <code>computed(expression)</code> for a field that recalculates every time you read it — it takes no space in the record and always reflects the current state. Inside both, <code>$</code> refers to the struct.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Item</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   name_length: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="bi"><a href="stdlib-text.html">len</a></span>($.name)
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Circle</span> {
+  radius: <span class="ty"><a href="stdlib-types.html">float</a></span>,
+  area: <span class="ty"><a href="stdlib-types.html">float</a></span> <span class="fn-call">computed</span>(<span class="nm">3.14159265</span> * $.radius * $.radius)
 }</code></pre>
 <h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
 <p><code>Area</code> uses smaller integer types to save memory: <code>u16</code> holds values 0–65535, and <code>u8</code> holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
@@ -588,9 +604,14 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.r == <span class="nm">64</span>, <span class="st">"dimmed r: {dark.r}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.b == <span class="nm">64</span>, <span class="st">"dimmed b: {dark.b}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.g == <span class="nm">0</span>, <span class="st">"dimmed g: {dark.g}"</span>);</code></pre>
-<p>Computed fields are filled in automatically when you create the struct.</p>
+<p>Stored defaults are filled once at construction time.</p>
 <pre><code>  it = <span class="en">Item</span> {name: <span class="st">"hello"</span> };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(it.name_length == <span class="nm">5</span>, <span class="st">"computed name_length: {it.name_length}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(it.name_length == <span class="nm">5</span>, <span class="st">"stored default name_length: {it.name_length}"</span>);</code></pre>
+<p>computed() fields recalculate on every access — changing radius updates area.</p>
+<pre><code>  ci = <span class="en">Circle</span> { radius: <span class="nm">5.0</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ci.area &gt; <span class="nm">78.0</span>, <span class="st">"computed area: {ci.area}"</span>);
+  ci.radius = <span class="nm">10.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ci.area &gt; <span class="nm">314.0</span>, <span class="st">"recomputed area: {ci.area}"</span>);</code></pre>
 <p>Fill a vector with copies of the same struct using <code>; count</code> syntax. This creates 16 Area records, all with the same initial values.</p>
 <pre><code>  map =[<span class="en">Area</span> {height: <span class="nm">0</span>, terrain: <span class="nm">1</span>, water: <span class="nm">1</span>, direction: <span class="nm">1</span> };
   <span class="nm">16</span>];
@@ -1046,49 +1067,18 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p>Loft has a built-in Image type for loading PNG files and inspecting their pixels. Loading a PNG takes one function call; after that you can read every pixel, check the dimensions, and iterate over the whole image with a for loop.</p>
 <h2 id="loading-an-image">Loading an Image</h2>
 <p>Pass a File handle to the <code>png()</code> function to load a PNG into memory. The entire file is read and decoded at this point. After the call you can access pixels as many times as you like with no further I/O.</p>
-<pre><code>img = png(file("photo.png"))
-</code></pre>
-<p>If the file does not exist or is not a valid PNG, <code>img</code> will be null and you can check for that with <code>!</code> before proceeding.</p>
 <h2 id="checking-dimensions">Checking Dimensions</h2>
-<p>Once loaded, <code>img#width</code> and <code>img#height</code> give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.</p>
-<pre><code>w = img#width
-h = img#height
-println("image is {w} x {h} pixels — {w * h} pixels total")
-</code></pre>
+<p>Once loaded, <code>img.width</code> and <code>img.height</code> give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.</p>
 <h2 id="accessing-individual-pixels">Accessing Individual Pixels</h2>
-<p>Index the image with two integer coordinates [x, y] to get a pixel value. x = 0 is the left column; y = 0 is the top row. Each pixel has four values (called channels), all in the range 0–255:</p>
-<pre><code>px = img[x, y]
-r  = px#red     // how much red   (0 = none, 255 = full)
-g  = px#green   // how much green
-b  = px#blue    // how much blue
-a  = px#alpha   // opacity (255 = fully opaque, 0 = fully transparent)
-</code></pre>
-<p>A pixel from outside the image bounds is null.</p>
-<h2 id="iterating-over-all-pixels">Iterating Over All Pixels</h2>
-<p>A <code>for</code> loop over an image visits every pixel from top-left to bottom-right, row by row. This is the easiest way to scan or analyse the whole image.</p>
-<pre><code>bright_red = 0;
-for px in img {
-    if px#red &gt; 200 and px#green &lt; 50 and px#blue &lt; 50 {
-        bright_red += 1;
-    }
-}
-println("found {bright_red} bright-red pixels")
-</code></pre>
-<h2 id="practical-example-average-brightness">Practical example: average brightness</h2>
-<p>Here is how you would compute the average brightness of an image. Brightness is often approximated as (r + g + b) / 3, or the more perceptually accurate formula (0.299*r + 0.587*g + 0.114*b).</p>
-<pre><code>total = 0;
-count = 0;
-for px in img {
-    total += px#red + px#green + px#blue;
-    count += 1;
-}
-if count &gt; 0 {
-    avg = total / (count * 3);
-    println("average brightness: {avg} / 255")
-}
-</code></pre>
-<p>Note: PNG test files are not included in the standard test suite, so the examples above are shown as comments rather than runnable assertions. Paste them into your own project and point them at a real PNG file to try.</p>
+<p>Pixel data is stored in the <code>data</code> field as a vector&lt;Pixel&gt;. Each Pixel has r, g, b fields (0–255). A pixel from outside the image bounds is null.</p>
+<h2 id="note">Note</h2>
+<p>Pixel iteration requires S12 completion — only dimension access is currently verified by this test.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/map.png"</span>);
+  img = f.<span class="fn-call"><a href="stdlib-file-system.html">png</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.width == <span class="nm">256</span>, <span class="st">"width={img.width}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.height == <span class="nm">256</span>, <span class="st">"height={img.height}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.name == <span class="st">"map.png"</span>, <span class="st">"name={img.name}"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="15-lexer">
@@ -1339,7 +1329,7 @@ entry = "src/mylib.loft"   override the default entry path
 <p>The full syntax is: for a in &lt;vector&gt; par(b=&lt;worker_call&gt;, &lt;threads&gt;) { body }</p>
 <p>Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument: for a in items par(b=my_func(a), 4) { ... }</p>
 <p>Form 2 calls a method on the element itself: for a in items par(b=a.my_method(), 4) { ... }</p>
-<p>The worker function must take a read-only reference to the element type (marked <code>const</code> to tell the compiler the function will not modify the element) and return a single primitive value (integer, float, or boolean). ── Shared struct definitions ────────────────────────────────────────────────</p>
+<p>The worker function must take a read-only reference to the element type (marked <code>const</code> to tell the compiler the function will not modify the element) and return a value (integer, long, float, single, boolean, enum, text, or a struct). Extra context arguments are forwarded to each worker: <code>par(b=scale(a, mult), N)</code>. ── Shared struct definitions ────────────────────────────────────────────────</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -1365,6 +1355,13 @@ entry = "src/mylib.loft"   override the default entry path
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">score_positive</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
   r.value &gt; <span class="nm">0</span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">DoubledScore</span> {
+  label: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  doubled: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">make_doubled</span>(r: const <span class="en">Score</span>) -&gt; <span class="en">DoubledScore</span> {
+  <span class="en">DoubledScore</span> { label: <span class="st">"v{r.value}"</span>, doubled: r.value * <span class="nm">2</span> }
 }</code></pre>
 <p>Methods on Score (Form 2)</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">get_value</span>(self: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
@@ -1430,6 +1427,17 @@ entry = "src/mylib.loft"   override the default entry path
     empty_sum += b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty_sum == <span class="nm">0</span>, <span class="st">"form-1 empty: body executes 0 times"</span>);</code></pre>
+<h2 id="returning-a-struct-from-a-parallel-worker">Returning a Struct from a Parallel Worker</h2>
+<p>Workers can return a struct. Each worker creates its own struct instance and the runtime deep-copies the result (including text fields) into a shared result vector so field access works in the loop body.</p>
+<pre><code>  q8 = <span class="fn-call">make_scores</span>();
+  dtotal = <span class="nm">0</span>;
+  dlabels = <span class="st">""</span>;
+  <span class="kw">for</span> sa <span class="kw">in</span> q8.items <span class="fn-call">par</span>(ds = <span class="fn-call">make_doubled</span>(sa), <span class="nm">1</span>) {
+    dtotal += ds.doubled;
+    dlabels += <span class="st">"{ds.label},"</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dtotal == <span class="nm">120</span>, <span class="st">"form-1 struct return: dtotal == 120"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dlabels == <span class="st">"v10,v20,v30,"</span>, <span class="st">"form-1 struct labels: {dlabels}"</span>);</code></pre>
 <h2 id="running-a-method-in-parallel">Running a Method in Parallel</h2>
 <p>Form 2 calls the worker as a method on each element. The syntax <code>b=a.get_value()</code> tells the compiler to dispatch <code>get_value</code> on every element in parallel and bind each result to <code>b</code> in the loop body.</p>
 <pre><code>  q5 = <span class="fn-call">make_scores</span>();
@@ -1733,6 +1741,85 @@ elapsed_ms  = elapsed_us / 1000l
 <p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. Use the <code>pow()</code> function for exponentiation.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"use pow() for power"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="24-json">
+<h1>JSON</h1>
+<p>Loft has built-in JSON support: any struct can be serialised to JSON with a format flag, and parsed back from JSON text.  No annotations or code generation needed — it works on every struct automatically.</p>
+<h2 id="serialisation-struct-to-json">Serialisation — struct to JSON</h2>
+<p>Use the <code>:j</code> format flag inside a format string to produce JSON output. Field names become quoted keys; strings are escaped; numbers and booleans are written as JSON literals.</p>
+<pre><code>"{my_struct:j}"
+</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">User</span> {
+  id: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  email: <span class="ty"><a href="stdlib-types.html">text</a></span>
+}</code></pre>
+<h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
+<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Both JSON-style quoted field names ("name": value) and loft-style unquoted field names (name: value) are accepted.  Missing fields get null sentinels. Extra fields in the input are silently skipped.</p>
+<pre><code>user = User.parse(json_text)
+</code></pre>
+<h2 id="vectors">Vectors</h2>
+<p>Parse a JSON array into a vector of structs with <code>vector&lt;T&gt;.parse(text)</code>.</p>
+<pre><code>scores = vector&lt;Score&gt;.parse("[{\"v\":1},{\"v\":2}]")
+</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Score</span> {
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<h2 id="parse-errors">Parse Errors</h2>
+<p>After parsing, check <code>#errors</code> on the result to see what went wrong. Each error is a text string describing the problem and its location.</p>
+<pre><code>data = MyType.parse(bad_json)
+for e in data#errors { log_warn(e) }
+</code></pre>
+<h2 id="nested-structs">Nested Structs</h2>
+<p>Structs with struct-typed fields parse nested JSON objects automatically.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Address</span> {
+  city: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  zip: <span class="ty"><a href="stdlib-types.html">text</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Contact</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  address: <span class="en">Address</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>--- Serialisation ---</p>
+<pre><code>  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
+  json = <span class="st">"{u:j}"</span>;
+  expected = `{{<span class="st">"id"</span>:<span class="nm">42</span>,<span class="st">"name"</span>:<span class="st">"Alice"</span>,<span class="st">"email"</span>:<span class="st">"alice@example.com"</span>}}`;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(json == expected, <span class="st">"to json"</span>);</code></pre>
+<p>--- Parsing a single object ---</p>
+<pre><code>  bob = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">7</span>,<span class="st">"name"</span>:<span class="st">"Bob"</span>,<span class="st">"email"</span>:<span class="st">"bob@test.org"</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.id == <span class="nm">7</span>, <span class="st">"parsed id: {bob.id}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.name == <span class="st">"Bob"</span>, <span class="st">"parsed name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.email == <span class="st">"bob@test.org"</span>, <span class="st">"parsed email"</span>);</code></pre>
+<p>--- Round-trip: serialise then parse ---</p>
+<pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
+<p>--- Parse errors ---</p>
+<pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
+  errs = <span class="nm">0</span>;
+  <span class="kw">for</span> err <span class="kw">in</span> bad#errors {
+    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"parse error: {err}"</span>);
+    errs += <span class="nm">1</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(errs &gt; <span class="nm">0</span>, <span class="st">"expected parse errors, got {errs}"</span>);</code></pre>
+<p>--- Parsing a vector ---</p>
+<pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
+  total = <span class="nm">0</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> scores {
+    total += s.value;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"vector sum: {total}"</span>);</code></pre>
+<p>--- Nested struct ---</p>
+<pre><code>  c = <span class="en">Contact</span>.<span class="fn-call">parse</span>(`{{<span class="st">"name"</span>:<span class="st">"Carol"</span>,<span class="st">"address"</span>:{{<span class="st">"city"</span>:<span class="st">"Amsterdam"</span>,<span class="st">"zip"</span>:<span class="st">"1012"</span>}}}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.name == <span class="st">"Carol"</span>, <span class="st">"nested name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
+<p>--- Missing fields get null ---</p>
+<pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">

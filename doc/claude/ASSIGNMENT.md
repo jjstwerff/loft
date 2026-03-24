@@ -190,16 +190,16 @@ made at the wrong position.
 
 ```
 Parser (two passes)
-  └─ variables.rs: add_variable(), copy_variable()   ← names, types, scopes (unchanged)
+  └─ variables/: add_variable(), copy_variable()   ← names, types, scopes (unchanged)
        scope_analysis (scopes.rs)                    ← scope IDs, OpFreeText/OpFreeRef
-            compute_intervals (variables.rs)         ← first_def/last_use per variable [DONE]
-                 assign_slots (variables.rs)         ← assign stack_pos from intervals [TODO]
+            compute_intervals (variables/)         ← first_def/last_use per variable [DONE]
+                 assign_slots (variables/)         ← assign stack_pos from intervals [TODO]
                       [debug] validate_slots         ← assert no overlapping live slots [DONE]
                            byte_code (state.rs)      ← reads stack_pos, no claim() [TODO]
                                 execute()
 ```
 
-#### Step 1 — `compute_intervals` (DONE — `src/variables.rs`)
+#### Step 1 — `compute_intervals` (DONE — `src/variables/`)
 
 `compute_intervals(val, function, free_text_nr, free_ref_nr, seq)` walks the IR in
 execution order, recording `first_def` and `last_use` on each `Variable`.  Called from
@@ -212,18 +212,18 @@ execution order, recording `first_def` and `last_use` on each `Variable`.  Calle
   `OpFreeRef`) for `v`.
 - Overlapping lifetimes: `u.first_def <= v.last_use && v.first_def <= u.last_use`.
 
-#### Step 2 — `validate_slots` (DONE — `src/variables.rs`)
+#### Step 2 — `validate_slots` (DONE — `src/variables/`)
 
 `validate_slots(function, data, def_nr)` (debug-only) checks every variable pair for
 simultaneous live-interval overlap and slot overlap.  Logs a full diagnostic then panics.
 Uses the extracted `find_conflict(vars)` helper for testability.
 
-Unit tests in `src/variables.rs` cover non-overlapping intervals, non-overlapping slots,
+Unit tests in `src/variables/` cover non-overlapping intervals, non-overlapping slots,
 integer inside wider DbRef slot, and edge cases.
 
 Integration tests in `tests/slot_assign.rs` (5 tests; all pass).
 
-#### Step 3 — `assign_slots` (TODO — `src/variables.rs`)
+#### Step 3 — `assign_slots` (TODO — `src/variables/`)
 
 Add `assign_slots(vars: &mut [Variable], arguments_size: u16)`.
 
@@ -296,7 +296,7 @@ intervals and can share or not share slots based on the interval check.
 |---|---|
 | `compute_intervals` | **Done** (loop-carried extension, Iter traversal, write-target last_use) |
 | `validate_slots` + `find_conflict` | **Done** (debug-only) |
-| Unit tests for `find_conflict` | **Done** (`src/variables.rs`) |
+| Unit tests for `find_conflict` | **Done** (`src/variables/`) |
 | Integration tests (`tests/slot_assign.rs`) | **Done** (5 tests; all pass) |
 | P1: pre-init for owned refs | **Done** |
 | P1: pre-init for borrowed refs | **Done** |

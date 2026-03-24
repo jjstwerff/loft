@@ -430,7 +430,7 @@ impl Stores {
 mod tests {
     use super::*;
 
-    /// S4 — Issue 59: `read_data Parts::Struct` must use `r.pos + f.position` for every
+    /// Issue 59: `read_data Parts::Struct` must use `r.pos + f.position` for every
     /// field, not `r.pos` for all fields.  Without the fix both fields serialise the same
     /// value (the first field is read twice).
     #[test]
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(b_val, 20, "field b should be 20 (was 10 before fix)");
     }
 
-    /// S4 — Issue 59: `write_data Parts::Struct` must use `r.pos + f.position` for every
+    /// Issue 59: `write_data Parts::Struct` must use `r.pos + f.position` for every
     /// field and advance the data-slice offset between fields.
     #[test]
     fn write_data_struct_field_positions() {

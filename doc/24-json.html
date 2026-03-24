@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - JSON</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="cur">JSON</span> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>JSON</h1>
+<article>
+<p>Loft has built-in JSON support: any struct can be serialised to JSON with a format flag, and parsed back from JSON text.  No annotations or code generation needed — it works on every struct automatically.</p>
+<h2 id="serialisation-struct-to-json">Serialisation — struct to JSON</h2>
+<p>Use the <code>:j</code> format flag inside a format string to produce JSON output. Field names become quoted keys; strings are escaped; numbers and booleans are written as JSON literals.</p>
+<pre><code>"{my_struct:j}"
+</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">User</span> {
+  id: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  email: <span class="ty"><a href="stdlib-types.html">text</a></span>
+}</code></pre>
+<h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
+<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Both JSON-style quoted field names ("name": value) and loft-style unquoted field names (name: value) are accepted.  Missing fields get null sentinels. Extra fields in the input are silently skipped.</p>
+<pre><code>user = User.parse(json_text)
+</code></pre>
+<h2 id="vectors">Vectors</h2>
+<p>Parse a JSON array into a vector of structs with <code>vector&lt;T&gt;.parse(text)</code>.</p>
+<pre><code>scores = vector&lt;Score&gt;.parse("[{\"v\":1},{\"v\":2}]")
+</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Score</span> {
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<h2 id="parse-errors">Parse Errors</h2>
+<p>After parsing, check <code>#errors</code> on the result to see what went wrong. Each error is a text string describing the problem and its location.</p>
+<pre><code>data = MyType.parse(bad_json)
+for e in data#errors { log_warn(e) }
+</code></pre>
+<h2 id="nested-structs">Nested Structs</h2>
+<p>Structs with struct-typed fields parse nested JSON objects automatically.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Address</span> {
+  city: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  zip: <span class="ty"><a href="stdlib-types.html">text</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Contact</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  address: <span class="en">Address</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>--- Serialisation ---</p>
+<pre><code>  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
+  json = <span class="st">"{u:j}"</span>;
+  expected = `{{<span class="st">"id"</span>:<span class="nm">42</span>,<span class="st">"name"</span>:<span class="st">"Alice"</span>,<span class="st">"email"</span>:<span class="st">"alice@example.com"</span>}}`;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(json == expected, <span class="st">"to json"</span>);</code></pre>
+<p>--- Parsing a single object ---</p>
+<pre><code>  bob = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">7</span>,<span class="st">"name"</span>:<span class="st">"Bob"</span>,<span class="st">"email"</span>:<span class="st">"bob@test.org"</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.id == <span class="nm">7</span>, <span class="st">"parsed id: {bob.id}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.name == <span class="st">"Bob"</span>, <span class="st">"parsed name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.email == <span class="st">"bob@test.org"</span>, <span class="st">"parsed email"</span>);</code></pre>
+<p>--- Round-trip: serialise then parse ---</p>
+<pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
+<p>--- Parse errors ---</p>
+<pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
+  errs = <span class="nm">0</span>;
+  <span class="kw">for</span> err <span class="kw">in</span> bad#errors {
+    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"parse error: {err}"</span>);
+    errs += <span class="nm">1</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(errs &gt; <span class="nm">0</span>, <span class="st">"expected parse errors, got {errs}"</span>);</code></pre>
+<p>--- Parsing a vector ---</p>
+<pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
+  total = <span class="nm">0</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> scores {
+    total += s.value;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"vector sum: {total}"</span>);</code></pre>
+<p>--- Nested struct ---</p>
+<pre><code>  c = <span class="en">Contact</span>.<span class="fn-call">parse</span>(`{{<span class="st">"name"</span>:<span class="st">"Carol"</span>,<span class="st">"address"</span>:{{<span class="st">"city"</span>:<span class="st">"Amsterdam"</span>,<span class="st">"zip"</span>:<span class="st">"1012"</span>}}}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.name == <span class="st">"Carol"</span>, <span class="st">"nested name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
+<p>--- Missing fields get null ---</p>
+<pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

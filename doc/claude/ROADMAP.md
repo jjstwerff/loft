@@ -8,39 +8,11 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 
 **Effort key:** Small · Medium · Med–High · High · Very High
 
----
-
-## 0.8.2 — Native stability, slot correctness, and interpreter performance
-
-**Native test parity achieved (2026-03-23):** all 305 `.loft` tests pass in both
-interpreter and native mode.  Issues #77 (fn-ref dispatch) and #80 (LIFO store-free)
-are fixed.  `loft --tests --native` with binary caching, stale-rlib auto-rebuild,
-and `file.loft::fn` filtering is implemented.  CI now fails on any native regression.
-
-**Completed in this cycle:**
-- **S5** — Optional `& text` parameter overflow. ✓
-- **S9** — `character + character` codegen panic. ✓
-- **S10** — Disallow type annotations in `|x|` lambdas; lambda hints for map/filter/reduce. ✓
-- **S11** — Bare function references; `fn` prefix forbidden. ✓
-- **S12** — PNG loading field offset fix. ✓
-- **S13** — `pub` visibility enforcement on imports. ✓
-- **L6.1** — Parser: `assert(expr)` in field definitions. ✓
-- **L6.2** — Bytecode: constraint checks after field writes. ✓
-- **L6** — `Type.parse(text)` with JSON support, `s#errors` accessor. ✓
-- **O1** — Superinstruction opcodes registered; disassembler; `fill_rs_up_to_date` CI. ✓ (peephole deferred)
-- **O6** — `_nn` non-null long arithmetic variants. ✓
-- **A1.1** — Extra integer context args forwarded to parallel workers. ✓
-- **A13.2+A13.3** — `Value::Iter` arm in `build_scope_parents` and `scan_inner`. ✓
-- **L6.3** — Native codegen field constraints: `Value::Insert` IR from L6.2 flows through unchanged. ✓
-
-**Remaining for 0.8.2:**
-
-| ID     | Title                                                   | Effort    | Depends on  | Source             |
-|--------|---------------------------------------------------------|-----------|-------------|--------------------|
-| O1     | ↳ Peephole rewriting pass (stack-relative operands)     | Medium    |             | compile.rs         |
-| A1.2   | ↳ Text/reference returns (dedicated result store)       | Medium    | A1.1        | parallel.rs        |
-| A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12    |
-| A13    | Complete two-zone slot assignment                       | Medium    |             | SLOTS.md           |
+**Maintenance rule:** When an item is completed, remove it from this file entirely.
+Do not keep completed items — the ROADMAP tracks only what remains to be done.
+Completed work belongs in CHANGELOG.md (user-facing) and git history (implementation).
+Issue IDs (S9, A1.2, etc.) must not appear in source code comments either; use
+plain English describing the purpose of the code.
 
 ---
 
@@ -64,15 +36,18 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 
 ---
 
-## 0.8.4 — HTTP client and JSON
+## 0.8.4 — HTTP client
+
+JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
+are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
 
 | ID     | Title                                                   | Effort    | Depends on  | Source          |
 |--------|---------------------------------------------------------|-----------|-------------|-----------------|
-| H1     | `#json` annotation + `to_json` synthesis                | Small     |             | WEB_SERVICES.md |
-| H2     | JSON primitive extraction stdlib                        | Small     | H1          | WEB_SERVICES.md |
-| H3     | `from_json` codegen — scalar struct fields              | Medium    | H1, H2      | WEB_SERVICES.md |
-| H4     | HTTP client stdlib + `HttpResponse` (ureq)              | Medium    | H2          | WEB_SERVICES.md |
-| H5     | Nested/array/enum `from_json` + integration tests       | Med–High  | H3, H4      | WEB_SERVICES.md |
+| H4     | HTTP client stdlib + `HttpResponse` (ureq)              | Medium    |             | WEB_SERVICES.md |
+| H4.1   | ↳ `HttpResponse` struct + `ok()` method                 | Small     |             | default/04_web.loft |
+| H4.2   | ↳ `http_get`, `http_post`, `http_put`, `http_delete`    | Medium    | H4.1        | native_http.rs  |
+| H4.3   | ↳ Header support (`http_get_h`, `http_post_h`)          | Small     | H4.2        | native_http.rs  |
+| H4.4   | ↳ Documentation + integration tests                     | Small     | H4.2        | tests/docs/     |
 
 ---
 
@@ -91,6 +66,15 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 | P2.2   | ↳ Single-statement execution in persistent state        | Medium    | P2.1        | main.rs, repl.rs      |
 | P2.3   | ↳ Automatic value output for non-void results           | Small     | P2.2        | repl.rs               |
 | P2.4   | ↳ Error recovery in session                             | Medium    | P2.2, L1    | repl.rs, parser.rs    |
+| TR1    | Stack trace introspection                               | Medium    |             | STACKTRACE.md         |
+| TR1.1  | ↳ Shadow call-frame vector                              | Small     |             | state/mod.rs          |
+| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations           | Small     | TR1.1       | 04_stacktrace.loft    |
+| TR1.3  | ↳ `stack_trace()` materialisation                       | Medium    | TR1.2       | state/mod.rs, fill.rs |
+| TR1.4  | ↳ Call-site line numbers in frames                      | Small     | TR1.3       | state/codegen.rs      |
+| A7     | Native extension libraries (`cdylib` + `#native`)       | High      |             | EXTERNAL_LIBS.md Ph2  |
+| A7.1   | ↳ `#native` annotation + symbol registration            | Medium    |             | parser.rs, compiler   |
+| A7.2   | ↳ `cdylib` loader (`libloading`)                        | Medium    | A7.1        | state.rs, Cargo.toml  |
+| A7.3   | ↳ Package layout + `loft-plugin-api` crate              | Medium    | A7.2        | new workspace member  |
 
 ---
 
@@ -128,11 +112,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | T1.5   | ↳ Reference-tuple parameters                            | Small     | T1.4        | compiler             |
 | T1.6   | ↳ Tuple-aware mutation guard                            | Small     | T1.4        | scopes.rs            |
 | T1.7   | ↳ `not null` for tuple integer elements                 | Small     | T1.4        | typedef.rs           |
-| TR1    | Stack trace introspection                               | Medium    |             | STACKTRACE.md        |
-| TR1.1  | ↳ Shadow call-frame vector                              | Small     |             | state/mod.rs         |
-| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations           | Small     | TR1.1       | 04_stacktrace.loft   |
-| TR1.3  | ↳ `stack_trace()` materialisation                       | Medium    | TR1.2       | state/mod.rs, fill.rs |
-| TR1.4  | ↳ Call-site line numbers in frames                      | Small     | TR1.3       | state/codegen.rs     |
 | CO1    | Coroutines (`yield`, `iterator<T>`, `yield from`)       | Very High | TR1         | COROUTINE.md         |
 | CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`                | Small     | TR1.2       | typedef.rs           |
 | CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`               | High      | CO1.1       | state/mod.rs, data.rs |
@@ -140,6 +119,7 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | CO1.4  | ↳ `yield from` delegation                               | Medium    | CO1.3       | state/mod.rs         |
 | CO1.5  | ↳ `for item in generator` integration                   | Small     | CO1.3       | parser/collections.rs |
 | CO1.6  | ↳ `next()` / `exhausted()` stdlib                       | Small     | CO1.2       | native.rs            |
+| O1     | Superinstruction peephole rewriting                     | Medium    |             | compile.rs           |
 | O2     | Stack raw pointer cache (eliminate store-indirection)   | High      |             | PERFORMANCE.md P2    |
 | O4     | Native: direct-emit local collections                   | High      |             | PERFORMANCE.md N1    |
 | O5     | Native: omit `stores` from pure functions               | High      | O4          | PERFORMANCE.md N2    |
@@ -149,14 +129,11 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.2   | ↳ Bounding-box range query                              | Medium    | A4.1        | database.rs          |
 | A4.3   | ↳ Removal                                               | Small     | A4.1        | database.rs          |
 | A4.4   | ↳ Full iteration                                        | Small     | A4.2, A4.3  | database.rs, io.rs   |
-| A7     | Native extension libraries (`cdylib` + `#native`)       | High      |             | EXTERNAL_LIBS.md Ph2 |
-| A7.1   | ↳ `#native` annotation + symbol registration            | Medium    |             | parser.rs, compiler  |
-| A7.2   | ↳ `cdylib` loader (`libloading`)                        | Medium    | A7.1        | state.rs, Cargo.toml |
-| A7.3   | ↳ Package layout + `loft-plugin-api` crate              | Medium    | A7.2        | new workspace member |
+| A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12      |
 
 ---
 
-## Deferred
+## Deferred indefinitely
 
 | ID     | Title                                                   | Effort    | Notes                                    |
 |--------|---------------------------------------------------------|-----------|------------------------------------------|

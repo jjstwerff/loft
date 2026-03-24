@@ -777,7 +777,7 @@ trace will show `line: 0` for that frame.
 
 | Blocker | Description |
 |---|---|
-| B1 — metadata discarded | `Variable` in `variables.rs` is dropped at end of compilation; nothing survives into `Definition` |
+| B1 — metadata discarded | `Variable` in `variables/` is dropped at end of compilation; nothing survives into `Definition` |
 | B2 — IR live ranges | `first_def` / `last_use` on `Variable` are IR sequence numbers, not bytecode positions |
 | B3 — slot reuse | Compiler reuses stack slots for dead variables; a slot may be physically occupied but logically dead |
 | B4 — work variables | Compiler-generated temporaries must be excluded from the debug table |

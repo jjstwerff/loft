@@ -302,7 +302,7 @@ impl State {
             .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
     }
 
-    /// O1: superinstruction stubs — delegated from fill.rs.
+    /// superinstruction stubs — delegated from fill.rs.
     /// These are placeholders; the peephole pass is not yet active.
     #[allow(clippy::unused_self)]
     pub fn nop(&mut self) {}
@@ -532,17 +532,7 @@ impl State {
         *self.get_stack::<i32>()
     }
 
-    /// Execute the bytecode function at `fn_pos` passing one `DbRef` argument,
-    /// then return the raw result bits in a `u64`.  The caller must supply the
-    /// `return_size` (in bytes: 1, 4, or 8) to select the right pop width.
-    ///
-    /// Stack layout built here:
-    /// ```text
-    ///   [arg: DbRef (12 bytes)][return-addr u32::MAX (4 bytes)]
-    /// ```
-    ///
-    /// # Panics
-    /// Panics if the worker executes more than 10 000 000 operations.
+    /// Execute a worker function at `fn_pos`, return raw result bits as `u64`.
     pub fn execute_at_raw(
         &mut self,
         fn_pos: u32,
@@ -580,20 +570,34 @@ impl State {
         }
     }
 
-    /// Execute the bytecode function at `fn_pos` passing one `DbRef` argument,
-    /// then pop the `Str` return value and copy its contents into an owned `String`.
-    ///
-    /// This is used for parallel workers that return text.  The `Str` on the
-    /// stack points into the worker's store; we must copy the bytes before the
-    /// worker's state is dropped.
-    ///
-    /// Hidden `__work_N` parameters (type `RefVar(Text)`) are backed by a real
-    /// `String` allocated in the worker's stack store via `claim`.  The function
-    /// accesses the String through the `DbRef` using `string_ref_mut`, which always
-    /// dereferences within `self.stack_cur`'s store.
-    ///
-    /// # Panics
-    /// Panics if the worker exceeds 10 000 000 operations.
+    /// Execute a worker function that returns a struct reference (`DbRef`).
+    /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
+    /// record lives in `self.database` (the worker's cloned stores).
+    pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
+        self.stack_pos = 4;
+        self.put_stack(*arg);
+        for &extra in extra_args {
+            self.put_stack(extra as i32);
+        }
+        self.put_stack(u32::MAX);
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            OPERATORS[op as usize](self);
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        *self.get_stack::<DbRef>()
+    }
+
+    /// Execute a text-returning worker function; copy the `Str` result to an owned
+    /// `String` before the worker state is dropped. Allocates `String` buffers in the
+    /// stack store for hidden `__work_N` parameters.
     pub fn execute_at_text(
         &mut self,
         fn_pos: u32,

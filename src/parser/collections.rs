@@ -704,7 +704,7 @@ use #count instead"
             self.vars.defined(iv);
             (iv, None)
         };
-        // T1-23: error if the loop variable reuses a name with a different type.
+        // error if the loop variable reuses a name with a different type.
         // Same-type reuse is idiomatic in loft (flat variable scoping).
         let existing_var = self.vars.var(id);
         if !self.first_pass
@@ -840,32 +840,8 @@ use #count instead"
         }
     }
 
-    // Desugar a parallel for loop:
-    //   for a in <vec> par(b=worker(a), N) { body }
-    // into an index-based loop over the parallel_for result.
-    //
-    // Supported worker call forms:
-    //   Form 1: func(a)         — global/user function; a is the element variable
-    //   Form 2: a.method()      — method on the element type; a is the loop variable
-    //   Form 3: c.method(a)     — NOT YET SUPPORTED (captured receiver + element arg)
-    //
-    // Limitations:
-    //   • Input must be a vector<T>; integer ranges (1..10) are not supported.
-    //   • The worker must return a primitive type: integer, long, float, or boolean.
-    //     text and reference return types require store-merging (deferred).
-    //   • Form 3 (captured receiver) requires IR-level wrapper synthesis (deferred).
-    //   • The element type T must be a struct (reference) or enum for form 2.
-    //
-    // The desugared IR:
-    //   par_len#N   = len(input_vec)
-    //   par_results#N = parallel_for(input_vec, elem_size, return_size, threads, fn_d_nr)
-    //   b#index     = 0
-    //   loop {
-    //     if par_len#N <= b#index { break }
-    //     b = parallel_get_T(par_results#N, b#index)
-    //     <body>
-    //     b#index += 1
-    //   }
+    // Desugar `for a in vec par(b = worker(a), N) { body }` into an
+    // index-based loop over the `parallel_for` result vector.
     pub(crate) fn parse_parallel_for_loop(
         &mut self,
         code: &mut Value,
@@ -943,9 +919,12 @@ use #count instead"
         self.lexer.token(")");
 
         // Compute element size from the return type.
-        // return_size = 0 signals text mode to n_parallel_for.
+        // return_size =  0 signals text mode to n_parallel_for.
+        // return_size = -1 signals reference (struct) mode.
         let return_size: i32 = if matches!(&ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
+        } else if matches!(&ret_type, Type::Reference(_, _)) {
+            -1 // sentinel: reference mode — workers return DbRef, main deep-copies
         } else {
             let sz = i32::from(var_size(&ret_type, &Context::Argument));
             if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || sz > 8) {
@@ -989,7 +968,7 @@ use #count instead"
 
     // parallel_for IR builder; threads unrelated IR params alongside &mut self — no sensible grouping
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn build_parallel_for_ir(
         &mut self,
         code: &mut Value,
@@ -1043,6 +1022,10 @@ use #count instead"
         if matches!(b_type, Type::Integer(_, _) | Type::Unknown(_)) {
             self.vars.in_use(b_var, true);
         }
+        // Reference return: b_var borrows from the result vector — must not be freed.
+        if matches!(ret_type, Type::Reference(_, _)) {
+            self.vars.set_skip_free(b_var);
+        }
 
         // Parse the body block.
         self.vars.loop_var(b_var);
@@ -1085,10 +1068,19 @@ use #count instead"
             Value::Null,
         );
 
-        // A1.2: Use OpGetVector + get_field to extract the element from the result
+        // Use OpGetVector + get_field to extract the element from the result
         // vector. This works for all return types (int, long, float, bool, text)
         // without per-type getter functions.
-        let result_elem_size = if return_size == 0 { 4i32 } else { return_size };
+        let result_elem_size = match return_size {
+            0 => 4, // text: 4-byte string pointer per element
+            -1 => {
+                // reference: inline struct size from the database
+                let ret_td = self.data.type_def_nr(ret_type);
+                let known = self.data.def(ret_td).known_type;
+                i32::from(self.database.size(known))
+            }
+            other => other,
+        };
         let get_vec = self.cl(
             "OpGetVector",
             &[

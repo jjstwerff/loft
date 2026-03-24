@@ -359,7 +359,7 @@ boundaries:
 | Database / runtime state | `src/database/*.rs` |
 | Parser | `src/parser/*.rs`, `src/lexer.rs` |
 | Bytecode generation | `src/state/codegen.rs`, `src/fill.rs` — see [Bytecode Economy](#bytecode-economy) |
-| Scope and variable analysis | `src/scopes.rs`, `src/variables.rs` |
+| Scope and variable analysis | `src/scopes.rs`, `src/variables/` |
 
 Example split for P1.2 (two areas):
 

@@ -49,13 +49,13 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
-  - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(0.8.2)*
-  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(0.8.2)*
-  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(0.8.2)*
-  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(1.1+)*
+  - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(completed 0.8.3)*
+  - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(deferred to 1.1+)*
+  - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(completed 0.8.3)*
+  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
-  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(0.8.2 / 1.1+)*
+  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(deferred to 1.1+)*
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
@@ -71,36 +71,11 @@ Goal: harden the interpreter, complete native code generation, fix slot assignme
 improve runtime efficiency.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
-**Completed in 0.8.2:**
-- **L4** — Empty `[]` literal as mutable vector argument. ✓
-- **L5** — `v += extra` via `&vector` ref-param. ✓
-- **A13/A14/A15** *(old numbering)* — slot efficiency (can_reuse guard, skip_free flag, exhaustive inline_ref_set_in). ✓
-- **S3** — Database dispatch exhaustiveness. ✓
-- **S4** — Binary I/O type coverage (Issues 59, 63). ✓
-- **P1** — Lambda expressions (`fn(params) -> ret { body }`). ✓
-- **N1** — `--native` / `--native-emit` CLI flags. ✓
-- **N2** — `CallRef` / function-pointer dispatch in generated Rust. ✓
-- **N3** — Resolve `external` crate reference for random/FFI. ✓
-- **N4** — Fix LIFO store-free order in generated frees. ✓
-- **N5** — `file_from_bytes` for `DbRef` vector types. ✓
-- **N6** — Text method in format interpolation: emit `&str` not `String`. ✓
-- **N7** — `directory()` / `user_directory()` / `program_directory()` scratch buffer. ✓
-- **N9** — fill.rs auto-generation (rustfmt, six `#rust` templates, byte-exact match). ✓
-- **S7** — `string` type name diagnostic ("did you mean 'text'?"). ✓
-- **S8** — Compile-time error for `key` field in hash-value struct. ✓
-- **O3** — Verified integer paths carry no `long` null-sentinel + guard test. ✓
+**Remaining for 0.8.2:** *(none — all items completed or deferred)*
 
-**Remaining for 0.8.2:**
-
-*Interpreter performance:*
-- **O1** — Superinstruction peephole rewriting pass (opcodes registered, needs stack-relative operand design).
-
-*Parallel execution:*
-- **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1 ✓).
-
-*Interpreter slot correctness:*
-- **A12** — Lazy work-variable initialization (blocked by Issues 69–70: SIGSEGV on text slot reuse).
-- **A13** — Two-zone slot assignment: codegen override can create overlaps with child-scope variables.
+**Deferred from 0.8.2 (too complex / disruptive for stability):**
+- **O1** — Superinstruction peephole rewriting pass — deferred to 1.1+.
+- **A12** — Lazy work-variable initialization — deferred to 1.1+ (also blocked by Issues 68–70).
 
 ---
 
@@ -110,10 +85,7 @@ Goal: add all new language syntax before the feature-complete 0.9.0 milestone so
 syntax decisions can be validated and refined independently.  All items change the parser
 or type system; 0.8.2 correctness work is a prerequisite.
 
-**Lambda expressions (P1):**
-- **P1.1** — Parser: ✓ completed in 0.8.2.
-- **P1.2** — Compilation: ✓ completed in 0.8.2 (short-form `|x| {…}` and `||` with hint inference).
-- **P1.3** — Integration: ✓ completed in 0.8.2 (`map`, `filter`, `reduce` accept inline lambdas).
+**Lambda expressions (P1):** ✓ completed in 0.8.2.
 - **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
 
 **Pattern extensions (L2):**
@@ -196,9 +168,10 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
 
 **Deferred from 0.9.0:**
-- A12 (lazy work-variable init) — Blocked by Issues 68–70; deferred to 1.1+.
+- O1 (superinstruction merging) — Too complex and disruptive for stability; deferred to 1.1+.
+- A12 (lazy work-variable init) — Too complex and disruptive; also blocked by Issues 68–70; deferred to 1.1+.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
-- A7 (native extension libraries) — Useful after the ecosystem exists; 1.1+.
+- A7 (native extension libraries) — Moved to 0.9.0.
 
 ---
 
@@ -268,7 +241,7 @@ for a scripting language includes browser-accessible tooling; shipping a 1.0 wit
 would require walking back that claim at 1.1.
 
 **Why include native codegen (Tier N) in 0.8.2?**
-`src/generation.rs` already translates the loft IR to Rust source; the code exists but
+`src/generation/` already translates the loft IR to Rust source; the code exists but
 does not compile.  The N items are incremental bug fixes — each is Small or Medium effort,
 independent of each other and of the other 0.8.2 items — they can be interleaved freely.
 Fixing them in 0.8.2 means 0.9.0 ships a binary where `--native` actually works, at no
@@ -302,20 +275,11 @@ at once" failure mode where half-finished features interact and regressions are 
 Ordered by unblocking impact and the small-steps principle (each item leaves the codebase
 in a better state than it found it, with passing tests).
 
-**For 0.8.2 (remaining):**
-1. **S5**, **S7**, **S8** — small stability fixes; independent, no dependencies
-2. **O3** — integer sentinel verification; Low effort, zero risk
-3. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation.rs`
-4. **O1** — superinstruction merging; Medium effort, highest impact
-5. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
-6. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
-7. **A12.1** → **A12.2** → **A12.3** → **A12** — sequential; each unblocks the next
-8. **A13.1** → **A13.2** → **A13.3** — sequential; completes two-zone slot design
+**Released as 0.8.2 (2026-03-24).**
 
 **For 0.8.3 (after 0.8.2 is tagged):**
-1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
-2. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1; batch together
-3. **A10** — field iteration; independent, medium; can land in parallel with P1–P3
+1. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1 (done in 0.8.2); batch together
+2. **A10** — field iteration; independent, medium; can land in parallel with P3
 
 **For 0.8.4 (after 0.8.3 is tagged):**
 1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
@@ -519,191 +483,6 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 
 ---
 
-### L6  Field constraints — `assert($.field op ...)` on struct fields
-
-**Sources:** Language design discussion 2026-03-23
-**Severity:** Low — enhancement, not a bug fix
-**Description:** Allow boolean constraint expressions on struct fields that are checked
-at runtime whenever the field is written.  The `$` token refers to the struct instance,
-allowing cross-field constraints.
-
-**Syntax:**
-
-```loft
-struct Color {
-    r: integer limit(0, 255) not null assert($.r >= $.b, "red must be >= blue"),
-    g: integer limit(0, 255) not null,
-    b: integer limit(0, 255) not null
-}
-
-struct Range {
-    lo: integer assert($.lo <= $.hi),
-    hi: integer assert($.hi >= $.lo, "hi must be >= lo, got {$.hi} < {$.lo}")
-}
-```
-
-`assert(condition)` or `assert(condition, message)` appears after other field modifiers
-(`limit`, `not null`).  The expression is a boolean condition that must hold after every
-write to that field.  `$` is the struct instance; `$.field` accesses any field of the
-same struct.  The optional message is a format string that can interpolate field values.
-
-**Semantics:**
-
-- **Checked on:** Every field write — constructor fields, `p.r = x` assignment,
-  deserialization (`from_json`, `f#read`).
-- **Two modes:**
-  - **Direct writes** (constructor, assignment): panic on violation, like `assert()`.
-  - **Parsing / deserialization:** collect violations into a `vector<text>` error list
-    instead of panicking; the caller decides what to do.
-- **On violation (direct):** With message: panic with the user-provided text (format
-  strings supported).  Without message: panic with auto-generated text:
-  `"field constraint failed on Color.r: $.r >= $.b (r=10, b=200)"`.
-- **On violation (parsing):** Append the error message to the parse-error vector.
-  The struct is still populated (with the invalid value) so the caller can inspect it.
-  The caller checks `errors.len() > 0` to decide whether to use or discard the result.
-- **Null fields:** A null value in `$.field` bypasses the check (constraint applies to
-  non-null values only).  Combine with `not null` if the constraint must always hold.
-- **Constructor order:** Fields are initialised in declaration order.  A constraint that
-  references a later field sees its default value (0 / null) during construction.
-  The final state is re-checked after all fields are set.
-- **Relationship to `limit()`:** `limit(min, max)` is a storage optimisation (narrows to
-  1–2 bytes).  `assert()` is a runtime check with no storage effect.  They compose freely.
-
-**Validation API:**
-
-```loft
-// Validate an existing struct — returns all violated constraints:
-errors = validate(color)
-if len(errors) > 0 {
-    for msg in errors { log_error(msg) }
-}
-
-// Parsing with validation (future — depends on H3 from_json):
-user = User.from_json(body)
-errors = validate(user)
-if len(errors) > 0 {
-    // handle bad input without panicking
-}
-```
-
-`validate(record) -> vector<text>` evaluates all `assert()` constraints on the struct
-and returns a list of failure messages (empty = all constraints pass).  This is the
-non-panicking entry point for deserialization, user input, and any context where bad
-data should be reported, not fatal.
-
-Direct field writes (`p.r = x`) still panic — the programmer controls what values they
-assign, so a violation is a bug.  Parsing from external data uses `validate()` because
-the input is untrusted.
-
-**Implementation:**
-
-- **L6.1 — Parser:** In `parse_field`, after `not null` / `limit()` / defaults, check for
-  `assert(`.  Parse the boolean expression with a synthetic `$` variable bound to the
-  struct's `DbRef`.  `$.field` resolves to `OpGetField($, field_offset)`.  Store the
-  constraint as `Attribute.check: Option<(Value, Option<Value>)>` (condition, message).
-- **L6.2 — Bytecode:** At every `OpSetField` site and at the end of struct constructors,
-  emit the check expression + conditional panic.  Reuse the existing `assert` panic
-  machinery.
-- **L6.3 — Native codegen:** Emit `assert!(expr, "constraint message")` after each
-  field write in generated Rust code.
-- **L6.4 — `validate()` builtin:** A stdlib function that evaluates all constraints on
-  a struct record and returns `vector<text>` of failure messages.  Implemented as a
-  generated function per struct type (like `to_json` / `from_json`).
-
-**Effort:** Medium (parser + codegen + native + validate builtin)
-**Target:** 0.8.2
-
----
-
-## P — Prototype Features
-
-### P1  Lambda / anonymous function expressions
-**Sources:** Prototype-friendly goal; callable fn refs already complete (landed in 0.8.0)
-**Severity:** Medium — without lambdas, `map` / `filter` require a named top-level function
-for every single-use transform, which is verbose for prototyping
-**Description:** Two syntactic forms for inline function literals:
-
-```loft
-// Long form — fully explicit types (always valid)
-doubled = map(items, fn(x: integer) -> integer { x * 2 });
-evens   = filter(items, fn(x: integer) -> boolean { x % 2 == 0 });
-
-// Short form — types inferred from call-site context
-doubled = map(items, |x| { x * 2 });
-evens   = filter(items, |x| { x > 0 });
-(a, b) = reduce(pairs, (0, 0), |acc, x| { (acc.0 + x.0, acc.1 + x.1) });
-
-// Short form with explicit annotations (when no context is available)
-transform: fn(integer) -> integer = |x: integer| -> integer { x * 2 };
-
-// Zero-parameter short form uses the existing || token
-run(|| { println("hello") });
-```
-
-Both forms produce a `Type::Function` value with the same d_nr representation as
-`fn <name>`.  No closure capture is required initially (see A5 for full closures).
-
-**Grammar additions:**
-```
-single ::= ...
-         | 'fn' '(' [ param_list ] ')' [ '->' type ] block     // long form
-         | '|' [ short_param { ',' short_param } ] '|'
-               [ '->' type ] block                              // short form ≥1 param
-         | '||' [ '->' type ] block                             // short form 0 params
-
-short_param ::= lower_ident [ ':' type ]    // type optional when context supplies it
-```
-
-The `||` token already exists in the lexer; inside `parse_primary` it is re-interpreted
-as a zero-parameter closure opener rather than logical-OR (which is a binary operator
-and cannot appear at a primary-expression position).  A closing `|` token after the
-parameter list is consumed before `->` and the body block.
-
-**Phase 1 — Parser** ✓ completed (0.8.2): `parse_lambda` added to `parse_primary`;
-`lambda_counter: u32` on `Parser` guarantees consistent `__lambda_N` naming across both
-passes.  Emits `Value::Int(d_nr)` — same representation as a named fn-ref.
-
-**Phase 2 — Short-form parser** (`src/parser/expressions.rs`):
-Add a `parse_lambda_short` helper called from `parse_primary` when the current token is
-`|` or `||`:
-1. Consume the opening delimiter; collect `(name, Option<Type>)` pairs up to the
-   closing `|`.
-2. Optionally consume `->` and a return type.
-3. First pass: register `__lambda_N` with placeholder types for unannotated params;
-   skip the body.
-4. Second pass: fill in any `None` parameter types from `hint`; error if hint is absent
-   and a type is still `None`; compile the body.
-5. Emit `Value::Int(d_nr as i32)`.
-*Tests:* `|x| { x * 2 }` as argument to `fn(integer)->integer`; `|x, y| { x + y }`;
-`|| { 0 }` for zero params; explicit annotation `|x: integer| -> integer { x }`;
-error when no context and no annotation.
-
-**Phase 3 — Hint propagation** (`src/parser/control.rs`):
-Extend `parse_call` to compute the expected type of each argument position and pass it
-as a hint to `parse_expression` → `parse_primary`.  When the expected type is
-`Type::Function(...)`, pass it as the hint for the short-lambda parser.  No change
-needed for the long form or non-lambda arguments.
-*Tests:* `map(v, |x| { x * 2 })` compiles and runs; `filter(v, |x| { x > 0 })`; nested
-call `map(filter(v, |x| { x > 0 }), |x| { x * 3 })`.
-
-**Phase 4 — Compilation** (`src/state/codegen.rs`, `src/compile.rs`):
-No changes expected.  Both lambda forms emit `Value::Int(d_nr)`, which is already handled
-identically to named fn-refs.
-*Tests:* both forms callable through a `fn(T) -> R` variable; `reduce` with a two-param
-short lambda.
-
-**Phase 5 — Integration with map / filter / reduce**:
-Verify that anywhere a named `fn <name>` ref works, both lambda forms also work.
-*Tests:* `map`, `filter`, `reduce` with short-form lambdas; named fn-ref alongside
-short lambda in the same expression; nested lambdas.
-
-**Effort:** Medium–High (parser.rs, compile.rs)
-**Completed:** 0.8.2 (P1.1 long-form, P1.2 short-form with hint inference, P1.3 map/filter/reduce integration)
-
----
-
-### P2  REPL / interactive mode
-**Sources:** Prototype-friendly goal
 **Severity:** Low–Medium — a REPL dramatically reduces iteration time when exploring data
 or testing small snippets
 **Description:** Running `loft` with no arguments (or `loft --repl`) enters an
@@ -795,7 +574,7 @@ Requires a new `OpSizeText` opcode backed by Rust's `.chars().count()`.
 **Fix path:**
 1. Add `OpSizeText` declaration + `#rust` body in `default/01_code.loft`.
 2. Implement `op_size_text` in `src/fill.rs`.
-3. Native codegen: emit `.chars().count() as i32` in `src/generation.rs`.
+3. Native codegen: emit `.chars().count() as i32` in `src/generation/`.
 4. Add tests in `tests/docs/02-text.loft` covering ASCII, multi-byte, and empty text.
 **Effort:** Small
 **Target:** 0.8.3
@@ -861,65 +640,12 @@ the recompile overhead that caching was designed to address)
 
 ## A — Architecture
 
-### A1  Parallel workers: extra arguments, value-struct returns, and text/reference returns
-**Sources:** [THREADING.md](THREADING.md) (deferred items)
-**Description:** Three related extensions to `par(...)` parallel for-loops.
-All worker state must currently live in the input vector; extra parameters, value-struct
-returns larger than 8 bytes, and text/reference returns are all unsupported.
-The three sub-problems share infrastructure but have different complexity.
-**Fix path:**
+### A1  Parallel workers: struct/reference return types *(completed 0.8.3)*
 
-**Phase 1 — Extra context args and value-struct returns** (`src/parser/collections.rs`, `src/parallel.rs`, `src/state/mod.rs`):
-
-*Extra context arguments (primitives and const struct refs):*
-Extend `execute_at_raw(fn_pos, arg, return_size) -> u64` to accept an extra
-`extra_args: &[u64]` slice; push those values onto the call stack before the row ref
-(in declaration order).  `run_parallel_raw` receives the captured extra arg values
-(cloned to every worker — they are read-only constants).  The compiler emits the
-extras as part of the `n_parallel_for` call.  No IR wrapper synthesis is needed for
-primitive extras.  For `const Struct` extras (DbRef, 12 bytes) add an
-`Option<DbRef>` context parameter alongside the row ref rather than folding it into
-`u64`.
-*Supported extra arg types:* `integer`, `long`, `float`, `boolean` (fit in u64);
-`const Struct` (passed as `Option<DbRef>` context).  Text extras are already readable
-from cloned stores via their DbRef — no special handling needed.
-
-*Value-struct returns (no heap pointers):*
-For worker return types where all fields are primitives (no `text`, no `reference`
-fields), replace the `Vec<u64>` result channel with a pre-allocated
-`Vec<u8>` output buffer of size `n_rows × result_byte_size`.  Divide it into
-non-overlapping per-row slices; each worker writes directly via
-`execute_at_struct(fn_pos, row_ref, out_slice: &mut [u8])`.  After join, interpret the
-buffer as a typed vector record in the store.  The compiler checks that the return type
-is "all-value" and computes `result_byte_size`.  DbRef (12 bytes) and any struct
-containing text/reference fields fall through to Phase 2.
-
-*Tests:* `par([1,2,3], fn worker, threshold)` where `worker(n: integer, t: integer) -> integer`
-correctly uses `threshold`; value-struct return test where `worker(s: Score) -> Pair`
-returns `Pair{lo: s.value, hi: s.value * 2}`; both marked `#[ignore]` in
-`tests/threading.rs` until this phase ships.
-
-**Phase 2 — Text/reference return types** (`src/parallel.rs`, `src/store.rs`):
-Text and reference values are DbRefs pointing into a specific store.  Workers get
-locked store snapshots; new allocations in a worker are invisible to the main thread
-after join.  LIFO freeing makes ad-hoc store merging unsafe.
-
-*Approach — dedicated result store:*
-Before dispatch, the main thread calls `Stores::new_result_store()` which allocates a
-fresh, writable store not included in the input snapshot.  `clone_for_worker` gives
-each worker a reference to this result store (mutable, range-partitioned by row).
-Workers write text/ref results into the result store via their local `State`'s text
-allocator redirected to the result store index.  After join, `Stores::adopt_result_store(idx)`
-unlocks the result store for use by the main thread; `n_parallel_for` builds the
-result vector from the result-store DbRefs.  Since the result store did not exist in
-any worker's input snapshot, there are no LIFO conflicts.
-
-*Tests:* `par([1,2,3], fn label)` where `label(n: integer) -> text` returns a formatted
-string; the result vector contains correct, independent text values with no dangling
-pointers.
-
-**Effort:** Med–High (parser.rs, parallel.rs, store.rs, state/mod.rs)
-**Target:** 0.8.2
+All parallel worker return types are now supported: primitives, text, enum, and
+struct/reference.  Struct returns use deep-copy (`copy_block` + `copy_claims`) in
+the bytecode interpreter and `n_parallel_for_ref_native` in native codegen.
+The native skip for `40-par-ref-return` has been removed.
 
 ---
 
@@ -1074,110 +800,7 @@ Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl
 Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
 **Effort:** High (parser, compiler, extensions loader, plugin API crate)
 **Depends on:** —
-**Target:** 1.1+ (useful after the ecosystem exists; not needed for 1.0.0)
-
----
-
-### A8  Destination-passing for text-returning native functions ✓ DONE
-**Sources:** String architecture review 2026-03-16
-**Severity:** Low — eliminates the scratch buffer entirely; also removes one intermediate
-`String` allocation per format-string expression by letting natives write directly into the
-caller's mutable `String`
-**Description:** Currently, text-returning natives (`replace`, `to_lowercase`, `to_uppercase`)
-create an owned `String`, push it to `scratch`, and return a `Str` pointing into it.  The
-caller then copies the `Str` content into a mutable `String` via `OpAppendText`.  This is
-two copies: native → scratch → destination.
-
-With destination-passing, the native receives a mutable reference to the caller's `String`
-and writes directly into it.  One copy: native → destination.
-
-**Current calling convention:**
-```
-Stack before call:  [ self:Str, arg1:Str, ... ]
-Native executes:    new_value = self.replace(arg1, arg2)
-                    scratch.push(new_value)
-                    push Str → stack
-Stack after call:   [ result:Str ]
-Caller:             OpAppendText(dest_var, result)   // copies again
-```
-
-**Proposed calling convention:**
-```
-Stack before call:  [ self:Str, arg1:Str, ..., dest:DbRef ]
-Native executes:    let dest: &mut String = stores.get_string_mut(stack)
-                    dest.push_str(&self.replace(arg1, arg2))
-Stack after call:   [ ]   // result already written to dest
-```
-
-**Fix path:**
-
-**Phase 1 — Compiler changes (`state/codegen.rs`, `parser/expressions.rs`):**
-1. Add a `TextDest` calling convention flag to text-returning native function definitions
-   in `data.rs`.  When the compiler sees a call to a `TextDest` native, it emits an
-   `OpCreateStack` pointing to the destination `String` variable as an extra trailing
-   argument.
-2. Identify the destination variable:
-   - If the call is inside `parse_append_text` (format string building), the destination
-     is the `__work_N` variable (already known at `expressions.rs:1079`).
-   - If the call is in a `v = text.replace(...)` assignment, the destination is `v`
-     (if `v` is a mutable `String`).
-   - If the call is in a struct field assignment (`obj.name = text.to_uppercase()`), the
-     result must go through a work-text and then `set_str()` — no change from current
-     behaviour for this case (Phase 2 optimises it).
-3. Stop emitting `OpAppendText` after the call — the native already wrote the result.
-
-**Phase 2 — Native function changes (`native.rs`):**
-4. Change the signature of `t_4text_replace`, `t_4text_to_lowercase`,
-   `t_4text_to_uppercase` to pop the trailing `DbRef` destination argument, resolve it
-   to `&mut String`, and `push_str()` into it.
-5. Remove `stores.scratch.push(...)` and the `Str` return.  These functions now return
-   nothing (void on the stack).
-6. Remove `OpClearScratch` emission since scratch is no longer used.
-
-**Phase 3 — Extend to format expressions (`parser/expressions.rs`):**
-7. In `parse_append_text` (`expressions.rs:1070-1119`), the `__work_N` variable is
-   currently:
-   ```
-   OpClearText(work)        // allocate empty String
-   OpAppendText(work, lhs)  // copy left fragment
-   OpAppendText(work, rhs)  // copy right fragment
-   Value::Var(work)         // read as Str
-   ```
-   With destination-passing, when a text-returning native appears as a fragment, skip
-   the intermediate `Str` → `OpAppendText` hop: pass `work` directly as the destination
-   to the native call.  This saves one copy per native-call fragment in format strings.
-8. When the *entire* expression is a single native call assigned to a text variable
-   (`result = text.replace(...)`) and `result` is a mutable `String`, pass `result`
-   directly as the destination — eliminating the `__work_N` temporary entirely.
-
-**Phase 4 — Remove scratch buffer:**
-9. Once all three natives use destination-passing, remove `Stores.scratch` field
-   (`database/mod.rs:118`) and the `scratch.clear()` call (`database/mod.rs:360`).
-10. Remove `OpClearScratch` from `fill.rs` if it was added.
-
-**Files changed:**
-| File | Change |
-|---|---|
-| `src/data.rs` | Add `TextDest` flag to function metadata |
-| `src/state/codegen.rs` | Emit destination `DbRef` as trailing argument for `TextDest` calls |
-| `src/parser/expressions.rs` | Pass destination through `parse_append_text`; skip `OpAppendText` for `TextDest` calls |
-| `src/native.rs` | Rewrite 3 functions to pop destination and write directly |
-| `src/database/mod.rs` | Remove `scratch` field |
-| `src/fill.rs` | Remove `clear_scratch` handler (scratch buffer removal already complete) |
-
-**Edge cases:**
-- **Chained calls** (`text.replace("a","b").replace("c","d")`): the first `replace` writes
-  into a work-text; the second reads from it as `Str` self-argument and writes into
-  another work-text (or the same one after clear).  Ensure the compiler doesn't pass the
-  same `String` as both source and destination — the intermediate work-text is still needed.
-- **Parallel workers**: `clone_for_worker()` currently clones `scratch`; with
-  destination-passing, no clone needed (workers have their own stack `String` variables).
-- **Future text-returning natives** (e.g. `trim`, `repeat`, `join`): any new native
-  returning text should use `TextDest` from the start.
-
-**Effort:** Medium–High (compiler calling-convention change + 3 native rewrites + codegen)
-**Note:** scratch buffer removal (OpClearScratch) was completed 2026-03-17 and is a prerequisite; some conditionals in the Fix path above reference it as already done.
-**Target:** 0.8.2
+**Target:** 0.9.0
 
 ---
 
@@ -1356,7 +979,7 @@ the generic type-mismatch message.
 ---
 
 ### A12  Lazy work-variable initialization
-**Status: deferred to 1.1+ — blocked by Issues 68–70 (see PROBLEMS.md)**
+**Status: deferred to 1.1+ — too complex and disruptive for stability; also blocked by Issues 68–70 (see PROBLEMS.md)**
 **Sources:** Stack efficiency evaluation 2026-03-20
 **Description:** Work text variables (`__work_N`) are currently initialized at function
 start via `Set(wt, Text(""))` inserted at index 0 of the body block.  This forces
@@ -1427,23 +1050,21 @@ for (pos, r, init) in insertions { ls.insert(pos, v_set(r, init)); }
 requires resolving Issues 69 and 70 and moving OpFreeText to after each variable's last
 use.
 
-**Tests:** `assign_slots_sequential_text_reuse` in `src/variables.rs` (currently
+**Tests:** `assign_slots_sequential_text_reuse` in `src/variables/` (currently
 `#[ignore]` — pending Issue 69 fix).
 **Effort:** Medium (three inter-related blockers; Issues 68–70)
 **Target:** 0.8.2
 
 ---
 
-### A13  Complete two-zone slot assignment (Steps 8 and 10)
-**Sources:** SLOTS.md Steps 8, 10 and § Open Issues
-**Description:** Three remaining steps to finish the two-zone design. Full details in [SLOTS.md](SLOTS.md).
+### A13  Complete two-zone slot assignment (Steps 8 and 10) *(completed 0.8.3)*
 
-- **Step 8** — Fix `Set(v, Block)` ordering in `place_large_and_recurse`: when the inner block evaluates first (e.g. `outer = { inner = …; inner }`), process the inner block before placing `outer` so both share the block's result slot legally. After this, replace the `pos > TOS` override branch in `generate_set` with a `debug_assert`.
-- **Step 10a** — Audit `build_scope_parents` against `scan_inner`: every IR variant containing a nested block should be handled in both. Missing arms cause `scopes_can_conflict` false-positives in `validate_slots`. Also investigate why any scope maps to itself in the parent map (root cause of the `is_scope_ancestor` cycle guard).
-- **Step 10b** — Add a `Value::Iter` arm to `scan_inner` in `src/scopes.rs`, recursing into all three sub-expressions, mirroring the existing arm in `compute_intervals`. Currently safe because parser-synthesised Iter nodes contain no user-defined `Set`; becomes a latent false-positive risk if a parser change ever places a `Set` inside an Iter sub-expression.
-
-**Effort:** Medium per step
-**Target:** 0.8.2
+All steps done.  Step 8 was completed earlier.  Step 10:
+- **10a** — Full cross-check (2026-03-24) confirmed `build_scope_parents`, `scan_inner`,
+  and `compute_intervals` all handle every `Value` variant with nested expressions.
+- **10b** — `Value::Iter` arm already present in `scan_inner` (added earlier).
+- **Scope-cycle root cause** — Fixed: `build_scope_parents` now uses `entry().or_insert()`
+  to keep the first-seen parent and skips self-loops (`bl.scope == parent`).
 
 ---
 
@@ -1457,7 +1078,7 @@ use.
 - **TR1.4** — Call-site line numbers: track source position in the call frame for accurate per-frame line reporting.
 
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.9.0
 
 ---
 
@@ -1466,33 +1087,6 @@ use.
 
 Items found in a systematic stability audit (2026-03-20).  Each addresses a panic,
 silent failure, or missing bound in the interpreter and database engine.  All target 0.8.2.
-
----
-
-### S4 — Binary I/O type coverage
-
-**Source:** PROBLEMS.md Issues 59, 63 · `src/database/io.rs:101`,
-`src/database/allocation.rs:399,461`, `src/database/format.rs:109`
-
-**Completed (0.8.2):**
-- `read_data`: `Parts::Array` implemented (loop over element count, recurse per element).
-  `Parts::Sorted | Ordered | Hash | Index | Spacial` now panics with a clear message
-  ("binary I/O not supported for keyed collection fields").  `Parts::Base` → `unreachable!`.
-- `write_data`: same messaging improvements for Sorted/etc. and `Parts::Base`.
-
-**Remaining:**
-- `write_data` `Parts::Array` — write support requires allocating new records in the store;
-  deferred.  Currently panics with a clear message.
-- `format_record` Issue 63 — `src/database/format.rs:109` still has a `TODO` for
-  `Parts::Struct(_)` and `Parts::EnumValue(_, _)` sub-record fields.  A struct with a
-  nested struct field prints `{}` instead of field contents.  Fix: call
-  `self.write_field(s, field_index, indent + 1)` recursively, as `write_struct` already
-  does for `Parts::Struct` at line 351.
-
-**Effort:** Small (each remaining arm is isolated)
-**Target:** 0.8.2
-
----
 
 ---
 
@@ -1510,55 +1104,19 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ## N — Native Codegen
 
-`src/generation.rs` already translates the loft IR tree into Rust source files
-(`tests/generated/*.rs`).  As of 2026-03-18, **76 of 115 files compile and pass**
-(66%).  The remaining 39 failures fall into the categories tracked by the items
-below.  Full design in [NATIVE.md](NATIVE.md).
-
-**Target: 0.8.2** — the generator already exists; N items are incremental fixes that turn
-broken generated output into correct compiled Rust.  Each fix is small and independent.
-See the 0.8.2 milestone in [PLANNING.md](PLANNING.md#version-082) for rationale.
-
----
-
-### N9  Repair fill.rs auto-generation ✓ DONE
-**Description:** Make `create.rs::generate_code()` produce a `fill.rs` that byte-for-byte
-replaces the hand-maintained `src/fill.rs`.
-
-**Completed phases:**
-- **N20a** — `use crate::ops;` import added to generated header.
-- **N20b** — `rustfmt` called on `tests/generated/fill.rs` after each write;
-  `#![allow(unused_parens)]` added to suppress double-paren template warnings.
-- **N20c** — `n9_generated_fill_matches_src` test enforces byte-exact match;
-  `src/fill.rs` replaced with auto-generated version.
-- **N20d** — Six operators that previously generated `s.{op}()` delegation stubs now
-  have `#rust` templates:
-  `OpMathFuncSingle`, `OpMathFunc2Single` (f32 match dispatch),
-  `OpMathFuncFloat`, `OpMathFunc2Float` (f64 match dispatch),
-  `OpClearScratch` (`stores.scratch.clear()`),
-  `OpSortVector` (inlined elem\_size + is\_float + `vector::sort_vector`).
-  The remaining delegation operators (e.g. `s.iterate()`) are correctly handled by
-  the `s.{name}()` fallback path in `generate_code()` — they still call into State
-  methods and require those methods to exist, but the generated code is functionally
-  correct.  No `#state_call` annotation was needed.
-
-**Effort:** Medium (completed)
-**Target:** 0.8.2 ✓
-
----
-
-## O — Performance Optimisations
-
-Planned interpreter and native-codegen performance improvements. Full designs with benchmark data and expected gains in [PERFORMANCE.md](PERFORMANCE.md). Priority order per that file: O1 > O4 > O2 > O5 > O6 > O3 > O7.
+All N-tier items (N1–N9) are completed.  Native test parity achieved 2026-03-23:
+all `.loft` tests pass in both interpreter and native mode.
+Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
 ### O1  Superinstruction merging
+**Status: deferred to 1.1+ — too complex and disruptive for current release stability**
 **Sources:** PERFORMANCE.md § P1
 **Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes 240–245. Six new entries added to the `OPERATORS` array in `src/fill.rs`. Operands encoded in the same byte count as the replaced sequence, so branch targets need no relocation.
 **Expected gain:** 2–4× on tight integer loops; benefits every loop in the interpreter.
 **Effort:** Medium
-**Target:** 0.8.2
+**Target:** 1.1+
 
 ---
 

@@ -21,7 +21,7 @@ History of earlier attempts is in ASSIGNMENT.md and SLOT_FAILURES.md.
 
 ## Background
 
-`assign_slots` (`src/variables.rs`) runs after `compute_intervals` and before codegen.
+`assign_slots` (`src/variables/`) runs after `compute_intervals` and before codegen.
 It assigns `stack_pos` to every local variable using greedy interval colouring:
 variables with non-overlapping live intervals may share a slot; large types (Text 24 B,
 Reference 12 B, Vector 12 B) always get a fresh slot because their init opcodes write
@@ -64,7 +64,7 @@ cargo test -p loft --test vectors    # 45/45
 
 ### Two-zone design — implementation status
 
-All steps complete except Step 10.  See [Implementation Status](#implementation-status) for detail.
+All steps complete.  See [Implementation Status](#implementation-status) for detail.
 
 ---
 
@@ -223,7 +223,7 @@ New opcode inserted at index 7 in the `OPERATORS` table.  At runtime, advances
 `stack.stack_pos` by its `size: u16` operand.  This is the only change to `fill.rs`
 and the interpreter — no structural change to the bytecode format.
 
-### 3. `assign_slots` — new algorithm (`src/variables.rs`)
+### 3. `assign_slots` — new algorithm (`src/variables/`)
 
 Signature: `assign_slots(function, code: &mut Value, local_start)`.
 
@@ -250,7 +250,7 @@ pre-`OpReserveFrame` `to` value, correctly freeing both zones.
 `assign_slots(&mut d.variables, &mut d.code, local_start)` called once per function after
 scope analysis.
 
-### 6. `validate_slots` — scope ancestry check (`src/variables.rs`)
+### 6. `validate_slots` — scope ancestry check (`src/variables/`)
 
 `find_conflict` skips variable pairs in sibling execution branches (neither scope is an
 ancestor of the other).  `build_scope_parents` builds a parent map from the IR tree;
@@ -284,24 +284,12 @@ Added before the `_ => val.clone()` catch-all in `scan_inner`.  The inner block 
 fully scanned: `_read_23` is inserted into `var_scope` with its correct scope, and
 `scopes::check` sets its `.scope` field accordingly.
 
-### `scan_inner` — `Value::Iter` sub-expressions not recursed
+### `scan_inner` — `Value::Iter` sub-expressions *(FIXED)*
 
-**Status:** documented in code; not yet fixed.
-
-**Gap:** `scan_inner` in `scopes.rs` has no `Value::Iter` arm.  Iter nodes ARE present in
-the IR when `scopes::check` runs (confirmed: `compute_intervals` handles them after
-`scan` returns).  Any `Value::Set(v, ...)` inside an Iter sub-expression (`create`,
-`next`, `extra_init`) is never seen by `scan_set`, so `v` keeps `scope = u16::MAX` →
-`scopes_can_conflict` always returns `true` for `v` → false-positive `validate_slots` panic.
-
-**Currently safe because:** Iter sub-expressions are fully synthesised by the parser and
-contain only index-variable reads — no user-named variable `Set` nodes appear inside them.
-
-**Latent risk:** if a parser change places a `Set(v, ...)` inside an Iter sub-expression,
-the symptom is a `validate_slots` panic blaming a false-positive conflict on `v`.
-
-**Fix:** add a `Value::Iter` arm to `scan_inner` that recurses into all three
-sub-expressions, mirroring the `compute_intervals` arm in `variables.rs:1084`.
+`scan_inner` in `scopes.rs` now handles `Value::Iter` by recursing into all three
+sub-expressions (`create`, `next`, `extra`), mirroring the `compute_intervals` arm.
+A full cross-check (2026-03-24) confirmed that `scan_inner`, `build_scope_parents`,
+and `compute_intervals` all handle every `Value` variant containing nested expressions.
 
 ### `place_large_and_recurse` — Zone-2 ordering invariant
 
@@ -320,23 +308,17 @@ statements.  Any future parser change that produces a Set inside an expression a
 must either update `place_large_and_recurse` or ensure the new Set node is reached via
 an already-recursed arm (e.g. `Value::Drop`, `Value::Return`).
 
-### `is_scope_ancestor` — cycle in parent map
+### `is_scope_ancestor` — cycle in parent map *(FIXED)*
 
-**Symptom:** before the guard was added, `validate_slots` hung indefinitely in
-`is_scope_ancestor` for the binary test.
+**Was:** `build_scope_parents` did `parents.insert(bl.scope, parent)` unconditionally.
+If a scope number appeared more than once in the IR (e.g., a synthetic block sharing
+a scope number with an outer block), the second insert could overwrite the first with
+a wrong parent, creating a self-loop `map[S] = S`.  `is_scope_ancestor` then looped.
 
-**Root cause:** `build_scope_parents` processes the IR tree by calling
-`parents.insert(bl.scope, parent)` for each block.  For a function with many sequential
-`{f = file(...)}` blocks where one block's scope appears more than once in the IR (e.g.,
-due to a synthetic or pre-init node sharing a scope number with an outer block), a scope
-can end up mapping to itself.  `is_scope_ancestor(X, S, map)` where `map[S] = S` and
-`X ≠ S` then loops forever.
-
-**Current fix:** step counter `steps <= 10_000` with a self-loop check `p == cur`.
-Returns `false` on cycle detection (conservative: treats as non-ancestor).
-
-**Permanent fix:** investigate why any block ends up with a repeated scope number and
-fix `build_scope_parents` or the IR construction that causes it.
+**Fix (2026-03-24):** `build_scope_parents` now uses `entry().or_insert()` to keep the
+first-seen (structurally outermost) parent, and skips the insert entirely when
+`bl.scope == parent` (which would be a self-loop).  The step-counter safety guard in
+`is_scope_ancestor` is retained as a belt-and-suspenders defence.
 
 ---
 
@@ -394,13 +376,12 @@ variable.  Immaterial on desktop targets.
 | 7 | Remove `eager_slots` / `assign_slots_old` dead machinery | ✅ |
 | 8 | Fix `Set(v, Block)` ordering in `place_large_and_recurse` (Issue 72) | ✅ |
 | 9 | `pos != u16::MAX` release guard + `pos <= stack.position` regression assert | ✅ |
-| 10 | Audit `build_scope_parents` for missing IR variants; fix scope-cycle root cause | ⏳ open |
+| 10 | Audit `build_scope_parents` for missing IR variants; fix scope-cycle root cause | ✅ |
 
-**Step 10 detail:** Cross-check `build_scope_parents` against `scan_inner`: every `Value`
-variant that contains a nested `Block` should be handled in both.  Missing arms produce wrong
-`scope_parents` entries → `scopes_can_conflict` false-positives.  Also investigate why a scope
-can map to itself in the parent map (root cause of the `is_scope_ancestor` cycle guard); fix
-at source rather than relying solely on the step-counter guard.
+**Step 10 detail (completed 2026-03-24):** Full cross-check confirmed all `Value` variants
+with nested expressions are handled in `build_scope_parents`, `scan_inner`, and
+`compute_intervals`.  Scope-cycle root cause fixed: `build_scope_parents` now uses
+`entry().or_insert()` and skips self-loops.
 
 ---
 

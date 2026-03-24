@@ -162,10 +162,10 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 
 | Function | File | Role |
 |---|---|---|
-| `compute_intervals(val, function, free_text_nr, free_ref_nr, seq)` | `src/variables.rs` | Walk IR; populate `first_def`/`last_use` |
-| `validate_slots(function, data, def_nr)` | `src/variables.rs` | Post-codegen conflict checker |
-| `find_conflict(vars)` | `src/variables.rs` | O(V²) overlap scan |
-| `size(tp, context)` | `src/variables.rs` | Bytes needed for a type on the stack |
+| `compute_intervals(val, function, free_text_nr, free_ref_nr, seq)` | `src/variables/` | Walk IR; populate `first_def`/`last_use` |
+| `validate_slots(function, data, def_nr)` | `src/variables/` | Post-codegen conflict checker |
+| `find_conflict(vars)` | `src/variables/` | O(V²) overlap scan |
+| `size(tp, context)` | `src/variables/` | Bytes needed for a type on the stack |
 
 **Complexity.** `compute_intervals`: O(N). `validate_slots` / `find_conflict`: O(V²) — acceptable because V is small per function (< 100 typically). Total file: ~1 166 lines.
 
@@ -210,7 +210,7 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 
 **Enhancement opportunities.**
 - Add a codegen-time assertion that stack depth returns to baseline after each statement.
-- Unify `size_code` with the variable `size()` function in `variables.rs`.
+- Unify `size_code` with the variable `size()` function in `variables/`.
 
 ---
 
@@ -497,9 +497,9 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 | `rust_type(tp, context)` | `src/create.rs` | loft `Type` → Rust type string |
 | `replace_attributes(body)` | `src/create.rs` | `@param` → `v_param` substitution |
 
-**Complexity.** O(D) where D = number of definitions. File I/O bound. ~150 + 1 075 lines (create.rs + generation.rs).
+**Complexity.** O(D) where D = number of definitions. File I/O bound. ~150 + 1 075 lines (create.rs + generation/).
 
-**Reducibility.** Moderate. `generation.rs` is large because it handles all operator categories. A template-based approach (Tera, Askama) would reduce the string-building boilerplate by ~200 lines.
+**Reducibility.** Moderate. `generation/` is large because it handles all operator categories. A template-based approach (Tera, Askama) would reduce the string-building boilerplate by ~200 lines.
 
 **Code quality.** Good. The `operator_name` conversion is clean and covers the `return` keyword edge case. The `@param` substitution is a simple but fragile string-replace; it would break if a parameter name appeared inside a string literal.
 
@@ -634,7 +634,7 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 | 2 | Two-pass parser | ~~parser.rs~~ → **src/parser/** (6 modules) | 7 873 | O(N) | ~~**Yes**~~ **Done 2026-03-15** | Good | Medium |
 | 3 | Type resolution | typedef.rs | 246 | O(T) | No | Good | Easy |
 | 4 | Scope analysis | scopes.rs | ~486 | O(N+V) | No | Fair | Hard |
-| 5 | Live intervals | variables.rs | 1 166 | O(N+V²) | No | Good | Medium |
+| 5 | Live intervals | variables/ | 1 166 | O(N+V²) | No | Good | Medium |
 | 6 | Stack tracker | stack.rs | 175 | O(1)/op | No | Good | Medium |
 | 7 | Bytecode generation | compile.rs + **src/state/** (5 modules) | 3 888 | O(N) | No | Good | Medium |
 | 8 | Operator dispatch | fill.rs | 1 799 | O(I) | No (generated) | Good | Good |
@@ -645,7 +645,7 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 | 13 | Hash table | hash.rs | 190 | O(1) avg | No | Good | Medium |
 | 14 | Dynamic arrays | vector.rs | 433 | O(1) / O(N) | No | Good | Easy |
 | 15 | Radix tree | radix_tree.rs | 288 | O(K) | No | Incomplete | Hard |
-| 16 | Rust code generator | create.rs + generation.rs | 1 225 | O(D) | No | Good | Easy |
+| 16 | Rust code generator | create.rs + generation/ | 1 225 | O(D) | No | Good | Easy |
 | 17 | Text formatting | ops.rs | 315 | O(len) | Marginal | Good | Easy |
 | 18 | PNG decoder | png_store.rs | 89 | O(W×H) | No | Good | Easy |
 | 19 | Documentation gen | gendoc.rs + documentation.rs | 1 369 | O(file) | **Yes** (use crate) | Fair | Easy |
@@ -654,7 +654,7 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 **Highest-value remaining improvements** (splits done 2026-03-15):
 1. ~~Split `parser.rs` / `state.rs` / `database.rs`~~ **Done** — `src/parser/` (6), `src/state/` (5), `src/database/` (7) modules.
 2. Complete radix tree (`rtree_next`, `rtree_remove`) and finish borrowed-ref pre-init in `scopes.rs`.
-3. `assign_slots()` compile-time pass in `variables.rs` (A6) — eliminates runtime `claim()` and removes slot conflicts in long functions.
+3. `assign_slots()` compile-time pass in `variables/` (A6) — eliminates runtime `claim()` and removes slot conflicts in long functions.
 
 ---
 

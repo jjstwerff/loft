@@ -27,13 +27,17 @@ src/main.rs              CLI entry; loads default/ then user file
   └─ src/parser/         Two-pass recursive-descent parser → Value IR
        ├─ mod.rs            Parser struct, constructors, core helpers
        ├─ definitions.rs    Enum/struct/typedef/function parsing
-       ├─ expressions.rs    Expressions, assignments, format strings
+       ├─ expressions.rs    Expressions, assignments, iterator materialisation
+       ├─ operators.rs      Operator dispatch, type coercion
+       ├─ vectors.rs        Vector literals, comprehensions, lambdas
+       ├─ fields.rs         Field access, indexing, iterator operations
+       ├─ objects.rs        Variable resolution, struct construction, parse
        ├─ collections.rs    Iterators, for-loops, map/filter, parallel-for
-       ├─ control.rs        Control flow, parse_call, parse_method
+       ├─ control.rs        Control flow, match, parse_call, parse_method
        └─ builtins.rs       Parallel worker helpers
        ├─ src/lexer.rs      Tokeniser
        ├─ src/typedef.rs    Type resolution + field offsets
-       ├─ src/variables.rs  Per-function variable table
+       ├─ src/variables/  Per-function variable table
        └─ src/scopes.rs     Scope/lifetime analysis
   └─ src/compile.rs      Drives IR → flat bytecode; initialises native registry
   └─ src/state/          Executes bytecode
@@ -109,8 +113,7 @@ give each item a traceable history.
 
 1. **Never `git commit` directly on `main`.** If you accidentally land on `main`, move
    the change to a feature branch before anything else.
-2. **Never `git push` without an explicit user instruction** — see the
-   [feedback memory](memory/feedback_no_github_automation.md) and the Remote CI section
+2. **Never `git push` without an explicit user instruction** — see the Remote CI section
    of [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md).
 3. Create branches from the tip of `main` using the naming convention in
    [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) (e.g. `p1-1-lambda-parser`, `benchmark`).
@@ -146,13 +149,13 @@ give each item a traceable history.
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, stack layout |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
-| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation.rs`) design and fix plans |
+| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
-| [CHANGELOG.md](doc/claude/CHANGELOG.md) | Release history |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [QUICK_START.md](doc/claude/QUICK_START.md) | Session-start orientation — commands, file map, naming conventions, key patterns |
 | [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) | Slot assignment design notes — P1/P2 proposals, resolved bugs, two-zone layout |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |

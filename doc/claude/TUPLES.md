@@ -694,7 +694,7 @@ broad) or misses mutations to `t.0` (too narrow).
 
 **Solution: element-path tracking**
 
-Extend the iterator context in `variables.rs`:
+Extend the iterator context in `variables/`:
 
 ```rust
 struct IterContext {
@@ -715,7 +715,7 @@ Mutating `t.1` while iterating `t.0` is allowed.
 
 **Changes required:**
 
-1. Add `element_path: Vec<usize>` to the iterator-tracking record in `variables.rs`.
+1. Add `element_path: Vec<usize>` to the iterator-tracking record in `variables/`.
 2. Extend `parse_for` to record the element path from tuple-element access chains.
 3. Extend the mutation-check site to compare `(var_nr, element_path)` pairs using
    the prefix-match rule on `+=` and `#remove`.

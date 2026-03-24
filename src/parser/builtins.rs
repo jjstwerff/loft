@@ -28,15 +28,6 @@ impl Parser {
         self.parse_block("parallel for", &mut dummy, &Type::Void);
     }
 
-    // Resolve the worker function from a parallel call pattern inside par(...).
-    //
-    // Recognised forms (elem_var is the name of the loop element, e.g. "a"):
-    //   Form 1  func(a)         — global/user function
-    //   Form 2  a.method()      — method whose receiver is the element
-    //   Form 3  c.method(a)     — captured receiver + element arg (deferred)
-    //
-    // All tokens for the call are consumed; the caller reads ',' next.
-    // On error or first pass returns (u32::MAX, Unknown).
     /// Consume a parenthesised argument list, discarding all tokens.
     pub(crate) fn consume_call_args(&mut self) {
         let mut depth = 1i32;

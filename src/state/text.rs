@@ -73,27 +73,9 @@ impl State {
         *v1 += text.str();
     }
 
-    /// Runtime implementation of `OpCreateStack(pos)`.
-    ///
-    /// Pushes a `DbRef` that points INTO the current stack frame:
-    ///
-    /// ```text
-    /// result = { store_nr: stack_cur.store_nr,
-    ///            rec:      stack_cur.rec,
-    ///            pos:      stack_cur.pos + stack_pos − pos }
-    /// ```
-    ///
-    /// The compile-time caller (`state.rs::generate_set`) emits `pos` as:
-    /// `stack.position_before_op − dep_var.stack_pos`,
-    /// which makes `result.pos = stack_cur.pos + dep_var.stack_pos` — a pointer into
-    /// the dep variable's stack slot, used as a null-state for borrowed references.
-    ///
-    /// WARNING: the `store_nr` is the *stack frame* store, not a data store.
-    /// Any code that dereferences a field through this `DbRef` (e.g. `last.val`) will
-    /// index into `stores[stack_cur.store_nr]` which is out of range for the heap
-    /// store array and will panic.  This `DbRef` must be overwritten by `OpPutRef`
-    /// before any field access.  See `ASSIGNMENT.md` §"Option A sub-option 3" and
-    /// the known bug in `tests/slot_assign.rs::long_lived_int_and_copy_record_followed_by_ref`.
+    /// `OpCreateStack`: push a `DbRef` pointing into the current stack frame.
+    /// Used as null-state for borrowed references; must be overwritten by `OpPutRef`
+    /// before any field access.
     #[inline]
     pub fn create_stack(&mut self) {
         let pos = *self.code::<u16>();
