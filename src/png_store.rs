@@ -19,7 +19,7 @@ pub fn read(file_path: &str, store: &mut Store) -> std::io::Result<(u32, u32, u3
 #[test]
 fn show_png() {
     let mut store = Store::new(12 + 256 * 256 * 3 / 8);
-    let (img, _h, w) = read("tests/example/map.png", &mut store).unwrap();
+    let (img, w, _h) = read("tests/example/map.png", &mut store).unwrap();
     let mut count = 0;
     for y in 0..128 {
         if y % 2 == 0 {
