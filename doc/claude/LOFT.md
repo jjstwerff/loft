@@ -155,14 +155,20 @@ struct Argument {
 Fields are declared as `name: type` with optional modifiers **after** the type:
 - `limit(min, max)` — constrain an integer field to a range
 - `not null` — disallow the null value (enables full integer range in storage)
-- `default(expr)` — a stored default value; `= expr` is a shorthand for `default(expr)`
-- `virtual(expr)` — a read-only computed field (evaluated at init, not stored)
+- `= expr` — stored default value, applied when field is omitted in constructor
+- `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
+- `computed(expr)` — calculated on every access, **not stored** in the record
 
-In default expressions, `$` refers to the record being initialised:
+In default/computed expressions, `$` refers to the record:
 ```
 struct Object {
-    name_length: integer = len($.name),   // computed from another field
+    name_length: integer = len($.name),   // stored default: computed at construction
     name: text
+}
+
+struct Circle {
+    radius: float,
+    area: float computed(3.14159 * $.radius * $.radius)   // recomputes on access
 }
 ```
 
@@ -281,6 +287,18 @@ Used for explicit type casts and conversions:
 ```
 10l as integer      // long to integer
 "json-text" as Program   // deserialize text as a struct
+```
+
+### Parsing (JSON / loft text → struct)
+
+`Type.parse(text)` parses JSON or loft-native text into a struct record.
+`vector<T>.parse(text)` parses a JSON array into an iterable vector.
+Parse errors are accessible via `record#errors`.
+
+```
+user = User.parse(`{{"id":42,"name":"Alice"}}`);
+scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
+for e in user#errors { log_warn(e); }
 ```
 
 ---
@@ -645,7 +663,7 @@ Anonymous form (type is inferred from context):
 point = { x: 1.0, y: 2.0 }
 ```
 
-Fields not specified get their `default(...)` value, or the zero value for their type.
+Fields not specified get their `= expr` default, or the zero value for their type.
 Nullable fields default to `null`.
 
 Field access uses `.`:
@@ -668,6 +686,19 @@ Otherwise they are called as free functions:
 ```
 len(collection)
 round(PI * 1000.0)
+```
+
+### Named arguments
+
+Any parameter can be passed by name using `name: value` syntax.  Positional arguments
+come first; once a named argument appears, all subsequent must be named.  Parameters
+not provided must have a default value.
+
+```
+fn connect(host: text, port: integer = 8080, tls: boolean = true) -> text
+connect("example.com")                         // all defaults
+connect("example.com", tls: false)             // skip port
+connect(host: "example.com", port: 443)        // all named
 ```
 
 ---

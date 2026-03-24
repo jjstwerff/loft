@@ -359,49 +359,20 @@ See [TESTING.md](TESTING.md) for how to reproduce and debug such failures.
 
 ## Parallel Execution (`src/parallel.rs`)
 
-Provides a thread-pool execution model for running compiled loft functions over every row of an input vector, collecting integer results in original row order.
+Dispatches a compiled worker function over every row of an input vector using OS threads.
 
-### `WorkerProgram`
+### Functions
 
-```rust
-pub struct WorkerProgram {
-    pub bytecode: Vec<u8>,
-    pub text_code: Vec<u8>,
-    pub library: Vec<Call>,
-}
-unsafe impl Send for WorkerProgram {}
-unsafe impl Sync for WorkerProgram {}
-```
+| Function | Return | Mechanism |
+|----------|--------|-----------|
+| `run_parallel_direct` | writes to `*mut u8` | Direct pointer write (≥4-byte returns) |
+| `run_parallel_raw` | `Vec<u64>` | Channel-based (1-byte bool/enum returns) |
+| `run_parallel_text` | `Vec<String>` | Workers copy `Str` to owned `String` |
+| `run_parallel_int` | `Vec<i32>` | Channel-based (legacy integer-only API) |
 
-An immutable snapshot of the interpreter's three read-only runtime tables. Created once by `State::worker_program()` (which clones all three `Vec`s from the main `State`) and shared across worker threads via `Arc<WorkerProgram>`. Each worker thread calls `clone_owned()` to get its own owned copies before constructing its `State`.
-
-### `run_parallel_int`
-
-```rust
-pub fn run_parallel_int(
-    stores: &Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    n_threads: usize,
-) -> Vec<i32>
-```
-
-Distributes the rows of `input` across `n_threads` OS threads and collects the results in order:
-
-1. Reads `n_rows` via `vector::length_vector`.
-2. Clamps `threads = min(n_threads, n_rows).max(1)`.
-3. Wraps `program` in `Arc<WorkerProgram>`.
-4. Opens an `mpsc::channel::<Vec<(usize, i32)>>()`.
-5. For each thread `t`, spawns a thread with:
-   - Row range `[t * n_rows / threads, (t+1) * n_rows / threads)`.
-   - Its own `Stores` via `stores.clone_for_worker()`.
-   - Its own `State` via `State::new_worker(worker_stores, bytecode, text_code, library)`.
-   - Calls `vector::get_vector` for each row to get a `DbRef`, then `state.execute_at(fn_pos, row_ref)` to obtain the `i32` result.
-   - Sends `Vec<(row_idx, val)>` batch over the channel.
-6. Drops `tx` so the channel closes when all threads finish.
-7. Collects all `(idx, val)` pairs into `vec![i32::MIN; n_rows]` placed by index.
+All variants distribute rows evenly across threads, clone stores via `clone_for_worker`,
+and create a fresh `State` per worker.  `WorkerProgram` wraps the bytecode/text_code/library
+in `Arc` for zero-copy sharing.
 
 ### `ParallelCtx` (in `src/database/mod.rs`)
 

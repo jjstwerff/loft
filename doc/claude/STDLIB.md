@@ -350,6 +350,23 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 
 ---
 
+## JSON / Parsing
+
+| Expression | Description |
+|---|---|
+| `"{value:j}"` | Serialise any struct/enum/vector to JSON text |
+| `Type.parse(text)` | Parse JSON or loft-native text into a struct |
+| `vector<T>.parse(text)` | Parse a JSON array into an iterable vector |
+| `record#errors` | Iterate parse errors from the last `Type.parse()` call |
+
+```loft
+user = User.parse(`{{"id":42,"name":"Alice"}}`);
+scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
+for e in user#errors { log_warn(e); }
+```
+
+---
+
 ## Higher-order functions
 
 `map`, `filter`, and `reduce` are compiler special-cases (like `parallel_for`) — they take a `fn <name>` function reference and a vector and produce a new vector or scalar.
@@ -395,7 +412,9 @@ Two worker call forms:
 | Form 1 | `func(a)` | Global function called with the loop element |
 | Form 2 | `a.method()` | Method on the element type |
 
-Worker must return a primitive: `integer`, `long`, `float`, or `boolean`. Input must be a `vector<T>`.
+Supported return types: `integer`, `long`, `float`, `single`, `boolean`, inline `enum`, `text`.
+Extra context arguments are forwarded: `par(b=scale(a, mult), N)`.
+Input must be a `vector<T>`.
 
 ```loft
 struct Score { value: integer }

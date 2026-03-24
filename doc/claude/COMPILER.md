@@ -550,6 +550,10 @@ computes `fn_var_dist = stack.position - var.stack_pos`, and emits
 looks it up in `fn_positions: Vec<u32>` (populated at the start of each execute call), and
 dispatches via `fn_call`.
 
+**Named arguments:** `parse_call` uses `lexer.peek_named_arg()` (two-token lookahead
+via `link`/`revert`) to detect `name: value` syntax. Named args are resolved to
+positional slots in `call_with_named`; `add_defaults` fills any remaining gaps.
+
 `fn(T) -> R` is a valid parameter type parsed by `parse_fn_type`:
 ```loft
 fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
