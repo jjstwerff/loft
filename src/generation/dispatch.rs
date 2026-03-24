@@ -484,12 +484,13 @@ impl Output<'_> {
                     write!(w, ", ")?;
                     if is_ref {
                         // For ref mode, pass struct_size and known_type instead of return_size.
-                        let (struct_size, known_type) = if let Type::Reference(d_nr, _) = &worker_ret {
-                            let kt = self.data.def(*d_nr).known_type;
-                            (i32::from(self.stores.size(kt)), kt as i32)
-                        } else {
-                            (0, 0)
-                        };
+                        let (struct_size, known_type) =
+                            if let Type::Reference(d_nr, _) = &worker_ret {
+                                let kt = self.data.def(*d_nr).known_type;
+                                (i32::from(self.stores.size(kt)), kt as i32)
+                            } else {
+                                (0, 0)
+                            };
                         write!(w, "{struct_size}, {known_type}, ")?;
                     } else {
                         self.output_code_inner(w, &vals[2])?;
