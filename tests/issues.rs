@@ -1861,6 +1861,22 @@ fn a8_to_lowercase_in_format() {
     .result(loft::data::Value::Null);
 }
 
+/// Assert that src/fill.rs matches what generate_code_to would produce.
+/// If this fails, run: cargo test regen_fill_rs -- --ignored --nocapture
+#[test]
+fn fill_rs_up_to_date() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    let generated = loft::create::generate_code_to(&p.data, "tests/generated/fill_check.rs")
+        .expect("generate_code_to failed");
+    let current = std::fs::read_to_string("src/fill.rs").expect("cannot read src/fill.rs");
+    assert_eq!(
+        current, generated,
+        "src/fill.rs is out of date — run: cargo test regen_fill_rs -- --ignored --nocapture"
+    );
+}
+
 /// Regenerate src/fill.rs from the default library definitions.
 /// Run with: cargo test regen_fill_rs -- --ignored --nocapture
 #[test]
