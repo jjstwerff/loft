@@ -119,6 +119,30 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   the vector element.  Validated at compile time and forwarded at runtime via
   the eval stack.
 
+- **A1.2** — Parallel workers support all return types: text (two-phase collect),
+  single (f32), inline enum (1 byte), plus existing int/long/float/bool.
+  Generic `return_size` computed from type — no per-type enumeration.
+  Native codegen via `n_parallel_for_text_native` with extra context arg forwarding.
+
+- **Named arguments** — Function calls accept `name: value` syntax after positional
+  arguments.  `connect("host", tls: false)` skips defaulted middle parameters.
+  Two-token lookahead (`peek_named_arg`); `add_defaults` fills gaps, not just trailing.
+
+- **`computed(expr)`** — Struct fields marked `computed(expr)` are calculated on every
+  access, not stored in the record.  Recomputes when dependencies change.
+  `default(expr)` syntax removed; `= expr` retained for stored defaults.
+
+- **`vector<T>.parse(text)`** — Parse JSON arrays into iterable vectors.
+  Extracts vector field from wrapper struct for direct iteration.
+
+- **`i_` internal namespace** — Internal functions use `i_` prefix, registered
+  programmatically in `Parser::new()`.  Hidden from user code — users can define
+  functions named `parse_errors` without collision.
+
+- **JSON documentation** — `tests/docs/24-json.loft` covers serialisation, parsing,
+  vectors, errors, nesting, and round-trip.  `WEB_SERVICES.md` redesigned around
+  existing `Type.parse()` — `#json` annotation no longer needed.
+
 - **A13.2+A13.3** — `build_scope_parents` and `scan_inner` now handle
   `Value::Iter`, closing a coverage gap in scope analysis.
 

@@ -26,19 +26,25 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 - **S13** — `pub` visibility enforcement on imports. ✓
 - **L6.1** — Parser: `assert(expr)` in field definitions. ✓
 - **L6.2** — Bytecode: constraint checks after field writes. ✓
-- **L6** — `Type.parse(text)` with JSON support, `s#errors` accessor. ✓
+- **L6** — `Type.parse(text)` with JSON support, `s#errors` accessor, `vector<T>.parse()`. ✓
+- **L6.3** — Native codegen field constraints. ✓
 - **O1** — Superinstruction opcodes registered; disassembler; `fill_rs_up_to_date` CI. ✓ (peephole deferred)
 - **O6** — `_nn` non-null long arithmetic variants. ✓
 - **A1.1** — Extra integer context args forwarded to parallel workers. ✓
+- **A1.2** — Parallel returns for all types: text (two-phase), enum, single, generic `return_size`. ✓
 - **A13.2+A13.3** — `Value::Iter` arm in `build_scope_parents` and `scan_inner`. ✓
-- **L6.3** — Native codegen field constraints: `Value::Insert` IR from L6.2 flows through unchanged. ✓
+- `computed(expr)` fields — calculate on access, not stored; `default(expr)` removed. ✓
+- `i_` internal namespace — hidden functions (`i_parse_errors`, `i_parse_error_push`). ✓
+- Named arguments — `func(host: "x", tls: false)` with default-gap filling. ✓
+- Native parallel text — `n_parallel_for_text_native`; extra context args forwarded. ✓
+- JSON documentation — `tests/docs/24-json.loft` with serialisation, parsing, vectors, errors. ✓
+- Code quality — split `generation.rs`, `variables.rs`, `main.rs`, `expressions.rs`; 10 `too_many_lines` removed. ✓
 
 **Remaining for 0.8.2:**
 
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
 | O1     | ↳ Peephole rewriting pass (stack-relative operands)     | Medium    |             | compile.rs         |
-| A1.2   | ↳ Text/reference returns (dedicated result store)       | Medium    | A1.1        | parallel.rs        |
 | A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12    |
 | A13    | Complete two-zone slot assignment                       | Medium    |             | SLOTS.md           |
 
@@ -64,15 +70,18 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 
 ---
 
-## 0.8.4 — HTTP client and JSON
+## 0.8.4 — HTTP client
+
+JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
+are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
 
 | ID     | Title                                                   | Effort    | Depends on  | Source          |
 |--------|---------------------------------------------------------|-----------|-------------|-----------------|
-| H1     | `#json` annotation + `to_json` synthesis                | Small     |             | WEB_SERVICES.md |
-| H2     | JSON primitive extraction stdlib                        | Small     | H1          | WEB_SERVICES.md |
-| H3     | `from_json` codegen — scalar struct fields              | Medium    | H1, H2      | WEB_SERVICES.md |
-| H4     | HTTP client stdlib + `HttpResponse` (ureq)              | Medium    | H2          | WEB_SERVICES.md |
-| H5     | Nested/array/enum `from_json` + integration tests       | Med–High  | H3, H4      | WEB_SERVICES.md |
+| H4     | HTTP client stdlib + `HttpResponse` (ureq)              | Medium    |             | WEB_SERVICES.md |
+| H4.1   | ↳ `HttpResponse` struct + `ok()` method                 | Small     |             | default/04_web.loft |
+| H4.2   | ↳ `http_get`, `http_post`, `http_put`, `http_delete`    | Medium    | H4.1        | native_http.rs  |
+| H4.3   | ↳ Header support (`http_get_h`, `http_post_h`)          | Small     | H4.2        | native_http.rs  |
+| H4.4   | ↳ Documentation + integration tests                     | Small     | H4.2        | tests/docs/     |
 
 ---
 
