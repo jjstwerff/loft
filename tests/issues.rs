@@ -27,33 +27,33 @@ use std::sync::{Arc, Mutex};
 // Scalar `+=` on an empty (null) vector struct field has no effect.
 // Expected: the scalar is appended and len == 1.
 
-/// `b.items += [1]` (bracket form) on a null field — this is the WORKING baseline.
-/// The bracket form goes through parse_vector with is_field=true and uses
-/// OpNewRecord / OpFinishRecord to allocate the element in place.
-/// `b.items += [3, 5]` on a null field — multiple elements with bracket form.
-/// `b.items += 1` (bare scalar, no brackets) on a null field — FIXED.
-/// Parser now routes through new_record so the field is allocated in place.
-/// Was tracked as Issue 5 in doc/claude/PROBLEMS.md.
+// `b.items += [1]` (bracket form) on a null field — this is the WORKING baseline.
+// The bracket form goes through parse_vector with is_field=true and uses
+// OpNewRecord / OpFinishRecord to allocate the element in place.
+// `b.items += [3, 5]` on a null field — multiple elements with bracket form.
+// `b.items += 1` (bare scalar, no brackets) on a null field — FIXED.
+// Parser now routes through new_record so the field is allocated in place.
+// Was tracked as Issue 5 in doc/claude/PROBLEMS.md.
 // ── Issue 1 ──────────────────────────────────────────────────────────────────
 // A method whose return type is a NEW struct record crashes at database.rs:1494
 // because the DbRef returned by the method has a garbage store_nr.
 
-/// Minimal reproducer: `fn double(self: Color) -> Color { Color { r: self.r * 2 } }`
-/// Calling `c.double()` crashes with "index out of bounds: the len is N but index is M".
-/// Tracked as Issue 1 in doc/claude/PROBLEMS.md.
+// Minimal reproducer: `fn double(self: Color) -> Color { Color { r: self.r * 2 } }`
+// Calling `c.double()` crashes with "index out of bounds: the len is N but index is M".
+// Tracked as Issue 1 in doc/claude/PROBLEMS.md.
 // ── Issue 2 ──────────────────────────────────────────────────────────────────
 // A borrowed reference first assigned inside a branch gets a garbage store_nr=8
 // DbRef at runtime, crashing at database.rs:1462.
 // Owned references are correctly pre-initialized (Option A sub-3); borrowed refs are not.
 
-/// Borrowed ref first assigned INSIDE an `if` branch — FIXED.
-/// Was tracked as Issue 2 in doc/claude/PROBLEMS.md; now passes after
-/// the Option A sub-3 pre-init work in scopes.rs.
+// Borrowed ref first assigned INSIDE an `if` branch — FIXED.
+// Was tracked as Issue 2 in doc/claude/PROBLEMS.md; now passes after
+// the Option A sub-3 pre-init work in scopes.rs.
 // ── Issue 4 ──────────────────────────────────────────────────────────────────
 // `v += items` inside a function that takes `v` as a `&vector<T>` ref-param
 // has no visible effect on the caller's variable after the call returns.
 
-/// Baseline: field mutation through a ref-param WORKS (e.g. `v[0].val = x`).
+// Baseline: field mutation through a ref-param WORKS (e.g. `v[0].val = x`).
 // ── Issue 44 — L4: Empty `[]` literal as a mutable vector argument ───────────
 // Fixed in parser/mod.rs call_nr(): when Value::Insert([Null]) (or empty Insert)
 // appears where a vector parameter is expected, a temp variable is created with
@@ -61,19 +61,19 @@ use std::sync::{Arc, Mutex};
 // The fix is in call_nr(), not in parse_vector(), so it runs whenever [] reaches
 // the call-site type-check regardless of call nesting.
 
-/// Baseline: `join([], "-")` — empty `vector<text>` arg via call_nr fix.
-/// L4 edge: `[]` passed to a user-defined function taking `vector<integer>`.
-/// Exercises the same call_nr path for a non-text element type.
-/// L4 edge: `[]` as second argument, not first — verifies argument index handling.
+// Baseline: `join([], "-")` — empty `vector<text>` arg via call_nr fix.
+// L4 edge: `[]` passed to a user-defined function taking `vector<integer>`.
+// Exercises the same call_nr path for a non-text element type.
+// L4 edge: `[]` as second argument, not first — verifies argument index handling.
 // ── Issue 56 — L5: `v += extra` via `&vector` ref-param ──────────────────────
 // Fixed in state/codegen.rs generate_var(): RefVar(Vector) now emits OpGetStackRef
 // to dereference the ref-param and load the actual vector DbRef before OpAppendVector.
 // The vector record write-back happens implicitly: vector_append writes through the
 // DbRef into the caller's local-variable record, so the caller sees the updated vector.
 
-/// Baseline: `v += extra` via ref-param appends elements to the caller's vector.
-/// L5 edge: append integers via ref-param; verify values and length.
-/// L5 edge: multiple sequential ref-param appends grow the vector correctly.
+// Baseline: `v += extra` via ref-param appends elements to the caller's vector.
+// L5 edge: append integers via ref-param; verify values and length.
+// L5 edge: multiple sequential ref-param appends grow the vector correctly.
 // ── Issue 11 ─────────────────────────────────────────────────────────────────
 // Field-name overlap between two structs in the same file must NOT cause wrong
 // field offsets in key lookups or tree traversal.
@@ -87,38 +87,38 @@ use std::sync::{Arc, Mutex};
 // alphabetically and the key is sorted descending, (20,C) appears BEFORE (20,B) in
 // the tree and IS therefore included → sum = 200+100+300 = 600.
 
-/// Two structs share a field name `key` at different offsets:
-/// `SortElm { key: text, value: integer }` (key is field 0, offset 0)
-/// `IdxElm  { nr: integer, key: text, value: integer }` (key is field 1, offset 4)
-/// Key lookups and iteration on `IdxElm` must use key's offset in IdxElm (4),
-/// not in SortElm (0).  Confirmed working — field offsets are type-scoped.
+// Two structs share a field name `key` at different offsets:
+// `SortElm { key: text, value: integer }` (key is field 0, offset 0)
+// `IdxElm  { nr: integer, key: text, value: integer }` (key is field 1, offset 4)
+// Key lookups and iteration on `IdxElm` must use key's offset in IdxElm (4),
+// not in SortElm (0).  Confirmed working — field offsets are type-scoped.
 // ── Issue 28 ─────────────────────────────────────────────────────────────────
 // validate_slots could panic in debug builds when the same variable name is reused
 // in sequential `{ }` blocks in the same function (both get the same slot but
 // different live-interval entries).  Fixed: find_conflict() exempts same-name+same-slot pairs.
 
-/// Same variable name in sequential blocks — the core Issue 28 case (fixed).
-/// Different variable names in sequential blocks — validate_slots must not panic.
-/// Each block is fully self-contained; variables don't escape their block.
+// Same variable name in sequential blocks — the core Issue 28 case (fixed).
+// Different variable names in sequential blocks — validate_slots must not panic.
+// Each block is fully self-contained; variables don't escape their block.
 // ── Issue 29 ─────────────────────────────────────────────────────────────────
 // validate_slots false positive: two differently-named owned (Reference) variables
 // that share a slot but have non-overlapping actual live ranges trigger a conflict
 // because compute_intervals gives the first variable a last_use that reaches past
 // the second variable's first_def.
 
-/// Two differently-named struct variables in sequential blocks — each in its own
-/// `{ }` scope so their lifetimes don't overlap.  validate_slots must not panic.
-/// The real issue 29 pattern: same variable name `f` reused across many sequential
-/// blocks; a differently-named reference variable `c` is introduced between some of
-/// those blocks.  validate_slots must not panic (c.first_def may fall between two
-/// of f's live ranges, which are separate Variable entries sharing the same slot).
+// Two differently-named struct variables in sequential blocks — each in its own
+// `{ }` scope so their lifetimes don't overlap.  validate_slots must not panic.
+// The real issue 29 pattern: same variable name `f` reused across many sequential
+// blocks; a differently-named reference variable `c` is introduced between some of
+// those blocks.  validate_slots must not panic (c.first_def may fall between two
+// of f's live ranges, which are separate Variable entries sharing the same slot).
 // ── T1-1: Non-zero exit code on runtime error (production mode) ───────────────
 // In normal mode a failing assert/panic aborts via Rust panic!().
 // In production mode (--production flag) the error is logged and execution
 // continues — main.rs must exit(1) via had_fatal.  These tests verify that
 // `Stores::had_fatal` is set correctly so the binary-level exit code is right.
 
-/// Helper: compile loft code and return a State ready for execution.
+// Helper: compile loft code and return a State ready for execution.
 fn compile_for_production(code: &str) -> (State, loft::data::Data) {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
@@ -134,7 +134,7 @@ fn compile_for_production(code: &str) -> (State, loft::data::Data) {
     (state, p.data)
 }
 
-/// Attach a production-mode logger (writes to /dev/null) to a State.
+// Attach a production-mode logger (writes to /dev/null) to a State.
 fn attach_production_logger(state: &mut State) {
     let config = RuntimeLogConfig {
         log_path: std::path::PathBuf::from("/dev/null"),
@@ -145,7 +145,7 @@ fn attach_production_logger(state: &mut State) {
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 }
 
-/// No error: had_fatal stays false.
+// No error: had_fatal stays false.
 #[test]
 fn production_mode_no_error_had_fatal_false() {
     let (mut state, data) = compile_for_production("fn test() { assert(1 == 1, \"ok\"); }");
@@ -157,7 +157,7 @@ fn production_mode_no_error_had_fatal_false() {
     );
 }
 
-/// panic() in production mode: had_fatal becomes true, execution does NOT abort.
+// panic() in production mode: had_fatal becomes true, execution does NOT abort.
 #[test]
 fn production_mode_panic_sets_had_fatal() {
     let (mut state, data) = compile_for_production("fn test() { panic(\"deliberate\"); }");
@@ -169,7 +169,7 @@ fn production_mode_panic_sets_had_fatal() {
     );
 }
 
-/// assert(false, ...) in production mode: had_fatal becomes true.
+// assert(false, ...) in production mode: had_fatal becomes true.
 #[test]
 fn production_mode_assert_false_sets_had_fatal() {
     let (mut state, data) = compile_for_production("fn test() { assert(1 == 2, \"mismatch\"); }");
@@ -186,7 +186,7 @@ fn production_mode_assert_false_sets_had_fatal() {
 // loops (vector) or structural corruption (sorted/index).  The guard that
 // catches `items += [x]` must also fire for `db.items += [x]`.
 
-/// Direct variable form: existing guard must still work.
+// Direct variable form: existing guard must still work.
 #[test]
 fn for_loop_mutation_guard_simple_var() {
     code!(
@@ -202,7 +202,7 @@ at for_loop_mutation_guard_simple_var:3:32",
     );
 }
 
-/// Field-access form: `db.items += [x]` inside `for e in db.items { ... }`.
+// Field-access form: `db.items += [x]` inside `for e in db.items { ... }`.
 #[test]
 fn for_loop_mutation_guard_field_access() {
     code!(
@@ -219,7 +219,7 @@ at for_loop_mutation_guard_field_access:4:38",
     );
 }
 
-/// Safe: appending to a DIFFERENT field than the one being iterated is allowed.
+// Safe: appending to a DIFFERENT field than the one being iterated is allowed.
 #[test]
 fn for_loop_mutation_guard_different_field_ok() {
     code!(
@@ -235,7 +235,7 @@ fn test() {
 
 // ── T2-4  f#exists attribute ──────────────────────────────────────────────────
 
-/// f#exists returns true for a known existing file.
+// f#exists returns true for a known existing file.
 #[test]
 fn file_exists_true() {
     code!(
@@ -247,7 +247,7 @@ fn file_exists_true() {
     .result(loft::data::Value::Null);
 }
 
-/// f#exists returns false for a path that does not exist.
+// f#exists returns false for a path that does not exist.
 #[test]
 fn file_exists_false() {
     code!(
@@ -263,7 +263,7 @@ fn file_exists_false() {
 // `fn <name>` produces a Value::Int(d_nr) with Type::Function(args, ret).
 // Calling `f(args)` where `f` is a local fn-ref variable emits OpCallRef.
 
-/// Basic fn-ref: store `double` and call it through the reference.
+// Basic fn-ref: store `double` and call it through the reference.
 #[test]
 fn fn_ref_basic_call() {
     code!(
@@ -277,7 +277,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Fn-ref with multiple arguments.
+// Fn-ref with multiple arguments.
 #[test]
 fn fn_ref_two_args() {
     code!(
@@ -291,7 +291,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Fn-ref assigned conditionally, then called.
+// Fn-ref assigned conditionally, then called.
 #[test]
 fn fn_ref_conditional_call() {
     code!(
@@ -307,7 +307,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Fn-ref passed as a parameter and called inside the callee.
+// Fn-ref passed as a parameter and called inside the callee.
 #[test]
 fn fn_ref_as_parameter() {
     code!(
@@ -378,8 +378,8 @@ fn test() {
 // Fix: `parse_assign_op` now calls `convert()` when s_type==Type::Null and op=="=",
 // substituting OpConvIntFromNull (or the appropriate FromNull op) before towards_set.
 
-/// Exact T0-1 reproduction: method sets an integer field to null via reference param.
-/// Previously panicked with "store_nr=60" in `set_int`.
+// Exact T0-1 reproduction: method sets an integer field to null via reference param.
+// Previously panicked with "store_nr=60" in `set_int`.
 #[test]
 fn set_int_field_null_via_ref() {
     code!(
@@ -394,7 +394,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Integer field set to null via direct struct access (not a method call).
+// Integer field set to null via direct struct access (not a method call).
 #[test]
 fn set_int_field_null_direct() {
     code!(
@@ -408,7 +408,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Long field set to null via reference parameter.
+// Long field set to null via reference parameter.
 #[test]
 fn set_long_field_null_via_ref() {
     code!(
@@ -423,7 +423,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Multiple scalar fields (integer, long) set to null in one method call.
+// Multiple scalar fields (integer, long) set to null in one method call.
 #[test]
 fn set_multiple_scalar_fields_null() {
     code!(
@@ -442,7 +442,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Set field to null then restore a value — round-trip correctness.
+// Set field to null then restore a value — round-trip correctness.
 #[test]
 fn null_then_reassign_integer_field() {
     code!(
@@ -466,7 +466,7 @@ fn test() {
 // freed first.  Fix: track insertion order in var_order: Vec<u16> and iterate it
 // in reverse so the last-inserted (last-allocated) variable is freed first.
 
-/// Two owned struct refs in the same scope — minimal T0-2 reproducer.
+// Two owned struct refs in the same scope — minimal T0-2 reproducer.
 #[test]
 fn lifo_store_free_two_owned_refs() {
     code!(
@@ -481,7 +481,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Three owned struct refs in the same scope — verifies LIFO holds for N > 2.
+// Three owned struct refs in the same scope — verifies LIFO holds for N > 2.
 #[test]
 fn lifo_store_free_three_owned_refs() {
     code!(
@@ -507,8 +507,8 @@ fn test() {
 // Fix: guard the convert() call so it only runs for scalar (non-reference,
 // non-collection) types.
 
-/// sorted[key] = null removes the entry.
-/// hash[key] = null removes the entry.
+// sorted[key] = null removes the entry.
+// hash[key] = null removes the entry.
 // ── PROBLEMS #39 (T0-4): `v += other_vec` shallow copy — text fields dangle ───
 // vector_add() used a raw copy_block without calling copy_claims().  Both the
 // source and destination vectors ended up with the same string-record indices;
@@ -517,10 +517,10 @@ fn test() {
 // each appended element and call copy_claims() to create independent copies of
 // string records (and sub-structures) in the destination store.
 
-/// Appending a vector<struct-with-text> to another vector must deep-copy string
-/// records.  Without the fix both bags share the same records; at end-of-scope
-/// LIFO frees the source first, then the destination tries to double-free the
-/// same records → panic.
+// Appending a vector<struct-with-text> to another vector must deep-copy string
+// records.  Without the fix both bags share the same records; at end-of-scope
+// LIFO frees the source first, then the destination tries to double-free the
+// same records → panic.
 #[test]
 fn vec_add_text_field_deep_copy() {
     code!(
@@ -539,8 +539,8 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// Appending to a non-empty destination: pre-existing and new elements all have
-/// independent text records.
+// Appending to a non-empty destination: pre-existing and new elements all have
+// independent text records.
 #[test]
 fn vec_add_text_field_non_empty_dest() {
     code!(
@@ -564,22 +564,22 @@ fn test() {
 // → copy_claims_index_body; freeing the struct after reassignment triggers the
 // Parts::Index arm of remove_claims.
 
-/// copy_claims path: a struct with an index<T[key]> field is added to a vector
-/// (triggering OpCopyRecord → copy_claims → copy_claims_index_body).
-/// Before the fix this panicked with "Not implemented".
-/// copy_claims on index with text fields: text records must be deep-copied so
-/// source and destination are independent.
-/// remove_claims path for Parts::Index: reassigning a struct that holds an
-/// index<T> field triggers database() → clear() → remove_claims on the index.
-/// Before the fix this panicked with "Not implemented".
+// copy_claims path: a struct with an index<T[key]> field is added to a vector
+// (triggering OpCopyRecord → copy_claims → copy_claims_index_body).
+// Before the fix this panicked with "Not implemented".
+// copy_claims on index with text fields: text records must be deep-copied so
+// source and destination are independent.
+// remove_claims path for Parts::Index: reassigning a struct that holds an
+// index<T> field triggers database() → clear() → remove_claims on the index.
+// Before the fix this panicked with "Not implemented".
 // ── PROBLEMS #41 (T0-6): inline ref-returning call leaks store → LIFO panic ───
 // `p.method().field` where method() returns an owned ref must wrap the temporary
 // in a work-ref variable so scopes.rs emits OpFreeRef at end-of-scope.
 
-/// Single field access on an inline ref-returning call must not leak the store.
-/// Two chained inline calls (shifted().shifted().x) must not leak either store.
-/// index[key] = null removes the entry.
-/// T2-7: mkdir creates a directory, mkdir_all creates nested directories.
+// Single field access on an inline ref-returning call must not leak the store.
+// Two chained inline calls (shifted().shifted().x) must not leak either store.
+// index[key] = null removes the entry.
+// T2-7: mkdir creates a directory, mkdir_all creates nested directories.
 #[test]
 fn mkdir_and_mkdir_all() {
     // Clean up from any previous failed run
@@ -611,15 +611,15 @@ fn mkdir_and_mkdir_all() {
 // vector_set_size may reallocate the backing store, making o_rec stale.
 // The fix snapshots the source bytes into a Vec<u8> before any resize.
 
-/// `v += v` on an integer vector: result must be a doubled vector with correct values.
-/// `v += v` on a single-element vector: result must have two equal elements.
+// `v += v` on an integer vector: result must be a doubled vector with correct values.
+// `v += v` on a single-element vector: result must have two equal elements.
 // ── T1-32: File I/O errors are no longer silently discarded ──────────────────
 // write_file/read_file/seek_file used unwrap_or_default() / unwrap_or(0),
 // swallowing OS errors with no diagnostic output.  The fix logs to stderr via
 // eprintln!.  The test below verifies that writing to a bad path does not panic
 // or hang — the error is printed to stderr and execution continues normally.
 
-/// Writing to an unwritable path must not panic; the program continues after the error.
+// Writing to an unwritable path must not panic; the program continues after the error.
 #[test]
 fn file_write_error_does_not_panic() {
     // Use a path inside a non-existent directory so File::create will fail.
@@ -640,8 +640,8 @@ fn file_write_error_does_not_panic() {
 // edition 2021+ parses `_pre14` as a prefix token (like `b"…"`), producing
 // parse errors in generated code.
 
-/// N8-naming: generated code must use `_pre_N` names, not bare `_preN`.
-/// A nested user-defined function call is enough to trigger pre-eval hoisting.
+// N8-naming: generated code must use `_pre_N` names, not bare `_preN`.
+// A nested user-defined function call is enough to trigger pre-eval hoisting.
 #[test]
 fn n8_pre_eval_uses_underscore_separator() {
     // Two nested user-fn calls: the inner call is pre-eval-hoisted by generation.rs.
@@ -663,8 +663,8 @@ fn n8_pre_eval_uses_underscore_separator() {
     }
 }
 
-/// N8-empty: generated code must not emit `let _preN = ;` (empty right-hand side).
-/// The mutable-reference pattern (user fn with `&T = null` default) triggers this.
+// N8-empty: generated code must not emit `let _preN = ;` (empty right-hand side).
+// The mutable-reference pattern (user fn with `&T = null` default) triggers this.
 #[test]
 fn n8_no_empty_pre_eval_binding() {
     code!(
@@ -687,8 +687,8 @@ fn add(r: &Data = null, val: integer) {
     }
 }
 
-/// N3: assigning a reference to another reference must emit OpCopyRecord for deep copy.
-/// Without it, both variables alias the same heap record; mutating through one changes the other.
+// N3: assigning a reference to another reference must emit OpCopyRecord for deep copy.
+// Without it, both variables alias the same heap record; mutating through one changes the other.
 #[test]
 fn n3_reference_assignment_emits_copy_record() {
     // Bytecode interpreter correctly deep-copies references already; test confirms behaviour.
@@ -710,9 +710,9 @@ a.name",
     );
 }
 
-/// N5: vector::clear_vector must not be called when the DbRef is null (rec == 0).
-/// A function that initialises and returns a vector was panicking with
-/// "Unknown record 2147483648" because clear_vector ran on stores.null() before allocation.
+// N5: vector::clear_vector must not be called when the DbRef is null (rec == 0).
+// A function that initialises and returns a vector was panicking with
+// "Unknown record 2147483648" because clear_vector ran on stores.null() before allocation.
 #[test]
 fn n5_null_dbref_clear_vector_guard() {
     code!(
@@ -732,9 +732,9 @@ fn n5_null_dbref_clear_vector_guard() {
     );
 }
 
-/// N4: struct-enum variants must show all fields when formatted with OpFormatDatabase.
-/// The init function was registering every enum value with u16::MAX as the struct type,
-/// so ShowDb could not dispatch to variant fields and only showed the variant name.
+// N4: struct-enum variants must show all fields when formatted with OpFormatDatabase.
+// The init function was registering every enum value with u16::MAX as the struct type,
+// so ShowDb could not dispatch to variant fields and only showed the variant name.
 #[test]
 fn n4_format_struct_enum_variant_shows_fields() {
     code!(
@@ -756,8 +756,8 @@ fn n4_format_struct_enum_variant_shows_fields() {
     );
 }
 
-/// N9a: the auto-generated fill.rs must contain `use crate::ops;`
-/// so it can be compiled as a crate-internal file and eventually replace src/fill.rs.
+// N9a: the auto-generated fill.rs must contain `use crate::ops;`
+// so it can be compiled as a crate-internal file and eventually replace src/fill.rs.
 #[test]
 fn n9a_generated_fill_has_ops_import() {
     let mut p = Parser::new();
@@ -776,10 +776,10 @@ fn n9a_generated_fill_has_ops_import() {
     );
 }
 
-/// N9 (N20b/N20c/N20d): auto-generated fill.rs must be byte-for-byte identical to
-/// src/fill.rs once all #rust templates are present.
-/// Generates to a thread-local temp file to avoid races with other tests writing
-/// tests/generated/fill.rs.
+// N9 (N20b/N20c/N20d): auto-generated fill.rs must be byte-for-byte identical to
+// src/fill.rs once all #rust templates are present.
+// Generates to a thread-local temp file to avoid races with other tests writing
+// tests/generated/fill.rs.
 #[test]
 fn n9_generated_fill_matches_src() {
     let mut p = Parser::new();
@@ -800,8 +800,8 @@ fn n9_generated_fill_matches_src() {
     );
 }
 
-/// N8: Sort must work correctly in native-codegen mode.
-/// The #rust template for OpSortVector is inlined directly (no OpSortVector runtime fn needed).
+// N8: Sort must work correctly in native-codegen mode.
+// The #rust template for OpSortVector is inlined directly (no OpSortVector runtime fn needed).
 #[test]
 fn n8_codegen_runtime_vector_ops_exist() {
     // Sorting a vector of integers must work in native-codegen mode.
@@ -817,10 +817,10 @@ fn n8_codegen_runtime_vector_ops_exist() {
     );
 }
 
-/// N10: ops::text_character returns char but loft represents character as i32.
-/// Generated code assigns the char to an i32 variable without a cast, causing a compile error.
-/// Also, i32 character variables used in method dispatch (is_alphanumeric etc.) need wrapping
-/// with ops::to_char(...) since the method requires char, not i32.
+// N10: ops::text_character returns char but loft represents character as i32.
+// Generated code assigns the char to an i32 variable without a cast, causing a compile error.
+// Also, i32 character variables used in method dispatch (is_alphanumeric etc.) need wrapping
+// with ops::to_char(...) since the method requires char, not i32.
 #[test]
 fn n10_char_cast_in_generated_code() {
     code!(
@@ -840,10 +840,10 @@ fn n10_char_cast_in_generated_code() {
     );
 }
 
-/// N2: output_init must register content types before the structs that reference them in
-/// sorted/index/hash fields.  When a struct has a sorted<Foo> field and Foo has a higher
-/// type-ID than the struct, the init function panicked because db.sorted(foo_type_id, ...)
-/// was called before Foo was registered.
+// N2: output_init must register content types before the structs that reference them in
+// sorted/index/hash fields.  When a struct has a sorted<Foo> field and Foo has a higher
+// type-ID than the struct, the init function panicked because db.sorted(foo_type_id, ...)
+// was called before Foo was registered.
 #[test]
 fn n2_sorted_field_content_type_registered_first() {
     code!(
@@ -871,9 +871,9 @@ struct Container { data: sorted<Sort[nr]> }"
 // read_data / write_data panic with "Not implemented" for Array / Sorted /
 // Ordered / Hash / Index / Spacial / Base — should be improved.
 
-/// S4: writing a struct with a `sorted<T>` field must be rejected at parse time
-/// with a clear message pointing the user to plain structs for serialisation.
-/// The parser catches collection fields early; the message contains "collection field".
+// S4: writing a struct with a `sorted<T>` field must be rejected at parse time
+// with a clear message pointing the user to plain structs for serialisation.
+// The parser catches collection fields early; the message contains "collection field".
 #[test]
 #[should_panic(expected = "collection field")]
 fn s4_sorted_field_write_panics_with_clear_message() {
@@ -890,8 +890,8 @@ fn test() {
     );
 }
 
-/// S4: writing a struct with a `hash<T>` field must be rejected at parse time
-/// with the same "collection field" message.
+// S4: writing a struct with a `hash<T>` field must be rejected at parse time
+// with the same "collection field" message.
 #[test]
 #[should_panic(expected = "collection field")]
 fn s4_hash_field_write_panics_with_clear_message() {
@@ -911,10 +911,10 @@ fn test() {
 // ── N1: --native CLI flag ─────────────────────────────────────────────────────
 // src/main.rs must recognise --native and run the native codegen pipeline.
 
-/// N1: parsing the default library and a trivial loft program, then generating
-/// native Rust via output_native_reachable must produce non-empty output containing
-/// the expected function signatures.  Actually running rustc is attempted if possible
-/// but is non-fatal if the loft crate cannot be linked (cargo test env dependency).
+// N1: parsing the default library and a trivial loft program, then generating
+// native Rust via output_native_reachable must produce non-empty output containing
+// the expected function signatures.  Actually running rustc is attempted if possible
+// but is non-fatal if the loft crate cannot be linked (cargo test env dependency).
 #[test]
 fn n1_native_pipeline_trivial_program() {
     use loft::generation::Output;
@@ -1016,8 +1016,8 @@ fn n1_native_pipeline_trivial_program() {
 // Parser must accept fn(params) -> ret { body } as an anonymous function
 // expression, producing a Type::Function value like a named fn-ref.
 
-/// P1.1: a basic lambda `fn(x: integer) -> integer { x * 2 }` can be assigned
-/// to a variable and called through it.
+// P1.1: a basic lambda `fn(x: integer) -> integer { x * 2 }` can be assigned
+// to a variable and called through it.
 #[test]
 fn p1_1_lambda_basic_call() {
     code!(
@@ -1030,7 +1030,7 @@ fn p1_1_lambda_basic_call() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.1: lambda passed inline to a function accepting fn(integer) -> integer.
+// P1.1: lambda passed inline to a function accepting fn(integer) -> integer.
 #[test]
 fn p1_1_lambda_as_argument() {
     code!(
@@ -1043,7 +1043,7 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.1: lambda with no return type (void).
+// P1.1: lambda with no return type (void).
 #[test]
 #[ignore = "A5: lambda captures outer variable 'count' — requires closure capture (A5, 1.1+)"]
 fn p1_1_lambda_void_body() {
@@ -1064,7 +1064,7 @@ fn p1_1_lambda_void_body() {
 // Using `string` in a struct field produces "Undefined type string" and a
 // cascade of "Invalid index key" / "Cannot write unknown" errors.
 
-/// Issue 82 / S7: `string` in a struct field must suggest `text`.
+// Issue 82 / S7: `string` in a struct field must suggest `text`.
 #[test]
 fn issue_82_string_type_is_undefined() {
     code!("struct Bad { x: string }").error(
@@ -1072,7 +1072,7 @@ fn issue_82_string_type_is_undefined() {
     );
 }
 
-/// Issue 82 positive: the same pattern with `text` must work correctly.
+// Issue 82 positive: the same pattern with `text` must work correctly.
 #[test]
 fn issue_82_text_type_works() {
     code!(
@@ -1092,7 +1092,7 @@ fn test() {
 // `key` is a pseudo-field used by hash iteration (`kv.key`) and conflicts with
 // the real struct field at the allocation level.
 
-/// Issue 83 / S8: field named `key` in a hash-value struct must be rejected at compile time.
+// Issue 83 / S8: field named `key` in a hash-value struct must be rejected at compile time.
 #[test]
 fn issue_83_hash_value_field_named_key_panics() {
     code!(
@@ -1112,7 +1112,7 @@ fn test() {
     );
 }
 
-/// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
+// Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
 #[test]
 fn issue_83_hash_value_field_renamed_works() {
     code!(
@@ -1136,7 +1136,7 @@ fn test() {
 // slot table for the recursive function when the helper's loop variables are
 // assigned. Affects both `const vector<T>` and plain `vector<T>` params.
 
-/// Issue 84: for loop in helper + recursive caller panics "Too few parameters".
+// Issue 84: for loop in helper + recursive caller panics "Too few parameters".
 #[test]
 fn issue_84_for_loop_in_helper_called_from_recursive_fn() {
     code!(
@@ -1158,7 +1158,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// Issue 84: merge sort (index-bound) also triggers the same panic.
+// Issue 84: merge sort (index-bound) also triggers the same panic.
 #[test]
 fn issue_84_merge_sort_too_few_parameters() {
     code!(
@@ -1196,8 +1196,8 @@ fn test() {
     .result(Value::Null);
 }
 
-/// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
-/// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
+// N7: OpFormatFloat must generate ops::format_float(...), not OpFormatFloat(stores, ...).
+// OpFormatStackLong must generate ops::format_long(var_, ...) without stores or &mut.
 #[test]
 fn n7_format_ops_generate_correct_rust() {
     // Float formatting
@@ -1222,8 +1222,8 @@ fn n7_format_ops_generate_correct_rust() {
 // Pattern: `e = hash[key]` (null result) followed by `hash += [Elem{...}]`
 // makes the inserted element unfindable via `hash[key]`.
 
-/// Issue 85: null hash lookup before insert — integer key.
-/// The inserted element must be findable immediately after insertion.
+// Issue 85: null hash lookup before insert — integer key.
+// The inserted element must be findable immediately after insertion.
 #[test]
 fn issue_85_hash_null_lookup_then_insert_integer_key() {
     code!(
@@ -1242,7 +1242,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// Issue 85: null hash lookup before insert — text key.
+// Issue 85: null hash lookup before insert — text key.
 #[test]
 fn issue_85_hash_null_lookup_then_insert_text_key() {
     code!(
@@ -1266,7 +1266,7 @@ fn test() {
 // with an explicit argument.  `convert()` must allocate a work-text variable
 // and route through OpAppendText + OpCreateStack, not bare OpCreateStack(text).
 
-/// Issue 89: calling `directory("sub")` with an explicit text arg must not panic.
+// Issue 89: calling `directory("sub")` with an explicit text arg must not panic.
 #[test]
 fn issue_89_optional_ref_text_param_with_arg() {
     // directory() has signature `pub fn directory(v: & text = "") -> text`.
@@ -1285,7 +1285,7 @@ fn issue_89_optional_ref_text_param_with_arg() {
 // `key` is a pseudo-field reserved for hash iteration.  A struct with a real
 // field named `key` used as a hash value type must be rejected at compile time.
 
-/// S8: hash-value struct with a `key` field must produce a compile-time error.
+// S8: hash-value struct with a `key` field must produce a compile-time error.
 #[test]
 fn s8_hash_value_struct_key_field_rejected() {
     code!(
@@ -1299,7 +1299,7 @@ fn test() { }"
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
 // Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
 
-/// P1.2: long-form lambda `fn(x: integer) -> integer { x * 2 }` with explicit annotations.
+// P1.2: long-form lambda `fn(x: integer) -> integer { x * 2 }` with explicit annotations.
 #[test]
 
 fn p1_2_short_lambda_explicit_types() {
@@ -1313,7 +1313,7 @@ fn p1_2_short_lambda_explicit_types() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Zero-parameter long-form lambda `fn() -> integer { 42 }`.
+// P1.2: Zero-parameter long-form lambda `fn() -> integer { 42 }`.
 #[test]
 
 fn p1_2_short_lambda_zero_params() {
@@ -1326,7 +1326,7 @@ fn p1_2_short_lambda_zero_params() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Two-parameter long-form lambda with explicit types.
+// P1.2: Two-parameter long-form lambda with explicit types.
 #[test]
 
 fn p1_2_short_lambda_two_params() {
@@ -1339,7 +1339,7 @@ fn p1_2_short_lambda_two_params() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Short lambda with inferred param type from call-site hint.
+// P1.2: Short lambda with inferred param type from call-site hint.
 #[test]
 
 fn p1_2_short_lambda_inferred_type() {
@@ -1355,7 +1355,7 @@ fn test() {
 
 // ── P1.3 — map / filter / reduce with inline lambdas ─────────────────────────
 
-/// P1.3: `map` with a short-form lambda.
+// P1.3: `map` with a short-form lambda.
 #[test]
 
 fn p1_3_map_short_lambda() {
@@ -1371,7 +1371,7 @@ fn p1_3_map_short_lambda() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.3: `filter` with a short-form lambda.
+// P1.3: `filter` with a short-form lambda.
 #[test]
 
 fn p1_3_filter_short_lambda() {
@@ -1387,7 +1387,7 @@ fn p1_3_filter_short_lambda() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.3: `reduce` with a short-form lambda.
+// P1.3: `reduce` with a short-form lambda.
 #[test]
 
 fn p1_3_reduce_short_lambda() {
@@ -1405,7 +1405,7 @@ fn p1_3_reduce_short_lambda() {
 // replace / to_lowercase / to_uppercase write directly into the destination
 // string variable, eliminating the scratch buffer double-copy.
 
-/// A8: `replace` result assigned to a variable produces the right string.
+// A8: `replace` result assigned to a variable produces the right string.
 #[test]
 
 fn a8_replace_into_var() {
@@ -1419,7 +1419,7 @@ fn a8_replace_into_var() {
     .result(loft::data::Value::Null);
 }
 
-/// A8: `to_lowercase` result in a format string.
+// A8: `to_lowercase` result in a format string.
 #[test]
 
 fn a8_to_lowercase_in_format() {
@@ -1433,8 +1433,8 @@ fn a8_to_lowercase_in_format() {
     .result(loft::data::Value::Null);
 }
 
-/// Assert that src/fill.rs matches what generate_code_to would produce.
-/// If this fails, run: cargo test regen_fill_rs -- --ignored --nocapture
+// Assert that src/fill.rs matches what generate_code_to would produce.
+// If this fails, run: cargo test regen_fill_rs -- --ignored --nocapture
 #[test]
 fn fill_rs_up_to_date() {
     let mut p = Parser::new();
@@ -1449,8 +1449,8 @@ fn fill_rs_up_to_date() {
     );
 }
 
-/// Regenerate src/fill.rs from the default library definitions.
-/// Run with: cargo test regen_fill_rs -- --ignored --nocapture
+// Regenerate src/fill.rs from the default library definitions.
+// Run with: cargo test regen_fill_rs -- --ignored --nocapture
 #[test]
 #[ignore = "maintenance: regenerates src/fill.rs — run manually when default/*.loft changes"]
 fn regen_fill_rs() {
@@ -1465,7 +1465,7 @@ fn regen_fill_rs() {
 // `c + d` where both are characters panics with a stack-size mismatch because
 // `parse_append_text` uses the character variable as a text destination.
 
-/// S9: character + character must produce text concatenation, not a panic.
+// S9: character + character must produce text concatenation, not a panic.
 #[test]
 fn s9_char_plus_char() {
     code!(
@@ -1479,7 +1479,7 @@ fn s9_char_plus_char() {
     .result(Value::Null);
 }
 
-/// S9: text indexing `a[0] + a[1]` must also work.
+// S9: text indexing `a[0] + a[1]` must also work.
 #[test]
 fn s9_text_index_plus_text_index() {
     code!(
@@ -1496,7 +1496,7 @@ fn s9_text_index_plus_text_index() {
 // Short-form lambdas infer types from the call-site hint.  Explicit type
 // annotations belong in the long form: fn(x: integer) -> integer { body }.
 
-/// S10: `|x: integer|` must produce a compile-time error.
+// S10: `|x: integer|` must produce a compile-time error.
 #[test]
 fn s10_short_lambda_type_annotation_rejected() {
     code!(
@@ -1510,7 +1510,7 @@ fn s10_short_lambda_type_annotation_rejected() {
 
 // ── S11 — Bare function references (no fn prefix) ────────────────────────────
 
-/// S11: bare `double` resolves as a function reference without `fn` prefix.
+// S11: bare `double` resolves as a function reference without `fn` prefix.
 #[test]
 fn s11_bare_fn_ref() {
     code!(
@@ -1523,7 +1523,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// S11: bare fn-ref with map.
+// S11: bare fn-ref with map.
 #[test]
 fn s11_bare_fn_ref_map() {
     code!(
@@ -1540,7 +1540,7 @@ fn test() {
 
 // ── L6 — Field constraints and JSON-style struct literals ─────────────────────
 
-/// L6: basic field constraint — valid construction.
+// L6: basic field constraint — valid construction.
 #[test]
 fn l6_constraint_valid_construction() {
     code!(
@@ -1559,7 +1559,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// L6: field constraint fires on invalid assignment.
+// L6: field constraint fires on invalid assignment.
 #[test]
 #[should_panic(expected = "value must be >= 0")]
 fn l6_constraint_violation_on_assign() {
@@ -1575,7 +1575,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// L6: cross-field constraint fires on invalid construction.
+// L6: cross-field constraint fires on invalid construction.
 #[test]
 #[should_panic(expected = "lo must be <= hi")]
 fn l6_cross_field_constraint_violation() {
@@ -1591,7 +1591,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// L6: JSON-style quoted field names in struct literals.
+// L6: JSON-style quoted field names in struct literals.
 #[test]
 fn l6_json_quoted_field_names() {
     code!(
@@ -1605,7 +1605,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// L6: constraint with auto-generated message.
+// L6: constraint with auto-generated message.
 #[test]
 #[should_panic(expected = "field constraint failed on Pos.x")]
 fn l6_constraint_auto_message() {
@@ -1621,7 +1621,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// L6: vector literal input parsed like JSON array.
+// L6: vector literal input parsed like JSON array.
 #[test]
 fn l6_vector_literal_as_json_array() {
     code!(
@@ -1636,7 +1636,7 @@ fn l6_vector_literal_as_json_array() {
     .result(Value::Null);
 }
 
-/// L6: validate a vector of constrained structs with format-string message.
+// L6: validate a vector of constrained structs with format-string message.
 #[test]
 fn l6_validate_vector_of_structs() {
     code!(
@@ -1661,7 +1661,7 @@ fn test() {
 
 // ── JSON-style parsing via `as` cast ─────────────────────────────────────────
 
-/// JSON-style quoted field names in `as Type` cast.
+// JSON-style quoted field names in `as Type` cast.
 #[test]
 fn json_quoted_field_names_in_cast() {
     code!(
@@ -1675,7 +1675,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// JSON-style vector of structs parsed via `as`.
+// JSON-style vector of structs parsed via `as`.
 #[test]
 fn json_vector_of_structs_cast() {
     code!(
@@ -1692,7 +1692,7 @@ fn test() {
 
 // ── Type.parse(text) ──────────────────────────────────────────────────────────
 
-/// Type.parse(text) with JSON input.
+// Type.parse(text) with JSON input.
 #[test]
 fn type_parse_json() {
     code!(
@@ -1706,7 +1706,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// Type.parse(text) with loft-native input.
+// Type.parse(text) with loft-native input.
 #[test]
 fn type_parse_loft_native() {
     code!(
@@ -1720,7 +1720,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// Type.parse(text) with variable input.
+// Type.parse(text) with variable input.
 #[test]
 fn type_parse_from_variable() {
     code!(
@@ -1735,7 +1735,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// Type.parse(text) with constraint — valid data.
+// Type.parse(text) with constraint — valid data.
 #[test]
 fn type_parse_with_constraint_valid() {
     code!(
@@ -1750,7 +1750,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// Type.parse(text) with invalid data — constraint fires.
+// Type.parse(text) with invalid data — constraint fires.
 #[test]
 #[should_panic(expected = "value must be >= 0")]
 fn type_parse_with_constraint_violation() {
@@ -1765,7 +1765,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// L6: constraint violation with format-string message (falls back to auto-generated).
+// L6: constraint violation with format-string message (falls back to auto-generated).
 #[test]
 #[should_panic(expected = "field constraint failed on Item.qty")]
 fn l6_vector_struct_constraint_violation() {
@@ -1785,7 +1785,7 @@ fn test() {
 
 // ── s#errors — error path reporting via #errors accessor ──────────────────────
 
-/// s#errors returns empty text on successful parse.
+// s#errors returns empty text on successful parse.
 #[test]
 fn errors_accessor_empty_on_success() {
     code!(
@@ -1800,7 +1800,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// s#errors returns path text on parse failure.
+// s#errors returns path text on parse failure.
 #[test]
 fn errors_accessor_path_on_failure() {
     code!(
@@ -1815,7 +1815,7 @@ fn test() {
     .result(Value::Null);
 }
 
-/// s#errors includes field path for nested struct.
+// s#errors includes field path for nested struct.
 #[test]
 fn errors_accessor_nested_path() {
     code!(
