@@ -393,20 +393,8 @@ impl Parser {
             && ref_tp.is_equal(is_type)
         {
             if matches!(**ref_tp, Type::Text(_)) {
-                // Text → & text: produce a stack-pointer reference to a text variable.
-                //
-                // When the source is already a plain variable (`Value::Var(v)`), use
-                // `OpCreateStack(v)` directly.  The reference then points to `v`'s own
-                // stack slot so any mutation inside the callee is immediately visible
-                // in the caller — the standard write-back behaviour (issue #89 fix A).
-                //
-                // When the source is a complex expression (field read, method call,
-                // …), we cannot create a direct stack reference to it.  Allocate a
-                // work-text variable, copy the expression in with OpAppendText, then
-                // reference the work variable.  Note: this path does NOT propagate
-                // mutations back to the original expression; it is only correct when
-                // the callee treats the parameter as read-only or initialises it fresh
-                // (issue #89 fix B / text_ref wrapper).
+                // Text → &text: use OpCreateStack for plain variables (write-back),
+                // allocate a work-text copy for complex expressions (read-only).
                 let orig = std::mem::replace(code, Value::Null);
                 if let Value::Var(_) = &orig {
                     *code = self.cl("OpCreateStack", &[orig]);

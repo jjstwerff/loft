@@ -19,35 +19,9 @@ use crate::state::State;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-/// Discover and run callable functions in `.loft` files under `root_dir`.
-///
-/// Every zero-parameter user function (and single-`vector<text>` functions when
-/// `@ARGS` supplies positional arguments) is treated as a test entry point.
-/// Each function runs with a fresh `State` so tests cannot leak heap/store
-/// state into each other.
-///
-/// ## File annotations (header comments)
-///
-/// ```text
-/// // @ARGS: --lib path --production arg1 arg2
-/// // @EXPECT_ERROR: substring
-/// // @EXPECT_FAIL: substring          (file-level — applies to all fns)
-/// ```
-///
-/// `@EXPECT_FAIL` on the line immediately before a `fn` applies to that
-/// function only:
-///
-/// ```text
-/// // @EXPECT_FAIL: out of bounds
-/// fn test_bad() { ... }
-/// ```
-///
-/// `@ARGS` supports the same flags as the main CLI (`--lib`, `--project`,
-/// `--production`, `--log-conf`); remaining positional tokens are passed as
-/// `argv` to the loft program, so scripts that accept `fn main(args:
-/// vector<text>)` work like normal UNIX commands.
-///
-/// Returns exit code: 0 if all tests pass, 1 if any fail.
+/// Run all zero-parameter functions in `.loft` files under `root_dir` as tests.
+/// Supports `@ARGS`, `@EXPECT_ERROR`, and `@EXPECT_FAIL` file annotations.
+/// Returns 0 if all pass, 1 if any fail.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_tests(
     default_dir: &str,

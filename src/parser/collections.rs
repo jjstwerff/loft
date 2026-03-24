@@ -840,32 +840,8 @@ use #count instead"
         }
     }
 
-    // Desugar a parallel for loop:
-    //   for a in <vec> par(b=worker(a), N) { body }
-    // into an index-based loop over the parallel_for result.
-    //
-    // Supported worker call forms:
-    //   Form 1: func(a)         — global/user function; a is the element variable
-    //   Form 2: a.method()      — method on the element type; a is the loop variable
-    //   Form 3: c.method(a)     — NOT YET SUPPORTED (captured receiver + element arg)
-    //
-    // Limitations:
-    //   • Input must be a vector<T>; integer ranges (1..10) are not supported.
-    //   • The worker must return a primitive type: integer, long, float, or boolean.
-    //     text and reference return types require store-merging (deferred).
-    //   • Form 3 (captured receiver) requires IR-level wrapper synthesis (deferred).
-    //   • The element type T must be a struct (reference) or enum for form 2.
-    //
-    // The desugared IR:
-    //   par_len#N   = len(input_vec)
-    //   par_results#N = parallel_for(input_vec, elem_size, return_size, threads, fn_d_nr)
-    //   b#index     = 0
-    //   loop {
-    //     if par_len#N <= b#index { break }
-    //     b = parallel_get_T(par_results#N, b#index)
-    //     <body>
-    //     b#index += 1
-    //   }
+    // Desugar `for a in vec par(b = worker(a), N) { body }` into an
+    // index-based loop over the `parallel_for` result vector.
     pub(crate) fn parse_parallel_for_loop(
         &mut self,
         code: &mut Value,

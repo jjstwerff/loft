@@ -163,26 +163,7 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
     }
 }
 
-/// Walk a single IR node to place large variables and recurse into child scopes.
-///
-/// - `Value::Set(v, _)` where `v` belongs to `scope` and `v` is large (> 8 B):
-///   assign `v.stack_pos = *tos` and advance `*tos`.
-/// - `Value::Block` / `Value::Loop`: recurse via `process_scope` (child has own frame).
-/// - `Value::If`: process then/else each starting from the same `*tos`; after both, `*tos`
-///   is unchanged (`gen_if` resets `stack.position` between arms and restores on exit).
-/// - Other compound nodes: recurse into sub-expressions.
-///
-/// # Zone-2 ordering invariant
-///
-/// This function finds a large variable `v` only when `Value::Set(v, ...)` appears as a
-/// **direct top-level operator** of the enclosing scope's Block, or as the direct RHS of
-/// such a Set (e.g. `Set(outer, Block([Set(inner, ...), ...]))`).  If a parser change
-/// places a first-assignment `Set(v, ...)` inside a non-recursed position — for example
-/// as an argument to a `Call` node — `v` would never be visited here and would keep
-/// `stack_pos = u16::MAX`, causing a panic in `generate_set` at codegen time.
-///
-/// The parser currently guarantees that every variable's first assignment is a block-level
-/// statement, never nested inside an expression.  Document any future exception here.
+/// Place large (> 8B) variables at TOS in IR-walk order, recurse into child scopes.
 fn place_large_and_recurse(
     function: &mut Function,
     val: &mut Value,
