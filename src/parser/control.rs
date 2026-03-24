@@ -1534,6 +1534,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_call(&mut self, val: &mut Value, source: u16, name: &str) -> Type {
         let call_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
@@ -1568,6 +1569,29 @@ impl Parser {
                 let expected = self.data.attr_type(d_nr, arg_idx);
                 if matches!(expected, Type::Function(_, _)) {
                     self.lambda_hint = expected;
+                }
+            }
+            // S10: for map/filter/reduce, infer lambda hint from the vector
+            // element type so that short-form |x| lambdas can infer types.
+            if fn_def_nr.is_none()
+                && !types.is_empty()
+                && let Type::Vector(elm, _) = &types[0]
+            {
+                let elem = *elm.clone();
+                let hint = match (name, arg_idx) {
+                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem))),
+                    ("filter", 1) => Some(Type::Function(vec![elem], Box::new(Type::Boolean))),
+                    ("reduce", 2) => {
+                        let init_tp = types.get(1).cloned().unwrap_or(elem.clone());
+                        Some(Type::Function(
+                            vec![init_tp.clone(), elem],
+                            Box::new(init_tp),
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(h) = hint {
+                    self.lambda_hint = h;
                 }
             }
             let mut p = Value::Null;

@@ -33,58 +33,58 @@ fn main() {
   // --- Full-form lambda: passed as argument ---
   assert(apply(fn(x: integer) -> integer { x * x }, 7) == 49, "inline lambda arg: 7^2={apply(fn(x: integer) -> integer { x * x }, 7)}");
 
-  // --- Short-form lambda: explicit types ---
-  triple = |x: integer| -> integer { x * 3 };
-  assert(triple(4) == 12, "short lambda triple(4)={triple(4)}");
-  assert(triple(0) == 0, "short lambda triple(0)={triple(0)}");
+  // --- Long-form lambda: explicit types ---
+  triple = fn(x: integer) -> integer { x * 3 };
+  assert(triple(4) == 12, "long lambda triple(4)={triple(4)}");
+  assert(triple(0) == 0, "long lambda triple(0)={triple(0)}");
 
   // --- Short-form lambda: zero params ---
-  const_42 = || -> integer { 42 };
+  const_42 = fn() -> integer { 42 };
   assert(const_42() == 42, "zero-param lambda const_42={const_42()}");
 
-  // --- Short-form lambda: two params ---
-  mul_fn = |a: integer, b: integer| -> integer { a * b };
-  assert(mul_fn(6, 7) == 42, "short lambda mul(6,7)={mul_fn(6,7)}");
+  // --- Long-form lambda: two params ---
+  mul_fn = fn(a: integer, b: integer) -> integer { a * b };
+  assert(mul_fn(6, 7) == 42, "long lambda mul(6,7)={mul_fn(6,7)}");
 
   // --- Short-form lambda: type inferred from call context ---
-  assert(apply(|x: integer| -> integer { x + 10 }, 5) == 15, "short lambda inferred: apply(+10, 5)");
-  assert(apply2(|a: integer, b: integer| -> integer { a - b }, 10, 3) == 7, "short lambda 2params inferred");
+  assert(apply(|x| { x + 10 }, 5) == 15, "short lambda inferred: apply(+10, 5)");
+  assert(apply2(|a, b| { a - b }, 10, 3) == 7, "short lambda 2params inferred");
 
   // --- Predicate lambda ---
-  assert(apply_pred(|x: integer| -> boolean { x > 0 }, 1), "pred lambda: 1 > 0");
-  assert(!apply_pred(|x: integer| -> boolean { x > 0 }, -1), "pred lambda: -1 not > 0");
+  assert(apply_pred(|x| { x > 0 }, 1), "pred lambda: 1 > 0");
+  assert(!apply_pred(|x| { x > 0 }, -1), "pred lambda: -1 not > 0");
 
   // --- Lambda stored, called multiple times ---
-  inc = |x: integer| -> integer { x + 1 };
+  inc = fn(x: integer) -> integer { x + 1 };
   assert(inc(0) == 1, "stored lambda inc(0)");
   assert(inc(99) == 100, "stored lambda inc(99)");
 
   // --- map with short-form lambda ---
   nums = [1, 2, 3, 4, 5];
-  doubled = map(nums, |x: integer| -> integer { x * 2 });
+  doubled = map(nums, |x| { x * 2 });
   assert(doubled[0] == 2, "map short lambda [0]={doubled[0]}");
   assert(doubled[2] == 6, "map short lambda [2]={doubled[2]}");
   assert(doubled[4] == 10, "map short lambda [4]={doubled[4]}");
 
   // --- filter with short-form lambda ---
-  evens = filter(nums, |x: integer| -> boolean { x % 2 == 0 });
+  evens = filter(nums, |x| { x % 2 == 0 });
   assert(len(evens) == 2, "filter even len={len(evens)}");
   assert(evens[0] == 2, "filter even [0]={evens[0]}");
   assert(evens[1] == 4, "filter even [1]={evens[1]}");
 
   // --- reduce with short-form lambda ---
-  total = reduce(nums, 0, |acc: integer, x: integer| -> integer { acc + x });
+  total = reduce(nums, 0, |acc, x| { acc + x });
   assert(total == 15, "reduce sum={total}");
 
-  product = reduce(nums, 1, |acc: integer, x: integer| -> integer { acc * x });
+  product = reduce(nums, 1, |acc, x| { acc * x });
   assert(product == 120, "reduce product={product}");
 
   // --- map then filter with lambdas ---
-  big = filter(map(nums, |x: integer| -> integer { x * 10 }), |x: integer| -> boolean { x > 25 });
+  big = filter(map(nums, |x| { x * 10 }), |x| { x > 25 });
   assert(len(big) == 3, "map+filter len={len(big)}");
   assert(big[0] == 30, "map+filter [0]={big[0]}");
 
   // --- fold (reduce) with custom lambda ---
   v2 = [10, 20, 30];
-  assert(fold(|a: integer, b: integer| -> integer { a + b }, 0, v2) == 60, "fold sum={fold(|a: integer, b: integer| -> integer { a + b }, 0, v2)}");
+  assert(fold(|a, b| { a + b }, 0, v2) == 60, "fold sum={fold(|a, b| { a + b }, 0, v2)}");
 }

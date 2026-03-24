@@ -245,19 +245,19 @@ fn test_reverse_empty() {
 
 fn test_map_method() {
   v = [1, 2, 3, 4, 5];
-  r = v.map(|x: integer| -> integer { x * x });
+  r = v.map(|x| { x * x });
   assert("{r}" == "[1,4,9,16,25]", "map method");
 }
 
 fn test_filter_method() {
   v = [1, 2, 3, 4, 5, 6];
-  r = v.filter(|x: integer| -> boolean { x % 2 == 0 });
+  r = v.filter(|x| { x % 2 == 0 });
   assert("{r}" == "[2,4,6]", "filter method");
 }
 
 fn test_reduce_method() {
   v = [1, 2, 3, 4, 5];
-  r = v.reduce(0, |acc: integer, x: integer| -> integer { acc + x });
+  r = v.reduce(0, |acc, x| { acc + x });
   assert(r == 15, "reduce method");
 }
 

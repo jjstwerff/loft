@@ -1572,13 +1572,18 @@ use a separate collection or add after the loop"
                 };
                 let idx = param_names.len();
                 let tp = if self.lexer.has_token(":") {
-                    // Explicit annotation — parse type in the outer context.
-                    if let Some(type_name) = self.lexer.has_identifier() {
-                        self.parse_type(self.context, &type_name, false)
-                            .unwrap_or(Type::Unknown(0))
-                    } else {
-                        Type::Unknown(0)
-                    }
+                    // S10: type annotations are not allowed in |x| short-form lambdas.
+                    // Use the long form fn(x: type) -> ret { body } instead.
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Type annotations are not allowed in |x| lambdas — \
+                         use fn({pname}: <type>) -> <ret> {{ ... }} instead"
+                    );
+                    // Consume the type token so parsing can continue.
+                    let _ = self.lexer.has_identifier();
+                    // Infer from hint to keep parsing viable.
+                    hint_params.get(idx).cloned().unwrap_or(Type::Unknown(0))
                 } else {
                     // Infer from hint.
                     hint_params.get(idx).cloned().unwrap_or(Type::Unknown(0))
@@ -1611,7 +1616,7 @@ use a separate collection or add after the loop"
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Cannot infer type for lambda parameter '{}'; add an explicit ': type' annotation or pass the lambda where the expected type is known",
+                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) -> <ret> {{{{ ... }}}}",
                         a.name
                     );
                 }
@@ -1639,9 +1644,15 @@ use a separate collection or add after the loop"
         }
         let d_nr = self.context;
 
-        // Parse optional return-type annotation.
+        // S10: return-type annotations are not allowed in |x| short-form lambdas.
         let has_arrow = self.lexer.has_token("->");
         let result = if has_arrow {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Return-type annotations are not allowed in |x| lambdas — \
+                 use fn(…) -> <ret> {{ ... }} instead"
+            );
             if let Some(type_name) = self.lexer.has_identifier() {
                 self.parse_type(d_nr, &type_name, true)
                     .unwrap_or(Type::Void)
@@ -2490,11 +2501,34 @@ use a separate collection or add after the loop"
                     let vec_val = code.clone();
                     let mut list = vec![vec_val];
                     let mut types = vec![t.clone()];
+                    let mut m_arg_idx = 1usize;
                     loop {
+                        // S10: infer lambda hint from vector element type.
+                        if let Type::Vector(elm, _) = &t {
+                            let elem = *elm.clone();
+                            let hint = match (field.as_str(), m_arg_idx) {
+                                ("map", 1) => {
+                                    Some(Type::Function(vec![elem.clone()], Box::new(elem)))
+                                }
+                                ("filter", 1) => {
+                                    Some(Type::Function(vec![elem], Box::new(Type::Boolean)))
+                                }
+                                ("reduce", 1) => Some(Type::Function(
+                                    vec![elem.clone(), elem.clone()],
+                                    Box::new(elem),
+                                )),
+                                _ => None,
+                            };
+                            if let Some(h) = hint {
+                                self.lambda_hint = h;
+                            }
+                        }
                         let mut p = Value::Null;
                         let pt = self.expression(&mut p);
+                        self.lambda_hint = Type::Unknown(0);
                         list.push(p);
                         types.push(pt);
+                        m_arg_idx += 1;
                         if !self.lexer.has_token(",") {
                             break;
                         }

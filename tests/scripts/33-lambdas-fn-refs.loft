@@ -17,17 +17,17 @@ fn test_lambda_as_argument() {
 }
 
 fn test_short_lambda_explicit_types() {
-  double = |x: integer| -> integer { x * 2 };
+  double = fn(x: integer) -> integer { x * 2 };
   assert(double(7) == 14, "short lambda explicit");
 }
 
 fn test_short_lambda_zero_params() {
-  greet = || -> text { "hello" };
+  greet = fn() -> text { "hello" };
   assert(greet() == "hello", "zero params");
 }
 
 fn test_short_lambda_two_params() {
-  add = |a: integer, b: integer| -> integer { a + b };
+  add = fn(a: integer, b: integer) -> integer { a + b };
   assert(add(3, 4) == 7, "two params");
 }
 
@@ -102,7 +102,7 @@ fn test_reduce_with_fn_ref() {
 
 fn test_map_inline_lambda() {
   v = [1, 2, 3];
-  r = map(v, |x: integer| -> integer { x * 10 });
+  r = map(v, |x| { x * 10 });
   assert(r[0] == 10, "r[0]");
   assert(r[1] == 20, "r[1]");
   assert(r[2] == 30, "r[2]");
@@ -110,7 +110,7 @@ fn test_map_inline_lambda() {
 
 fn test_filter_inline_lambda() {
   v = [1, 2, 3, 4, 5, 6];
-  evens = filter(v, |x: integer| -> boolean { x % 2 == 0 });
+  evens = filter(v, |x| { x % 2 == 0 });
   assert(len(evens) == 3, "expected 3 evens");
   assert(evens[0] == 2, "evens[0]");
   assert(evens[2] == 6, "evens[2]");
@@ -118,6 +118,6 @@ fn test_filter_inline_lambda() {
 
 fn test_reduce_inline_lambda() {
   v = [1, 2, 3, 4, 5];
-  total = reduce(v, 0, |acc: integer, x: integer| -> integer { acc + x });
+  total = reduce(v, 0, |acc, x| { acc + x });
   assert(total == 15, "expected 15, got {total}");
 }

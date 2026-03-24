@@ -1127,10 +1127,12 @@ use #count instead"
         // and subsequent `for x in r` iterations resolve correctly.
         // We must NOT create unique variables here — only determine the type.
         if self.first_pass {
-            if types.len() >= 2
-                && let Type::Function(_, ret) = &types[1]
-            {
-                return Type::Vector(ret.clone(), Vec::new());
+            // On first pass, infer output element type from the input vector.
+            // The lambda return type may not be fully resolved yet; defaulting
+            // to the input element type is correct for most cases (e.g. x * 10)
+            // and lets downstream code like r[0] type-check.
+            if let Type::Vector(elm, _) = &types[0] {
+                return Type::Vector(elm.clone(), Vec::new());
             }
             return placeholder;
         }

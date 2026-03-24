@@ -1727,13 +1727,13 @@ fn test() { }"
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
 // Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
 
-/// P1.2: `|x: integer| -> integer { x * 2 }` with fully explicit annotations.
+/// P1.2: long-form lambda `fn(x: integer) -> integer { x * 2 }` with explicit annotations.
 #[test]
 
 fn p1_2_short_lambda_explicit_types() {
     code!(
         "fn test() {
-    f = |x: integer| -> integer { x * 2 };
+    f = fn(x: integer) -> integer { x * 2 };
     assert(f(5) == 10, \"expected 10\");
     assert(f(21) == 42, \"expected 42\");
 }"
@@ -1741,26 +1741,26 @@ fn p1_2_short_lambda_explicit_types() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Zero-parameter short lambda `|| -> integer { 42 }`.
+/// P1.2: Zero-parameter long-form lambda `fn() -> integer { 42 }`.
 #[test]
 
 fn p1_2_short_lambda_zero_params() {
     code!(
         "fn test() {
-    f = || -> integer { 42 };
+    f = fn() -> integer { 42 };
     assert(f() == 42, \"expected 42\");
 }"
     )
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Two-parameter short lambda with explicit types.
+/// P1.2: Two-parameter long-form lambda with explicit types.
 #[test]
 
 fn p1_2_short_lambda_two_params() {
     code!(
         "fn test() {
-    add = |a: integer, b: integer| -> integer { a + b };
+    add = fn(a: integer, b: integer) -> integer { a + b };
     assert(add(3, 4) == 7, \"expected 7\");
 }"
     )
@@ -1790,7 +1790,7 @@ fn p1_3_map_short_lambda() {
     code!(
         "fn test() {
     v = [1, 2, 3];
-    r = map(v, |x: integer| -> integer { x * 10 });
+    r = map(v, |x| { x * 10 });
     assert(r[0] == 10, \"r[0]\");
     assert(r[1] == 20, \"r[1]\");
     assert(r[2] == 30, \"r[2]\");
@@ -1806,7 +1806,7 @@ fn p1_3_filter_short_lambda() {
     code!(
         "fn test() {
     v = [1, 2, 3, 4, 5, 6];
-    evens = filter(v, |x: integer| -> boolean { x % 2 == 0 });
+    evens = filter(v, |x| { x % 2 == 0 });
     assert(len(evens) == 3, \"expected 3 evens\");
     assert(evens[0] == 2, \"evens[0]\");
     assert(evens[2] == 6, \"evens[2]\");
@@ -1822,7 +1822,7 @@ fn p1_3_reduce_short_lambda() {
     code!(
         "fn test() {
     v = [1, 2, 3, 4, 5];
-    total = reduce(v, 0, |acc: integer, x: integer| -> integer { acc + x });
+    total = reduce(v, 0, |acc, x| { acc + x });
     assert(total == 15, \"expected 15, got {total}\");
 }"
     )
@@ -1902,4 +1902,20 @@ fn s9_text_index_plus_text_index() {
 }"
     )
     .result(Value::Null);
+}
+
+// ── S10 — Disallow type annotations in |x| short-form lambdas ────────────────
+// Short-form lambdas infer types from the call-site hint.  Explicit type
+// annotations belong in the long form: fn(x: integer) -> integer { body }.
+
+/// S10: `|x: integer|` must produce a compile-time error.
+#[test]
+fn s10_short_lambda_type_annotation_rejected() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3];
+    r = map(v, |x: integer| { x * 2 });
+}"
+    )
+    .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) -> <ret> { ... } instead at s10_short_lambda_type_annotation_rejected:3:27");
 }
