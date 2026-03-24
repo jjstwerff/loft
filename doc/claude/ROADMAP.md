@@ -8,39 +8,17 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 
 **Effort key:** Small · Medium · Med–High · High · Very High
 
+**Maintenance rule:** When an item is completed, remove it from this file entirely.
+Do not keep completed items — the ROADMAP tracks only what remains to be done.
+Completed work belongs in CHANGELOG.md (user-facing) and git history (implementation).
+Issue IDs (S9, A1.2, etc.) must not appear in source code comments either; use
+plain English describing the purpose of the code.
+
 ---
 
 ## 0.8.2 — Native stability, slot correctness, and interpreter performance
 
-**Native test parity achieved (2026-03-23):** all 305 `.loft` tests pass in both
-interpreter and native mode.  Issues #77 (fn-ref dispatch) and #80 (LIFO store-free)
-are fixed.  `loft --tests --native` with binary caching, stale-rlib auto-rebuild,
-and `file.loft::fn` filtering is implemented.  CI now fails on any native regression.
-
-**Completed in this cycle:**
-- **S5** — Optional `& text` parameter overflow. ✓
-- **S9** — `character + character` codegen panic. ✓
-- **S10** — Disallow type annotations in `|x|` lambdas; lambda hints for map/filter/reduce. ✓
-- **S11** — Bare function references; `fn` prefix forbidden. ✓
-- **S12** — PNG loading field offset fix. ✓
-- **S13** — `pub` visibility enforcement on imports. ✓
-- **L6.1** — Parser: `assert(expr)` in field definitions. ✓
-- **L6.2** — Bytecode: constraint checks after field writes. ✓
-- **L6** — `Type.parse(text)` with JSON support, `s#errors` accessor, `vector<T>.parse()`. ✓
-- **L6.3** — Native codegen field constraints. ✓
-- **O1** — Superinstruction opcodes registered; disassembler; `fill_rs_up_to_date` CI. ✓ (peephole deferred)
-- **O6** — `_nn` non-null long arithmetic variants. ✓
-- **A1.1** — Extra integer context args forwarded to parallel workers. ✓
-- **A1.2** — Parallel returns for all types: text (two-phase), enum, single, generic `return_size`. ✓
-- **A13.2+A13.3** — `Value::Iter` arm in `build_scope_parents` and `scan_inner`. ✓
-- `computed(expr)` fields — calculate on access, not stored; `default(expr)` removed. ✓
-- `i_` internal namespace — hidden functions (`i_parse_errors`, `i_parse_error_push`). ✓
-- Named arguments — `func(host: "x", tls: false)` with default-gap filling. ✓
-- Native parallel text — `n_parallel_for_text_native`; extra context args forwarded. ✓
-- JSON documentation — `tests/docs/24-json.loft` with serialisation, parsing, vectors, errors. ✓
-- Code quality — split `generation.rs`, `variables.rs`, `main.rs`, `expressions.rs`; 10 `too_many_lines` removed. ✓
-
-**Remaining for 0.8.2:**
+**Remaining:**
 
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
