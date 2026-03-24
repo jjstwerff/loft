@@ -925,6 +925,20 @@ use a separate collection or add after the loop"
             if operator.is_empty() {
                 if !ls.is_empty() {
                     if matches!(current_type, Type::Text(_) | Type::Character) {
+                        if current_type == Type::Character {
+                            // S9: a Character variable cannot serve as an OpAppendText
+                            // destination.  Prepend it to the parts list and use an empty
+                            // text literal as the first operand so parse_append_text
+                            // creates a fresh work text.
+                            ls.insert(0, (code.clone(), Type::Character));
+                            *code = Value::Text(String::new());
+                            return self.parse_append_text(
+                                code,
+                                &Type::Text(Vec::new()),
+                                &ls,
+                                u16::MAX,
+                            );
+                        }
                         return self.parse_append_text(code, &current_type, &ls, orig_var);
                     } else if matches!(current_type, Type::Vector(_, _)) {
                         return self.parse_append_vector(code, &current_type, &ls, orig_var);
@@ -1266,7 +1280,9 @@ use a separate collection or add after the loop"
             }
         }
         let tp = Type::Text(vec![var_nr]);
-        if orig_var == u16::MAX {
+        if orig_var == u16::MAX || var_nr != orig_var {
+            // A new work text was created (either no orig_var, or orig_var was a
+            // Character variable) — wrap in a Block so the work text appears on the stack.
             ls.push(Value::Var(var_nr));
             *code = v_block(ls, tp.clone(), "Add text");
             return tp;
