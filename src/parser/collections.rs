@@ -919,9 +919,12 @@ use #count instead"
         self.lexer.token(")");
 
         // Compute element size from the return type.
-        // return_size = 0 signals text mode to n_parallel_for.
+        // return_size =  0 signals text mode to n_parallel_for.
+        // return_size = -1 signals reference (struct) mode.
         let return_size: i32 = if matches!(&ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
+        } else if matches!(&ret_type, Type::Reference(_, _)) {
+            -1 // sentinel: reference mode — workers return DbRef, main deep-copies
         } else {
             let sz = i32::from(var_size(&ret_type, &Context::Argument));
             if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || sz > 8) {
@@ -965,7 +968,7 @@ use #count instead"
 
     // parallel_for IR builder; threads unrelated IR params alongside &mut self — no sensible grouping
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn build_parallel_for_ir(
         &mut self,
         code: &mut Value,
@@ -1019,6 +1022,10 @@ use #count instead"
         if matches!(b_type, Type::Integer(_, _) | Type::Unknown(_)) {
             self.vars.in_use(b_var, true);
         }
+        // Reference return: b_var borrows from the result vector — must not be freed.
+        if matches!(ret_type, Type::Reference(_, _)) {
+            self.vars.set_skip_free(b_var);
+        }
 
         // Parse the body block.
         self.vars.loop_var(b_var);
@@ -1064,7 +1071,16 @@ use #count instead"
         // Use OpGetVector + get_field to extract the element from the result
         // vector. This works for all return types (int, long, float, bool, text)
         // without per-type getter functions.
-        let result_elem_size = if return_size == 0 { 4i32 } else { return_size };
+        let result_elem_size = match return_size {
+            0 => 4, // text: 4-byte string pointer per element
+            -1 => {
+                // reference: inline struct size from the database
+                let ret_td = self.data.type_def_nr(ret_type);
+                let known = self.data.def(ret_td).known_type;
+                i32::from(self.database.size(known))
+            }
+            other => other,
+        };
         let get_vec = self.cl(
             "OpGetVector",
             &[

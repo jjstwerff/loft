@@ -487,7 +487,7 @@ impl Output<'_> {
                         let (struct_size, known_type) =
                             if let Type::Reference(d_nr, _) = &worker_ret {
                                 let kt = self.data.def(*d_nr).known_type;
-                                (i32::from(self.stores.size(kt)), kt as i32)
+                                (i32::from(self.stores.size(kt)), i32::from(kt))
                             } else {
                                 (0, 0)
                             };
