@@ -222,7 +222,7 @@ impl Parser {
                 if !ls.is_empty() {
                     if matches!(current_type, Type::Text(_) | Type::Character) {
                         if current_type == Type::Character {
-                            // S9: a Character variable cannot serve as an OpAppendText
+                            // a Character variable cannot serve as an OpAppendText
                             // destination.  Prepend it to the parts list and use an empty
                             // text literal as the first operand so parse_append_text
                             // creates a fresh work text.

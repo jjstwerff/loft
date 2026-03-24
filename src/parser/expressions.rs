@@ -352,7 +352,7 @@ use a separate collection or add after the loop"
         if var_nr == u16::MAX {
             self.validate_write(to, &parent_tp);
         }
-        // A9: materialise an iterator (e.g. v[a..b] slice) into a vector variable.
+        // materialise an iterator (e.g. v[a..b] slice) into a vector variable.
         if matches!(&s_type, Type::Iterator(_, _))
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
@@ -441,7 +441,7 @@ use a separate collection or add after the loop"
         if !matches!(code, Value::Insert(_)) {
             *code = self.towards_set(to, code, f_type, &op[0..1]);
         }
-        // L6.2: emit field constraint check after assignment to a constrained field.
+        // emit field constraint check after assignment to a constrained field.
         if !self.first_pass
             && let Type::Reference(struct_dnr, _) = &parent_tp
             && let Value::Call(_, to_args) = to
@@ -767,7 +767,7 @@ mod tests {
     use super::inline_ref_set_in;
     use crate::data::{Block, Type, Value};
 
-    /// S2: `inline_ref_set_in` must return false conservatively when nesting exceeds the limit.
+    /// `inline_ref_set_in` must return false conservatively when nesting exceeds the limit.
     #[test]
     fn inline_ref_set_in_depth_limit_returns_false() {
         let mut v: Value = Value::Null;

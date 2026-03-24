@@ -143,7 +143,7 @@ impl Parser {
             *code = self.data.attr_value(*enr, *a_nr);
             t = parent_tp.clone();
         } else {
-            // S11: try resolving as a bare function reference.
+            // try resolving as a bare function reference.
             // On the first pass, only do this when the identifier is NOT followed
             // by '=' (assignment position), so that `double = 5` still creates a
             // local variable that shadows the function name.
@@ -974,7 +974,7 @@ impl Parser {
         self.lexer.token("}");
         if !self.first_pass {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
-            // L6.2: emit all field constraint checks after construction completes.
+            // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
             for a_nr in 0..self.data.def(td_nr).attributes.len() {
                 let check = self.data.def(td_nr).attributes[a_nr].check.clone();

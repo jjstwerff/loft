@@ -1092,7 +1092,7 @@ impl Parser {
                 actual.push(actual_code);
                 continue;
             }
-            // P44: empty `[]` literal → create temp vector where parameter type is known.
+            // empty `[]` literal → create temp vector where parameter type is known.
             if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
                 && let Type::Vector(elm_tp, dep) = &tp
             {
@@ -1340,7 +1340,7 @@ impl Parser {
             {
                 break;
             }
-            // S13: mark newly created definitions as pub-visible.
+            // mark newly created definitions as pub-visible.
             if is_pub {
                 for d_nr in before..self.data.definitions() {
                     self.data.def_mut(d_nr).pub_visible = true;
@@ -1592,7 +1592,7 @@ impl Parser {
                     a.name
                 );
             }
-            // T3-6: warn when `const` is used on a primitive parameter that is never
+            // warn when `const` is used on a primitive parameter that is never
             // written to — the annotation is redundant since the parameter would not
             // have been modified anyway.  Compound types (vector, reference, struct)
             // are exempt: `const` serves as read-only documentation on those.

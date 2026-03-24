@@ -93,7 +93,7 @@ impl State {
     /// index into `stores[stack_cur.store_nr]` which is out of range for the heap
     /// store array and will panic.  This `DbRef` must be overwritten by `OpPutRef`
     /// before any field access.  See `ASSIGNMENT.md` §"Option A sub-option 3" and
-    /// the known bug in `tests/slot_assign.rs::long_lived_int_and_copy_record_followed_by_ref`.
+    /// a known slot-assignment edge case.
     #[inline]
     pub fn create_stack(&mut self) {
         let pos = *self.code::<u16>();

@@ -978,7 +978,7 @@ mod tests {
         );
     }
 
-    /// S2: `compute_intervals` must panic with a depth-limit message when nesting exceeds 1000.
+    /// `compute_intervals` must panic with a depth-limit message when nesting exceeds 1000.
     #[test]
     #[should_panic(expected = "expression nesting limit")]
     fn compute_intervals_depth_limit() {

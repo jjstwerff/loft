@@ -957,7 +957,7 @@ impl Parser {
             is_computed |=
                 self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
             if self.lexer.has_token("assert") {
-                // L6: assert(condition) or assert(condition, message) on struct fields.
+                // assert(condition) or assert(condition, message) on struct fields.
                 self.lexer.token("(");
                 self.expression(&mut check);
                 if self.lexer.has_token(",") {

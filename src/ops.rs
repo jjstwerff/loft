@@ -864,7 +864,7 @@ mod test {
         let _ = op_min_long(i64::MIN + 1, 1);
     }
 
-    /// O3: compile-time guard — `_int` functions must never reference `i64::MIN`.
+    /// compile-time guard — `_int` functions must never reference `i64::MIN`.
     /// Integer paths use `i32::MIN` as their null sentinel.  Any `i64::MIN` check
     /// in an `_int` function would add an unnecessary branch on every integer op.
     #[test]

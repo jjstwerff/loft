@@ -10,7 +10,7 @@ use crate::variables::size;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Returns true for the three text-returning native functions that use destination-passing (A8).
+/// Text-returning natives that accept a destination buffer instead of allocating one.
 fn is_text_dest_native(name: &str) -> bool {
     matches!(
         name,
@@ -441,22 +441,13 @@ impl State {
 
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
-        // Null-typed variables (e.g. `x = null`) have size 0 and no stack storage.
-        // assign_slots sets their slot to 0 as a sentinel; skip allocation entirely.
+        // Zero-sized variables (null-typed) have no stack storage.
         if size(stack.function.tp(v), &Context::Variable) == 0 {
             stack.function.set_stack_allocated(v);
             return;
         }
         let pos = stack.function.stack(v);
-        // Step 9: a variable that escaped assign_slots would silently corrupt the stack
-        // in release builds.  One unconditional integer compare catches it here.
-        assert!(
-            pos != u16::MAX,
-            "[generate_set] variable '{}' (var_nr={v}) in '{}' has stack_pos == u16::MAX — \
-             it was never assigned a slot by assign_slots.  This is a compiler bug.",
-            stack.function.name(v),
-            stack.data.def(stack.def_nr).name,
-        );
+        assert!(pos != u16::MAX, "variable '{}' never assigned a slot", stack.function.name(v));
         if stack.function.is_stack_allocated(v) {
             // Reassignment — variable already on the stack.
             if matches!(stack.function.tp(v), Type::Text(_)) {
@@ -466,10 +457,7 @@ impl State {
             }
             self.set_var(stack, v, value);
         } else {
-            // First allocation — slot pre-assigned by assign_slots (A6.3).
-            // Check: does the first-assignment value reference v itself?
-            // A Var(v) inside the value reads an uninitialised stack slot — always a parser bug.
-            // Classic example: OpCopyRecord(src, v, tp) passed as a function's self-arg.
+            // First allocation — slot pre-assigned by assign_slots.
             #[cfg(debug_assertions)]
             assert!(
                 !ir_contains_var(value, v),
@@ -579,7 +567,7 @@ impl State {
         }
     }
 
-    /// A8: destination-passing for text-producing natives inside `OpAppendText`.
+    /// destination-passing for text-producing natives inside `OpAppendText`.
     /// Returns true if the optimisation was applied (caller should return Void).
     fn try_text_dest_pass(&mut self, stack: &mut Stack, op: u32, parameters: &[Value]) -> bool {
         if stack.data.def(op).name != "OpAppendText" || parameters.len() < 2 {
@@ -640,7 +628,7 @@ impl State {
             parameters.len(),
             stack.data.def(op).attributes.len(),
         );
-        // A8: try destination-passing optimisation for text-producing natives.
+        // try destination-passing optimisation for text-producing natives.
         if self.try_text_dest_pass(stack, op, parameters) {
             return Type::Void;
         }
@@ -681,7 +669,7 @@ impl State {
                 }
             }
         }
-        // A1.1: push extra Call args beyond the declared parameter count.
+        // push extra Call args beyond the declared parameter count.
         // Only for n_parallel_for — forwards extra context args + n_extra count.
         if stack.data.def(op).name == "n_parallel_for" {
             let n_declared = stack.data.def(op).attributes.len();
@@ -750,7 +738,7 @@ impl State {
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
             }
-            // A1.1: also subtract the extra args pushed beyond declared params.
+            // also subtract the extra args pushed beyond declared params.
             if stack.data.def(op).name == "n_parallel_for" {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {
@@ -1147,7 +1135,7 @@ impl State {
             self.code_add(0u16);
             return;
         }
-        // A8: destination-passing — avoid scratch buffer for text-returning natives.
+        // destination-passing — avoid scratch buffer for text-returning natives.
         if matches!(stack.function.tp(var), Type::Text(_))
             && let Value::Call(op, args) = value
         {
@@ -1189,7 +1177,7 @@ impl State {
         self.code_add(var_pos);
     }
 
-    /// A8: emit a destination-passing call for a text-returning native function.
+    /// emit a destination-passing call for a text-returning native function.
     ///
     /// Instead of: evaluate call → Str on stack → OpAppendText(var)
     /// Emits:      args → OpCreateStack(var) → `OpStaticCall`  (native writes to var directly)

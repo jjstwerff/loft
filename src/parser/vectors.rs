@@ -196,7 +196,7 @@ impl Parser {
             if self.lexer.peek_token("(") {
                 self.parse_lambda(val)
             } else {
-                // S11: function references use the bare name, not 'fn name'.
+                // function references use the bare name, not 'fn name'.
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -407,7 +407,7 @@ impl Parser {
                 };
                 let idx = param_names.len();
                 let tp = if self.lexer.has_token(":") {
-                    // S10: type annotations are not allowed in |x| short-form lambdas.
+                    // type annotations are not allowed in |x| short-form lambdas.
                     // Use the long form fn(x: type) -> ret { body } instead.
                     diagnostic!(
                         self.lexer,
@@ -479,7 +479,7 @@ impl Parser {
         }
         let d_nr = self.context;
 
-        // S10: return-type annotations are not allowed in |x| short-form lambdas.
+        // return-type annotations are not allowed in |x| short-form lambdas.
         let has_arrow = self.lexer.has_token("->");
         let result = if has_arrow {
             diagnostic!(

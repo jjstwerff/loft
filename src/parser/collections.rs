@@ -704,7 +704,7 @@ use #count instead"
             self.vars.defined(iv);
             (iv, None)
         };
-        // T1-23: error if the loop variable reuses a name with a different type.
+        // error if the loop variable reuses a name with a different type.
         // Same-type reuse is idiomatic in loft (flat variable scoping).
         let existing_var = self.vars.var(id);
         if !self.first_pass
@@ -1085,7 +1085,7 @@ use #count instead"
             Value::Null,
         );
 
-        // A1.2: Use OpGetVector + get_field to extract the element from the result
+        // Use OpGetVector + get_field to extract the element from the result
         // vector. This works for all return types (int, long, float, bool, text)
         // without per-type getter functions.
         let result_elem_size = if return_size == 0 { 4i32 } else { return_size };

@@ -13,7 +13,7 @@ use super::{
 
 /// Collected match arm data for enum/struct-enum match expressions.
 struct EnumArm {
-    /// T1-15: discriminants for this arm — Vec allows or-patterns (multiple variants per arm).
+    /// discriminants for this arm — Vec allows or-patterns (multiple variants per arm).
     discs: Vec<i32>,
     code: Value,
     tp: Type,
@@ -165,7 +165,7 @@ impl Parser {
             let ignore = *t == Type::Void
                 && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last]));
             if !self.convert(&mut l[last], t, result) && !ignore {
-                // T1-22: for function bodies with `not null` return, downgrade to a warning.
+                // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
                     && self.context != u32::MAX
                     && self.data.definitions[self.context as usize].returned_not_null
@@ -271,7 +271,7 @@ impl Parser {
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Struct => {
                 (*d_nr, true, true, true)
             }
-            // T1-14: scalar types — dispatch to scalar match handler.
+            // scalar types — dispatch to scalar match handler.
             Type::Integer(_, _)
             | Type::Long
             | Type::Float
@@ -281,7 +281,7 @@ impl Parser {
             | Type::Text(_) => {
                 return self.parse_scalar_match(subject, &subject_type, code);
             }
-            // T1-21: vector types — dispatch to vector match handler.
+            // vector types — dispatch to vector match handler.
             Type::Vector(_, _) => {
                 return self.parse_vector_match(subject, &subject_type, code);
             }
@@ -341,7 +341,7 @@ impl Parser {
 
             if pattern_name == "_" {
                 // Wildcard arm — must be last.
-                // T1-16: parse optional guard clause.
+                // parse optional guard clause.
                 let guard_opt = if self.lexer.has_token("if") {
                     let mut guard_code = Value::Null;
                     let guard_type = self.expression(&mut guard_code);
@@ -400,7 +400,7 @@ impl Parser {
             // Look up the variant definition.
             let variant_def_nr = self.data.def_nr(&pattern_name);
 
-            // T1-18: for plain struct match, the pattern name must match the struct type.
+            // for plain struct match, the pattern name must match the struct type.
             // There is no discriminant — the arm always matches.
             if is_plain_struct {
                 if variant_def_nr != e_nr && !self.first_pass {
@@ -514,7 +514,7 @@ impl Parser {
                 }
             };
 
-            // T1-15: or-patterns — collect additional variants separated by `|`.
+            // or-patterns — collect additional variants separated by `|`.
             // Only for plain enum arms without field bindings.
             let mut all_discs = vec![disc];
             while self.lexer.has_token("|") {
@@ -620,7 +620,7 @@ impl Parser {
                 self.lexer.token("}");
             }
 
-            // T1-16: parse optional guard clause after pattern + field bindings.
+            // parse optional guard clause after pattern + field bindings.
             // Field-bound variables are in scope for the guard expression.
             let guard_opt = if self.lexer.has_token("if") {
                 let mut guard_code = Value::Null;
@@ -745,19 +745,19 @@ impl Parser {
         for arm in arms.iter().rev() {
             if arm.discs.is_empty() {
                 // Wildcard — always taken; becomes the else branch of the chain.
-                // T1-16: guarded wildcard wraps body in If(guard, body, chain_rest).
+                // guarded wildcard wraps body in If(guard, body, chain_rest).
                 chain = match &arm.guard {
                     Some(guard) => v_if(guard.clone(), arm.code.clone(), chain),
                     None => arm.code.clone(),
                 };
             } else {
-                // T1-15: build OR'd comparison for all discriminants in this arm.
+                // build OR'd comparison for all discriminants in this arm.
                 let mut cmp = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(arm.discs[0])]);
                 for &d in &arm.discs[1..] {
                     let next = self.cl("OpEqInt", &[disc_expr.clone(), Value::Int(d)]);
                     cmp = v_if(cmp, Value::Boolean(true), next);
                 }
-                // T1-16: guarded arms nest the guard inside the pattern branch.
+                // guarded arms nest the guard inside the pattern branch.
                 chain = match &arm.guard {
                     Some(guard) => {
                         let guarded = v_if(guard.clone(), arm.code.clone(), chain.clone());
@@ -826,7 +826,7 @@ impl Parser {
         if !self.first_pass && lit_type != Type::Null && !lit_type.is_same(subject_type) {
             self.can_convert(&lit_type, subject_type);
         }
-        // T1-17: check for range pattern `lo..hi` or `lo..=hi`.
+        // check for range pattern `lo..hi` or `lo..=hi`.
         if self.lexer.has_token("..") {
             let inclusive = self.lexer.has_token("=");
             let mut hi = Value::Null;
@@ -855,7 +855,7 @@ impl Parser {
         }
     }
 
-    /// T1-14: parse a match expression over a scalar (integer, text, boolean, etc.).
+    /// parse a match expression over a scalar (integer, text, boolean, etc.).
     /// Builds an if/else chain: `if subject == lit1 { arm1 } else if subject == lit2 { arm2 } else { wildcard }`
     #[allow(clippy::too_many_lines)] // match-arm dispatch with pattern/guard/binding logic
     fn parse_scalar_match(
@@ -885,7 +885,7 @@ impl Parser {
             let mut is_wildcard = false;
             let mut arm_bindings: Vec<Value> = Vec::new();
 
-            // T1-20: null pattern — matches when subject is null.
+            // null pattern — matches when subject is null.
             if self.lexer.has_token("null") {
                 let mut null_cond = Value::Null;
                 self.call_op(
@@ -901,7 +901,7 @@ impl Parser {
                 if id == "_" {
                     is_wildcard = true;
                 } else if self.lexer.has_token("@") {
-                    // T1-20: binding pattern `name @ pattern` — bind the subject to
+                    // binding pattern `name @ pattern` — bind the subject to
                     // a variable and continue parsing the sub-pattern.
                     let bind_nr = self.vars.add_variable(&id, subject_type, &mut self.lexer);
                     self.vars.defined(bind_nr);
@@ -921,7 +921,7 @@ impl Parser {
                 pattern_val = Some(pat);
             }
 
-            // T1-15: or-patterns in scalar match — `1 | 2 | 3 => ...`
+            // or-patterns in scalar match — `1 | 2 | 3 => ...`
             while self.lexer.has_token("|") && !is_wildcard {
                 let (next_pat, _) = self.parse_match_pattern(subject_type, v);
                 if let Some(prev) = pattern_val.take() {
@@ -936,7 +936,7 @@ impl Parser {
                 }
             }
 
-            // T1-16: parse optional guard clause.
+            // parse optional guard clause.
             let guard_opt = if self.lexer.has_token("if") {
                 let mut guard_code = Value::Null;
                 let guard_type = self.expression(&mut guard_code);
@@ -968,7 +968,7 @@ impl Parser {
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
-            // T1-20: prepend any binding assignments (from `name @ pattern` or bare `name`)
+            // prepend any binding assignments (from `name @ pattern` or bare `name`)
             // to the arm body so the variable is assigned before the body executes.
             if !arm_bindings.is_empty() {
                 arm_bindings.push(arm_code);
@@ -996,7 +996,7 @@ impl Parser {
         result_type
     }
 
-    /// T1-21: parse a match expression over a vector subject.
+    /// parse a match expression over a vector subject.
     /// Slice patterns: `[a, b] =>`, `[first, ..] =>`, `[.., last] =>`, `_ =>`.
     /// Each arm generates a length check and element bindings.
     #[allow(clippy::too_many_lines)] // slice pattern parsing with head/tail/rest dispatch
@@ -1177,7 +1177,7 @@ impl Parser {
         result_type
     }
 
-    /// T1-15: build a boolean condition for a single scalar pattern value.
+    /// build a boolean condition for a single scalar pattern value.
     fn build_scalar_cond(&mut self, cond: &mut Value, v: u16, subject_type: &Type, pat: Value) {
         // Reuse the same logic as build_scalar_chain for special block patterns.
         if let Value::Block(ref bl) = pat
@@ -1214,7 +1214,7 @@ impl Parser {
         let mut chain = fallback;
         for (pattern_val, arm_code, _, guard_opt) in arms.into_iter().rev() {
             if let Some(lit) = pattern_val {
-                // T1-15/T1-17/T1-20: range/null/or patterns stored as Block with Boolean result.
+                // range/null/or patterns stored as Block with Boolean result.
                 if let Value::Block(ref bl) = lit
                     && bl.result == Type::Boolean
                     && (bl.name == "range_pattern"
@@ -1592,7 +1592,7 @@ impl Parser {
                     self.lambda_hint = expected;
                 }
             }
-            // S10: for map/filter/reduce, infer lambda hint from the vector
+            // for map/filter/reduce, infer lambda hint from the vector
             // element type so that short-form |x| lambdas can infer types.
             if fn_def_nr.is_none()
                 && !types.is_empty()

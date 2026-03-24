@@ -141,7 +141,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-    // S8: reject hash-value structs that have a field named `key`.
+    // reject hash-value structs that have a field named `key`.
     // `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`).
     for d_nr in start_def..data.definitions() {
         if !matches!(data.def_type(d_nr), DefType::Struct) {

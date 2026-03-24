@@ -812,7 +812,6 @@ impl Function {
             let n = format!("__ref_{}", w + 1);
             let v_nr = self.var(&n);
             // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
-            // A14: replaced the previous type-mutation hack (setting type to Reference(0,[0]))
             // with this explicit flag, keeping the type_def intact for downstream passes.
             self.variables[v_nr as usize].skip_free = true;
         }

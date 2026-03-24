@@ -1,12 +1,7 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Parallel execution support for the loft interpreter.
-//!
-//! `run_parallel_int` dispatches a compiled loft function over every element
-//! of an input vector using a pool of OS threads.  Each thread gets a
-//! locked (read-only) snapshot of the caller's stores and its own fresh
-//! execution stack.
+//! Parallel execution: dispatch a worker function over vector elements using OS threads.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
@@ -54,31 +49,10 @@ impl WorkerProgram {
     }
 }
 
-/// Run a compiled loft function over every row of `input` in parallel, returning
-/// raw result bits (up to 8 bytes per row) in a `Vec<u64>`.
-///
-/// # Arguments
-/// - `stores` — the calling state's stores; cloned read-only for workers.
-/// - `program` — shared bytecode + library snapshot.
-/// - `fn_pos` — bytecode offset of the worker function.
-/// - `input` — `DbRef` pointing to the vector field.
-/// - `element_size` — byte size of each vector element.
-/// - `return_size` — byte size of the worker's return value (1, 4, or 8).
-/// - `n_threads` — number of OS threads to use (clamped to row count).
-///
-/// # Returns
-/// A `Vec<u64>` with one entry per row (in original order).  The low
-/// `return_size` bytes of each entry hold the raw return bits; the high bytes
-/// are zero.
-///
+/// Run workers in parallel, writing results directly into `out_ptr`.
 /// # Panics
-/// Run a worker function in parallel, writing results directly into a
-/// pre-allocated output buffer.  No channel, no reordering — each worker
-/// writes its slice at `out_ptr[row_idx * return_size]`.
-///
-/// # Safety
-/// `out_ptr` must point to a buffer of at least `n_rows * return_size` bytes.
-/// Each thread writes to a non-overlapping range, so no data race occurs.
+/// Panics if a worker thread panics.
+/// Each thread writes a non-overlapping slice — no channel, no reordering.
 #[allow(clippy::too_many_arguments)]
 pub fn run_parallel_direct(
     stores: &Stores,
@@ -136,10 +110,9 @@ pub fn run_parallel_direct(
     }
 }
 
-/// Channel-based parallel: returns one u64 per row (for sub-8-byte types like bool).
-///
+/// Channel-based parallel: one u64 per row (for bool and other sub-4-byte types).
 /// # Panics
-/// Panics if a worker thread panics or the internal channel send fails.
+/// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_raw(
@@ -199,13 +172,9 @@ pub fn run_parallel_raw(
     results
 }
 
-/// Run a compiled loft function returning text in parallel.  Each worker copies
-/// its `Str` result into an owned `String` before the worker state is dropped.
-///
-/// Returns a `Vec<String>` with one entry per row, in the original row order.
-///
+/// Parallel text returns: workers copy `Str` to owned `String` before state drops.
 /// # Panics
-/// Panics if a worker thread panics or the internal channel send fails.
+/// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_text(
@@ -265,22 +234,9 @@ pub fn run_parallel_text(
     results
 }
 
-/// Run a compiled loft function (returning `integer`) in parallel over every
-/// row of `input` and return the results ordered by row index.
-///
-/// # Arguments
-/// - `stores` — the calling state's stores; cloned read-only for workers.
-/// - `program` — shared bytecode + library snapshot.
-/// - `fn_pos` — bytecode offset of the worker function.
-/// - `input` — `DbRef` pointing to the vector field (same convention as `vector::length_vector`).
-/// - `element_size` — byte size of each vector element (e.g. 12 for a `DbRef`).
-/// - `n_threads` — number of OS threads to use (clamped to row count).
-///
-/// # Returns
-/// A `Vec<i32>` with one entry per row, in the original row order.
-///
+/// Parallel integer returns: one `i32` per row, original order.
 /// # Panics
-/// Panics if a worker thread panics, or if the internal channel send fails.
+/// Panics if a worker thread panics.
 #[must_use]
 pub fn run_parallel_int(
     stores: &Stores,

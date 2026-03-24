@@ -1,16 +1,5 @@
-//! Native function registry: every loft built-in that is implemented in Rust
-//! rather than in `default/*.loft` is registered here via the `FUNCTIONS` table.
-//!
-//! ## Naming conventions for entries in `FUNCTIONS`
-//!
-//! * `n_<name>`                — global function (no receiver).
-//!   Example: `n_assert`, `n_rand`, `n_env_variables`.
-//! * `t_<LEN><Type>_<method>` — method on a built-in type, where `<LEN>` is the
-//!   number of characters in `<Type>`.
-//!   Example: `t_4text_starts_with` (type `text`, 4 chars), `t_9character_is_numeric` (type `character`, 9 chars).
-//!
-//! The `<LEN><Type>` prefix lets the runtime dispatch table look up methods by
-//! type name without a hash map lookup.
+//! Native function registry: Rust implementations of loft built-ins.
+//! Naming: `n_<name>` for globals, `t_<LEN><Type>_<method>` for methods.
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_truncation)]
@@ -599,19 +588,10 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
-/// Compiler-checked parallel map: `parallel_for(fn worker, input_vec, threads)`.
-// (n_parallel_for_int section ends here)
-///
-/// The parser rewrites the user-friendly call into this internal 5-arg signature:
-/// ```loft
-/// fn parallel_for(input: reference, element_size: integer, return_size: integer,
-///                 threads: integer, func: integer) -> reference
-/// ```
-/// `func` is the definition number of the worker function (verified at compile time).
-/// `return_size` is 0 (text), 1 (boolean), 4 (integer), or 8 (long/float).
-/// Returns a `reference` pointing to a freshly allocated result vector.
+/// Internal `parallel_for` dispatch: pop args from stack, spawn workers, collect results.
+/// `return_size`: 0=text, 1=bool, 4=int, 8=long/float.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    // A1.1: Stack layout (push order from codegen):
+    // Stack layout (push order from codegen):
     //   vec(12B), elem_size(4B), return_size(4B), threads(4B), func(4B),
     //   extra1(4B), ..., extraN(4B), n_extra(4B)
     // Pop order (LIFO): n_extra, extraN, ..., extra1, func, threads, return_size, elem_size, vec

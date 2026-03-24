@@ -1151,7 +1151,7 @@ unsafe impl Send for Store {}
 mod tests {
     use super::{MAX_STORE_WORDS, Store};
 
-    /// S6-67: growing the store through many claims must not wrap or silently fail.
+    /// growing the store through many claims must not wrap or silently fail.
     #[test]
     fn store_grows_without_overflow() {
         let mut store = Store::new(4);
@@ -1163,7 +1163,7 @@ mod tests {
         assert!(store.byte_capacity() >= 200 * 8);
     }
 
-    /// S6-64: `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.
+    /// `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.
     #[test]
     #[should_panic(expected = "store offset overflow")]
     fn resize_store_exceeds_max_panics() {
@@ -1172,7 +1172,7 @@ mod tests {
         store.resize_store(MAX_STORE_WORDS + 1);
     }
 
-    /// T0-11: `addr_mut` on a locked store must panic (not silently discard the write).
+    /// `addr_mut` on a locked store must panic (not silently discard the write).
     #[test]
     #[should_panic(expected = "Write to locked store")]
     fn write_to_locked_store_panics() {
