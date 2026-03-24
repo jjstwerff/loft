@@ -302,6 +302,29 @@ impl State {
             .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
     }
 
+    /// O1: superinstruction stubs — delegated from fill.rs.
+    /// These are placeholders; the peephole pass is not yet active.
+    #[allow(clippy::unused_self)]
+    pub fn nop(&mut self) {}
+    pub fn si_load2_add_store(&mut self) {
+        self.nop();
+    }
+    pub fn si_load_const_add_store(&mut self) {
+        self.nop();
+    }
+    pub fn si_load_const_cmp_branch(&mut self) {
+        self.nop();
+    }
+    pub fn si_load2_cmp_branch(&mut self) {
+        self.nop();
+    }
+    pub fn si_load_const_mul_store(&mut self) {
+        self.nop();
+    }
+    pub fn si_load2_mul_store(&mut self) {
+        self.nop();
+    }
+
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
