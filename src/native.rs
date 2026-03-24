@@ -20,7 +20,7 @@ use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "random")]
 use crate::ops;
-use crate::parallel::{WorkerProgram, run_parallel_int, run_parallel_raw};
+use crate::parallel::{WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw};
 use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
@@ -655,46 +655,53 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     let n_threads = (v_threads as usize).max(1);
     let n = vector::length_vector(&v_input, &stores.allocations) as usize;
 
-    let results = run_parallel_raw(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        return_size,
-        n_threads,
-        &extra_args,
-    );
-
-    // Build result vector in a fresh store.
+    // A1.2: pre-allocate result vector in a fresh store, then write directly.
     let result_db = stores.null();
     let bytes_per_element = return_size;
     let vec_words = ((n as u32) * bytes_per_element + 15) / 8;
-    let vec_words = vec_words.max(1);
-    let vec_cr = stores.claim(&result_db, vec_words);
+    let vec_cr = stores.claim(&result_db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
 
-    {
+    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
+    stores
+        .store_mut(&result_db)
+        .set_int(header_rec, 4, vec_rec as i32);
+
+    if return_size >= 4 {
+        // Direct write: workers write into the store buffer without channel/ordering.
+        let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
+        run_parallel_direct(
+            stores,
+            program,
+            fn_pos,
+            &v_input,
+            element_size,
+            return_size,
+            n_threads,
+            &extra_args,
+            out_ptr,
+            n,
+        );
+    } else {
+        // Byte-sized returns (bool): use channel + set_byte for correct byte packing.
+        let results = run_parallel_raw(
+            stores,
+            program,
+            fn_pos,
+            &v_input,
+            element_size,
+            return_size,
+            n_threads,
+            &extra_args,
+        );
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
         let mut fld = 8u32;
         for &raw in &results {
-            match bytes_per_element {
-                8 => {
-                    store.set_long(vec_rec, fld, raw as i64);
-                }
-                1 => {
-                    store.set_byte(vec_rec, fld, 0, raw as i32);
-                }
-                _ => {
-                    store.set_int(vec_rec, fld, raw as i32);
-                }
-            }
-            fld += bytes_per_element;
+            store.set_byte(vec_rec, fld, 0, raw as i32);
+            fld += 1;
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
     }
 
     let result_ref = DbRef {

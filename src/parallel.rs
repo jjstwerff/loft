@@ -22,6 +22,12 @@ use std::thread;
 /// Shared bytecode + library for a single `parallel_for` dispatch.
 type ProgramRefs = (Arc<Vec<u8>>, Arc<Vec<u8>>, Arc<Vec<crate::database::Call>>);
 
+/// Wrapper for `*mut u8` that is `Send + Sync` for cross-thread direct writes.
+/// SAFETY: callers must ensure non-overlapping writes and join all threads.
+struct SendMutPtr(*mut u8);
+unsafe impl Send for SendMutPtr {}
+unsafe impl Sync for SendMutPtr {}
+
 /// Immutable interpreter context shared across all worker threads.
 ///
 /// All three fields are `Arc`-wrapped so that spawning many workers only
@@ -66,9 +72,73 @@ impl WorkerProgram {
 /// are zero.
 ///
 /// # Panics
-/// Panics if a worker thread panics or the internal channel send fails.
-#[must_use]
+/// Run a worker function in parallel, writing results directly into a
+/// pre-allocated output buffer.  No channel, no reordering — each worker
+/// writes its slice at `out_ptr[row_idx * return_size]`.
+///
+/// # Safety
+/// `out_ptr` must point to a buffer of at least `n_rows * return_size` bytes.
+/// Each thread writes to a non-overlapping range, so no data race occurs.
 #[allow(clippy::too_many_arguments)]
+pub fn run_parallel_direct(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    return_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    out_ptr: *mut u8,
+    n_rows: usize,
+) {
+    if n_rows == 0 {
+        return;
+    }
+    let threads = n_threads.max(1).min(n_rows);
+    let program = Arc::new(program);
+    let mut handles = Vec::with_capacity(threads);
+    let out = Arc::new(SendMutPtr(out_ptr));
+
+    for t in 0..threads {
+        let start = t * n_rows / threads;
+        let end = (t + 1) * n_rows / threads;
+        let worker_stores = stores.clone_for_worker();
+        let prog = Arc::clone(&program);
+        let input_t = *input;
+        let extras = extra_args.to_vec();
+        let out_t = Arc::clone(&out);
+        let ret_sz = return_size as usize;
+
+        let handle = thread::spawn(move || {
+            let (bytecode, text_code, library) = prog.clone_refs();
+            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+            for row_idx in start..end {
+                let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                let row_ref = vector::get_vector(
+                    &input_t,
+                    element_size,
+                    row_idx_i32,
+                    &state.database.allocations,
+                );
+                let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                // Write return_size low bytes of val directly into the output buffer.
+                unsafe {
+                    let dst = out_t.0.add(row_idx * ret_sz);
+                    std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
+                }
+            }
+        });
+        handles.push(handle);
+    }
+    for h in handles {
+        h.join().expect("worker thread panicked");
+    }
+}
+
+/// Channel-based parallel: returns one u64 per row (for sub-8-byte types like bool).
+#[allow(clippy::too_many_arguments, dead_code)]
+#[must_use]
 pub fn run_parallel_raw(
     stores: &Stores,
     program: WorkerProgram,
@@ -83,11 +153,9 @@ pub fn run_parallel_raw(
     if n_rows == 0 {
         return Vec::new();
     }
-
     let threads = n_threads.max(1).min(n_rows);
     let program = Arc::new(program);
     let (tx, rx) = mpsc::channel::<Vec<(usize, u64)>>();
-
     let mut handles = Vec::with_capacity(threads);
     for t in 0..threads {
         let start = t * n_rows / threads;
@@ -97,17 +165,15 @@ pub fn run_parallel_raw(
         let tx_t = tx.clone();
         let input_t = *input;
         let extras = extra_args.to_vec();
-
         let handle = thread::spawn(move || {
             let (bytecode, text_code, library) = prog.clone_refs();
             let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
             let mut batch = Vec::with_capacity(end - start);
             for row_idx in start..end {
-                let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
                 let row_ref = vector::get_vector(
                     &input_t,
                     element_size,
-                    row_idx_i32,
+                    i32::try_from(row_idx).expect("row index fits i32"),
                     &state.database.allocations,
                 );
                 let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
@@ -118,7 +184,6 @@ pub fn run_parallel_raw(
         handles.push(handle);
     }
     drop(tx);
-
     let mut results = vec![0u64; n_rows];
     for batch in rx {
         for (idx, val) in batch {
