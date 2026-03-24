@@ -4,7 +4,7 @@ All notable changes to the loft language and interpreter.
 
 ---
 
-## [Unreleased]
+## [0.8.2] — 2026-03-24
 
 ### New features
 
@@ -168,6 +168,6 @@ First release.
 
 ---
 
-[Unreleased]: https://github.com/jjstwerff/loft/compare/v0.8.0...HEAD
+[0.8.2]: https://github.com/jjstwerff/loft/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/jjstwerff/loft/compare/v0.1.0...v0.8.0
 [0.1.0]: https://github.com/jjstwerff/loft/releases/tag/v0.1.0

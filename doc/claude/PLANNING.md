@@ -275,20 +275,11 @@ at once" failure mode where half-finished features interact and regressions are 
 Ordered by unblocking impact and the small-steps principle (each item leaves the codebase
 in a better state than it found it, with passing tests).
 
-**For 0.8.2 (remaining):**
-1. **S5**, **S7**, **S8** — small stability fixes; independent, no dependencies
-2. **O3** — integer sentinel verification; Low effort, zero risk
-3. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation/`
-4. ~~**O1** — superinstruction merging~~ *(deferred to 1.1+ — too disruptive for stability)*
-5. ~~**A1.1** — extra args + value-struct returns~~ *(done)*
-6. ~~**A1.2** — text/ref returns~~ *(done — interpreter + native codegen)*
-7. ~~**A12.1** → **A12.2** → **A12.3** → **A12**~~ *(deferred to 1.1+ — too complex, blocked by Issues 68–70)*
-8. ~~**A13.1** → **A13.2** → **A13.3**~~ *(done — two-zone slot assignment complete)*
+**Released as 0.8.2 (2026-03-24).**
 
 **For 0.8.3 (after 0.8.2 is tagged):**
-1. **P1** — lambdas; unblocks P3, A5; makes the language feel complete
-2. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1; batch together
-3. **A10** — field iteration; independent, medium; can land in parallel with P1–P3
+1. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1 (done in 0.8.2); batch together
+2. **A10** — field iteration; independent, medium; can land in parallel with P3
 
 **For 0.8.4 (after 0.8.3 is tagged):**
 1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
