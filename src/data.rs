@@ -480,8 +480,11 @@ pub struct Attribute {
     primary: bool,
     /// The initial value of this attribute if it is not given.
     pub value: Value,
-    /// A test on the validity of this attribute.
-    check: Value,
+    /// A constraint expression checked on every field write.
+    /// Parsed from `assert(expr)` or `assert(expr, message)` in field definitions.
+    pub check: Value,
+    /// Optional message for a failed constraint check.
+    pub check_message: Value,
 }
 
 impl Debug for Attribute {
@@ -788,6 +791,7 @@ impl Data {
             primary: false,
             value: Value::Null,
             check: Value::Null,
+            check_message: Value::Null,
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];

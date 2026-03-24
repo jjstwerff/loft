@@ -944,7 +944,8 @@ impl Parser {
         let mut a_type: Type = Type::Unknown(0);
         let mut defined = false;
         let mut value = Value::Null;
-        //let mut check = Value::Null;
+        let mut check = Value::Null;
+        let mut check_message = Value::Null;
         let mut nullable = true;
         loop {
             if self.lexer.has_keyword("not") {
@@ -953,17 +954,17 @@ impl Parser {
                 nullable = false;
             }
             self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
-            /* TODO for now ignore this, we have to properly implement this in the future
-            if self.lexer.has_keyword("check") {
+            if self.lexer.has_token("assert") {
+                // L6: assert(condition) or assert(condition, message) on struct fields.
                 self.lexer.token("(");
-                let tp = self.expression(&mut check);
-                self.convert(&mut check, &tp, &Type::Boolean);
+                self.expression(&mut check);
+                if self.lexer.has_token(",") {
+                    self.expression(&mut check_message);
+                }
                 self.lexer.token(")");
-            }
-            */
-            if let Some(id) = self.lexer.has_identifier() {
+            } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "CHECK" {
-                    // CHECK(condition, message) constraint — parse and discard for now
+                    // Legacy CHECK syntax — parse and discard for backward compat
                     self.lexer.token("(");
                     let mut p = Value::Null;
                     self.expression(&mut p);
@@ -1000,10 +1001,18 @@ impl Parser {
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);
             self.data.set_attr_nullable(d_nr, a, nullable);
             self.data.set_attr_value(d_nr, a, value);
+            if check != Value::Null {
+                self.data.definitions[d_nr as usize].attributes[a].check = check;
+                self.data.definitions[d_nr as usize].attributes[a].check_message = check_message;
+            }
         } else {
             let a = self.data.attr(d_nr, a_name);
             if value != Value::Null {
                 self.data.set_attr_value(d_nr, a, value);
+            }
+            if check != Value::Null {
+                self.data.definitions[d_nr as usize].attributes[a].check = check;
+                self.data.definitions[d_nr as usize].attributes[a].check_message = check_message;
             }
         }
     }
