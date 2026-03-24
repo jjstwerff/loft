@@ -5,11 +5,10 @@
 //! before emitting the main code.  This avoids nested borrow conflicts in
 //! generated Rust code where `stores` would be borrowed mutably twice.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value};
-use std::collections::HashSet;
+use crate::data::{Type, Value};
 use std::io::Write;
 
-use super::{Output, PreEvalEntry, default_native_value, narrow_int_cast, rust_type, sanitize};
+use super::{Output, PreEvalEntry, narrow_int_cast, sanitize};
 
 impl Output<'_> {
     /// Use this instead of emitting an argument block when the block exists only to pass a
@@ -54,7 +53,10 @@ impl Output<'_> {
     /// This method detects the pattern in a slice of block operators and returns a patched
     /// copy where `Return(Null)` is replaced by `Return(expr)` and `expr` is removed from
     /// its earlier position.
-    pub(super) fn patch_hoisted_returns<'a>(&self, ops: &'a [Value]) -> std::borrow::Cow<'a, [Value]> {
+    pub(super) fn patch_hoisted_returns<'a>(
+        &self,
+        ops: &'a [Value],
+    ) -> std::borrow::Cow<'a, [Value]> {
         let fn_returned = &self.data.def(self.def_nr).returned;
         if matches!(fn_returned, Type::Void) {
             return std::borrow::Cow::Borrowed(ops);

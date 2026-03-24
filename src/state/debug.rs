@@ -45,7 +45,10 @@ impl State {
     }
 
     /// Validate the interpreter stack and write a diagnostic hex dump.
-    /// Returns the number of anomalies (bounds, alignment, stale DbRef).
+    /// Returns the number of anomalies (bounds, alignment, stale `DbRef`).
+    ///
+    /// # Errors
+    /// Propagates I/O errors from the writer.
     #[allow(clippy::too_many_lines)]
     pub fn validate_stack(
         &self,
@@ -921,7 +924,7 @@ impl State {
                     return format!("ref({},{},{})", val.store_nr, val.rec, val.pos);
                 }
                 // Guard: the record must be live (positive fld-0 header) before we
-                // dereference.  A stale DbRef can point to a store that was re-initialised
+                // dereference.  A stale `DbRef` can point to a store that was re-initialised
                 // (init() sets fld 0 negative) but not yet re-claimed — show coords only.
                 if val.rec != 0 {
                     let hdr =

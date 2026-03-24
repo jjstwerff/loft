@@ -1,15 +1,15 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-use crate::data::{Block, Context, Data, DefType, Definition, Type, Value};
+use crate::data::{Context, Data, DefType, Type, Value};
 use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
-mod pre_eval;
-mod emit;
-mod text;
 mod calls;
 mod dispatch;
+mod emit;
+mod pre_eval;
+mod text;
 
 /// Entry produced by `collect_pre_evals`: `(temp_var, type_str, expr_code, def_nr, stores_fn)`.
 type PreEvalEntry = (String, String, String, u32, bool);

@@ -116,7 +116,7 @@ fn scopes_can_conflict(sa: u16, sb: u16, parents: &HashMap<u16, u16>) -> bool {
 /// overlap AND whose scopes are in the same execution branch (i.e. one scope is an ancestor
 /// of the other).  Variables in sibling branches cannot be simultaneously on the stack.
 #[cfg(any(debug_assertions, test))]
-fn find_conflict(
+pub(super) fn find_conflict(
     vars: &[Variable],
     scope_parents: &HashMap<u16, u16>,
 ) -> Option<(usize, u16, usize, u16)> {
@@ -302,4 +302,3 @@ pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Re
     }
     writeln!(f)
 }
-

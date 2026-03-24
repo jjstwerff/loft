@@ -3,15 +3,18 @@
 
 //! Variable assignment and function call dispatch code generation.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value};
-use std::fmt::Write as FmtWrite;
+use crate::data::{Context, Type, Value};
 use std::io::Write;
 
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
-
-    pub(super) fn output_set(&mut self, w: &mut dyn Write, var: u16, to: &Value) -> std::io::Result<()> {
+    pub(super) fn output_set(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        to: &Value,
+    ) -> std::io::Result<()> {
         let variables = &self.data.def(self.def_nr).variables;
         if variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
@@ -119,7 +122,7 @@ impl Output<'_> {
         Ok(())
     }
 
-    /// Emit a null-initialised DbRef variable, matching the interpreter's pre-init order.
+    /// Emit a null-initialised `DbRef` variable, matching the interpreter's pre-init order.
     fn emit_null_dbref(&mut self, w: &mut dyn Write, var: u16, name: &str) -> std::io::Result<()> {
         let variables = &self.data.def(self.def_nr).variables;
         let var_raw_name = variables.name(var);
@@ -147,7 +150,10 @@ impl Output<'_> {
             } else {
                 writeln!(w, "stores.null_named(\"var_{name}\");")?;
                 self.indent(w)?;
-                write!(w, "var_{name} = OpDatabase(stores, var_{name}, {ref_buf_type_id}_i32)")?;
+                write!(
+                    w,
+                    "var_{name} = OpDatabase(stores, var_{name}, {ref_buf_type_id}_i32)"
+                )?;
             }
         }
         Ok(())
@@ -515,5 +521,4 @@ impl Output<'_> {
             self.output_call_template(w, def_fn, vals)
         }
     }
-
 }

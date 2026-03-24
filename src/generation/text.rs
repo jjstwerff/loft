@@ -9,7 +9,11 @@ use std::io::Write;
 use super::{Output, sanitize};
 
 impl Output<'_> {
-    pub(super) fn clear_vector(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
+    pub(super) fn clear_vector(
+        &mut self,
+        w: &mut dyn Write,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
             let v_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             write!(
@@ -25,7 +29,12 @@ impl Output<'_> {
     /// `type_nr` is from a `Key` struct; sign indicates sort direction (ignored here),
     /// absolute value indicates the data type:
     /// 1 = integer, 2 = long, 3 = f32, 4 = f64, 5 = bool, 6 = text, 7 = byte.
-    pub(super) fn emit_content(&mut self, w: &mut dyn Write, v: &Value, type_nr: i8) -> std::io::Result<()> {
+    pub(super) fn emit_content(
+        &mut self,
+        w: &mut dyn Write,
+        v: &Value,
+        type_nr: i8,
+    ) -> std::io::Result<()> {
         let expr = self.generate_expr_buf(v)?;
         match type_nr.unsigned_abs() {
             1 | 5 | 7 => write!(w, "Content::Long({expr} as i64)"),
@@ -38,7 +47,11 @@ impl Output<'_> {
     }
 
     /// Use this to emit `OpClearStackText` as a `.clear()` call on the target string variable.
-    pub(super) fn clear_stack_text(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
+    pub(super) fn clear_stack_text(
+        &mut self,
+        w: &mut dyn Write,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             write!(w, "var_{s_nr}.clear()")?;
@@ -49,7 +62,11 @@ impl Output<'_> {
 
     /// Use this to emit `OpAppendCharacter` with a null-character guard,
     /// because loft represents characters as integers and zero means no character.
-    pub(super) fn append_character(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
+    pub(super) fn append_character(
+        &mut self,
+        w: &mut dyn Write,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
         if let [Value::Var(nr), val] = vals {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
@@ -177,5 +194,4 @@ impl Output<'_> {
         }
         panic!("Could not parse {vals:?}");
     }
-
 }

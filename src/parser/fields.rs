@@ -4,11 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use super::{
-    Argument, DefType, Function, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS,
-    OUTPUT_DEFAULT, OutputState, Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value,
-    diagnostic_format, field_id, rename, to_default, v_block, v_if, v_loop, v_set,
-};
+use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_set};
 
 // Field access, indexing, and iterator operations.
 
@@ -514,5 +510,4 @@ pair the hash with a vector to iterate in insertion order"
             ));
         }
     }
-
 }

@@ -8,7 +8,7 @@
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::data::{Block, Context, Type, Value};
+use crate::data::{Context, Type, Value};
 
 use super::{Function, size};
 
@@ -268,6 +268,9 @@ fn place_large_and_recurse(
 mod tests {
     use super::*;
     use crate::data::Block;
+    use crate::keys::DbRef;
+    use crate::variables::intervals::compute_intervals;
+    use crate::variables::validate::find_conflict;
     use std::collections::HashMap;
     use std::mem::size_of;
 

@@ -5,14 +5,15 @@
 #![allow(clippy::cast_sign_loss)]
 
 use super::{
-    Argument, DefType, Function, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS,
-    OUTPUT_DEFAULT, OutputState, Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value,
-    diagnostic_format, field_id, rename, to_default, v_block, v_if, v_loop, v_set,
+    DefType, HashSet, I32, Level, LexItem, LexResult, Mode, OUTPUT_DEFAULT, OutputState, Parser,
+    SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format, to_default, v_block, v_if,
+    v_set,
 };
 
 // Variable resolution, struct construction, and object parsing.
 
 impl Parser {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_var(&mut self, code: &mut Value, name: &str, parent_tp: &mut Type) -> Type {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
@@ -1157,5 +1158,4 @@ impl Parser {
             }
         }
     }
-
 }

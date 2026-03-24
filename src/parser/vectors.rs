@@ -5,9 +5,8 @@
 #![allow(clippy::cast_sign_loss)]
 
 use super::{
-    Argument, DefType, Function, HashSet, I32, Level, LexItem, LexResult, Mode, OPERATORS,
-    OUTPUT_DEFAULT, OutputState, Parser, Parts, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value,
-    diagnostic_format, field_id, rename, to_default, v_block, v_if, v_loop, v_set,
+    Argument, DefType, Function, I32, Level, Parser, ToString, Type, Value, diagnostic_format,
+    field_id, v_block, v_if, v_loop, v_set,
 };
 
 // Lambda and vector expression parsing.

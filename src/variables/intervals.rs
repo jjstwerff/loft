@@ -7,7 +7,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 
-use crate::data::{Block, Context, Data, DefType, Type, Value};
+use crate::data::{Context, Type, Value};
 
 use super::{Function, size};
 
@@ -204,4 +204,3 @@ pub fn compute_intervals(
         }
     }
 }
-

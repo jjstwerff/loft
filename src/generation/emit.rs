@@ -3,18 +3,21 @@
 
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value};
+use crate::data::{Block, Context, Type, Value};
 use std::io::Write;
 
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
-
     /// Central recursive dispatch from a `Value` node to its Rust representation.
     /// All emit functions ultimately call this; complex variants are delegated to
     /// dedicated helpers to keep each match arm concise.
     #[allow(clippy::too_many_lines)]
-    pub(super) fn output_code_inner(&mut self, w: &mut dyn Write, code: &Value) -> std::io::Result<()> {
+    pub(super) fn output_code_inner(
+        &mut self,
+        w: &mut dyn Write,
+        code: &Value,
+    ) -> std::io::Result<()> {
         match code {
             Value::Text(txt) => {
                 // Use debug format to produce a properly escaped Rust string literal.
@@ -488,5 +491,4 @@ impl Output<'_> {
         )?;
         Ok(())
     }
-
 }

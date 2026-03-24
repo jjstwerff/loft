@@ -6,6 +6,7 @@
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(unused_imports)] // Module used from main(), not from test builds.
 
 use crate::compile;
 use crate::data::{Data, DefType, Type};

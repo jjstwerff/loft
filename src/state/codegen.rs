@@ -447,7 +447,11 @@ impl State {
             return;
         }
         let pos = stack.function.stack(v);
-        assert!(pos != u16::MAX, "variable '{}' never assigned a slot", stack.function.name(v));
+        assert!(
+            pos != u16::MAX,
+            "variable '{}' never assigned a slot",
+            stack.function.name(v)
+        );
         if stack.function.is_stack_allocated(v) {
             // Reassignment — variable already on the stack.
             if matches!(stack.function.tp(v), Type::Text(_)) {

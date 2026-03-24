@@ -18,6 +18,7 @@ mod log_config;
 mod logger;
 mod manifest;
 mod native;
+mod native_utils;
 mod ops;
 mod parallel;
 mod parser;
@@ -28,15 +29,14 @@ mod scopes;
 mod stack;
 mod state;
 mod store;
+mod test_runner;
 mod tree;
 mod typedef;
 mod variables;
 mod vector;
-mod native_utils;
-mod test_runner;
 
-use crate::state::State;
 use crate::native_utils::*;
+use crate::state::State;
 use crate::test_runner::run_tests;
 use std::collections::HashSet;
 use std::env;
@@ -552,4 +552,3 @@ fn main() {
         std::process::exit(1);
     }
 }
-

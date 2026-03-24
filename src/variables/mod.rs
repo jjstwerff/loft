@@ -23,7 +23,6 @@ This administrates variables and scopes for a specific function.
 */
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::io::{Error, Write};
 
 // Iterator details on each for loop inside the current function
 #[derive(Debug, Clone)]
@@ -961,4 +960,3 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         _ => 0,
     }
 }
-
