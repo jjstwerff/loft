@@ -10,7 +10,8 @@ use crate::logger::Severity;
 #[cfg(feature = "random")]
 use crate::ops;
 use crate::parallel::{
-    WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_text,
+    WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_ref,
+    run_parallel_text,
 };
 use crate::platform::sep;
 use crate::state::{Call, State};
@@ -645,12 +646,37 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     let element_size = v_element_size as u32;
     let n_threads = (v_threads as usize).max(1);
     let n = vector::length_vector(&v_input, &stores.allocations) as usize;
-    // return_size == 0 signals text mode; otherwise clamp to [1, 8].
+    // return_size == 0 signals text mode; -1 signals reference (struct) mode.
     let is_text = v_return_size == 0;
+    let is_ref = v_return_size == -1;
+    // For ref mode, compute the actual inline struct size from known_type.
+    // This is used for result vector allocation.
     let return_size = if is_text {
         4u32
+    } else if is_ref {
+        // Will be set below after known_type is resolved.
+        0u32 // placeholder
     } else {
         v_return_size.clamp(1, 8) as u32
+    };
+
+    // For reference returns, look up the struct's known_type for deep-copy
+    // and compute the inline struct size for the result vector.
+    let (known_type, return_size) = if is_ref {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_for: missing context");
+        let data = unsafe { &*ctx.data };
+        let def = data.def(v_func as u32);
+        let kt = match &def.returned {
+            crate::data::Type::Reference(d_nr, _) => data.def(*d_nr).known_type,
+            _ => u16::MAX,
+        };
+        let sz = u32::from(stores.size(kt));
+        (kt, sz)
+    } else {
+        (u16::MAX, return_size)
     };
 
     let result_ref = parallel_execute_and_collect(
@@ -661,6 +687,8 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         element_size,
         return_size,
         is_text,
+        is_ref,
+        known_type,
         n_threads,
         &extra_args,
         n,
@@ -679,6 +707,8 @@ fn parallel_execute_and_collect(
     element_size: u32,
     return_size: u32,
     is_text: bool,
+    is_ref: bool,
+    known_type: u16,
     n_threads: usize,
     extra_args: &[u64],
     n: usize,
@@ -695,7 +725,33 @@ fn parallel_execute_and_collect(
         .store_mut(&result_db)
         .set_int(header_rec, 4, vec_rec as i32);
 
-    if is_text {
+    if is_ref {
+        let batches = run_parallel_ref(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            n_threads,
+            extra_args,
+            n,
+        );
+        // Deep-copy each worker-created struct directly into the result vector
+        // at the inline element position.  The struct bytes live at
+        // vec_rec offset `8 + i * struct_size`; OpGetVector will return a DbRef
+        // pointing there so field access works without extra indirection.
+        let struct_size = u32::from(stores.size(known_type));
+        for (batch, mut worker_stores) in batches {
+            for (i, src_ref) in batch {
+                let dest = DbRef {
+                    store_nr: result_db.store_nr,
+                    rec: vec_rec,
+                    pos: 8 + (i as u32) * struct_size,
+                };
+                stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, known_type);
+            }
+        }
+    } else if is_text {
         let strings = run_parallel_text(
             stores,
             program,

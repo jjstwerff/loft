@@ -182,6 +182,45 @@ impl Stores {
             && self.allocations[r.store_nr as usize].is_locked()
     }
 
+    /// Deep-copy a struct record from a worker's `Stores` into a pre-allocated
+    /// destination in this (main) `Stores`.
+    ///
+    /// Uses a temporary "graft": the worker's source store is swapped into
+    /// `self.allocations` at its `store_nr` index so that `copy_block` and
+    /// `copy_claims` can reach both source and destination through the same
+    /// `Stores` instance.  After copying the graft is swapped back out.
+    pub fn copy_from_worker(
+        &mut self,
+        src_ref: &DbRef,
+        dest: &DbRef,
+        worker_stores: &mut Stores,
+        tp: u16,
+    ) {
+        let ws = src_ref.store_nr as usize;
+
+        // Extend allocations so the worker's store index is reachable.
+        while self.allocations.len() <= ws {
+            self.allocations.push(Store::new(100));
+        }
+
+        // Graft the worker's store in.
+        std::mem::swap(
+            &mut self.allocations[ws],
+            &mut worker_stores.allocations[ws],
+        );
+
+        // Raw byte copy + deep-copy of owned sub-fields (text, nested refs).
+        let size = u32::from(self.size(tp));
+        self.copy_block(src_ref, dest, size);
+        self.copy_claims(src_ref, dest, tp);
+
+        // Un-graft: put the worker's store back.
+        std::mem::swap(
+            &mut self.allocations[ws],
+            &mut worker_stores.allocations[ws],
+        );
+    }
+
     /// Clone all current stores as locked read-only copies for use in a worker thread.
     /// The returned `Stores` has the same type schema but no files and no `parallel_ctx`.
     /// When a worker `State` is created from this, `State::new()` will allocate its own

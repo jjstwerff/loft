@@ -234,6 +234,67 @@ pub fn run_parallel_text(
     results
 }
 
+/// Parallel struct-reference returns: workers send back `(index, DbRef)` batches
+/// together with their `Stores` so the main thread can deep-copy struct data.
+/// # Panics
+/// Panics if a worker thread panics.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_ref(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    n_rows: usize,
+) -> Vec<(Vec<(usize, DbRef)>, crate::database::Stores)> {
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let threads = n_threads.max(1).min(n_rows);
+    let program = Arc::new(program);
+    let (tx, rx) = mpsc::channel::<(Vec<(usize, DbRef)>, crate::database::Stores)>();
+    let mut handles = Vec::with_capacity(threads);
+    for t in 0..threads {
+        let start = t * n_rows / threads;
+        let end = (t + 1) * n_rows / threads;
+        let worker_stores = stores.clone_for_worker();
+        let prog = Arc::clone(&program);
+        let tx_t = tx.clone();
+        let input_t = *input;
+        let extras = extra_args.to_vec();
+        let handle = thread::spawn(move || {
+            let (bytecode, text_code, library) = prog.clone_refs();
+            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+            let mut batch = Vec::with_capacity(end - start);
+            for row_idx in start..end {
+                let row_ref = vector::get_vector(
+                    &input_t,
+                    element_size,
+                    i32::try_from(row_idx).expect("row index fits i32"),
+                    &state.database.allocations,
+                );
+                let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
+                batch.push((row_idx, val));
+            }
+            tx_t.send((batch, state.database))
+                .expect("channel send failed");
+        });
+        handles.push(handle);
+    }
+    drop(tx);
+    let mut results = Vec::with_capacity(threads);
+    for batch in rx {
+        results.push(batch);
+    }
+    for h in handles {
+        h.join().expect("worker thread panicked");
+    }
+    results
+}
+
 /// Parallel integer returns: one `i32` per row, original order.
 /// # Panics
 /// Panics if a worker thread panics.

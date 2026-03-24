@@ -570,6 +570,31 @@ impl State {
         }
     }
 
+    /// Execute a worker function that returns a struct reference (`DbRef`).
+    /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
+    /// record lives in `self.database` (the worker's cloned stores).
+    pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
+        self.stack_pos = 4;
+        self.put_stack(*arg);
+        for &extra in extra_args {
+            self.put_stack(extra as i32);
+        }
+        self.put_stack(u32::MAX);
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            OPERATORS[op as usize](self);
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        *self.get_stack::<DbRef>()
+    }
+
     /// Execute a text-returning worker function; copy the `Str` result to an owned
     /// `String` before the worker state is dropped. Allocates `String` buffers in the
     /// stack store for hidden `__work_N` parameters.

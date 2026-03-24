@@ -42,15 +42,20 @@ fn to_hex(self: Colour) -> integer {
 fn dimmed(self: Colour) -> Colour {
   Colour {r: self.r / 2, g: self.g / 2, b: self.b / 2 }
 }
-// ## Computed Fields
-// A field can calculate its value from other fields in the same struct.
-// Write '= expression' after the type to set a value computed when you create the struct.
-// Inside that expression, '$' refers to the struct being built.
-// The 'name_length' field is filled automatically whenever you create an Item.
+// ## Defaults and Computed Fields
+// Write '= expression' after the type to set a stored default, filled at construction.
+// Use 'computed(expression)' for a field that recalculates every time you read it —
+// it takes no space in the record and always reflects the current state.
+// Inside both, '$' refers to the struct.
 
 struct Item {
   name: text,
   name_length: integer = len($.name)
+}
+
+struct Circle {
+  radius: float,
+  area: float computed(3.14159265 * $.radius * $.radius)
 }
 // ## Storing many structs in a vector
 // 'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535,
@@ -91,9 +96,14 @@ fn main() {
   assert(dark.r == 64, "dimmed r: {dark.r}");
   assert(dark.b == 64, "dimmed b: {dark.b}");
   assert(dark.g == 0, "dimmed g: {dark.g}");
-  // Computed fields are filled in automatically when you create the struct.
+  // Stored defaults are filled once at construction time.
   it = Item {name: "hello" };
-  assert(it.name_length == 5, "computed name_length: {it.name_length}");
+  assert(it.name_length == 5, "stored default name_length: {it.name_length}");
+  // computed() fields recalculate on every access — changing radius updates area.
+  ci = Circle { radius: 5.0 };
+  assert(ci.area > 78.0, "computed area: {ci.area}");
+  ci.radius = 10.0;
+  assert(ci.area > 314.0, "recomputed area: {ci.area}");
   // Fill a vector with copies of the same struct using '; count' syntax.
   // This creates 16 Area records, all with the same initial values.
   map =[Area {height: 0, terrain: 1, water: 1, direction: 1 };

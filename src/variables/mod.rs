@@ -884,6 +884,13 @@ impl Function {
         self.variables[v as usize].skip_free
     }
 
+    /// Mark a variable so that `get_free_vars` will not emit `OpFreeRef` for it.
+    /// Used for borrowed references (e.g. par-loop result variables that point
+    /// into the result vector store).
+    pub fn set_skip_free(&mut self, v: u16) {
+        self.variables[v as usize].skip_free = true;
+    }
+
     pub fn inline_ref_references(&self) -> Vec<u16> {
         self.inline_ref_vars.iter().copied().collect()
     }

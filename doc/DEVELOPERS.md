@@ -300,7 +300,7 @@ Stop and reconsider if you find yourself:
 
 ### Currently out of scope (planned for a future major version)
 
-- Lambda / closure expressions (planned 1.1).
+- Closure capture for lambdas (planned 1.1; lambdas without capture shipped in 0.8.2).
 - REPL / interactive mode (planned 1.1).
 - Generics beyond the built-in collection types.
 - Async/await.

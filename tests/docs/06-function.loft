@@ -16,6 +16,13 @@
 fn greet(name: text, greeting: text = "Hello") -> text {
   greeting + ", " + name + "!"
 }
+// ## Named Arguments
+// When a function has several parameters with defaults, you can skip middle ones
+// by naming the arguments you want to provide. Positional arguments come first;
+// once you use a name, all remaining arguments must also be named.
+fn connect(host: text, port: integer = 8080, tls: boolean = true) -> text {
+  "{host}:{port}:{tls}"
+}
 // ## Reference Parameters and Defaults
 // A function with no '-> type' is called for its side effects, not its result.
 // Adding '&' before a parameter type makes it a reference: the function receives a
@@ -151,4 +158,11 @@ fn main() {
 
   // A lambda passed to your own higher-order function (same as apply_fn above).
   assert(apply_fn(fn(x: integer) -> integer { x * x }, 6) == 36, "lambda as arg: 6^2");
+
+  // --- Named arguments ---
+  assert(connect("example.com") == "example.com:8080:true", "all defaults");
+  assert(connect("example.com", tls: false) == "example.com:8080:false", "skip port");
+  assert(connect(host: "example.com", tls: false) == "example.com:8080:false", "all named");
+  assert(connect("example.com", port: 443, tls: false) == "example.com:443:false", "mixed");
+  assert(greet(name: "World") == "Hello, World!", "named with default greeting");
 }
