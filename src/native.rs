@@ -84,6 +84,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_path_sep", n_path_sep),
+    ("n_parse_errors", n_parse_errors),
 ];
 
 pub fn init(state: &mut State) {
@@ -813,4 +814,14 @@ fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
 /// `'\\'` on Windows filesystems, `'/'` everywhere else.
 fn n_path_sep(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, sep());
+}
+
+/// Return the error text from the last `Type.parse()` call.
+/// Empty string means the parse succeeded.
+fn n_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.last_parse_errors.join("\n");
+    stores.last_parse_errors.clear();
+    stores.scratch.clear();
+    stores.scratch.push(msg);
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }

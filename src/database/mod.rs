@@ -107,6 +107,8 @@ pub struct Stores {
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.
     pub scratch: Vec<String>,
+    /// Errors from the last `Type.parse()` call, read via `s#errors`.
+    pub last_parse_errors: Vec<String>,
     /// Set by `State::execute()` to allow native functions to access the
     /// interpreter's bytecode, library, and compiled data during execution.
     pub parallel_ctx: Option<Box<ParallelCtx>>,
@@ -141,6 +143,7 @@ impl Clone for Stores {
             files: Vec::new(),
             max: self.max,
             scratch: Vec::new(),
+            last_parse_errors: Vec::new(),
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
@@ -352,6 +355,7 @@ impl Stores {
             files: Vec::new(),
             max: 0,
             scratch: Vec::new(),
+            last_parse_errors: Vec::new(),
             parallel_ctx: None,
             logger: None,
             had_fatal: false,

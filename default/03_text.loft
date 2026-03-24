@@ -107,3 +107,7 @@ pub fn user_directory(v:  & text = "") -> text;
 // Use to locate assets bundled alongside the program.
 pub fn program_directory(v:  & text = "") -> text;
 #rust"Stores::os_executable_native()"
+// Returns the parse error from the last Type.parse() call.
+// Empty text means success; non-empty means parse failure with path info
+// like "line 1:15 path:items[2].name".
+pub fn parse_errors() -> text;

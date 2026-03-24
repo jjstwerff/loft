@@ -808,20 +808,11 @@ impl State {
             pos: 8,
         };
         self.database.set_default_value(db_tp, &into);
-        let mut pos = 0;
-        // prevent throwing an error here
-        if self
-            .database
-            .parsing(val, &mut pos, db_tp, db_tp, u16::MAX, &into)
-        {
-            into
-        } else {
-            DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            }
+        self.database.last_parse_errors.clear();
+        if let Some(err) = self.database.parse(val, db_tp, &into) {
+            self.database.last_parse_errors.push(err);
         }
+        into
     }
 
     pub fn insert_vector(&mut self) {
