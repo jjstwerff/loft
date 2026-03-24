@@ -35,7 +35,9 @@ mod typedef;
 mod variables;
 mod vector;
 
-use crate::native_utils::{project_dir, is_output_path, default_artifact_path, loft_lib_dir_for, loft_lib_dir};
+use crate::native_utils::{
+    default_artifact_path, is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
+};
 use crate::state::State;
 use crate::test_runner::run_tests;
 use std::collections::HashSet;
