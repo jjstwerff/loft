@@ -113,8 +113,7 @@ give each item a traceable history.
 
 1. **Never `git commit` directly on `main`.** If you accidentally land on `main`, move
    the change to a feature branch before anything else.
-2. **Never `git push` without an explicit user instruction** — see the
-   [feedback memory](memory/feedback_no_github_automation.md) and the Remote CI section
+2. **Never `git push` without an explicit user instruction** — see the Remote CI section
    of [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md).
 3. Create branches from the tip of `main` using the naming convention in
    [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) (e.g. `p1-1-lambda-parser`, `benchmark`).
@@ -156,7 +155,7 @@ give each item a traceable history.
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
-| [CHANGELOG.md](doc/claude/CHANGELOG.md) | Release history |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [QUICK_START.md](doc/claude/QUICK_START.md) | Session-start orientation — commands, file map, naming conventions, key patterns |
 | [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) | Slot assignment design notes — P1/P2 proposals, resolved bugs, two-zone layout |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
