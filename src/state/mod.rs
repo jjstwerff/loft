@@ -543,10 +543,24 @@ impl State {
     ///
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations.
-    pub fn execute_at_raw(&mut self, fn_pos: u32, arg: &DbRef, return_size: u32) -> u64 {
+    pub fn execute_at_raw(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
         self.stack_pos = 4;
-        self.put_stack(*arg); // 12 bytes → stack_pos = 16
-        self.put_stack(u32::MAX); // 4 bytes → stack_pos = 20
+        // Push extra context args first (they precede the element arg in the
+        // function's parameter list: fn worker(element, extra1, extra2, ...)).
+        // The stack grows upward; the function reads params from low to high offset.
+        // Element arg (DbRef) occupies the first parameter slot; extras follow.
+        self.put_stack(*arg); // 12 bytes
+        for &extra in extra_args {
+            // Push each extra as a raw i32 (integer context args).
+            self.put_stack(extra as i32);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;

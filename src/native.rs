@@ -608,7 +608,18 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 /// `return_size` is 1 (boolean), 4 (integer), or 8 (long/float).
 /// Returns a `reference` pointing to a freshly allocated result vector.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    // Pop in reverse declaration order.
+    // A1.1: Stack layout (push order from codegen):
+    //   vec(12B), elem_size(4B), return_size(4B), threads(4B), func(4B),
+    //   extra1(4B), ..., extraN(4B), n_extra(4B)
+    // Pop order (LIFO): n_extra, extraN, ..., extra1, func, threads, return_size, elem_size, vec
+
+    let n_extra = *stores.get::<i32>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i32>(stack) as u64);
+    }
+    extra_args.reverse(); // restore push order (first extra = first worker param)
+
     let v_func = *stores.get::<i32>(stack);
     let v_threads = *stores.get::<i32>(stack);
     let v_return_size = *stores.get::<i32>(stack);
@@ -652,6 +663,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         element_size,
         return_size,
         n_threads,
+        &extra_args,
     );
 
     // Build result vector in a fresh store.

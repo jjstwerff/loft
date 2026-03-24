@@ -648,6 +648,14 @@ impl State {
                 }
             }
         }
+        // A1.1: push extra Call args beyond the declared parameter count.
+        // Only for n_parallel_for — forwards extra context args + n_extra count.
+        if stack.data.def(op).name == "n_parallel_for" {
+            let n_declared = stack.data.def(op).attributes.len();
+            for extra in parameters.iter().skip(n_declared) {
+                self.generate(extra, stack, false);
+            }
+        }
         match &stack.data.def(op).name as &str {
             "OpGetRecord" => {
                 was_stack = stack.position;
@@ -708,6 +716,15 @@ impl State {
             self.code_add(self.library_names[&name]);
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
+            }
+            // A1.1: also subtract the extra args pushed beyond declared params.
+            if stack.data.def(op).name == "n_parallel_for" {
+                let n_declared = stack.data.def(op).attributes.len();
+                for extra in parameters.iter().skip(n_declared) {
+                    // Extra args are always integer (4 bytes) in the current implementation.
+                    let _ = extra;
+                    stack.position -= 4;
+                }
             }
             // add the result to the stack
             stack.position += size(&stack.data.def(op).returned, &Context::Argument);

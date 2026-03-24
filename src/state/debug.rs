@@ -985,6 +985,14 @@ pub(super) fn execute_log_impl(
     let d_nr = data.def_nr(&format!("n_{name}"));
     assert_ne!(d_nr, u32::MAX, "Unknown routine {name}");
 
+    // Set up parallel context so n_parallel_for can access bytecode/library.
+    state.database.parallel_ctx = Some(Box::new(super::ParallelCtx {
+        data: std::ptr::from_ref::<crate::data::Data>(data),
+        bytecode: &raw const state.bytecode,
+        text_code: &raw const state.text_code,
+        library: &raw const state.library,
+    }));
+
     // If logging is suppressed for this function, fall back to silent execution.
     if !config.phases.execution || !config.show_function(name) {
         state.execute(name, data);
@@ -1021,6 +1029,8 @@ pub(super) fn execute_log_impl(
         }
     } else {
         writeln!(log, "Execute {name}:")?;
-        state.execute_log_steps(log, d_nr, config, data)
+        let r = state.execute_log_steps(log, d_nr, config, data);
+        state.database.parallel_ctx = None;
+        r
     }
 }

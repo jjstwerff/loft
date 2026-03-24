@@ -19,7 +19,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             // literal that is resolved to a closure in native output_call.
             // Detect it here so the worker is included in the reachable set.
             if data.def(*d).name == "n_parallel_for"
-                && args.len() == 5
+                && args.len() >= 5
                 && let Value::Int(fn_d_nr) = &args[4]
                 && *fn_d_nr >= 0
             {
@@ -2348,7 +2348,7 @@ extern crate loft;"
                 // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm) as i64 }).
                 // The fn_d_nr is always a compile-time constant (Value::Int), so we can
                 // resolve the worker function name statically.
-                if vals.len() == 5
+                if vals.len() >= 5
                     && let Value::Int(fn_d_nr) = &vals[4]
                     && *fn_d_nr >= 0
                 {

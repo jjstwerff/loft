@@ -68,6 +68,7 @@ impl WorkerProgram {
 /// # Panics
 /// Panics if a worker thread panics or the internal channel send fails.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn run_parallel_raw(
     stores: &Stores,
     program: WorkerProgram,
@@ -76,6 +77,7 @@ pub fn run_parallel_raw(
     element_size: u32,
     return_size: u32,
     n_threads: usize,
+    extra_args: &[u64],
 ) -> Vec<u64> {
     let n_rows = vector::length_vector(input, &stores.allocations) as usize;
     if n_rows == 0 {
@@ -94,6 +96,7 @@ pub fn run_parallel_raw(
         let prog = Arc::clone(&program);
         let tx_t = tx.clone();
         let input_t = *input;
+        let extras = extra_args.to_vec();
 
         let handle = thread::spawn(move || {
             let (bytecode, text_code, library) = prog.clone_refs();
@@ -107,7 +110,7 @@ pub fn run_parallel_raw(
                     row_idx_i32,
                     &state.database.allocations,
                 );
-                let val = state.execute_at_raw(fn_pos, &row_ref, return_size);
+                let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
                 batch.push((row_idx, val));
             }
             tx_t.send(batch).expect("channel send failed");

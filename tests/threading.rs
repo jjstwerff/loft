@@ -370,7 +370,7 @@ fn to_long(r: const Num) -> long { r.v as long * 1000000000l }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 8, 2);
+    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 8, 2, &[]);
     let longs: Vec<i64> = raw.iter().map(|&r| r as i64).collect();
     assert_eq!(
         longs,
@@ -394,7 +394,7 @@ fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 1, 1);
+    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 1, 1, &[]);
     let bools: Vec<bool> = raw.iter().map(|&r| r != 0).collect();
     assert_eq!(
         bools,
@@ -418,7 +418,6 @@ fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
 /// Currently the parser accepts this (arg count matches) but the runtime
 /// ignores `m`, producing wrong results.
 #[test]
-#[ignore = "T3-1: extra context args not yet forwarded to workers at runtime"]
 fn parallel_extra_integer_context_arg() {
     let code = r#"
 struct Item { value: integer }
@@ -440,7 +439,6 @@ fn test() {
 /// `fn fused(r: const Item, offset: integer, scale: integer) -> integer`
 /// Should compute `r.value * scale + offset` for each element.
 #[test]
-#[ignore = "T3-1: extra context args not yet forwarded to workers at runtime"]
 fn parallel_two_context_args() {
     let code = r#"
 struct Item { value: integer }

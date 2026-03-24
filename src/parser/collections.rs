@@ -932,7 +932,8 @@ use #count instead"
         }
 
         // Resolve worker function: consumes the worker call tokens up to the ','.
-        let (fn_d_nr, ret_type) = self.parse_parallel_worker(elem_var, &elem_tp);
+        let (fn_d_nr, ret_type, extra_vals, _extra_types) =
+            self.parse_parallel_worker(elem_var, &elem_tp);
 
         // Comma separating worker from thread count.
         self.lexer.token(",");
@@ -985,10 +986,12 @@ use #count instead"
             threads_expr,
             fill,
             loop_nr,
+            extra_vals,
         );
     }
 
     // parallel_for IR builder; threads unrelated IR params alongside &mut self — no sensible grouping
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_parallel_for_ir(
         &mut self,
@@ -1003,6 +1006,7 @@ use #count instead"
         threads_expr: Value,
         fill: Value,
         loop_nr: u16,
+        extra_args: Vec<Value>,
     ) {
         let ref_d_nr = self.data.def_nr("reference");
         let results_ref_type = Type::Reference(ref_d_nr, Vec::new());
@@ -1059,17 +1063,19 @@ use #count instead"
             return;
         }
 
-        // parallel_for(input, elem_size, return_size, threads, fn_d_nr)
-        let pf_call = Value::Call(
-            par_for_d_nr,
-            vec![
-                vec_expr.clone(),
-                Value::Int(elem_size),
-                Value::Int(return_size),
-                threads_expr,
-                Value::Int(fn_d_nr as i32),
-            ],
-        );
+        // parallel_for(input, elem_size, return_size, threads, fn_d_nr, extra1, ..., n_extra)
+        // n_extra is pushed LAST so it's on top of the stack for popping first.
+        let n_extra = extra_args.len();
+        let mut pf_args = vec![
+            vec_expr.clone(),
+            Value::Int(elem_size),
+            Value::Int(return_size),
+            threads_expr,
+            Value::Int(fn_d_nr as i32),
+        ];
+        pf_args.extend(extra_args);
+        pf_args.push(Value::Int(n_extra as i32));
+        let pf_call = Value::Call(par_for_d_nr, pf_args);
 
         // len(input_vec) — compute once before the loop.
         let len_call = self.cl("OpLengthVector", &[vec_expr]);
