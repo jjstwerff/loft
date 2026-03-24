@@ -10,7 +10,7 @@ The compiler pipeline is:
 The intermediate representation is the `Value` enum tree defined in `src/data.rs`.
 Bytecode generation is done in `src/state/codegen.rs` via `State`.
 The 233 operator functions are in `src/fill.rs`.
-Variable/scope tracking during parsing is in `src/variables.rs` via `Function`.
+Variable/scope tracking during parsing is in `src/variables/` via `Function`.
 
 ---
 
@@ -19,7 +19,7 @@ Variable/scope tracking during parsing is in `src/variables.rs` via `Function`.
 - [Type Enum — `src/data.rs`](#type-enum--srcdatars)
 - [AST-Level Operators (Call node op_nr)](#ast-level-operators-call-node-op_nr)
 - [Bytecode State — `src/state/`](#bytecode-state--srcstate)
-- [Variable Tracking — `src/variables.rs`](#variable-tracking--srcvariablesrs)
+- [Variable Tracking — `src/variables/`](#variable-tracking--srcvariablesrs)
 - [233 Bytecode Operators — `src/fill.rs`](#233-bytecode-operators--srcfillrs)
 - [DbRef](#dbref)
 - [Key Patterns](#key-patterns)
@@ -319,7 +319,7 @@ to `vector_append`, which modifies the caller's vector in place.
 
 ---
 
-## Variable Tracking — `src/variables.rs`
+## Variable Tracking — `src/variables/`
 
 ```rust
 pub struct Function {
@@ -359,7 +359,7 @@ The same variable name may have multiple `Variable` instances across scopes.
 
 ### Live Intervals (`first_def` / `last_use`)
 
-`compute_intervals(function, ir)` in `variables.rs` walks the entire IR tree in sequential
+`compute_intervals(function, ir)` in `variables/` walks the entire IR tree in sequential
 order (assigning each node a monotonically-increasing sequence number `seq`) and fills:
 
 - `first_def` — the sequence number of the `Value::Set(v, …)` node that first defines `v`.

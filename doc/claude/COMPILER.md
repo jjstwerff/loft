@@ -11,7 +11,7 @@ This document covers how loft source code is turned into executable bytecode: th
 - [IR — The `Value` tree (`src/data.rs`)](#ir--the-value-tree-srcdatars)
 - [Type resolution (`src/typedef.rs`)](#type-resolution-srctypedefrs)
 - [Scope analysis (`src/scopes.rs`)](#scope-analysis-srcscopesrs)
-- [Rust code generation (`src/generation.rs`)](#rust-code-generation-srcgenerationrs)
+- [Rust code generation (`src/generation/`)](#rust-code-generation-srcgenerationrs)
 - [Bytecode generation (`src/compile.rs`, `src/state/`)](#bytecode-generation-srccompilers-srcstate)
 - [Default library (`default/*.loft`)](#default-library-defaultloft)
 - [Naming conventions enforced by the parser](#naming-conventions-enforced-by-the-parser)
@@ -432,7 +432,7 @@ explicitly marked defined when first referenced, so they are always valid inside
 
 ### Variable tracking — `Function` / `vars`
 
-`self.vars` (a `Function` from `src/variables.rs`) tracks the variable table for the function being compiled:
+`self.vars` (a `Function` from `src/variables/`) tracks the variable table for the function being compiled:
 
 - `create_var(name, type)` — allocates a new slot.
 - `unique(prefix, type)` — allocates an anonymous working variable.
@@ -468,10 +468,10 @@ Without the `vec == u16::MAX` guard, calling `is_argument(u16::MAX)` would panic
 During the second pass, `parse_assign` and `parse_function` enforce two additional
 safety invariants beyond type-checking:
 
-**For-loop mutation guard (`parse_assign`, `variables.rs`):**
+**For-loop mutation guard (`parse_assign`, `variables/`):**
 When parsing `v += items`, if the type is a collection (`Vector`, `Sorted`, `Index`, or
 `Spacial`) and `v` resolves to a `Value::Var(v_nr)`, the parser calls `vars.is_iterated_var(v_nr)`.
-This walks the `current_loop` chain in `variables.rs` comparing against each loop's `coll_var`
+This walks the `current_loop` chain in `variables/` comparing against each loop's `coll_var`
 (original collection variable, set via `set_coll_var()` in `parse_for`). If the variable is
 currently being iterated, a compile error is emitted:
 
@@ -826,15 +826,15 @@ for each variable v in scope:
 
 If a block allocates a new text variable internally and returns it, the variable's position falls inside the discard range and the debug assertion fires. The fix in such cases is to hoist the text variable's initialisation (`claim_temp`) to the enclosing scope.
 
-### `copy_variable` (`variables.rs`)
+### `copy_variable` (`variables/`)
 
 Creates an exact duplicate of a variable (same name, same type including deps) with fresh `scope = u16::MAX` and `stack_pos = u16::MAX`. Used when a variable from an outer scope is assigned again in an inner sibling scope that no longer has the outer scope in its stack.
 
 ---
 
-## Rust code generation (`src/generation.rs`)
+## Rust code generation (`src/generation/`)
 
-`src/generation.rs` provides the `Output` struct and `rust_type` function used to transpile compiled loft programs to Rust source files. This is used only during development to regenerate `src/fill.rs` and `src/native.rs` from the `#rust "..."` annotations in the default library. It is not involved in the normal interpreter execution path.
+`src/generation/` provides the `Output` struct and `rust_type` function used to transpile compiled loft programs to Rust source files. This is used only during development to regenerate `src/fill.rs` and `src/native.rs` from the `#rust "..."` annotations in the default library. It is not involved in the normal interpreter execution path.
 
 ### `Output<'a>`
 
@@ -881,7 +881,7 @@ The bytecode is a compact encoding of the `Call`/`Set`/`If`/`Loop` IR nodes. It 
 
 The default library is loaded before any user source. It is parsed with `default: true`, which:
 - Allows `OpXxx`-prefixed names (operator definitions).
-- Allows `#rust "..."` annotations that supply the Rust implementation string for the code generator (`src/generation.rs`).
+- Allows `#rust "..."` annotations that supply the Rust implementation string for the code generator (`src/generation/`).
 - Registers all built-in types, operators, and standard functions in `Data` and `Stores`.
 
 Files are loaded in alphabetical order:
@@ -932,7 +932,7 @@ Diagnostics are collected on the `Lexer` and merged into `Parser::diagnostics` a
 | `src/data.rs` | `Value`, `Type`, `DefType`, `Data`, `Attribute` definitions |
 | `src/typedef.rs` | Type resolution; `Stores` schema population |
 | `src/scopes.rs` | Scope assignment; lifetime cleanup insertion |
-| `src/variables.rs` | Per-function variable table (`Function`) |
+| `src/variables/` | Per-function variable table (`Function`) |
 | `src/compile.rs` | `byte_code` — IR → bytecode; `show_code` |
 | `src/state/mod.rs` | `State` struct, constructors, `execute`/`execute_argv`, stack primitives |
 | `src/state/text.rs` | String/text operations: allocation, formatting, slicing |
@@ -947,7 +947,7 @@ Diagnostics are collected on the `Lexer` and merged into `Parser::diagnostics` a
 | `src/database/structures.rs` | Record construction, parsing, `get_ref`, `get_field`, `vector_add` |
 | `src/database/io.rs` | File I/O: `read_data`, `write_data`, `get_file`, `get_dir`, `get_png` |
 | `src/database/format.rs` | Display/formatting: `show`, `dump`, `rec`, `path` |
-| `src/generation.rs` | Rust code generator — `Output` struct, `rust_type` mapping, emits `fill.rs` / `native.rs` |
+| `src/generation/` | Rust code generator — `Output` struct, `rust_type` mapping, emits `fill.rs` / `native.rs` |
 | `src/calc.rs` | Field byte-offset calculator for struct/enum-variant layout |
 | `src/stack.rs` | Bytecode-generation stack frame (`Stack`, `Loop`) |
 | `src/create.rs` | Drives code generation: `generate_lib` and `generate_code` |

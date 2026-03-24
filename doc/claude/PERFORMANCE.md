@@ -186,7 +186,7 @@ workloads can favour loft.
 
 **1. Every generated function takes `stores: &mut Stores`**
 
-`src/generation.rs` emits all loft functions with this signature:
+`src/generation/` emits all loft functions with this signature:
 
 ```rust
 fn n_fibonacci(stores: &mut Stores, n: i32) -> i32 { … }
@@ -627,7 +627,7 @@ If a `Local` vector must be passed to a function that expects `DbRef`, it is not
 `Local` by the escape analysis above — it has `Escaping` status and uses the existing
 store-backed path. This ensures correctness without special cases.
 
-### Changes to `src/generation.rs`
+### Changes to `src/generation/`
 
 1. Add `fn escape_analysis(def_nr: u32, data: &Data) -> HashMap<u16, Locality>`.
 2. In `Output::output_code_inner`, check `locality[var]` before emitting any
@@ -673,7 +673,7 @@ A function is **pure** for native codegen purposes if:
 3. It has no `Format`, `IO`, `HashFind`, `NewRecord`, `FreeRef`, or similar operations
    in its IR
 
-Purity is determined by a recursive scan of `def.code: Value` before `generation.rs`
+Purity is determined by a recursive scan of `def.code: Value` before `generation/`
 runs.
 
 ### Pure function signature
@@ -703,7 +703,7 @@ to optimise.
 ### Purity analysis implementation
 
 Add `fn is_pure(def_nr: u32, data: &Data, cache: &mut HashMap<u32, bool>) -> bool`
-to `src/generation.rs`. Scan `data.def(def_nr).code` recursively:
+to `src/generation/`. Scan `data.def(def_nr).code` recursively:
 
 ```rust
 fn is_pure(v: &Value, data: &Data, cache: &mut HashMap<u32, bool>) -> bool {
@@ -732,7 +732,7 @@ fn is_pure(v: &Value, data: &Data, cache: &mut HashMap<u32, bool>) -> bool {
 
 Memoise results to avoid exponential recursion on call graphs.
 
-### Changes to `src/generation.rs`
+### Changes to `src/generation/`
 
 1. Add `fn is_pure` (above).
 2. In `output_native_reachable`, for each pure function, emit both `n_foo_pure`
@@ -746,7 +746,7 @@ Memoise results to avoid exponential recursion on call graphs.
 
 **Affected benchmarks:** 04 (2.24×)
 **Expected gain:** 1.3–1.5× on Collatz and any `long`-heavy generated code
-**Cost:** Low — localised change in `src/generation.rs` + `src/ops.rs`
+**Cost:** Low — localised change in `src/generation/` + `src/ops.rs`
 
 ### Background
 
@@ -782,7 +782,7 @@ its first use (guaranteed by the compiler's scope analysis).
    // … etc. for all long arithmetic ops
    ```
 
-2. **In `src/generation.rs`:**
+2. **In `src/generation/`:**
 
    For a `long` binary operation where both operands are local variables (determined by
    the same escape analysis pass from N1, applied to `long` variables), emit
@@ -799,7 +799,7 @@ its first use (guaranteed by the compiler's scope analysis).
 
 - `src/ops.rs`: add `_nn` variants for `add`, `sub`, `mul`, `div`, `mod`, `neg`,
   comparison ops.
-- `src/generation.rs`: in the long-arithmetic emit path, check nullability of both
+- `src/generation/`: in the long-arithmetic emit path, check nullability of both
   operands before choosing variant.
 - `default/01_code.loft`: add `#rust` templates for the `_nn` ops if needed by codegen.
 
@@ -832,7 +832,7 @@ path:
 2. **Avoid intermediate allocations.** Replace `text + other_text` (which allocates
    a new `String`) with `text.push_str(&other_text)` (appends in place). The loft
    compiler already emits format-string concatenation this way in the interpreter; verify
-   that `src/generation.rs` does the same for native/wasm.
+   that `src/generation/` does the same for native/wasm.
 
 3. **Profile first.** Run `bench/run_bench.sh` with wasm and capture a perf trace
    via `wasmtime --profile`. If the 2× gap is allocator overhead, the capacity
@@ -867,6 +867,6 @@ without touching the memory model.
 
 - [OPTIMISATIONS.md](OPTIMISATIONS.md) — runtime optimisation opportunities audit
 - [PLANNING.md](PLANNING.md) — priority-ordered enhancement backlog
-- [INTERNALS.md](INTERNALS.md) — `src/fill.rs`, `src/state/`, `src/generation.rs`
+- [INTERNALS.md](INTERNALS.md) — `src/fill.rs`, `src/state/`, `src/generation/`
 - [NATIVE.md](NATIVE.md) — native code generation design and known issues
 - [doc/00-performance.html](../00-performance.html) — rendered benchmark page with bar charts

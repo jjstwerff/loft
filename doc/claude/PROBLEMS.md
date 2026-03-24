@@ -100,7 +100,7 @@ is a field on the returned value, not global state.  See WEB_SERVICES.md Approac
 
 **Severity:** Medium — only affects the `--native` code path, which is not yet the default.
 
-**Location:** `src/generation.rs:1396,1422,1437,1448,1470,1500`
+**Location:** `src/generation/:1396,1422,1437,1448,1470,1500`
 
 **Symptom:** `panic!("Could not parse {vals:?}")` when the native code generator
 encounters an IR pattern it does not recognise.  This is an exhaustiveness gap in the
@@ -112,7 +112,7 @@ updating the emitter leaves silent coverage gaps that manifest as panics at nati
 codegen time (i.e., compile time for the `--native` path, not interpreter runtime).
 
 **Fix path:** When implementing native codegen for a new opcode or value kind (N9 in the
-roadmap), add the corresponding arm to every dispatch site in `generation.rs`.  An
+roadmap), add the corresponding arm to every dispatch site in `generation/`.  An
 exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arms first.
 
 **Effort:** Low per opcode; Medium to reach full coverage (tracked as N9).
@@ -158,7 +158,7 @@ that the `polymorph` test and all vector tests pass after the change.
 **Severity:** High — multiple variables assigned to overlapping regions of a dead 24-byte
 text slot; debug assertion fires; release builds produce undefined behaviour.
 
-**Location:** `src/variables.rs` — `assign_slots`, `can_reuse` predicate.
+**Location:** `src/variables/` — `assign_slots`, `can_reuse` predicate.
 
 **Symptom (A12 investigation, 2026-03-20):** Extending `can_reuse` from `var_size <= 8`
 to also include `Type::Text` allowed two smaller variables (e.g., a 4-byte `total` and
@@ -240,7 +240,7 @@ there by `assign_slots`.
 After loop 1 exited, TOS=52.  Codegen saw pos(60) > TOS(52) → overrode to 52.  `e#iter_state`
 (var 7) was also pre-assigned slot 52 for loop 2. Conflict.
 
-**Fix (`src/variables.rs` — `assign_slots`):**
+**Fix (`src/variables/` — `assign_slots`):**
 1. Before the slot-search loop, compute `tos_estimate` = the maximum slot-end of all
    already-assigned variables that are live at `first_def`.  This is the guaranteed-reachable
    TOS at the variable's first allocation.
@@ -274,7 +274,7 @@ runs in-place at `outer_var`'s slot.  `outer_var` and `inner_var` share the bloc
 legally (non-overlapping live intervals in parent/child scopes), but `assign_slots` didn't model
 this sharing.
 
-**Fix (`src/variables.rs` — `place_large_and_recurse`):**
+**Fix (`src/variables/` — `place_large_and_recurse`):**
 In the `Value::Set(v_nr, inner)` arm, when `inner` is a `Value::Block` and `v` is a large
 non-Text type, call `process_scope(function, inner, v_slot, depth + 1)` with `frame_base = v_slot`
 (the outer var's pre-computed slot), then set `v.stack_pos = v_slot` and return without recursing
@@ -458,7 +458,7 @@ appending elements. `12-binary.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
 **Severity:** Medium — now fixed.
 
-**Location:** `src/generation.rs` — format-string expression emission.
+**Location:** `src/generation/` — format-string expression emission.
 
 **Symptom:** A format string containing a text method call such as `"{tag.to_lowercase()}"` caused a
 `rustc` type error in the generated `.rs` file:
@@ -474,7 +474,7 @@ which returns a `String`. The `ops::format_text` function expects `&str`. For pr
 `&var_x` coerces `&String` → `&str`, but a temporary `String` cannot be implicitly borrowed to `&str`
 in the same expression.
 
-**Fix:** In `generation.rs`, text-returning method calls appearing in format interpolation now emit a
+**Fix:** In `generation/`, text-returning method calls appearing in format interpolation now emit a
 `let _tmp_N = ...; ` let-binding before the format expression and use `&_tmp_N` in the
 `format_text` call. `03-text.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
@@ -484,7 +484,7 @@ in the same expression.
 
 **Severity:** Medium — now fixed.
 
-**Location:** `src/generation.rs` — native emission for `Stores::os_directory`, `Stores::os_home`,
+**Location:** `src/generation/` — native emission for `Stores::os_directory`, `Stores::os_home`,
 `Stores::os_executable`.
 
 **Symptom:** Calling `directory()`, `user_directory()`, or `program_directory()` caused a `rustc`
@@ -499,7 +499,7 @@ error[E0308]: mismatched types
 `&mut String` provided by the caller and return a `Str` view). The native emitter did not correctly
 generate the scratch-buffer setup for them.
 
-**Fix:** `generation.rs` now generates `&mut work_N` (the pre-allocated scratch string) as the first
+**Fix:** `generation/` now generates `&mut work_N` (the pre-allocated scratch string) as the first
 argument for these destination-passing functions. `11-files.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
 ---

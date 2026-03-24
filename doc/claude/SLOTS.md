@@ -21,7 +21,7 @@ History of earlier attempts is in ASSIGNMENT.md and SLOT_FAILURES.md.
 
 ## Background
 
-`assign_slots` (`src/variables.rs`) runs after `compute_intervals` and before codegen.
+`assign_slots` (`src/variables/`) runs after `compute_intervals` and before codegen.
 It assigns `stack_pos` to every local variable using greedy interval colouring:
 variables with non-overlapping live intervals may share a slot; large types (Text 24 B,
 Reference 12 B, Vector 12 B) always get a fresh slot because their init opcodes write
@@ -223,7 +223,7 @@ New opcode inserted at index 7 in the `OPERATORS` table.  At runtime, advances
 `stack.stack_pos` by its `size: u16` operand.  This is the only change to `fill.rs`
 and the interpreter — no structural change to the bytecode format.
 
-### 3. `assign_slots` — new algorithm (`src/variables.rs`)
+### 3. `assign_slots` — new algorithm (`src/variables/`)
 
 Signature: `assign_slots(function, code: &mut Value, local_start)`.
 
@@ -250,7 +250,7 @@ pre-`OpReserveFrame` `to` value, correctly freeing both zones.
 `assign_slots(&mut d.variables, &mut d.code, local_start)` called once per function after
 scope analysis.
 
-### 6. `validate_slots` — scope ancestry check (`src/variables.rs`)
+### 6. `validate_slots` — scope ancestry check (`src/variables/`)
 
 `find_conflict` skips variable pairs in sibling execution branches (neither scope is an
 ancestor of the other).  `build_scope_parents` builds a parent map from the IR tree;
@@ -301,7 +301,7 @@ contain only index-variable reads — no user-named variable `Set` nodes appear 
 the symptom is a `validate_slots` panic blaming a false-positive conflict on `v`.
 
 **Fix:** add a `Value::Iter` arm to `scan_inner` that recurses into all three
-sub-expressions, mirroring the `compute_intervals` arm in `variables.rs:1084`.
+sub-expressions, mirroring the `compute_intervals` arm in `variables/:1084`.
 
 ### `place_large_and_recurse` — Zone-2 ordering invariant
 

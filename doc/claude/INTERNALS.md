@@ -322,7 +322,7 @@ Loft text is represented by two distinct Rust types:
 | `Str` (= `*const u8` + `u32 len`) | **16 bytes** | Arguments, return values, stack temporaries |
 | `String` (heap-allocated) | **24 bytes** | Owned variable storage (`Context::Variable`) |
 
-The `size()` function in `variables.rs` returns `size_of::<String>()` = 24 when the context is `Context::Variable`, and `size_of::<&str>()` = 16 in all other contexts (arguments, return values, intermediate stack slots).
+The `size()` function in `variables/` returns `size_of::<String>()` = 24 when the context is `Context::Variable`, and `size_of::<&str>()` = 16 in all other contexts (arguments, return values, intermediate stack slots).
 
 **Native functions must always push `Str` (16 bytes), not `String` (24 bytes).**  Writing a 24-byte value into a 16-byte stack slot corrupts everything above it on the stack.
 

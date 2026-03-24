@@ -27,13 +27,17 @@ src/main.rs              CLI entry; loads default/ then user file
   └─ src/parser/         Two-pass recursive-descent parser → Value IR
        ├─ mod.rs            Parser struct, constructors, core helpers
        ├─ definitions.rs    Enum/struct/typedef/function parsing
-       ├─ expressions.rs    Expressions, assignments, format strings
+       ├─ expressions.rs    Expressions, assignments, iterator materialisation
+       ├─ operators.rs      Operator dispatch, type coercion
+       ├─ vectors.rs        Vector literals, comprehensions, lambdas
+       ├─ fields.rs         Field access, indexing, iterator operations
+       ├─ objects.rs        Variable resolution, struct construction, parse
        ├─ collections.rs    Iterators, for-loops, map/filter, parallel-for
-       ├─ control.rs        Control flow, parse_call, parse_method
+       ├─ control.rs        Control flow, match, parse_call, parse_method
        └─ builtins.rs       Parallel worker helpers
        ├─ src/lexer.rs      Tokeniser
        ├─ src/typedef.rs    Type resolution + field offsets
-       ├─ src/variables.rs  Per-function variable table
+       ├─ src/variables/  Per-function variable table
        └─ src/scopes.rs     Scope/lifetime analysis
   └─ src/compile.rs      Drives IR → flat bytecode; initialises native registry
   └─ src/state/          Executes bytecode
@@ -146,7 +150,7 @@ give each item a traceable history.
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, stack layout |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
-| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation.rs`) design and fix plans |
+| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |

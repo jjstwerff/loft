@@ -243,7 +243,7 @@ for a scripting language includes browser-accessible tooling; shipping a 1.0 wit
 would require walking back that claim at 1.1.
 
 **Why include native codegen (Tier N) in 0.8.2?**
-`src/generation.rs` already translates the loft IR to Rust source; the code exists but
+`src/generation/` already translates the loft IR to Rust source; the code exists but
 does not compile.  The N items are incremental bug fixes — each is Small or Medium effort,
 independent of each other and of the other 0.8.2 items — they can be interleaved freely.
 Fixing them in 0.8.2 means 0.9.0 ships a binary where `--native` actually works, at no
@@ -280,7 +280,7 @@ in a better state than it found it, with passing tests).
 **For 0.8.2 (remaining):**
 1. **S5**, **S7**, **S8** — small stability fixes; independent, no dependencies
 2. **O3** — integer sentinel verification; Low effort, zero risk
-3. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation.rs`
+3. **O6** — `_nn` long arithmetic; Low effort, only touches `ops.rs` + `generation/`
 4. **O1** — superinstruction merging; Medium effort, highest impact
 5. **A1.1** — extra args + value-struct returns; Medium; extend `execute_at_raw`, add output buffer
 6. **A1.2** — text/ref returns; Medium; dedicated result store; depends on A1.1
@@ -770,7 +770,7 @@ Requires a new `OpSizeText` opcode backed by Rust's `.chars().count()`.
 **Fix path:**
 1. Add `OpSizeText` declaration + `#rust` body in `default/01_code.loft`.
 2. Implement `op_size_text` in `src/fill.rs`.
-3. Native codegen: emit `.chars().count() as i32` in `src/generation.rs`.
+3. Native codegen: emit `.chars().count() as i32` in `src/generation/`.
 4. Add tests in `tests/docs/02-text.loft` covering ASCII, multi-byte, and empty text.
 **Effort:** Small
 **Target:** 0.8.3
@@ -1402,7 +1402,7 @@ for (pos, r, init) in insertions { ls.insert(pos, v_set(r, init)); }
 requires resolving Issues 69 and 70 and moving OpFreeText to after each variable's last
 use.
 
-**Tests:** `assign_slots_sequential_text_reuse` in `src/variables.rs` (currently
+**Tests:** `assign_slots_sequential_text_reuse` in `src/variables/` (currently
 `#[ignore]` — pending Issue 69 fix).
 **Effort:** Medium (three inter-related blockers; Issues 68–70)
 **Target:** 0.8.2
@@ -1485,7 +1485,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ## N — Native Codegen
 
-`src/generation.rs` already translates the loft IR tree into Rust source files
+`src/generation/` already translates the loft IR tree into Rust source files
 (`tests/generated/*.rs`).  As of 2026-03-18, **76 of 115 files compile and pass**
 (66%).  The remaining 39 failures fall into the categories tracked by the items
 below.  Full design in [NATIVE.md](NATIVE.md).

@@ -3,7 +3,7 @@
 
 # Native Rust Code Generation
 
-Plan for making the existing Rust code generation backend (`src/generation.rs`) produce
+Plan for making the existing Rust code generation backend (`src/generation/`) produce
 compilable, runnable code. The generated code must produce the same results as the
 bytecode interpreter for every loft program.
 
@@ -12,7 +12,7 @@ bytecode interpreter for every loft program.
 ## Goals
 
 ### Primary goal
-Make `src/generation.rs` produce Rust source files that compile and run correctly —
+Make `src/generation/` produce Rust source files that compile and run correctly —
 producing identical output to the bytecode interpreter for every loft program.
 
 ### Interpreter safety invariant
@@ -25,10 +25,10 @@ plan must leave it fully functional.**  Concretely:
    These files are the interpreter core.  Native codegen is a parallel backend,
    not a replacement.
 3. **`default/01_code.loft` templates are shared.**  The `#rust` annotations are
-   read by both `src/create.rs` (bytecode → fill.rs) and `src/generation.rs`
+   read by both `src/create.rs` (bytecode → fill.rs) and `src/generation/`
    (native codegen).  Any template change must be validated against both paths:
    - `create.rs` applies `stores.` → `s.database.` before writing fill.rs
-   - `generation.rs` must apply `s.database.` → `stores.` (the inverse) when
+   - `generation/` must apply `s.database.` → `stores.` (the inverse) when
      emitting native code
    - Templates that already say `s.database.*` pass through create.rs unchanged
      and **must not be changed to `stores.*`** — that would break fill.rs
@@ -54,7 +54,7 @@ cargo fmt -- --check                    # formatted
 
 **Updated 2026-03-23 — Full native test parity achieved.**
 
-`src/generation.rs` translates the loft IR tree into Rust source files.  The original 6
+`src/generation/` translates the loft IR tree into Rust source files.  The original 6
 root-cause error categories (totalling ~1500 errors) are resolved by the completed N-steps.
 The `codegen_runtime.rs` module is in place; templates are corrected; stdlib inclusion works.
 `src/fill.rs` is now auto-generated: `create.rs::generate_code()` runs `rustfmt` after
@@ -75,7 +75,7 @@ writing and the `n9_generated_fill_matches_src` test enforces byte-exact match.
 - **Issue #80 (LIFO store-free):** Recursive functions caused use-after-free because native
   codegen allocates stores at call time (not pre-allocated like the interpreter).
   Fix: `allocation.rs::free_named` now allows non-LIFO frees by cascading `max` downward;
-  `generation.rs` resets `store_nr` to `u16::MAX` after `OpFreeRef`.
+  `generation/` resets `store_nr` to `u16::MAX` after `OpFreeRef`.
 - **Pre-eval extension:** `needs_pre_eval` now covers `Value::Insert` and `Value::Iter`;
   `collect_pre_evals_inner` handles `Value::Return`.
 
@@ -112,15 +112,15 @@ All other `external::op_*` names match `ops::op_*` exactly.
 Const parameters are emitted as `i32` literals but templates wrap in `u32::from()`.
 Rust has no `u32: From<i32>` impl. Field offsets are always non-negative, so `as u32` is safe.
 
-**1c. `s.database.*` → `stores.*` in generation.rs (NOT in templates)**
+**1c. `s.database.*` → `stores.*` in generation/ (NOT in templates)**
 Some templates reference `s.database.allocations`, `s.database.enum_val()`, etc.
 In generated code there is no `s` — only `stores: &mut Stores`.  However, these
 patterns **must stay unchanged in `default/01_code.loft`** because `create.rs` needs
-them for fill.rs (the bytecode interpreter).  The fix goes in `src/generation.rs`:
+them for fill.rs (the bytecode interpreter).  The fix goes in `src/generation/`:
 add `res = res.replace("s.database.", "stores.");` in the template substitution path
 (the inverse of what create.rs does with `stores.` → `s.database.`).
 
-**Files:** `src/generation.rs` (template substitution), possibly `src/database/mod.rs` (make methods pub)
+**Files:** `src/generation/` (template substitution), possibly `src/database/mod.rs` (make methods pub)
 **Verify:** `grep -c 'external::\|u32::from\|s\.database' tests/generated/*.rs` returns 0
 **Eliminates:** ~1019 errors
 **Interpreter safety:** Templates unchanged; fill.rs unaffected
@@ -164,11 +164,11 @@ bytecode interpreter does for each operation:
 | `op_conv_text_from_null() -> Str` | `src/fill.rs` | Null text constant |
 
 Register the module: add `pub mod codegen_runtime;` to `src/lib.rs`.
-Add `use loft::codegen_runtime::*;` to the generated preamble in `src/generation.rs`.
-Update `output_call()` in `generation.rs` to emit these function names for the
+Add `use loft::codegen_runtime::*;` to the generated preamble in `src/generation/`.
+Update `output_call()` in `generation/` to emit these function names for the
 corresponding `Op*` definitions.
 
-**Files:** new `src/codegen_runtime.rs`, `src/lib.rs`, `src/generation.rs`
+**Files:** new `src/codegen_runtime.rs`, `src/lib.rs`, `src/generation/`
 **Eliminates:** ~260 errors
 
 ---
@@ -185,7 +185,7 @@ They fall through to the `_ => write!(w, "{code:?}")` debug fallback.
 
 Also add `op_iterate()` and `op_step()` to `codegen_runtime.rs`.
 
-**Files:** `src/generation.rs`, `src/codegen_runtime.rs`
+**Files:** `src/generation/`, `src/codegen_runtime.rs`
 **Depends on:** N3
 **Eliminates:** ~11 errors
 
@@ -204,7 +204,7 @@ return expression.
 For operators that genuinely need a `#rust` template but don't have one, add the template
 to `default/01_code.loft`.
 
-**Files:** `src/generation.rs`, `default/01_code.loft`
+**Files:** `src/generation/`, `default/01_code.loft`
 **Eliminates:** remaining ~50 errors; all files compile
 
 ---
@@ -246,7 +246,7 @@ sub-step below fixes one root cause and is independently testable.
 
 #### N10a — Fix `output_init` to register ALL intermediate types
 
-**Problem:** `output_init` (generation.rs:273–318) skips intermediate type
+**Problem:** `output_init` (generation/:273–318) skips intermediate type
 registrations.  The compile-time type IDs are sequential across ALL definitions
 with `known_type != u16::MAX`, but `output_init` only emits types matching:
 `DefType::Struct || DefType::Enum || DefType::Vector || (EnumValue with attrs)`.
@@ -265,7 +265,7 @@ assigns `known_type` via `database.structure()`, `database.enumerate()`, etc. to
 every definition in order.  The runtime must register types in exactly the same
 order.  When `output_init` skips a type, all subsequent type IDs shift down.
 
-**Fix (generation.rs `output_init`):**
+**Fix (generation/ `output_init`):**
 1. Collect ALL definitions with `known_type != u16::MAX` into `type_defs` — remove
    the `def_type` filter at line 281–285.
 2. Sort by `known_type` (already done at line 290).
@@ -285,7 +285,7 @@ standalone byte/short types (like the text type = 5).  They must be registered
 with `db.byte()` or `db.short()` so their type ID is consumed.  Compare with
 `typedef.rs:173–195` which handles `Parts::Byte` and `Parts::Short`.
 
-**Files:** `src/generation.rs` (`output_init`, lines 273–318)
+**Files:** `src/generation/` (`output_init`, lines 273–318)
 **Test:** `enums_types` and `enums_enum_field` pass
 **Verify:** `grep -c 'db\.' tests/generated/enums_types.rs` registration count
 matches compile-time types: `cargo test --test expressions -- enums_types` then
@@ -304,10 +304,10 @@ modifying `b.name` also changes `a.name` because they share the same record.
 
 **Root cause detail:** The bytecode codegen (`src/state/codegen.rs:405–423`)
 detects same-type reference assignment in `generate_set` and synthesises a
-`Value::Call(OpCopyRecord, [Var(src), Var(dst), Int(tp_nr)])`.  The `generation.rs`
+`Value::Call(OpCopyRecord, [Var(src), Var(dst), Int(tp_nr)])`.  The `generation/`
 `output_set` does not perform this synthesis — it emits a plain `var_b = var_a`.
 
-**Fix (generation.rs `output_set`, after line 997):**
+**Fix (generation/ `output_set`, after line 997):**
 After emitting the assignment, check if:
 1. Variable type is `Type::Reference(d_nr, _)`
 2. RHS is `Value::Var(src_var)` where src_var has the same reference type
@@ -331,7 +331,7 @@ if let Type::Reference(d_nr, _) = variables.tp(var) {
 The `tp_nr` comes from `data.def(d_nr).known_type` where `d_nr` is the struct
 definition number from the `Type::Reference(d_nr, _)`.
 
-**Files:** `src/generation.rs` (`output_set`, lines 967–1014)
+**Files:** `src/generation/` (`output_set`, lines 967–1014)
 **Test:** `objects_independent_strings` passes
 
 ---
@@ -358,7 +358,7 @@ Check what the generated code passes — if `output_call`'s `OpFormatDatabase`
 handler passes the variant type instead of the parent enum type, the format will
 only show the variant name without struct fields.
 
-**Fix (src/generation.rs or src/codegen_runtime.rs):**
+**Fix (src/generation/ or src/codegen_runtime.rs):**
 1. In `output_call`'s `OpFormatDatabase` handler, verify the `tp_val` argument
    is the parent enum's `known_type`, not a variant's.
 2. If the IR passes the wrong type, fix the `output_call` handler to look up
@@ -371,7 +371,7 @@ only show the variant name without struct fields.
 vs the generated code by adding a `eprintln!("OpFormatDatabase db_tp={db_tp}")` in
 both `codegen_runtime::OpFormatDatabase` and `State::format_db`.
 
-**Files:** `src/codegen_runtime.rs` and/or `src/generation.rs`
+**Files:** `src/codegen_runtime.rs` and/or `src/generation/`
 **Test:** `enums_define_enum` and `enums_general_json` pass
 
 ---
@@ -395,7 +395,7 @@ The bytecode interpreter avoids this because the variable sits on the stack and
 `OpDatabase` returns a new DbRef (assigned to `var_result`), but `clear_vector`
 runs BEFORE `OpDatabase` in the generated sequence.
 
-**Fix (src/codegen_runtime.rs and/or src/generation.rs):**
+**Fix (src/codegen_runtime.rs and/or src/generation/):**
 
 Option A — Guard `clear_vector` calls:
 In generated code, add a null check before `clear_vector`:
@@ -416,7 +416,7 @@ Ensure `OpDatabase` runs before `clear_vector`.  Check the IR ordering and wheth
 
 **Recommended:** Option A — minimal, codegen-only change, no interpreter impact.
 
-**Files:** `src/generation.rs` (`output_call` for `OpClearVector`)
+**Files:** `src/generation/` (`output_call` for `OpClearVector`)
 **Test:** `vectors_fill_result` passes
 
 ---
@@ -441,7 +441,7 @@ After N10a–N10d fix the 6 runtime failures, the 34 compile failures remain.
 
 **N10e-1: Fix `output_if` for missing else branches (fixes ~20 files)**
 
-**Location:** `src/generation.rs` `output_if` (lines 828–862) and
+**Location:** `src/generation/` `output_if` (lines 828–862) and
 `output_code_inner` (line 747: `Value::Null => write!(w, "()")`)
 
 **Problem:** When `false_v` is `Value::Null`, the if-expression emits `()` for the
@@ -483,7 +483,7 @@ by adding a `result_type: Option<&Type>` parameter.  More invasive but cleaner.
 - `Value::Int(_)` → `Type::Integer(...)`
 - `Value::Block(bl)` → `bl.result`
 
-**Files:** `src/generation.rs`
+**Files:** `src/generation/`
 **Test:** 20 files that currently fail with "mismatched types" or "if/else incompatible"
 
 ---
@@ -544,7 +544,7 @@ The `create` sub-expression is a `Value::Call(OpIterate, ...)`.
 The `step` sub-expression is a `Value::Call(OpStep, ...)`.
 The loop body is NOT inside the Iter — it follows in the parent Block.
 
-**Files:** `src/generation.rs` (`output_code_inner`), `src/codegen_runtime.rs`
+**Files:** `src/generation/` (`output_code_inner`), `src/codegen_runtime.rs`
 **Test:** 3 files with iterator operations compile and pass
 
 ---
@@ -586,7 +586,7 @@ these `ops` functions.
 Check whether `OpFormatLong` is already handled (line 1028: `"OpFormatLong" => return self.format_long(w, vals)`).  If so, only `OpFormatFloat` /
 `OpFormatStackFloat` need new handlers.
 
-**Files:** `src/generation.rs` (`output_call`)
+**Files:** `src/generation/` (`output_call`)
 **Test:** 2 files with float/long formatting compile
 
 ---
@@ -606,7 +606,7 @@ generated file itself — not the `loft` crate.
 pub const STRING_NULL: &str = "\0";
 ```
 
-**Fix:** In `output_call_template` (generation.rs, after the `s.database.` → `stores.`
+**Fix:** In `output_call_template` (generation/, after the `s.database.` → `stores.`
 substitution at line 1102), add:
 ```rust
 res = res.replace("crate::state::", "loft::state::");
@@ -615,14 +615,14 @@ res = res.replace("crate::state::", "loft::state::");
 This handles any `crate::` reference in templates that should point to the `loft`
 crate in generated code.
 
-**Files:** `src/generation.rs` (`output_call_template`, ~line 1103)
+**Files:** `src/generation/` (`output_call_template`, ~line 1103)
 **Test:** 2 files with `crate::state::` references compile
 
 ---
 
 **N10e-5: Fix empty pre-eval, prefix, and argument count issues (fixes 3 files)**
 
-**Problem 1 — Empty pre-eval:** `collect_pre_evals` (`src/generation.rs:601–655`)
+**Problem 1 — Empty pre-eval:** `collect_pre_evals` (`src/generation/:601–655`)
 can produce a pre-eval binding where the expression buffer is empty:
 `let _pre19 = ;` — a syntax error.
 
@@ -648,7 +648,7 @@ function expects a `&[Content]` slice.
 **Fix:** In `output_call`, add a handler for `OpGetRecord` that collects
 the key arguments into a `vec![...]` literal before calling the runtime function.
 
-**Files:** `src/generation.rs`
+**Files:** `src/generation/`
 **Test:** 3 remaining files compile
 
 ---
@@ -776,7 +776,7 @@ N10e-2–N10e-5 fix the remaining 10 compile failures.
 | File | Role |
 |------|------|
 | `default/01_code.loft` | All `#rust` templates (N1, N5) |
-| `src/generation.rs` | Code emitter (N3–N5) |
+| `src/generation/` | Code emitter (N3–N5) |
 | `tests/testing.rs:220–242` | Where generated files are written (N2) |
 | `src/fill.rs` | Reference implementations for all 234 opcodes |
 | `src/state/io.rs` | Reference for `OpDatabase`, `OpNewRecord`, etc. |

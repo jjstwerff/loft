@@ -139,7 +139,7 @@ where `j_size` is already computed.  The existing `!can_reuse` guard (large type
 extended to also reject size-mismatched reuse for small types:
 
 ```rust
-// src/variables.rs  assign_slots  (inner loop, dead-slot-overlap path)
+// src/variables/  assign_slots  (inner loop, dead-slot-overlap path)
 
 // was:
 if !can_reuse {
@@ -191,7 +191,7 @@ Iter(u16, Box<Value>, Box<Value>, Box<Value>),
 ```
 
 ```rust
-// src/variables.rs  compute_intervals
+// src/variables/  compute_intervals
 _ => {
     *seq += 1;  // Iter falls here — none of create/next/extra_init are traversed
 }
@@ -238,9 +238,9 @@ extends `c#index.last_use` to `loop_last`.  `assign_slots` then sees
 
 | Bug | Status | File | Change |
 |-----|--------|------|--------|
-| A — comprehension aliasing | **Fixed (A6.3a)** | `src/variables.rs` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` |
-| B — narrow→wide reuse | **Fixed (A6.3b)** | `src/variables.rs` `assign_slots` | `\|\| var_size != j_size` added to dead-slot-overlap guard |
-| C — Iter not traversed | **Fixed (A6.3b)** | `src/variables.rs` `compute_intervals` | `Value::Iter` arm recurses into `create`/`next`/`extra_init`; `Value::Set` now updates `last_use` for write targets |
+| A — comprehension aliasing | **Fixed (A6.3a)** | `src/variables/` `compute_intervals` | `needs_early_first_def` excludes `Type::Vector` |
+| B — narrow→wide reuse | **Fixed (A6.3b)** | `src/variables/` `assign_slots` | `\|\| var_size != j_size` added to dead-slot-overlap guard |
+| C — Iter not traversed | **Fixed (A6.3b)** | `src/variables/` `compute_intervals` | `Value::Iter` arm recurses into `create`/`next`/`extra_init`; `Value::Set` now updates `last_use` for write targets |
 
 All three bugs are fixed.  `assign_slots` (greedy) is the unconditional default as of
 A6.3b.  All tests pass except `ref_param_append_bug` (pre-existing `store.rs` bug).
@@ -310,7 +310,7 @@ stack.position += size(stack.function.tp(v), &Context::Argument);
 ```
 
 **Deleted:** `pub fn claim(...)`, `pub fn assign_slots_safe(...)`, and
-`LOFT_DEBUG_SLOTS` debug blocks in both `variables.rs` and `codegen.rs`.
+`LOFT_DEBUG_SLOTS` debug blocks in both `variables/` and `codegen.rs`.
 
 ---
 

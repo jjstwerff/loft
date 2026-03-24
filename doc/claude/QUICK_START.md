@@ -33,7 +33,7 @@ src/main.rs              CLI entry; loads default/ then user file
        └─ builtins.rs       Parallel worker helpers
        ├─ src/lexer.rs      Tokeniser
        ├─ src/typedef.rs    Type resolution + field offsets
-       ├─ src/variables.rs  Per-function variable table
+       ├─ src/variables/  Per-function variable table
        └─ src/scopes.rs     Scope/lifetime analysis
   └─ src/compile.rs      Drives IR → flat bytecode; initialises native registry
   └─ src/state/          Executes bytecode
@@ -216,7 +216,7 @@ default/03_text.loft    — text utilities
 | [MATCH.md](MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
 | [TUPLES.md](TUPLES.md) | Tuple design — multi-value returns, deconstruction, stack layout |
 | [STACKTRACE.md](STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
-| [NATIVE.md](NATIVE.md) | Native code generation (`src/generation.rs`) design and fix plans |
+| [NATIVE.md](NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [BYTECODE_CACHE.md](BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred — superseded by native codegen) |
 | [DEBUG.md](DEBUG.md) | Debugging utilities and tools |
@@ -240,7 +240,7 @@ default/03_text.loft    — text utilities
 | Improve the test suite | [TESTING.md](TESTING.md), then `tests/scripts/` and `tests/docs/` |
 | Debug slot conflicts / understand stack layout | [SLOTS.md](SLOTS.md) — two-zone design, `validate_slots`, `LOFT_ASSIGN_LOG` |
 | Format a loft source file | [FORMATTER.md](FORMATTER.md) — `loft --format`; rules and golden tests |
-| Understand native Rust codegen | [NATIVE.md](NATIVE.md) — `generation.rs`, `fill.rs` auto-gen, open N items |
+| Understand native Rust codegen | [NATIVE.md](NATIVE.md) — `generation/`, `fill.rs` auto-gen, open N items |
 
 ## Debug logging — `LOFT_LOG` quick reference
 
