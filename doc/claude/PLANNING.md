@@ -71,35 +71,10 @@ Goal: harden the interpreter, complete native code generation, fix slot assignme
 improve runtime efficiency.  No new language syntax.  Most items are independent and can be developed
 in parallel.
 
-**Completed in 0.8.2:**
-- **L4** — Empty `[]` literal as mutable vector argument. ✓
-- **L5** — `v += extra` via `&vector` ref-param. ✓
-- **A13/A14/A15** *(old numbering)* — slot efficiency (can_reuse guard, skip_free flag, exhaustive inline_ref_set_in). ✓
-- **S3** — Database dispatch exhaustiveness. ✓
-- **S4** — Binary I/O type coverage (Issues 59, 63). ✓
-- **P1** — Lambda expressions (`fn(params) -> ret { body }`). ✓
-- **N1** — `--native` / `--native-emit` CLI flags. ✓
-- **N2** — `CallRef` / function-pointer dispatch in generated Rust. ✓
-- **N3** — Resolve `external` crate reference for random/FFI. ✓
-- **N4** — Fix LIFO store-free order in generated frees. ✓
-- **N5** — `file_from_bytes` for `DbRef` vector types. ✓
-- **N6** — Text method in format interpolation: emit `&str` not `String`. ✓
-- **N7** — `directory()` / `user_directory()` / `program_directory()` scratch buffer. ✓
-- **N9** — fill.rs auto-generation (rustfmt, six `#rust` templates, byte-exact match). ✓
-- **S7** — `string` type name diagnostic ("did you mean 'text'?"). ✓
-- **S8** — Compile-time error for `key` field in hash-value struct. ✓
-- **O3** — Verified integer paths carry no `long` null-sentinel + guard test. ✓
-
 **Remaining for 0.8.2:**
 
-*Interpreter performance:*
 - **O1** — Superinstruction peephole rewriting pass (opcodes registered, needs stack-relative operand design).
-
-*Parallel execution:*
-- **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1 ✓).
-
-*Interpreter slot correctness:*
-- **A12** — Lazy work-variable initialization (blocked by Issues 69–70: SIGSEGV on text slot reuse).
+- **A12** — Lazy work-variable initialization (blocked by text slot reuse SIGSEGV).
 - **A13** — Two-zone slot assignment: codegen override can create overlaps with child-scope variables.
 
 ---

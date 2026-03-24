@@ -7,8 +7,6 @@
 - [Runtime](#runtime)
 - [Compiler Validation Summary](#compiler-validation-summary)
 - [`par(...)` Parallel For-Loop Syntax](#par-parallel-for-loop-syntax)
-- [Deferred: Extra Worker Parameters](#deferred-extra-worker-parameters)
-- [Deferred: Text and Reference Return Types](#deferred-text-and-reference-return-types)
 
 ---
 
@@ -182,13 +180,17 @@ for b#index in 0..par_len {
 }
 ```
 
+### Supported return types
+
+`integer`, `long`, `float`, `single`, `boolean`, inline `enum`, and `text`.
+Extra context arguments are forwarded to workers: `par(b = scale(a, mult), N)`.
+
 ### Limitations
 
 - Input must be a `vector<T>`; integer ranges (`1..10`) are not supported.
-- Worker must return a primitive: `integer`, `long`, `float`, or `boolean`.
-- Form 3 (captured receiver) requires IR-level wrapper synthesis (deferred).
+- Form 3 (`c.method(a)` — captured receiver) is not yet supported.
 - The worker function may not write to shared state.
-- **Float/long accumulation**: using the result variable `b` in arithmetic with a pre-declared `float` or `long` variable can trigger a first-pass type-inference conflict (`Variable 'x' cannot change type from float to integer`).  Workaround: only use `b` in boolean comparisons (`if b > threshold { count += 1; }`) or cast to integer (`sum += b as integer`) inside the body.
+- Reference/struct return types (12-byte DbRef) are not yet supported.
 
 ### Element Size
 
@@ -220,40 +222,6 @@ fn main() {
     }
 }
 ```
-
----
-
-## Deferred: Extra Worker Parameters
-
-Passing additional parameters beyond the row reference to the worker is not yet implemented.  The validation infrastructure is already in place (`n_extra == n_worker_extra` check in `parse_parallel_for`); only the emission path is missing.
-
-**Planned approach — extend `execute_at_raw`** (no IR wrapper synthesis required):
-
-1. Add `extra_args: &[u64]` to `execute_at_raw` and push those values onto the call stack before the row ref, in declaration order.
-2. `run_parallel_raw` receives the captured extra arg values as a `Vec<u64>` (read-only constants, cloned to every worker).
-3. The compiler emits the extras as additional parameters in the `n_parallel_for` call.
-
-Supported extra arg types:
-- `integer`, `long`, `float`, `boolean` — fit directly in a `u64` slot.
-- `const Struct` — 12-byte DbRef; pass as an `Option<DbRef>` context alongside the row ref rather than folding into `u64`.
-- `text` — already readable from cloned stores via their DbRef; no special handling needed.
-
-This is planned for A1.1 (0.8.2).
-
----
-
-## Deferred: Value-Struct and Text/Reference Return Types
-
-**Value-struct returns (no heap pointers) — A1.1:**
-For worker return types where all fields are primitives (`integer`, `long`, `float`, `boolean`, `character`), the `Vec<u64>` result channel is replaced with a pre-allocated `Vec<u8>` output buffer of size `n_rows × result_byte_size`.  Workers write directly into non-overlapping per-row slices via `execute_at_struct(fn_pos, row_ref, out_slice: &mut [u8])`.  No store interaction needed.  Structs with `text` or `reference` fields use the approach below.
-
-**Text and reference return types — A1.2:**
-`text` and `reference` values are DbRefs that point into a specific store.  Worker stores are LIFO-locked snapshots; new allocations in a worker are invisible to the main thread after join, and ad-hoc merging is unsafe due to LIFO ordering constraints.
-
-*Planned approach — dedicated result store:*
-Before parallel dispatch the main thread calls `Stores::new_result_store()`, which allocates a fresh writable store not included in the workers' input snapshots.  `clone_for_worker` gives each worker mutable access to this result store, range-partitioned by row index.  Workers redirect text allocations to the result store.  After join, `Stores::adopt_result_store(idx)` incorporates the result store into the main store map.  Since the result store did not exist in any input snapshot, there are no LIFO conflicts.
-
-This is planned for A1.2 (0.8.2), dependent on A1.1.
 
 ---
 
