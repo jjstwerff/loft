@@ -2615,11 +2615,8 @@ use a separate collection or add after the loop"
                 );
             }
         } else if self.data.def(dnr).attributes[fnr].constant {
-            let mut new = self.data.attr_value(dnr, fnr);
-            if let Value::Call(_, args) = &mut new {
-                args[0] = code.clone();
-            }
-            *code = new;
+            let expr = self.data.attr_value(dnr, fnr);
+            *code = Self::replace_record_ref(expr, &code.clone());
             let dep = t.depend();
             t = self.data.attr_type(dnr, fnr);
             for on in dep {
@@ -3016,6 +3013,35 @@ pair the hash with a vector to iterate in insertion order"
         } else {
             name.to_string()
         };
+        // vector<T>.parse(text) — parse a JSON array into a vector of T.
+        if nm == "vector" && self.lexer.has_token("<") {
+            if let Some(elem_name) = self.lexer.has_identifier() {
+                let elem_d_nr = self.data.def_nr(&elem_name);
+                self.lexer.token(">");
+                if self.lexer.has_token(".") && self.lexer.has_keyword("parse") {
+                    if elem_d_nr != u32::MAX {
+                        return self.parse_vector_parse(elem_d_nr, code);
+                    }
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown type '{elem_name}' in vector<{elem_name}>.parse()"
+                        );
+                    }
+                    return Type::Unknown(0);
+                }
+            }
+            // Not a vector<T>.parse() — cannot recover tokens, report error.
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expected '.parse(' after vector<T>"
+                );
+            }
+            return Type::Unknown(0);
+        }
         let mut t = self.parse_constant_value(code, source, &nm);
         if t != Type::Null {
             return t;
@@ -3041,7 +3067,7 @@ pair the hash with a vector to iterate in insertion order"
                 self.var_usages(index_var, true);
                 if self.lexer.has_keyword("errors") {
                     // s#errors — return the parse errors from the last Type.parse() call.
-                    let fn_nr = self.data.def_nr("n_parse_errors");
+                    let fn_nr = self.data.def_nr("i_parse_errors");
                     if fn_nr != u32::MAX {
                         *code = Value::Call(fn_nr, vec![]);
                         t = Type::Text(Vec::new());
@@ -3400,6 +3426,41 @@ pair the hash with a vector to iterate in insertion order"
             );
         }
         Type::Reference(d_nr, Vec::new())
+    }
+
+    /// Parse `vector<T>.parse(text)` — parse a JSON array into a vector of T.
+    /// Returns `Type::Vector(T)` so the result is directly iterable.
+    fn parse_vector_parse(&mut self, elem_d_nr: u32, code: &mut Value) -> Type {
+        self.lexer.token("(");
+        let mut text_expr = Value::Null;
+        let tp = self.expression(&mut text_expr);
+        self.lexer.token(")");
+        let elem_tp = Type::Reference(elem_d_nr, Vec::new());
+        let vec_type = Type::Vector(Box::new(elem_tp.clone()), Vec::new());
+        if !self.first_pass {
+            if !matches!(tp, Type::Text(_)) {
+                self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
+            }
+            // Get the database vector type for vector<elem>.
+            let elem_kt = self.data.def(elem_d_nr).known_type;
+            let vec_kt = self.database.vector(elem_kt);
+            let parse_call = self.cl(
+                "OpCastVectorFromText",
+                &[text_expr, Value::Int(i32::from(vec_kt))],
+            );
+            // The parse returns a DbRef to the wrapper struct main_vector<T>.
+            // Extract the vector field (at position 0) so the result is directly iterable.
+            let wrapper_name = format!("main_vector<{}>", self.data.def(elem_d_nr).name);
+            let wrapper_d_nr = self.data.def_nr(&wrapper_name);
+            if wrapper_d_nr == u32::MAX {
+                *code = parse_call;
+            } else {
+                *code = self.get_field(wrapper_d_nr, 0, parse_call);
+            }
+        }
+        // Ensure the vector def exists for type resolution.
+        self.data.vector_def(&mut self.lexer, &elem_tp);
+        vec_type
     }
 
     pub(crate) fn parse_string(&mut self, code: &mut Value, string: &str) -> Type {
@@ -3988,7 +4049,11 @@ pair the hash with a vector to iterate in insertion order"
             let tp = self.data.attr_type(td_nr, aid);
             let nm = self.data.attr_name(td_nr, aid);
             let fld = self.database.position(self.data.def(td_nr).known_type, &nm);
-            if found_fields.contains(&nm) || matches!(tp, Type::Routine(_)) {
+            // Skip computed fields (not stored) and already-provided fields.
+            if found_fields.contains(&nm)
+                || matches!(tp, Type::Routine(_))
+                || self.data.def(td_nr).attributes[aid].constant
+            {
                 continue;
             }
             let mut default = self.data.attr_value(td_nr, aid);

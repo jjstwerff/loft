@@ -185,8 +185,11 @@ impl Parser {
             return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
         }
         // Validate extra arg count against function signature.
+        // Skip hidden __ref_* / __rref_* / __work_* parameters (work-refs for text/vector returns).
         if !self.first_pass {
-            let n_params = self.data.attributes(d_nr);
+            let n_params = (0..self.data.attributes(d_nr))
+                .filter(|&a| !self.data.attr_name(d_nr, a).starts_with("__"))
+                .count();
             let n_extra = extra_vals.len();
             let expected_extra = if n_params > 0 { n_params - 1 } else { 0 };
             if n_extra != expected_extra {
@@ -284,20 +287,22 @@ impl Parser {
             );
             return Type::Unknown(0);
         };
-        // Validate return type is a supported primitive.
-        let return_size: u32 = match &worker_ret_type {
-            Type::Integer(_, _) | Type::Character => 4,
-            Type::Boolean => 1,
-            Type::Long | Type::Float => 8,
-            _ => {
+        // Compute element size from the return type.
+        // return_size = 0 signals text mode to n_parallel_for.
+        let return_size: u32 = if matches!(&worker_ret_type, Type::Text(_)) {
+            0
+        } else {
+            let sz = u32::from(var_size(&worker_ret_type, &Context::Argument));
+            if sz == 0 || sz > 8 {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "parallel_for: worker return type '{}' must be integer, long, float, or boolean",
+                    "parallel_for: worker return type '{}' (size {sz}) is not supported",
                     worker_ret_type.name(&self.data)
                 );
                 return Type::Unknown(0);
             }
+            sz
         };
         // Validate extra arg count matches worker's extra params.
         let n_extra = list.len().saturating_sub(3);

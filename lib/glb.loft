@@ -69,7 +69,7 @@ struct Attributes {
 struct Primitive {
   attributes: Attributes,
   material: integer,
-  mode: integer default(4),
+  mode: integer = 4,
   // POINTS=0, LINES=1, LINE_LOOP=2, LINE_STRIP=3, TRIANGLES=4, TRIANGLE_STRIP=5, TRIANGLE_FAN=6
   targets: vector < integer >,
   indices: integer  // accessor nr
@@ -198,8 +198,8 @@ struct Chunk {
 }
 
 struct Glb {
-  magic: integer default(0x46546C67),
-  version: integer default(2),
+  magic: integer = 0x46546C67,
+  version: integer = 2,
   length: integer
 }
 // Move the scene out of the render.

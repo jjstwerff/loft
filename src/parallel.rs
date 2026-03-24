@@ -137,6 +137,9 @@ pub fn run_parallel_direct(
 }
 
 /// Channel-based parallel: returns one u64 per row (for sub-8-byte types like bool).
+///
+/// # Panics
+/// Panics if a worker thread panics or the internal channel send fails.
 #[allow(clippy::too_many_arguments, dead_code)]
 #[must_use]
 pub fn run_parallel_raw(
@@ -185,6 +188,72 @@ pub fn run_parallel_raw(
     }
     drop(tx);
     let mut results = vec![0u64; n_rows];
+    for batch in rx {
+        for (idx, val) in batch {
+            results[idx] = val;
+        }
+    }
+    for h in handles {
+        h.join().expect("worker thread panicked");
+    }
+    results
+}
+
+/// Run a compiled loft function returning text in parallel.  Each worker copies
+/// its `Str` result into an owned `String` before the worker state is dropped.
+///
+/// Returns a `Vec<String>` with one entry per row, in the original row order.
+///
+/// # Panics
+/// Panics if a worker thread panics or the internal channel send fails.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_text(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    n_rows: usize,
+    n_hidden_text: usize,
+) -> Vec<String> {
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let threads = n_threads.max(1).min(n_rows);
+    let program = Arc::new(program);
+    let (tx, rx) = mpsc::channel::<Vec<(usize, String)>>();
+    let mut handles = Vec::with_capacity(threads);
+    for t in 0..threads {
+        let start = t * n_rows / threads;
+        let end = (t + 1) * n_rows / threads;
+        let worker_stores = stores.clone_for_worker();
+        let prog = Arc::clone(&program);
+        let tx_t = tx.clone();
+        let input_t = *input;
+        let extras = extra_args.to_vec();
+        let handle = thread::spawn(move || {
+            let (bytecode, text_code, library) = prog.clone_refs();
+            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+            let mut batch = Vec::with_capacity(end - start);
+            for row_idx in start..end {
+                let row_ref = vector::get_vector(
+                    &input_t,
+                    element_size,
+                    i32::try_from(row_idx).expect("row index fits i32"),
+                    &state.database.allocations,
+                );
+                let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
+                batch.push((row_idx, s));
+            }
+            tx_t.send(batch).expect("channel send failed");
+        });
+        handles.push(handle);
+    }
+    drop(tx);
+    let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
     for batch in rx {
         for (idx, val) in batch {
             results[idx] = val;

@@ -107,6 +107,3 @@ pub fn user_directory(v:  & text = "") -> text;
 // Use to locate assets bundled alongside the program.
 pub fn program_directory(v:  & text = "") -> text;
 #rust"Stores::os_executable_native()"
-// Internal: returns the parse error from the last Type.parse() call.
-// Accessed via s#errors in user code, not called directly.
-fn parse_errors() -> text;

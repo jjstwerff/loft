@@ -215,6 +215,10 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
         database.enum_value(enum_tp, &data.def(d_nr).name, data.def(d_nr).known_type);
     }
     for a_nr in 0..data.attributes(d_nr) {
+        // Computed fields are not stored — skip them in the database layout.
+        if data.def(d_nr).attributes[a_nr].constant {
+            continue;
+        }
         let a_type = data.attr_type(d_nr, a_nr);
         let t_nr = data.type_elm(&a_type);
         let nullable = data.attr_nullable(d_nr, a_nr);

@@ -942,23 +942,21 @@ use #count instead"
         // Closing ')'.
         self.lexer.token(")");
 
-        // Map return type to sizes and get function names.
-        let (return_size, get_fn_name): (i32, &str) = match &ret_type {
-            Type::Integer(_, _) | Type::Character => (4, "n_parallel_get_int"),
-            Type::Long => (8, "n_parallel_get_long"),
-            Type::Float => (8, "n_parallel_get_float"),
-            Type::Boolean => (1, "n_parallel_get_bool"),
-            _ => {
-                if !self.first_pass && fn_d_nr != u32::MAX {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Parallel worker return type '{}' must be integer, long, float, or boolean",
-                        ret_type.name(&self.data)
-                    );
-                }
-                (4, "n_parallel_get_int") // fallback; fn_d_nr will be u32::MAX on error
+        // Compute element size from the return type.
+        // return_size = 0 signals text mode to n_parallel_for.
+        let return_size: i32 = if matches!(&ret_type, Type::Text(_)) {
+            0 // sentinel: text mode — workers collect Strings, main thread stores refs
+        } else {
+            let sz = i32::from(var_size(&ret_type, &Context::Argument));
+            if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || sz > 8) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Parallel worker return type '{}' (size {sz}) is not supported",
+                    ret_type.name(&self.data)
+                );
             }
+            sz.max(1) // fallback to 1 if unknown
         };
         // Use the actual inline element size from the database (e.g. 4 for Score{value:integer},
         // 8 for Range{lo,hi:integer}).  var_size() returns size_of::<DbRef>() for reference types,
@@ -978,10 +976,9 @@ use #count instead"
             code,
             &result_name,
             fn_d_nr,
-            ret_type,
+            &ret_type,
             elem_size,
             return_size,
-            get_fn_name,
             vec_expr,
             threads_expr,
             fill,
@@ -998,10 +995,9 @@ use #count instead"
         code: &mut Value,
         result_name: &str,
         fn_d_nr: u32,
-        ret_type: Type,
+        ret_type: &Type,
         elem_size: i32,
         return_size: i32,
-        get_fn_name: &str,
         vec_expr: Value,
         threads_expr: Value,
         fill: Value,
@@ -1011,7 +1007,6 @@ use #count instead"
         let ref_d_nr = self.data.def_nr("reference");
         let results_ref_type = Type::Reference(ref_d_nr, Vec::new());
         let par_for_d_nr = self.data.def_nr("n_parallel_for");
-        let get_fn_d_nr = self.data.def_nr(get_fn_name);
 
         // Create result-reference variable.
         let results_var = self.create_unique("par_results", &results_ref_type);
@@ -1037,8 +1032,11 @@ use #count instead"
         } else if fn_d_nr == u32::MAX {
             // First pass: placeholder — will be replaced on second pass.
             Type::Unknown(u32::MAX)
+        } else if let Type::Text(_) = ret_type {
+            // Strip worker-internal deps — they reference variables in the worker scope.
+            Type::Text(Vec::new())
         } else {
-            ret_type
+            ret_type.clone()
         };
         let b_var = self.create_var(result_name, &b_type);
         self.vars.defined(b_var);
@@ -1057,7 +1055,7 @@ use #count instead"
         self.vars.finish_loop(loop_nr);
 
         // Build IR only when we have a valid function reference.
-        if fn_d_nr == u32::MAX || par_for_d_nr == u32::MAX || get_fn_d_nr == u32::MAX {
+        if fn_d_nr == u32::MAX || par_for_d_nr == u32::MAX {
             // Errors already reported; emit nothing useful.
             *code = Value::Null;
             return;
@@ -1086,10 +1084,25 @@ use #count instead"
             v_block(vec![Value::Break(0)], Type::Void, "break"),
             Value::Null,
         );
-        let get_call = Value::Call(
-            get_fn_d_nr,
-            vec![Value::Var(results_var), Value::Var(idx_var)],
+
+        // A1.2: Use OpGetVector + get_field to extract the element from the result
+        // vector. This works for all return types (int, long, float, bool, text)
+        // without per-type getter functions.
+        let result_elem_size = if return_size == 0 { 4i32 } else { return_size };
+        let get_vec = self.cl(
+            "OpGetVector",
+            &[
+                Value::Var(results_var),
+                Value::Int(result_elem_size),
+                Value::Var(idx_var),
+            ],
         );
+        let get_call = if matches!(ret_type, Type::Reference(_, _)) {
+            get_vec
+        } else {
+            let vec_tp = self.data.type_def_nr(ret_type);
+            self.get_field(vec_tp, usize::MAX, get_vec)
+        };
         let b_assign = v_set(b_var, get_call);
         let idx_inc = v_set(
             idx_var,

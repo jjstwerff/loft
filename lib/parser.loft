@@ -18,19 +18,19 @@ struct Parser {
   lexer: lexer::Lexer,
   log: logger::Log,
   code: code::Code,
-  cur_file: integer default(0),
+  cur_file: integer = 0,
   operators: hash < Operator[op] >
 }
 
 struct FormatSpec {
-  token: text default("0"),
+  token: text = "0",
   special_layout: boolean,
-  dir: i16 default(2),
+  dir: i16 = 2,
   plus: boolean,
   is_float: boolean,
-  radix: u8 default(10),
-  size: i8 default(-1),
-  decimals: i8 default(-1)
+  radix: u8 = 10,
+  size: i8 = -1,
+  decimals: i8 = -1
 }
 
 pub fn parse(name: text, s: text) {

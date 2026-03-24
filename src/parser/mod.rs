@@ -203,9 +203,21 @@ fn is_camel(name: &str) -> bool {
 impl Parser {
     #[must_use]
     pub fn new() -> Self {
+        let mut data = Data::new();
+        // Register internal-only functions (i_ prefix) that are never visible to user code.
+        // These are resolved by the compiler via data.def_nr("i_...") and mapped to native
+        // Rust implementations in native.rs.
+        let pos = Position { file: String::new(), line: 0, pos: 0 };
+        let d = data.add_def("i_parse_errors", &pos, DefType::Function);
+        data.definitions[d as usize].returned = Type::Text(Vec::new());
+        let d = data.add_def("i_parse_error_push", &pos, DefType::Function);
+        {
+            let mut lexer = Lexer::default();
+            data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));
+        }
         Parser {
             todo_files: Vec::new(),
-            data: Data::new(),
+            data,
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,

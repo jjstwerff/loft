@@ -22,6 +22,14 @@ fn double_score(r: const Score) -> integer {
   r.value * 2
 }
 
+fn scale(r: const Score, m: integer) -> integer {
+  r.value * m
+}
+
+fn fused(r: const Score, offset: integer, factor: integer) -> integer {
+  r.value * factor + offset
+}
+
 fn span(r: const Range) -> integer {
   r.hi - r.lo
 }
@@ -40,6 +48,30 @@ fn get_value(self: const Score) -> integer {
 
 fn is_positive(self: const Score) -> boolean {
   self.value > 0
+}
+
+fn score_label(r: const Score) -> text {
+  "v{r.value}"
+}
+
+fn score_as_single(r: const Score) -> single {
+  r.value as single
+}
+
+enum Grade {
+  Low,
+  Medium,
+  High
+}
+
+fn score_grade(r: const Score) -> Grade {
+  if r.value >= 20 {
+    High
+  } else if r.value >= 10 {
+    Medium
+  } else {
+    Low
+  }
 }
 
 fn main() {
@@ -106,4 +138,44 @@ fn main() {
     }
   }
   assert(pos2 == 3, "form-2 boolean: {pos2} positive");
+  // --- Form 1: text return ---
+  labels = "";
+  for a in q.items par(lbl = score_label(a), 1) {
+    labels += "{lbl},";
+  }
+  assert(labels == "v10,v20,v30,", "form-1 text: {labels}");
+  // --- Form 1: text return, multi-thread ---
+  labels2 = "";
+  for a in q.items par(lbl2 = score_label(a), 4) {
+    labels2 += "{lbl2},";
+  }
+  assert(labels2 != "", "form-1 text multi-thread: {labels2}");
+  // --- Form 1: single (f32) return ---
+  stotal = 0.0f;
+  for a in q.items par(s = score_as_single(a), 1) {
+    stotal += s;
+  }
+  assert(stotal > 59.0f, "form-1 single: {stotal}");
+  // --- Form 1: enum return ---
+  highs = 0;
+  for a in q.items par(g = score_grade(a), 1) {
+    if g == High {
+      highs += 1;
+    }
+  }
+  assert(highs == 2, "form-1 enum: {highs} high grades");
+  // --- Extra context arguments ---
+  scaled = 0;
+  mult = 5;
+  for a in q.items par(c = scale(a, mult), 2) {
+    scaled += c;
+  }
+  assert(scaled == 300, "context arg: {scaled}");
+  // --- Two extra context arguments ---
+  fused_sum = 0;
+  for a in q.items par(d = fused(a, 10, 3), 2) {
+    fused_sum += d;
+  }
+  // expected: (10*3+10) + (20*3+10) + (30*3+10) = 40 + 70 + 100 = 210
+  assert(fused_sum == 210, "two context args: {fused_sum}");
 }

@@ -20,7 +20,9 @@ use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "random")]
 use crate::ops;
-use crate::parallel::{WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw};
+use crate::parallel::{
+    WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_text,
+};
 use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
@@ -84,7 +86,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_path_sep", n_path_sep),
-    ("n_parse_errors", n_parse_errors),
+    ("i_parse_error_push", i_parse_error_push),
+    ("i_parse_errors", i_parse_errors),
 ];
 
 pub fn init(state: &mut State) {
@@ -605,8 +608,9 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 ///                 threads: integer, func: integer) -> reference
 /// ```
 /// `func` is the definition number of the worker function (verified at compile time).
-/// `return_size` is 1 (boolean), 4 (integer), or 8 (long/float).
+/// `return_size` is 0 (text), 1 (boolean), 4 (integer), or 8 (long/float).
 /// Returns a `reference` pointing to a freshly allocated result vector.
+#[allow(clippy::too_many_lines)]
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     // A1.1: Stack layout (push order from codegen):
     //   vec(12B), elem_size(4B), return_size(4B), threads(4B), func(4B),
@@ -626,7 +630,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     let v_element_size = *stores.get::<i32>(stack);
     let v_input = *stores.get::<DbRef>(stack);
 
-    let (fn_pos, program) = {
+    let (fn_pos, program, n_hidden_text) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -636,7 +640,15 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             v_func >= 0,
             "parallel_for: invalid function reference {v_func}"
         );
-        let fn_pos = data.def(v_func as u32).code_position;
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        // Count hidden __work_N text params for text-returning workers.
+        let n_hidden = data
+            .def(d_nr)
+            .attributes
+            .iter()
+            .filter(|a| a.name.starts_with("__"))
+            .count();
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
         let text_code = unsafe { Arc::clone(&*ctx.text_code) };
         let library = unsafe { Arc::clone(&*ctx.library) };
@@ -647,13 +659,16 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
                 text_code,
                 library,
             },
+            n_hidden,
         )
     };
 
     let element_size = v_element_size as u32;
-    let return_size = v_return_size.clamp(1, 8) as u32;
     let n_threads = (v_threads as usize).max(1);
     let n = vector::length_vector(&v_input, &stores.allocations) as usize;
+    // return_size == 0 signals text mode; otherwise clamp to [1, 8].
+    let is_text = v_return_size == 0;
+    let return_size = if is_text { 4u32 } else { v_return_size.clamp(1, 8) as u32 };
 
     // A1.2: pre-allocate result vector in a fresh store, then write directly.
     let result_db = stores.null();
@@ -669,7 +684,25 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&result_db)
         .set_int(header_rec, 4, vec_rec as i32);
 
-    if return_size >= 4 {
+    if is_text {
+        // Text mode: workers collect owned Strings; main thread writes them into the store.
+        let strings = run_parallel_text(
+            stores,
+            program,
+            fn_pos,
+            &v_input,
+            element_size,
+            n_threads,
+            &extra_args,
+            n,
+            n_hidden_text,
+        );
+        let store = stores.store_mut(&result_db);
+        for (i, s) in strings.iter().enumerate() {
+            let s_pos = store.set_str(s);
+            store.set_int(vec_rec, 8 + i as u32 * 4, s_pos as i32);
+        }
+    } else if return_size >= 4 {
         // Direct write: workers write into the store buffer without channel/ordering.
         let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
         run_parallel_direct(
@@ -837,7 +870,12 @@ fn n_path_sep(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return the error text from the last `Type.parse()` call.
 /// Empty string means the parse succeeded.
-fn n_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
+fn i_parse_error_push(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = *stores.get::<Str>(stack);
+    stores.last_parse_errors.push(msg.str().to_owned());
+}
+
+fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
     stores.scratch.clear();

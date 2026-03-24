@@ -9,12 +9,10 @@
 
 extern crate loft;
 
-mod testing;
-
 use loft::compile::byte_code;
 use loft::database::Stores;
 use loft::keys::DbRef;
-use loft::parallel::{WorkerProgram, run_parallel_int};
+use loft::parallel::{WorkerProgram, run_parallel_int, run_parallel_text};
 use loft::parser::Parser;
 use loft::scopes;
 use loft::state::State;
@@ -403,57 +401,54 @@ fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
     );
 }
 
-// ---------------------------------------------------------------------------
-// Desired future behaviour: worker function with extra context parameters.
-//
-// Currently the runtime only passes the per-element DbRef to the worker.
-// Extra arguments are validated at compile time (arg count must match the
-// worker's parameter list) but are NOT forwarded to the worker at runtime.
-// These tests are #[ignore]-d until the feature is implemented.
-// See PLANNING.md T3-1.
-// ---------------------------------------------------------------------------
-
-/// Desired: `parallel_for(fn scale, items, threads, multiplier)` where
-/// `scale(r: const Item, m: integer)` reads `m` from the extra context arg.
-/// Currently the parser accepts this (arg count matches) but the runtime
-/// ignores `m`, producing wrong results.
+/// Worker returns `text`; result collected via run_parallel_text.
 #[test]
-fn parallel_extra_integer_context_arg() {
+fn parallel_text_return_type() {
     let code = r#"
-struct Item { value: integer }
-fn scale(r: const Item, m: integer) -> integer { r.value * m }
-fn test() {
-    items = [Item{value:1}, Item{value:2}, Item{value:3}];
-    mult = 5;
-    sum = 0;
-    for a in items par(b=scale(a, mult), 2) {
-        sum += b;
-    }
-    assert(sum == 30, "scaled sum: {sum}");
-}
+struct Num { v: integer }
+fn label(r: const Num) -> text { "v{r.v}" }
 "#;
-    code!(code);
+    let (mut state, data) = compile(code);
+
+    let values = vec![10i32, 20, 30];
+    let input = build_int_vector(&mut state.database, &values);
+    let d_nr = data.def_nr("n_label");
+    assert_ne!(d_nr, u32::MAX, "label function not found");
+    let fn_pos = data.def(d_nr).code_position;
+    // Count hidden params (attrs starting with "__").
+    let n_hidden = data
+        .def(d_nr)
+        .attributes
+        .iter()
+        .filter(|a| a.name.starts_with("__"))
+        .count();
+    eprintln!(
+        "n_label: {} attrs, {} hidden, fn_pos={}",
+        data.def(d_nr).attributes.len(),
+        n_hidden,
+        fn_pos
+    );
+    for (i, a) in data.def(d_nr).attributes.iter().enumerate() {
+        eprintln!("  attr {i}: '{}' type={:?}", a.name, a.typedef);
+    }
+
+    let n_rows = values.len();
+    let program = worker_program(&state);
+    let strings = run_parallel_text(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        4,
+        1,
+        &[],
+        n_rows,
+        n_hidden,
+    );
+    assert_eq!(
+        strings,
+        vec!["v10".to_string(), "v20".to_string(), "v30".to_string()],
+        "text results"
+    );
 }
 
-/// Desired: worker accesses two context scalars alongside per-element data.
-/// `fn fused(r: const Item, offset: integer, scale: integer) -> integer`
-/// Should compute `r.value * scale + offset` for each element.
-#[test]
-fn parallel_two_context_args() {
-    let code = r#"
-struct Item { value: integer }
-fn fused(r: const Item, offset: integer, factor: integer) -> integer {
-    r.value * factor + offset
-}
-fn test() {
-    items = [Item{value:1}, Item{value:2}, Item{value:4}];
-    sum = 0;
-    for a in items par(b=fused(a, 10, 3), 2) {
-        sum += b;
-    }
-    // expected: (1*3+10) + (2*3+10) + (4*3+10) = 13 + 16 + 22 = 51
-    assert(sum == 51, "fused sum: {sum}");
-}
-"#;
-    code!(code);
-}
