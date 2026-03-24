@@ -33,6 +33,7 @@ plain English describing the purpose of the code.
 | A10.2  | ↳ `ident#fields` → `Value::FieldsOf` in parser          | Small     | A10.1       | collections.rs, data.rs |
 | A10.3  | ↳ Loop unrolling for `Type::FieldsOf`                   | Medium    | A10.2       | collections.rs          |
 | A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
+| L6     | Prevent double evaluation of `expr ?? default`          | Small     |             | operators.rs line 330   |
 
 ---
 

@@ -41,6 +41,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [L — Language Quality](#l--language-quality)
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
+  - [L6 — Prevent double evaluation of `expr ?? default`](#l6--prevent-double-evaluation-of-expr--default)
 - [S — Stability Hardening](#s--stability-hardening)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
@@ -479,6 +480,44 @@ function in `src/database/io.rs`. No other changes yet; verify the project compi
 - Run full test suite; verify no regressions.
 
 **Effort:** Small (3 phases; no parser changes; all changes are mechanical)
+**Target:** 0.8.3
+
+---
+
+### L6  Prevent double evaluation of `expr ?? default`
+**Sources:** Code review 2026-03-24 — known V1 limitation noted in `src/parser/operators.rs` line 330
+**Severity:** Medium — `f() ?? default` calls `f()` twice; wrong if `f()` has side-effects or is expensive
+**Description:** The null-coalescing operator `??` currently clones the LHS expression into two positions in the IR — once as the condition (`bool(expr)`) and once as the true branch — so the bytecode evaluates it twice.  For a `Value::Var(n)` LHS this is harmless (reading a stack slot twice), but for any call, field access, or index expression it causes a double evaluation.
+
+**Fix:**  When the LHS is not already `Value::Var(_)`, materialise it into a compiler-generated temp before building the conditional:
+
+```rust
+if let Value::Var(_) = code {
+    // Simple variable: reading twice is side-effect-free.
+    let lhs = code.clone();
+    let mut null_check = code.clone();
+    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+    *code = v_if(null_check, lhs, rhs);
+} else {
+    // Non-trivial expression: materialise into a temp to avoid double evaluation.
+    let tmp = self.create_unique("ncc", &lhs_type);
+    let set_tmp = v_set(tmp, code.clone());
+    let mut null_check = Value::Var(tmp);
+    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+    let if_expr = v_if(null_check, Value::Var(tmp), rhs);
+    *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
+}
+*ctp = lhs_type;
+```
+
+All helpers (`v_if`, `v_set`, `v_block`, `create_unique`) already exist.  The two-pass design is safe: `create_unique` uses a counter suffix (`_ncc_1`, `_ncc_2`, …) and `add_variable` returns the same slot on the second pass.
+
+**Fix path:**
+1. Replace lines ~353–360 in the `??` branch of `handle_operator` in `src/parser/operators.rs` with the code above.
+2. Add `tests/scripts/null_coalesce_once.loft` — call a side-effectful function through `??`, assert it ran exactly once.
+3. Run `make test`; verify no regressions and that the dump shows one `OpCall` for the LHS, not two.
+
+**Effort:** Small (one code block in `operators.rs` + one test script)
 **Target:** 0.8.3
 
 ---
