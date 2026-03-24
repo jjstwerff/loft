@@ -154,6 +154,10 @@ pub(super) mod collections;
 pub(super) mod control;
 pub(super) mod definitions;
 pub(super) mod expressions;
+pub(super) mod fields;
+pub(super) mod objects;
+pub(super) mod operators;
+pub(super) mod vectors;
 
 impl Default for Parser {
     fn default() -> Self {
