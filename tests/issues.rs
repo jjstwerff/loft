@@ -1879,30 +1879,27 @@ fn regen_fill_rs() {
 
 /// S9: character + character must produce text concatenation, not a panic.
 #[test]
-#[ignore = "S9: character + character codegen panic not yet fixed"]
 fn s9_char_plus_char() {
     code!(
-        "fn test() -> text {
+        "fn test() {
     c = 'h';
     d = 'i';
     r = c + d;
     assert(r == \"hi\", \"expected 'hi' got '{r}'\");
-    r
 }"
     )
-    .result(Value::Text("hi".to_string()));
+    .result(Value::Null);
 }
 
 /// S9: text indexing `a[0] + a[1]` must also work.
 #[test]
-#[ignore = "S9: character + character codegen panic not yet fixed"]
 fn s9_text_index_plus_text_index() {
     code!(
-        "fn test() -> text {
+        "fn test() {
     a = \"hello\";
     r = a[0] + a[1];
-    r
+    assert(r == \"he\");
 }"
     )
-    .result(Value::Text("he".to_string()));
+    .result(Value::Null);
 }
