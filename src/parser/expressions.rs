@@ -313,8 +313,6 @@ use a separate collection or add after the loop"
     /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_lines)] // +5 lines from dead-assignment check (T1-9)
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,
@@ -363,69 +361,12 @@ use a separate collection or add after the loop"
             self.validate_write(to, &parent_tp);
         }
         // A9: materialise an iterator (e.g. v[a..b] slice) into a vector variable.
-        // Promotes the LHS variable to Vector<elm_tp> and builds a loop that appends
-        // each element in-place; without this Value::Iter reaches codegen and panics.
         if matches!(&s_type, Type::Iterator(_, _))
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
             && matches!(op, "=" | "+=")
         {
-            let Type::Iterator(elm_tp, _) = s_type.clone() else {
-                unreachable!()
-            };
-            let elm_tp = *elm_tp;
-            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
-            self.change_var(to, &vec_tp);
-            if !self.first_pass
-                && let Value::Iter(_, init, next, _) = code.clone()
-                && matches!(*next, Value::Block(_))
-            {
-                let ed_nr = self.data.type_def_nr(&elm_tp);
-                let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
-                    0
-                } else {
-                    self.database.vector(self.data.def(ed_nr).known_type)
-                };
-                let known = Value::Int(i32::from(known_db));
-                let fld = Value::Int(i32::from(u16::MAX));
-                // elm_var holds the DbRef returned by OpNewRecord; must be Reference-typed.
-                let elm_var = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
-                let for_var = self.create_unique("slice_elm", &elm_tp);
-                let comp_var = self.create_unique("comp", &elm_tp);
-                let for_next = v_set(for_var, *next);
-                let mut lp = vec![for_next];
-                lp.push(v_set(comp_var, Value::Var(for_var)));
-                lp.push(v_set(
-                    elm_var,
-                    self.cl(
-                        "OpNewRecord",
-                        &[Value::Var(var_nr), known.clone(), fld.clone()],
-                    ),
-                ));
-                lp.push(self.set_field(
-                    ed_nr,
-                    usize::MAX,
-                    0,
-                    Value::Var(elm_var),
-                    Value::Var(comp_var),
-                ));
-                lp.push(self.cl(
-                    "OpFinishRecord",
-                    &[Value::Var(var_nr), Value::Var(elm_var), known, fld],
-                ));
-                let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
-                let mut stmts = Vec::new();
-                if op == "=" && !needs_db {
-                    stmts.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
-                }
-                stmts.push(*init);
-                stmts.push(v_loop(lp, "Slice materialise"));
-                if needs_db {
-                    let db = self.insert_new(var_nr, elm_var, &elm_tp, &mut stmts);
-                    self.vars.depend(var_nr, db);
-                }
-                *code = Value::Insert(stmts);
-            }
+            self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
         self.change_var(to, &s_type);
@@ -756,6 +697,75 @@ use a separate collection or add after the loop"
                     }
                 }
             }
+        }
+    }
+
+    /// Materialise an iterator (e.g. `v[a..b]` slice) into a vector variable.
+    /// Promotes the LHS variable to `Vector<elm_tp>` and builds a loop that appends
+    /// each element in-place.
+    fn materialize_iterator(
+        &mut self,
+        code: &mut Value,
+        s_type: &Type,
+        to: &Value,
+        lhs_parent_tp: &Type,
+        var_nr: u16,
+        op: &str,
+    ) {
+        let Type::Iterator(elm_tp, _) = s_type.clone() else {
+            unreachable!()
+        };
+        let elm_tp = *elm_tp;
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+        self.change_var(to, &vec_tp);
+        if !self.first_pass
+            && let Value::Iter(_, init, next, _) = code.clone()
+            && matches!(*next, Value::Block(_))
+        {
+            let ed_nr = self.data.type_def_nr(&elm_tp);
+            let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
+                0
+            } else {
+                self.database.vector(self.data.def(ed_nr).known_type)
+            };
+            let known = Value::Int(i32::from(known_db));
+            let fld = Value::Int(i32::from(u16::MAX));
+            let elm_var = self.unique_elm_var(lhs_parent_tp, &elm_tp, var_nr);
+            let for_var = self.create_unique("slice_elm", &elm_tp);
+            let comp_var = self.create_unique("comp", &elm_tp);
+            let for_next = v_set(for_var, *next);
+            let mut lp = vec![for_next];
+            lp.push(v_set(comp_var, Value::Var(for_var)));
+            lp.push(v_set(
+                elm_var,
+                self.cl(
+                    "OpNewRecord",
+                    &[Value::Var(var_nr), known.clone(), fld.clone()],
+                ),
+            ));
+            lp.push(self.set_field(
+                ed_nr,
+                usize::MAX,
+                0,
+                Value::Var(elm_var),
+                Value::Var(comp_var),
+            ));
+            lp.push(self.cl(
+                "OpFinishRecord",
+                &[Value::Var(var_nr), Value::Var(elm_var), known, fld],
+            ));
+            let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
+            let mut stmts = Vec::new();
+            if op == "=" && !needs_db {
+                stmts.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+            }
+            stmts.push(*init);
+            stmts.push(v_loop(lp, "Slice materialise"));
+            if needs_db {
+                let db = self.insert_new(var_nr, elm_var, &elm_tp, &mut stmts);
+                self.vars.depend(var_nr, db);
+            }
+            *code = Value::Insert(stmts);
         }
     }
 
@@ -2489,7 +2499,6 @@ use a separate collection or add after the loop"
     }
 
     // <children> ::=
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
             diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
@@ -2546,48 +2555,7 @@ use a separate collection or add after the loop"
                     && matches!(field.as_str(), "map" | "filter" | "reduce")
                     && self.lexer.has_token("(")
                 {
-                    let vec_val = code.clone();
-                    let mut list = vec![vec_val];
-                    let mut types = vec![t.clone()];
-                    let mut m_arg_idx = 1usize;
-                    loop {
-                        // S10: infer lambda hint from vector element type.
-                        if let Type::Vector(elm, _) = &t {
-                            let elem = *elm.clone();
-                            let hint = match (field.as_str(), m_arg_idx) {
-                                ("map", 1) => {
-                                    Some(Type::Function(vec![elem.clone()], Box::new(elem)))
-                                }
-                                ("filter", 1) => {
-                                    Some(Type::Function(vec![elem], Box::new(Type::Boolean)))
-                                }
-                                ("reduce", 1) => Some(Type::Function(
-                                    vec![elem.clone(), elem.clone()],
-                                    Box::new(elem),
-                                )),
-                                _ => None,
-                            };
-                            if let Some(h) = hint {
-                                self.lambda_hint = h;
-                            }
-                        }
-                        let mut p = Value::Null;
-                        let pt = self.expression(&mut p);
-                        self.lambda_hint = Type::Unknown(0);
-                        list.push(p);
-                        types.push(pt);
-                        m_arg_idx += 1;
-                        if !self.lexer.has_token(",") {
-                            break;
-                        }
-                    }
-                    self.lexer.token(")");
-                    return match field.as_str() {
-                        "map" => self.parse_map(code, &list, &types),
-                        "filter" => self.parse_filter(code, &list, &types),
-                        "reduce" => self.parse_reduce(code, &list, &types),
-                        _ => unreachable!(),
-                    };
+                    return self.parse_vector_method(code, &t, &field);
                 }
                 diagnostic!(
                     self.lexer,
@@ -2638,6 +2606,46 @@ use a separate collection or add after the loop"
     }
 
     /// Consume remaining function call arguments after `(` has already been consumed.
+    /// Handle `v.map(fn)` / `v.filter(fn)` / `v.reduce(fn)` method syntax.
+    fn parse_vector_method(&mut self, code: &mut Value, t: &Type, method: &str) -> Type {
+        let mut list = vec![code.clone()];
+        let mut types = vec![t.clone()];
+        let mut m_arg_idx = 1usize;
+        loop {
+            if let Type::Vector(elm, _) = t {
+                let elem = *elm.clone();
+                let hint = match (method, m_arg_idx) {
+                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem))),
+                    ("filter", 1) => Some(Type::Function(vec![elem], Box::new(Type::Boolean))),
+                    ("reduce", 1) => Some(Type::Function(
+                        vec![elem.clone(), elem.clone()],
+                        Box::new(elem),
+                    )),
+                    _ => None,
+                };
+                if let Some(h) = hint {
+                    self.lambda_hint = h;
+                }
+            }
+            let mut p = Value::Null;
+            let pt = self.expression(&mut p);
+            self.lambda_hint = Type::Unknown(0);
+            list.push(p);
+            types.push(pt);
+            m_arg_idx += 1;
+            if !self.lexer.has_token(",") {
+                break;
+            }
+        }
+        self.lexer.token(")");
+        match method {
+            "map" => self.parse_map(code, &list, &types),
+            "filter" => self.parse_filter(code, &list, &types),
+            "reduce" => self.parse_reduce(code, &list, &types),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn skip_remaining_args(&mut self) {
         loop {
             if self.lexer.peek_token(")") {

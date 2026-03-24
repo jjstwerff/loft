@@ -1534,7 +1534,6 @@ impl Parser {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_call(&mut self, val: &mut Value, source: u16, name: &str) -> Type {
         let call_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
@@ -1627,59 +1626,78 @@ impl Parser {
             }
         }
         self.lexer.token(")");
+        self.dispatch_call(val, source, name, &list, &types, &named_args, &call_pos)
+    }
+
+    /// Dispatch a parsed call to the appropriate handler: diagnostics, special
+    /// forms (map/filter/reduce/sort/parallel_for), fn-ref calls, or normal calls.
+    fn dispatch_call(
+        &mut self,
+        val: &mut Value,
+        source: u16,
+        name: &str,
+        list: &[Value],
+        types: &[Type],
+        named_args: &[(String, Value, Type)],
+        call_pos: &Position,
+    ) -> Type {
         if matches!(
             name,
             "assert" | "panic" | "log_info" | "log_warn" | "log_error" | "log_fatal"
         ) {
-            return self.parse_call_diagnostic(val, name, &list, &types, &call_pos);
+            return self.parse_call_diagnostic(val, name, list, types, call_pos);
         }
-        if name == "parallel_for" {
-            return self.parse_parallel_for(val, &list, &types);
+        match name {
+            "parallel_for" => return self.parse_parallel_for(val, list, types),
+            "map" => return self.parse_map(val, list, types),
+            "filter" => return self.parse_filter(val, list, types),
+            "reduce" => return self.parse_reduce(val, list, types),
+            "sort" => return self.parse_sort(val, list, types),
+            "insert" => return self.parse_insert(val, list, types),
+            "reverse" => return self.parse_reverse(val, list, types),
+            _ => {}
         }
-        if name == "map" {
-            return self.parse_map(val, &list, &types);
+        if let Some(tp) = self.try_fn_ref_call(val, name, list, types) {
+            return tp;
         }
-        if name == "filter" {
-            return self.parse_filter(val, &list, &types);
+        self.call(val, source, name, list, types, named_args)
+    }
+
+    /// Try to dispatch as a call through a function-reference variable.
+    /// Returns `Some(return_type)` if `name` is a fn-ref variable, `None` otherwise.
+    fn try_fn_ref_call(
+        &mut self,
+        val: &mut Value,
+        name: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> Option<Type> {
+        if !self.vars.name_exists(name) {
+            return None;
         }
-        if name == "reduce" {
-            return self.parse_reduce(val, &list, &types);
-        }
-        if name == "sort" {
-            return self.parse_sort(val, &list, &types);
-        }
-        if name == "insert" {
-            return self.parse_insert(val, &list, &types);
-        }
-        if name == "reverse" {
-            return self.parse_reverse(val, &list, &types);
-        }
-        // If the name refers to a fn-ref variable, emit a dynamic call through it.
-        if self.vars.name_exists(name) {
-            let v_nr = self.vars.var(name);
-            if let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone() {
-                if !self.first_pass {
-                    if list.len() != param_types.len() {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "Function reference '{name}' expects {} argument(s), got {}",
-                            param_types.len(),
-                            list.len()
-                        );
-                        return *ret_type;
-                    }
-                    let mut converted = list.clone();
-                    for (i, expected) in param_types.iter().enumerate() {
-                        self.convert(&mut converted[i], &types[i], expected);
-                    }
-                    self.var_usages(v_nr, true);
-                    *val = Value::CallRef(v_nr, converted);
-                }
-                return *ret_type;
+        let v_nr = self.vars.var(name);
+        let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone() else {
+            return None;
+        };
+        if !self.first_pass {
+            if list.len() != param_types.len() {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Function reference '{name}' expects {} argument(s), got {}",
+                    param_types.len(),
+                    list.len()
+                );
+                return Some(*ret_type);
             }
+            let mut converted = list.to_vec();
+            for (i, expected) in param_types.iter().enumerate() {
+                self.convert(&mut converted[i], &types[i], expected);
+            }
+            self.var_usages(v_nr, true);
+            *val = Value::CallRef(v_nr, converted);
         }
-        self.call(val, source, name, &list, &types, &named_args)
+        Some(*ret_type)
     }
 
     // Validate and rewrite a user-friendly `parallel_for(fn f, vec, threads)` call

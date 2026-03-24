@@ -610,7 +610,6 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 /// `func` is the definition number of the worker function (verified at compile time).
 /// `return_size` is 0 (text), 1 (boolean), 4 (integer), or 8 (long/float).
 /// Returns a `reference` pointing to a freshly allocated result vector.
-#[allow(clippy::too_many_lines)]
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     // A1.1: Stack layout (push order from codegen):
     //   vec(12B), elem_size(4B), return_size(4B), threads(4B), func(4B),
@@ -670,32 +669,40 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     let is_text = v_return_size == 0;
     let return_size = if is_text { 4u32 } else { v_return_size.clamp(1, 8) as u32 };
 
-    // A1.2: pre-allocate result vector in a fresh store, then write directly.
+    let result_ref = parallel_execute_and_collect(
+        stores, program, fn_pos, &v_input, element_size, return_size, is_text, n_threads,
+        &extra_args, n, n_hidden_text,
+    );
+    stores.put(stack, result_ref);
+}
+
+/// Allocate a result vector, dispatch workers, and collect results.
+#[allow(clippy::too_many_arguments)]
+fn parallel_execute_and_collect(
+    stores: &mut Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    return_size: u32,
+    is_text: bool,
+    n_threads: usize,
+    extra_args: &[u64],
+    n: usize,
+    n_hidden_text: usize,
+) -> DbRef {
     let result_db = stores.null();
-    let bytes_per_element = return_size;
-    let vec_words = ((n as u32) * bytes_per_element + 15) / 8;
+    let vec_words = ((n as u32) * return_size + 15) / 8;
     let vec_cr = stores.claim(&result_db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-
     stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
-    stores
-        .store_mut(&result_db)
-        .set_int(header_rec, 4, vec_rec as i32);
+    stores.store_mut(&result_db).set_int(header_rec, 4, vec_rec as i32);
 
     if is_text {
-        // Text mode: workers collect owned Strings; main thread writes them into the store.
         let strings = run_parallel_text(
-            stores,
-            program,
-            fn_pos,
-            &v_input,
-            element_size,
-            n_threads,
-            &extra_args,
-            n,
-            n_hidden_text,
+            stores, program, fn_pos, input, element_size, n_threads, extra_args, n, n_hidden_text,
         );
         let store = stores.store_mut(&result_db);
         for (i, s) in strings.iter().enumerate() {
@@ -703,31 +710,14 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             store.set_int(vec_rec, 8 + i as u32 * 4, s_pos as i32);
         }
     } else if return_size >= 4 {
-        // Direct write: workers write into the store buffer without channel/ordering.
         let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
         run_parallel_direct(
-            stores,
-            program,
-            fn_pos,
-            &v_input,
-            element_size,
-            return_size,
-            n_threads,
-            &extra_args,
-            out_ptr,
-            n,
+            stores, program, fn_pos, input, element_size, return_size, n_threads, extra_args,
+            out_ptr, n,
         );
     } else {
-        // Byte-sized returns (bool): use channel + set_byte for correct byte packing.
         let results = run_parallel_raw(
-            stores,
-            program,
-            fn_pos,
-            &v_input,
-            element_size,
-            return_size,
-            n_threads,
-            &extra_args,
+            stores, program, fn_pos, input, element_size, return_size, n_threads, extra_args,
         );
         let store = stores.store_mut(&result_db);
         let mut fld = 8u32;
@@ -736,13 +726,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             fld += 1;
         }
     }
-
-    let result_ref = DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    };
-    stores.put(stack, result_ref);
+    DbRef { store_nr: result_db.store_nr, rec: header_rec, pos: 4 }
 }
 
 // ── parallel_get_* ────────────────────────────────────────────────────────────

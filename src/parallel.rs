@@ -140,7 +140,7 @@ pub fn run_parallel_direct(
 ///
 /// # Panics
 /// Panics if a worker thread panics or the internal channel send fails.
-#[allow(clippy::too_many_arguments, dead_code)]
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_raw(
     stores: &Stores,
