@@ -635,9 +635,9 @@ pub struct Data {
     referenced: HashMap<u32, (u32, Value)>,
     /// Static data
     statics: Vec<u8>,
-    op_codes: u16,
+    pub(crate) op_codes: u16,
     possible: HashMap<String, Vec<u32>>,
-    operators: HashMap<u8, u32>,
+    pub(crate) operators: HashMap<u8, u32>,
 }
 
 #[must_use]
