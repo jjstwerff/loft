@@ -1154,7 +1154,8 @@ impl Parser {
         self.file += 1;
         self.line = 0;
         loop {
-            self.lexer.has_token("pub");
+            let is_pub = self.lexer.has_token("pub");
+            let before = self.data.definitions();
             if self.lexer.diagnostics().level() == Level::Fatal
                 || (!self.parse_enum()
                     && !self.parse_typedef()
@@ -1163,6 +1164,12 @@ impl Parser {
                     && !self.parse_constant())
             {
                 break;
+            }
+            // S13: mark newly created definitions as pub-visible.
+            if is_pub {
+                for d_nr in before..self.data.definitions() {
+                    self.data.def_mut(d_nr).pub_visible = true;
+                }
             }
         }
         let res = self.lexer.peek();

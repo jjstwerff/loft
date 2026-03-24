@@ -1,13 +1,13 @@
 // Library for T1-2 wildcard and selective import tests.
-struct Point {
+pub struct Point {
   x: integer,
   y: integer
 }
 
-fn add(a: integer, b: integer) -> integer {
+pub fn add(a: integer, b: integer) -> integer {
   a + b
 }
 
-fn mul(a: integer, b: integer) -> integer {
+pub fn mul(a: integer, b: integer) -> integer {
   a * b
 }
