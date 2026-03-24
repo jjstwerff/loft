@@ -219,6 +219,7 @@ impl Parser {
         let d = data.add_def("i_parse_errors", &pos, DefType::Function);
         data.definitions[d as usize].returned = Type::Text(Vec::new());
         let d = data.add_def("i_parse_error_push", &pos, DefType::Function);
+        data.definitions[d as usize].returned = Type::Void;
         {
             let mut lexer = Lexer::default();
             data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));

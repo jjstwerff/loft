@@ -1,5 +1,8 @@
 # Copyright (c) 2022-2025 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
+
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test
+
 all:
 	rustfmt src/*.rs --edition 2024
 	RUSTFLAGS=-g cargo build --release
@@ -109,6 +112,10 @@ gtest:
 	cd generated && cargo clippy --tests -- -W clippy::all -W clippy::cognitive_complexity > result.txt 2>&1
 	cd generated && rustfmt tests/*.rs --edition 2024 >> result.txt 2>&1
 	cd generated && cargo test -- --nocapture --test-threads=1 >>result.txt 2>&1
+
+bench:
+	cargo build --release -q
+	bash bench/run_bench.sh --warmup
 
 pdf:
 	cargo run --bin gendoc

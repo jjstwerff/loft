@@ -9,7 +9,9 @@ mod validate;
 
 pub use intervals::compute_intervals;
 pub use slots::assign_slots;
-pub use validate::{dump_variables, validate_slots};
+pub use validate::dump_variables;
+#[cfg(any(debug_assertions, test))]
+pub use validate::validate_slots;
 
 use crate::data::{Context, Data, Type, Value};
 use crate::diagnostics::{Level, diagnostic_format};
