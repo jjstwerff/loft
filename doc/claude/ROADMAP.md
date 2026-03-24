@@ -17,32 +17,30 @@ interpreter and native mode.  Issues #77 (fn-ref dispatch) and #80 (LIFO store-f
 are fixed.  `loft --tests --native` with binary caching, stale-rlib auto-rebuild,
 and `file.loft::fn` filtering is implemented.  CI now fails on any native regression.
 
+**Completed in this cycle:**
+- **S5** — Optional `& text` parameter overflow. ✓
+- **S9** — `character + character` codegen panic. ✓
+- **S10** — Disallow type annotations in `|x|` lambdas; lambda hints for map/filter/reduce. ✓
+- **S11** — Bare function references; `fn` prefix forbidden. ✓
+- **S12** — PNG loading field offset fix. ✓
+- **S13** — `pub` visibility enforcement on imports. ✓
+- **L6.1** — Parser: `assert(expr)` in field definitions. ✓
+- **L6.2** — Bytecode: constraint checks after field writes. ✓
+- **L6** — `Type.parse(text)` with JSON support, `s#errors` accessor. ✓
+- **O1** — Superinstruction opcodes registered; disassembler; `fill_rs_up_to_date` CI. ✓ (peephole deferred)
+- **O6** — `_nn` non-null long arithmetic variants. ✓
+- **A1.1** — Extra integer context args forwarded to parallel workers. ✓
+- **A13.2+A13.3** — `Value::Iter` arm in `build_scope_parents` and `scan_inner`. ✓
+
+**Remaining for 0.8.2:**
+
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
-| S5     | Fix `& text` parameter subtract-with-overflow panic     | Small     |             | PROBLEMS.md #89    |
-| S9     | Fix `character + character` codegen panic                | Small     |             | PROBLEMS.md #90    |
-| S10    | Allow `const` modifier in lambda parameters             | Small     |             | parser/expressions.rs |
-| S11    | Drop `fn` prefix for function references                | Small     |             | parser/expressions.rs |
-| S12    | Fix PNG loading — wrong dimensions and record panic     | Medium    |             | png_store.rs        |
-| S13    | Enforce `pub` visibility — non-pub items leak across files | Small    |             | parser/mod.rs       |
-| L6     | Field constraints with `assert($.<field>)` syntax      | Medium    |             | definitions.rs     |
-| L6.1   | ↳ Parser: `assert(expr)` in field definition            | Small     |             | definitions.rs     |
-| L6.2   | ↳ Bytecode: emit check after every field write          | Medium    | L6.1        | codegen.rs, fill.rs |
 | L6.3   | ↳ Native codegen: emit `assert!` after field write      | Small     | L6.2        | generation.rs      |
-| L6.4   | ↳ `validate()` builtin: non-panicking constraint check  | Small     | L6.2        | 01_code.loft       |
-| O1     | Superinstruction merging (peephole, opcodes 240–245)    | Medium    |             | PERFORMANCE.md P1  |
-| O6     | `_nn` variants: drop `long` sentinel from local arith   | Low       |             | PERFORMANCE.md N3  |
-| A1     | Parallel workers: extra args + value-struct + text/ref  | Med–High  |             | THREADING.md       |
-| A1.1   | ↳ Extra args + value-struct returns                     | Medium    |             | parallel.rs        |
+| O1     | ↳ Peephole rewriting pass (stack-relative operands)     | Medium    |             | compile.rs         |
 | A1.2   | ↳ Text/reference returns (dedicated result store)       | Medium    | A1.1        | parallel.rs        |
 | A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12    |
-| A12.1  | ↳ Fix `first_set_in` Block/Loop descent                 | Small     |             | PROBLEMS.md #68    |
-| A12.2  | ↳ Text slot reuse: require exact size match             | Small–Med | A12.1       | PROBLEMS.md #69    |
-| A12.3  | ↳ Revert `Type::Text` override in `generate_set`        | Trivial   | A12.2       | PROBLEMS.md #70    |
 | A13    | Complete two-zone slot assignment                       | Medium    |             | SLOTS.md           |
-| A13.1  | ↳ Fix `Set(v, Block)` ordering in slot placer           | Medium    |             | SLOTS.md Step 8    |
-| A13.2  | ↳ Audit `build_scope_parents` for missing IR variants   | Medium    | A13.1       | SLOTS.md Step 10   |
-| A13.3  | ↳ Add `Value::Iter` arm to `scan_inner`                 | Small     |             | SLOTS.md           |
 
 ---
 

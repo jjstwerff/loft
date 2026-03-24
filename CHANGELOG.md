@@ -38,6 +38,30 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   `fn(…) -> …` now propagates the type hint so that untyped lambda params can
   be inferred.  (`src/parser/control.rs`)
 
+### Language changes
+
+- **S10** — Short-form lambdas `|x| { body }` no longer accept type annotations.
+  Use `fn(x: type) -> ret { body }` for explicit types.  The `|x|` form infers
+  types from the call-site hint.  `map`, `filter`, and `reduce` now propagate
+  the vector element type as a lambda hint so `|x| { x * 10 }` works without
+  annotations.
+
+- **S11** — Function references no longer require the `fn` prefix.  Write
+  `apply(double, 7)` instead of `apply(fn double, 7)`.  Using `fn name` as a
+  value is now a compile error.  Redefining a function name as a variable is
+  also an error.
+
+- **L6** — Struct fields can now declare runtime constraints via
+  `assert(condition)` or `assert(condition, message)`.  Constraints fire on
+  every field write (constructor completion and direct assignment).  The `$`
+  token refers to the struct instance for cross-field constraints:
+  `lo: integer assert($.lo <= $.hi)`.
+
+- **L6** — `Type.parse(text)` parses JSON or loft-native text into a struct.
+  Uses the existing database parser.  Errors are accessible via `s#errors`
+  after parsing.  JSON-style `{"field": value}` is now accepted in both
+  struct literal constructors and `as Type` casts.
+
 ### Diagnostics
 
 - **S7** — Using `string` as a type name now produces "Undefined type 'string' —
@@ -49,11 +73,31 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   the naming conflict previously caused confusing runtime behavior.
   (`src/typedef.rs`)
 
+- **S13** — Definitions without `pub` are no longer visible to `use` imports
+  from other files.  Default library definitions remain accessible.
+
+### Bug fixes
+
+- **S9** — `c + d` where both are characters no longer panics.  The parser now
+  converts character-first concatenation to `"" + c + d` internally.
+
+- **S12** — PNG loading now writes Image struct fields at the correct offsets
+  (was off by 4 bytes).  `img.width` and `img.height` return correct values.
+
 ### Performance
+
+- **O1** — Superinstruction opcodes registered in `01_code.loft` (6 merged
+  integer-loop patterns + NOP).  Standalone bytecode disassembler added.
+  `fill_rs_up_to_date` CI assertion ensures `src/fill.rs` stays in sync.
+  Peephole rewriting pass deferred (needs stack-relative operand design).
 
 - **O3** — Audited all `_int` functions in `src/ops.rs`: none reference `i64::MIN`.
   Added a compile-time guard test to prevent future regressions.  Integer paths
   use only `i32::MIN` as their null sentinel.  (`src/ops.rs`)
+
+- **O6** — Non-null long arithmetic variants (`op_add_long_nn`, etc.) added to
+  `ops.rs`.  Skip the `i64::MIN` sentinel check when both operands are known
+  non-null.  Native codegen integration deferred.
 
 ### Improvements
 
@@ -65,6 +109,14 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   (`Stores.scratch`) is retained for all other call paths (e.g. format string
   interpolation `"{expr}"`) and cleared at statement boundaries by `OpClearScratch`.
   (`src/native.rs`, `src/state/codegen.rs`, `src/fill.rs`, `default/02_images.loft`)
+
+- **A1.1** — Parallel workers now receive extra integer context arguments.
+  `par(b=scale(a, mult), 2)` forwards `mult` to each worker thread alongside
+  the vector element.  Validated at compile time and forwarded at runtime via
+  the eval stack.
+
+- **A13.2+A13.3** — `build_scope_parents` and `scan_inner` now handle
+  `Value::Iter`, closing a coverage gap in scope analysis.
 
 - **S4** — `read_data` in `database/io.rs` now implements `Parts::Array` (indirect
   record reads by looping over element count and recursing per element).

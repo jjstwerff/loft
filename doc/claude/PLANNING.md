@@ -92,20 +92,15 @@ in parallel.
 
 **Remaining for 0.8.2:**
 
-*Stability:*
-- **S5** — Fix optional `& text` parameter subtract-with-overflow panic (Issue 89).
-
 *Interpreter performance:*
-- **O1** — Superinstruction merging: peephole pass, 6 merged opcodes 240–245.
-- **O6** — Native: `_nn` variants remove `long` null-sentinel from local arithmetic.
+- **O1** — Superinstruction peephole rewriting pass (opcodes registered, needs stack-relative operand design).
 
 *Parallel execution:*
-- **A1.1** — Extra context args + value-struct returns: extend `execute_at_raw`, output buffer.
-- **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1).
+- **A1.2** — Text/reference returns: dedicated result store per dispatch (depends on A1.1 ✓).
 
 *Interpreter slot correctness:*
-- **A12.1–A12.3 + A12** — Fix Issues 68–70, then enable lazy work-variable init.
-- **A13.1–A13.3** — Complete two-zone slot assignment (Steps 8 and 10).
+- **A12** — Lazy work-variable initialization (blocked by Issues 69–70: SIGSEGV on text slot reuse).
+- **A13** — Two-zone slot assignment: codegen override can create overlaps with child-scope variables.
 
 ---
 
@@ -1499,14 +1494,6 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
-### S5  Fix optional `& text` parameter subtract-with-overflow panic
-**Sources:** PROBLEMS.md #89
-**Severity:** High — interpreter panics at call site when any optional `& text` argument is supplied
-**Description:** `create_stack` size calculation for optional `& text` parameters underflows when the argument is provided, causing a subtract-with-overflow panic before the function body is entered.
-**Fix path:** Audit `create_stack` in `src/state/codegen.rs` for the optional-reference slot size/offset calculation; ensure the slot reserved for `& T` matches the stack layout.
-**Effort:** Small
-**Target:** 0.8.2
-
 ---
 
 ### S6  Fix remaining "recursive call sees stale attribute count" cases
@@ -1606,13 +1593,6 @@ Planned interpreter and native-codegen performance improvements. Full designs wi
 **Target:** 1.1+
 
 ---
-
-### O6  Native: remove `long` null-sentinel from local arithmetic
-**Sources:** PERFORMANCE.md § N3
-**Description:** Add `op_add_long_nn`, `op_sub_long_nn`, etc. (`_nn` = non-nullable) to `src/ops.rs`. When escape analysis confirms both operands are local (definitely assigned) `long` variables, the native emitter uses `_nn` variants, eliminating the `i64::MIN` check on the hot path.
-**Expected gain:** 1.3–1.5× on Collatz and `long`-heavy native benchmarks.
-**Effort:** Low
-**Target:** 0.8.2
 
 ---
 
