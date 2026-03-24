@@ -455,21 +455,43 @@ impl State {
                 stack.function.name(v),
                 stack.data.def(stack.def_nr).name,
             );
-            if pos > stack.position
-                || (pos < stack.position
-                    && matches!(
-                        stack.function.tp(v),
-                        Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-                    ))
-            {
-                // Override slot to TOS.
-                // Case 1 (pos > TOS): should never fire after the Step-8 fix — the debug_assert
-                //   above catches any regression.  Retained as a release-mode safety net.
-                // Case 2 (pos < TOS for a large type): a mutable &vector<T> argument passed by
-                //   OpCreateStack pushes a DbRef to the eval stack before this block's large var
-                //   is allocated, raising the codegen TOS above the pre-assigned slot.  Still
-                //   fires legitimately in append_vector; retained until that pattern is fixed.
+            if pos > stack.position {
+                // Case 1: pre-assigned slot above TOS — always override.
                 stack.function.set_stack_pos(v, stack.position);
+            } else if pos < stack.position
+                && matches!(
+                    stack.function.tp(v),
+                    Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+                )
+            {
+                // Case 2: large type below TOS — override only if the new range
+                // [TOS, TOS + v_size) doesn't overlap any child-scope variable.
+                // A13 fix: the override can shift a zone-2 variable forward into
+                // a zone-1 child-scope slot, causing validate_slots to fail.
+                let v_size = size(stack.function.tp(v), &Context::Variable);
+                let new_end = stack.position + v_size;
+                let v_scope = stack.function.scope(v);
+                let v_first = stack.function.first_def(v);
+                let v_last = stack.function.last_use(v);
+                let has_child_overlap = (0..stack.function.count()).any(|j| {
+                    if j == v || stack.function.stack(j) == u16::MAX {
+                        return false;
+                    }
+                    let j_scope = stack.function.scope(j);
+                    if j_scope == v_scope {
+                        return false;
+                    }
+                    let js = stack.function.stack(j);
+                    let je = js + size(stack.function.tp(j), &Context::Variable);
+                    // Slot range overlap AND live-interval overlap.
+                    stack.position < je
+                        && new_end > js
+                        && v_first <= stack.function.last_use(j)
+                        && v_last >= stack.function.first_def(j)
+                });
+                if !has_child_overlap {
+                    stack.function.set_stack_pos(v, stack.position);
+                }
             }
             let pos = stack.function.stack(v);
             if pos == stack.position {

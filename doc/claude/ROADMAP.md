@@ -31,12 +31,12 @@ and `file.loft::fn` filtering is implemented.  CI now fails on any native regres
 - **O6** — `_nn` non-null long arithmetic variants. ✓
 - **A1.1** — Extra integer context args forwarded to parallel workers. ✓
 - **A13.2+A13.3** — `Value::Iter` arm in `build_scope_parents` and `scan_inner`. ✓
+- **L6.3** — Native codegen field constraints: `Value::Insert` IR from L6.2 flows through unchanged. ✓
 
 **Remaining for 0.8.2:**
 
 | ID     | Title                                                   | Effort    | Depends on  | Source             |
 |--------|---------------------------------------------------------|-----------|-------------|--------------------|
-| L6.3   | ↳ Native codegen: emit `assert!` after field write      | Small     | L6.2        | generation.rs      |
 | O1     | ↳ Peephole rewriting pass (stack-relative operands)     | Medium    |             | compile.rs         |
 | A1.2   | ↳ Text/reference returns (dedicated result store)       | Medium    | A1.1        | parallel.rs        |
 | A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12    |

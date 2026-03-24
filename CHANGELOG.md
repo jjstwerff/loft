@@ -57,6 +57,10 @@ The stability guarantee is described in `doc/claude/RELEASE.md`.
   token refers to the struct instance for cross-field constraints:
   `lo: integer assert($.lo <= $.hi)`.
 
+- **L6.3** — Field constraints are automatically enforced in native codegen
+  (`--native` path).  The L6.2 IR (`Value::Insert` wrapping set + assert) flows
+  through `generation.rs` unchanged — no additional native-specific code needed.
+
 - **L6** — `Type.parse(text)` parses JSON or loft-native text into a struct.
   Uses the existing database parser.  Errors are accessible via `s#errors`
   after parsing.  JSON-style `{"field": value}` is now accepted in both
