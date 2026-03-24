@@ -203,9 +203,25 @@ fn is_camel(name: &str) -> bool {
 impl Parser {
     #[must_use]
     pub fn new() -> Self {
+        let mut data = Data::new();
+        // Register internal-only functions (i_ prefix) that are never visible to user code.
+        // These are resolved by the compiler via data.def_nr("i_...") and mapped to native
+        // Rust implementations in native.rs.
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
+        let d = data.add_def("i_parse_errors", &pos, DefType::Function);
+        data.definitions[d as usize].returned = Type::Text(Vec::new());
+        let d = data.add_def("i_parse_error_push", &pos, DefType::Function);
+        {
+            let mut lexer = Lexer::default();
+            data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));
+        }
         Parser {
             todo_files: Vec::new(),
-            data: Data::new(),
+            data,
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
@@ -598,6 +614,7 @@ impl Parser {
         name: &str,
         list: &[Value],
         types: &[Type],
+        named_args: &[(String, Value, Type)],
     ) -> Type {
         // Create a new list of parameters based on the current ones
         // We still need to know the types.
@@ -615,13 +632,80 @@ impl Parser {
             )
         };
         if d_nr != u32::MAX {
-            self.call_nr(code, d_nr, list, types, true)
+            self.call_with_named(code, d_nr, list, types, named_args, true)
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else {
             diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
             Type::Unknown(0)
         }
+    }
+
+    /// Resolve named arguments into positional slots, then delegate to `call_nr`.
+    fn call_with_named(
+        &mut self,
+        code: &mut Value,
+        d_nr: u32,
+        positional: &[Value],
+        pos_types: &[Type],
+        named: &[(String, Value, Type)],
+        is_method: bool,
+    ) -> Type {
+        if named.is_empty() {
+            return self.call_nr(code, d_nr, positional, pos_types, is_method);
+        }
+        // Build full argument vector with named args placed at the correct indices.
+        let n_params = self.data.attributes(d_nr);
+        let mut args = vec![Value::Null; n_params];
+        let mut arg_types = vec![Type::Unknown(0); n_params];
+        // Place positional args first.
+        for (i, (val, tp)) in positional.iter().zip(pos_types.iter()).enumerate() {
+            if i < n_params {
+                args[i] = val.clone();
+                arg_types[i] = tp.clone();
+            }
+        }
+        let pos_count = positional.len();
+        // Place named args by looking up parameter names.
+        for (name, val, tp) in named {
+            let idx = self.data.attr(d_nr, name);
+            if idx == usize::MAX {
+                if !self.first_pass {
+                    diagnostic!(self.lexer, Level::Error, "Unknown parameter '{name}'");
+                }
+                continue;
+            }
+            if idx < pos_count {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Parameter '{name}' already provided as positional argument {idx}"
+                    );
+                }
+                continue;
+            }
+            if args[idx] != Value::Null {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Duplicate named argument '{name}'"
+                    );
+                }
+                continue;
+            }
+            args[idx] = val.clone();
+            arg_types[idx] = tp.clone();
+        }
+        // Trim trailing Null args — add_defaults will fill them.
+        let mut last_provided = args.len();
+        while last_provided > 0 && args[last_provided - 1] == Value::Null {
+            last_provided -= 1;
+        }
+        args.truncate(last_provided);
+        arg_types.truncate(last_provided);
+        self.call_nr(code, d_nr, &args, &arg_types, is_method)
     }
 
     fn single_op(&mut self, op: &str, f: Value, t: Type) -> Value {
@@ -716,6 +800,29 @@ impl Parser {
         ref_code: Value,
         val_code: Value,
     ) -> Value {
+        self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, true)
+    }
+
+    fn set_field_no_check(
+        &mut self,
+        d_nr: u32,
+        f_nr: usize,
+        d_pos: u16,
+        ref_code: Value,
+        val_code: Value,
+    ) -> Value {
+        self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, false)
+    }
+
+    fn set_field_check(
+        &mut self,
+        d_nr: u32,
+        f_nr: usize,
+        d_pos: u16,
+        ref_code: Value,
+        val_code: Value,
+        emit_check: bool,
+    ) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
         let nm = self.data.attr_name(d_nr, f_nr);
         let pos = self.database.position(self.data.def(d_nr).known_type, &nm);
@@ -724,7 +831,21 @@ impl Parser {
         } else {
             i32::from(pos + d_pos)
         });
-        match tp {
+        let has_check = emit_check
+            && f_nr != usize::MAX
+            && !self.first_pass
+            && self
+                .data
+                .def(d_nr)
+                .attributes
+                .get(f_nr)
+                .is_some_and(|a| a.check != Value::Null);
+        let ref_for_check = if has_check {
+            Some(ref_code.clone())
+        } else {
+            None
+        };
+        let set_op = match tp {
             Type::Integer(min, _) => {
                 let m = Value::Int(min);
                 let s = tp.size(self.data.attr_nullable(d_nr, f_nr));
@@ -774,19 +895,54 @@ impl Parser {
                 if self.first_pass {
                     Value::Null
                 } else {
-                    {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "Cannot assign to field '{}' of type {}",
-                            self.data.attr_name(d_nr, f_nr),
-                            self.data.attr_type(d_nr, f_nr).name(&self.data)
-                        );
-                        Value::Null
-                    }
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot assign to field '{}' of type {}",
+                        self.data.attr_name(d_nr, f_nr),
+                        self.data.attr_type(d_nr, f_nr).name(&self.data)
+                    );
+                    Value::Null
                 }
             }
-        }
+        };
+        self.emit_field_constraint(set_op, ref_for_check, d_nr, f_nr, &nm)
+    }
+
+    /// Wrap a set operation with a constraint assertion if the field has one.
+    fn emit_field_constraint(
+        &mut self,
+        set_op: Value,
+        ref_for_check: Option<Value>,
+        d_nr: u32,
+        f_nr: usize,
+        field_name: &str,
+    ) -> Value {
+        let Some(ref_val) = ref_for_check else {
+            return set_op;
+        };
+        let check = self.data.def(d_nr).attributes[f_nr].check.clone();
+        let bound = Self::replace_record_ref(check, &ref_val);
+        let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes[f_nr].check_message {
+            Value::Text(s.clone())
+        } else {
+            Value::Text(format!(
+                "field constraint failed on {}.{field_name}",
+                self.data.def(d_nr).name
+            ))
+        };
+        let assert_dnr = self.data.def_nr("n_assert");
+        let pos = self.lexer.pos();
+        let assert_call = Value::Call(
+            assert_dnr,
+            vec![
+                bound,
+                msg,
+                Value::Text(pos.file.clone()),
+                Value::Int(pos.line as i32),
+            ],
+        );
+        Value::Insert(vec![set_op, assert_call])
     }
 
     fn cl(&mut self, op: &str, list: &[Value]) -> Value {
@@ -843,7 +999,6 @@ impl Parser {
     }
 
     /// Call a specific definition
-    #[allow(clippy::too_many_lines)] // P44: empty-vector-arg handling adds necessary dispatch
     fn call_nr(
         &mut self,
         code: &mut Value,
@@ -885,82 +1040,90 @@ impl Parser {
             }
             return Type::Null;
         }
-        let mut actual: Vec<Value> = Vec::new();
-        if !types.is_empty() {
-            if list.len() > self.data.attributes(d_nr) {
-                if report {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Too many parameters for {}",
-                        self.data.def(d_nr).name
-                    );
-                }
-                return Type::Null;
-            }
-            for (nr, a_code) in list.iter().enumerate() {
-                let tp = self.data.attr_type(d_nr, nr);
-                if let Some(actual_type) = types.get(nr) {
-                    let mut actual_code = a_code.clone();
-                    // When encountered a subtype reference, find the actual corresponding type
-                    if let (Type::Vector(to_tp, _), Type::Vector(a_tp, _)) = (&tp, actual_type)
-                        && a_tp.is_unknown()
-                        && !to_tp.is_unknown()
-                    {
-                        self.change_var(&actual_code, &tp);
-                        actual.push(actual_code);
-                        continue;
-                    }
-                    // P44: empty `[]` literal passed as a vector argument produces
-                    // Value::Insert([Null]) with no stack presence.  Create a temp
-                    // vector variable with OpDatabase here where the parameter type
-                    // is known.
-                    if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
-                        && let Type::Vector(elm_tp, dep) = &tp
-                    {
-                        let vec =
-                            self.create_unique("vec", &Type::Vector(elm_tp.clone(), dep.clone()));
-                        let mut ls = self.vector_db(elm_tp, vec);
-                        ls.push(Value::Var(vec));
-                        actual.push(v_block(ls, tp.clone(), "empty_vector_arg"));
-                        all_types[nr] = tp.clone();
-                        continue;
-                    }
-                    if actual_type.is_unknown()
-                        && let Type::Vector(_, _) = &tp
-                    {
-                        self.change_var(&actual_code, &tp);
-                        actual.push(actual_code);
-                        continue;
-                    }
-                    if let (Type::Integer(_, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
-                        // An enum with a structure is normally a reference to the data.
-                        // But for compares we can expect to be a constant Enum value.
-                        let cd = if matches!(actual_code, Value::Enum(_, _)) {
-                            actual_code
-                        } else {
-                            self.cl("OpGetEnum", &[actual_code, Value::Int(0)])
-                        };
-                        actual.push(self.cl("OpConvIntFromEnum", &[cd]));
-                        continue;
-                    }
-                    if !self.convert(&mut actual_code, actual_type, &tp) {
-                        if report {
-                            let context =
-                                format!("call to {}", self.data.def(d_nr).original_name());
-                            self.validate_convert(&context, actual_type, &tp);
-                        } else if !self.can_convert(actual_type, &tp) {
-                            return Type::Null;
-                        }
-                    }
-                    actual.push(actual_code);
-                }
-            }
+        let mut actual = self.process_call_args(d_nr, list, types, &mut all_types, report);
+        if actual.is_empty() && !types.is_empty() {
+            return Type::Null;
         }
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
         tp
+    }
+
+    /// Convert and validate each positional argument for a call.
+    fn process_call_args(
+        &mut self,
+        d_nr: u32,
+        list: &[Value],
+        types: &[Type],
+        all_types: &mut [Type],
+        report: bool,
+    ) -> Vec<Value> {
+        let mut actual = Vec::new();
+        if types.is_empty() {
+            return actual;
+        }
+        if list.len() > self.data.attributes(d_nr) {
+            if report {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Too many parameters for {}",
+                    self.data.def(d_nr).name
+                );
+            }
+            return actual;
+        }
+        for (nr, a_code) in list.iter().enumerate() {
+            let tp = self.data.attr_type(d_nr, nr);
+            let Some(actual_type) = types.get(nr) else {
+                continue;
+            };
+            let mut actual_code = a_code.clone();
+            if let (Type::Vector(to_tp, _), Type::Vector(a_tp, _)) = (&tp, actual_type)
+                && a_tp.is_unknown()
+                && !to_tp.is_unknown()
+            {
+                self.change_var(&actual_code, &tp);
+                actual.push(actual_code);
+                continue;
+            }
+            // P44: empty `[]` literal → create temp vector where parameter type is known.
+            if matches!(&actual_code, Value::Insert(ops) if ops.len() <= 1)
+                && let Type::Vector(elm_tp, dep) = &tp
+            {
+                let vec = self.create_unique("vec", &Type::Vector(elm_tp.clone(), dep.clone()));
+                let mut ls = self.vector_db(elm_tp, vec);
+                ls.push(Value::Var(vec));
+                actual.push(v_block(ls, tp.clone(), "empty_vector_arg"));
+                all_types[nr] = tp.clone();
+                continue;
+            }
+            if actual_type.is_unknown() && matches!(&tp, Type::Vector(_, _)) {
+                self.change_var(&actual_code, &tp);
+                actual.push(actual_code);
+                continue;
+            }
+            if let (Type::Integer(_, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
+                let cd = if matches!(actual_code, Value::Enum(_, _)) {
+                    actual_code
+                } else {
+                    self.cl("OpGetEnum", &[actual_code, Value::Int(0)])
+                };
+                actual.push(self.cl("OpConvIntFromEnum", &[cd]));
+                continue;
+            }
+            if !self.convert(&mut actual_code, actual_type, &tp) {
+                if report {
+                    let context = format!("call to {}", self.data.def(d_nr).original_name());
+                    self.validate_convert(&context, actual_type, &tp);
+                } else if !self.can_convert(actual_type, &tp) {
+                    return Vec::new();
+                }
+            }
+            actual.push(actual_code);
+        }
+        actual
     }
 
     // Gather depended on variables from arguments of the given called routine.
@@ -1014,9 +1177,17 @@ impl Parser {
         // first pass (allowing ref_return to find the name match instead of adding a
         // new attribute and growing the function's attr count across passes).
         let is_recursive_self = d_nr == self.context && !self.first_pass;
-        if actual.len() < self.data.attributes(d_nr) {
-            // Insert the default values for not given attributes
-            for a_nr in actual.len()..self.data.attributes(d_nr) {
+        // Extend to full parameter count so we can fill gaps from named arguments.
+        while actual.len() < self.data.attributes(d_nr) {
+            actual.push(Value::Null);
+            all_types.push(Type::Unknown(0));
+        }
+        {
+            // Fill all missing (Null) parameter slots with defaults.
+            for a_nr in 0..self.data.attributes(d_nr) {
+                if actual[a_nr] != Value::Null {
+                    continue;
+                }
                 let default = self.data.def(d_nr).attributes[a_nr].value.clone();
                 let tp = self.data.attr_type(d_nr, a_nr);
                 if let Type::Vector(content, _) = &tp {
@@ -1031,8 +1202,8 @@ impl Parser {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
                     self.data.vector_def(&mut self.lexer, content);
-                    all_types.push(Type::Vector(content.clone(), vec![vr]));
-                    actual.push(Value::Var(vr));
+                    all_types[a_nr] = Type::Vector(content.clone(), vec![vr]);
+                    actual[a_nr] = Value::Var(vr);
                 } else if let Type::Reference(content, _) = tp {
                     assert_eq!(
                         default,
@@ -1044,8 +1215,8 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
-                    all_types.push(Type::Reference(content, vec![vr]));
-                    actual.push(Value::Var(vr));
+                    all_types[a_nr] = Type::Reference(content, vec![vr]);
+                    actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
@@ -1070,15 +1241,15 @@ impl Parser {
                         0
                     };
                     ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
-                    actual.push(v_block(
+                    actual[a_nr] = v_block(
                         ls,
                         Type::Reference(self.data.def_nr("reference"), vec![vr]),
                         "default ref",
-                    ));
-                    all_types.push(tp.clone());
+                    );
+                    all_types[a_nr] = tp.clone();
                 } else {
-                    actual.push(default);
-                    all_types.push(tp.clone());
+                    actual[a_nr] = default;
+                    all_types[a_nr] = tp.clone();
                 }
             }
         }
@@ -1154,7 +1325,8 @@ impl Parser {
         self.file += 1;
         self.line = 0;
         loop {
-            self.lexer.has_token("pub");
+            let is_pub = self.lexer.has_token("pub");
+            let before = self.data.definitions();
             if self.lexer.diagnostics().level() == Level::Fatal
                 || (!self.parse_enum()
                     && !self.parse_typedef()
@@ -1163,6 +1335,12 @@ impl Parser {
                     && !self.parse_constant())
             {
                 break;
+            }
+            // S13: mark newly created definitions as pub-visible.
+            if is_pub {
+                for d_nr in before..self.data.definitions() {
+                    self.data.def_mut(d_nr).pub_visible = true;
+                }
             }
         }
         let res = self.lexer.peek();

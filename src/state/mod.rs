@@ -15,7 +15,7 @@ use crate::data::{Data, Type};
 pub use crate::database::Call;
 use crate::database::{ParallelCtx, Stores};
 use crate::fill::OPERATORS;
-use crate::keys::DbRef;
+use crate::keys::{DbRef, Str};
 use crate::log_config::LogConfig;
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Error, Write};
@@ -302,6 +302,29 @@ impl State {
             .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
     }
 
+    /// O1: superinstruction stubs — delegated from fill.rs.
+    /// These are placeholders; the peephole pass is not yet active.
+    #[allow(clippy::unused_self)]
+    pub fn nop(&mut self) {}
+    pub fn si_load2_add_store(&mut self) {
+        self.nop();
+    }
+    pub fn si_load_const_add_store(&mut self) {
+        self.nop();
+    }
+    pub fn si_load_const_cmp_branch(&mut self) {
+        self.nop();
+    }
+    pub fn si_load2_cmp_branch(&mut self) {
+        self.nop();
+    }
+    pub fn si_load_const_mul_store(&mut self) {
+        self.nop();
+    }
+    pub fn si_load2_mul_store(&mut self) {
+        self.nop();
+    }
+
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
@@ -520,10 +543,24 @@ impl State {
     ///
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations.
-    pub fn execute_at_raw(&mut self, fn_pos: u32, arg: &DbRef, return_size: u32) -> u64 {
+    pub fn execute_at_raw(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
         self.stack_pos = 4;
-        self.put_stack(*arg); // 12 bytes → stack_pos = 16
-        self.put_stack(u32::MAX); // 4 bytes → stack_pos = 20
+        // Push extra context args first (they precede the element arg in the
+        // function's parameter list: fn worker(element, extra1, extra2, ...)).
+        // The stack grows upward; the function reads params from low to high offset.
+        // Element arg (DbRef) occupies the first parameter slot; extras follow.
+        self.put_stack(*arg); // 12 bytes
+        for &extra in extra_args {
+            // Push each extra as a raw i32 (integer context args).
+            self.put_stack(extra as i32);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
@@ -541,6 +578,81 @@ impl State {
             1 => u64::from(*self.get_stack::<u8>()),
             _ => u64::from(*self.get_stack::<u32>()),
         }
+    }
+
+    /// Execute the bytecode function at `fn_pos` passing one `DbRef` argument,
+    /// then pop the `Str` return value and copy its contents into an owned `String`.
+    ///
+    /// This is used for parallel workers that return text.  The `Str` on the
+    /// stack points into the worker's store; we must copy the bytes before the
+    /// worker's state is dropped.
+    ///
+    /// Hidden `__work_N` parameters (type `RefVar(Text)`) are backed by a real
+    /// `String` allocated in the worker's stack store via `claim`.  The function
+    /// accesses the String through the `DbRef` using `string_ref_mut`, which always
+    /// dereferences within `self.stack_cur`'s store.
+    ///
+    /// # Panics
+    /// Panics if the worker exceeds 10 000 000 operations.
+    pub fn execute_at_text(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        extra_args: &[u64],
+        n_hidden_text: usize,
+    ) -> String {
+        // Allocate String buffers for hidden RefVar(Text) params in the stack store.
+        let mut work_crs: Vec<DbRef> = Vec::with_capacity(n_hidden_text);
+        for _ in 0..n_hidden_text {
+            let cr = self.database.claim(&self.stack_cur, 4); // 32 bytes; String needs 24
+            unsafe {
+                let p = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<String>(cr.rec, cr.pos);
+                let p = std::ptr::from_mut(p);
+                std::ptr::write(p, String::new());
+            }
+            work_crs.push(cr);
+        }
+
+        self.stack_pos = 4;
+        self.put_stack(*arg);
+        for &extra in extra_args {
+            self.put_stack(extra as i32);
+        }
+        // Push the work buffer DbRefs as the hidden parameters.
+        for cr in &work_crs {
+            self.put_stack(*cr);
+        }
+        self.put_stack(u32::MAX);
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            OPERATORS[op as usize](self);
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        // Pop the Str return value (16 bytes) and copy into owned String.
+        let s = *self.get_stack::<Str>();
+        let result = s.str().to_owned();
+        // Drop the String buffers to free their heap allocations.
+        for cr in work_crs.iter().rev() {
+            unsafe {
+                let p = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<String>(cr.rec, cr.pos);
+                let p = std::ptr::from_mut(p);
+                std::ptr::drop_in_place(p);
+            }
+        }
+        result
     }
 
     /**

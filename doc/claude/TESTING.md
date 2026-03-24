@@ -48,7 +48,7 @@ Each file is a Cargo integration test (auto-discovered because it lives directly
 | `immutability.rs` | Immutability diagnostics (`ref never modified`, `const mutated`) |
 | `slot_assign.rs` | Stack-slot assignment correctness (no overlapping slots) |
 | `log_config.rs` | Unit tests for the `LogConfig` debug-logging framework |
-| `threading.rs` | Rust-level parallel API tests (`run_parallel_int`, `WorkerProgram`, `clone_for_worker`) |
+| `threading.rs` | Low-level Rust parallel API tests only (`run_parallel_int`, `run_parallel_raw`, `run_parallel_text`); end-to-end parallel tests live in `tests/scripts/22-threading.loft` |
 | `issues.rs` | Minimal reproducers for known open/fixed issues (see [PROBLEMS.md](PROBLEMS.md)) |
 | `expressions_auto_convert.rs` | Auto-conversion edge cases (hand-written) |
 | `wrap.rs` | Runs `.loft` files from `tests/docs/`; generates HTML docs |
@@ -614,45 +614,66 @@ add a new one — not to add a Rust `.rs` test.
 **Add to `tests/*.rs` only when the scenario cannot be expressed as a loft script:**
 - The test expects a compile-time error or warning (all `parse_errors.rs`, `immutability.rs`,
   `format_strings.rs` diagnostics).
-- The test calls Rust APIs directly (`data_structures.rs`, `threading.rs`, `log_config.rs`,
-  `expressions_auto_convert.rs`).
+- The test calls Rust APIs directly (`threading.rs` low-level `run_parallel_int`/`run_parallel_raw`
+  tests, `data_structures.rs`, `log_config.rs`, `expressions_auto_convert.rs`).
 - The test exercises compiler internals that only surface via the Rust test framework
   (`slot_assign.rs`).
-- The test is a minimal reproducer for a tracked issue (`issues.rs`), where the tightest
-  possible reproduction matters more than script-style readability.
+
+**Prefer `tests/scripts/` over `code!()` in `.rs` files.**  If a test can be written as
+plain loft code with `assert()`, put it in the appropriate script file — do not wrap it in
+`code!(r#"..."#)` inside a `.rs` file.  The `code!()` macro exists for cases that need Rust
+assertions on compiler output, not as a convenience wrapper for loft code.  Script tests are
+also validated by the native test runner (`cargo test --test native`), giving automatic
+dual-mode coverage.
 
 **When a `.rs` test and a script test cover the same behaviour**, the `.rs` test should be removed
-— the script is the authoritative version. Both the round-1 and round-2 deduplication passes in
-March 2026 removed `.rs` tests on this basis; further passes are welcome whenever a script gains
-new coverage that duplicates an existing `.rs` test.
+— the script is the authoritative version.
 
 In `cargo test` mode, `run_test` writes a bytecode dump to `tests/dumps/` in debug builds.
 No generated Rust code is produced.
 
 ```
 tests/scripts/
-  01-integers.loft    arithmetic, bitwise, null, type conversions
-  02-floats.loft      float/single arithmetic, math functions, null (NaN)
-  03-text.loft        concatenation, len, indexing, slicing, UTF-8 iteration, search, join
-  04-booleans.loft    logical ops, short-circuit, null truthiness
-  05-control-flow.loft  if/else, for loops, ranges, break, named break, loop metadata
-  06-functions.loft   default args, reference params, early return, recursion
-  07-structs.loft     constructors, methods, virtual fields, JSON/format, vectors of structs
-  08-enums.loft       plain enums, struct-enum variants, polymorphic dispatch
-  09-vectors.loft     literals, append, slice, iteration, removal, #index/#first/#count
-  10-collections.loft sorted, index, hash — lookup, ordered iteration, range queries
-  11-files.loft       text file I/O: lines(), move/delete, path safety, file().files() listing
-                      Note: lines() test placed last to avoid Issue 29 slot overlap
-  12-binary.loft      binary file I/O: typed reads/writes (u8/u16/i32/long/single/float/text/integer-vector), endianness, mixed
-  13-binary-ops.loft  binary file operations: seek+overwrite, set_size (truncate/extend), incomplete read, size field
-  14-formatting.loft  format specifiers: integers, floats, booleans, text, long, single, vectors
-  15-threading.loft   parallel_for, fn references, worker functions
-  16-stress.loft      build-and-free cycles for all 4 collection types; reads wordlist.txt
-  17-map-filter-reduce.loft  map, filter, reduce higher-order functions
-  18-random.loft      rand, rand_seed, rand_indices — range, reproducibility, permutation
-  19-min-max-clamp.loft  min, max, clamp for integer, long, single, float; null propagation
-  20-math-functions.loft  exp, ln, log2, log10 for single and float; null propagation
-  wordlist.txt        edge-case string keys: fruits, short strings, alphabet, digits, spaces, duplicates
+  01-integers.loft         arithmetic, bitwise, null, type conversions
+  02-floats.loft           float/single arithmetic, math functions, null (NaN)
+  03-text.loft             concatenation, len, indexing, slicing, UTF-8, search, join
+  04-booleans.loft         logical ops, short-circuit, null truthiness
+  05-enums.loft            plain enums, struct-enum variants, polymorphic dispatch
+  06-structs.loft          constructors, methods, virtual fields, JSON/format
+  07-control-flow.loft     if/else, for loops, ranges, break, named break, loop metadata
+  08-functions.loft        default args, reference params, early return, recursion
+  09-lambdas.loft          lambda syntax, short |x| form, fn(x:T) form, type hints
+  10-match.loft            match expressions, pattern binding
+  11-vectors.loft          literals, append, slice, iteration, removal, #index/#first/#count
+  12-collections.loft      sorted, index, hash — lookup, ordered iteration, range queries
+  13-map-filter-reduce.loft  map, filter, reduce higher-order functions
+  14-formatting.loft       format specifiers: integers, floats, booleans, text, long, single
+  15-random.loft           rand, rand_seed, rand_indices — range, reproducibility
+  16-time.loft             time-related operations
+  17-min-max-clamp.loft    min, max, clamp for integer, long, single, float; null
+  18-math-functions.loft   exp, ln, log2, log10 for single and float; null
+  19-files.loft            text file I/O: lines(), move/delete, path safety
+  20-binary.loft           binary file I/O: typed reads/writes, endianness
+  21-binary-ops.loft       binary operations: seek, set_size, incomplete read
+  22-threading.loft        parallel_for: all return types, context args, methods, text
+  23-sizeof.loft           sizeof expressions and struct layout
+  24-immutability.loft     immutability constraints
+  25-null-coalescing.loft  null coalescing operator
+  26-dead-assignment.loft  dead assignment detection
+  27-format-specifiers.loft  extended format specifiers
+  28-references.loft       reference parameter semantics
+  29-strings.loft          complex string operations
+  30-expressions.loft      expression edge cases
+  31-vectors.loft          vector regressions and advanced cases
+  32-collections-regressions.loft  collection regression tests
+  33-lambdas-fn-refs.loft  bare function references, fn-ref dispatch
+  34-slot-assign.loft      slot assignment correctness
+  35-format-errors.loft    format string error handling
+  36-parse-errors.loft     parse error recovery
+  37-stress.loft           build-and-free cycles; reads wordlist.txt
+  38-parse-warnings.loft   parse warning validation
+  39-diagnostics-passing.loft  diagnostic edge cases that should pass
+  wordlist.txt             edge-case string keys for stress tests
 ```
 
 Run with:

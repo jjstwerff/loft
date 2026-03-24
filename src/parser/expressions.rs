@@ -312,8 +312,7 @@ use a separate collection or add after the loop"
     /// Apply the operator `op` to an already-parsed LHS and parse the RHS,
     /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_lines)] // +5 lines from dead-assignment check (T1-9)
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,
@@ -335,15 +334,7 @@ use a separate collection or add after the loop"
         if op == "=" && var_nr != u16::MAX && !self.first_pass && self.vars.exists(var_nr) {
             self.vars.track_write(var_nr, &mut self.lexer);
         }
-        // An untyped null literal (`null` keyword) produces Type::Null with Value::Null.
-        // For scalar field assignments (e.g. `self.cur_def = null`), convert it to the
-        // appropriate typed null constant (OpConvIntFromNull, OpConvLongFromNull, etc.)
-        // so that the stack argument is actually pushed before the set-operator executes.
-        // Without this, `generate(Value::Null)` emits nothing, leaving the stack short by
-        // one argument and causing the operator to read garbage bytes as the value.
-        //
-        // Do NOT convert for reference/collection types: `collection[key] = null` must
-        // reach towards_set_hash_remove with Value::Null intact so it can emit OpHashRemove.
+        // Convert untyped null to typed null for scalar assignments (not collections).
         if s_type == Type::Null
             && op == "="
             && !matches!(
@@ -362,69 +353,12 @@ use a separate collection or add after the loop"
             self.validate_write(to, &parent_tp);
         }
         // A9: materialise an iterator (e.g. v[a..b] slice) into a vector variable.
-        // Promotes the LHS variable to Vector<elm_tp> and builds a loop that appends
-        // each element in-place; without this Value::Iter reaches codegen and panics.
         if matches!(&s_type, Type::Iterator(_, _))
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
             && matches!(op, "=" | "+=")
         {
-            let Type::Iterator(elm_tp, _) = s_type.clone() else {
-                unreachable!()
-            };
-            let elm_tp = *elm_tp;
-            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
-            self.change_var(to, &vec_tp);
-            if !self.first_pass
-                && let Value::Iter(_, init, next, _) = code.clone()
-                && matches!(*next, Value::Block(_))
-            {
-                let ed_nr = self.data.type_def_nr(&elm_tp);
-                let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
-                    0
-                } else {
-                    self.database.vector(self.data.def(ed_nr).known_type)
-                };
-                let known = Value::Int(i32::from(known_db));
-                let fld = Value::Int(i32::from(u16::MAX));
-                // elm_var holds the DbRef returned by OpNewRecord; must be Reference-typed.
-                let elm_var = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
-                let for_var = self.create_unique("slice_elm", &elm_tp);
-                let comp_var = self.create_unique("comp", &elm_tp);
-                let for_next = v_set(for_var, *next);
-                let mut lp = vec![for_next];
-                lp.push(v_set(comp_var, Value::Var(for_var)));
-                lp.push(v_set(
-                    elm_var,
-                    self.cl(
-                        "OpNewRecord",
-                        &[Value::Var(var_nr), known.clone(), fld.clone()],
-                    ),
-                ));
-                lp.push(self.set_field(
-                    ed_nr,
-                    usize::MAX,
-                    0,
-                    Value::Var(elm_var),
-                    Value::Var(comp_var),
-                ));
-                lp.push(self.cl(
-                    "OpFinishRecord",
-                    &[Value::Var(var_nr), Value::Var(elm_var), known, fld],
-                ));
-                let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
-                let mut stmts = Vec::new();
-                if op == "=" && !needs_db {
-                    stmts.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
-                }
-                stmts.push(*init);
-                stmts.push(v_loop(lp, "Slice materialise"));
-                if needs_db {
-                    let db = self.insert_new(var_nr, elm_var, &elm_tp, &mut stmts);
-                    self.vars.depend(var_nr, db);
-                }
-                *code = Value::Insert(stmts);
-            }
+            self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
         self.change_var(to, &s_type);
@@ -506,6 +440,47 @@ use a separate collection or add after the loop"
         }
         if !matches!(code, Value::Insert(_)) {
             *code = self.towards_set(to, code, f_type, &op[0..1]);
+        }
+        // L6.2: emit field constraint check after assignment to a constrained field.
+        if !self.first_pass
+            && let Type::Reference(struct_dnr, _) = &parent_tp
+            && let Value::Call(_, to_args) = to
+            && to_args.len() >= 2
+            && let Value::Int(field_offset) = &to_args[1]
+        {
+            let sd = *struct_dnr;
+            let off = *field_offset;
+            // Find the field by matching its database offset.
+            for a_nr in 0..self.data.def(sd).attributes.len() {
+                let nm = self.data.attr_name(sd, a_nr);
+                let fpos = self.database.position(self.data.def(sd).known_type, &nm);
+                if i32::from(fpos) == off && self.data.def(sd).attributes[a_nr].check != Value::Null
+                {
+                    let check = self.data.def(sd).attributes[a_nr].check.clone();
+                    let ref_val = to_args[0].clone();
+                    let bound = Self::replace_record_ref(check, &ref_val);
+                    let msg = match &self.data.def(sd).attributes[a_nr].check_message {
+                        Value::Text(s) => Value::Text(s.clone()),
+                        _ => Value::Text(format!(
+                            "field constraint failed on {}.{nm}",
+                            self.data.def(sd).name
+                        )),
+                    };
+                    let assert_dnr = self.data.def_nr("n_assert");
+                    let pos = self.lexer.pos();
+                    let assert_call = Value::Call(
+                        assert_dnr,
+                        vec![
+                            bound,
+                            msg,
+                            Value::Text(pos.file.clone()),
+                            Value::Int(pos.line as i32),
+                        ],
+                    );
+                    *code = Value::Insert(vec![code.clone(), assert_call]);
+                    break;
+                }
+            }
         }
         Type::Void
     }
@@ -717,6 +692,75 @@ use a separate collection or add after the loop"
         }
     }
 
+    /// Materialise an iterator (e.g. `v[a..b]` slice) into a vector variable.
+    /// Promotes the LHS variable to `Vector<elm_tp>` and builds a loop that appends
+    /// each element in-place.
+    fn materialize_iterator(
+        &mut self,
+        code: &mut Value,
+        s_type: &Type,
+        to: &Value,
+        lhs_parent_tp: &Type,
+        var_nr: u16,
+        op: &str,
+    ) {
+        let Type::Iterator(elm_tp, _) = s_type.clone() else {
+            unreachable!()
+        };
+        let elm_tp = *elm_tp;
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+        self.change_var(to, &vec_tp);
+        if !self.first_pass
+            && let Value::Iter(_, init, next, _) = code.clone()
+            && matches!(*next, Value::Block(_))
+        {
+            let ed_nr = self.data.type_def_nr(&elm_tp);
+            let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
+                0
+            } else {
+                self.database.vector(self.data.def(ed_nr).known_type)
+            };
+            let known = Value::Int(i32::from(known_db));
+            let fld = Value::Int(i32::from(u16::MAX));
+            let elm_var = self.unique_elm_var(lhs_parent_tp, &elm_tp, var_nr);
+            let for_var = self.create_unique("slice_elm", &elm_tp);
+            let comp_var = self.create_unique("comp", &elm_tp);
+            let for_next = v_set(for_var, *next);
+            let mut lp = vec![for_next];
+            lp.push(v_set(comp_var, Value::Var(for_var)));
+            lp.push(v_set(
+                elm_var,
+                self.cl(
+                    "OpNewRecord",
+                    &[Value::Var(var_nr), known.clone(), fld.clone()],
+                ),
+            ));
+            lp.push(self.set_field(
+                ed_nr,
+                usize::MAX,
+                0,
+                Value::Var(elm_var),
+                Value::Var(comp_var),
+            ));
+            lp.push(self.cl(
+                "OpFinishRecord",
+                &[Value::Var(var_nr), Value::Var(elm_var), known, fld],
+            ));
+            let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
+            let mut stmts = Vec::new();
+            if op == "=" && !needs_db {
+                stmts.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+            }
+            stmts.push(*init);
+            stmts.push(v_loop(lp, "Slice materialise"));
+            if needs_db {
+                let db = self.insert_new(var_nr, elm_var, &elm_tp, &mut stmts);
+                self.vars.depend(var_nr, db);
+            }
+            *code = Value::Insert(stmts);
+        }
+    }
+
     pub(crate) fn assign_text(
         &mut self,
         code: &mut Value,
@@ -925,6 +969,20 @@ use a separate collection or add after the loop"
             if operator.is_empty() {
                 if !ls.is_empty() {
                     if matches!(current_type, Type::Text(_) | Type::Character) {
+                        if current_type == Type::Character {
+                            // S9: a Character variable cannot serve as an OpAppendText
+                            // destination.  Prepend it to the parts list and use an empty
+                            // text literal as the first operand so parse_append_text
+                            // creates a fresh work text.
+                            ls.insert(0, (code.clone(), Type::Character));
+                            *code = Value::Text(String::new());
+                            return self.parse_append_text(
+                                code,
+                                &Type::Text(Vec::new()),
+                                &ls,
+                                u16::MAX,
+                            );
+                        }
                         return self.parse_append_text(code, &current_type, &ls, orig_var);
                     } else if matches!(current_type, Type::Vector(_, _)) {
                         return self.parse_append_vector(code, &current_type, &ls, orig_var);
@@ -1266,7 +1324,9 @@ use a separate collection or add after the loop"
             }
         }
         let tp = Type::Text(vec![var_nr]);
-        if orig_var == u16::MAX {
+        if orig_var == u16::MAX || var_nr != orig_var {
+            // A new work text was created (either no orig_var, or orig_var was a
+            // Character variable) — wrap in a Block so the work text appears on the stack.
             ls.push(Value::Var(var_nr));
             *code = v_block(ls, tp.clone(), "Add text");
             return tp;
@@ -1351,6 +1411,12 @@ use a separate collection or add after the loop"
             if self.lexer.peek_token("(") {
                 self.parse_lambda(val)
             } else {
+                // S11: function references use the bare name, not 'fn name'.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Use the function name directly, without 'fn' prefix"
+                );
                 self.parse_fn_ref(val)
             }
         } else if self.lexer.has_token("||") {
@@ -1556,13 +1622,18 @@ use a separate collection or add after the loop"
                 };
                 let idx = param_names.len();
                 let tp = if self.lexer.has_token(":") {
-                    // Explicit annotation — parse type in the outer context.
-                    if let Some(type_name) = self.lexer.has_identifier() {
-                        self.parse_type(self.context, &type_name, false)
-                            .unwrap_or(Type::Unknown(0))
-                    } else {
-                        Type::Unknown(0)
-                    }
+                    // S10: type annotations are not allowed in |x| short-form lambdas.
+                    // Use the long form fn(x: type) -> ret { body } instead.
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Type annotations are not allowed in |x| lambdas — \
+                         use fn({pname}: <type>) -> <ret> {{ ... }} instead"
+                    );
+                    // Consume the type token so parsing can continue.
+                    let _ = self.lexer.has_identifier();
+                    // Infer from hint to keep parsing viable.
+                    hint_params.get(idx).cloned().unwrap_or(Type::Unknown(0))
                 } else {
                     // Infer from hint.
                     hint_params.get(idx).cloned().unwrap_or(Type::Unknown(0))
@@ -1595,7 +1666,7 @@ use a separate collection or add after the loop"
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Cannot infer type for lambda parameter '{}'; add an explicit ': type' annotation or pass the lambda where the expected type is known",
+                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) -> <ret> {{{{ ... }}}}",
                         a.name
                     );
                 }
@@ -1623,9 +1694,15 @@ use a separate collection or add after the loop"
         }
         let d_nr = self.context;
 
-        // Parse optional return-type annotation.
+        // S10: return-type annotations are not allowed in |x| short-form lambdas.
         let has_arrow = self.lexer.has_token("->");
         let result = if has_arrow {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Return-type annotations are not allowed in |x| lambdas — \
+                 use fn(…) -> <ret> {{ ... }} instead"
+            );
             if let Some(type_name) = self.lexer.has_identifier() {
                 self.parse_type(d_nr, &type_name, true)
                     .unwrap_or(Type::Void)
@@ -2414,7 +2491,6 @@ use a separate collection or add after the loop"
     }
 
     // <children> ::=
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
             diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
@@ -2471,25 +2547,7 @@ use a separate collection or add after the loop"
                     && matches!(field.as_str(), "map" | "filter" | "reduce")
                     && self.lexer.has_token("(")
                 {
-                    let vec_val = code.clone();
-                    let mut list = vec![vec_val];
-                    let mut types = vec![t.clone()];
-                    loop {
-                        let mut p = Value::Null;
-                        let pt = self.expression(&mut p);
-                        list.push(p);
-                        types.push(pt);
-                        if !self.lexer.has_token(",") {
-                            break;
-                        }
-                    }
-                    self.lexer.token(")");
-                    return match field.as_str() {
-                        "map" => self.parse_map(code, &list, &types),
-                        "filter" => self.parse_filter(code, &list, &types),
-                        "reduce" => self.parse_reduce(code, &list, &types),
-                        _ => unreachable!(),
-                    };
+                    return self.parse_vector_method(code, &t, &field);
                 }
                 diagnostic!(
                     self.lexer,
@@ -2517,11 +2575,8 @@ use a separate collection or add after the loop"
                 );
             }
         } else if self.data.def(dnr).attributes[fnr].constant {
-            let mut new = self.data.attr_value(dnr, fnr);
-            if let Value::Call(_, args) = &mut new {
-                args[0] = code.clone();
-            }
-            *code = new;
+            let expr = self.data.attr_value(dnr, fnr);
+            *code = Self::replace_record_ref(expr, &code.clone());
             let dep = t.depend();
             t = self.data.attr_type(dnr, fnr);
             for on in dep {
@@ -2543,6 +2598,46 @@ use a separate collection or add after the loop"
     }
 
     /// Consume remaining function call arguments after `(` has already been consumed.
+    /// Handle `v.map(fn)` / `v.filter(fn)` / `v.reduce(fn)` method syntax.
+    fn parse_vector_method(&mut self, code: &mut Value, t: &Type, method: &str) -> Type {
+        let mut list = vec![code.clone()];
+        let mut types = vec![t.clone()];
+        let mut m_arg_idx = 1usize;
+        loop {
+            if let Type::Vector(elm, _) = t {
+                let elem = *elm.clone();
+                let hint = match (method, m_arg_idx) {
+                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem))),
+                    ("filter", 1) => Some(Type::Function(vec![elem], Box::new(Type::Boolean))),
+                    ("reduce", 1) => Some(Type::Function(
+                        vec![elem.clone(), elem.clone()],
+                        Box::new(elem),
+                    )),
+                    _ => None,
+                };
+                if let Some(h) = hint {
+                    self.lambda_hint = h;
+                }
+            }
+            let mut p = Value::Null;
+            let pt = self.expression(&mut p);
+            self.lambda_hint = Type::Unknown(0);
+            list.push(p);
+            types.push(pt);
+            m_arg_idx += 1;
+            if !self.lexer.has_token(",") {
+                break;
+            }
+        }
+        self.lexer.token(")");
+        match method {
+            "map" => self.parse_map(code, &list, &types),
+            "filter" => self.parse_filter(code, &list, &types),
+            "reduce" => self.parse_reduce(code, &list, &types),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn skip_remaining_args(&mut self) {
         loop {
             if self.lexer.peek_token(")") {
@@ -2899,6 +2994,7 @@ pair the hash with a vector to iterate in insertion order"
     }
 
     // <var> ::= <object> | [ <call> | <var> | <enum> ] <children> }
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_var(&mut self, code: &mut Value, name: &str, parent_tp: &mut Type) -> Type {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
@@ -2917,6 +3013,35 @@ pair the hash with a vector to iterate in insertion order"
         } else {
             name.to_string()
         };
+        // vector<T>.parse(text) — parse a JSON array into a vector of T.
+        if nm == "vector" && self.lexer.has_token("<") {
+            if let Some(elem_name) = self.lexer.has_identifier() {
+                let elem_d_nr = self.data.def_nr(&elem_name);
+                self.lexer.token(">");
+                if self.lexer.has_token(".") && self.lexer.has_keyword("parse") {
+                    if elem_d_nr != u32::MAX {
+                        return self.parse_vector_parse(elem_d_nr, code);
+                    }
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown type '{elem_name}' in vector<{elem_name}>.parse()"
+                        );
+                    }
+                    return Type::Unknown(0);
+                }
+            }
+            // Not a vector<T>.parse() — cannot recover tokens, report error.
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expected '.parse(' after vector<T>"
+                );
+            }
+            return Type::Unknown(0);
+        }
         let mut t = self.parse_constant_value(code, source, &nm);
         if t != Type::Null {
             return t;
@@ -2940,6 +3065,15 @@ pair the hash with a vector to iterate in insertion order"
             let index_var = self.vars.var(name);
             if self.lexer.has_token("#") {
                 self.var_usages(index_var, true);
+                if self.lexer.has_keyword("errors") {
+                    // s#errors — return the parse errors from the last Type.parse() call.
+                    let fn_nr = self.data.def_nr("i_parse_errors");
+                    if fn_nr != u32::MAX {
+                        *code = Value::Call(fn_nr, vec![]);
+                        t = Type::Text(Vec::new());
+                    }
+                    return t;
+                }
                 self.iter_op(code, name, &mut t, index_var);
             } else if let Value::Var(into) = code {
                 let v_nr = self.vars.var(name);
@@ -2990,12 +3124,43 @@ pair the hash with a vector to iterate in insertion order"
         {
             *code = self.data.attr_value(*enr, *a_nr);
             t = parent_tp.clone();
-        } else if !self.first_pass {
-            diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
-            t = Type::Unknown(0);
         } else {
-            *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-            t = Type::Unknown(0);
+            // S11: try resolving as a bare function reference.
+            // On the first pass, only do this when the identifier is NOT followed
+            // by '=' (assignment position), so that `double = 5` still creates a
+            // local variable that shadows the function name.
+            let fn_d_nr = {
+                let prefixed = format!("n_{nm}");
+                let nr = self.data.def_nr(&prefixed);
+                if nr == u32::MAX {
+                    self.data.def_nr(&nm)
+                } else {
+                    nr
+                }
+            };
+            if fn_d_nr != u32::MAX && matches!(self.data.def_type(fn_d_nr), DefType::Function) {
+                if self.lexer.peek_token("=") && !self.lexer.peek_token("==") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot redefine function '{nm}' as a variable"
+                    );
+                }
+                *code = Value::Int(fn_d_nr as i32);
+                self.data.def_used(fn_d_nr);
+                let n_args = self.data.attributes(fn_d_nr);
+                let arg_types: Vec<Type> = (0..n_args)
+                    .map(|a| self.data.attr_type(fn_d_nr, a))
+                    .collect();
+                let ret_type = self.data.def(fn_d_nr).returned.clone();
+                t = Type::Function(arg_types, Box::new(ret_type));
+            } else if !self.first_pass {
+                diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                t = Type::Unknown(0);
+            } else {
+                *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
+                t = Type::Unknown(0);
+            }
         }
         t
     }
@@ -3192,11 +3357,21 @@ pair the hash with a vector to iterate in insertion order"
                 self.data.def_type(d_nr),
                 DefType::Struct | DefType::EnumValue
             ) && !matches!(self.data.def(d_nr).returned, Type::Enum(_, false, _))
-                && self.lexer.peek_token("{")
             {
-                let tp = self.parse_object(d_nr, code);
-                if tp != Type::Unknown(0) {
-                    return tp;
+                if self.lexer.peek_token("{") {
+                    let tp = self.parse_object(d_nr, code);
+                    if tp != Type::Unknown(0) {
+                        return tp;
+                    }
+                } else if self.lexer.peek_token(".") {
+                    // Check for Type.parse(text) without consuming the dot
+                    // unless we confirm it's ".parse(".
+                    // Consume "." — if parse follows, continue; otherwise this
+                    // will fall through to normal parsing which handles Struct.field.
+                    self.lexer.cont();
+                    if self.lexer.has_keyword("parse") {
+                        return self.parse_type_parse(d_nr, code);
+                    }
                 }
             } else if self.data.def_type(d_nr) == DefType::Constant {
                 *code = self.data.def(d_nr).code.clone();
@@ -3231,6 +3406,61 @@ pair the hash with a vector to iterate in insertion order"
                 );
             }
         }
+    }
+
+    /// `Type.parse(text_expr)` — parse text into a struct record.
+    /// Compiles to the same `OpCastVectorFromText` as the `as Type` cast.
+    fn parse_type_parse(&mut self, d_nr: u32, code: &mut Value) -> Type {
+        self.lexer.token("(");
+        let mut text_expr = Value::Null;
+        let tp = self.expression(&mut text_expr);
+        self.lexer.token(")");
+        if !self.first_pass {
+            if !matches!(tp, Type::Text(_)) {
+                self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
+            }
+            let known_tp = self.data.def(d_nr).known_type;
+            *code = self.cl(
+                "OpCastVectorFromText",
+                &[text_expr, Value::Int(i32::from(known_tp))],
+            );
+        }
+        Type::Reference(d_nr, Vec::new())
+    }
+
+    /// Parse `vector<T>.parse(text)` — parse a JSON array into a vector of T.
+    /// Returns `Type::Vector(T)` so the result is directly iterable.
+    fn parse_vector_parse(&mut self, elem_d_nr: u32, code: &mut Value) -> Type {
+        self.lexer.token("(");
+        let mut text_expr = Value::Null;
+        let tp = self.expression(&mut text_expr);
+        self.lexer.token(")");
+        let elem_tp = Type::Reference(elem_d_nr, Vec::new());
+        let vec_type = Type::Vector(Box::new(elem_tp.clone()), Vec::new());
+        if !self.first_pass {
+            if !matches!(tp, Type::Text(_)) {
+                self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
+            }
+            // Get the database vector type for vector<elem>.
+            let elem_kt = self.data.def(elem_d_nr).known_type;
+            let vec_kt = self.database.vector(elem_kt);
+            let parse_call = self.cl(
+                "OpCastVectorFromText",
+                &[text_expr, Value::Int(i32::from(vec_kt))],
+            );
+            // The parse returns a DbRef to the wrapper struct main_vector<T>.
+            // Extract the vector field (at position 0) so the result is directly iterable.
+            let wrapper_name = format!("main_vector<{}>", self.data.def(elem_d_nr).name);
+            let wrapper_d_nr = self.data.def_nr(&wrapper_name);
+            if wrapper_d_nr == u32::MAX {
+                *code = parse_call;
+            } else {
+                *code = self.get_field(wrapper_d_nr, 0, parse_call);
+            }
+        }
+        // Ensure the vector def exists for type resolution.
+        self.data.vector_def(&mut self.lexer, &elem_tp);
+        vec_type
     }
 
     pub(crate) fn parse_string(&mut self, code: &mut Value, string: &str) -> Type {
@@ -3608,7 +3838,12 @@ pair the hash with a vector to iterate in insertion order"
         list: &mut Vec<Value>,
         found_fields: &mut HashSet<String>,
     ) -> bool {
-        let Some(field) = self.lexer.has_identifier() else {
+        // Accept both bare identifiers and JSON-style quoted strings as field names.
+        let field = if let Some(id) = self.lexer.has_identifier() {
+            id
+        } else if let Some(s) = self.lexer.has_cstring() {
+            s
+        } else {
             return false;
         };
         if !self.lexer.has_token(":") {
@@ -3721,6 +3956,32 @@ pair the hash with a vector to iterate in insertion order"
         self.lexer.token("}");
         if !self.first_pass {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
+            // L6.2: emit all field constraint checks after construction completes.
+            let assert_dnr = self.data.def_nr("n_assert");
+            for a_nr in 0..self.data.def(td_nr).attributes.len() {
+                let check = self.data.def(td_nr).attributes[a_nr].check.clone();
+                if check != Value::Null {
+                    let bound = Self::replace_record_ref(check, code);
+                    let nm = self.data.attr_name(td_nr, a_nr);
+                    let msg = match &self.data.def(td_nr).attributes[a_nr].check_message {
+                        Value::Text(s) => Value::Text(s.clone()),
+                        _ => Value::Text(format!(
+                            "field constraint failed on {}.{nm}",
+                            self.data.def(td_nr).name
+                        )),
+                    };
+                    let pos = self.lexer.pos();
+                    list.push(Value::Call(
+                        assert_dnr,
+                        vec![
+                            bound,
+                            msg,
+                            Value::Text(pos.file.clone()),
+                            Value::Int(pos.line as i32),
+                        ],
+                    ));
+                }
+            }
         }
         if new_object && let Value::Var(v) = code {
             list.push(Value::Var(*v));
@@ -3759,6 +4020,18 @@ pair the hash with a vector to iterate in insertion order"
                 scope: bl.scope,
                 var_size: 0,
             })),
+            Value::Set(v, inner) => {
+                Value::Set(v, Box::new(Self::replace_record_ref(*inner, record)))
+            }
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|v| Self::replace_record_ref(v, record))
+                    .collect(),
+            ),
+            Value::Return(inner) => {
+                Value::Return(Box::new(Self::replace_record_ref(*inner, record)))
+            }
+            Value::Drop(inner) => Value::Drop(Box::new(Self::replace_record_ref(*inner, record))),
             other => other,
         }
     }
@@ -3776,7 +4049,11 @@ pair the hash with a vector to iterate in insertion order"
             let tp = self.data.attr_type(td_nr, aid);
             let nm = self.data.attr_name(td_nr, aid);
             let fld = self.database.position(self.data.def(td_nr).known_type, &nm);
-            if found_fields.contains(&nm) || matches!(tp, Type::Routine(_)) {
+            // Skip computed fields (not stored) and already-provided fields.
+            if found_fields.contains(&nm)
+                || matches!(tp, Type::Routine(_))
+                || self.data.def(td_nr).attributes[aid].constant
+            {
                 continue;
             }
             let mut default = self.data.attr_value(td_nr, aid);
@@ -3790,7 +4067,7 @@ pair the hash with a vector to iterate in insertion order"
             } else {
                 default = Self::replace_record_ref(default, code);
             }
-            list.push(self.set_field(td_nr, aid, pos, code.clone(), default));
+            list.push(self.set_field_no_check(td_nr, aid, pos, code.clone(), default));
         }
     }
 
@@ -3829,7 +4106,7 @@ pair the hash with a vector to iterate in insertion order"
                     exp_tp.show(&self.data, &self.vars)
                 );
             }
-            list.push(self.set_field(td_nr, nr, 0, code.clone(), value.clone()));
+            list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));
         }
     }
 

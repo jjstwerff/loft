@@ -22,7 +22,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
-| 90 | `character + character` codegen panic — stack size mismatch | Medium | Assign to text first: `r = "" + c + d` |
+| 90 | ~~`character + character` codegen panic~~ | ~~Fixed~~ | Fixed: parser converts char+char to `"" + c + d` internally |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
@@ -40,7 +40,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 86 | `f#read(n) as vector<T>` silently returned an empty vector | Medium | **Fixed** — interpreter and native both fixed in 0.8.2 |
 | 87 | Native codegen: text method call in format interpolation emits `String` not `&str` | Medium | **Fixed** — native codegen fixed in 0.8.2 (03-text.loft passes) |
 | 88 | Native codegen: `directory()` / `user_directory()` / `program_directory()` generate wrong argument | Medium | **Fixed** — native codegen fixed in 0.8.2 (11-files.loft passes) |
-| 89 | Optional `& text` parameter causes subtract-with-overflow panic at call site | High | Call without the optional argument |
+| 89 | ~~Optional `& text` parameter subtract-with-overflow panic~~ | ~~Fixed~~ | Fixed in 0.8.2 |
 
 ---
 

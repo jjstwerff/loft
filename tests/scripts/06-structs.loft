@@ -38,6 +38,12 @@ struct Object {
   name: text
 }
 
+struct Circle {
+  radius: float,
+  area: float
+    computed(3.14159265 * $.radius * $.radius)
+}
+
 struct Counter {
   count: integer not null
 }
@@ -59,11 +65,18 @@ fn main() {
   assert(dark.r == 64, "dimmed r: {dark.r}");
   assert(dark.g == 0, "dimmed g: {dark.g}");
   assert(dark.b == 32, "dimmed b: {dark.b}");
-  // --- Virtual / computed field ---
+  // --- Stored default field (= expr, computed at construction) ---
   o = Object {name: "hello" };
-  assert(o.name_length == 5, "virtual field name_length");
+  assert(o.name_length == 5, "stored default name_length");
   o2 = Object {name: "hi" };
-  assert(o2.name_length == 2, "virtual field shorter name");
+  assert(o2.name_length == 2, "stored default shorter name");
+  // --- Computed field (not stored, recomputed on access) ---
+  ci = Circle { radius: 5.0 };
+  assert(ci.area > 78.0, "computed area: {ci.area}");
+  assert(ci.area < 79.0, "computed area upper: {ci.area}");
+  ci.radius = 10.0;
+  assert(ci.area > 314.0, "recomputed area: {ci.area}");
+  assert(ci.area < 315.0, "recomputed area upper: {ci.area}");
   // --- not null field with zero ---
   c = Counter { };
   assert(c.count == 0, "not null int defaults to 0");

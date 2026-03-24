@@ -132,7 +132,13 @@ impl Parser {
     }
 
     /// Parallel Form 1: `func(a)` — global/user function call.
-    pub(crate) fn parse_parallel_worker_fn(&mut self, first_id: &str) -> (u32, Type) {
+    /// Parse `worker(a, extra1, extra2)` in a parallel clause.
+    /// Returns `(fn_d_nr, return_type, extra_arg_values, extra_arg_types)`.
+    /// The first argument (the element variable) is skipped; extra args are returned.
+    pub(crate) fn parse_parallel_worker_fn(
+        &mut self,
+        first_id: &str,
+    ) -> (u32, Type, Vec<Value>, Vec<Type>) {
         // Resolve function name: try n_<name> first (user function convention).
         let d_nr = {
             let prefixed = format!("n_{first_id}");
@@ -143,9 +149,24 @@ impl Parser {
                 nr
             }
         };
-        // Consume the argument list.
+        // Parse the argument list — skip first arg (element), collect extras.
+        let mut extra_vals = Vec::new();
+        let mut extra_types = Vec::new();
         if self.lexer.has_token("(") {
-            self.consume_call_args();
+            // Skip the first argument (element variable reference).
+            let mut dummy = Value::Null;
+            self.expression(&mut dummy);
+            // Collect remaining arguments as extra context args.
+            while self.lexer.has_token(",") {
+                if self.lexer.peek_token(")") {
+                    break;
+                }
+                let mut val = Value::Null;
+                let tp = self.expression(&mut val);
+                extra_vals.push(val);
+                extra_types.push(tp);
+            }
+            self.lexer.token(")");
         } else if !self.first_pass {
             diagnostic!(
                 self.lexer,
@@ -157,18 +178,39 @@ impl Parser {
             if !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Unknown function '{first_id}'");
             }
-            return (u32::MAX, Type::Unknown(0));
+            return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
         }
         if !self.first_pass && !matches!(self.data.def_type(d_nr), DefType::Function) {
             diagnostic!(self.lexer, Level::Error, "'{first_id}' is not a function");
-            return (u32::MAX, Type::Unknown(0));
+            return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
+        }
+        // Validate extra arg count against function signature.
+        // Skip hidden __ref_* / __rref_* / __work_* parameters (work-refs for text/vector returns).
+        if !self.first_pass {
+            let n_params = (0..self.data.attributes(d_nr))
+                .filter(|&a| !self.data.attr_name(d_nr, a).starts_with("__"))
+                .count();
+            let n_extra = extra_vals.len();
+            let expected_extra = if n_params > 0 { n_params - 1 } else { 0 };
+            if n_extra != expected_extra {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "parallel_for: wrong number of extra arguments: \
+                     worker expects {expected_extra}, got {n_extra}"
+                );
+            }
         }
         self.data.def_used(d_nr);
         let ret_type = self.data.def(d_nr).returned.clone();
-        (d_nr, ret_type)
+        (d_nr, ret_type, extra_vals, extra_types)
     }
 
-    pub(crate) fn parse_parallel_worker(&mut self, elem_var: &str, elem_tp: &Type) -> (u32, Type) {
+    pub(crate) fn parse_parallel_worker(
+        &mut self,
+        elem_var: &str,
+        elem_tp: &Type,
+    ) -> (u32, Type, Vec<Value>, Vec<Type>) {
         let Some(first_id) = self.lexer.has_identifier() else {
             if !self.first_pass {
                 diagnostic!(
@@ -177,12 +219,13 @@ impl Parser {
                     "Expect function name or '{elem_var}.method' inside |..|"
                 );
             }
-            return (u32::MAX, Type::Unknown(0));
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
         };
 
         if first_id == elem_var {
             // ── Form 2: a.method() ────────────────────────────────────────────
-            self.parse_parallel_worker_method(elem_var, elem_tp)
+            let (d, t) = self.parse_parallel_worker_method(elem_var, elem_tp);
+            (d, t, Vec::new(), Vec::new())
         } else if self.lexer.peek_token(".") {
             // ── Form 3: c.method(a) — deferred ───────────────────────────────
             // Consume the rest of the call so parsing can continue.
@@ -198,9 +241,9 @@ impl Parser {
                      is not yet supported; define a wrapper function and use func({elem_var}) instead"
                 );
             }
-            (u32::MAX, Type::Unknown(0))
+            (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new())
         } else {
-            // ── Form 1: func(a) ───────────────────────────────────────────────
+            // ── Form 1: func(a, extra...) ─────────────────────────────────────
             self.parse_parallel_worker_fn(&first_id)
         }
     }
@@ -244,20 +287,22 @@ impl Parser {
             );
             return Type::Unknown(0);
         };
-        // Validate return type is a supported primitive.
-        let return_size: u32 = match &worker_ret_type {
-            Type::Integer(_, _) | Type::Character => 4,
-            Type::Boolean => 1,
-            Type::Long | Type::Float => 8,
-            _ => {
+        // Compute element size from the return type.
+        // return_size = 0 signals text mode to n_parallel_for.
+        let return_size: u32 = if matches!(&worker_ret_type, Type::Text(_)) {
+            0
+        } else {
+            let sz = u32::from(var_size(&worker_ret_type, &Context::Argument));
+            if sz == 0 || sz > 8 {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "parallel_for: worker return type '{}' must be integer, long, float, or boolean",
+                    "parallel_for: worker return type '{}' (size {sz}) is not supported",
                     worker_ret_type.name(&self.data)
                 );
                 return Type::Unknown(0);
             }
+            sz
         };
         // Validate extra arg count matches worker's extra params.
         let n_extra = list.len().saturating_sub(3);

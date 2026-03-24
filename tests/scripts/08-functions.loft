@@ -5,6 +5,10 @@ fn greet(name: text, greeting: text = "Hello") -> text {
   greeting + ", " + name + "!"
 }
 
+fn connect(host: text, port: integer = 8080, tls: boolean = true) -> text {
+  "{host}:{port}:{tls}"
+}
+
 fn add(a:  & integer, b: integer, c: integer = 0) {
   a += b + c;
 }
@@ -159,4 +163,12 @@ fn main() {
   assert(base == 100, "const local int is readable");
   const greeting = "hi";
   assert(greeting == "hi", "const local text is readable");
+  // --- Named arguments ---
+  assert(connect("example.com") == "example.com:8080:true", "named: all defaults");
+  assert(connect("example.com", 443) == "example.com:443:true", "named: positional");
+  assert(connect("example.com", tls: false) == "example.com:8080:false", "named: skip middle");
+  assert(connect(host: "example.com", tls: false) == "example.com:8080:false", "named: all named");
+  assert(connect("example.com", port: 443, tls: false) == "example.com:443:false", "named: mixed");
+  assert(greet(name: "World") == "Hello, World!", "named: greet with default greeting");
+  assert(greet("World", greeting: "Hi") == "Hi, World!", "named: greet override greeting");
 }

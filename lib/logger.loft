@@ -6,8 +6,8 @@ enum Level {
 
 struct Log {
   messages: vector < text >,
-  level: Level default(Warning),
-  errors: i32 default(0)
+  level: Level = Warning,
+  errors: i32 = 0
 }
 
 fn error(self: Log, message: text) {

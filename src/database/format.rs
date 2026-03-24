@@ -168,17 +168,15 @@ impl Stores {
         res
     }
 
-    /**
-    Parse the content of a string into a new database.
-    # Panics
-    When this string is incorrectly parsed.
-    */
-    pub fn parse(&mut self, text: &str, tp: u16, result: &DbRef) {
+    /// Parse the content of a string into an existing record.
+    /// Returns `None` on success, or `Some(error_path)` on failure.
+    /// The error path is a human-readable string like `"line 1:15 path:items[2].name"`.
+    pub fn parse(&mut self, text: &str, tp: u16, result: &DbRef) -> Option<String> {
         let mut pos = 0;
         if self.parsing(text, &mut pos, tp, tp, u16::MAX, result) {
-            return;
+            return None;
         }
-        let result = pos;
+        let err_pos = pos;
         pos = 0;
         let mut key = super::ParseKey {
             line: 1,
@@ -186,11 +184,8 @@ impl Stores {
             current: Vec::new(),
             step: 0,
         };
-        super::parse_key(text, &mut pos, result, &mut key);
-        panic!(
-            "Parse error on position {result} at {}",
-            super::show_key(text, &key)
-        );
+        super::parse_key(text, &mut pos, err_pos, &mut key);
+        Some(super::show_key(text, &key))
     }
 
     // Used for testing, returns the interpreted data or the error path on problems.

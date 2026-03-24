@@ -17,17 +17,17 @@ fn test_lambda_as_argument() {
 }
 
 fn test_short_lambda_explicit_types() {
-  double = |x: integer| -> integer { x * 2 };
+  double = fn(x: integer) -> integer { x * 2 };
   assert(double(7) == 14, "short lambda explicit");
 }
 
 fn test_short_lambda_zero_params() {
-  greet = || -> text { "hello" };
+  greet = fn() -> text { "hello" };
   assert(greet() == "hello", "zero params");
 }
 
 fn test_short_lambda_two_params() {
-  add = |a: integer, b: integer| -> integer { a + b };
+  add = fn(a: integer, b: integer) -> integer { a + b };
   assert(add(3, 4) == 7, "two params");
 }
 
@@ -43,14 +43,14 @@ fn test_short_lambda_inferred_type() {
 fn fr_double(n: integer) -> integer { n * 2 }
 
 fn test_fn_ref_basic_call() {
-  f = fn fr_double;
+  f = fr_double;
   assert(f(21) == 42, "fn ref basic");
 }
 
 fn fr_add(a: integer, b: integer) -> integer { a + b }
 
 fn test_fn_ref_two_args() {
-  f = fn fr_add;
+  f = fr_add;
   assert(f(10, 32) == 42, "fn ref two args");
 }
 
@@ -59,7 +59,7 @@ fn fr_dec(n: integer) -> integer { n - 1 }
 
 fn test_fn_ref_conditional() {
   flag = true;
-  f = if flag { fn fr_inc } else { fn fr_dec };
+  f = if flag { fr_inc } else { fr_dec };
   assert(f(41) == 42, "fn ref conditional");
 }
 
@@ -67,7 +67,7 @@ fn fr_square(n: integer) -> integer { n * n }
 fn fr_apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
 
 fn test_fn_ref_as_parameter() {
-  assert(fr_apply(fn fr_square, 7) == 49, "fn ref as param");
+  assert(fr_apply(fr_square, 7) == 49, "fn ref as param");
 }
 
 // ── map / filter / reduce ───────────────────────────────────────────────────
@@ -76,7 +76,7 @@ fn mfr_double(x: integer) -> integer { x * 2 }
 
 fn test_map_with_fn_ref() {
   v = [1, 2, 3, 4, 5];
-  r = map(v, fn mfr_double);
+  r = map(v, mfr_double);
   s = 0;
   for x in r { s += x; }
   assert(s == 30, "expected 30, got {s}");
@@ -86,7 +86,7 @@ fn mfr_is_even(x: integer) -> boolean { x % 2 == 0 }
 
 fn test_filter_with_fn_ref() {
   v = [1, 2, 3, 4, 5, 6];
-  r = filter(v, fn mfr_is_even);
+  r = filter(v, mfr_is_even);
   s = 0;
   for x in r { s += x; }
   assert(s == 12, "expected 12, got {s}");
@@ -96,13 +96,13 @@ fn mfr_add(acc: integer, x: integer) -> integer { acc + x }
 
 fn test_reduce_with_fn_ref() {
   v = [1, 2, 3, 4, 5];
-  s = reduce(v, 0, fn mfr_add);
+  s = reduce(v, 0, mfr_add);
   assert(s == 15, "expected 15, got {s}");
 }
 
 fn test_map_inline_lambda() {
   v = [1, 2, 3];
-  r = map(v, |x: integer| -> integer { x * 10 });
+  r = map(v, |x| { x * 10 });
   assert(r[0] == 10, "r[0]");
   assert(r[1] == 20, "r[1]");
   assert(r[2] == 30, "r[2]");
@@ -110,7 +110,7 @@ fn test_map_inline_lambda() {
 
 fn test_filter_inline_lambda() {
   v = [1, 2, 3, 4, 5, 6];
-  evens = filter(v, |x: integer| -> boolean { x % 2 == 0 });
+  evens = filter(v, |x| { x % 2 == 0 });
   assert(len(evens) == 3, "expected 3 evens");
   assert(evens[0] == 2, "evens[0]");
   assert(evens[2] == 6, "evens[2]");
@@ -118,6 +118,6 @@ fn test_filter_inline_lambda() {
 
 fn test_reduce_inline_lambda() {
   v = [1, 2, 3, 4, 5];
-  total = reduce(v, 0, |acc: integer, x: integer| -> integer { acc + x });
+  total = reduce(v, 0, |acc, x| { acc + x });
   assert(total == 15, "expected 15, got {total}");
 }

@@ -551,7 +551,10 @@ impl Stores {
             let mut found_fields = HashSet::new();
             loop {
                 let mut field_name = String::new();
-                if !match_identifier(text, pos, &mut field_name) {
+                // Accept both JSON-style "field" and loft-style field names.
+                if !match_text(text, pos, &mut field_name)
+                    && !match_identifier(text, pos, &mut field_name)
+                {
                     return false;
                 }
                 match_empty(text, pos);

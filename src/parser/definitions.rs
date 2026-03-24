@@ -175,7 +175,7 @@ impl Parser {
             let mut call_types = vec![self_type];
             call_types.extend_from_slice(extra_types);
             let mut code = Value::Null;
-            self.call(&mut code, u16::MAX, name, &call_args, &call_types);
+            self.call(&mut code, u16::MAX, name, &call_args, &call_types, &[]);
             let ret_call = v_block(
                 vec![Value::Return(Box::new(code.clone()))],
                 Type::Void,
@@ -944,26 +944,29 @@ impl Parser {
         let mut a_type: Type = Type::Unknown(0);
         let mut defined = false;
         let mut value = Value::Null;
-        //let mut check = Value::Null;
+        let mut check = Value::Null;
+        let mut check_message = Value::Null;
         let mut nullable = true;
+        let mut is_computed = false;
         loop {
             if self.lexer.has_keyword("not") {
                 // This field cannot be null, this allows for 256 values in a byte
                 self.lexer.token("null");
                 nullable = false;
             }
-            self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
-            /* TODO for now ignore this, we have to properly implement this in the future
-            if self.lexer.has_keyword("check") {
+            is_computed |=
+                self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
+            if self.lexer.has_token("assert") {
+                // L6: assert(condition) or assert(condition, message) on struct fields.
                 self.lexer.token("(");
-                let tp = self.expression(&mut check);
-                self.convert(&mut check, &tp, &Type::Boolean);
+                self.expression(&mut check);
+                if self.lexer.has_token(",") {
+                    self.expression(&mut check_message);
+                }
                 self.lexer.token(")");
-            }
-            */
-            if let Some(id) = self.lexer.has_identifier() {
+            } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "CHECK" {
-                    // CHECK(condition, message) constraint — parse and discard for now
+                    // Legacy CHECK syntax — parse and discard for backward compat
                     self.lexer.token("(");
                     let mut p = Value::Null;
                     self.expression(&mut p);
@@ -1000,10 +1003,24 @@ impl Parser {
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);
             self.data.set_attr_nullable(d_nr, a, nullable);
             self.data.set_attr_value(d_nr, a, value);
+            if is_computed {
+                self.data.definitions[d_nr as usize].attributes[a].constant = true;
+            }
+            if check != Value::Null {
+                self.data.definitions[d_nr as usize].attributes[a].check = check;
+                self.data.definitions[d_nr as usize].attributes[a].check_message = check_message;
+            }
         } else {
             let a = self.data.attr(d_nr, a_name);
+            if is_computed {
+                self.data.definitions[d_nr as usize].attributes[a].constant = true;
+            }
             if value != Value::Null {
                 self.data.set_attr_value(d_nr, a, value);
+            }
+            if check != Value::Null {
+                self.data.definitions[d_nr as usize].attributes[a].check = check;
+                self.data.definitions[d_nr as usize].attributes[a].check_message = check_message;
             }
         }
     }
@@ -1013,49 +1030,17 @@ impl Parser {
         &mut self,
         value: &mut Value,
         a_type: &mut Type,
-        d_nr: u32,
-        a_name: &String,
+        _d_nr: u32,
+        _a_name: &String,
         defined: &mut bool,
     ) -> bool {
-        let mut is_virtual = false;
-        if self.lexer.has_keyword("virtual") {
-            is_virtual = true;
-            // Define the result of a field that cannot be written to
-            self.lexer.token("(");
-            let args = vec![Argument {
-                name: "rec".to_string(),
-                typedef: Type::Reference(d_nr, Vec::new()),
-                default: Value::Null,
-                constant: false,
-            }];
-            let mut is_virtual = Value::Null;
-            let name = format!(
-                "_virtual_attr_{}_{a_name}",
-                self.data.def(d_nr).name.to_lowercase()
-            );
-            let v_nr = if self.first_pass {
-                self.data.add_fn(&mut self.lexer, &name, &args)
-            } else {
-                self.data.def_nr(&name)
-            };
-            let tp = self.expression(&mut is_virtual);
-            if a_type.is_unknown() {
-                *a_type = tp;
-                *defined = true;
-            } else {
-                self.convert(&mut is_virtual, &tp, a_type);
-            }
-            if self.first_pass {
-                self.data.set_returned(v_nr, a_type.clone());
-            } else {
-                self.data.definitions[v_nr as usize].code = is_virtual;
-            }
-            // We still need to replace Var(0) with the actual record on the call
-            *value = self.cl(&name, &[Value::Var(0)]);
-            self.lexer.token(")");
-        }
-        if self.lexer.has_keyword("default") {
-            // Define a default value on an attribute
+        let mut is_computed = false;
+        if self.lexer.has_keyword("computed") || self.lexer.has_keyword("virtual") {
+            is_computed = true;
+            // Computed field: calculate on every access, no store space.
+            // The expression is stored directly in the attribute value and inlined
+            // at every access site.  Var(0) references the record (replaced by
+            // replace_record_ref at the access site).
             self.lexer.token("(");
             let tp = self.expression(value);
             if a_type.is_unknown() {
@@ -1065,14 +1050,18 @@ impl Parser {
                 self.convert(value, &tp, a_type);
             }
             self.lexer.token(")");
-            if is_virtual {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Attribute {a_name} cannot be virtual and have a default"
-                );
-            }
         }
-        is_virtual
+        if self.lexer.has_keyword("default") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "default(expr) is removed; use 'computed(expr)' for calculated fields or '= expr' for stored defaults"
+            );
+            // Consume the expression to recover parsing.
+            self.lexer.token("(");
+            self.expression(value);
+            self.lexer.token(")");
+        }
+        is_computed
     }
 }

@@ -20,7 +20,9 @@ use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "random")]
 use crate::ops;
-use crate::parallel::{WorkerProgram, run_parallel_int, run_parallel_raw};
+use crate::parallel::{
+    WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_text,
+};
 use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
@@ -84,6 +86,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_path_sep", n_path_sep),
+    ("i_parse_error_push", i_parse_error_push),
+    ("i_parse_errors", i_parse_errors),
 ];
 
 pub fn init(state: &mut State) {
@@ -604,17 +608,28 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 ///                 threads: integer, func: integer) -> reference
 /// ```
 /// `func` is the definition number of the worker function (verified at compile time).
-/// `return_size` is 1 (boolean), 4 (integer), or 8 (long/float).
+/// `return_size` is 0 (text), 1 (boolean), 4 (integer), or 8 (long/float).
 /// Returns a `reference` pointing to a freshly allocated result vector.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    // Pop in reverse declaration order.
+    // A1.1: Stack layout (push order from codegen):
+    //   vec(12B), elem_size(4B), return_size(4B), threads(4B), func(4B),
+    //   extra1(4B), ..., extraN(4B), n_extra(4B)
+    // Pop order (LIFO): n_extra, extraN, ..., extra1, func, threads, return_size, elem_size, vec
+
+    let n_extra = *stores.get::<i32>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i32>(stack) as u64);
+    }
+    extra_args.reverse(); // restore push order (first extra = first worker param)
+
     let v_func = *stores.get::<i32>(stack);
     let v_threads = *stores.get::<i32>(stack);
     let v_return_size = *stores.get::<i32>(stack);
     let v_element_size = *stores.get::<i32>(stack);
     let v_input = *stores.get::<DbRef>(stack);
 
-    let (fn_pos, program) = {
+    let (fn_pos, program, n_hidden_text) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -624,7 +639,15 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             v_func >= 0,
             "parallel_for: invalid function reference {v_func}"
         );
-        let fn_pos = data.def(v_func as u32).code_position;
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        // Count hidden __work_N text params for text-returning workers.
+        let n_hidden = data
+            .def(d_nr)
+            .attributes
+            .iter()
+            .filter(|a| a.name.starts_with("__"))
+            .count();
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
         let text_code = unsafe { Arc::clone(&*ctx.text_code) };
         let library = unsafe { Arc::clone(&*ctx.library) };
@@ -635,61 +658,117 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
                 text_code,
                 library,
             },
+            n_hidden,
         )
     };
 
     let element_size = v_element_size as u32;
-    let return_size = v_return_size.clamp(1, 8) as u32;
     let n_threads = (v_threads as usize).max(1);
     let n = vector::length_vector(&v_input, &stores.allocations) as usize;
+    // return_size == 0 signals text mode; otherwise clamp to [1, 8].
+    let is_text = v_return_size == 0;
+    let return_size = if is_text {
+        4u32
+    } else {
+        v_return_size.clamp(1, 8) as u32
+    };
 
-    let results = run_parallel_raw(
+    let result_ref = parallel_execute_and_collect(
         stores,
         program,
         fn_pos,
         &v_input,
         element_size,
         return_size,
+        is_text,
         n_threads,
+        &extra_args,
+        n,
+        n_hidden_text,
     );
+    stores.put(stack, result_ref);
+}
 
-    // Build result vector in a fresh store.
+/// Allocate a result vector, dispatch workers, and collect results.
+#[allow(clippy::too_many_arguments)]
+fn parallel_execute_and_collect(
+    stores: &mut Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    return_size: u32,
+    is_text: bool,
+    n_threads: usize,
+    extra_args: &[u64],
+    n: usize,
+    n_hidden_text: usize,
+) -> DbRef {
     let result_db = stores.null();
-    let bytes_per_element = return_size;
-    let vec_words = ((n as u32) * bytes_per_element + 15) / 8;
-    let vec_words = vec_words.max(1);
-    let vec_cr = stores.claim(&result_db, vec_words);
+    let vec_words = ((n as u32) * return_size + 15) / 8;
+    let vec_cr = stores.claim(&result_db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
+    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
+    stores
+        .store_mut(&result_db)
+        .set_int(header_rec, 4, vec_rec as i32);
 
-    {
+    if is_text {
+        let strings = run_parallel_text(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            n_threads,
+            extra_args,
+            n,
+            n_hidden_text,
+        );
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
+        for (i, s) in strings.iter().enumerate() {
+            let s_pos = store.set_str(s);
+            store.set_int(vec_rec, 8 + i as u32 * 4, s_pos as i32);
+        }
+    } else if return_size >= 4 {
+        let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
+        run_parallel_direct(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            return_size,
+            n_threads,
+            extra_args,
+            out_ptr,
+            n,
+        );
+    } else {
+        let results = run_parallel_raw(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            return_size,
+            n_threads,
+            extra_args,
+        );
+        let store = stores.store_mut(&result_db);
         let mut fld = 8u32;
         for &raw in &results {
-            match bytes_per_element {
-                8 => {
-                    store.set_long(vec_rec, fld, raw as i64);
-                }
-                1 => {
-                    store.set_byte(vec_rec, fld, 0, raw as i32);
-                }
-                _ => {
-                    store.set_int(vec_rec, fld, raw as i32);
-                }
-            }
-            fld += bytes_per_element;
+            store.set_byte(vec_rec, fld, 0, raw as i32);
+            fld += 1;
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
     }
-
-    let result_ref = DbRef {
+    DbRef {
         store_nr: result_db.store_nr,
         rec: header_rec,
         pos: 4,
-    };
-    stores.put(stack, result_ref);
+    }
 }
 
 // ── parallel_get_* ────────────────────────────────────────────────────────────
@@ -813,4 +892,19 @@ fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
 /// `'\\'` on Windows filesystems, `'/'` everywhere else.
 fn n_path_sep(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, sep());
+}
+
+/// Return the error text from the last `Type.parse()` call.
+/// Empty string means the parse succeeded.
+fn i_parse_error_push(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = *stores.get::<Str>(stack);
+    stores.last_parse_errors.push(msg.str().to_owned());
+}
+
+fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.last_parse_errors.join("\n");
+    stores.last_parse_errors.clear();
+    stores.scratch.clear();
+    stores.scratch.push(msg);
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }

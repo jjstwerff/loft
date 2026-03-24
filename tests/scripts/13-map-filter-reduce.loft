@@ -28,19 +28,19 @@ fn mul(acc: integer, x: integer) -> integer {
 fn main() {
   nums =[1, 2, 3, 4, 5];
   // --- map: double each element ---
-  doubled = map(nums,  fn double);
+  doubled = map(nums,  double);
   assert(doubled[0] == 2, "map[0]={doubled[0]}");
   assert(doubled[1] == 4, "map[1]={doubled[1]}");
   assert(doubled[2] == 6, "map[2]={doubled[2]}");
   assert(doubled[3] == 8, "map[3]={doubled[3]}");
   assert(doubled[4] == 10, "map[4]={doubled[4]}");
   // --- map: negate ---
-  negated = map(nums,  fn negate);
+  negated = map(nums,  negate);
   assert(negated[0] == -1, "negate[0]={negated[0]}");
   assert(negated[4] == -5, "negate[4]={negated[4]}");
   // --- map on empty vector (produced by filtering all elements out) ---
   all_neg =[-1, -2, -3];
-  mapped_empty = map(filter(all_neg,  fn is_positive),  fn double);
+  mapped_empty = map(filter(all_neg,  is_positive),  double);
   cnt = 0;
   for _x in mapped_empty {
     cnt += 1;
@@ -48,7 +48,7 @@ fn main() {
   assert(cnt == 0, "map empty: cnt={cnt}");
   // --- filter: keep positive ---
   mixed =[-3, 1, -1, 4, 0, 2];
-  positives = filter(mixed,  fn is_positive);
+  positives = filter(mixed,  is_positive);
   assert(positives[0] == 1, "filter[0]={positives[0]}");
   assert(positives[1] == 4, "filter[1]={positives[1]}");
   assert(positives[2] == 2, "filter[2]={positives[2]}");
@@ -58,7 +58,7 @@ fn main() {
   }
   assert(pos_cnt == 3, "filter count={pos_cnt}");
   // --- filter: keep even ---
-  evens = filter(nums,  fn is_even);
+  evens = filter(nums,  is_even);
   assert(evens[0] == 2, "even[0]={evens[0]}");
   assert(evens[1] == 4, "even[1]={evens[1]}");
   ev_cnt = 0;
@@ -67,26 +67,26 @@ fn main() {
   }
   assert(ev_cnt == 2, "even count={ev_cnt}");
   // --- filter: nothing passes ---
-  none_pass = filter(nums,  fn is_even);
+  none_pass = filter(nums,  is_even);
   // reuse: filter only evens from [1,3,5] (odd-only vector)
   odds =[1, 3, 5];
-  no_evens = filter(odds,  fn is_even);
+  no_evens = filter(odds,  is_even);
   none_cnt = 0;
   for _x in no_evens {
     none_cnt += 1;
   }
   assert(none_cnt == 0, "filter none: cnt={none_cnt}");
   // --- reduce: sum ---
-  total = reduce(nums, 0,  fn add);
+  total = reduce(nums, 0,  add);
   assert(total == 15, "reduce sum={total}");
   // --- reduce: product ---
-  product = reduce(nums, 1,  fn mul);
+  product = reduce(nums, 1,  mul);
   assert(product == 120, "reduce product={product}");
   // --- reduce: sum with non-zero init ---
-  total2 = reduce(nums, 100,  fn add);
+  total2 = reduce(nums, 100,  add);
   assert(total2 == 115, "reduce sum+100={total2}");
   // --- map then filter ---
-  big_evens = filter(map(nums,  fn double),  fn is_even);
+  big_evens = filter(map(nums,  double),  is_even);
   // doubled = [2,4,6,8,10], all even
   be_cnt = 0;
   for _x in big_evens {
@@ -94,6 +94,6 @@ fn main() {
   }
   assert(be_cnt == 5, "map+filter count={be_cnt}");
   // --- filter then reduce ---
-  even_sum = reduce(filter(nums,  fn is_even), 0,  fn add);
+  even_sum = reduce(filter(nums,  is_even), 0,  add);
   assert(even_sum == 6, "filter+reduce={even_sum}");
 }

@@ -196,9 +196,9 @@ struct Map {
 // y = ty
 
 struct Point {
-  x: float default(0.0),
-  y: float default(0.0),
-  z: float default(0.0)
+  x: float = 0.0,
+  y: float = 0.0,
+  z: float = 0.0
 }
 
 struct Position {

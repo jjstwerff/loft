@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 240] = &[
+pub const OPERATORS: &[fn(&mut State); 247] = &[
     goto,
     goto_word,
     goto_false,
@@ -232,6 +232,13 @@ pub const OPERATORS: &[fn(&mut State); 240] = &[
     append_stack_text,
     append_stack_character,
     clear_stack_text,
+    si_load2_add_store,
+    si_load_const_add_store,
+    si_load_const_cmp_branch,
+    si_load2_cmp_branch,
+    si_load_const_mul_store,
+    si_load2_mul_store,
+    nop,
     get_file,
     get_dir,
     get_png_image,
@@ -1759,6 +1766,34 @@ fn append_stack_character(s: &mut State) {
 
 fn clear_stack_text(s: &mut State) {
     s.clear_stack_text();
+}
+
+fn si_load2_add_store(s: &mut State) {
+    s.si_load2_add_store();
+}
+
+fn si_load_const_add_store(s: &mut State) {
+    s.si_load_const_add_store();
+}
+
+fn si_load_const_cmp_branch(s: &mut State) {
+    s.si_load_const_cmp_branch();
+}
+
+fn si_load2_cmp_branch(s: &mut State) {
+    s.si_load2_cmp_branch();
+}
+
+fn si_load_const_mul_store(s: &mut State) {
+    s.si_load_const_mul_store();
+}
+
+fn si_load2_mul_store(s: &mut State) {
+    s.si_load2_mul_store();
+}
+
+fn nop(s: &mut State) {
+    s.nop();
 }
 
 fn get_file(s: &mut State) {

@@ -480,8 +480,11 @@ pub struct Attribute {
     primary: bool,
     /// The initial value of this attribute if it is not given.
     pub value: Value,
-    /// A test on the validity of this attribute.
-    check: Value,
+    /// A constraint expression checked on every field write.
+    /// Parsed from `assert(expr)` or `assert(expr, message)` in field definitions.
+    pub check: Value,
+    /// Optional message for a failed constraint check.
+    pub check_message: Value,
 }
 
 impl Debug for Attribute {
@@ -552,6 +555,8 @@ pub struct Definition {
     pub known_type: u16,
     /// Known variables inside this definition
     pub variables: Function,
+    /// Whether this definition was declared with `pub`.
+    pub pub_visible: bool,
 }
 
 impl Definition {
@@ -633,9 +638,9 @@ pub struct Data {
     referenced: HashMap<u32, (u32, Value)>,
     /// Static data
     statics: Vec<u8>,
-    op_codes: u16,
+    pub(crate) op_codes: u16,
     possible: HashMap<String, Vec<u32>>,
-    operators: HashMap<u8, u32>,
+    pub(crate) operators: HashMap<u8, u32>,
 }
 
 #[must_use]
@@ -786,6 +791,7 @@ impl Data {
             primary: false,
             value: Value::Null,
             check: Value::Null,
+            check_message: Value::Null,
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];
@@ -825,6 +831,7 @@ impl Data {
             code_position: 0,
             code_length: 0,
             variables: Function::new(name, &position.file),
+            pub_visible: false,
         };
         self.definitions.push(new_def);
         rec
@@ -1256,7 +1263,9 @@ impl Data {
         let names: Vec<(String, u32)> = self
             .def_names
             .iter()
-            .filter(|((_, src), _)| *src == lib_source)
+            .filter(|((_, src), def_nr)| {
+                *src == lib_source && self.definitions[**def_nr as usize].pub_visible
+            })
             .map(|((name, _), &def_nr)| (name.clone(), def_nr))
             .collect();
         for (name, def_nr) in names {
@@ -1271,8 +1280,16 @@ impl Data {
     pub fn import_name(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
         // Functions are stored under the `n_` prefix; try both forms.
         let fn_key = format!("n_{name}");
-        let found_plain = self.def_names.get(&(name.to_string(), lib_source)).copied();
-        let found_fn = self.def_names.get(&(fn_key.clone(), lib_source)).copied();
+        let found_plain = self
+            .def_names
+            .get(&(name.to_string(), lib_source))
+            .copied()
+            .filter(|&d| self.definitions[d as usize].pub_visible);
+        let found_fn = self
+            .def_names
+            .get(&(fn_key.clone(), lib_source))
+            .copied()
+            .filter(|&d| self.definitions[d as usize].pub_visible);
         if found_plain.is_none() && found_fn.is_none() {
             return false;
         }
@@ -1297,6 +1314,13 @@ impl Data {
     pub fn def(&self, dnr: u32) -> &Definition {
         assert_ne!(dnr, u32::MAX, "Unknown definition");
         &self.definitions[dnr as usize]
+    }
+
+    /// # Panics
+    /// When no definition on that number is found.
+    pub fn def_mut(&mut self, dnr: u32) -> &mut Definition {
+        assert_ne!(dnr, u32::MAX, "Unknown definition");
+        &mut self.definitions[dnr as usize]
     }
 
     #[must_use]

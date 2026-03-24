@@ -209,6 +209,7 @@ impl Stores {
             files: Vec::new(),
             max: self.max,
             scratch: Vec::new(),
+            last_parse_errors: Vec::new(),
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,

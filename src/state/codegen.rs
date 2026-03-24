@@ -401,7 +401,44 @@ impl State {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Adjust the slot position for a first-assignment variable.
+    /// Case 1: pre-assigned above TOS → move down. Case 2: large type below TOS →
+    /// override only if no child-scope overlap (A13 guard).
+    fn adjust_first_assignment_slot(stack: &mut Stack, v: u16, pos: u16) {
+        if pos > stack.position {
+            stack.function.set_stack_pos(v, stack.position);
+        } else if pos < stack.position
+            && matches!(
+                stack.function.tp(v),
+                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+        {
+            let v_size = size(stack.function.tp(v), &Context::Variable);
+            let new_end = stack.position + v_size;
+            let v_scope = stack.function.scope(v);
+            let v_first = stack.function.first_def(v);
+            let v_last = stack.function.last_use(v);
+            let has_child_overlap = (0..stack.function.count()).any(|j| {
+                if j == v || stack.function.stack(j) == u16::MAX {
+                    return false;
+                }
+                let j_scope = stack.function.scope(j);
+                if j_scope == v_scope {
+                    return false;
+                }
+                let js = stack.function.stack(j);
+                let je = js + size(stack.function.tp(j), &Context::Variable);
+                stack.position < je
+                    && new_end > js
+                    && v_first <= stack.function.last_use(j)
+                    && v_last >= stack.function.first_def(j)
+            });
+            if !has_child_overlap {
+                stack.function.set_stack_pos(v, stack.position);
+            }
+        }
+    }
+
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
         // Null-typed variables (e.g. `x = null`) have size 0 and no stack storage.
@@ -455,22 +492,7 @@ impl State {
                 stack.function.name(v),
                 stack.data.def(stack.def_nr).name,
             );
-            if pos > stack.position
-                || (pos < stack.position
-                    && matches!(
-                        stack.function.tp(v),
-                        Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-                    ))
-            {
-                // Override slot to TOS.
-                // Case 1 (pos > TOS): should never fire after the Step-8 fix — the debug_assert
-                //   above catches any regression.  Retained as a release-mode safety net.
-                // Case 2 (pos < TOS for a large type): a mutable &vector<T> argument passed by
-                //   OpCreateStack pushes a DbRef to the eval stack before this block's large var
-                //   is allocated, raising the codegen TOS above the pre-assigned slot.  Still
-                //   fires legitimately in append_vector; retained until that pattern is fixed.
-                stack.function.set_stack_pos(v, stack.position);
-            }
+            Self::adjust_first_assignment_slot(stack, v, pos);
             let pos = stack.function.stack(v);
             if pos == stack.position {
                 // Slot is at current TOS — use direct placement (same as old claim() path).
@@ -557,6 +579,50 @@ impl State {
         }
     }
 
+    /// A8: destination-passing for text-producing natives inside `OpAppendText`.
+    /// Returns true if the optimisation was applied (caller should return Void).
+    fn try_text_dest_pass(&mut self, stack: &mut Stack, op: u32, parameters: &[Value]) -> bool {
+        if stack.data.def(op).name != "OpAppendText" || parameters.len() < 2 {
+            return false;
+        }
+        let (Value::Var(dest_var), Value::Call(inner_op, inner_args)) =
+            (&parameters[0], &parameters[1])
+        else {
+            return false;
+        };
+        let inner_name = stack.data.def(*inner_op).name.clone();
+        if !is_text_dest_native(&inner_name) {
+            return false;
+        }
+        let dest_name = inner_name.clone() + "_dest";
+        let Some(&lib_nr) = self.library_names.get(&dest_name) else {
+            return false;
+        };
+        let dest_var = *dest_var;
+        let inner_op = *inner_op;
+        let inner_args = inner_args.clone();
+        let inner_attrs: Vec<Type> = stack
+            .data
+            .def(inner_op)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect();
+        for arg_val in &inner_args {
+            self.generate(arg_val, stack, false);
+        }
+        stack.add_op("OpCreateStack", self);
+        let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
+        self.code_add(before_stack - stack.function.stack(dest_var));
+        stack.add_op("OpStaticCall", self);
+        self.code_add(lib_nr);
+        for attr_type in &inner_attrs {
+            stack.position -= size(attr_type, &Context::Argument);
+        }
+        stack.position -= size_of::<crate::keys::DbRef>() as u16;
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn generate_call(
         &mut self,
@@ -574,42 +640,9 @@ impl State {
             parameters.len(),
             stack.data.def(op).attributes.len(),
         );
-        // A8: destination-passing for text-producing natives inside OpAppendText.
-        // OpAppendText(dest_var, Call(text_dest_fn, args)) → dest-passing call, skip OpAppendText.
-        if stack.data.def(op).name == "OpAppendText"
-            && parameters.len() >= 2
-            && let Value::Var(dest_var) = &parameters[0]
-            && let Value::Call(inner_op, inner_args) = &parameters[1]
-        {
-            let inner_name = stack.data.def(*inner_op).name.clone();
-            if is_text_dest_native(&inner_name) {
-                let dest_name = inner_name.clone() + "_dest";
-                if let Some(&lib_nr) = self.library_names.get(&dest_name) {
-                    let dest_var = *dest_var;
-                    let inner_op = *inner_op;
-                    let inner_args = inner_args.clone();
-                    let inner_attrs: Vec<Type> = stack
-                        .data
-                        .def(inner_op)
-                        .attributes
-                        .iter()
-                        .map(|a| a.typedef.clone())
-                        .collect();
-                    for arg_val in &inner_args {
-                        self.generate(arg_val, stack, false);
-                    }
-                    stack.add_op("OpCreateStack", self);
-                    let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
-                    self.code_add(before_stack - stack.function.stack(dest_var));
-                    stack.add_op("OpStaticCall", self);
-                    self.code_add(lib_nr);
-                    for attr_type in &inner_attrs {
-                        stack.position -= size(attr_type, &Context::Argument);
-                    }
-                    stack.position -= size_of::<crate::keys::DbRef>() as u16;
-                    return Type::Void;
-                }
-            }
+        // A8: try destination-passing optimisation for text-producing natives.
+        if self.try_text_dest_pass(stack, op, parameters) {
+            return Type::Void;
         }
         for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
             if a.mutable {
@@ -646,6 +679,14 @@ impl State {
                         val = &parameters[a_nr],
                     );
                 }
+            }
+        }
+        // A1.1: push extra Call args beyond the declared parameter count.
+        // Only for n_parallel_for — forwards extra context args + n_extra count.
+        if stack.data.def(op).name == "n_parallel_for" {
+            let n_declared = stack.data.def(op).attributes.len();
+            for extra in parameters.iter().skip(n_declared) {
+                self.generate(extra, stack, false);
             }
         }
         match &stack.data.def(op).name as &str {
@@ -708,6 +749,15 @@ impl State {
             self.code_add(self.library_names[&name]);
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
+            }
+            // A1.1: also subtract the extra args pushed beyond declared params.
+            if stack.data.def(op).name == "n_parallel_for" {
+                let n_declared = stack.data.def(op).attributes.len();
+                for extra in parameters.iter().skip(n_declared) {
+                    // Extra args are always integer (4 bytes) in the current implementation.
+                    let _ = extra;
+                    stack.position -= 4;
+                }
             }
             // add the result to the stack
             stack.position += size(&stack.data.def(op).returned, &Context::Argument);

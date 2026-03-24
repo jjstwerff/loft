@@ -537,13 +537,13 @@ fn file_exists_false() {
 // `fn <name>` produces a Value::Int(d_nr) with Type::Function(args, ret).
 // Calling `f(args)` where `f` is a local fn-ref variable emits OpCallRef.
 
-/// Basic fn-ref: store `fn double` and call it through the reference.
+/// Basic fn-ref: store `double` and call it through the reference.
 #[test]
 fn fn_ref_basic_call() {
     code!(
         "fn double(n: integer) -> integer { n * 2 }
 fn test() {
-    f = fn double;
+    f = double;
     result = f(21);
     assert(result == 42, \"expected 42, got {result}\");
 }"
@@ -557,7 +557,7 @@ fn fn_ref_two_args() {
     code!(
         "fn add(a: integer, b: integer) -> integer { a + b }
 fn test() {
-    f = fn add;
+    f = add;
     result = f(10, 32);
     assert(result == 42, \"expected 42, got {result}\");
 }"
@@ -573,7 +573,7 @@ fn fn_ref_conditional_call() {
 fn dec(n: integer) -> integer { n - 1 }
 fn test() {
     flag = true;
-    f = if flag { fn inc } else { fn dec };
+    f = if flag { inc } else { dec };
     result = f(41);
     assert(result == 42, \"expected 42, got {result}\");
 }"
@@ -588,7 +588,7 @@ fn fn_ref_as_parameter() {
         "fn square(n: integer) -> integer { n * n }
 fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
 fn test() {
-    result = apply(fn square, 7);
+    result = apply(square, 7);
     assert(result == 49, \"expected 49, got {result}\");
 }"
     )
@@ -603,7 +603,7 @@ fn map_integers() {
         "fn double(x: integer) -> integer { x * 2 }
 fn test() {
     v = [1, 2, 3, 4, 5];
-    r = map(v, fn double);
+    r = map(v, double);
     s = 0;
     for x in r {
         s += x;
@@ -620,7 +620,7 @@ fn filter_integers() {
         "fn is_even(x: integer) -> boolean { x % 2 == 0 }
 fn test() {
     v = [1, 2, 3, 4, 5, 6];
-    r = filter(v, fn is_even);
+    r = filter(v, is_even);
     s = 0;
     for x in r {
         s += x;
@@ -637,7 +637,7 @@ fn reduce_sum() {
         "fn add(acc: integer, x: integer) -> integer { acc + x }
 fn test() {
     v = [1, 2, 3, 4, 5];
-    s = reduce(v, 0, fn add);
+    s = reduce(v, 0, add);
     assert(s == 15, \"expected 15, got {s}\");
 }"
     )
@@ -1727,13 +1727,13 @@ fn test() { }"
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
 // Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
 
-/// P1.2: `|x: integer| -> integer { x * 2 }` with fully explicit annotations.
+/// P1.2: long-form lambda `fn(x: integer) -> integer { x * 2 }` with explicit annotations.
 #[test]
 
 fn p1_2_short_lambda_explicit_types() {
     code!(
         "fn test() {
-    f = |x: integer| -> integer { x * 2 };
+    f = fn(x: integer) -> integer { x * 2 };
     assert(f(5) == 10, \"expected 10\");
     assert(f(21) == 42, \"expected 42\");
 }"
@@ -1741,26 +1741,26 @@ fn p1_2_short_lambda_explicit_types() {
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Zero-parameter short lambda `|| -> integer { 42 }`.
+/// P1.2: Zero-parameter long-form lambda `fn() -> integer { 42 }`.
 #[test]
 
 fn p1_2_short_lambda_zero_params() {
     code!(
         "fn test() {
-    f = || -> integer { 42 };
+    f = fn() -> integer { 42 };
     assert(f() == 42, \"expected 42\");
 }"
     )
     .result(loft::data::Value::Null);
 }
 
-/// P1.2: Two-parameter short lambda with explicit types.
+/// P1.2: Two-parameter long-form lambda with explicit types.
 #[test]
 
 fn p1_2_short_lambda_two_params() {
     code!(
         "fn test() {
-    add = |a: integer, b: integer| -> integer { a + b };
+    add = fn(a: integer, b: integer) -> integer { a + b };
     assert(add(3, 4) == 7, \"expected 7\");
 }"
     )
@@ -1790,7 +1790,7 @@ fn p1_3_map_short_lambda() {
     code!(
         "fn test() {
     v = [1, 2, 3];
-    r = map(v, |x: integer| -> integer { x * 10 });
+    r = map(v, |x| { x * 10 });
     assert(r[0] == 10, \"r[0]\");
     assert(r[1] == 20, \"r[1]\");
     assert(r[2] == 30, \"r[2]\");
@@ -1806,7 +1806,7 @@ fn p1_3_filter_short_lambda() {
     code!(
         "fn test() {
     v = [1, 2, 3, 4, 5, 6];
-    evens = filter(v, |x: integer| -> boolean { x % 2 == 0 });
+    evens = filter(v, |x| { x % 2 == 0 });
     assert(len(evens) == 3, \"expected 3 evens\");
     assert(evens[0] == 2, \"evens[0]\");
     assert(evens[2] == 6, \"evens[2]\");
@@ -1822,7 +1822,7 @@ fn p1_3_reduce_short_lambda() {
     code!(
         "fn test() {
     v = [1, 2, 3, 4, 5];
-    total = reduce(v, 0, |acc: integer, x: integer| -> integer { acc + x });
+    total = reduce(v, 0, |acc, x| { acc + x });
     assert(total == 15, \"expected 15, got {total}\");
 }"
     )
@@ -1861,6 +1861,22 @@ fn a8_to_lowercase_in_format() {
     .result(loft::data::Value::Null);
 }
 
+/// Assert that src/fill.rs matches what generate_code_to would produce.
+/// If this fails, run: cargo test regen_fill_rs -- --ignored --nocapture
+#[test]
+fn fill_rs_up_to_date() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    let generated = loft::create::generate_code_to(&p.data, "tests/generated/fill_check.rs")
+        .expect("generate_code_to failed");
+    let current = std::fs::read_to_string("src/fill.rs").expect("cannot read src/fill.rs");
+    assert_eq!(
+        current, generated,
+        "src/fill.rs is out of date — run: cargo test regen_fill_rs -- --ignored --nocapture"
+    );
+}
+
 /// Regenerate src/fill.rs from the default library definitions.
 /// Run with: cargo test regen_fill_rs -- --ignored --nocapture
 #[test]
@@ -1871,4 +1887,373 @@ fn regen_fill_rs() {
     scopes::check(&mut p.data);
     loft::create::generate_code_to(&p.data, "src/fill.rs").expect("generate_code_to failed");
     println!("src/fill.rs regenerated");
+}
+
+// ── S9 / Issue 90 — character + character codegen panic ───────────────────────
+// `c + d` where both are characters panics with a stack-size mismatch because
+// `parse_append_text` uses the character variable as a text destination.
+
+/// S9: character + character must produce text concatenation, not a panic.
+#[test]
+fn s9_char_plus_char() {
+    code!(
+        "fn test() {
+    c = 'h';
+    d = 'i';
+    r = c + d;
+    assert(r == \"hi\", \"expected 'hi' got '{r}'\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// S9: text indexing `a[0] + a[1]` must also work.
+#[test]
+fn s9_text_index_plus_text_index() {
+    code!(
+        "fn test() {
+    a = \"hello\";
+    r = a[0] + a[1];
+    assert(r == \"he\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── S10 — Disallow type annotations in |x| short-form lambdas ────────────────
+// Short-form lambdas infer types from the call-site hint.  Explicit type
+// annotations belong in the long form: fn(x: integer) -> integer { body }.
+
+/// S10: `|x: integer|` must produce a compile-time error.
+#[test]
+fn s10_short_lambda_type_annotation_rejected() {
+    code!(
+        "fn test() {
+    v = [1, 2, 3];
+    r = map(v, |x: integer| { x * 2 });
+}"
+    )
+    .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) -> <ret> { ... } instead at s10_short_lambda_type_annotation_rejected:3:27");
+}
+
+// ── S11 — Bare function references (no fn prefix) ────────────────────────────
+
+/// S11: bare `double` resolves as a function reference without `fn` prefix.
+#[test]
+fn s11_bare_fn_ref() {
+    code!(
+        "fn double(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn test() {
+    assert(apply(double, 7) == 14, \"bare fn ref\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// S11: bare fn-ref with map.
+#[test]
+fn s11_bare_fn_ref_map() {
+    code!(
+        "fn triple(x: integer) -> integer { x * 3 }
+fn test() {
+    v = [1, 2, 3];
+    r = map(v, triple);
+    assert(r[0] == 3);
+    assert(r[1] == 6);
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── L6 — Field constraints and JSON-style struct literals ─────────────────────
+
+/// L6: basic field constraint — valid construction.
+#[test]
+fn l6_constraint_valid_construction() {
+    code!(
+        "struct Score {
+    value: integer assert($.value >= 0, \"value must be >= 0\"),
+    max: integer assert($.max >= $.value, \"max must be >= value\")
+}
+fn test() {
+    s = Score { value: 5, max: 10 };
+    assert(s.value == 5);
+    assert(s.max == 10);
+    s.value = 8;
+    assert(s.value == 8);
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: field constraint fires on invalid assignment.
+#[test]
+#[should_panic(expected = "value must be >= 0")]
+fn l6_constraint_violation_on_assign() {
+    code!(
+        "struct Score {
+    value: integer assert($.value >= 0, \"value must be >= 0\")
+}
+fn test() {
+    s = Score { value: 5 };
+    s.value = -1;
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: cross-field constraint fires on invalid construction.
+#[test]
+#[should_panic(expected = "lo must be <= hi")]
+fn l6_cross_field_constraint_violation() {
+    code!(
+        "struct Range {
+    lo: integer assert($.lo <= $.hi, \"lo must be <= hi\"),
+    hi: integer
+}
+fn test() {
+    r = Range { lo: 20, hi: 10 };
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: JSON-style quoted field names in struct literals.
+#[test]
+fn l6_json_quoted_field_names() {
+    code!(
+        r#"struct Point { x: integer, y: integer }
+fn test() {
+    p = Point { "x": 3, "y": 4 };
+    assert(p.x == 3, "x={p.x}");
+    assert(p.y == 4, "y={p.y}");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// L6: constraint with auto-generated message.
+#[test]
+#[should_panic(expected = "field constraint failed on Pos.x")]
+fn l6_constraint_auto_message() {
+    code!(
+        "struct Pos {
+    x: integer assert($.x >= 0)
+}
+fn test() {
+    p = Pos { x: 5 };
+    p.x = -1;
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: vector literal input parsed like JSON array.
+#[test]
+fn l6_vector_literal_as_json_array() {
+    code!(
+        "fn test() {
+    v = [12, 34, 56];
+    assert(len(v) == 3, \"len={len(v)}\");
+    assert(v[0] == 12);
+    assert(v[1] == 34);
+    assert(v[2] == 56);
+}"
+    )
+    .result(Value::Null);
+}
+
+/// L6: validate a vector of constrained structs with format-string message.
+#[test]
+fn l6_validate_vector_of_structs() {
+    code!(
+        "struct Item {
+    name: text,
+    qty: integer assert($.qty > 0, \"qty must be > 0 for '{$.name}'\")
+}
+fn test() {
+    items = [
+        Item { name: \"apple\", qty: 3 },
+        Item { name: \"banana\", qty: 5 }
+    ];
+    total = 0;
+    for it in items {
+        total += it.qty;
+    }
+    assert(total == 8, \"total={total}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── JSON-style parsing via `as` cast ─────────────────────────────────────────
+
+/// JSON-style quoted field names in `as Type` cast.
+#[test]
+fn json_quoted_field_names_in_cast() {
+    code!(
+        r#"struct Item { name: text, value: integer }
+fn test() {
+    jt = `{{"name": "hello", "value": 42}}` as Item;
+    assert(jt.name == "hello", "name={jt.name}");
+    assert(jt.value == 42, "value={jt.value}");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// JSON-style vector of structs parsed via `as`.
+#[test]
+fn json_vector_of_structs_cast() {
+    code!(
+        r#"struct Item { name: text, value: integer }
+fn test() {
+    items = `[ {{"name": "a", "value": 1}}, {{"name": "b", "value": 2}} ]` as vector<Item>;
+    assert(len(items) == 2, "len={len(items)}");
+    assert(items[0].name == "a");
+    assert(items[1].value == 2);
+}"#
+    )
+    .result(Value::Null);
+}
+
+// ── Type.parse(text) ──────────────────────────────────────────────────────────
+
+/// Type.parse(text) with JSON input.
+#[test]
+fn type_parse_json() {
+    code!(
+        r#"struct Score { value: integer, name: text }
+fn test() {
+    s = Score.parse(`{{"value": 42, "name": "test"}}`);
+    assert(s.value == 42, "value={s.value}");
+    assert(s.name == "test", "name={s.name}");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with loft-native input.
+#[test]
+fn type_parse_loft_native() {
+    code!(
+        r#"struct Score { value: integer, name: text }
+fn test() {
+    s = Score.parse(`{{value: 7, name: "hello"}}`);
+    assert(s.value == 7);
+    assert(s.name == "hello");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with variable input.
+#[test]
+fn type_parse_from_variable() {
+    code!(
+        r#"struct Point { x: integer, y: integer }
+fn test() {
+    input = `{{"x": 10, "y": 20}}`;
+    p = Point.parse(input);
+    assert(p.x == 10);
+    assert(p.y == 20);
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with constraint — valid data.
+#[test]
+fn type_parse_with_constraint_valid() {
+    code!(
+        r#"struct Score {
+    value: integer assert($.value >= 0, "value must be >= 0")
+}
+fn test() {
+    s = Score.parse(`{{"value": 5}}`);
+    assert(s.value == 5);
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with invalid data — constraint fires.
+#[test]
+#[should_panic(expected = "value must be >= 0")]
+fn type_parse_with_constraint_violation() {
+    code!(
+        r#"struct Score {
+    value: integer assert($.value >= 0, "value must be >= 0")
+}
+fn test() {
+    s = Score { "value": -1 };
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// L6: constraint violation with format-string message (falls back to auto-generated).
+#[test]
+#[should_panic(expected = "field constraint failed on Item.qty")]
+fn l6_vector_struct_constraint_violation() {
+    code!(
+        "struct Item {
+    name: text,
+    qty: integer assert($.qty > 0, \"qty must be > 0 for '{$.name}'\")
+}
+fn test() {
+    items = [
+        Item { name: \"bad\", qty: 0 }
+    ];
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── s#errors — error path reporting via #errors accessor ──────────────────────
+
+/// s#errors returns empty text on successful parse.
+#[test]
+fn errors_accessor_empty_on_success() {
+    code!(
+        r#"struct Score { value: integer }
+fn test() {
+    s = Score.parse(`{{"value": 42}}`);
+    err = s#errors;
+    assert(len(err) == 0, "expected no error, got: '{err}'");
+    assert(s.value == 42);
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// s#errors returns path text on parse failure.
+#[test]
+fn errors_accessor_path_on_failure() {
+    code!(
+        r#"struct Score { value: integer }
+fn test() {
+    bad = Score.parse(`not_json`);
+    err = bad#errors;
+    assert(len(err) > 0, "expected error for bad input");
+    assert(bad.value == null, "value should be null on bad parse");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// s#errors includes field path for nested struct.
+#[test]
+fn errors_accessor_nested_path() {
+    code!(
+        r#"struct Inner { x: integer }
+struct Outer { name: text, data: Inner }
+fn test() {
+    bad = Outer.parse(`{{"name": "ok", "data": "not_an_object"}}`);
+    err = bad#errors;
+    assert(len(err) > 0, "expected error for name={bad.name}");
+}"#
+    )
+    .result(Value::Null);
 }

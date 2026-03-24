@@ -19,7 +19,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             // literal that is resolved to a closure in native output_call.
             // Detect it here so the worker is included in the reachable set.
             if data.def(*d).name == "n_parallel_for"
-                && args.len() == 5
+                && args.len() >= 5
                 && let Value::Int(fn_d_nr) = &args[4]
                 && *fn_d_nr >= 0
             {
@@ -806,9 +806,18 @@ extern crate loft;"
                 self.output_block(w, bl, returns_text)?;
             }
         } else if def.code == Value::Null {
-            // Native-only function with no loft body — emit a todo!() stub.
+            // Native-only function with no loft body.
+            // Internal i_ functions have implementations in codegen_runtime.rs;
+            // all others get a todo!() stub.
             writeln!(w, "{{")?;
-            if def.returned != Type::Void {
+            if def.name == "i_parse_errors" {
+                writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
+            } else if def.name == "i_parse_error_push" {
+                writeln!(
+                    w,
+                    "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
+                )?;
+            } else if def.returned != Type::Void {
                 writeln!(w, "  todo!(\"native function {}\")", def.name)?;
             }
             writeln!(w, "}}")?;
@@ -2344,11 +2353,9 @@ extern crate loft;"
                 }
             }
             "n_parallel_for" => {
-                // Special-case: replace n_parallel_for(input, elem_sz, ret_sz, threads, fn_d_nr)
-                // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm) as i64 }).
-                // The fn_d_nr is always a compile-time constant (Value::Int), so we can
-                // resolve the worker function name statically.
-                if vals.len() == 5
+                // Special-case: replace n_parallel_for(input, elem_sz, ret_sz, threads, fn_d_nr, extras..., n_extra)
+                // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm, extras...) as i64 }).
+                if vals.len() >= 5
                     && let Value::Int(fn_d_nr) = &vals[4]
                     && *fn_d_nr >= 0
                 {
@@ -2356,7 +2363,20 @@ extern crate loft;"
                     let worker_def = self.data.def(fn_d_nr);
                     let worker_name = worker_def.name.clone();
                     let worker_ret = worker_def.returned.clone();
-                    write!(w, "n_parallel_for_native(stores, ")?;
+                    // Extra context args: vals[5..len-1], last element is n_extra count.
+                    let n_extra = if vals.len() > 6 { vals.len() - 6 } else { 0 };
+                    // Emit let-bindings for extra args so they can be captured by the closure.
+                    for i in 0..n_extra {
+                        write!(w, "{{ let _ex{i} = ")?;
+                        self.output_code_inner(w, &vals[5 + i])?;
+                        write!(w, "; ")?;
+                    }
+                    let par_fn = if matches!(&worker_ret, Type::Text(_)) {
+                        "n_parallel_for_text_native"
+                    } else {
+                        "n_parallel_for_native"
+                    };
+                    write!(w, "{par_fn}(stores, ")?;
                     self.output_code_inner(w, &vals[0])?;
                     write!(w, ", ")?;
                     self.output_code_inner(w, &vals[1])?;
@@ -2364,17 +2384,33 @@ extern crate loft;"
                     self.output_code_inner(w, &vals[2])?;
                     write!(w, ", ")?;
                     self.output_code_inner(w, &vals[3])?;
-                    // Generate closure: |stores, elm| { worker(stores, elm) as i64 }
-                    // For float: use f64::to_bits() cast to i64.
+                    // Build the extra arg list for the worker call inside the closure.
+                    #[allow(clippy::format_push_string)]
+                    let extras = {
+                        let mut s = String::new();
+                        for i in 0..n_extra {
+                            s += &format!(", _ex{i}");
+                        }
+                        s
+                    };
+                    // Generate closure with return-type-specific conversion.
                     match &worker_ret {
-                        Type::Float => write!(
+                        Type::Text(_) => write!(
                             w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm).to_bits() as i64 }})"
+                            ", |stores, elm| {{ let mut _w = String::new(); {worker_name}(stores, elm{extras}, &mut _w); _w }})"
+                        )?,
+                        Type::Float | Type::Single => write!(
+                            w,
+                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}).to_bits() as i64 }})"
                         )?,
                         _ => write!(
                             w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm) as i64 }})"
+                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}) as i64 }})"
                         )?,
+                    }
+                    // Close the let-binding braces.
+                    for _ in 0..n_extra {
+                        write!(w, " }}")?;
                     }
                     return Ok(());
                 }

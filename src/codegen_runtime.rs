@@ -13,10 +13,11 @@
 
 #![allow(non_snake_case)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 
 use crate::database::{ShowDb, Stores};
-use crate::keys::{Content, DbRef, Key};
+use crate::keys::{Content, DbRef, Key, Str};
 use crate::ops;
 use crate::tree;
 use crate::vector;
@@ -194,16 +195,26 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
         pos: 8,
     };
     stores.set_default_value(db_tp, &into);
-    let mut pos = 0;
-    if stores.parsing(val, &mut pos, db_tp, db_tp, u16::MAX, &into) {
-        into
-    } else {
-        DbRef {
-            store_nr: db.store_nr,
-            rec: 0,
-            pos: 0,
-        }
+    stores.last_parse_errors.clear();
+    if let Some(err) = stores.parse(val, db_tp, &into) {
+        stores.last_parse_errors.push(err);
     }
+    into
+}
+
+/// Return the parse errors from the last `Type.parse()` call as a single
+/// newline-separated string.  Called by the `#errors` accessor.
+pub fn i_parse_errors(stores: &mut Stores) -> Str {
+    let msg = stores.last_parse_errors.join("\n");
+    stores.last_parse_errors.clear();
+    stores.scratch.clear();
+    stores.scratch.push(msg);
+    Str::new(&stores.scratch[0])
+}
+
+/// Push a constraint-check error to the parse error list.
+pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
+    stores.last_parse_errors.push(msg.to_owned());
 }
 
 /// Deep-copy a database record: copies the raw bytes and duplicates
@@ -1261,13 +1272,61 @@ where
                 store.set_long(vec_rec, fld, val);
             }
             1 => {
-                store.set_byte(vec_rec, fld, 0, i32::from(val != 0));
+                store.set_byte(vec_rec, fld, 0, val as i32);
             }
             _ => {
                 store.set_int(vec_rec, fld, val as i32);
             }
         }
         fld += return_sz;
+    }
+    {
+        let store = stores.store_mut(&result_db);
+        store.set_int(vec_rec, 4, n as i32);
+        store.set_int(header_rec, 4, vec_rec as i32);
+    }
+    DbRef {
+        store_nr: result_db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
+}
+
+/// Text-returning variant of `n_parallel_for_native`.  The worker closure returns
+/// an owned `String`; each result is stored in the result store via `set_str` and
+/// the 4-byte text position is written into the result vector.
+pub fn n_parallel_for_text_native<F>(
+    stores: &mut Stores,
+    input: DbRef,
+    elem_size: i32,
+    _return_size: i32,
+    _threads: i32,
+    mut worker: F,
+) -> DbRef
+where
+    F: FnMut(&mut Stores, DbRef) -> String,
+{
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let result_db = stores.null();
+    let vec_words = ((n as u32) * 4 + 15) / 8;
+    let vec_cr = stores.claim(&result_db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = stores.claim(&result_db, 1);
+    let header_rec = header_cr.rec;
+    for i in 0..n {
+        let elm = {
+            let v_rec = crate::keys::store(&input, &stores.allocations)
+                .get_int(input.rec, input.pos) as u32;
+            DbRef {
+                store_nr: input.store_nr,
+                rec: v_rec,
+                pos: 8 + (i as u32) * (elem_size as u32),
+            }
+        };
+        let s = worker(stores, elm);
+        let store = stores.store_mut(&result_db);
+        let s_pos = store.set_str(&s);
+        store.set_int(vec_rec, 8 + (i as u32) * 4, s_pos as i32);
     }
     {
         let store = stores.store_mut(&result_db);

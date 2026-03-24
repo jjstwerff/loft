@@ -390,10 +390,10 @@ impl Stores {
         if let Ok((img, width, height)) = crate::png_store::read(file_path, store) {
             if let Some(name) = std::path::Path::new(&file_path).file_name() {
                 let name_pos = store.set_str(name.to_str().unwrap());
-                store.set_int(result.rec, result.pos + 4, name_pos as i32);
-                store.set_int(result.rec, result.pos + 8, width as i32);
-                store.set_int(result.rec, result.pos + 12, height as i32);
-                store.set_int(result.rec, result.pos + 16, img as i32);
+                store.set_int(result.rec, result.pos, name_pos as i32);
+                store.set_int(result.rec, result.pos + 4, width as i32);
+                store.set_int(result.rec, result.pos + 8, height as i32);
+                store.set_int(result.rec, result.pos + 12, img as i32);
                 true
             } else {
                 false
