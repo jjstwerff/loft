@@ -2211,16 +2211,16 @@ fn test() {
     .result(Value::Null);
 }
 
-// ── parse_errors() — error path reporting ────────────────────────────────────
+// ── s#errors — error path reporting via #errors accessor ──────────────────────
 
-/// parse_errors() returns empty text on successful parse.
+/// s#errors returns empty text on successful parse.
 #[test]
-fn parse_errors_empty_on_success() {
+fn errors_accessor_empty_on_success() {
     code!(
         r#"struct Score { value: integer }
 fn test() {
     s = Score.parse(`{{"value": 42}}`);
-    err = parse_errors();
+    err = s#errors;
     assert(len(err) == 0, "expected no error, got: '{err}'");
     assert(s.value == 42);
 }"#
@@ -2228,14 +2228,14 @@ fn test() {
     .result(Value::Null);
 }
 
-/// parse_errors() returns path text on parse failure.
+/// s#errors returns path text on parse failure.
 #[test]
-fn parse_errors_path_on_failure() {
+fn errors_accessor_path_on_failure() {
     code!(
         r#"struct Score { value: integer }
 fn test() {
     bad = Score.parse(`not_json`);
-    err = parse_errors();
+    err = bad#errors;
     assert(len(err) > 0, "expected error for bad input");
     assert(bad.value == null, "value should be null on bad parse");
 }"#
@@ -2243,15 +2243,15 @@ fn test() {
     .result(Value::Null);
 }
 
-/// parse_errors() includes field path for nested struct.
+/// s#errors includes field path for nested struct.
 #[test]
-fn parse_errors_nested_path() {
+fn errors_accessor_nested_path() {
     code!(
         r#"struct Inner { x: integer }
 struct Outer { name: text, data: Inner }
 fn test() {
     bad = Outer.parse(`{{"name": "ok", "data": "not_an_object"}}`);
-    err = parse_errors();
+    err = bad#errors;
     assert(len(err) > 0, "expected error for name={bad.name}");
 }"#
     )

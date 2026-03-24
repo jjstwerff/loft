@@ -3038,6 +3038,7 @@ pair the hash with a vector to iterate in insertion order"
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
             if self.lexer.has_token("#") {
+                self.var_usages(index_var, true);
                 if self.lexer.has_keyword("errors") {
                     // s#errors — return the parse errors from the last Type.parse() call.
                     let fn_nr = self.data.def_nr("n_parse_errors");
@@ -3047,7 +3048,6 @@ pair the hash with a vector to iterate in insertion order"
                     }
                     return t;
                 }
-                self.var_usages(index_var, true);
                 self.iter_op(code, name, &mut t, index_var);
             } else if let Value::Var(into) = code {
                 let v_nr = self.vars.var(name);
