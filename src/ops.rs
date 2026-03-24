@@ -332,6 +332,54 @@ pub fn op_rem_long(v1: i64, v2: i64) -> i64 {
     }
 }
 
+// ── O6: Non-null long variants ────────────────────────────────────────────
+// Skip the i64::MIN sentinel check when both operands are known non-null
+// (local variables with definite assignment).  Used by native codegen.
+
+#[inline]
+#[must_use]
+pub fn op_add_long_nn(v1: i64, v2: i64) -> i64 {
+    checked_long!(v1.checked_add(v2), "+", v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_min_long_nn(v1: i64, v2: i64) -> i64 {
+    checked_long!(v1.checked_sub(v2), "-", v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_mul_long_nn(v1: i64, v2: i64) -> i64 {
+    checked_long!(v1.checked_mul(v2), "*", v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_div_long_nn(v1: i64, v2: i64) -> i64 {
+    if v2 != 0 {
+        checked_long!(v1.checked_div(v2), "/", v1, v2)
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_rem_long_nn(v1: i64, v2: i64) -> i64 {
+    if v2 != 0 {
+        checked_long!(v1.checked_rem(v2), "%", v1, v2)
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_neg_long_nn(v1: i64) -> i64 {
+    checked_long!(v1.checked_neg(), "-", v1, 0)
+}
+
 #[inline]
 #[must_use]
 pub fn op_logical_and_long(v1: i64, v2: i64) -> i64 {
