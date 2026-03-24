@@ -1194,6 +1194,24 @@ impl Lexer {
         }
     }
 
+    /// Peek two tokens ahead to detect `identifier :` (named argument syntax).
+    /// Returns `Some(name)` if the pattern matches, without consuming any tokens.
+    /// Returns `None` if the current token is not an identifier followed by `:`.
+    pub fn peek_named_arg(&mut self) -> Option<String> {
+        if let LexItem::Identifier(ref name) = self.peek.has {
+            let name = name.clone();
+            let saved = self.link();
+            self.cont(); // consume identifier
+            let is_colon = self.peek_token(":");
+            let is_double_colon = self.peek_token("::");
+            self.revert(saved); // restore to before identifier
+            if is_colon && !is_double_colon {
+                return Some(name);
+            }
+        }
+        None
+    }
+
     /// Shorthand test if the current element is an identifier and skip it if found.
     pub fn has_identifier(&mut self) -> Option<String> {
         if let LexItem::Identifier(n) = self.peek().has {

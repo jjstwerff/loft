@@ -610,6 +610,7 @@ impl Parser {
         name: &str,
         list: &[Value],
         types: &[Type],
+        named_args: &[(String, Value, Type)],
     ) -> Type {
         // Create a new list of parameters based on the current ones
         // We still need to know the types.
@@ -627,13 +628,84 @@ impl Parser {
             )
         };
         if d_nr != u32::MAX {
-            self.call_nr(code, d_nr, list, types, true)
+            self.call_with_named(code, d_nr, list, types, named_args, true)
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else {
             diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
             Type::Unknown(0)
         }
+    }
+
+    /// Resolve named arguments into positional slots, then delegate to `call_nr`.
+    fn call_with_named(
+        &mut self,
+        code: &mut Value,
+        d_nr: u32,
+        positional: &[Value],
+        pos_types: &[Type],
+        named: &[(String, Value, Type)],
+        is_method: bool,
+    ) -> Type {
+        if named.is_empty() {
+            return self.call_nr(code, d_nr, positional, pos_types, is_method);
+        }
+        // Build full argument vector with named args placed at the correct indices.
+        let n_params = self.data.attributes(d_nr);
+        let mut args = vec![Value::Null; n_params];
+        let mut arg_types = vec![Type::Unknown(0); n_params];
+        // Place positional args first.
+        for (i, (val, tp)) in positional.iter().zip(pos_types.iter()).enumerate() {
+            if i < n_params {
+                args[i] = val.clone();
+                arg_types[i] = tp.clone();
+            }
+        }
+        let pos_count = positional.len();
+        // Place named args by looking up parameter names.
+        for (name, val, tp) in named {
+            let idx = self.data.attr(d_nr, name);
+            if idx == usize::MAX {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown parameter '{name}'"
+                    );
+                }
+                continue;
+            }
+            if idx < pos_count {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Parameter '{name}' already provided as positional argument {idx}"
+                    );
+                }
+                continue;
+            }
+            if args[idx] != Value::Null {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Duplicate named argument '{name}'"
+                    );
+                }
+                continue;
+            }
+            args[idx] = val.clone();
+            arg_types[idx] = tp.clone();
+        }
+        // Trim trailing Null args — add_defaults will fill them.
+        let mut last_provided = args.len();
+        while last_provided > 0 && args[last_provided - 1] == Value::Null {
+            last_provided -= 1;
+        }
+        args.truncate(last_provided);
+        arg_types.truncate(last_provided);
+        self.call_nr(code, d_nr, &args, &arg_types, is_method)
     }
 
     fn single_op(&mut self, op: &str, f: Value, t: Type) -> Value {
@@ -1093,9 +1165,17 @@ impl Parser {
         // first pass (allowing ref_return to find the name match instead of adding a
         // new attribute and growing the function's attr count across passes).
         let is_recursive_self = d_nr == self.context && !self.first_pass;
-        if actual.len() < self.data.attributes(d_nr) {
-            // Insert the default values for not given attributes
-            for a_nr in actual.len()..self.data.attributes(d_nr) {
+        // Extend to full parameter count so we can fill gaps from named arguments.
+        while actual.len() < self.data.attributes(d_nr) {
+            actual.push(Value::Null);
+            all_types.push(Type::Unknown(0));
+        }
+        {
+            // Fill all missing (Null) parameter slots with defaults.
+            for a_nr in 0..self.data.attributes(d_nr) {
+                if actual[a_nr] != Value::Null {
+                    continue;
+                }
                 let default = self.data.def(d_nr).attributes[a_nr].value.clone();
                 let tp = self.data.attr_type(d_nr, a_nr);
                 if let Type::Vector(content, _) = &tp {
@@ -1110,8 +1190,8 @@ impl Parser {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
                     self.data.vector_def(&mut self.lexer, content);
-                    all_types.push(Type::Vector(content.clone(), vec![vr]));
-                    actual.push(Value::Var(vr));
+                    all_types[a_nr] = Type::Vector(content.clone(), vec![vr]);
+                    actual[a_nr] = Value::Var(vr);
                 } else if let Type::Reference(content, _) = tp {
                     assert_eq!(
                         default,
@@ -1123,8 +1203,8 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
-                    all_types.push(Type::Reference(content, vec![vr]));
-                    actual.push(Value::Var(vr));
+                    all_types[a_nr] = Type::Reference(content, vec![vr]);
+                    actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
@@ -1149,15 +1229,15 @@ impl Parser {
                         0
                     };
                     ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
-                    actual.push(v_block(
+                    actual[a_nr] = v_block(
                         ls,
                         Type::Reference(self.data.def_nr("reference"), vec![vr]),
                         "default ref",
-                    ));
-                    all_types.push(tp.clone());
+                    );
+                    all_types[a_nr] = tp.clone();
                 } else {
-                    actual.push(default);
-                    all_types.push(tp.clone());
+                    actual[a_nr] = default;
+                    all_types[a_nr] = tp.clone();
                 }
             }
         }

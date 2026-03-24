@@ -1553,7 +1553,7 @@ impl Parser {
                     return *ret_type;
                 }
             }
-            return self.call(val, source, name, &list, &Vec::new());
+            return self.call(val, source, name, &list, &Vec::new(), &[]);
         }
         let fn_def_nr = if self.first_pass {
             None
@@ -1562,7 +1562,29 @@ impl Parser {
             (d_nr != u32::MAX).then_some(d_nr)
         };
         let mut arg_idx = 0usize;
+        let mut named_args: Vec<(String, Value, Type)> = Vec::new();
+        let mut in_named = false;
         loop {
+            // Check for named argument: `name: expr`
+            if let Some(arg_name) = self.lexer.peek_named_arg() {
+                in_named = true;
+                self.lexer.has_identifier(); // consume name
+                self.lexer.has_token(":");   // consume :
+                let mut p = Value::Null;
+                let t = self.expression(&mut p);
+                named_args.push((arg_name, p, t));
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+                continue;
+            }
+            if in_named && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Positional argument after named argument"
+                );
+            }
             if let Some(d_nr) = fn_def_nr
                 && arg_idx < self.data.attributes(d_nr)
             {
@@ -1657,7 +1679,7 @@ impl Parser {
                 return *ret_type;
             }
         }
-        self.call(val, source, name, &list, &types)
+        self.call(val, source, name, &list, &types, &named_args)
     }
 
     // Validate and rewrite a user-friendly `parallel_for(fn f, vec, threads)` call
