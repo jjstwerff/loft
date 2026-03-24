@@ -2023,12 +2023,12 @@ fn test() {
 #[test]
 fn l6_json_quoted_field_names() {
     code!(
-        "struct Point { x: integer, y: integer }
+        r#"struct Point { x: integer, y: integer }
 fn test() {
-    p = Point { \"x\": 3, \"y\": 4 };
-    assert(p.x == 3, \"x={p.x}\");
-    assert(p.y == 4, \"y={p.y}\");
-}"
+    p = Point { "x": 3, "y": 4 };
+    assert(p.x == 3, "x={p.x}");
+    assert(p.y == 4, "y={p.y}");
+}"#
     )
     .result(Value::Null);
 }
@@ -2083,6 +2083,37 @@ fn test() {
     }
     assert(total == 8, \"total={total}\");
 }"
+    )
+    .result(Value::Null);
+}
+
+// ── JSON-style parsing via `as` cast ─────────────────────────────────────────
+
+/// JSON-style quoted field names in `as Type` cast.
+#[test]
+fn json_quoted_field_names_in_cast() {
+    code!(
+        r#"struct Item { name: text, value: integer }
+fn test() {
+    jt = `{{"name": "hello", "value": 42}}` as Item;
+    assert(jt.name == "hello", "name={jt.name}");
+    assert(jt.value == 42, "value={jt.value}");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// JSON-style vector of structs parsed via `as`.
+#[test]
+fn json_vector_of_structs_cast() {
+    code!(
+        r#"struct Item { name: text, value: integer }
+fn test() {
+    items = `[ {{"name": "a", "value": 1}}, {{"name": "b", "value": 2}} ]` as vector<Item>;
+    assert(len(items) == 2, "len={len(items)}");
+    assert(items[0].name == "a");
+    assert(items[1].value == 2);
+}"#
     )
     .result(Value::Null);
 }
