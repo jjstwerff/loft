@@ -2118,6 +2118,81 @@ fn test() {
     .result(Value::Null);
 }
 
+// ── Type.parse(text) ──────────────────────────────────────────────────────────
+
+/// Type.parse(text) with JSON input.
+#[test]
+fn type_parse_json() {
+    code!(
+        r#"struct Score { value: integer, name: text }
+fn test() {
+    s = Score.parse(`{{"value": 42, "name": "test"}}`);
+    assert(s.value == 42, "value={s.value}");
+    assert(s.name == "test", "name={s.name}");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with loft-native input.
+#[test]
+fn type_parse_loft_native() {
+    code!(
+        r#"struct Score { value: integer, name: text }
+fn test() {
+    s = Score.parse(`{{value: 7, name: "hello"}}`);
+    assert(s.value == 7);
+    assert(s.name == "hello");
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with variable input.
+#[test]
+fn type_parse_from_variable() {
+    code!(
+        r#"struct Point { x: integer, y: integer }
+fn test() {
+    input = `{{"x": 10, "y": 20}}`;
+    p = Point.parse(input);
+    assert(p.x == 10);
+    assert(p.y == 20);
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with constraint — valid data.
+#[test]
+fn type_parse_with_constraint_valid() {
+    code!(
+        r#"struct Score {
+    value: integer assert($.value >= 0, "value must be >= 0")
+}
+fn test() {
+    s = Score.parse(`{{"value": 5}}`);
+    assert(s.value == 5);
+}"#
+    )
+    .result(Value::Null);
+}
+
+/// Type.parse(text) with invalid data — constraint fires.
+#[test]
+#[should_panic(expected = "value must be >= 0")]
+fn type_parse_with_constraint_violation() {
+    code!(
+        r#"struct Score {
+    value: integer assert($.value >= 0, "value must be >= 0")
+}
+fn test() {
+    s = Score { "value": -1 };
+}"#
+    )
+    .result(Value::Null);
+}
+
 /// L6: constraint violation with format-string message (falls back to auto-generated).
 #[test]
 #[should_panic(expected = "field constraint failed on Item.qty")]

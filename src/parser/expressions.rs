@@ -3322,11 +3322,21 @@ pair the hash with a vector to iterate in insertion order"
                 self.data.def_type(d_nr),
                 DefType::Struct | DefType::EnumValue
             ) && !matches!(self.data.def(d_nr).returned, Type::Enum(_, false, _))
-                && self.lexer.peek_token("{")
             {
-                let tp = self.parse_object(d_nr, code);
-                if tp != Type::Unknown(0) {
-                    return tp;
+                if self.lexer.peek_token("{") {
+                    let tp = self.parse_object(d_nr, code);
+                    if tp != Type::Unknown(0) {
+                        return tp;
+                    }
+                } else if self.lexer.peek_token(".") {
+                    // Check for Type.parse(text) without consuming the dot
+                    // unless we confirm it's ".parse(".
+                    // Consume "." — if parse follows, continue; otherwise this
+                    // will fall through to normal parsing which handles Struct.field.
+                    self.lexer.cont();
+                    if self.lexer.has_keyword("parse") {
+                        return self.parse_type_parse(d_nr, code);
+                    }
                 }
             } else if self.data.def_type(d_nr) == DefType::Constant {
                 *code = self.data.def(d_nr).code.clone();
@@ -3361,6 +3371,26 @@ pair the hash with a vector to iterate in insertion order"
                 );
             }
         }
+    }
+
+    /// `Type.parse(text_expr)` — parse text into a struct record.
+    /// Compiles to the same `OpCastVectorFromText` as the `as Type` cast.
+    fn parse_type_parse(&mut self, d_nr: u32, code: &mut Value) -> Type {
+        self.lexer.token("(");
+        let mut text_expr = Value::Null;
+        let tp = self.expression(&mut text_expr);
+        self.lexer.token(")");
+        if !self.first_pass {
+            if !matches!(tp, Type::Text(_)) {
+                self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
+            }
+            let known_tp = self.data.def(d_nr).known_type;
+            *code = self.cl(
+                "OpCastVectorFromText",
+                &[text_expr, Value::Int(i32::from(known_tp))],
+            );
+        }
+        Type::Reference(d_nr, Vec::new())
     }
 
     pub(crate) fn parse_string(&mut self, code: &mut Value, string: &str) -> Type {

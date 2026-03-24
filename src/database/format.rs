@@ -215,6 +215,28 @@ impl Stores {
         super::show_key(text, &key)
     }
 
+    /// Parse text into an existing record.  Returns empty Vec on success,
+    /// or a Vec with one error-path string on parse failure.
+    /// The record is populated even on failure (with partial/default values).
+    pub fn parse_into(&mut self, text: &str, tp: u16, result: &DbRef) -> Vec<String> {
+        self.set_default_value(tp, result);
+        let mut pos = 0;
+        if self.parsing(text, &mut pos, tp, tp, u16::MAX, result) {
+            Vec::new()
+        } else {
+            let err_pos = pos;
+            pos = 0;
+            let mut key = super::ParseKey {
+                line: 1,
+                line_pos: 0,
+                current: Vec::new(),
+                step: 0,
+            };
+            super::parse_key(text, &mut pos, err_pos, &mut key);
+            vec![super::show_key(text, &key)]
+        }
+    }
+
     /**
     Get the command line arguments into a vector
     # Panics
