@@ -1205,6 +1205,11 @@ fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>
                 build_scope_parents(op, parent, parents);
             }
         }
+        Value::Iter(_, create, next, extra) => {
+            build_scope_parents(create, parent, parents);
+            build_scope_parents(next, parent, parents);
+            build_scope_parents(extra, parent, parents);
+        }
         _ => {}
     }
 }

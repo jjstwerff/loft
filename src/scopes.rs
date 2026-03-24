@@ -207,17 +207,12 @@ impl Scopes {
                 Value::Insert(ops.iter().map(|v| self.scan(v, function, data)).collect())
             }
             Value::Drop(inner) => Value::Drop(Box::new(self.scan(inner, function, data))),
-            // COVERAGE GAP: Value::Iter(index_var, create, next, extra_init) is NOT recursed
-            // into here.  Iter nodes ARE present in the IR at this point (compute_intervals
-            // handles them after scan_inner runs).  Any Value::Set inside create/next/extra_init
-            // is never seen by scan_set, so those variables keep scope = u16::MAX.
-            // Currently safe because Iter sub-expressions are synthesised by the parser and
-            // contain only index-variable reads (no user Set nodes in named variables).
-            // If that invariant ever changes — e.g. a Set(v, ...) appears inside an Iter
-            // sub-expression — v will keep scope = u16::MAX, making scopes_can_conflict always
-            // return true for v, and validate_slots will panic with a false-positive conflict.
-            // Fix: add a Value::Iter arm that recurses into all three sub-expressions, mirroring
-            // the compute_intervals arm in variables.rs.
+            Value::Iter(idx, create, next, extra) => Value::Iter(
+                *idx,
+                Box::new(self.scan(create, function, data)),
+                Box::new(self.scan(next, function, data)),
+                Box::new(self.scan(extra, function, data)),
+            ),
             _ => val.clone(),
         }
     }
