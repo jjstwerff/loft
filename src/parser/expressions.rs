@@ -314,6 +314,7 @@ use a separate collection or add after the loop"
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)] // +5 lines from dead-assignment check (T1-9)
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,
@@ -506,6 +507,49 @@ use a separate collection or add after the loop"
         }
         if !matches!(code, Value::Insert(_)) {
             *code = self.towards_set(to, code, f_type, &op[0..1]);
+        }
+        // L6.2: emit field constraint check after assignment to a constrained field.
+        if !self.first_pass
+            && let Type::Reference(struct_dnr, _) = &parent_tp
+            && let Value::Call(_, to_args) = to
+            && to_args.len() >= 2
+            && let Value::Int(field_offset) = &to_args[1]
+        {
+            let sd = *struct_dnr;
+            let off = *field_offset;
+            // Find the field by matching its database offset.
+            for a_nr in 0..self.data.def(sd).attributes.len() {
+                let nm = self.data.attr_name(sd, a_nr);
+                let fpos = self.database.position(self.data.def(sd).known_type, &nm);
+                if i32::from(fpos) == off && self.data.def(sd).attributes[a_nr].check != Value::Null
+                {
+                    let check = self.data.def(sd).attributes[a_nr].check.clone();
+                    let ref_val = to_args[0].clone();
+                    let bound = Self::replace_record_ref(check, &ref_val);
+                    let msg = if self.data.def(sd).attributes[a_nr].check_message == Value::Null {
+                        Value::Text(format!(
+                            "field constraint failed on {}.{nm}",
+                            self.data.def(sd).name
+                        ))
+                    } else {
+                        let m = self.data.def(sd).attributes[a_nr].check_message.clone();
+                        Self::replace_record_ref(m, &ref_val)
+                    };
+                    let assert_dnr = self.data.def_nr("n_assert");
+                    let pos = self.lexer.pos();
+                    let assert_call = Value::Call(
+                        assert_dnr,
+                        vec![
+                            bound,
+                            msg,
+                            Value::Text(pos.file.clone()),
+                            Value::Int(pos.line as i32),
+                        ],
+                    );
+                    *code = Value::Insert(vec![code.clone(), assert_call]);
+                    break;
+                }
+            }
         }
         Type::Void
     }
@@ -3809,6 +3853,35 @@ pair the hash with a vector to iterate in insertion order"
         self.lexer.token("}");
         if !self.first_pass {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
+            // L6.2: emit all field constraint checks after construction completes.
+            let assert_dnr = self.data.def_nr("n_assert");
+            for a_nr in 0..self.data.def(td_nr).attributes.len() {
+                let check = self.data.def(td_nr).attributes[a_nr].check.clone();
+                if check != Value::Null {
+                    let bound = Self::replace_record_ref(check, code);
+                    let nm = self.data.attr_name(td_nr, a_nr);
+                    let msg = if self.data.def(td_nr).attributes[a_nr].check_message == Value::Null
+                    {
+                        Value::Text(format!(
+                            "field constraint failed on {}.{nm}",
+                            self.data.def(td_nr).name
+                        ))
+                    } else {
+                        let m = self.data.def(td_nr).attributes[a_nr].check_message.clone();
+                        Self::replace_record_ref(m, code)
+                    };
+                    let pos = self.lexer.pos();
+                    list.push(Value::Call(
+                        assert_dnr,
+                        vec![
+                            bound,
+                            msg,
+                            Value::Text(pos.file.clone()),
+                            Value::Int(pos.line as i32),
+                        ],
+                    ));
+                }
+            }
         }
         if new_object && let Value::Var(v) = code {
             list.push(Value::Var(*v));
@@ -3878,7 +3951,7 @@ pair the hash with a vector to iterate in insertion order"
             } else {
                 default = Self::replace_record_ref(default, code);
             }
-            list.push(self.set_field(td_nr, aid, pos, code.clone(), default));
+            list.push(self.set_field_no_check(td_nr, aid, pos, code.clone(), default));
         }
     }
 
@@ -3917,7 +3990,7 @@ pair the hash with a vector to iterate in insertion order"
                     exp_tp.show(&self.data, &self.vars)
                 );
             }
-            list.push(self.set_field(td_nr, nr, 0, code.clone(), value.clone()));
+            list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));
         }
     }
 

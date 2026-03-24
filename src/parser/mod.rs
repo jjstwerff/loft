@@ -716,6 +716,30 @@ impl Parser {
         ref_code: Value,
         val_code: Value,
     ) -> Value {
+        self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, true)
+    }
+
+    fn set_field_no_check(
+        &mut self,
+        d_nr: u32,
+        f_nr: usize,
+        d_pos: u16,
+        ref_code: Value,
+        val_code: Value,
+    ) -> Value {
+        self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn set_field_check(
+        &mut self,
+        d_nr: u32,
+        f_nr: usize,
+        d_pos: u16,
+        ref_code: Value,
+        val_code: Value,
+        emit_check: bool,
+    ) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
         let nm = self.data.attr_name(d_nr, f_nr);
         let pos = self.database.position(self.data.def(d_nr).known_type, &nm);
@@ -724,7 +748,21 @@ impl Parser {
         } else {
             i32::from(pos + d_pos)
         });
-        match tp {
+        let has_check = emit_check
+            && f_nr != usize::MAX
+            && !self.first_pass
+            && self
+                .data
+                .def(d_nr)
+                .attributes
+                .get(f_nr)
+                .is_some_and(|a| a.check != Value::Null);
+        let ref_for_check = if has_check {
+            Some(ref_code.clone())
+        } else {
+            None
+        };
+        let set_op = match tp {
             Type::Integer(min, _) => {
                 let m = Value::Int(min);
                 let s = tp.size(self.data.attr_nullable(d_nr, f_nr));
@@ -774,18 +812,45 @@ impl Parser {
                 if self.first_pass {
                     Value::Null
                 } else {
-                    {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "Cannot assign to field '{}' of type {}",
-                            self.data.attr_name(d_nr, f_nr),
-                            self.data.attr_type(d_nr, f_nr).name(&self.data)
-                        );
-                        Value::Null
-                    }
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot assign to field '{}' of type {}",
+                        self.data.attr_name(d_nr, f_nr),
+                        self.data.attr_type(d_nr, f_nr).name(&self.data)
+                    );
+                    Value::Null
                 }
             }
+        };
+        // L6.2: emit constraint check after every constrained field write.
+        if let Some(ref_val) = ref_for_check {
+            let check = self.data.def(d_nr).attributes[f_nr].check.clone();
+            let bound = Self::replace_record_ref(check, &ref_val);
+            let msg = if self.data.def(d_nr).attributes[f_nr].check_message == Value::Null {
+                Value::Text(format!(
+                    "field constraint failed on {}.{}",
+                    self.data.def(d_nr).name,
+                    nm
+                ))
+            } else {
+                let m = self.data.def(d_nr).attributes[f_nr].check_message.clone();
+                Self::replace_record_ref(m, &ref_val)
+            };
+            let assert_dnr = self.data.def_nr("n_assert");
+            let pos = self.lexer.pos();
+            let assert_call = Value::Call(
+                assert_dnr,
+                vec![
+                    bound,
+                    msg,
+                    Value::Text(pos.file.clone()),
+                    Value::Int(pos.line as i32),
+                ],
+            );
+            Value::Insert(vec![set_op, assert_call])
+        } else {
+            set_op
         }
     }
 
