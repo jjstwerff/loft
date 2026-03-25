@@ -165,7 +165,6 @@ All notable changes to the loft language and interpreter.
   same field name with different types, each arm now gets its own variable. Previously
   the second arm reused the first arm's type, causing garbled values.
 
-
 - **S14: stdlib struct-enum field positions** — Struct-enum types defined in the default
   library (`FieldValue`, etc.) no longer panic with "Fld N is outside of record". Fixed
   two issues in `typedef.rs`: loop range for `fill_all()` and lazy byte-type registration.
