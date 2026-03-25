@@ -30,7 +30,7 @@ const NATIVE_SKIP: &[&str] = &[];
 /// See PROBLEMS.md for issue numbers.
 /// Do NOT remove tests from this list by weakening the test — fix the native codegen instead.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // A10: field iteration generates invalid native code for mixed-type match arms.
+    // A10: native codegen for field iteration's match arms not yet supported.
     "45-field-iter.loft",
 ];
 

@@ -596,8 +596,11 @@ impl Parser {
 
             // Parse optional field bindings for struct-enum arms: `{ field1, field2, ... }`.
             // L2: fields may carry `:` sub-patterns that generate additional guard conditions.
+            // S15: each binding uses a unique variable so different arms can bind the same
+            // field name with different types without corrupting the variable's type/slot.
             let mut arm_stmts: Vec<Value> = Vec::new();
             let mut field_conditions: Vec<Value> = Vec::new();
+            let mut name_aliases: Vec<(String, Option<u16>)> = Vec::new();
             if is_struct && self.lexer.peek_token("{") {
                 self.lexer.token("{");
                 let mut seen_fields: HashSet<String> = HashSet::new();
@@ -637,10 +640,17 @@ impl Parser {
                                     field_conditions.push(cond);
                                 }
                             } else {
-                                let v_nr = self.create_var(&field_name, &field_type);
+                                // S15: use a unique variable per arm so that different
+                                // variant types get correctly-typed slots.
+                                let v_nr =
+                                    self.create_unique(&format!("mv_{field_name}"), &field_type);
                                 if v_nr != u16::MAX {
                                     self.vars.defined(v_nr);
                                     arm_stmts.push(v_set(v_nr, field_read));
+                                    // Alias the user-visible name to this unique var
+                                    // so the arm body can reference it by name.
+                                    let old = self.vars.set_name(&field_name, v_nr);
+                                    name_aliases.push((field_name.clone(), old));
                                 }
                             }
                         }
@@ -729,6 +739,16 @@ impl Parser {
                 self.expression(&mut arm_body)
             };
             self.vars.restore_write_state(&arm_write_state);
+
+            // S15: restore name mappings after arm body so the next arm can
+            // create its own alias for the same field name.
+            for (name, old) in name_aliases.drain(..) {
+                if let Some(old_nr) = old {
+                    self.vars.set_name(&name, old_nr);
+                } else {
+                    self.vars.remove_name(&name);
+                }
+            }
 
             // Type unification across arms.
             if result_type == Type::Void {
