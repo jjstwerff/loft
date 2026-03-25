@@ -352,7 +352,10 @@ impl Parser {
                     var_type.name(&self.data)
                 );
             }
-            // Return a void type — the unrolling will be handled by parse_for.
+            // Set code to the source variable so parse_field_iteration receives it.
+            if var != u16::MAX {
+                *code = Value::Var(var);
+            }
             *t = Type::Void;
             return;
         }
@@ -1463,13 +1466,13 @@ use #count instead"
             let attr_type = self.data.attr_type(struct_def_nr, a);
 
             let variant_name = match &attr_type {
-                Type::Boolean => "Bool",
-                Type::Integer(_, _) => "Int",
-                Type::Long => "Long",
-                Type::Float => "Float",
-                Type::Single => "Single",
-                Type::Character => "Char",
-                Type::Text(_) => "Text",
+                Type::Boolean => "FvBool",
+                Type::Integer(_, _) => "FvInt",
+                Type::Long => "FvLong",
+                Type::Float => "FvFloat",
+                Type::Single => "FvSingle",
+                Type::Character => "FvChar",
+                Type::Text(_) => "FvText",
                 _ => continue,
             };
 

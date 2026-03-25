@@ -908,24 +908,6 @@ fn OpSiLoad2CmpBranch(a: const u16, b: const u16, off: const i16);
 fn OpSiLoadConstMulStore(a: const u16, k: const integer, c: const u16);
 fn OpSiLoad2MulStore(a: const u16, b: const u16, c: const u16);
 fn OpNop();
-// --- Field iteration types ---
-// Used by for f in s#fields to represent each field at runtime.
-pub enum FieldValue {
-  Bool   { v: boolean },
-  Int    { v: integer },
-  Long   { v: long },
-  Float  { v: float },
-  Single { v: single },
-  Char   { v: character },
-  Text   { v: text },
-  Enum   { name: text not null, ordinal: integer not null }
-}
-
-pub struct StructField {
-  name: text not null,
-  value: FieldValue
-}
-
 // --- Vector aggregates ---
 // Internal helpers for reduce-based aggregates.
 fn __add_int(a: integer, b: integer) -> integer { a + b }
