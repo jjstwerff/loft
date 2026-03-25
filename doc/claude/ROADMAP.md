@@ -34,6 +34,7 @@ plain English describing the purpose of the code.
 | A10.3  | ↳ Loop unrolling for `Type::FieldsOf`                   | Medium    | A10.2       | collections.rs          |
 | A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
 | L6     | Prevent double evaluation of `expr ?? default`          | Small     |             | operators.rs line 330   |
+| L7     | `init(expr)` stored field initialiser with `$` reference | Small–Med |             | Design 2026-03-25       |
 
 ---
 
