@@ -1421,8 +1421,24 @@ use #count instead"
         )
     }
 
-    /// A10: try to parse `ident#fields` and generate compile-time unrolled blocks.
-    /// A10: compile-time unroll `for f in s#fields {{ body }}` into one block per field.
+    /// Build ops to construct a struct/struct-enum instance, replicating the IR that
+    /// `parse_object` produces. Returns the ops list and the work variable holding the result.
+    fn build_object_ops(&mut self, td_nr: u32, fields: &[(usize, Value)]) -> (Vec<Value>, u16) {
+        let ret = self.data.def(td_nr).returned.clone();
+        let w = self.vars.work_refs(&ret, &mut self.lexer);
+        self.data.set_referenced(td_nr, self.context, Value::Null);
+        let tp = i32::from(self.data.def(td_nr).known_type);
+        let mut list: Vec<Value> = vec![
+            v_set(w, Value::Null),
+            self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]),
+        ];
+        for &(f_nr, ref val) in fields {
+            list.push(self.set_field_no_check(td_nr, f_nr, 0, Value::Var(w), val.clone()));
+        }
+        (list, w)
+    }
+
+    /// A10: compile-time unroll `for f in s#fields` into one block per field.
     fn parse_field_iteration(
         &mut self,
         loop_var_name: &str,
@@ -1441,6 +1457,7 @@ use #count instead"
         let num_attrs = self.data.attributes(struct_def_nr);
         let mut blocks: Vec<Value> = Vec::new();
 
+        let work_checkpoint = self.vars.work_ref();
         for a in 0..num_attrs {
             let attr_name = self.data.attr_name(struct_def_nr, a);
             let attr_type = self.data.attr_type(struct_def_nr, a);
@@ -1458,45 +1475,28 @@ use #count instead"
 
             let field_read = self.get_field(struct_def_nr, a, source_expr.clone());
             let variant_def_nr = self.data.def_nr(variant_name);
-
-            // Build FieldValue variant using the parser's object construction pattern:
-            // OpDatabase allocates the record, then set_field sets each attribute.
-            let fv_type = Type::Enum(self.data.def(variant_def_nr).parent, true, Vec::new());
-            let fv_work = self.vars.work_refs(&fv_type, &mut self.lexer);
-            let fv_known = i32::from(self.data.def(variant_def_nr).known_type);
             let disc_val = self.data.def(variant_def_nr).attributes[0].value.clone();
-            let mut fv_ops: Vec<Value> = vec![
-                v_set(fv_work, Value::Null),
-                self.cl("OpDatabase", &[Value::Var(fv_work), Value::Int(fv_known)]),
-                self.set_field_no_check(variant_def_nr, 0, 0, Value::Var(fv_work), disc_val),
-                self.set_field_no_check(variant_def_nr, 1, 0, Value::Var(fv_work), field_read),
-            ];
-            fv_ops.push(Value::Var(fv_work));
-            let fv_expr = v_block(fv_ops, fv_type.clone(), "fv_ctor");
 
-            // Build StructField using the same pattern.
-            let sf_work = self.vars.work_refs(&field_type, &mut self.lexer);
-            let sf_known = i32::from(self.data.def(field_def_nr).known_type);
-            self.data
-                .set_referenced(field_def_nr, self.context, Value::Null);
-            let mut sf_ops: Vec<Value> = vec![
-                v_set(sf_work, Value::Null),
-                self.cl("OpDatabase", &[Value::Var(sf_work), Value::Int(sf_known)]),
-                self.set_field_no_check(
-                    field_def_nr,
-                    0,
-                    0,
-                    Value::Var(sf_work),
-                    Value::Text(attr_name),
-                ),
-                self.set_field_no_check(field_def_nr, 1, 0, Value::Var(sf_work), fv_expr),
-            ];
-            sf_ops.push(Value::Var(sf_work));
-            let sf_result = v_block(sf_ops, field_type.clone(), "sf_ctor");
+            // Construct FieldValue variant as Value::Insert (flat ops list).
+            let (fv_ops, fv_work) =
+                self.build_object_ops(variant_def_nr, &[(0, disc_val), (1, field_read)]);
+            let fv_insert = Value::Insert(fv_ops);
 
-            blocks.push(v_set(loop_var, sf_result));
+            // Construct StructField: the FieldValue is passed as Value::Var(fv_work)
+            // after the Insert has executed.
+            let (sf_ops, sf_work) = self.build_object_ops(
+                field_def_nr,
+                &[(0, Value::Text(attr_name)), (1, Value::Var(fv_work))],
+            );
+            let sf_insert = Value::Insert(sf_ops);
+
+            blocks.push(fv_insert);
+            blocks.push(sf_insert);
+            blocks.push(v_set(loop_var, Value::Var(sf_work)));
             blocks.push(body.clone());
         }
+        // Mark work refs as skip_free — they are consumed by the loop var assignment.
+        self.vars.clean_work_refs(work_checkpoint);
 
         if blocks.is_empty() {
             *code = Value::Null;
