@@ -42,11 +42,13 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
   - [L6 — Prevent double evaluation of `expr ?? default`](#l6--prevent-double-evaluation-of-expr--default)
+  - [L7 — `init(expr)` stored field initialiser with `$` reference](#l7--initexpr-stored-field-initialiser-with--reference)
 - [S — Stability Hardening](#s--stability-hardening)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
 - [P — Prototype Features](#p--prototype-features)
+  - [P5 — First-parameter generic functions](#p5--first-parameter-generic-functions) *(0.8.3)*
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
@@ -89,7 +91,11 @@ or type system; 0.8.2 correctness work is a prerequisite.
 **Lambda expressions (P1):** ✓ completed in 0.8.2.
 **Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
 
-**Nested match patterns (L2):** ✓ completed. Enum variants, scalars, wildcards, or-patterns in field positions.
+**Generic functions (P5):**
+- **P5** — First-parameter generic functions: `fn name<T>(param: T, ...)` with demand-driven instantiation.
+
+**Pattern extensions (L2):**
+- **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
 
 **Remaining:**
 - **A10** — Field iteration (`for f in s#fields`): 5 phases (A10.0–A10.4).
@@ -275,7 +281,8 @@ in a better state than it found it, with passing tests).
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1 (done in 0.8.2); batch together
-2. **A10** — field iteration; independent, medium; can land in parallel with P3
+2. **P5** — generic functions; independent of P3/L2; land after data.rs changes settle
+3. **A10** — field iteration; independent, medium; can land in parallel with P3
 
 **For 0.8.4 (after 0.8.3 is tagged):**
 1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
@@ -319,6 +326,154 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 ---
 
 ---
+
+---
+
+### L6  Prevent double evaluation of `expr ?? default`
+**Sources:** Code review 2026-03-24 — known V1 limitation noted in `src/parser/operators.rs` line 330
+**Severity:** Medium — `f() ?? default` calls `f()` twice; wrong if `f()` has side-effects or is expensive
+**Description:** The null-coalescing operator `??` currently clones the LHS expression into two positions in the IR — once as the condition (`bool(expr)`) and once as the true branch — so the bytecode evaluates it twice.  For a `Value::Var(n)` LHS this is harmless (reading a stack slot twice), but for any call, field access, or index expression it causes a double evaluation.
+
+**Fix:**  When the LHS is not already `Value::Var(_)`, materialise it into a compiler-generated temp before building the conditional:
+
+```rust
+if let Value::Var(_) = code {
+    // Simple variable: reading twice is side-effect-free.
+    let lhs = code.clone();
+    let mut null_check = code.clone();
+    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+    *code = v_if(null_check, lhs, rhs);
+} else {
+    // Non-trivial expression: materialise into a temp to avoid double evaluation.
+    let tmp = self.create_unique("ncc", &lhs_type);
+    let set_tmp = v_set(tmp, code.clone());
+    let mut null_check = Value::Var(tmp);
+    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+    let if_expr = v_if(null_check, Value::Var(tmp), rhs);
+    *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
+}
+*ctp = lhs_type;
+```
+
+All helpers (`v_if`, `v_set`, `v_block`, `create_unique`) already exist.  The two-pass design is safe: `create_unique` uses a counter suffix (`_ncc_1`, `_ncc_2`, …) and `add_variable` returns the same slot on the second pass.
+
+**Fix path:**
+1. Replace lines ~353–360 in the `??` branch of `handle_operator` in `src/parser/operators.rs` with the code above.
+2. Add `tests/scripts/null_coalesce_once.loft` — call a side-effectful function through `??`, assert it ran exactly once.
+3. Run `make test`; verify no regressions and that the dump shows one `OpCall` for the LHS, not two.
+
+**Effort:** Small (one code block in `operators.rs` + one test script)
+**Target:** 0.8.3
+
+---
+
+### L7  `init(expr)` stored field initialiser with `$` reference
+**Sources:** Design conversation 2026-03-25
+**Severity:** Low–Medium — stored fields with derived defaults currently require the caller to
+compute them manually at every construction site; `computed(expr)` covers the read-only case
+but leaves no option for a mutable field with a smart default
+**Description:** A new field modifier `init(expr)` evaluated once when a record is created
+(like `= expr`) but allowed to reference `$` (the record being constructed) and therefore
+other fields including `computed` ones.  After construction the field is writable like any
+ordinary stored field.
+
+```loft
+struct Metrics {
+    c: integer,                    // stored, writable, no default
+    b: integer computed($.c),      // no storage — inlines $.c at every read
+    a: integer init($.b * 5),      // stored at creation, writable after
+}
+
+m = Metrics { c: 3 };
+// m.a == 15  (init evaluated: $.b → $.c → 3 * 5)
+// m.b == 3   (computed: always $.c)
+m.c = 10;
+// m.b == 10  (computed: follows c)
+// m.a == 15  (stored: frozen at init)
+m.a = 99;    // ok: init fields are freely writable
+```
+
+**Modifier comparison:**
+
+| Modifier | Storage | Writable | Evaluated | `$` allowed |
+|---|---|---|---|---|
+| *(plain)* | yes | yes | never | no |
+| `= literal` | yes | yes | once at init | no |
+| `init(expr)` | yes | yes | once at init | **yes** |
+| `computed(expr)` | no | no | on every read | yes |
+
+`= expr` without `$` keeps its current meaning.  If `= expr` references `$`, it is a parse
+error — users must use `init(expr)` explicitly so the init-time evaluation is visible.
+
+**Evaluation order (struct):** `init(expr)` runs after all explicitly-supplied field values
+have been written, so a `computed` field accessed inside `init` sees the supplied values of
+the fields it depends on.
+
+**Circular-init detection:** Two `init` fields that reference each other are a compile-time
+error.  Build a dependency graph over `init` fields (extract all `$`-accesses from each init
+expression), then DFS for cycles.  Runs during the first parser pass.
+
+---
+
+**Function parameter form:**
+
+`init(expr)` is also allowed on function parameters to provide a dynamic default evaluated
+at call time from earlier parameters:
+
+```loft
+fn normalize(x: float, y: float, scale: float init(sqrt(x*x + y*y))) -> Point {
+    Point { x: x / scale, y: y / scale }
+}
+
+normalize(3.0, 4.0)              // scale = 5.0 (computed from x, y)
+normalize(3.0, 4.0, scale: 1.0) // scale = 1.0 (explicit)
+```
+
+The `init` expression is evaluated at the call site when the argument is not supplied; earlier
+parameters are already live stack slots and can be referenced directly (no `$` needed).
+`init` parameters must appear after all parameters they reference, and — like `= expr`
+defaults — after all required parameters.  Referencing a later parameter in `init(expr)` is
+a compile-time error.
+
+Existing `= expr` on parameters stays constant-only; if the expression references a parameter
+name, the parser emits an error and suggests `init(expr)`.
+
+---
+
+**Fix path:**
+1. **Lexer** (`src/lexer.rs`): add `"init"` to `KEYWORDS`.
+2. **Parser — field modifier** (`src/parser/definitions.rs`, `parse_field_default`):
+   extend the `computed/virtual` branch to also accept `"init"`; parse the expression the
+   same way (`(` expr `)`); do **not** set `attribute.constant = true`.  Set a new
+   `attribute.init = true` flag instead.
+3. **Data model** (`src/data.rs`): add `pub init: bool` to `Attribute`; default `false`.
+4. **Struct construction** (`src/parser/objects.rs`, field-init loop):
+   for `init` fields, call `replace_record_ref(attr.value, record_ref)` at the call site —
+   already done for stored defaults via `default = Self::replace_record_ref(default, code)`.
+   Computed fields accessed inside the expression are transparently inlined by the existing
+   `get_field` path (it already expands `constant` fields inline).
+5. **Write guard**: the existing guard that errors on assignment to a `computed` field must
+   not fire for `init` fields (`init == true`, `constant == false`); no change needed as
+   `constant` stays `false`.
+6. **Circular-init detection** (`src/parser/definitions.rs`, after parsing all struct
+   fields): collect fields where `attribute.init`, extract `$`-access names via a recursive
+   walk, build a directed graph, DFS for cycles; emit `diagnostic!(Level::Error, …)`.
+7. **Parser — function parameter default** (`src/parser/definitions.rs`, parameter-parsing
+   loop): extend the `= expr` default branch to also accept `init(expr)`; parse the
+   expression in the current parameter scope (earlier params are already registered as
+   `Value::Var(n)`); store the init expression alongside the parameter default.  At the
+   call site, emit the expression as the argument value when no argument is supplied —
+   identical to `= expr` defaults except the expression is not required to be constant.
+8. **Docs**: update the grammar in `LOFT.md` (`field_mod` and `param` productions), add
+   `init` to both the field modifier table and the parameter modifier table, add worked
+   examples for both contexts.
+9. **Tests** (`tests/scripts/init_field.loft`, `tests/scripts/init_param.loft`):
+   - struct: basic `init` from a plain field; from a `computed` field; overridden in literal; mutated after construction; circular → compile error
+   - function: default computed from earlier param; explicit arg overrides; `init` referencing a later param → compile error
+
+**Effort:** Small–Medium (data.rs + lexer.rs + definitions.rs + objects.rs + docs + tests;
+no bytecode or fill.rs changes needed)
+**Target:** 0.8.3
 
 ---
 
@@ -417,6 +572,124 @@ Phases:
 **Effort:** Medium (C1 is Small; full C1–C4 is Medium)
 **Target:** Deferred — superseded by Tier N (native Rust code generation eliminates
 the recompile overhead that caching was designed to address)
+
+---
+
+### P5  First-parameter generic functions
+**Sources:** Design conversation 2026-03-25
+**Severity:** Medium — container helpers, identity-like functions, and pass-through
+wrappers must be written once per concrete element type today; any new numeric type
+(e.g. `u16`) immediately requires duplicating every such helper
+**Description:** A single type variable `<T>` bound to the first parameter lets the
+programmer write a function body once and have the compiler instantiate it for each
+concrete type it is called with.
+
+```loft
+fn identity<T>(x: T) -> T { x }
+fn first<T>(v: vector<T>) -> T { v[0] }
+fn wrap<T>(x: T) -> vector<T> { [x] }
+fn pair<T>(a: T, b: T) -> vector<T> { [a, b] }
+fn print_and_return<T>(x: T, label: text) -> T { println(label); x }
+```
+
+`T` may appear in the first parameter position, any additional parameter of the same
+type, and the return type.  It may also appear as the element type of a container
+(`vector<T>`, `hash<T[key]>`, etc.) in any parameter or return position.
+
+#### Allowed operations on T
+Only operations that are defined on the container, not on T itself, are permitted:
+
+| Allowed | Reason |
+|---|---|
+| Pass T through — assign, return, store in `vector<T>` | No type-specific code |
+| `v[i]` where `v: vector<T>` | Indexing dispatches on the container, not on T |
+| `v += [x]` where `v: vector<T>`, `x: T` | Append dispatches on the container |
+| `len(v)` where `v: vector<T>` | Structural operation on the container |
+| Concrete-typed parameters alongside T | No constraint on non-T params |
+
+#### Disallowed operations — compile-time errors
+
+| Situation | Error message |
+|---|---|
+| `x.field` where `x: T` | `generic type T: field access requires a concrete type — write a typed overload for each type that needs '{field}'` |
+| `x + y`, `x - y`, etc. where x or y is T | `generic type T: operator '{op}' requires a concrete type — operators are type-specific` |
+| `x.method()` where `x: T` | `generic type T: method call requires a concrete type — write a typed overload for each type that needs '{method}'` |
+| `T { field: val }` construction | `generic type T: struct construction requires a concrete type` |
+| `match x { ... }` where `x: T` | `generic type T: match requires a concrete type` |
+| `x as SomeType` cast where `x: T` | `generic type T: explicit cast requires a concrete type` |
+| Second type variable `<T, U>` | `only one type variable is supported; replace 'U' with a concrete type or write separate overloads` |
+| T only in non-first position | `type variable T must appear as the first parameter — move T to the first parameter position` |
+| Recursive generic call | `generic functions cannot call themselves recursively — instantiation is demand-driven` |
+| T used in first-pass before any call | *(not an error — templates are not compiled until first use)* |
+
+#### Implementation mechanics
+
+Instantiation reuses the existing `t_<LEN><Type>_name` naming scheme, so no changes
+to `find_fn`, bytecode compilation, or the runtime are required for instantiated
+functions.  A generic `fn identity<T>` called with `x: Point` produces a concrete
+definition stored as `t_5Point_identity`, indistinguishable from a hand-written
+`fn identity(self: Point) -> Point { self }`.
+
+The call-site lookup sequence in `parse_call` becomes:
+1. Look for an exact typed match as today (`t_<LEN><Type>_name` or `n_name`).
+2. If not found, look for `DefType::Generic` under `n_name`.
+3. If found and arg[0]'s type is concrete: clone the template IR, substitute
+   `Type::Unknown("T")` → concrete type, register the instantiated definition, emit
+   the call.
+4. If arg[0]'s type is still unknown at the call site: emit
+   `cannot infer type for generic parameter T — provide an explicit type annotation`.
+
+**Fix path:**
+
+**P5.1 — Parser: `<T>` syntax + template registration** (`src/parser/definitions.rs`, `src/data.rs`):
+After the `fn` keyword, detect `'<' Identifier '>'` and store the type-variable name.
+Validate that the first parameter's declared type matches the type-variable name;
+emit an error if `T` does not appear there.  Register the definition with a new
+`DefType::Generic` variant instead of `DefType::Function`.  Parse the body in the
+second pass as normal (this produces the template `Value` IR); skip the
+`byte_code` compilation step for generic definitions — they are compiled only at
+instantiation time.
+
+**P5.2 — Call-site instantiation** (`src/parser/control.rs`):
+In the not-found branch of `parse_call`, check whether a `DefType::Generic` exists
+with the same name.  If yes, resolve arg[0]'s type; if it is concrete, call a new
+`instantiate_generic(data, generic_def_nr, concrete_type)` function that:
+1. Clones the template's `Value` IR and attribute list.
+2. Replaces every `Type::Unknown("T")` with the concrete type.
+3. Adds a new `DefType::Function` definition under the mangled name.
+4. Calls `byte_code` on the new definition immediately so it is ready for execution.
+Returns the new definition's `d_nr` and proceeds with the call as normal.
+
+**P5.3 — Validation errors** (`src/parser/` — second pass of template body):
+While parsing the template body, represent T as `Type::Unknown(GENERIC_T_SENTINEL)`
+where `GENERIC_T_SENTINEL = u32::MAX - 1` — a value not used by any other
+`Type::Unknown` producer (forward references use 1..u32::MAX-2; the parallel-worker
+placeholder uses u32::MAX).  This avoids any change to the `Type` enum and leaves
+all existing exhaustive match arms unchanged.
+
+Guard `typedef.rs`'s forward-resolution loop so that it skips the sentinel value
+(~3 lines).  Then at each error emission site, add a sentinel check before the
+existing diagnostic:
+
+| Error site | File | Change |
+|---|---|---|
+| Field access on unknown | `fields.rs:13` | `if tp == SENTINEL` → specific field error |
+| Operator no match | `mod.rs` `call_op` | `if types[i] == SENTINEL` → specific operator error |
+| Unary operator | `operators.rs:185` | Thread `Type` to the error site; add sentinel check |
+| Method/function not found | `mod.rs:629` | Check arg[0] type before lookup failure error |
+| match / cast on unknown | `control.rs` | Add sentinel check at each arm |
+
+Total change: ~36 lines across 4–5 existing files; no enum changes; no impact on
+compiled code that does not use generics.
+
+**P5.4 — Tests + docs** (`tests/docs/`, `doc/claude/LOFT.md`):
+- `tests/docs/35-generics.loft`: identity, first, wrap, pair, cross-type calls, each
+  of the disallowed operations (each must produce the specified error message).
+- Add a § "Generic functions" section to `LOFT.md` after the Polymorphism section.
+
+**Effort:** Medium (definitions.rs, data.rs, control.rs, ~120–180 lines net new;
+no changes to fill.rs, scopes.rs, or the runtime)
+**Target:** 0.8.3
 
 ---
 
