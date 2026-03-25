@@ -21,6 +21,11 @@ plain English describing the purpose of the code.
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
 | P3     | Vector aggregates (sum, min_of, any, all, count_if)     | Low–Med   | P1          | Stdlib audit 2026-03-15 |
+| P5     | First-parameter generic functions (`fn name<T>(...)`)   | Medium    |             | Design 2026-03-25       |
+| P5.1   | ↳ `<T>` syntax + `DefType::Generic` template storage    | Small     |             | definitions.rs, data.rs |
+| P5.2   | ↳ Call-site instantiation + name mangling               | Medium    | P5.1        | control.rs              |
+| P5.3   | ↳ Validation errors for disallowed uses of T            | Small     | P5.1        | parser/ (second pass)   |
+| P5.4   | ↳ Tests + LOFT.md § Generic functions                   | Small     | P5.2, P5.3  | tests/docs/, LOFT.md    |
 | T2     | `size(t)` — character count for text                    | Small     |             | User request 2026-03-24 |
 | L2     | Nested patterns in field positions                      | Medium    |             | MATCH.md L2             |
 | L3     | `FileResult` enum for mutating fs operations            | Small     |             | User request 2026-03-19 |

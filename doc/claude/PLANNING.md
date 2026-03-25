@@ -48,6 +48,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
 - [P — Prototype Features](#p--prototype-features)
+  - [P5 — First-parameter generic functions](#p5--first-parameter-generic-functions) *(0.8.3)*
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
@@ -89,6 +90,9 @@ or type system; 0.8.2 correctness work is a prerequisite.
 
 **Lambda expressions (P1):** ✓ completed in 0.8.2.
 - **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
+
+**Generic functions (P5):**
+- **P5** — First-parameter generic functions: `fn name<T>(param: T, ...)` with demand-driven instantiation.
 
 **Pattern extensions (L2):**
 - **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
@@ -281,7 +285,8 @@ in a better state than it found it, with passing tests).
 
 **For 0.8.3 (after 0.8.2 is tagged):**
 1. **P3** + **L2** — aggregates and nested patterns; P3 depends on P1 (done in 0.8.2); batch together
-2. **A10** — field iteration; independent, medium; can land in parallel with P3
+2. **P5** — generic functions; independent of P3/L2; land after data.rs changes settle
+3. **A10** — field iteration; independent, medium; can land in parallel with P3
 
 **For 0.8.4 (after 0.8.3 is tagged):**
 1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
@@ -751,6 +756,124 @@ Phases:
 **Effort:** Medium (C1 is Small; full C1–C4 is Medium)
 **Target:** Deferred — superseded by Tier N (native Rust code generation eliminates
 the recompile overhead that caching was designed to address)
+
+---
+
+### P5  First-parameter generic functions
+**Sources:** Design conversation 2026-03-25
+**Severity:** Medium — container helpers, identity-like functions, and pass-through
+wrappers must be written once per concrete element type today; any new numeric type
+(e.g. `u16`) immediately requires duplicating every such helper
+**Description:** A single type variable `<T>` bound to the first parameter lets the
+programmer write a function body once and have the compiler instantiate it for each
+concrete type it is called with.
+
+```loft
+fn identity<T>(x: T) -> T { x }
+fn first<T>(v: vector<T>) -> T { v[0] }
+fn wrap<T>(x: T) -> vector<T> { [x] }
+fn pair<T>(a: T, b: T) -> vector<T> { [a, b] }
+fn print_and_return<T>(x: T, label: text) -> T { println(label); x }
+```
+
+`T` may appear in the first parameter position, any additional parameter of the same
+type, and the return type.  It may also appear as the element type of a container
+(`vector<T>`, `hash<T[key]>`, etc.) in any parameter or return position.
+
+#### Allowed operations on T
+Only operations that are defined on the container, not on T itself, are permitted:
+
+| Allowed | Reason |
+|---|---|
+| Pass T through — assign, return, store in `vector<T>` | No type-specific code |
+| `v[i]` where `v: vector<T>` | Indexing dispatches on the container, not on T |
+| `v += [x]` where `v: vector<T>`, `x: T` | Append dispatches on the container |
+| `len(v)` where `v: vector<T>` | Structural operation on the container |
+| Concrete-typed parameters alongside T | No constraint on non-T params |
+
+#### Disallowed operations — compile-time errors
+
+| Situation | Error message |
+|---|---|
+| `x.field` where `x: T` | `generic type T: field access requires a concrete type — write a typed overload for each type that needs '{field}'` |
+| `x + y`, `x - y`, etc. where x or y is T | `generic type T: operator '{op}' requires a concrete type — operators are type-specific` |
+| `x.method()` where `x: T` | `generic type T: method call requires a concrete type — write a typed overload for each type that needs '{method}'` |
+| `T { field: val }` construction | `generic type T: struct construction requires a concrete type` |
+| `match x { ... }` where `x: T` | `generic type T: match requires a concrete type` |
+| `x as SomeType` cast where `x: T` | `generic type T: explicit cast requires a concrete type` |
+| Second type variable `<T, U>` | `only one type variable is supported; replace 'U' with a concrete type or write separate overloads` |
+| T only in non-first position | `type variable T must appear as the first parameter — move T to the first parameter position` |
+| Recursive generic call | `generic functions cannot call themselves recursively — instantiation is demand-driven` |
+| T used in first-pass before any call | *(not an error — templates are not compiled until first use)* |
+
+#### Implementation mechanics
+
+Instantiation reuses the existing `t_<LEN><Type>_name` naming scheme, so no changes
+to `find_fn`, bytecode compilation, or the runtime are required for instantiated
+functions.  A generic `fn identity<T>` called with `x: Point` produces a concrete
+definition stored as `t_5Point_identity`, indistinguishable from a hand-written
+`fn identity(self: Point) -> Point { self }`.
+
+The call-site lookup sequence in `parse_call` becomes:
+1. Look for an exact typed match as today (`t_<LEN><Type>_name` or `n_name`).
+2. If not found, look for `DefType::Generic` under `n_name`.
+3. If found and arg[0]'s type is concrete: clone the template IR, substitute
+   `Type::Unknown("T")` → concrete type, register the instantiated definition, emit
+   the call.
+4. If arg[0]'s type is still unknown at the call site: emit
+   `cannot infer type for generic parameter T — provide an explicit type annotation`.
+
+**Fix path:**
+
+**P5.1 — Parser: `<T>` syntax + template registration** (`src/parser/definitions.rs`, `src/data.rs`):
+After the `fn` keyword, detect `'<' Identifier '>'` and store the type-variable name.
+Validate that the first parameter's declared type matches the type-variable name;
+emit an error if `T` does not appear there.  Register the definition with a new
+`DefType::Generic` variant instead of `DefType::Function`.  Parse the body in the
+second pass as normal (this produces the template `Value` IR); skip the
+`byte_code` compilation step for generic definitions — they are compiled only at
+instantiation time.
+
+**P5.2 — Call-site instantiation** (`src/parser/control.rs`):
+In the not-found branch of `parse_call`, check whether a `DefType::Generic` exists
+with the same name.  If yes, resolve arg[0]'s type; if it is concrete, call a new
+`instantiate_generic(data, generic_def_nr, concrete_type)` function that:
+1. Clones the template's `Value` IR and attribute list.
+2. Replaces every `Type::Unknown("T")` with the concrete type.
+3. Adds a new `DefType::Function` definition under the mangled name.
+4. Calls `byte_code` on the new definition immediately so it is ready for execution.
+Returns the new definition's `d_nr` and proceeds with the call as normal.
+
+**P5.3 — Validation errors** (`src/parser/` — second pass of template body):
+While parsing the template body, represent T as `Type::Unknown(GENERIC_T_SENTINEL)`
+where `GENERIC_T_SENTINEL = u32::MAX - 1` — a value not used by any other
+`Type::Unknown` producer (forward references use 1..u32::MAX-2; the parallel-worker
+placeholder uses u32::MAX).  This avoids any change to the `Type` enum and leaves
+all existing exhaustive match arms unchanged.
+
+Guard `typedef.rs`'s forward-resolution loop so that it skips the sentinel value
+(~3 lines).  Then at each error emission site, add a sentinel check before the
+existing diagnostic:
+
+| Error site | File | Change |
+|---|---|---|
+| Field access on unknown | `fields.rs:13` | `if tp == SENTINEL` → specific field error |
+| Operator no match | `mod.rs` `call_op` | `if types[i] == SENTINEL` → specific operator error |
+| Unary operator | `operators.rs:185` | Thread `Type` to the error site; add sentinel check |
+| Method/function not found | `mod.rs:629` | Check arg[0] type before lookup failure error |
+| match / cast on unknown | `control.rs` | Add sentinel check at each arm |
+
+Total change: ~36 lines across 4–5 existing files; no enum changes; no impact on
+compiled code that does not use generics.
+
+**P5.4 — Tests + docs** (`tests/docs/`, `doc/claude/LOFT.md`):
+- `tests/docs/35-generics.loft`: identity, first, wrap, pair, cross-type calls, each
+  of the disallowed operations (each must produce the specified error message).
+- Add a § "Generic functions" section to `LOFT.md` after the Polymorphism section.
+
+**Effort:** Medium (definitions.rs, data.rs, control.rs, ~120–180 lines net new;
+no changes to fill.rs, scopes.rs, or the runtime)
+**Target:** 0.8.3
 
 ---
 
