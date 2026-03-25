@@ -52,6 +52,9 @@ plain English describing the purpose of the code.
 | CO1.4  | ↳ `yield from` delegation                               | Medium    | CO1.3       | state/mod.rs            |
 | CO1.5  | ↳ `for item in generator` integration                   | Small     | CO1.3       | parser/collections.rs   |
 | CO1.6  | ↳ `next()` / `exhausted()` stdlib                       | Small     | CO1.2       | native.rs               |
+| S14    | Struct-enum stdlib field positions (#80)                 | Medium    |             | CAVEATS.md C9           |
+| S15    | Struct-enum same-name variant field offsets (#81)        | Medium    |             | CAVEATS.md C10          |
+| L8     | Warn on format specifier / type mismatch                | Small     |             | CAVEATS.md C14          |
 
 ---
 
@@ -123,13 +126,10 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.3   | ↳ Removal                                               | Small     | A4.1        | database.rs             |
 | A4.4   | ↳ Full iteration                                        | Small     | A4.2, A4.3  | database.rs, io.rs      |
 | A12    | Lazy work-variable initialization                       | Medium    |             | PLANNING.md A12         |
-| S14    | Struct-enum stdlib field positions (#80)                 | Medium    |             | CAVEATS.md C9           |
-| S15    | Struct-enum same-name variant field offsets (#81)        | Medium    |             | CAVEATS.md C10          |
 | S16    | Native codegen: enum method dispatch                    | Small–Med |             | CAVEATS.md C2           |
 | S17    | Slot: text below TOS in nested scopes                   | Medium    |             | CAVEATS.md C4           |
 | S18    | Slot: sequential file blocks conflict                   | Medium    |             | CAVEATS.md C5           |
 | L7     | Non-zero exit code on parse/runtime errors              | Small     |             | CAVEATS.md C6           |
-| L8     | Warn on format specifier / type mismatch                | Small     |             | CAVEATS.md C14          |
 
 ---
 
