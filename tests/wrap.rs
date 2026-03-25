@@ -288,7 +288,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::new()
+    HashSet::from(["45-field-iter.loft"])
 }
 
 macro_rules! script_test {
@@ -410,6 +410,18 @@ fn size_text() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
         PathBuf::from("tests/scripts/41-size-text.loft"),
+        false,
+        true,
+    )
+}
+
+/// A10: Verify field iteration (for f in s#fields).
+#[test]
+#[ignore = "A10: field iteration not yet implemented"]
+fn field_iteration() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(
+        PathBuf::from("tests/scripts/45-field-iter.loft"),
         false,
         true,
     )
