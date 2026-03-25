@@ -288,7 +288,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from(["42-file-result.loft"])
+    HashSet::new()
 }
 
 macro_rules! script_test {
@@ -417,7 +417,6 @@ fn size_text() -> std::io::Result<()> {
 
 /// L3: Verify FileResult enum for filesystem operations.
 #[test]
-#[ignore = "L3: FileResult enum not yet implemented"]
 fn file_result() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
