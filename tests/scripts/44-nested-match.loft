@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// L2: Nested patterns in match field positions
+
+enum Status { Pending, Paid, Refunded }
+
+struct Order {
+  id: integer,
+  status: Status,
+  amount: float
+}
+
+fn classify(o: Order) -> text {
+  match o {
+    Order { status: Paid, amount } => "paid:{amount}"
+    Order { status: Refunded, amount } => "refunded:{amount}"
+    _ => "other"
+  }
+}
+
+fn main() {
+  // --- Enum sub-pattern in struct field ---
+  o1 = Order { id: 1, status: Status.Paid, amount: 99.0 };
+  assert(classify(o1) == "paid:99", "paid order");
+
+  o2 = Order { id: 2, status: Status.Refunded, amount: 50.0 };
+  assert(classify(o2) == "refunded:50", "refunded order");
+
+  o3 = Order { id: 3, status: Status.Pending, amount: 10.0 };
+  assert(classify(o3) == "other", "pending order");
+
+  // --- Scalar sub-pattern in struct field ---
+  match o1 {
+    Order { id: 1 } => assert(true, "id match 1")
+    _ => assert(false, "should not reach here")
+  }
+
+  // --- Multiple field sub-patterns ---
+  match o1 {
+    Order { id: 1, status: Paid } => assert(true, "multi-field match")
+    _ => assert(false, "should not reach multi-field wildcard")
+  }
+
+  // --- Wildcard sub-pattern ---
+  match o1 {
+    Order { status: _, amount } => assert(amount == 99.0, "wildcard sub: {amount}")
+  }
+}
