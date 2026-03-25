@@ -615,7 +615,7 @@ impl Parser {
     ) -> Type {
         // Create a new list of parameters based on the current ones
         // We still need to know the types.
-        let d_nr = if self.default && is_op(name) {
+        let mut d_nr = if self.default && is_op(name) {
             self.data.def_nr(name)
         } else {
             self.data.find_fn(
@@ -628,6 +628,10 @@ impl Parser {
                 },
             )
         };
+        // P5.2: if no exact match, try generic instantiation.
+        if d_nr == u32::MAX && !self.first_pass && !self.default {
+            d_nr = self.try_generic_instantiation(name, types);
+        }
         if d_nr != u32::MAX {
             self.call_with_named(code, d_nr, list, types, named_args, true)
         } else if self.first_pass && !self.default {
@@ -635,6 +639,162 @@ impl Parser {
         } else {
             diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
             Type::Unknown(0)
+        }
+    }
+
+    /// P5.2: Try to instantiate a generic function template for the given call-site types.
+    /// Returns the `def_nr` of the instantiated function, or `u32::MAX` if no generic matches.
+    fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
+        let generic_name = format!("n_{name}");
+        let g_nr = self.data.def_nr(&generic_name);
+        if g_nr == u32::MAX || self.data.def(g_nr).def_type != DefType::Generic {
+            return u32::MAX;
+        }
+        if types.is_empty() || types[0].is_unknown() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot infer type for generic parameter — provide an explicit type annotation"
+            );
+            return u32::MAX;
+        }
+        let concrete = types[0].clone();
+        // Find the type variable def_nr from the template's first attribute type.
+        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes[0].typedef);
+        if tv_nr == u32::MAX {
+            return u32::MAX;
+        }
+        // Build the mangled name for the instantiated function.
+        let type_nr = self.data.type_def_nr(&concrete);
+        let mangled = if type_nr == u32::MAX {
+            format!("n_{name}")
+        } else {
+            format!(
+                "t_{}{}_{name}",
+                self.data.def(type_nr).name.len(),
+                self.data.def(type_nr).name
+            )
+        };
+        // Return existing instantiation if already created.
+        let existing = self.data.def_nr(&mangled);
+        if existing != u32::MAX {
+            return existing;
+        }
+        // Clone the template data before mutating self.data.
+        let tmpl_code = self.data.definitions[g_nr as usize].code.clone();
+        let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
+        let tmpl_attrs: Vec<_> = self.data.definitions[g_nr as usize]
+            .attributes
+            .iter()
+            .map(|a| Argument {
+                name: a.name.clone(),
+                typedef: Self::substitute_type(a.typedef.clone(), tv_nr, &concrete),
+                default: a.value.clone(),
+                constant: false,
+            })
+            .collect();
+        let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
+        let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
+        let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete);
+        let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        // Register the new definition.
+        let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
+        for a in &tmpl_attrs {
+            let a_nr = self
+                .data
+                .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
+            self.data.set_attr_value(d_nr, a_nr, a.default.clone());
+        }
+        self.data.definitions[d_nr as usize].code = new_code;
+        self.data.set_returned(d_nr, new_returned);
+        // Copy the variable table with substituted types.
+        let mut vars = Function::copy(&tmpl_vars);
+        vars.substitute_type(tv_nr, &concrete);
+        self.data.definitions[d_nr as usize].variables = vars;
+        d_nr
+    }
+
+    /// Extract the type variable `def_nr` from a type tree.
+    /// Returns the `def_nr` of the first `Reference` that refers to the type variable,
+    /// or `u32::MAX` if not found.
+    fn extract_type_var(tp: &Type) -> u32 {
+        match tp {
+            Type::Reference(d, _) => *d,
+            Type::Vector(inner, _) => Self::extract_type_var(inner),
+            _ => u32::MAX,
+        }
+    }
+
+    /// Substitute all occurrences of `Type::Reference(tv_nr, _)` with `concrete` in a type.
+    fn substitute_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
+        match tp {
+            Type::Reference(d, _) if d == tv_nr => concrete.clone(),
+            Type::Vector(inner, deps) => Type::Vector(
+                Box::new(Self::substitute_type(*inner, tv_nr, concrete)),
+                deps,
+            ),
+            other => other,
+        }
+    }
+
+    /// Recursively substitute types in a Value IR tree.
+    fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type) -> Value {
+        match val {
+            Value::Call(d, args) => Value::Call(
+                d,
+                args.into_iter()
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete))
+                    .collect(),
+            ),
+            Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
+                operators: bl
+                    .operators
+                    .into_iter()
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete))
+                    .collect(),
+                result: Self::substitute_type(bl.result, tv_nr, concrete),
+                name: bl.name,
+                scope: bl.scope,
+                var_size: bl.var_size,
+            })),
+            Value::Set(v, expr) => Value::Set(
+                v,
+                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete)),
+            ),
+            Value::Return(expr) => Value::Return(Box::new(Self::substitute_type_in_value(
+                *expr, tv_nr, concrete,
+            ))),
+            Value::If(cond, t, f) => Value::If(
+                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete)),
+            ),
+            Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
+                operators: bl
+                    .operators
+                    .into_iter()
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete))
+                    .collect(),
+                result: Self::substitute_type(bl.result, tv_nr, concrete),
+                name: bl.name,
+                scope: bl.scope,
+                var_size: bl.var_size,
+            })),
+            Value::Drop(expr) => Value::Drop(Box::new(Self::substitute_type_in_value(
+                *expr, tv_nr, concrete,
+            ))),
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete))
+                    .collect(),
+            ),
+            Value::Iter(name, create, next, extra) => Value::Iter(
+                name,
+                Box::new(Self::substitute_type_in_value(*create, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(*next, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(*extra, tv_nr, concrete)),
+            ),
+            other => other,
         }
     }
 

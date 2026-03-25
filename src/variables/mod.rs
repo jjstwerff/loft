@@ -454,6 +454,24 @@ impl Function {
         }
     }
 
+    /// P5.2: Replace all occurrences of `Type::Reference(tv_nr, _)` with `concrete`
+    /// in every variable's type definition.  Used when instantiating a generic template.
+    pub fn substitute_type(&mut self, tv_nr: u32, concrete: &Type) {
+        for v in &mut self.variables {
+            v.type_def = Self::subst_type(v.type_def.clone(), tv_nr, concrete);
+        }
+    }
+
+    fn subst_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
+        match tp {
+            Type::Reference(d, _) if d == tv_nr => concrete.clone(),
+            Type::Vector(inner, deps) => {
+                Type::Vector(Box::new(Self::subst_type(*inner, tv_nr, concrete)), deps)
+            }
+            _ => tp,
+        }
+    }
+
     pub fn is_independent(&self, var_nr: u16) -> bool {
         let d = self.variables[var_nr as usize].type_def.depend();
         d.is_empty() || (d.len() == 1 && d[0] == var_nr)
