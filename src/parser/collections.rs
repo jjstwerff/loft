@@ -538,6 +538,7 @@ use #count instead"
         ));
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn append_data(
         &mut self,
         tp: Type,
@@ -553,6 +554,25 @@ use #count instead"
         } else {
             "OpFormat"
         };
+        // L8: warn when a format specifier has no effect on the value type.
+        if !self.first_pass {
+            let is_text = matches!(tp, Type::Text(_));
+            let is_bool = matches!(tp, Type::Boolean);
+            if state.radix != 10 && (is_text || is_bool) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "Format specifier has no effect on {}",
+                    tp.name(&self.data)
+                );
+            } else if is_text && state.token == "0" && state.width != Value::Int(0) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "Zero-padding has no effect on text"
+                );
+            }
+        }
         match tp {
             Type::Integer(_, _) => {
                 let value = self.cl("OpConvLongFromInt", std::slice::from_ref(format));
