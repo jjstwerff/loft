@@ -19,6 +19,10 @@ All notable changes to the loft language and interpreter.
 - **Vector aggregates** — `sum_of`, `min_of`, `max_of` for `vector<integer>`, implemented
   as `reduce` wrappers with internal helper functions.
 
+- **Nested match patterns** — Field positions in struct match arms support sub-patterns:
+  `Order { status: Paid, amount } => charge(amount)`. Supports enum variants, scalar
+  literals, wildcards, and or-patterns (`Paid | Refunded`).
+
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
 

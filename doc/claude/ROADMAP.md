@@ -20,7 +20,6 @@ plain English describing the purpose of the code.
 
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| L2     | Nested patterns in field positions                      | Medium    |             | MATCH.md L2             |
 | A10    | Field iteration (`for f in s#fields`)                   | Medium    |             | Design eval 2026-03-18  |
 | A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     |             | lexer.rs                |
 | A10.1  | ↳ `Field` + `FieldValue` types in stdlib                | Small     | A10.0       | 01_code.loft            |

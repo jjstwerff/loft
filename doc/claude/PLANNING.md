@@ -89,8 +89,9 @@ or type system; 0.8.2 correctness work is a prerequisite.
 **Lambda expressions (P1):** ✓ completed in 0.8.2.
 **Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
 
+**Nested match patterns (L2):** ✓ completed. Enum variants, scalars, wildcards, or-patterns in field positions.
+
 **Remaining:**
-- **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
 - **A10** — Field iteration (`for f in s#fields`): 5 phases (A10.0–A10.4).
 
 ---
@@ -314,15 +315,6 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 **Target:** 0.9.0
 
 ---
-
-### L2  Nested patterns in field positions
-**Sources:** [MATCH.md](MATCH.md) — L2
-**Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
-**Description:** `Order { status: Paid, amount } => charge(amount)` — a field may carry a sub-pattern (`:` separator) instead of (or in addition to) a binding variable.  Sub-patterns generate additional `&&` conditions on the arm.
-**Fix path:** See [MATCH.md § L2](MATCH.md) for full design.
-Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
-**Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
-**Target:** 0.8.3
 
 ---
 
