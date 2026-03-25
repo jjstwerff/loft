@@ -20,7 +20,7 @@ fn main() {
     if names != "" { names += "," }
     names += f.name;
     match f.value {
-      Float { v } => { total += v },
+      FvFloat { v } => { total += v },
       _ => {}
     }
   }
@@ -33,10 +33,10 @@ fn main() {
   for f in m#fields {
     if result != "" { result += "|" }
     match f.value {
-      Text { v } => { result += "{f.name}='{v}'" },
-      Int { v } => { result += "{f.name}={v}" },
-      Bool { v } => { result += "{f.name}={v}" },
-      Float { v } => { result += "{f.name}={v}" },
+      FvText { v } => { result += "{f.name}='{v}'" },
+      FvInt { v } => { result += "{f.name}={v}" },
+      FvBool { v } => { result += "{f.name}={v}" },
+      FvFloat { v } => { result += "{f.name}={v}" },
       _ => {}
     }
   }
