@@ -615,6 +615,13 @@ pub fn len(both: text) -> integer {
   OpLengthText(both)
 }
 
+fn OpSizeText(v1: text) -> integer;
+#rust"@v1.chars().count() as i32"
+// Number of Unicode code points (characters) in the text.
+pub fn size(both: text) -> integer {
+  OpSizeText(both)
+}
+
 fn OpLengthCharacter(v1: character) -> integer;
 // Byte length of the character's UTF-8 encoding (1–4).
 pub fn len(both: character) -> integer {
