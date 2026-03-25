@@ -32,6 +32,8 @@ const NATIVE_SKIP: &[&str] = &[];
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // P3: native codegen does not generate loop variables for any/all/count_if.
     "47-predicates.loft",
+    // A10: field iteration generates invalid native code for mixed-type match arms.
+    "45-field-iter.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
