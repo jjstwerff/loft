@@ -490,32 +490,12 @@ left at the last successful checkpoint.
 
 ---
 
-### P3  Vector aggregates — `sum`, `min_of`, `max_of`, `any`, `all`, `count_if`
-**Sources:** Standard library audit 2026-03-15
-**Severity:** Low–Medium — common operations currently require manual `reduce`/loop boilerplate;
-the building blocks (`map`, `filter`, `reduce`) are already present
-**Description:** Typed overloads for each primitive element type:
-```loft
-// Sum (integer overload shown; long/float/single analogous)
-pub fn sum(v: vector<integer>) -> integer { reduce(v, 0, fn __add_int) }
+### P3  Vector aggregates *(completed 0.8.3)*
 
-// Range min/max (avoids shadowing scalar min/max by using longer names)
-pub fn min_of(v: vector<integer>) -> integer { ... }
-pub fn max_of(v: vector<integer>) -> integer { ... }
-
-// Predicates — require compiler special-casing (like map/filter) because fn-ref
-// types are not generic; each overload hardcodes the element type
-pub fn any(v: vector<integer>, pred: fn(integer)->boolean) -> boolean { ... }
-pub fn all(v: vector<integer>, pred: fn(integer)->boolean) -> boolean { ... }
-pub fn count_if(v: vector<integer>, pred: fn(integer)->boolean) -> integer { ... }
-```
-`sum`/`min_of`/`max_of` are straightforward reduce wrappers; `any`/`all`/`count_if`
-are short-circuit loops that need a named helper or compiler special-casing.
-Note: naming these `min_of`/`max_of` (not `min`/`max`) avoids collision with the built-in `min`/`max` stdlib functions.
-**Fix path:** Typed loft overloads using `reduce` for sum/min_of/max_of; compiler
-special-case in `parse_call` for `any`/`all`/`count_if` (same level of effort as similar compiler special-cases).
-**Effort:** Low for aggregates (pure loft); Medium for any/all/count_if (compiler)
-**Target:** 0.8.3 — batch all variants after P1 lands
+`sum_of`/`min_of`/`max_of` implemented as pure-loft reduce wrappers for
+`vector<integer>`.  `any(vec, pred)`, `all(vec, pred)`, `count_if(vec, pred)`
+implemented as compiler special-cases with short-circuit evaluation and
+lambda type inference support.
 
 ---
 
@@ -610,14 +590,11 @@ The call-site lookup sequence in `parse_call` becomes:
 
 **Fix path:**
 
-**P5.1 — Parser: `<T>` syntax + template registration** (`src/parser/definitions.rs`, `src/data.rs`):
-After the `fn` keyword, detect `'<' Identifier '>'` and store the type-variable name.
-Validate that the first parameter's declared type matches the type-variable name;
-emit an error if `T` does not appear there.  Register the definition with a new
-`DefType::Generic` variant instead of `DefType::Function`.  Parse the body in the
-second pass as normal (this produces the template `Value` IR); skip the
-`byte_code` compilation step for generic definitions — they are compiled only at
-instantiation time.
+**P5.1 — Parser: `<T>` syntax + template registration** *(completed 0.8.3)*:
+Implemented: `<T>` detection after `fn name`, `DefType::Generic` variant, T registered
+as a struct for type resolution, validation that T appears in first parameter
+(including container element positions like `vector<T>`).  Template bodies are parsed
+normally but skipped by byte_code and scope analysis.
 
 **P5.2 — Call-site instantiation** (`src/parser/control.rs`):
 In the not-found branch of `parse_call`, check whether a `DefType::Generic` exists
@@ -1043,38 +1020,14 @@ discriminant field uses `database.byte(0, false)` instead of `database.name("byt
 
 ---
 
-### S15  Struct-enum same-name variant field offsets (PROBLEMS #81)
-**Sources:** Discovered during A10 development; [CAVEATS.md](CAVEATS.md) C10
-**Severity:** Medium — blocks A10 mixed-type field iteration; affects any struct-enum
-where multiple variants use the same field name with different types
-**Description:** When `enum Fv { FvInt { v: integer }, FvFloat { v: float } }` is
-constructed as `FvInt { v: 42 }` and matched with `FvInt { v } => v`, the value
-reads from the wrong byte offset — returning garbage that looks like float bytes
-reinterpreted as integer.
+### S15  Struct-enum same-name variant field offsets *(completed 0.8.3)*
 
-**Root cause:** Each variant gets its own `known_type` via
-`database.structure()` in `src/typedef.rs:210`.  Field offsets are assigned by
-`database.field()` at line 295.  The offset depends on the preceding fields in
-the variant's record, starting after the enum discriminant byte.
-
-When `get_field(variant_def_nr, attr_idx, ...)` is called during match binding
-(`src/parser/control.rs:630`), it calls `database.position(known_type, name)`.
-If `known_type` is correct per-variant, the offset should be correct.
-
-**Diagnosis needed:** dump `known_type` for each variant and compare the field
-offsets.  The issue may be that the discriminant field ("enum") occupies
-different sizes across variants, or that field alignment differs.
-Use `LOFT_LOG=static` and inspect the type table for each variant.
-
-**Fix path:**
-1. Add diagnostic logging in `fill_database()` to print each variant's
-   `known_type`, field name, and assigned position.
-2. Compare the positions for `FvInt.v` vs `FvFloat.v` — they should differ
-   because `integer` is 4 bytes and `float` is 8 bytes, but the discriminant
-   + padding before `v` must be consistent.
-3. Fix the offset calculation if variants with different-sized fields get
-   misaligned positions.
-*Tests:* construct each variant, match, read the field, verify value.
+Fixed: match arm field bindings now use per-arm unique variables via
+`create_unique` + temporary name aliasing.  Each arm's variable has the
+correct type for its variant, avoiding the type/slot reuse bug.
+Field offsets were already correct in the database — the root cause was
+`add_variable` reusing the first arm's variable for subsequent arms.
+A10 field iteration test now passes.
 
 **Effort:** Medium (requires understanding database field layout)
 **Target:** 0.8.3

@@ -20,16 +20,11 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| P3     | Vector aggregates (any, all, count_if)                  | Medium    | P1          | Stdlib audit 2026-03-15 |
 | P5     | First-parameter generic functions (`fn name<T>(...)`)   | Medium    |             | Design 2026-03-25       |
-| P5.1   | ↳ `<T>` syntax + `DefType::Generic` template storage    | Small     |             | definitions.rs, data.rs |
-| P5.2   | ↳ Call-site instantiation + name mangling               | Medium    | P5.1        | control.rs              |
-| P5.3   | ↳ Validation errors for disallowed uses of T            | Small     | P5.1        | parser/ (second pass)   |
+| P5.2   | ↳ Call-site instantiation + name mangling               | Medium    | P5.1 (done) | control.rs              |
+| P5.3   | ↳ Validation errors for disallowed uses of T            | Small     | P5.1 (done) | parser/ (second pass)   |
 | P5.4   | ↳ Tests + LOFT.md § Generic functions                   | Small     | P5.2, P5.3  | tests/docs/, LOFT.md    |
 | L7     | `init(expr)` stored field initialiser with `$` reference | Small–Med |             | Design 2026-03-25       |
-| S15    | Struct-enum same-name variant field offsets (#81)       | Medium    |             | PLANNING.md S15         |
-| A10.3  | ↳ Loop unrolling in `parse_field_iteration`             | Medium    | S15         | collections.rs          |
-| A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
 | T1.1   | ↳ Type system (`Type::Tuple`, offsets)          | M  | ✓      |            | data.rs, typedef.rs |
 | T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1       | parser/             |

@@ -247,21 +247,16 @@ preventing double-processing.  Changed the discriminant type from `database.name
 
 ---
 
-### 81. Match arm binding variable type reuse (S15)
+### 81. *(fixed)* Match arm binding variable type reuse (S15)
 
 **Symptom:** When multiple match arms bind the same field name with different types
 (e.g. `Vi { v } => ...` where v is integer, then `Vf { v } => ...` where v is float),
-the second arm reuses the first arm's variable and type.  The value reads as garbage.
+the second arm reused the first arm's variable and type.  The value read as garbage.
 
-**Root cause:** `add_variable()` in `src/variables/mod.rs` finds the existing variable
-by name and returns it without updating the type.  The codegen then uses the wrong
-store/load opcode for the second arm.
-
-**Workaround:** Use separate match expressions with only one binding arm each.
-A proper fix requires either per-arm variable scoping or making the codegen derive
-the store opcode from the value's IR type rather than the variable's declared type.
-
-**Effort:** Medium — touches the variable system, slot assignment, and codegen.
+**Fix:** Each match arm now creates a per-arm unique variable via `create_unique` with
+the correct type.  The user-visible field name is temporarily aliased to the per-arm
+variable so the arm body resolves it correctly; the alias is restored after each arm.
+Added `set_name`/`remove_name` methods to `Function` for name map manipulation.
 
 ---
 
