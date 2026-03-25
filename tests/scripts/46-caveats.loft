@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regression tests for documented caveats (CAVEATS.md).
+// Each test verifies the current behaviour so releases can be retested quickly.
+
+// C11 — No while loop: for + break is the workaround.
+fn test_no_while() {
+  found = false;
+  for i in 0..1000000 {
+    if i * i > 100 { found = true; break }
+  }
+  assert(found, "C11: polling via for+break");
+}
+
+// C14 — Format specifier silently ignored on incompatible types.
+fn test_format_specifier_ignored() {
+  t = "hello";
+  r = "{t:05}";
+  // :05 on text is silently ignored — value is unchanged.
+  assert(r == "hello", "C14: format specifier on text ignored: '{r}'");
+}
+
+// C6 — Verify assert works (the exit code caveat can't be tested from inside).
+fn test_assert_works() {
+  assert(1 + 1 == 2, "C6: assert passes for true condition");
+}
+
+// C1 — Lambda closure capture: verify lambdas work without capture.
+fn test_lambda_no_capture() {
+  nums = [1, 2, 3, 4, 5];
+  doubled = map(nums, |x| { x * 2 });
+  assert(doubled[0] == 2, "C1: lambda works without capture");
+  assert(doubled[4] == 10, "C1: lambda map result");
+}
+
+// C8 — Predicate aggregates not available; verify sum_of/min_of/max_of work.
+fn test_available_aggregates() {
+  nums = [3, 1, 4, 1, 5];
+  assert(sum_of(nums) == 14, "C8: sum_of works");
+  assert(min_of(nums) == 1, "C8: min_of works");
+  assert(max_of(nums) == 5, "C8: max_of works");
+}

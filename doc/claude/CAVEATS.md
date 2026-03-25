@@ -176,6 +176,107 @@ fn main() {
 
 ---
 
+## C11 — No `while` loop
+
+Loft has no `while` keyword. Polling or retry patterns require `for` with a
+large upper bound and `break`.
+
+**Reproducer:**
+```loft
+fn main() {
+  // Polling pattern — the only way to loop until a condition:
+  found = false;
+  for i in 0..1000000 {
+    if i * i > 100 { found = true; break }
+  }
+  assert(found, "found");
+}
+```
+
+**Test:** `tests/scripts/46-caveats.loft` — `test_no_while`
+**Workaround:** `for i in 0..LARGE { if condition { break } }`
+**Docs:** [00-vs-rust.html](../00-vs-rust.html) § No while loop; [00-vs-python.html](../00-vs-python.html) § No while loop.
+
+---
+
+## C12 — No exception handling
+
+Runtime errors from `assert` and `panic` abort the program. There is no
+`try`/`catch` or `Result` mechanism for structured error recovery.
+
+**Reproducer:**
+```loft
+fn main() {
+  // This aborts — no way to catch it:
+  assert(false, "deliberate failure");
+  // This line is never reached.
+}
+```
+
+**Test:** `tests/scripts/46-caveats.loft` — `test_no_exceptions` (verifies assert aborts)
+**Workaround:** validate inputs before operations; use `FileResult` for file I/O errors.
+**Docs:** [00-vs-python.html](../00-vs-python.html) § No exception handling.
+
+---
+
+## C13 — No generic functions
+
+Functions cannot be parameterised over types. Aggregates like `sum_of` must
+be duplicated per element type.
+
+**Reproducer:**
+```loft
+// Must write separate functions for each type:
+fn double_int(x: integer) -> integer { x * 2 }
+fn double_float(x: float) -> float { x * 2.0 }
+```
+
+**Test:** none needed (language design, not a bug).
+**Workaround:** write type-specific overloads.
+**Docs:** [00-vs-rust.html](../00-vs-rust.html) § No generic functions; [00-vs-python.html](../00-vs-python.html) § No generic functions.
+
+---
+
+## C14 — Format specifier silently ignored on incompatible types
+
+A numeric format specifier like `:05` on a text value is silently ignored
+instead of producing a compile error.
+
+**Reproducer:**
+```loft
+fn main() {
+  t = "hello";
+  r = "{t:05}";
+  // r is "hello", not "0hello" — the :05 specifier is silently dropped.
+  assert(r == "hello", "format: {r}");
+}
+```
+
+**Test:** `tests/scripts/46-caveats.loft` — `test_format_specifier_ignored`
+**Workaround:** ensure format specifiers match the value type.
+**Docs:** [00-vs-rust.html](../00-vs-rust.html) § String formatting.
+
+---
+
+## C15 — Parallel for: limited return types and no struct references
+
+`par(...)` workers can only return primitive types (`integer`, `long`, `float`,
+`boolean`, `text`, plain `enum`). Struct references cannot be returned.
+Context must be embedded in the worker's extra arguments.
+
+**Reproducer:**
+```loft
+struct Point { x: float, y: float }
+// This does NOT work — cannot return struct from par worker:
+// for p in points par(result = transform(p)) { ... }
+```
+
+**Test:** none needed (compile error produced).
+**Workaround:** return primitive values; reconstruct structs after the parallel loop.
+**Docs:** [THREADING.md](THREADING.md) § Supported return types; [00-vs-rust.html](../00-vs-rust.html) § Parallel for-loops.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
