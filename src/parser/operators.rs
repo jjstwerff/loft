@@ -327,7 +327,8 @@ impl Parser {
         if operator == "??" {
             // Null-coalescing: `x ?? default` evaluates to `x` if x is not null,
             // otherwise to `default`.  Compiles as: if (x != null_sentinel) { x } else { default }.
-            // Note: `x` is evaluated twice for non-trivial expressions (known V1 limitation).
+            // Non-trivial LHS expressions are materialised into a temp to avoid
+            // double evaluation (L6 fix).  Simple Var reads are safe without a temp.
             // Returns None so the outer loop in parse_operators continues, allowing chaining.
             if self.expr_not_null && !self.first_pass {
                 diagnostic!(

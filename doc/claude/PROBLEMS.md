@@ -230,6 +230,41 @@ necessary `extern` block in the generated file.
 
 
 
+### 80. *(fixed)* Stdlib struct-enum field positions broken (S14)
+
+**Symptom:** `Fld 65543 is outside of record N size M` panic when constructing a struct-enum
+variant defined in `default/*.loft`.  User-defined struct-enums worked fine.
+
+**Root cause:** Two issues in `src/typedef.rs`:
+1. `fill_all()` only processed definitions after `start_def`, missing variants from earlier
+   library files loaded by `parse_dir()`.
+2. The enum discriminant field used `database.name("byte")` which returned `u16::MAX` when
+   the byte type hadn't been lazily registered yet.
+
+**Fix:** Changed `fill_all()` loop to start from 0 (not `start_def`) with the `has_type` guard
+preventing double-processing.  Changed the discriminant type from `database.name("byte")` to
+`database.byte(0, false)` which creates the type on demand.
+
+---
+
+### 81. Match arm binding variable type reuse (S15)
+
+**Symptom:** When multiple match arms bind the same field name with different types
+(e.g. `Vi { v } => ...` where v is integer, then `Vf { v } => ...` where v is float),
+the second arm reuses the first arm's variable and type.  The value reads as garbage.
+
+**Root cause:** `add_variable()` in `src/variables/mod.rs` finds the existing variable
+by name and returns it without updating the type.  The codegen then uses the wrong
+store/load opcode for the second arm.
+
+**Workaround:** Use separate match expressions with only one binding arm each.
+A proper fix requires either per-arm variable scoping or making the codegen derive
+the store opcode from the value's IR type rather than the variable's declared type.
+
+**Effort:** Medium — touches the variable system, slot assignment, and codegen.
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries
