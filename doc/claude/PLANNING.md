@@ -581,8 +581,8 @@ scope exit (see [TUPLES.md](TUPLES.md) § Calling Convention, Scope exit order).
 when multiple closures are live simultaneously; a `text` capture is freed exactly once.
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
-**Depends on:** P1
-**Target:** 1.1+
+**Depends on:** P1 (done)
+**Target:** 0.8.3
 
 ---
 
@@ -790,6 +790,93 @@ the generic type-mismatch message.
 - `virtual` fields are included (they are read-only computed values, still primitive).
 
 **Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)
+**Target:** 0.8.3
+
+---
+
+### S14  Struct-enum stdlib field positions (PROBLEMS #80)
+**Sources:** Discovered during A10 development; [CAVEATS.md](CAVEATS.md) C9
+**Severity:** Medium — blocks A10 field iteration and any future stdlib struct-enum
+**Description:** Struct-enum types defined in `default/*.loft` have broken field
+positions: `database.position(known_type, field_name)` returns `u16::MAX`, causing
+"Fld N is outside of record" panics at runtime.  User-defined struct-enums work.
+
+**Root cause:** `typedef::fill_all()` in `src/typedef.rs:165` iterates only
+`start_def..data.definitions()`.  When the default library is loaded file-by-file
+via `parse_dir()`, each file resets `start_def` to the current definition count.
+Struct-enum variants from earlier files (e.g. `01_code.loft`) are never re-processed
+by `fill_all()` in later files.
+
+**Fix path:**
+1. In `src/typedef.rs`, change `fill_all()` to process ALL struct-enum variants
+   that have `known_type == u16::MAX`, not just those in the `start_def..` range.
+   Alternatively, pass `start_def=0` during the final `finish()` call.
+2. Or: add a global `fill_all(0..)` call after all default files are loaded,
+   in `parse_dir()` (`src/parser/mod.rs:344`), before returning.
+3. Verify: `FvBool { v: true }` defined in `default/01_code.loft` works at runtime.
+*Tests:* add a test that constructs a stdlib struct-enum variant (re-enable A10 test).
+
+**Effort:** Small (one loop bound change or one extra call)
+**Target:** 0.8.3
+
+---
+
+### S15  Struct-enum same-name variant field offsets (PROBLEMS #81)
+**Sources:** Discovered during A10 development; [CAVEATS.md](CAVEATS.md) C10
+**Severity:** Medium — blocks A10 mixed-type field iteration; affects any struct-enum
+where multiple variants use the same field name with different types
+**Description:** When `enum Fv { FvInt { v: integer }, FvFloat { v: float } }` is
+constructed as `FvInt { v: 42 }` and matched with `FvInt { v } => v`, the value
+reads from the wrong byte offset — returning garbage that looks like float bytes
+reinterpreted as integer.
+
+**Root cause:** Each variant gets its own `known_type` via
+`database.structure()` in `src/typedef.rs:210`.  Field offsets are assigned by
+`database.field()` at line 295.  The offset depends on the preceding fields in
+the variant's record, starting after the enum discriminant byte.
+
+When `get_field(variant_def_nr, attr_idx, ...)` is called during match binding
+(`src/parser/control.rs:630`), it calls `database.position(known_type, name)`.
+If `known_type` is correct per-variant, the offset should be correct.
+
+**Diagnosis needed:** dump `known_type` for each variant and compare the field
+offsets.  The issue may be that the discriminant field ("enum") occupies
+different sizes across variants, or that field alignment differs.
+Use `LOFT_LOG=static` and inspect the type table for each variant.
+
+**Fix path:**
+1. Add diagnostic logging in `fill_database()` to print each variant's
+   `known_type`, field name, and assigned position.
+2. Compare the positions for `FvInt.v` vs `FvFloat.v` — they should differ
+   because `integer` is 4 bytes and `float` is 8 bytes, but the discriminant
+   + padding before `v` must be consistent.
+3. Fix the offset calculation if variants with different-sized fields get
+   misaligned positions.
+*Tests:* construct each variant, match, read the field, verify value.
+
+**Effort:** Medium (requires understanding database field layout)
+**Target:** 0.8.3
+
+---
+
+### L8  Warn on format specifier / type mismatch
+**Sources:** [CAVEATS.md](CAVEATS.md) C14; [00-vs-rust.html](../00-vs-rust.html)
+**Severity:** Low — numeric specifiers like `:05` on text are silently ignored
+**Description:** `"{t:05}"` where `t` is text produces `"hello"` with no warning.
+The `:05` zero-pad specifier is meaningful only for integers.  A compile-time
+warning would catch the mistake.
+
+**Fix path:**
+In `src/parser/objects.rs`, inside `append_data()` (called per format segment),
+the type of the value and the format specifier are both known.  After computing
+the radix and width, check:
+- If `radix` is not 10 (hex, binary, octal) and the value type is `Text` or
+  `Boolean`, emit a warning: "format specifier has no effect on {type}".
+- If `width` is nonzero and has a zero-pad token (`token == "0"`) and the value
+  type is `Text`, emit a warning: "zero-padding has no effect on text".
+*Tests:* `tests/scripts/38-parse-warnings.loft` or new `@EXPECT_WARNING` entries.
+
+**Effort:** Small (one diagnostic in `append_data`)
 **Target:** 0.8.3
 
 ---
