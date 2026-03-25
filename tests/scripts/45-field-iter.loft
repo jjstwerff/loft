@@ -20,7 +20,7 @@ fn main() {
     if names != "" { names += "," }
     names += f.name;
     match f.value {
-      Float { v } => total += v
+      Float { v } => { total += v },
       _ => {}
     }
   }
@@ -33,11 +33,11 @@ fn main() {
   for f in m#fields {
     if result != "" { result += "|" }
     match f.value {
-      Text { v } => result += "{f.name}='{v}'"
-      Int { v } => result += "{f.name}={v}"
-      Bool { v } => result += "{f.name}={v}"
-      Float { v } => result += "{f.name}={v}"
-      _ => result += "{f.name}=?"
+      Text { v } => { result += "{f.name}='{v}'" },
+      Int { v } => { result += "{f.name}={v}" },
+      Bool { v } => { result += "{f.name}={v}" },
+      Float { v } => { result += "{f.name}={v}" },
+      _ => {}
     }
   }
   assert(result == "name='test'|count=42|active=true|score=9.5", "mixed: {result}");

@@ -334,6 +334,28 @@ impl Parser {
             self.file_op(code, t, index_var);
             return;
         }
+        // A10: detect #fields for compile-time field iteration.
+        if self.lexer.has_keyword("fields") {
+            let var = self.vars.var(name);
+            let var_type = if var == u16::MAX {
+                Type::Unknown(0)
+            } else {
+                self.vars.tp(var).clone()
+            };
+            if let Type::Reference(d, _) = &var_type {
+                self.fields_of = *d;
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "#fields requires a struct variable, got {}",
+                    var_type.name(&self.data)
+                );
+            }
+            // Return a void type — the unrolling will be handled by parse_for.
+            *t = Type::Void;
+            return;
+        }
         if self.lexer.has_keyword("index") {
             // For index<T> collections, {name}#index holds an internal B-tree record number,
             // not a sequential 0-based counter.  Reject it at compile time.
@@ -742,6 +764,14 @@ use #count instead"
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
+            // A10: if #fields was detected, take the compile-time unrolling path.
+            if self.fields_of != u32::MAX {
+                let struct_def_nr = self.fields_of;
+                self.fields_of = u32::MAX;
+                self.vars.finish_loop(loop_nr);
+                self.parse_field_iteration(&id, struct_def_nr, &expr, code);
+                return;
+            }
             let mut fill = Value::Null;
             // For vector loops, the iterator runs on a unique temp copy so that the loop
             // variable does not alias the user-visible collection.  Record the original
@@ -1391,7 +1421,60 @@ use #count instead"
         )
     }
 
-    /// Compute the in-store byte size of a vector element type.
+    /// A10: try to parse `ident#fields` and generate compile-time unrolled blocks.
+    /// A10: compile-time unroll `for f in s#fields {{ body }}` into one block per field.
+    fn parse_field_iteration(
+        &mut self,
+        loop_var_name: &str,
+        struct_def_nr: u32,
+        source_expr: &Value,
+        code: &mut Value,
+    ) {
+        let field_def_nr = self.data.def_nr("StructField");
+        let field_type = Type::Reference(field_def_nr, Vec::new());
+        let loop_var = self.create_var(loop_var_name, &field_type);
+        self.vars.defined(loop_var);
+
+        let mut body = Value::Null;
+        self.parse_block("fields", &mut body, &Type::Void);
+
+        let num_attrs = self.data.attributes(struct_def_nr);
+        let mut blocks: Vec<Value> = Vec::new();
+
+        for a in 0..num_attrs {
+            let attr_name = self.data.attr_name(struct_def_nr, a);
+            let attr_type = self.data.attr_type(struct_def_nr, a);
+
+            let variant_name = match &attr_type {
+                Type::Boolean => "Bool",
+                Type::Integer(_, _) => "Int",
+                Type::Long => "Long",
+                Type::Float => "Float",
+                Type::Single => "Single",
+                Type::Character => "Char",
+                Type::Text(_) => "Text",
+                _ => continue,
+            };
+
+            let field_read = self.get_field(struct_def_nr, a, source_expr.clone());
+            let variant_def_nr = self.data.def_nr(variant_name);
+            // Struct-enum constructors need the discriminant as the first argument.
+            let disc = self.data.def(variant_def_nr).attributes[0].value.clone();
+            let fv_constructor = Value::Call(variant_def_nr, vec![disc, field_read]);
+            let field_constructor =
+                Value::Call(field_def_nr, vec![Value::Text(attr_name), fv_constructor]);
+
+            blocks.push(v_set(loop_var, field_constructor));
+            blocks.push(body.clone());
+        }
+
+        if blocks.is_empty() {
+            *code = Value::Null;
+        } else {
+            *code = v_block(blocks, Type::Void, "field_iter");
+        }
+    }
+
     /// Compute the in-store byte size of a vector element type.
     pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);

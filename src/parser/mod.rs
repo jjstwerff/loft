@@ -102,6 +102,9 @@ pub struct Parser {
     /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
     /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
     pub(crate) lambda_hint: Type,
+    /// A10: set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
+    /// Checked by `parse_for` to take the unrolling path. Reset after use.
+    pub(crate) fields_of: u32,
 }
 
 // Operators ordered on their precedence
@@ -245,6 +248,7 @@ impl Parser {
             expr_not_null_name: String::new(),
             lambda_counter: 0,
             lambda_hint: Type::Unknown(0),
+            fields_of: u32::MAX,
         }
     }
 
