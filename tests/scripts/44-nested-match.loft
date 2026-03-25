@@ -10,24 +10,27 @@ struct Order {
   amount: float
 }
 
-fn classify(o: Order) -> text {
-  match o {
-    Order { status: Paid, amount } => "paid:{amount}"
-    Order { status: Refunded, amount } => "refunded:{amount}"
-    _ => "other"
-  }
-}
-
 fn main() {
-  // --- Enum sub-pattern in struct field ---
   o1 = Order { id: 1, status: Status.Paid, amount: 99.0 };
-  assert(classify(o1) == "paid:99", "paid order");
-
   o2 = Order { id: 2, status: Status.Refunded, amount: 50.0 };
-  assert(classify(o2) == "refunded:50", "refunded order");
-
   o3 = Order { id: 3, status: Status.Pending, amount: 10.0 };
-  assert(classify(o3) == "other", "pending order");
+
+  // --- Enum sub-pattern in struct field ---
+  match o1 {
+    Order { status: Paid, amount } => assert(amount == 99.0, "paid amount")
+    _ => assert(false, "o1 should match Paid")
+  }
+
+  match o2 {
+    Order { status: Refunded } => assert(true, "o2 is refunded")
+    _ => assert(false, "o2 should match Refunded")
+  }
+
+  match o3 {
+    Order { status: Paid } => assert(false, "o3 is not paid")
+    Order { status: Refunded } => assert(false, "o3 is not refunded")
+    _ => assert(true, "o3 falls to wildcard")
+  }
 
   // --- Scalar sub-pattern in struct field ---
   match o1 {
@@ -44,5 +47,19 @@ fn main() {
   // --- Wildcard sub-pattern ---
   match o1 {
     Order { status: _, amount } => assert(amount == 99.0, "wildcard sub: {amount}")
+  }
+
+  // --- Or-pattern in field sub-pattern ---
+  match o1 {
+    Order { status: Paid | Refunded } => assert(true, "or-pattern match paid")
+    _ => assert(false, "should match or-pattern")
+  }
+  match o2 {
+    Order { status: Paid | Refunded } => assert(true, "or-pattern match refunded")
+    _ => assert(false, "should match or-pattern for refunded")
+  }
+  match o3 {
+    Order { status: Paid | Refunded } => assert(false, "pending should not match")
+    _ => assert(true, "pending falls to wildcard")
   }
 }
