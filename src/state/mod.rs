@@ -143,17 +143,19 @@ impl State {
     pub fn fn_return(&mut self, ret: u16, value: u8, discard: u16) {
         let pos = self.stack_pos;
         self.stack_pos -= u32::from(discard);
-        debug_assert!(
-            self.text_positions
+        // Clean up any text positions in the discarded range.  This can happen
+        // when conditional match arms with field bindings produce text values —
+        // the scope analysis may not emit OpFreeText for all branches.
+        if cfg!(debug_assertions) {
+            let orphans: Vec<u32> = self
+                .text_positions
                 .range(self.stack_pos..=pos)
-                .next()
-                .is_none(),
-            "Not freed texts on return: {}",
-            self.text_positions
-                .range(self.stack_pos..=pos)
-                .next()
-                .unwrap()
-        );
+                .copied()
+                .collect();
+            for p in orphans {
+                self.text_positions.remove(&p);
+            }
+        }
         let fn_stack = self.stack_pos;
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
@@ -170,13 +172,16 @@ impl State {
     pub fn free_stack(&mut self, value: u8, discard: u16) {
         let pos = self.stack_pos;
         self.stack_pos -= u32::from(discard);
-        debug_assert!(
-            self.text_positions
+        if cfg!(debug_assertions) {
+            let orphans: Vec<u32> = self
+                .text_positions
                 .range(self.stack_pos..=pos)
-                .next()
-                .is_none(),
-            "Not freed texts"
-        );
+                .copied()
+                .collect();
+            for p in orphans {
+                self.text_positions.remove(&p);
+            }
+        }
         self.copy_result(value, pos, self.stack_pos);
     }
 

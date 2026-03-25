@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// L2: Nested patterns in match field positions
+
+enum Status { Pending, Paid, Refunded }
+
+struct Order {
+  id: integer,
+  status: Status,
+  amount: float
+}
+
+fn main() {
+  o1 = Order { id: 1, status: Status.Paid, amount: 99.0 };
+  o2 = Order { id: 2, status: Status.Refunded, amount: 50.0 };
+  o3 = Order { id: 3, status: Status.Pending, amount: 10.0 };
+
+  // --- Enum sub-pattern in struct field ---
+  match o1 {
+    Order { status: Paid, amount } => assert(amount == 99.0, "paid amount")
+    _ => assert(false, "o1 should match Paid")
+  }
+
+  match o2 {
+    Order { status: Refunded } => assert(true, "o2 is refunded")
+    _ => assert(false, "o2 should match Refunded")
+  }
+
+  match o3 {
+    Order { status: Paid } => assert(false, "o3 is not paid")
+    Order { status: Refunded } => assert(false, "o3 is not refunded")
+    _ => assert(true, "o3 falls to wildcard")
+  }
+
+  // --- Scalar sub-pattern in struct field ---
+  match o1 {
+    Order { id: 1 } => assert(true, "id match 1")
+    _ => assert(false, "should not reach here")
+  }
+
+  // --- Multiple field sub-patterns ---
+  match o1 {
+    Order { id: 1, status: Paid } => assert(true, "multi-field match")
+    _ => assert(false, "should not reach multi-field wildcard")
+  }
+
+  // --- Wildcard sub-pattern ---
+  match o1 {
+    Order { status: _, amount } => assert(amount == 99.0, "wildcard sub: {amount}")
+  }
+
+  // --- Duplicate bindings across conditional arms (non-text return) ---
+  r = match o1 {
+    Order { status: Paid, amount } => amount
+    Order { status: Refunded, amount } => amount + 1.0
+    _ => 0.0
+  };
+  assert(r == 99.0, "dup bind paid: {r}");
+  r2 = match o2 {
+    Order { status: Paid, amount } => amount
+    Order { status: Refunded, amount } => amount + 1.0
+    _ => 0.0
+  };
+  assert(r2 == 51.0, "dup bind refunded: {r2}");
+
+  // --- Duplicate bindings + text return (previously crashed) ---
+  t1 = match o1 {
+    Order { status: Paid, amount } => "paid:{amount}"
+    Order { status: Refunded, amount } => "refunded:{amount}"
+    _ => "other"
+  };
+  assert(t1 == "paid:99", "text bind paid: {t1}");
+  t2 = match o2 {
+    Order { status: Paid, amount } => "paid:{amount}"
+    Order { status: Refunded, amount } => "refunded:{amount}"
+    _ => "other"
+  };
+  assert(t2 == "refunded:50", "text bind refunded: {t2}");
+
+  // --- Or-pattern in field sub-pattern ---
+  match o1 {
+    Order { status: Paid | Refunded } => assert(true, "or-pattern match paid")
+    _ => assert(false, "should match or-pattern")
+  }
+  match o2 {
+    Order { status: Paid | Refunded } => assert(true, "or-pattern match refunded")
+    _ => assert(false, "should match or-pattern for refunded")
+  }
+  match o3 {
+    Order { status: Paid | Refunded } => assert(false, "pending should not match")
+    _ => assert(true, "pending falls to wildcard")
+  }
+}

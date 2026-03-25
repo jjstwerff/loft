@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P3: Vector aggregates — sum, min_of, max_of
+
+fn main() {
+  nums = [1, 2, 3, 4, 5];
+
+  // --- sum ---
+  assert(sum_of(nums) == 15, "sum integers");
+  assert(sum_of([10, 20, 30]) == 60, "sum inline");
+
+  // --- min_of / max_of ---
+  assert(min_of(nums) == 1, "min_of integers");
+  assert(max_of(nums) == 5, "max_of integers");
+  assert(min_of([3, 1, 2]) == 1, "min_of inline");
+  assert(max_of([3, 1, 2]) == 3, "max_of inline");
+}

@@ -20,7 +20,7 @@ fn main() {
   assert(f#read(1) as u8 == 0, "u8 read 0");
   assert(f#read(1) as u8 == 255, "u8 read 255");
  }
-  assert(delete("test_loft_a.bin"), "delete after u8 test");
+  assert(delete("test_loft_a.bin").ok(), "delete after u8 test");
   // === Binary: u16 ===
  {f = file("test_loft_a.bin");
   f#format = BigEndian;
@@ -35,7 +35,7 @@ fn main() {
   f#format = LittleEndian;
   assert(f#read(2) as u16 == 0x0302, "u16 bytes swapped in LE");
  }
-  assert(delete("test_loft_a.bin"), "delete after u16 test");
+  assert(delete("test_loft_a.bin").ok(), "delete after u16 test");
   // === Binary: i32 (LittleEndian) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -50,7 +50,7 @@ fn main() {
   f#format = BigEndian;
   assert(f#read(4) as i32 == 0x44332211, "i32 LE bytes read as BE");
  }
-  assert(delete("test_loft_a.bin"), "delete after i32 LE test");
+  assert(delete("test_loft_a.bin").ok(), "delete after i32 LE test");
   // === Binary: i32 (BigEndian) ===
  {f = file("test_loft_a.bin");
   f#format = BigEndian;
@@ -60,7 +60,7 @@ fn main() {
   f#format = BigEndian;
   assert(f#read(4) as i32 == 0x11223344, "i32 BE roundtrip");
  }
-  assert(delete("test_loft_a.bin"), "delete after i32 BE test");
+  assert(delete("test_loft_a.bin").ok(), "delete after i32 BE test");
   // === Binary: long (i64) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -71,7 +71,7 @@ fn main() {
   f#format = LittleEndian;
   assert(f#read(8) as long == 0x0102030405060708l, "long LE roundtrip");
  }
-  assert(delete("test_loft_a.bin"), "delete after long test");
+  assert(delete("test_loft_a.bin").ok(), "delete after long test");
   // === Binary: single (f32) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -81,7 +81,7 @@ fn main() {
   f#format = LittleEndian;
   assert(f#read(4) as single == 1.5f, "single LE roundtrip");
  }
-  assert(delete("test_loft_a.bin"), "delete after single test");
+  assert(delete("test_loft_a.bin").ok(), "delete after single test");
   // === Binary: float (f64) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -92,7 +92,7 @@ fn main() {
   f#format = LittleEndian;
   assert(f#read(8) as float == 3.14, "float LE roundtrip");
  }
-  assert(delete("test_loft_a.bin"), "delete after float test");
+  assert(delete("test_loft_a.bin").ok(), "delete after float test");
   // === Binary: text (raw UTF-8, no length prefix) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -105,7 +105,7 @@ fn main() {
   f#next = 0l;
   assert(f#read(100) as text == "Hello", "text read past eof full");
  }
-  assert(delete("test_loft_a.bin"), "delete after text binary test");
+  assert(delete("test_loft_a.bin").ok(), "delete after text binary test");
   // === Binary: vector of integers ===
  {f = file("test_loft_b.bin");
   f#format = LittleEndian;
@@ -116,7 +116,7 @@ fn main() {
   f#read(4) as i32;
   assert(f#read(4) as i32 == 2, "integer vector binary write: second element");
  }
-  assert(delete("test_loft_b.bin"), "delete after integer-vector write test");
+  assert(delete("test_loft_b.bin").ok(), "delete after integer-vector write test");
   // === Mixed write: sequential types ===
  {f = file("test_loft_a.bin");
   f#format = BigEndian;
@@ -144,7 +144,7 @@ fn main() {
   assert(rest == " world!", "mixed read to eof");
   assert(f#next == f#size, "#next at end == #size");
  }
-  assert(delete("test_loft_a.bin"), "delete after mixed test");
+  assert(delete("test_loft_a.bin").ok(), "delete after mixed test");
   // === vector<float> binary I/O ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -160,7 +160,7 @@ fn main() {
   assert(rv[1] == 2.5, "vector<float> [1]={rv[1]}");
   assert(rv[2] == 3.5, "vector<float> [2]={rv[2]}");
  }
-  assert(delete("test_loft_a.bin"), "delete after vector<float> test");
+  assert(delete("test_loft_a.bin").ok(), "delete after vector<float> test");
   // === vector<single> binary I/O ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -175,7 +175,7 @@ fn main() {
   assert(rsv[0] == 10.0f, "vector<single> [0]={rsv[0]}");
   assert(rsv[2] == 30.0f, "vector<single> [2]={rsv[2]}");
  }
-  assert(delete("test_loft_a.bin"), "delete after vector<single> test");
+  assert(delete("test_loft_a.bin").ok(), "delete after vector<single> test");
   // === multiple vectors round-trip in one file ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -190,5 +190,5 @@ fn main() {
   assert(rl[0] == 100l, "multi-vector long [0]={rl[0]}");
   assert(rl[1] == 200l, "multi-vector long [1]={rl[1]}");
  }
-  assert(delete("test_loft_a.bin"), "delete after multi-vector test");
+  assert(delete("test_loft_a.bin").ok(), "delete after multi-vector test");
 }

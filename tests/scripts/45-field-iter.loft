@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// A10: Field iteration — for f in s#fields
+
+struct Point { x: float not null, y: float not null, z: float not null }
+
+struct Mixed {
+  name: text,
+  count: integer,
+  active: boolean,
+  score: float
+}
+
+fn main() {
+  // --- Iterate over uniform struct ---
+  p = Point { x: 1.0, y: 2.0, z: 3.0 };
+  names = "";
+  total = 0.0;
+  for f in p#fields {
+    if names != "" { names += "," }
+    names += f.name;
+    match f.value {
+      FvFloat { v } => { total += v },
+      _ => {}
+    }
+  }
+  assert(names == "x,y,z", "point names: {names}");
+  assert(total == 6.0, "point total: {total}");
+
+  // --- Iterate over mixed-type struct ---
+  m = Mixed { name: "test", count: 42, active: true, score: 9.5 };
+  result = "";
+  for f in m#fields {
+    if result != "" { result += "|" }
+    match f.value {
+      FvText { v } => { result += "{f.name}='{v}'" },
+      FvInt { v } => { result += "{f.name}={v}" },
+      FvBool { v } => { result += "{f.name}={v}" },
+      FvFloat { v } => { result += "{f.name}={v}" },
+      _ => {}
+    }
+  }
+  assert(result == "name='test'|count=42|active=true|score=9.5", "mixed: {result}");
+}

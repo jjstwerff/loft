@@ -30,6 +30,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
+| 80 | Struct-enums in default library have broken field positions | Medium | Define in user code instead of `default/*.loft` |
+| 81 | Struct-enum variants with same-named fields read wrong offset | Medium | Use distinct field names per variant |
 
 ---
 
