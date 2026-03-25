@@ -22,14 +22,14 @@ fn main() {
   assert(exists("tests/example/show.loft"), "exists: file");
   assert(!exists("nonexistent_xyz.txt"), "exists: missing");
   assert(!exists("../Cargo.toml"), "exists: outside project");
-  // --- delete() returns false for non-existent ---
-  assert(!delete("nonexistent_xyz.txt"), "delete non-existent returns false");
-  assert(!delete("../Cargo.toml"), "delete outside project returns false");
+  // --- delete() returns FileResult ---
+  assert(!delete("nonexistent_xyz.txt").ok(), "delete non-existent not ok");
+  assert(!delete("../Cargo.toml").ok(), "delete outside project not ok");
   // --- move() edge cases ---
-  assert(!move("nonexistent_src_xyz.txt", "dst_xyz.txt"), "move: missing source");
-  assert(!move("tests/example/show.loft", "tests/example/map.png"), "move: dst already exists");
-  assert(!move("tests/example/show.loft", "../outside.txt"), "move: dst outside project");
-  assert(!move("../Cargo.toml", "stolen.toml"), "move: src outside project");
+  assert(!move("nonexistent_src_xyz.txt", "dst_xyz.txt").ok(), "move: missing source");
+  assert(!move("tests/example/show.loft", "tests/example/map.png").ok(), "move: dst already exists");
+  assert(!move("tests/example/show.loft", "../outside.txt").ok(), "move: dst outside project");
+  assert(!move("../Cargo.toml", "stolen.toml").ok(), "move: src outside project");
   // === Text file write and read ===
  {f = file("test_loft_t.txt");
   f += "Hello World";
@@ -56,15 +56,15 @@ fn main() {
   again = f#read(5) as text;
   assert(again == "Hello", "text seek and reread");
  }
-  assert(delete("test_loft_t.txt"), "delete text file");
+  assert(delete("test_loft_t.txt").ok(), "delete text file");
   // === move() write-and-move cycle ===
  {f = file("test_loft_src.txt");
   f += "data";
  }
-  assert(move("test_loft_src.txt", "test_loft_dst.txt"), "move succeeds");
+  assert(move("test_loft_src.txt", "test_loft_dst.txt").ok(), "move succeeds");
   assert(!exists("test_loft_src.txt"), "source gone after move");
   assert(exists("test_loft_dst.txt"), "destination exists after move");
-  assert(delete("test_loft_dst.txt"), "delete destination");
+  assert(delete("test_loft_dst.txt").ok(), "delete destination");
   // === Seek then overwrite: text file ===
  {f = file("test_loft_t.txt");
   f += "Hello";
@@ -74,7 +74,7 @@ fn main() {
  {f = file("test_loft_t.txt");
   assert(f#read(5) as text == "World", "text seek overwrite: reads overwritten data");
  }
-  assert(delete("test_loft_t.txt"), "delete after text seek overwrite test");
+  assert(delete("test_loft_t.txt").ok(), "delete after text seek overwrite test");
   // === file().files() directory listing ===
   dir_list = file("tests/example").files();
   assert(dir_list[0].path == "tests/example/config", "files() first entry is config dir");
@@ -103,20 +103,20 @@ fn main() {
   // Use a file inside the dir to verify existence, since delete() only removes files.
   mkdir("test_loft_dir_xyz");            // idempotent pre-clean: ignore result
   delete("test_loft_dir_xyz/sentinel.txt");
-  assert(mkdir_all("test_loft_dir_xyz"), "mkdir_all on existing dir returns true");
+  assert(mkdir_all("test_loft_dir_xyz").ok(), "mkdir_all on existing dir ok");
   assert(exists("test_loft_dir_xyz"), "dir exists after mkdir");
-  assert(!mkdir("test_loft_dir_xyz"), "mkdir returns false if already exists");
+  assert(!mkdir("test_loft_dir_xyz").ok(), "mkdir on existing dir not ok");
   // Write a sentinel file then clean up via file delete
  {sentinel = file("test_loft_dir_xyz/sentinel.txt");
   sentinel += "x";
  }
   assert(exists("test_loft_dir_xyz/sentinel.txt"), "sentinel file created");
-  assert(delete("test_loft_dir_xyz/sentinel.txt"), "sentinel deleted");
+  assert(delete("test_loft_dir_xyz/sentinel.txt").ok(), "sentinel deleted");
   // mkdir_all creates nested directories
-  assert(mkdir_all("test_loft_dir_xyz/a/b"), "mkdir_all creates nested dirs");
+  assert(mkdir_all("test_loft_dir_xyz/a/b").ok(), "mkdir_all creates nested dirs");
   assert(exists("test_loft_dir_xyz/a/b"), "nested leaf exists");
   // mkdir outside project is rejected
-  assert(!mkdir("../loft_outside_test"), "mkdir outside project rejected");
+  assert(!mkdir("../loft_outside_test").ok(), "mkdir outside project rejected");
   // === directory(), user_directory(), program_directory() ===
   cwd = directory();
   assert(len(cwd) > 0, "directory() is non-empty");

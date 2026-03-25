@@ -13,8 +13,8 @@
 // Directory, or NotExists.
 // `lines()` reads a text file and returns it as a vector of lines.
 // `exists(path)` is a convenience shorthand for checking that a path is not
-// NotExists. `delete(path)` removes a file and returns false if it was not
-// there.
+// NotExists. `delete(path)` removes a file and returns a `FileResult` enum;
+// use `.ok()` to check success.
 // Clean up any leftover files from a previous interrupted run.
 fn cleanup() {
   delete("test.bin");
@@ -38,7 +38,7 @@ fn main() {
   // `exists` and `delete` are safe to call when the file is absent.
   // `delete` returns false rather than crashing when nothing is there.
   assert(!exists("test.bin"), "File should not exist before the test.");
-  assert(!delete("nonexistent_xyz.bin"), "delete on missing file returns false");
+  assert(!delete("nonexistent_xyz.bin").ok(), "delete on missing file not ok");
   // ## Writing a Text or Binary File
   // Wrapping the file handle in a block ensures the file closes the moment
   // the block ends. Set `f#format` to LittleEndian or BigEndian before
@@ -61,8 +61,8 @@ fn main() {
   // `move(src, dst)` renames a file. It refuses if the destination already
   // exists or if either path would leave the project directory.
   assert(exists("test.bin"), "File should exist after writing.");
-  assert(!move("test.bin", "../test.bin"), "Should refuse to move outside the project.");
-  assert(move("test.bin", "test2.bin"), "Could not move the file.");
+  assert(!move("test.bin", "../test.bin").ok(), "Should refuse to move outside the project.");
+  assert(move("test.bin", "test2.bin").ok(), "Could not move the file.");
   // ## Reading Back What You Wrote
   // When you open an existing file the default format is TextFile. Set
   // `f#format` to match the format used when writing before you read any
@@ -93,7 +93,7 @@ fn main() {
   f#next = 0l;
   assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
  }
-  assert(delete("test2.bin"), "Could not remove the test file.");
+  assert(delete("test2.bin").ok(), "Could not remove the test file.");
   // ## Working with Vectors and Struct Data
   // `f += vector<T>` writes every element in sequence as raw bytes, which is
   // the fastest way to dump a whole collection to disk. Setting `f#size = n`
@@ -108,7 +108,7 @@ fn main() {
   f#size = 8l;
   assert(f#size == 8l, "Truncated to 8 bytes");
  }
-  assert(delete("buffer.bin"), "Could not remove buffer.bin after vector write test.");
+  assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
   // Write a count followed by individual float values. `sizeof(T)` returns
   // the byte width of a type, so you can compute the correct read length
   // without hard-coding magic numbers.
@@ -129,5 +129,5 @@ fn main() {
   n = f#read(4) as i32;
   b.data = f#read(n * sizeof(single));
  }
-  assert(delete("buffer.bin"), "Could not remove buffer.bin.");
+  assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 }

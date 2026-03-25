@@ -17,7 +17,7 @@ fn main() {
 
   // Create a file, then delete it successfully
   f = file("test_loft_fr.txt");
-  f.append("test content");
+  f += "test content";
   assert(delete("test_loft_fr.txt") == FileResult.Ok, "delete existing file");
   assert(delete("test_loft_fr.txt").ok() == false, "delete already deleted");
 
@@ -33,7 +33,7 @@ fn main() {
 
   // --- move() returns FileResult ---
   f2 = file("test_loft_fr.txt");
-  f2.append("move test");
+  f2 += "move test";
   assert(move("test_loft_fr.txt", "test_loft_fr2.txt").ok(), "move succeeds");
   assert(!move("nonexistent_fr_src.txt", "dst.txt").ok(), "move missing source");
 
