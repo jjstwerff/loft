@@ -23,6 +23,10 @@ All notable changes to the loft language and interpreter.
   `Order { status: Paid, amount } => charge(amount)`. Supports enum variants, scalar
   literals, wildcards, and or-patterns (`Paid | Refunded`).
 
+- **Field iteration (partial)** — `for f in s#fields` syntax detected and parsed;
+  `FieldValue` enum and `StructField` struct added to stdlib. Loop unrolling
+  infrastructure in place but blocked on struct-enum constructor codegen.
+
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
 
