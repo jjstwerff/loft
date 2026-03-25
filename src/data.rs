@@ -513,6 +513,9 @@ pub enum DefType {
     Type,
     // A static constant.
     Constant,
+    // A generic function template parameterised by a single type variable.
+    // Not compiled until instantiated at a concrete call site (P5).
+    Generic,
 }
 
 impl Display for DefType {

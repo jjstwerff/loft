@@ -11,6 +11,16 @@ use super::{
 };
 
 impl Parser {
+    /// Check whether a type tree contains a reference to a specific definition.
+    /// Used to validate that a generic type variable appears in a parameter type.
+    fn type_contains_def(tp: &Type, d_nr: u32) -> bool {
+        match tp {
+            Type::Reference(d, _) | Type::Unknown(d) | Type::Enum(d, _, _) => *d == d_nr,
+            Type::Vector(inner, _) => Self::type_contains_def(inner, d_nr),
+            _ => false,
+        }
+    }
+
     pub(crate) fn warn_missing_enum_variants(&mut self, e_nr: u32, nrs: &[usize], name: &str) {
         let implemented: HashSet<u32> = nrs
             .iter()
@@ -430,6 +440,7 @@ impl Parser {
         None
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_function(&mut self) -> bool {
         if !self.lexer.has_token("fn") {
             return false;
@@ -445,17 +456,77 @@ impl Parser {
                 "Expect function names to be in lower case style"
             );
         }
+        // P5.1: detect `<T>` type parameter after function name.
+        let mut is_generic = false;
+        let mut type_var_name = String::new();
+        if self.lexer.has_token("<") {
+            if let Some(tv) = self.lexer.has_identifier() {
+                if !is_camel(&tv) && !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Type variable '{}' must be CamelCase",
+                        tv
+                    );
+                }
+                type_var_name = tv;
+                is_generic = true;
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expected type variable name after '<'"
+                );
+            }
+            self.lexer.token(">");
+        }
         let mut arguments = Vec::new();
         if self.lexer.token("(") {
+            // P5.1: register the type variable as a struct so parse_type
+            // resolves it to Reference(d, []).  The definition is never
+            // compiled — it only exists for the template's type resolution.
+            if is_generic && self.first_pass && self.data.def_nr(&type_var_name) == u32::MAX {
+                let tv_nr = self
+                    .data
+                    .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
+                self.data
+                    .set_returned(tv_nr, Type::Reference(tv_nr, Vec::new()));
+            }
             if !self.parse_arguments(&fn_name, &mut arguments) {
                 return true;
             }
             self.lexer.token(")");
         }
+        // P5.1: validate that the type variable appears in the first parameter.
+        if is_generic && !arguments.is_empty() {
+            let tv_nr = self.data.def_nr(&type_var_name);
+            let has_tv = Self::type_contains_def(&arguments[0].typedef, tv_nr);
+            if !has_tv && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Type variable {} must appear in the first parameter — \
+                     move {} to the first parameter position",
+                    type_var_name,
+                    type_var_name
+                );
+            }
+        } else if is_generic && arguments.is_empty() && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Generic function must have at least one parameter of type {}",
+                type_var_name
+            );
+        }
         self.context = if self.default && self.first_pass && is_op(&fn_name) {
             self.data.add_op(&mut self.lexer, &fn_name, &arguments)
         } else if self.first_pass {
-            self.data.add_fn(&mut self.lexer, &fn_name, &arguments)
+            let d = self.data.add_fn(&mut self.lexer, &fn_name, &arguments);
+            if is_generic && d != u32::MAX {
+                self.data.definitions[d as usize].def_type = DefType::Generic;
+            }
+            d
         } else if self.default && is_op(&fn_name) {
             self.data.def_nr(&fn_name)
         } else {
