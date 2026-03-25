@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// L3: FileResult enum for filesystem operations
+
+fn main() {
+  // Cleanup from any previous failed run
+  delete("test_loft_fr.txt");
+  delete("test_loft_fr2.txt");
+
+  // --- delete() returns FileResult ---
+  // Delete a non-existent file returns NotFound
+  assert(delete("nonexistent_fr_xyz.txt") == FileResult.NotFound, "delete non-existent");
+  assert(!delete("nonexistent_fr_xyz.txt").ok(), "delete non-existent not ok");
+
+  // Delete outside project returns NotFound
+  assert(delete("../Cargo.toml") == FileResult.NotFound, "delete outside project");
+
+  // Create a file, then delete it successfully
+  f = file("test_loft_fr.txt");
+  f.append("test content");
+  assert(delete("test_loft_fr.txt") == FileResult.Ok, "delete existing file");
+  assert(delete("test_loft_fr.txt").ok() == false, "delete already deleted");
+
+  // --- mkdir() returns FileResult ---
+  assert(!mkdir("../loft_outside_fr").ok(), "mkdir outside project");
+  assert(mkdir("test_loft_fr_dir").ok(), "mkdir new dir");
+  // Second mkdir on existing dir fails
+  r = mkdir("test_loft_fr_dir");
+  assert(r != FileResult.Ok, "mkdir on existing dir not ok");
+
+  // --- mkdir_all() returns FileResult ---
+  assert(mkdir_all("test_loft_fr_dir/a/b").ok(), "mkdir_all nested");
+
+  // --- move() returns FileResult ---
+  f2 = file("test_loft_fr.txt");
+  f2.append("move test");
+  assert(move("test_loft_fr.txt", "test_loft_fr2.txt").ok(), "move succeeds");
+  assert(!move("nonexistent_fr_src.txt", "dst.txt").ok(), "move missing source");
+
+  // --- ok() convenience method ---
+  assert(FileResult.Ok.ok() == true, "Ok.ok() is true");
+  assert(FileResult.NotFound.ok() == false, "NotFound.ok() is false");
+  assert(FileResult.PermissionDenied.ok() == false, "PermissionDenied.ok() is false");
+
+  // Cleanup
+  delete("test_loft_fr2.txt");
+  delete("test_loft_fr_dir/a/b");
+  delete("test_loft_fr_dir/a");
+  delete("test_loft_fr_dir");
+}

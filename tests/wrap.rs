@@ -267,10 +267,28 @@ fn loft_suite() -> std::io::Result<()> {
         })
         .collect();
     files.sort();
+    // Scripts with dedicated #[ignore] wrappers are skipped here to keep
+    // loft_suite green while the feature is under development.
+    let skip: HashSet<&str> = ignored_scripts();
     for entry in files {
+        let name = entry
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if skip.contains(name.as_str()) {
+            println!("skip {entry:?} (has dedicated #[ignore] test)");
+            continue;
+        }
         run_test(entry, false, false)?;
     }
     Ok(())
+}
+
+/// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
+/// Removed once the feature lands and the #[ignore] is dropped.
+fn ignored_scripts() -> HashSet<&'static str> {
+    HashSet::from(["42-file-result.loft"])
 }
 
 macro_rules! script_test {
@@ -392,6 +410,18 @@ fn size_text() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
         PathBuf::from("tests/scripts/41-size-text.loft"),
+        false,
+        true,
+    )
+}
+
+/// L3: Verify FileResult enum for filesystem operations.
+#[test]
+#[ignore = "L3: FileResult enum not yet implemented"]
+fn file_result() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(
+        PathBuf::from("tests/scripts/42-file-result.loft"),
         false,
         true,
     )
