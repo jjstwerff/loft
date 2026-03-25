@@ -288,7 +288,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from(["44-nested-match.loft"])
+    HashSet::new()
 }
 
 macro_rules! script_test {
@@ -417,7 +417,6 @@ fn size_text() -> std::io::Result<()> {
 
 /// L2: Verify nested match patterns in field positions.
 #[test]
-#[ignore = "L2: nested match patterns not yet implemented"]
 fn nested_match() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
