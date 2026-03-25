@@ -7,8 +7,15 @@ Verifiable edge cases and limitations that affect users or block tests.
 Each entry has a reproducer and the test(s) that exercise it, so a release
 build can be retested quickly.
 
-**Maintenance rule:** remove an entry when the underlying issue is fully fixed
-and the test passes without workarounds.
+**Maintenance rules:**
+- Remove an entry when the underlying issue is fully fixed and the test passes
+  without workarounds.
+- Keep entries short — this is a quick-lookup document for release retesting.
+  Fix designs, root-cause analysis, and implementation plans belong in
+  [PLANNING.md](PLANNING.md), [PROBLEMS.md](PROBLEMS.md), or the relevant
+  design doc.  Each entry here should have at most: one-line description,
+  reproducer, test reference, workaround, and a pointer to where the fix is
+  planned.
 
 ---
 
