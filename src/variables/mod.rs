@@ -597,6 +597,18 @@ impl Function {
         self.variables.len() as u16
     }
 
+    /// Set a name→variable mapping, returning the previous mapping (if any).
+    /// Used by match arm bindings (S15) to alias a user-visible field name
+    /// to a per-arm unique variable.
+    pub fn set_name(&mut self, name: &str, var_nr: u16) -> Option<u16> {
+        self.names.insert(name.to_string(), var_nr)
+    }
+
+    /// Remove a name→variable mapping.
+    pub fn remove_name(&mut self, name: &str) {
+        self.names.remove(name);
+    }
+
     pub fn unique(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
         self.unique += 1;
         self.add_variable(&format!("_{name}_{}", self.unique), type_def, lexer)

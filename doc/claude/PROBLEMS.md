@@ -230,6 +230,36 @@ necessary `extern` block in the generated file.
 
 
 
+### 80. *(fixed)* Stdlib struct-enum field positions broken (S14)
+
+**Symptom:** `Fld 65543 is outside of record N size M` panic when constructing a struct-enum
+variant defined in `default/*.loft`.  User-defined struct-enums worked fine.
+
+**Root cause:** Two issues in `src/typedef.rs`:
+1. `fill_all()` only processed definitions after `start_def`, missing variants from earlier
+   library files loaded by `parse_dir()`.
+2. The enum discriminant field used `database.name("byte")` which returned `u16::MAX` when
+   the byte type hadn't been lazily registered yet.
+
+**Fix:** Changed `fill_all()` loop to start from 0 (not `start_def`) with the `has_type` guard
+preventing double-processing.  Changed the discriminant type from `database.name("byte")` to
+`database.byte(0, false)` which creates the type on demand.
+
+---
+
+### 81. *(fixed)* Match arm binding variable type reuse (S15)
+
+**Symptom:** When multiple match arms bind the same field name with different types
+(e.g. `Vi { v } => ...` where v is integer, then `Vf { v } => ...` where v is float),
+the second arm reused the first arm's variable and type.  The value read as garbage.
+
+**Fix:** Each match arm now creates a per-arm unique variable via `create_unique` with
+the correct type.  The user-visible field name is temporarily aliased to the per-arm
+variable so the arm body resolves it correctly; the alias is restored after each arm.
+Added `set_name`/`remove_name` methods to `Function` for name map manipulation.
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries

@@ -17,18 +17,37 @@ All notable changes to the loft language and interpreter.
   Use `.ok()` for a simple success check.
 
 - **Vector aggregates** — `sum_of`, `min_of`, `max_of` for `vector<integer>`, implemented
-  as `reduce` wrappers with internal helper functions.
+  as `reduce` wrappers with internal helper functions. Predicate aggregates `any(vec, pred)`,
+  `all(vec, pred)`, `count_if(vec, pred)` with short-circuit evaluation and lambda support.
 
 - **Nested match patterns** — Field positions in struct match arms support sub-patterns:
   `Order { status: Paid, amount } => charge(amount)`. Supports enum variants, scalar
   literals, wildcards, and or-patterns (`Paid | Refunded`).
 
-- **Field iteration (partial)** — `for f in s#fields` syntax detected and parsed;
-  `FieldValue` enum and `StructField` struct added to stdlib. Loop unrolling
-  infrastructure in place but blocked on struct-enum constructor codegen.
+- **Field iteration** — `for f in s#fields` iterates over a struct's primitive fields
+  at compile time. Each iteration provides `f.name` (field name) and `f.value` (a
+  `FieldValue` enum wrapping the typed value). Works for uniform and mixed-type structs.
+
+- **Generic function syntax** — `fn name<T>(x: T) -> T { ... }` declares a generic
+  function template. T must appear in the first parameter (directly or as a container
+  element like `vector<T>`). Templates are stored but not compiled until call-site
+  instantiation (P5.2).
 
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
+
+- **Format specifier warnings** — Compile-time warnings for format specifiers that
+  have no effect: hex/binary/octal on text or boolean, zero-padding on text.
+
+### Bug fixes
+
+- **S15: match arm binding type reuse** — When multiple struct-enum match arms bind the
+  same field name with different types, each arm now gets its own variable. Previously
+  the second arm reused the first arm's type, causing garbled values.
+
+- **S14: stdlib struct-enum field positions** — Struct-enum types defined in the default
+  library (`FieldValue`, etc.) no longer panic with "Fld N is outside of record". Fixed
+  two issues in `typedef.rs`: loop range for `fill_all()` and lazy byte-type registration.
 
 ---
 

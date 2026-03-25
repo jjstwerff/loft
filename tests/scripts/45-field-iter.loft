@@ -14,31 +14,42 @@ struct Mixed {
 fn main() {
   // --- Iterate over uniform struct ---
   p = Point { x: 1.0, y: 2.0, z: 3.0 };
-  names = "";
-  total = 0.0;
-  for f in p#fields {
-    if names != "" { names += "," }
-    names += f.name;
-    match f.value {
-      FvFloat { v } => { total += v },
+  pt_names = "";
+  pt_total = 0.0;
+  for pf in p#fields {
+    if pt_names != "" { pt_names += "," }
+    pt_names += pf.name;
+    match pf.value {
+      FvFloat { v } => { pt_total += v },
       _ => {}
     }
   }
-  assert(names == "x,y,z", "point names: {names}");
-  assert(total == 6.0, "point total: {total}");
+  assert(pt_names == "x,y,z", "point names: {pt_names}");
+  assert(pt_total == 6.0, "point total: {pt_total}");
 
   // --- Iterate over mixed-type struct ---
   m = Mixed { name: "test", count: 42, active: true, score: 9.5 };
-  result = "";
-  for f in m#fields {
-    if result != "" { result += "|" }
-    match f.value {
-      FvText { v } => { result += "{f.name}='{v}'" },
-      FvInt { v } => { result += "{f.name}={v}" },
-      FvBool { v } => { result += "{f.name}={v}" },
-      FvFloat { v } => { result += "{f.name}={v}" },
+  mx_result = "";
+  for mf in m#fields {
+    if mx_result != "" { mx_result += "|" }
+    mx_result += mf.name;
+    mx_result += "=";
+    match mf.value {
+      FvText { v } => { mx_result += "'{v}'" },
+      _ => {}
+    }
+    match mf.value {
+      FvInt { v } => { mx_result += "{v}" },
+      _ => {}
+    }
+    match mf.value {
+      FvBool { v } => { mx_result += "{v}" },
+      _ => {}
+    }
+    match mf.value {
+      FvFloat { v } => { mx_result += "{v}" },
       _ => {}
     }
   }
-  assert(result == "name='test'|count=42|active=true|score=9.5", "mixed: {result}");
+  assert(mx_result == "name='test'|count=42|active=true|score=9.5", "mixed: {mx_result}");
 }

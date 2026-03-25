@@ -29,7 +29,10 @@ const NATIVE_SKIP: &[&str] = &[];
 /// Script files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for issue numbers.
 /// Do NOT remove tests from this list by weakening the test — fix the native codegen instead.
-const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
+const SCRIPTS_NATIVE_SKIP: &[&str] = &[
+    // P3: native codegen does not generate loop variables for any/all/count_if.
+    "47-predicates.loft",
+];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
 ///

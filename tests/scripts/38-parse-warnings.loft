@@ -49,3 +49,19 @@ fn test_unreachable_after_continue() {
   }
 }
 
+// --- L8: Format specifier / type mismatch warnings ---
+
+// @EXPECT_WARNING: Format specifier has no effect on text
+fn test_hex_on_text() {
+  fw_t = "hello";
+  fw_r = "{fw_t:x}";
+  assert(len(fw_r) > 0, "hex on text");
+}
+
+// @EXPECT_WARNING: Zero-padding has no effect on text
+fn test_zero_pad_on_text() {
+  fw_t2 = "hi";
+  fw_r2 = "{fw_t2:05}";
+  assert(len(fw_r2) > 0, "zero-pad text");
+}
+

@@ -41,7 +41,11 @@ impl Output<'_> {
         {
             let src_name = sanitize(variables.name(*src));
             let tp_nr = self.data.def(*d_nr).known_type;
-            if !self.declared.contains(&var) {
+            if self.declared.contains(&var) {
+                // Reassignment: the variable was pre-declared via null_named
+                // (Set(var, Null)) at function entry.  OpDatabase below
+                // ensures it has a valid allocated record.
+            } else {
                 self.declared.insert(var);
                 let var_tp = variables.tp(var);
                 let tp_str = rust_type(var_tp, &Context::Variable);
@@ -51,12 +55,12 @@ impl Output<'_> {
                     "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
                 )?;
                 self.indent(w)?;
-                writeln!(
-                    w,
-                    "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
-                )?;
-                self.indent(w)?;
             }
+            writeln!(
+                w,
+                "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
+            )?;
+            self.indent(w)?;
             write!(
                 w,
                 "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"

@@ -538,6 +538,7 @@ use #count instead"
         ));
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn append_data(
         &mut self,
         tp: Type,
@@ -553,6 +554,25 @@ use #count instead"
         } else {
             "OpFormat"
         };
+        // L8: warn when a format specifier has no effect on the value type.
+        if !self.first_pass {
+            let is_text = matches!(tp, Type::Text(_));
+            let is_bool = matches!(tp, Type::Boolean);
+            if state.radix != 10 && (is_text || is_bool) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "Format specifier has no effect on {}",
+                    tp.name(&self.data)
+                );
+            } else if is_text && state.token == "0" && state.width != Value::Int(0) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "Zero-padding has no effect on text"
+                );
+            }
+        }
         match tp {
             Type::Integer(_, _) => {
                 let value = self.cl("OpConvLongFromInt", std::slice::from_ref(format));
@@ -1639,5 +1659,217 @@ use #count instead"
         };
         *val = self.cl("OpReverseVector", &[list[0].clone(), Value::Int(elm_size)]);
         Type::Void
+    }
+
+    /// Validate arguments for `any`/`all`/`count_if`: (vector, fn-pred→boolean).
+    fn validate_predicate_args(
+        &mut self,
+        name: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> Option<(Type, u32)> {
+        if list.len() != 2 {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{name} requires 2 arguments: {name}(vector, fn pred)"
+                );
+            }
+            return None;
+        }
+        let elem_type = if let Type::Vector(elm, _) = &types[0] {
+            *elm.clone()
+        } else {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{name}: first argument must be a vector"
+                );
+            }
+            return None;
+        };
+        if let Type::Function(params, ret) = &types[1] {
+            if params.len() != 1 && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{name}: predicate must take exactly one argument"
+                );
+            }
+            if **ret != Type::Boolean && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{name}: predicate must return boolean"
+                );
+            }
+        } else if !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "{name}: second argument must be a function reference (use fn <name>)"
+            );
+            return None;
+        }
+        let fn_d_nr = if let Value::Int(d) = &list[1] {
+            *d as u32
+        } else {
+            return None;
+        };
+        Some((elem_type, fn_d_nr))
+    }
+
+    /// Build the iteration preamble shared by `any`/`all`/`count_if`: copies the
+    /// vector, creates an iterator, and returns the loop scaffolding.
+    #[allow(clippy::type_complexity)]
+    fn predicate_loop_scaffold(
+        &mut self,
+        name: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> (Vec<Value>, u16, Value) {
+        let mut in_type = types[0].clone();
+        let vec_var = self.create_unique(&format!("{name}_vec"), &in_type);
+        in_type = in_type.depending(vec_var);
+
+        let iter_var = self.create_unique(&format!("{name}_idx"), &I32);
+        self.vars.defined(iter_var);
+
+        let var_tp = self.for_type(&in_type);
+        let for_var = self.create_unique(&format!("{name}_elm"), &var_tp);
+        self.vars.defined(for_var);
+
+        let mut create_iter = Value::Var(vec_var);
+        let it = Type::Iterator(Box::new(var_tp.clone()), Box::new(Type::Null));
+        let loop_nr = self.vars.start_loop();
+        let iter_next = self.iterator(&mut create_iter, &in_type, &it, iter_var, None);
+        self.vars.loop_var(for_var);
+        self.vars.finish_loop(loop_nr);
+        let for_next = v_set(for_var, iter_next);
+
+        let mut test_for = Value::Var(for_var);
+        self.convert(&mut test_for, &var_tp, &Type::Boolean);
+        let not_test = self.cl("OpNot", &[test_for]);
+        let break_if_done = v_if(
+            not_test,
+            v_block(vec![Value::Break(0)], Type::Void, "break"),
+            Value::Null,
+        );
+
+        let preamble = vec![v_set(vec_var, list[0].clone()), create_iter];
+        (
+            preamble,
+            for_var,
+            v_block(vec![for_next, break_if_done], Type::Void, "iter_step"),
+        )
+    }
+
+    /// `any(vec, pred)` — true if pred returns true for any element.
+    pub(crate) fn parse_any(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
+        if self.first_pass {
+            return Type::Boolean;
+        }
+        let Some((_, fn_d_nr)) = self.validate_predicate_args("any", list, types) else {
+            return Type::Boolean;
+        };
+
+        let acc = self.create_unique("any_acc", &Type::Boolean);
+        self.vars.defined(acc);
+
+        let (preamble, for_var, iter_step) = self.predicate_loop_scaffold("any", list, types);
+
+        // if pred(elem) { acc = true; break }
+        let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let short_circuit = v_if(
+            pred_call,
+            v_block(
+                vec![v_set(acc, Value::Boolean(true)), Value::Break(0)],
+                Type::Void,
+                "any_hit",
+            ),
+            Value::Null,
+        );
+
+        let loop_body = vec![iter_step, short_circuit];
+        let mut stmts = vec![v_set(acc, Value::Boolean(false))];
+        stmts.extend(preamble);
+        stmts.push(v_loop(loop_body, "any"));
+        stmts.push(Value::Var(acc));
+
+        *val = v_block(stmts, Type::Boolean, "any");
+        Type::Boolean
+    }
+
+    /// `all(vec, pred)` — true if pred returns true for every element.
+    pub(crate) fn parse_all(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
+        if self.first_pass {
+            return Type::Boolean;
+        }
+        let Some((_, fn_d_nr)) = self.validate_predicate_args("all", list, types) else {
+            return Type::Boolean;
+        };
+
+        let acc = self.create_unique("all_acc", &Type::Boolean);
+        self.vars.defined(acc);
+
+        let (preamble, for_var, iter_step) = self.predicate_loop_scaffold("all", list, types);
+
+        // if !pred(elem) { acc = false; break }
+        let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let not_pred = self.cl("OpNot", &[pred_call]);
+        let short_circuit = v_if(
+            not_pred,
+            v_block(
+                vec![v_set(acc, Value::Boolean(false)), Value::Break(0)],
+                Type::Void,
+                "all_miss",
+            ),
+            Value::Null,
+        );
+
+        let loop_body = vec![iter_step, short_circuit];
+        let mut stmts = vec![v_set(acc, Value::Boolean(true))];
+        stmts.extend(preamble);
+        stmts.push(v_loop(loop_body, "all"));
+        stmts.push(Value::Var(acc));
+
+        *val = v_block(stmts, Type::Boolean, "all");
+        Type::Boolean
+    }
+
+    /// `count_if(vec, pred)` — count of elements where pred returns true.
+    pub(crate) fn parse_count_if(
+        &mut self,
+        val: &mut Value,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
+        if self.first_pass {
+            return I32.clone();
+        }
+        let Some((_, fn_d_nr)) = self.validate_predicate_args("count_if", list, types) else {
+            return I32.clone();
+        };
+
+        let acc = self.create_unique("cntif_acc", &I32);
+        self.vars.defined(acc);
+
+        let (preamble, for_var, iter_step) = self.predicate_loop_scaffold("count_if", list, types);
+
+        // if pred(elem) { acc += 1 }
+        let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let inc = v_set(acc, self.cl("OpAddInt", &[Value::Var(acc), Value::Int(1)]));
+        let count_step = v_if(pred_call, inc, Value::Null);
+
+        let loop_body = vec![iter_step, count_step];
+        let mut stmts = vec![v_set(acc, Value::Int(0))];
+        stmts.extend(preamble);
+        stmts.push(v_loop(loop_body, "count_if"));
+        stmts.push(Value::Var(acc));
+
+        *val = v_block(stmts, I32.clone(), "count_if");
+        I32.clone()
     }
 }

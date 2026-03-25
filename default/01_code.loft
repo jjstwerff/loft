@@ -923,3 +923,22 @@ pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
 pub fn min_of(v: vector<integer>) -> integer { reduce(v, 2147483646, __min_int) }
 // Largest integer element.
 pub fn max_of(v: vector<integer>) -> integer { reduce(v, -2147483647, __max_int) }
+
+// --- A10: Field iteration support types ---
+
+// Wraps a field value in a type-discriminated enum for compile-time field iteration.
+pub enum FieldValue {
+  FvBool   { v: boolean },
+  FvInt    { v: integer },
+  FvLong   { v: long },
+  FvFloat  { v: float },
+  FvSingle { v: single },
+  FvChar   { v: character },
+  FvText   { v: text }
+}
+
+// Represents a single struct field during compile-time iteration.
+pub struct StructField {
+  name:  text not null,
+  value: FieldValue,
+}
