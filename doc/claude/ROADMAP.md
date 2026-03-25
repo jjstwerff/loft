@@ -57,7 +57,11 @@ Both must be fixed before A10 can deliver mixed-type field iteration.
 | CO1.5  | ↳ `for item in generator` integration                   | Small     | CO1.3       | parser/collections.rs |
 | CO1.6  | ↳ `next()` / `exhausted()` stdlib                       | Small     | CO1.2       | native.rs            |
 
-_CO1 depends on TR1 (stack trace introspection) from 0.9.0._
+| TR1    | Stack trace introspection                               | Medium    |             | STACKTRACE.md         |
+| TR1.1  | ↳ Shadow call-frame vector                              | Small     |             | state/mod.rs          |
+| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations           | Small     | TR1.1       | 04_stacktrace.loft    |
+| TR1.3  | ↳ `stack_trace()` materialisation                       | Medium    | TR1.2       | state/mod.rs, fill.rs |
+| TR1.4  | ↳ Call-site line numbers in frames                      | Small     | TR1.3       | state/codegen.rs      |
 
 ---
 
@@ -91,11 +95,6 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | P2.2   | ↳ Single-statement execution in persistent state        | Medium    | P2.1        | main.rs, repl.rs      |
 | P2.3   | ↳ Automatic value output for non-void results           | Small     | P2.2        | repl.rs               |
 | P2.4   | ↳ Error recovery in session                             | Medium    | P2.2, L1    | repl.rs, parser.rs    |
-| TR1    | Stack trace introspection                               | Medium    |             | STACKTRACE.md         |
-| TR1.1  | ↳ Shadow call-frame vector                              | Small     |             | state/mod.rs          |
-| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations           | Small     | TR1.1       | 04_stacktrace.loft    |
-| TR1.3  | ↳ `stack_trace()` materialisation                       | Medium    | TR1.2       | state/mod.rs, fill.rs |
-| TR1.4  | ↳ Call-site line numbers in frames                      | Small     | TR1.3       | state/codegen.rs      |
 | A7     | Native extension libraries (`cdylib` + `#native`)       | High      |             | EXTERNAL_LIBS.md Ph2  |
 | A7.1   | ↳ `#native` annotation + symbol registration            | Medium    |             | parser.rs, compiler   |
 | A7.2   | ↳ `cdylib` loader (`libloading`)                        | Medium    | A7.1        | state.rs, Cargo.toml  |
