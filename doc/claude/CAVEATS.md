@@ -42,19 +42,6 @@ fn test() {
 
 ---
 
-## C2 — Native codegen: `FileResult` enum method `ok()` not supported
-
-The `--native` and `--native-wasm` backends cannot compile programs that call
-`.ok()` on a `FileResult` enum value.  The interpreter works correctly.
-
-**Reproducer:** `tests/scripts/42-file-result.loft` (any call to `.ok()`)
-
-**Test:** `tests/native.rs` — `SCRIPTS_NATIVE_SKIP` includes `42-file-result.loft`.
-**Workaround:** avoid `--native` for programs using `FileResult.ok()`.
-**Planned fix:** S16 in [ROADMAP.md](ROADMAP.md) (1.1+).
-
----
-
 ## C3 — WASM backend: several features not implemented
 
 The `--native-wasm` backend lacks support for file I/O, threading, random
