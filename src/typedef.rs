@@ -162,7 +162,10 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-    for d_nr in start_def..data.definitions() {
+    // Start from 0 (not start_def) so struct-enum variants defined in earlier
+    // default library files are processed when later files trigger fill_all.
+    // The has_type guard prevents double-processing.  Fixes S14 (PROBLEMS #80).
+    for d_nr in 0..data.definitions() {
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
             && !database.has_type(&data.def(d_nr).name)
@@ -289,7 +292,7 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     set_mutable(data, c_nr, &key_fields);
                     database.spacial(c_tp, &key_fields)
                 }
-                Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.name("byte"),
+                Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
                 _ => data.def(t_nr).known_type,
             };
             database.field(s_type, &data.attr_name(d_nr, a_nr), tp);
