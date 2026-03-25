@@ -329,41 +329,10 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 
 ---
 
-### L6  Prevent double evaluation of `expr ?? default`
-**Sources:** Code review 2026-03-24 — known V1 limitation noted in `src/parser/operators.rs` line 330
-**Severity:** Medium — `f() ?? default` calls `f()` twice; wrong if `f()` has side-effects or is expensive
-**Description:** The null-coalescing operator `??` currently clones the LHS expression into two positions in the IR — once as the condition (`bool(expr)`) and once as the true branch — so the bytecode evaluates it twice.  For a `Value::Var(n)` LHS this is harmless (reading a stack slot twice), but for any call, field access, or index expression it causes a double evaluation.
+### L6  Prevent double evaluation of `expr ?? default` *(completed 0.8.3)*
 
-**Fix:**  When the LHS is not already `Value::Var(_)`, materialise it into a compiler-generated temp before building the conditional:
-
-```rust
-if let Value::Var(_) = code {
-    // Simple variable: reading twice is side-effect-free.
-    let lhs = code.clone();
-    let mut null_check = code.clone();
-    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
-    *code = v_if(null_check, lhs, rhs);
-} else {
-    // Non-trivial expression: materialise into a temp to avoid double evaluation.
-    let tmp = self.create_unique("ncc", &lhs_type);
-    let set_tmp = v_set(tmp, code.clone());
-    let mut null_check = Value::Var(tmp);
-    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
-    let if_expr = v_if(null_check, Value::Var(tmp), rhs);
-    *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
-}
-*ctp = lhs_type;
-```
-
-All helpers (`v_if`, `v_set`, `v_block`, `create_unique`) already exist.  The two-pass design is safe: `create_unique` uses a counter suffix (`_ncc_1`, `_ncc_2`, …) and `add_variable` returns the same slot on the second pass.
-
-**Fix path:**
-1. Replace lines ~353–360 in the `??` branch of `handle_operator` in `src/parser/operators.rs` with the code above.
-2. Add `tests/scripts/null_coalesce_once.loft` — call a side-effectful function through `??`, assert it ran exactly once.
-3. Run `make test`; verify no regressions and that the dump shows one `OpCall` for the LHS, not two.
-
-**Effort:** Small (one code block in `operators.rs` + one test script)
-**Target:** 0.8.3
+Implemented: non-trivial LHS expressions are materialised into a temp variable
+before building the null-check conditional.  Tests in `25-null-coalescing.loft`.
 
 ---
 
@@ -1067,30 +1036,10 @@ the generic type-mismatch message.
 
 ---
 
-### S14  Struct-enum stdlib field positions (PROBLEMS #80)
-**Sources:** Discovered during A10 development; [CAVEATS.md](CAVEATS.md) C9
-**Severity:** Medium — blocks A10 field iteration and any future stdlib struct-enum
-**Description:** Struct-enum types defined in `default/*.loft` have broken field
-positions: `database.position(known_type, field_name)` returns `u16::MAX`, causing
-"Fld N is outside of record" panics at runtime.  User-defined struct-enums work.
+### S14  Struct-enum stdlib field positions *(completed 0.8.3)*
 
-**Root cause:** `typedef::fill_all()` in `src/typedef.rs:165` iterates only
-`start_def..data.definitions()`.  When the default library is loaded file-by-file
-via `parse_dir()`, each file resets `start_def` to the current definition count.
-Struct-enum variants from earlier files (e.g. `01_code.loft`) are never re-processed
-by `fill_all()` in later files.
-
-**Fix path:**
-1. In `src/typedef.rs`, change `fill_all()` to process ALL struct-enum variants
-   that have `known_type == u16::MAX`, not just those in the `start_def..` range.
-   Alternatively, pass `start_def=0` during the final `finish()` call.
-2. Or: add a global `fill_all(0..)` call after all default files are loaded,
-   in `parse_dir()` (`src/parser/mod.rs:344`), before returning.
-3. Verify: `FvBool { v: true }` defined in `default/01_code.loft` works at runtime.
-*Tests:* add a test that constructs a stdlib struct-enum variant (re-enable A10 test).
-
-**Effort:** Small (one loop bound change or one extra call)
-**Target:** 0.8.3
+Fixed: `fill_all()` now processes all definitions from 0 (not `start_def`), and the
+discriminant field uses `database.byte(0, false)` instead of `database.name("byte")`.
 
 ---
 
@@ -1132,25 +1081,10 @@ Use `LOFT_LOG=static` and inspect the type table for each variant.
 
 ---
 
-### L8  Warn on format specifier / type mismatch
-**Sources:** [CAVEATS.md](CAVEATS.md) C14; [00-vs-rust.html](../00-vs-rust.html)
-**Severity:** Low — numeric specifiers like `:05` on text are silently ignored
-**Description:** `"{t:05}"` where `t` is text produces `"hello"` with no warning.
-The `:05` zero-pad specifier is meaningful only for integers.  A compile-time
-warning would catch the mistake.
+### L8  Warn on format specifier / type mismatch *(completed 0.8.3)*
 
-**Fix path:**
-In `src/parser/objects.rs`, inside `append_data()` (called per format segment),
-the type of the value and the format specifier are both known.  After computing
-the radix and width, check:
-- If `radix` is not 10 (hex, binary, octal) and the value type is `Text` or
-  `Boolean`, emit a warning: "format specifier has no effect on {type}".
-- If `width` is nonzero and has a zero-pad token (`token == "0"`) and the value
-  type is `Text`, emit a warning: "zero-padding has no effect on text".
-*Tests:* `tests/scripts/38-parse-warnings.loft` or new `@EXPECT_WARNING` entries.
-
-**Effort:** Small (one diagnostic in `append_data`)
-**Target:** 0.8.3
+Implemented: compile-time warnings in `append_data()` for numeric format specifiers
+on text/boolean and zero-padding on text.  Tests in `38-parse-warnings.loft`.
 
 ---
 

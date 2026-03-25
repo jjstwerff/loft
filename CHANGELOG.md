@@ -30,6 +30,15 @@ All notable changes to the loft language and interpreter.
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
 
+- **Format specifier warnings** — Compile-time warnings for format specifiers that
+  have no effect: hex/binary/octal on text or boolean, zero-padding on text.
+
+### Bug fixes
+
+- **S14: stdlib struct-enum field positions** — Struct-enum types defined in the default
+  library (`FieldValue`, etc.) no longer panic with "Fld N is outside of record". Fixed
+  two issues in `typedef.rs`: loop range for `fill_all()` and lazy byte-type registration.
+
 ---
 
 ## [0.8.2] — 2026-03-24

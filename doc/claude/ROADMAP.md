@@ -20,26 +20,42 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| P3     | Vector aggregates (sum, min_of, any, all, count_if)     | Low–Med   | P1          | Stdlib audit 2026-03-15 |
+| P3     | Vector aggregates (any, all, count_if)                  | Medium    | P1          | Stdlib audit 2026-03-15 |
 | P5     | First-parameter generic functions (`fn name<T>(...)`)   | Medium    |             | Design 2026-03-25       |
 | P5.1   | ↳ `<T>` syntax + `DefType::Generic` template storage    | Small     |             | definitions.rs, data.rs |
 | P5.2   | ↳ Call-site instantiation + name mangling               | Medium    | P5.1        | control.rs              |
 | P5.3   | ↳ Validation errors for disallowed uses of T            | Small     | P5.1        | parser/ (second pass)   |
 | P5.4   | ↳ Tests + LOFT.md § Generic functions                   | Small     | P5.2, P5.3  | tests/docs/, LOFT.md    |
-| T2     | `size(t)` — character count for text                    | Small     |             | User request 2026-03-24 |
-| L2     | Nested patterns in field positions                      | Medium    |             | MATCH.md L2             |
-| L3     | `FileResult` enum for mutating fs operations            | Small     |             | User request 2026-03-19 |
-| L3.1   | ↳ `FileResult` enum + `io_result` helper                | Small     |             | database/io.rs          |
-| L3.2   | ↳ Op signatures + all Rust impls                        | Small     | L3.1        | fill.rs, state/io.rs    |
-| L3.3   | ↳ `ok()` method + public API + test migration           | Small     | L3.2        | 02_images.loft, tests/  |
-| A10    | Field iteration (`for f in s#fields`)                   | Medium    |             | Design eval 2026-03-18  |
-| A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     |             | lexer.rs                |
-| A10.1  | ↳ `Field` + `FieldValue` types in stdlib                | Small     | A10.0       | 01_code.loft            |
-| A10.2  | ↳ `ident#fields` → `Value::FieldsOf` in parser          | Small     | A10.1       | collections.rs, data.rs |
-| A10.3  | ↳ Loop unrolling for `Type::FieldsOf`                   | Medium    | A10.2       | collections.rs          |
-| A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
-| L6     | Prevent double evaluation of `expr ?? default`          | Small     |             | operators.rs line 330   |
 | L7     | `init(expr)` stored field initialiser with `$` reference | Small–Med |             | Design 2026-03-25       |
+| S15    | Struct-enum same-name variant field offsets (#81)       | Medium    |             | PLANNING.md S15         |
+| A10.3  | ↳ Loop unrolling in `parse_field_iteration`             | Medium    | S15         | collections.rs          |
+| A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
+| T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
+| T1.1   | ↳ Type system (`Type::Tuple`, offsets)          | M  | ✓      |            | data.rs, typedef.rs |
+| T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1       | parser/             |
+| T1.3   | ↳ Scope analysis (intervals, lifetimes)         | S  | ✓      | T1.2       | scopes.rs           |
+| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)     | M  | ✓      | T1.3       | state/codegen.rs    |
+| T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4       | compiler            |
+| T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
+| T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
+| A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
+| A5.1   | ↳ Capture analysis (identify free variables)    | S  | ✓      |            | scopes.rs           |
+| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1       | data.rs, typedef.rs |
+| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2       | codegen.rs          |
+| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
+| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
+| TR1    | Stack trace introspection                       | M  | ✓      |            | STACKTRACE.md       |
+| TR1.1  | ↳ Shadow call-frame vector                      | S  | ✓      |            | state/mod.rs        |
+| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations   | S  | ✓      | TR1.1      | 04_stacktrace.loft  |
+| TR1.3  | ↳ `stack_trace()` materialisation               | M  | ✓      | TR1.2      | state/mod.rs        |
+| TR1.4  | ↳ Call-site line numbers in frames              | S  | ✓      | TR1.3      | state/codegen.rs    |
+| CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1        | COROUTINE.md        |
+| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`        | S  | ✓      | TR1.2      | typedef.rs          |
+| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`       | H  | ✓      | CO1.1      | state/mod.rs        |
+| CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2      | state/mod.rs        |
+| CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |
+| CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3      | collections.rs      |
+| CO1.6  | ↳ `next()` / `exhausted()` stdlib               | S  | ✓      | CO1.2      | native.rs           |
 
 ---
 
