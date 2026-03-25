@@ -334,6 +334,31 @@ impl Parser {
             self.file_op(code, t, index_var);
             return;
         }
+        // A10: detect #fields for compile-time field iteration.
+        if self.lexer.has_keyword("fields") {
+            let var = self.vars.var(name);
+            let var_type = if var == u16::MAX {
+                Type::Unknown(0)
+            } else {
+                self.vars.tp(var).clone()
+            };
+            if let Type::Reference(d, _) = &var_type {
+                self.fields_of = *d;
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "#fields requires a struct variable, got {}",
+                    var_type.name(&self.data)
+                );
+            }
+            // Set code to the source variable so parse_field_iteration receives it.
+            if var != u16::MAX {
+                *code = Value::Var(var);
+            }
+            *t = Type::Void;
+            return;
+        }
         if self.lexer.has_keyword("index") {
             // For index<T> collections, {name}#index holds an internal B-tree record number,
             // not a sequential 0-based counter.  Reject it at compile time.
@@ -742,6 +767,14 @@ use #count instead"
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
+            // A10: if #fields was detected, take the compile-time unrolling path.
+            if self.fields_of != u32::MAX {
+                let struct_def_nr = self.fields_of;
+                self.fields_of = u32::MAX;
+                self.vars.finish_loop(loop_nr);
+                self.parse_field_iteration(&id, struct_def_nr, &expr, code);
+                return;
+            }
             let mut fill = Value::Null;
             // For vector loops, the iterator runs on a unique temp copy so that the loop
             // variable does not alias the user-visible collection.  Record the original
@@ -1389,6 +1422,90 @@ use #count instead"
             true,
             tp,
         )
+    }
+
+    /// Build ops to construct a struct/struct-enum instance, replicating the IR that
+    /// `parse_object` produces. Returns the ops list and the work variable holding the result.
+    fn build_object_ops(&mut self, td_nr: u32, fields: &[(usize, Value)]) -> (Vec<Value>, u16) {
+        let ret = self.data.def(td_nr).returned.clone();
+        let w = self.vars.work_refs(&ret, &mut self.lexer);
+        self.data.set_referenced(td_nr, self.context, Value::Null);
+        let tp = i32::from(self.data.def(td_nr).known_type);
+        let mut list: Vec<Value> = vec![
+            v_set(w, Value::Null),
+            self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]),
+        ];
+        for &(f_nr, ref val) in fields {
+            list.push(self.set_field_no_check(td_nr, f_nr, 0, Value::Var(w), val.clone()));
+        }
+        (list, w)
+    }
+
+    /// A10: compile-time unroll `for f in s#fields` into one block per field.
+    fn parse_field_iteration(
+        &mut self,
+        loop_var_name: &str,
+        struct_def_nr: u32,
+        source_expr: &Value,
+        code: &mut Value,
+    ) {
+        let field_def_nr = self.data.def_nr("StructField");
+        let field_type = Type::Reference(field_def_nr, Vec::new());
+        let loop_var = self.create_var(loop_var_name, &field_type);
+        self.vars.defined(loop_var);
+
+        let mut body = Value::Null;
+        self.parse_block("fields", &mut body, &Type::Void);
+
+        let num_attrs = self.data.attributes(struct_def_nr);
+        let mut blocks: Vec<Value> = Vec::new();
+
+        let work_checkpoint = self.vars.work_ref();
+        for a in 0..num_attrs {
+            let attr_name = self.data.attr_name(struct_def_nr, a);
+            let attr_type = self.data.attr_type(struct_def_nr, a);
+
+            let variant_name = match &attr_type {
+                Type::Boolean => "FvBool",
+                Type::Integer(_, _) => "FvInt",
+                Type::Long => "FvLong",
+                Type::Float => "FvFloat",
+                Type::Single => "FvSingle",
+                Type::Character => "FvChar",
+                Type::Text(_) => "FvText",
+                _ => continue,
+            };
+
+            let field_read = self.get_field(struct_def_nr, a, source_expr.clone());
+            let variant_def_nr = self.data.def_nr(variant_name);
+            let disc_val = self.data.def(variant_def_nr).attributes[0].value.clone();
+
+            // Construct FieldValue variant as Value::Insert (flat ops list).
+            let (fv_ops, fv_work) =
+                self.build_object_ops(variant_def_nr, &[(0, disc_val), (1, field_read)]);
+            let fv_insert = Value::Insert(fv_ops);
+
+            // Construct StructField: the FieldValue is passed as Value::Var(fv_work)
+            // after the Insert has executed.
+            let (sf_ops, sf_work) = self.build_object_ops(
+                field_def_nr,
+                &[(0, Value::Text(attr_name)), (1, Value::Var(fv_work))],
+            );
+            let sf_insert = Value::Insert(sf_ops);
+
+            blocks.push(fv_insert);
+            blocks.push(sf_insert);
+            blocks.push(v_set(loop_var, Value::Var(sf_work)));
+            blocks.push(body.clone());
+        }
+        // Mark work refs as skip_free — they are consumed by the loop var assignment.
+        self.vars.clean_work_refs(work_checkpoint);
+
+        if blocks.is_empty() {
+            *code = Value::Null;
+        } else {
+            *code = v_block(blocks, Type::Void, "field_iter");
+        }
     }
 
     /// Compute the in-store byte size of a vector element type.

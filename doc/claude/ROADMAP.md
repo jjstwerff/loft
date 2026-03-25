@@ -6,33 +6,52 @@
 Items in expected implementation order, grouped by milestone.
 Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 
-**Effort key:** Small · Medium · Med–High · High · Very High
+**Effort:** S = Small · M = Medium · MH = Med–High · H = High · VH = Very High
+
+**Design:** ✓ = detailed design in place · ~ = partial/outline · — = needs design
 
 **Maintenance rule:** When an item is completed, remove it from this file entirely.
 Do not keep completed items — the ROADMAP tracks only what remains to be done.
 Completed work belongs in CHANGELOG.md (user-facing) and git history (implementation).
-Issue IDs (S9, A1.2, etc.) must not appear in source code comments either; use
-plain English describing the purpose of the code.
 
 ---
 
 ## 0.8.3 — Language syntax extensions
 
-| ID     | Title                                                   | Effort    | Depends on  | Source                  |
-|--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| P3     | Vector aggregates (sum, min_of, any, all, count_if)     | Low–Med   | P1          | Stdlib audit 2026-03-15 |
-| T2     | `size(t)` — character count for text                    | Small     |             | User request 2026-03-24 |
-| L2     | Nested patterns in field positions                      | Medium    |             | MATCH.md L2             |
-| L3     | `FileResult` enum for mutating fs operations            | Small     |             | User request 2026-03-19 |
-| L3.1   | ↳ `FileResult` enum + `io_result` helper                | Small     |             | database/io.rs          |
-| L3.2   | ↳ Op signatures + all Rust impls                        | Small     | L3.1        | fill.rs, state/io.rs    |
-| L3.3   | ↳ `ok()` method + public API + test migration           | Small     | L3.2        | 02_images.loft, tests/  |
-| A10    | Field iteration (`for f in s#fields`)                   | Medium    |             | Design eval 2026-03-18  |
-| A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     |             | lexer.rs                |
-| A10.1  | ↳ `Field` + `FieldValue` types in stdlib                | Small     | A10.0       | 01_code.loft            |
-| A10.2  | ↳ `ident#fields` → `Value::FieldsOf` in parser          | Small     | A10.1       | collections.rs, data.rs |
-| A10.3  | ↳ Loop unrolling for `Type::FieldsOf`                   | Medium    | A10.2       | collections.rs          |
-| A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
+| ID     | Title                                          | E  | Design | Depends on | Source              |
+|--------|-------------------------------------------------|----|--------|------------|---------------------|
+| L8     | Warn on format specifier / type mismatch        | S  | ✓      |            | PLANNING.md L8      |
+| S14    | Struct-enum stdlib field positions (#80)        | M  | ✓      |            | PLANNING.md S14     |
+| S15    | Struct-enum same-name variant field offsets (#81)| M | ✓      |            | PLANNING.md S15     |
+| A10    | Field iteration (`for f in s#fields`)           | M  | ✓      |            | PLANNING.md A10     |
+| A10.3  | ↳ Loop unrolling in `parse_field_iteration`     | M  | ✓      | S14, S15   | collections.rs      |
+| A10.4  | ↳ Error messages, docs, tests                   | S  | ✓      | A10.3      | LOFT.md, tests/     |
+| T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
+| T1.1   | ↳ Type system (`Type::Tuple`, offsets)          | M  | ✓      |            | data.rs, typedef.rs |
+| T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1       | parser/             |
+| T1.3   | ↳ Scope analysis (intervals, lifetimes)         | S  | ✓      | T1.2       | scopes.rs           |
+| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)     | M  | ✓      | T1.3       | state/codegen.rs    |
+| T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4       | compiler            |
+| T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
+| T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
+| A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
+| A5.1   | ↳ Capture analysis (identify free variables)    | S  | ✓      |            | scopes.rs           |
+| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1       | data.rs, typedef.rs |
+| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2       | codegen.rs          |
+| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
+| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
+| TR1    | Stack trace introspection                       | M  | ✓      |            | STACKTRACE.md       |
+| TR1.1  | ↳ Shadow call-frame vector                      | S  | ✓      |            | state/mod.rs        |
+| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations   | S  | ✓      | TR1.1      | 04_stacktrace.loft  |
+| TR1.3  | ↳ `stack_trace()` materialisation               | M  | ✓      | TR1.2      | state/mod.rs        |
+| TR1.4  | ↳ Call-site line numbers in frames              | S  | ✓      | TR1.3      | state/codegen.rs    |
+| CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1        | COROUTINE.md        |
+| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`        | S  | ✓      | TR1.2      | typedef.rs          |
+| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`       | H  | ✓      | CO1.1      | state/mod.rs        |
+| CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2      | state/mod.rs        |
+| CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |
+| CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3      | collections.rs      |
+| CO1.6  | ↳ `next()` / `exhausted()` stdlib               | S  | ✓      | CO1.2      | native.rs           |
 
 ---
 
@@ -41,54 +60,49 @@ plain English describing the purpose of the code.
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
 are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
 
-| ID     | Title                                                   | Effort    | Depends on  | Source          |
-|--------|---------------------------------------------------------|-----------|-------------|-----------------|
-| H4     | HTTP client stdlib + `HttpResponse` (ureq)              | Medium    |             | WEB_SERVICES.md |
-| H4.1   | ↳ `HttpResponse` struct + `ok()` method                 | Small     |             | default/04_web.loft |
-| H4.2   | ↳ `http_get`, `http_post`, `http_put`, `http_delete`    | Medium    | H4.1        | native_http.rs  |
-| H4.3   | ↳ Header support (`http_get_h`, `http_post_h`)          | Small     | H4.2        | native_http.rs  |
-| H4.4   | ↳ Documentation + integration tests                     | Small     | H4.2        | tests/docs/     |
+| ID     | Title                                          | E  | Design | Depends on | Source              |
+|--------|-------------------------------------------------|----|--------|------------|---------------------|
+| H4     | HTTP client stdlib + `HttpResponse` (ureq)     | M  | ✓      |            | WEB_SERVICES.md     |
+| H4.1   | ↳ `HttpResponse` struct + `ok()` method         | S  | ✓      |            | default/04_web.loft |
+| H4.2   | ↳ `http_get`, `http_post`, `http_put`, `http_delete` | M | ✓ | H4.1      | native_http.rs      |
+| H4.3   | ↳ Header support (`http_get_h`, `http_post_h`) | S  | ✓      | H4.2       | native_http.rs      |
+| H4.4   | ↳ Documentation + integration tests            | S  | ✓      | H4.2       | tests/docs/         |
 
 ---
 
 ## 0.9.0 — Standalone executable
 
-| ID     | Title                                                   | Effort    | Depends on  | Source                |
-|--------|---------------------------------------------------------|-----------|-------------|-----------------------|
-| L1     | Error recovery after token failures                     | Medium    |             | DEVELOPERS.md Step 5  |
-| A2     | Logger: hot-reload, run-mode, release + debug flags     | Medium    |             | LOGGER.md             |
-| A2.1   | ↳ Wire hot-reload in log functions                      | Small     |             | native.rs             |
-| A2.2   | ↳ `is_production()` + `is_debug()` + `RunMode`          | Small     |             | native.rs, 01_code.loft |
-| A2.3   | ↳ `--release` flag + `debug_assert()` elision           | Small–Med | A2.2        | control.rs, main.rs   |
-| A2.4   | ↳ `--debug` per-type safety logging                     | Medium    | A2.2        | fill.rs, native.rs    |
-| P2     | REPL / interactive mode                                 | High      | L1          | Prototype goal        |
-| P2.1   | ↳ Input completeness detection                          | Small     |             | new repl.rs           |
-| P2.2   | ↳ Single-statement execution in persistent state        | Medium    | P2.1        | main.rs, repl.rs      |
-| P2.3   | ↳ Automatic value output for non-void results           | Small     | P2.2        | repl.rs               |
-| P2.4   | ↳ Error recovery in session                             | Medium    | P2.2, L1    | repl.rs, parser.rs    |
-| TR1    | Stack trace introspection                               | Medium    |             | STACKTRACE.md         |
-| TR1.1  | ↳ Shadow call-frame vector                              | Small     |             | state/mod.rs          |
-| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations           | Small     | TR1.1       | 04_stacktrace.loft    |
-| TR1.3  | ↳ `stack_trace()` materialisation                       | Medium    | TR1.2       | state/mod.rs, fill.rs |
-| TR1.4  | ↳ Call-site line numbers in frames                      | Small     | TR1.3       | state/codegen.rs      |
-| A7     | Native extension libraries (`cdylib` + `#native`)       | High      |             | EXTERNAL_LIBS.md Ph2  |
-| A7.1   | ↳ `#native` annotation + symbol registration            | Medium    |             | parser.rs, compiler   |
-| A7.2   | ↳ `cdylib` loader (`libloading`)                        | Medium    | A7.1        | state.rs, Cargo.toml  |
-| A7.3   | ↳ Package layout + `loft-plugin-api` crate              | Medium    | A7.2        | new workspace member  |
+| ID     | Title                                          | E  | Design | Depends on | Source              |
+|--------|-------------------------------------------------|----|--------|------------|---------------------|
+| L1     | Error recovery after token failures            | M  | ~      |            | DEVELOPERS.md       |
+| A2     | Logger: hot-reload, run-mode, release + debug  | M  | ✓      |            | LOGGER.md           |
+| A2.1   | ↳ Wire hot-reload in log functions              | S  | ✓      |            | native.rs           |
+| A2.2   | ↳ `is_production()` + `is_debug()` + `RunMode` | S  | ✓      |            | 01_code.loft        |
+| A2.3   | ↳ `--release` flag + `debug_assert()` elision  | MH | ✓      | A2.2       | control.rs, main.rs |
+| A2.4   | ↳ `--debug` per-type safety logging            | M  | ✓      | A2.2       | fill.rs, native.rs  |
+| P2     | REPL / interactive mode                        | H  | ✓      | L1         | PLANNING.md P2      |
+| P2.1   | ↳ Input completeness detection                  | S  | ✓      |            | new repl.rs         |
+| P2.2   | ↳ Single-statement execution                    | M  | ✓      | P2.1       | main.rs, repl.rs    |
+| P2.3   | ↳ Automatic value output                        | S  | ✓      | P2.2       | repl.rs             |
+| P2.4   | ↳ Error recovery in session                    | M  | ✓      | P2.2, L1   | repl.rs, parser.rs  |
+| A7     | Native extension libraries (`cdylib`)          | H  | ✓      |            | EXTERNAL_LIBS.md    |
+| A7.1   | ↳ `#native` annotation + symbol registration   | M  | ✓      |            | parser.rs           |
+| A7.2   | ↳ `cdylib` loader (`libloading`)               | M  | ✓      | A7.1       | state.rs            |
+| A7.3   | ↳ Package layout + `loft-plugin-api` crate     | M  | ✓      | A7.2       | new workspace       |
 
 ---
 
 ## 1.0.0 — IDE + stability contract
 
-| ID     | Title                                                   | Effort    | Depends on  | Source        |
-|--------|---------------------------------------------------------|-----------|-------------|---------------|
-| R1     | Workspace split                                         | Small     |             | Extraction plan |
-| W1     | WASM foundation                                         | Medium    | R1          | WEB_IDE.md M1 |
-| W2     | Editor shell (CodeMirror 6 + Loft grammar)              | Medium    | W1          | WEB_IDE.md M2 |
-| W4     | Multi-file projects (IndexedDB)                         | Medium    | W2          | WEB_IDE.md M4 |
-| W3     | Symbol navigation (go-to-def, find-usages)              | Medium    | W1, W2      | WEB_IDE.md M3 |
-| W5     | Docs & examples browser                                 | Small–Med | W2          | WEB_IDE.md M5 |
-| W6     | Export/import ZIP + PWA offline                         | Small–Med | W4          | WEB_IDE.md M6 |
+| ID     | Title                                          | E  | Design | Depends on | Source              |
+|--------|-------------------------------------------------|----|--------|------------|---------------------|
+| R1     | Workspace split                                | S  | ~      |            | Extraction plan     |
+| W1     | WASM foundation                                | M  | ✓      | R1         | WEB_IDE.md M1       |
+| W2     | Editor shell (CodeMirror 6 + Loft grammar)     | M  | ✓      | W1         | WEB_IDE.md M2       |
+| W3     | Symbol navigation (go-to-def, find-usages)     | M  | ✓      | W1, W2     | WEB_IDE.md M3       |
+| W4     | Multi-file projects (IndexedDB)                | M  | ✓      | W2         | WEB_IDE.md M4       |
+| W5     | Docs & examples browser                        | MH | ✓      | W2         | WEB_IDE.md M5       |
+| W6     | Export/import ZIP + PWA offline                 | MH | ✓      | W4         | WEB_IDE.md M6       |
 
 _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independently._
 
@@ -96,53 +110,37 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 ## 1.1+ — Backlog
 
-| ID     | Title                                                   | Effort    | Depends on  | Source               |
-|--------|---------------------------------------------------------|-----------|-------------|----------------------|
-| A5     | Closure capture for lambdas                             | Very High | P1          | PLANNING.md A5       |
-| A5.1   | ↳ Capture analysis (identify free variables)            | Small     | P1          | scopes.rs            |
-| A5.2   | ↳ Closure record layout                                 | Small     | A5.1        | data.rs, typedef.rs  |
-| A5.3   | ↳ Capture at call site                                  | Medium    | A5.2        | codegen.rs           |
-| A5.4   | ↳ Closure body reads via closure record                 | Medium    | A5.3        | codegen.rs, fill.rs  |
-| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)                      | Small     | A5.4        | scopes.rs            |
-| T1     | Tuple types                                             | Very High |             | TUPLES.md            |
-| T1.1   | ↳ Type system (`Type::Tuple`, offsets)                  | Medium    |             | data.rs, typedef.rs  |
-| T1.2   | ↳ Parser (notation, literals, destructuring)            | Medium    | T1.1        | parser/              |
-| T1.3   | ↳ Scope analysis (intervals, lifetimes)                 | Small     | T1.2        | scopes.rs            |
-| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)             | Medium    | T1.3        | state/codegen.rs     |
-| T1.5   | ↳ Reference-tuple parameters                            | Small     | T1.4        | compiler             |
-| T1.6   | ↳ Tuple-aware mutation guard                            | Small     | T1.4        | scopes.rs            |
-| T1.7   | ↳ `not null` for tuple integer elements                 | Small     | T1.4        | typedef.rs           |
-| CO1    | Coroutines (`yield`, `iterator<T>`, `yield from`)       | Very High | TR1         | COROUTINE.md         |
-| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`                | Small     | TR1.2       | typedef.rs           |
-| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`               | High      | CO1.1       | state/mod.rs, data.rs |
-| CO1.3  | ↳ `OpYield` (serialise stack to heap)                   | High      | CO1.2       | state/mod.rs         |
-| CO1.4  | ↳ `yield from` delegation                               | Medium    | CO1.3       | state/mod.rs         |
-| CO1.5  | ↳ `for item in generator` integration                   | Small     | CO1.3       | parser/collections.rs |
-| CO1.6  | ↳ `next()` / `exhausted()` stdlib                       | Small     | CO1.2       | native.rs            |
-| O1     | Superinstruction peephole rewriting                     | Medium    |             | compile.rs           |
-| O2     | Stack raw pointer cache (eliminate store-indirection)   | High      |             | PERFORMANCE.md P2    |
-| O4     | Native: direct-emit local collections                   | High      |             | PERFORMANCE.md N1    |
-| O5     | Native: omit `stores` from pure functions               | High      | O4          | PERFORMANCE.md N2    |
-| O7     | wasm: pre-allocate string buffers in format path        | Medium    | W1          | PERFORMANCE.md W1    |
-| A4     | Spatial index operations                                | High      |             | PROBLEMS.md #22      |
-| A4.1   | ↳ Insert + exact lookup                                 | Medium    |             | database.rs, fill.rs |
-| A4.2   | ↳ Bounding-box range query                              | Medium    | A4.1        | database.rs          |
-| A4.3   | ↳ Removal                                               | Small     | A4.1        | database.rs          |
-| A4.4   | ↳ Full iteration                                        | Small     | A4.2, A4.3  | database.rs, io.rs   |
-| A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12      |
+| ID     | Title                                          | E  | Design | Depends on | Source              |
+|--------|-------------------------------------------------|----|--------|------------|---------------------|
+| L7     | Non-zero exit code on parse/runtime errors     | S  | —      |            | CAVEATS.md C6       |
+| S17    | Slot: text below TOS in nested scopes          | M  | —      |            | CAVEATS.md C4       |
+| S18    | Slot: sequential file blocks conflict          | M  | —      |            | CAVEATS.md C5       |
+| A12    | Lazy work-variable initialization              | M  | ~      |            | PLANNING.md A12     |
+| S16    | Native codegen: enum method dispatch           | MH | —      |            | CAVEATS.md C2       |
+| O1     | Superinstruction peephole rewriting            | M  | ~      |            | compile.rs          |
+| O2     | Stack raw pointer cache                        | H  | ~      |            | PERFORMANCE.md P2   |
+| A4     | Spatial index operations                       | H  | ~      |            | PROBLEMS.md #22     |
+| A4.1   | ↳ Insert + exact lookup                         | M  | ~      |            | database.rs         |
+| A4.2   | ↳ Bounding-box range query                      | M  | ~      | A4.1       | database.rs         |
+| A4.3   | ↳ Removal                                       | S  | ~      | A4.1       | database.rs         |
+| A4.4   | ↳ Full iteration                                | S  | ~      | A4.2, A4.3 | database.rs         |
+| O4     | Native: direct-emit local collections          | H  | ~      |            | PERFORMANCE.md N1   |
+| O5     | Native: omit `stores` from pure functions      | H  | ~      | O4         | PERFORMANCE.md N2   |
+| O7     | WASM: pre-allocate format string buffers       | M  | —      | W1         | PERFORMANCE.md W1   |
 
 ---
 
 ## Deferred indefinitely
 
-| ID     | Title                                                   | Effort    | Notes                                    |
-|--------|---------------------------------------------------------|-----------|------------------------------------------|
-| P4     | Bytecode cache (`.loftc`)                               | Medium    | Superseded by native codegen             |
-| A7.4   | External libs: package registry + `loft install`        | Medium    | 2.x; ecosystem must exist first          |
+| ID     | Title                                          | E  | Notes                                    |
+|--------|-------------------------------------------------|----|------------------------------------------|
+| P4     | Bytecode cache (`.loftc`)                      | M  | Superseded by native codegen             |
+| A7.4   | External libs: package registry + `loft install`| M | 2.x; ecosystem must exist first          |
 
 ---
 
 ## See also
+
 - [PLANNING.md](PLANNING.md) — Full descriptions, fix paths, and effort justifications for every item
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark data and designs for O1–O7
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Branch naming, commit sequence, and CI workflow

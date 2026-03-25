@@ -4,6 +4,34 @@ All notable changes to the loft language and interpreter.
 
 ---
 
+## [Unreleased]
+
+### New features
+
+- **`size(t)` character count** — `size("héllo")` returns 5 (Unicode code points),
+  complementing `len()` which returns byte length. Backed by a new `OpSizeText` opcode.
+
+- **`FileResult` enum** — Filesystem-mutating operations (`delete`, `move`, `mkdir`,
+  `mkdir_all`, `set_file_size`) now return a `FileResult` enum (`Ok`, `NotFound`,
+  `PermissionDenied`, `IsDirectory`, `NotDirectory`, `Other`) instead of `boolean`.
+  Use `.ok()` for a simple success check.
+
+- **Vector aggregates** — `sum_of`, `min_of`, `max_of` for `vector<integer>`, implemented
+  as `reduce` wrappers with internal helper functions.
+
+- **Nested match patterns** — Field positions in struct match arms support sub-patterns:
+  `Order { status: Paid, amount } => charge(amount)`. Supports enum variants, scalar
+  literals, wildcards, and or-patterns (`Paid | Refunded`).
+
+- **Field iteration (partial)** — `for f in s#fields` syntax detected and parsed;
+  `FieldValue` enum and `StructField` struct added to stdlib. Loop unrolling
+  infrastructure in place but blocked on struct-enum constructor codegen.
+
+- **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
+  LHS expressions are materialised into a temporary before the null check.
+
+---
+
 ## [0.8.2] — 2026-03-24
 
 ### New features

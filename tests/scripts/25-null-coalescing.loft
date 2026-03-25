@@ -104,6 +104,32 @@ fn test_redundant_coalesce() {
   assert(r == 0, "r: {r}");
 }
 
+// ── Double-evaluation prevention (L6) ────────────────────────────────────────
+
+fn side_effect_int(counter: &integer) -> integer {
+  counter += 1;
+  42
+}
+
+fn side_effect_null(counter: &integer) -> integer {
+  counter += 1;
+  null
+}
+
+fn test_coalesce_call_once_non_null() {
+  c = 0;
+  r = side_effect_int(c) ?? 99;
+  assert(r == 42, "r: {r}");
+  assert(c == 1, "call count: {c}");
+}
+
+fn test_coalesce_call_once_null() {
+  c = 0;
+  r = side_effect_null(c) ?? 99;
+  assert(r == 99, "r: {r}");
+  assert(c == 1, "call count: {c}");
+}
+
 struct NItem { value: integer }
 
 fn test_no_warning_nullable_null_check() {

@@ -587,11 +587,11 @@ fn mkdir_and_mkdir_all() {
     code!(
         "fn test() {
     // mkdir_all creates nested path
-    assert(mkdir_all(\"tests/tmp_mkdir_test/sub\"), \"mkdir_all\");
-    // mkdir on existing directory returns false
-    assert(!mkdir(\"tests/tmp_mkdir_test/sub\"), \"mkdir existing\");
+    assert(mkdir_all(\"tests/tmp_mkdir_test/sub\").ok(), \"mkdir_all\");
+    // mkdir on existing directory returns not ok
+    assert(!mkdir(\"tests/tmp_mkdir_test/sub\").ok(), \"mkdir existing\");
     // mkdir on a new sibling
-    assert(mkdir(\"tests/tmp_mkdir_test/other\"), \"mkdir sibling\");
+    assert(mkdir(\"tests/tmp_mkdir_test/other\").ok(), \"mkdir sibling\");
 }"
     );
     // Clean up after test

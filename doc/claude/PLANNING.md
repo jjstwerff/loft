@@ -41,6 +41,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [L — Language Quality](#l--language-quality)
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
+  - [L6 — Prevent double evaluation of `expr ?? default`](#l6--prevent-double-evaluation-of-expr--default)
 - [S — Stability Hardening](#s--stability-hardening)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
@@ -86,17 +87,12 @@ syntax decisions can be validated and refined independently.  All items change t
 or type system; 0.8.2 correctness work is a prerequisite.
 
 **Lambda expressions (P1):** ✓ completed in 0.8.2.
-- **P3** — Vector aggregates: `sum`, `min_of`, `max_of`, `any`, `all`, `count_if` (depends on P1).
+**Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
 
-**Pattern extensions (L2):**
-- **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
+**Nested match patterns (L2):** ✓ completed. Enum variants, scalars, wildcards, or-patterns in field positions.
 
-**Field iteration (A10):**
-- **A10.0** — Remove `fields` from `KEYWORDS` (revert L3 code change; keep identifier renames).
-- **A10.1** — `Field` + `FieldValue` enum types in `default/01_code.loft`.
-- **A10.2** — `ident#fields` detection in `parse_for` → `Value::FieldsOf` + `Type::FieldsOf`.
-- **A10.3** — Loop unrolling in `parse_for` for `Type::FieldsOf` (compile-time expansion).
-- **A10.4** — Error messages, docs, and test coverage.
+**Remaining:**
+- **A10** — Field iteration (`for f in s#fields`): 5 phases (A10.0–A10.4).
 
 ---
 
@@ -320,166 +316,9 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 
 ---
 
-### L2  Nested patterns in field positions
-**Sources:** [MATCH.md](MATCH.md) — L2
-**Severity:** Low — field-level sub-patterns currently require nested `match` or `if` inside the arm body
-**Description:** `Order { status: Paid, amount } => charge(amount)` — a field may carry a sub-pattern (`:` separator) instead of (or in addition to) a binding variable.  Sub-patterns generate additional `&&` conditions on the arm.
-**Fix path:** See [MATCH.md § L2](MATCH.md) for full design.
-Extend field-binding parser to detect `:`; call recursive `parse_sub_pattern(field_val, field_type)` → returns boolean `Value` added to arm conditions with `&&`.
-**Effort:** Medium (parser/control.rs — recursive sub-pattern entry point)
-**Target:** 0.8.3
-
 ---
 
-### L3  `FileResult` enum — replace filesystem boolean returns
-
-**Sources:** User request 2026-03-19; [PROBLEMS.md](PROBLEMS.md)
-**Severity:** Low — file I/O failures (permission denied, wrong path type) are silently
-collapsed into `false`, making error handling impossible without a second `file()` call
-**Description:** All filesystem-mutating ops currently return `boolean`.  A failed
-`delete()` returns `false` whether the file was absent, the path outside the project, or
-a permission was denied.  Expanding this to an enum lets callers distinguish error causes
-without extra queries.
-
-**Design — `FileResult` enum** (variant index matches the stored byte):
-
-```loft
-pub enum FileResult {
-  Ok,               // 0 — succeeded
-  NotFound,         // 1 — path does not exist (also: path outside project)
-  PermissionDenied, // 2 — OS permission denied
-  IsDirectory,      // 3 — expected a file, got a directory
-  NotDirectory,     // 4 — expected a directory, got a file
-  Other             // 5 — any other OS error (incl. bad arguments, invalid PNG, etc.)
-}
-```
-
-`AlreadyExists` was dropped: it cannot be returned by any current public API function
-(`move` pre-checks with `exists(to)`, the others never create files that could conflict).
-Adding an unreachable variant would mislead callers matching on the result.
-
-**Design — Rust helper** (placed in `src/database/io.rs`, used everywhere):
-
-```rust
-fn io_result<T>(r: std::io::Result<T>) -> u8 {
-    match r {
-        Ok(_) => 0,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound         => 1,
-            std::io::ErrorKind::PermissionDenied => 2,
-            std::io::ErrorKind::IsADirectory     => 3,
-            std::io::ErrorKind::NotADirectory    => 4,
-            _                                    => 5,
-        },
-    }
-}
-```
-
-**Ops changed** (`default/02_images.loft`):
-
-`OpGetFile`, `OpGetDir`, and `OpGetPngImage` are **excluded from scope** — their return
-value is always discarded by the loft wrappers (`file()`, `files()`, `png()`), so
-changing them adds Rust complexity with no benefit to callers.  They remain `boolean`.
-
-| Op | Old return | New return | `#rust` body change |
-|---|---|---|---|
-| `OpGetFile` | `boolean` | unchanged | — |
-| `OpGetDir` | `boolean` | unchanged | — |
-| `OpGetPngImage` | `boolean` | unchanged | — |
-| `OpDelete` | `boolean` | `FileResult` | `io_result(std::fs::remove_file(@path))` |
-| `OpMoveFile` | `boolean` | `FileResult` | `io_result(std::fs::rename(@from, @to))` |
-| `OpTruncateFile` | `boolean` | `FileResult` | — (no `#rust`) |
-| `OpMkdir` | `boolean` | `FileResult` | `io_result(std::fs::create_dir(@path))` |
-| `OpMkdirAll` | `boolean` | `FileResult` | `io_result(std::fs::create_dir_all(@path))` |
-
-**Public API changed** (`default/02_images.loft`):
-
-| Function | Old | New | Notes |
-|---|---|---|---|
-| `delete(path)` | `-> boolean` | `-> FileResult` | `valid_path` guard → `NotFound` |
-| `move(from, to)` | `-> boolean` | `-> FileResult` | `valid_path` guards → `NotFound` |
-| `mkdir(path)` | `-> boolean` | `-> FileResult` | `valid_path` guard → `NotFound` |
-| `mkdir_all(path)` | `-> boolean` | `-> FileResult` | `valid_path` guard → `NotFound` |
-| `set_file_size(self, n)` | `-> boolean` | `-> FileResult` | bad format/negative size → `Other` |
-| `exists(path)` | `-> boolean` | unchanged | Boolean question; unaffected |
-| `file(path)` | `-> File` | unchanged | `format` field already encodes state |
-| `FileResult.ok()` | — | `-> boolean` | New — `self == FileResult.Ok`; preserves boolean idiom |
-
-**`valid_path` boundary:** A path that fails `valid_path()` is inaccessible from within
-the project namespace — from the caller's perspective, it does not exist.  The guard
-returns `FileResult.NotFound`.  This avoids the false implication that a `chmod` or
-ownership change would help.
-
-**`set_file_size` note:** Pre-condition violations (negative size, wrong file format) are
-caller errors, not OS errors, but they share the `Other` variant with unusual OS
-conditions.  This is acceptable: `set_file_size` is called on a `File` value the caller
-already has, so the format check is a defensive guard rather than a user-facing branch.
-If distinguishing these ever matters, a dedicated `InvalidInput` variant can be added
-without renumbering.
-
-**`truncate_file` change** (`src/state/io.rs`): `put_stack(bool)` → `put_stack(u8)`;
-open + set-len error mapped via `io_result`.
-
-**Boolean conversion — `ok()` method:**
-`FileResult` exposes `ok() -> boolean` so existing call sites need only append `.ok()`
-rather than rewriting to an enum comparison:
-
-```loft
-pub fn ok(self: FileResult) -> boolean {
-  self == FileResult.Ok
-}
-```
-
-This keeps the migration mechanical and preserves the boolean idiom for callers that only
-care about success vs. failure.  Callers that need the specific error reason use the enum
-value directly.
-
-**Breaking change:** Minimal.  Every existing boolean use of `delete`, `move`, `mkdir`,
-`mkdir_all`, or `set_file_size` appends `.ok()`.  Tests in `11-files.loft` and
-`13-file.loft` are updated as part of L3.3.
-
-**Test migration pattern:**
-```loft
-// Before
-assert(delete(f), "removed");
-assert(!delete(f), "not there");
-// After — success/failure only
-assert(delete(f).ok(), "removed");
-assert(!delete(f).ok(), "not there");
-// After — specific error reason
-assert(delete(f) == FileResult.NotFound, "not there");
-```
-
-**Fix path:**
-
-**Phase 1 — Enum definition** (`default/02_images.loft`, `src/database/io.rs`):
-Add `FileResult` enum immediately after the existing `Format` enum in
-`02_images.loft`. Add `io_result<T>(r: std::io::Result<T>) -> u8` as a private
-function in `src/database/io.rs`. No other changes yet; verify the project compiles.
-
-**Phase 2 — Op signatures and Rust internals:**
-- Change the five in-scope `Op*` return types (`OpDelete`, `OpMoveFile`, `OpTruncateFile`,
-  `OpMkdir`, `OpMkdirAll`) from `boolean` to `FileResult` in `default/02_images.loft`.
-- Update `#rust` bodies for the four annotated ops (OpDelete, OpMoveFile, OpMkdir,
-  OpMkdirAll) to call `io_result(...)`.
-- `src/database/io.rs`: add `io_result` helper; no changes to `fill_file`, `get_file`,
-  `get_dir`, or `get_png` (those ops remain `boolean`).
-- `src/state/io.rs`: change `truncate_file` to `put_stack(u8)` using `io_result`.
-- `src/fill.rs`: update `delete`, `move_file`, `mkdir`, `mkdir_all` to `put_stack(u8)`
-  via `io_result`.  Leave `get_file`, `get_dir`, `get_png_image` unchanged.
-
-**Phase 3 — Public API wrappers and tests:**
-- Add `ok() -> boolean` method to `FileResult` in `default/02_images.loft`.
-- Rewrite `delete`, `move`, `mkdir`, `mkdir_all`, `set_file_size` in
-  `default/02_images.loft` to return `FileResult`, replacing `&&`-chains with
-  explicit `if` guards.
-- Update all assertions in `tests/scripts/11-files.loft` and
-  `tests/docs/13-file.loft`: simple success/failure checks become `.ok()` / `!.ok()`;
-  checks that verify a specific failure reason use `== FileResult.<Variant>`.
-- Run full test suite; verify no regressions.
-
-**Effort:** Small (3 phases; no parser changes; all changes are mechanical)
-**Target:** 0.8.3
+---
 
 ---
 
@@ -555,29 +394,6 @@ special-case in `parse_call` for `any`/`all`/`count_if` (same level of effort as
 **Target:** 0.8.3 — batch all variants after P1 lands
 
 ---
-
-### T2  `size(t)` — character count for text
-
-**Sources:** User request 2026-03-24
-**Severity:** Small — `len()` returns byte length, but there is no stdlib function
-to get the number of Unicode characters (code points).  Users working with multi-byte
-text (emoji, CJK, accented characters) need this regularly.
-**Description:** Add a `size` function on `text` that returns the number of Unicode
-code points:
-```loft
-pub fn size(both: text) -> integer {
-  OpSizeText(both)
-}
-```
-`size("hello")` → 5, `size("héllo")` → 5, `size("")` → 0.
-Requires a new `OpSizeText` opcode backed by Rust's `.chars().count()`.
-**Fix path:**
-1. Add `OpSizeText` declaration + `#rust` body in `default/01_code.loft`.
-2. Implement `op_size_text` in `src/fill.rs`.
-3. Native codegen: emit `.chars().count() as i32` in `src/generation/`.
-4. Add tests in `tests/docs/02-text.loft` covering ASCII, multi-byte, and empty text.
-**Effort:** Small
-**Target:** 0.8.3
 
 ---
 
@@ -765,8 +581,8 @@ scope exit (see [TUPLES.md](TUPLES.md) § Calling Convention, Scope exit order).
 when multiple closures are live simultaneously; a `text` capture is freed exactly once.
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
-**Depends on:** P1
-**Target:** 1.1+
+**Depends on:** P1 (done)
+**Target:** 0.8.3
 
 ---
 
@@ -974,6 +790,93 @@ the generic type-mismatch message.
 - `virtual` fields are included (they are read-only computed values, still primitive).
 
 **Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)
+**Target:** 0.8.3
+
+---
+
+### S14  Struct-enum stdlib field positions (PROBLEMS #80)
+**Sources:** Discovered during A10 development; [CAVEATS.md](CAVEATS.md) C9
+**Severity:** Medium — blocks A10 field iteration and any future stdlib struct-enum
+**Description:** Struct-enum types defined in `default/*.loft` have broken field
+positions: `database.position(known_type, field_name)` returns `u16::MAX`, causing
+"Fld N is outside of record" panics at runtime.  User-defined struct-enums work.
+
+**Root cause:** `typedef::fill_all()` in `src/typedef.rs:165` iterates only
+`start_def..data.definitions()`.  When the default library is loaded file-by-file
+via `parse_dir()`, each file resets `start_def` to the current definition count.
+Struct-enum variants from earlier files (e.g. `01_code.loft`) are never re-processed
+by `fill_all()` in later files.
+
+**Fix path:**
+1. In `src/typedef.rs`, change `fill_all()` to process ALL struct-enum variants
+   that have `known_type == u16::MAX`, not just those in the `start_def..` range.
+   Alternatively, pass `start_def=0` during the final `finish()` call.
+2. Or: add a global `fill_all(0..)` call after all default files are loaded,
+   in `parse_dir()` (`src/parser/mod.rs:344`), before returning.
+3. Verify: `FvBool { v: true }` defined in `default/01_code.loft` works at runtime.
+*Tests:* add a test that constructs a stdlib struct-enum variant (re-enable A10 test).
+
+**Effort:** Small (one loop bound change or one extra call)
+**Target:** 0.8.3
+
+---
+
+### S15  Struct-enum same-name variant field offsets (PROBLEMS #81)
+**Sources:** Discovered during A10 development; [CAVEATS.md](CAVEATS.md) C10
+**Severity:** Medium — blocks A10 mixed-type field iteration; affects any struct-enum
+where multiple variants use the same field name with different types
+**Description:** When `enum Fv { FvInt { v: integer }, FvFloat { v: float } }` is
+constructed as `FvInt { v: 42 }` and matched with `FvInt { v } => v`, the value
+reads from the wrong byte offset — returning garbage that looks like float bytes
+reinterpreted as integer.
+
+**Root cause:** Each variant gets its own `known_type` via
+`database.structure()` in `src/typedef.rs:210`.  Field offsets are assigned by
+`database.field()` at line 295.  The offset depends on the preceding fields in
+the variant's record, starting after the enum discriminant byte.
+
+When `get_field(variant_def_nr, attr_idx, ...)` is called during match binding
+(`src/parser/control.rs:630`), it calls `database.position(known_type, name)`.
+If `known_type` is correct per-variant, the offset should be correct.
+
+**Diagnosis needed:** dump `known_type` for each variant and compare the field
+offsets.  The issue may be that the discriminant field ("enum") occupies
+different sizes across variants, or that field alignment differs.
+Use `LOFT_LOG=static` and inspect the type table for each variant.
+
+**Fix path:**
+1. Add diagnostic logging in `fill_database()` to print each variant's
+   `known_type`, field name, and assigned position.
+2. Compare the positions for `FvInt.v` vs `FvFloat.v` — they should differ
+   because `integer` is 4 bytes and `float` is 8 bytes, but the discriminant
+   + padding before `v` must be consistent.
+3. Fix the offset calculation if variants with different-sized fields get
+   misaligned positions.
+*Tests:* construct each variant, match, read the field, verify value.
+
+**Effort:** Medium (requires understanding database field layout)
+**Target:** 0.8.3
+
+---
+
+### L8  Warn on format specifier / type mismatch
+**Sources:** [CAVEATS.md](CAVEATS.md) C14; [00-vs-rust.html](../00-vs-rust.html)
+**Severity:** Low — numeric specifiers like `:05` on text are silently ignored
+**Description:** `"{t:05}"` where `t` is text produces `"hello"` with no warning.
+The `:05` zero-pad specifier is meaningful only for integers.  A compile-time
+warning would catch the mistake.
+
+**Fix path:**
+In `src/parser/objects.rs`, inside `append_data()` (called per format segment),
+the type of the value and the format specifier are both known.  After computing
+the radix and width, check:
+- If `radix` is not 10 (hex, binary, octal) and the value type is `Text` or
+  `Boolean`, emit a warning: "format specifier has no effect on {type}".
+- If `width` is nonzero and has a zero-pad token (`token == "0"`) and the value
+  type is `Text`, emit a warning: "zero-padding has no effect on text".
+*Tests:* `tests/scripts/38-parse-warnings.loft` or new `@EXPECT_WARNING` entries.
+
+**Effort:** Small (one diagnostic in `append_data`)
 **Target:** 0.8.3
 
 ---

@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regression tests for documented caveats (CAVEATS.md).
+// Each test verifies the current behaviour so releases can be retested quickly.
+
+// C1 — Lambda closure capture: verify lambdas work without capture.
+fn test_c1_lambda_no_capture() {
+  nums = [1, 2, 3, 4, 5];
+  doubled = map(nums, |x| { x * 2 });
+  assert(doubled[0] == 2, "C1: lambda works without capture");
+  assert(doubled[4] == 10, "C1: lambda map result");
+}
+
+// C8 — Predicate aggregates not available; verify sum_of/min_of/max_of work.
+fn test_c8_available_aggregates() {
+  nums = [3, 1, 4, 1, 5];
+  assert(sum_of(nums) == 14, "C8: sum_of works");
+  assert(min_of(nums) == 1, "C8: min_of works");
+  assert(max_of(nums) == 5, "C8: max_of works");
+}
+
+// C10 — Struct-enum variants with same-named fields read wrong offset.
+// This test documents the CURRENT broken behaviour.
+// When #81 is fixed, the assertion should be updated to expect v == 42.
+enum TwoVal { TvInt { v: integer }, TvFloat { v: float } }
+
+fn test_c10_same_named_field_offset() {
+  x = TvInt { v: 42 };
+  matched = false;
+  match x {
+    TvInt { v } => {
+      // BUG: v reads from TvFloat's offset, producing garbage.
+      // When #81 is fixed, this should be: assert(v == 42, ...)
+      matched = true;
+    },
+    _ => {}
+  }
+  assert(matched, "C10: TvInt variant matched");
+}
+
+// C11 — No while loop: for + break is the workaround.
+fn test_c11_no_while() {
+  found = false;
+  for i in 0..1000000 {
+    if i * i > 100 { found = true; break }
+  }
+  assert(found, "C11: polling via for+break");
+}
+
+// C14 — Format specifier silently ignored on incompatible types.
+fn test_c14_format_specifier_ignored() {
+  t = "hello";
+  r = "{t:05}";
+  // :05 on text is silently ignored — value is unchanged.
+  assert(r == "hello", "C14: format specifier on text ignored: '{r}'");
+}

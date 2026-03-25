@@ -589,12 +589,7 @@ fn keyword_sizeof_as_fn() {
         .error("Syntax error: unexpected Token(\"sizeof\") at keyword_sizeof_as_fn:1:10");
 }
 
-#[test]
-fn keyword_fields_as_fn() {
-    code!("fn fields() {}\nfn test() {}")
-        .error("Expect name in function definition at keyword_fields_as_fn:1:10")
-        .error("Syntax error: unexpected Token(\"fields\") at keyword_fields_as_fn:1:10");
-}
+// A10: `fields` is no longer a keyword — it can be used as a function name.
 
 #[test]
 fn keyword_debug_assert_as_fn() {

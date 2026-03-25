@@ -350,13 +350,21 @@ impl Parser {
                 if !self.convert(&mut rhs, &rhs_type, &lhs_type) && !self.first_pass {
                     self.can_convert(&rhs_type, &lhs_type);
                 }
-                let lhs = code.clone();
-                // Use boolean truthiness (!is_null) instead of `!= null` comparison.
-                // For floats, `!= NaN` is always true after NaN-guard fix; boolean
-                // conversion (`conv_bool_from_float`) correctly detects NaN as falsy.
-                let mut null_check = code.clone();
-                self.convert(&mut null_check, &lhs_type, &Type::Boolean);
-                *code = v_if(null_check, lhs, rhs);
+                if let Value::Var(_) = code {
+                    // Simple variable: reading twice is side-effect-free.
+                    let lhs = code.clone();
+                    let mut null_check = code.clone();
+                    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+                    *code = v_if(null_check, lhs, rhs);
+                } else {
+                    // Non-trivial expression: materialise into a temp to avoid double evaluation.
+                    let tmp = self.create_unique("ncc", &lhs_type);
+                    let set_tmp = v_set(tmp, code.clone());
+                    let mut null_check = Value::Var(tmp);
+                    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+                    let if_expr = v_if(null_check, Value::Var(tmp), rhs);
+                    *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
+                }
                 *ctp = lhs_type;
             }
         } else if operator == "as" {
