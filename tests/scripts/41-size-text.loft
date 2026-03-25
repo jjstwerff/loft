@@ -2,20 +2,18 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // T2: size(t) — Unicode character count
 
-fn test_size_ascii() {
+fn main() {
+  // ASCII: each character is one code point
   assert(size("hello") == 5, "ASCII size");
-}
 
-fn test_size_multibyte() {
+  // Multi-byte: accent and CJK are still one code point each
   assert(size("héllo") == 5, "Multi-byte accent");
   assert(size("日本語") == 3, "CJK characters");
-}
 
-fn test_size_empty() {
+  // Empty text
   assert(size("") == 0, "Empty text");
-}
 
-fn test_size_emoji() {
+  // Emoji: 4-byte UTF-8 but one code point
   assert(size("🎉") == 1, "4-byte emoji");
   assert(size("♥") == 1, "3-byte heart");
   assert(size("a😃b") == 3, "Mixed ASCII and emoji");

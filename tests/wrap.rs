@@ -388,7 +388,6 @@ fn main(args: vector<text>) {
 
 /// T2: Verify `size()` returns Unicode code-point count, not byte length.
 #[test]
-#[ignore = "T2: size() opcode not yet implemented"]
 fn size_text() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
