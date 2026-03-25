@@ -20,20 +20,13 @@ plain English describing the purpose of the code.
 
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| P3     | Vector aggregates (sum, min_of, any, all, count_if)     | Low–Med   | P1          | Stdlib audit 2026-03-15 |
-| T2     | `size(t)` — character count for text                    | Small     |             | User request 2026-03-24 |
 | L2     | Nested patterns in field positions                      | Medium    |             | MATCH.md L2             |
-| L3     | `FileResult` enum for mutating fs operations            | Small     |             | User request 2026-03-19 |
-| L3.1   | ↳ `FileResult` enum + `io_result` helper                | Small     |             | database/io.rs          |
-| L3.2   | ↳ Op signatures + all Rust impls                        | Small     | L3.1        | fill.rs, state/io.rs    |
-| L3.3   | ↳ `ok()` method + public API + test migration           | Small     | L3.2        | 02_images.loft, tests/  |
 | A10    | Field iteration (`for f in s#fields`)                   | Medium    |             | Design eval 2026-03-18  |
 | A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     |             | lexer.rs                |
 | A10.1  | ↳ `Field` + `FieldValue` types in stdlib                | Small     | A10.0       | 01_code.loft            |
 | A10.2  | ↳ `ident#fields` → `Value::FieldsOf` in parser          | Small     | A10.1       | collections.rs, data.rs |
 | A10.3  | ↳ Loop unrolling for `Type::FieldsOf`                   | Medium    | A10.2       | collections.rs          |
 | A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
-| L6     | Prevent double evaluation of `expr ?? default`          | Small     |             | operators.rs line 330   |
 
 ---
 

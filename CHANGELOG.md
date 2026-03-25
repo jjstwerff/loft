@@ -4,6 +4,26 @@ All notable changes to the loft language and interpreter.
 
 ---
 
+## [Unreleased]
+
+### New features
+
+- **`size(t)` character count** — `size("héllo")` returns 5 (Unicode code points),
+  complementing `len()` which returns byte length. Backed by a new `OpSizeText` opcode.
+
+- **`FileResult` enum** — Filesystem-mutating operations (`delete`, `move`, `mkdir`,
+  `mkdir_all`, `set_file_size`) now return a `FileResult` enum (`Ok`, `NotFound`,
+  `PermissionDenied`, `IsDirectory`, `NotDirectory`, `Other`) instead of `boolean`.
+  Use `.ok()` for a simple success check.
+
+- **Vector aggregates** — `sum_of`, `min_of`, `max_of` for `vector<integer>`, implemented
+  as `reduce` wrappers with internal helper functions.
+
+- **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
+  LHS expressions are materialised into a temporary before the null check.
+
+---
+
 ## [0.8.2] — 2026-03-24
 
 ### New features

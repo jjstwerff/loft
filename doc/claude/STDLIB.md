@@ -122,6 +122,7 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 | Function | Description |
 |----------|-------------|
 | `len(v: text) -> integer` | Number of bytes in the text. |
+| `size(v: text) -> integer` | Number of Unicode code points (characters) in the text. |
 | `len(v: character) -> integer` | Byte length of the character's UTF-8 encoding (1–4). |
 
 ### Searching
@@ -201,6 +202,14 @@ Operations on `vector<T>` — the primary ordered collection type.
 | Function | Description |
 |----------|-------------|
 | `len(v: vector) -> integer` | Number of elements in the vector. Use in loop bounds: `for i in 0..v.len()`. |
+
+### Aggregates
+
+| Function | Description |
+|----------|-------------|
+| `sum_of(v: vector<integer>) -> integer` | Sum of all elements; returns 0 for an empty vector. |
+| `min_of(v: vector<integer>) -> integer` | Smallest element. |
+| `max_of(v: vector<integer>) -> integer` | Largest element. |
 
 Vectors are grown by appending with `+=` and elements are accessed by index. Removal and insertion are handled by the parser's built-in operators.
 
@@ -333,6 +342,29 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 | Function | Description |
 |----------|-------------|
 | `files(self: File) -> vector<File>` | Returns the entries inside a directory. The `File` must have `format == Format.Directory`. Use to iterate over all files in a folder. |
+
+### Filesystem Operations
+
+Mutating filesystem operations return a `FileResult` enum:
+
+| Variant | Meaning |
+|---------|---------|
+| `FileResult.Ok` | Operation succeeded. |
+| `FileResult.NotFound` | Path does not exist or is outside the project directory. |
+| `FileResult.PermissionDenied` | OS permission denied. |
+| `FileResult.IsDirectory` | Expected a file, got a directory. |
+| `FileResult.NotDirectory` | Expected a directory, got a file. |
+| `FileResult.Other` | Any other OS error. |
+
+| Function | Description |
+|----------|-------------|
+| `ok(self: FileResult) -> boolean` | Returns `true` if `Ok`. |
+| `exists(path: text) -> boolean` | Returns `true` if the path exists and is inside the project. |
+| `delete(path: text) -> FileResult` | Removes a file. |
+| `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
+| `mkdir(path: text) -> FileResult` | Creates a single directory level. |
+| `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
+| `set_file_size(self: File, size: long) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 
 ### Images
 
