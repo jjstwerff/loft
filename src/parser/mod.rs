@@ -628,6 +628,10 @@ impl Parser {
                 },
             )
         };
+        // P5.2: skip generic templates — they are not callable directly.
+        if d_nr != u32::MAX && self.data.def(d_nr).def_type == DefType::Generic {
+            d_nr = u32::MAX;
+        }
         // P5.2: if no exact match, try generic instantiation.
         if d_nr == u32::MAX && !self.first_pass && !self.default {
             d_nr = self.try_generic_instantiation(name, types);
@@ -658,10 +662,19 @@ impl Parser {
             );
             return u32::MAX;
         }
-        let concrete = types[0].clone();
-        // Find the type variable def_nr from the template's first attribute type.
+        // Find the type variable def_nr and resolve the concrete type T maps to.
         let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes[0].typedef);
         if tv_nr == u32::MAX {
+            return u32::MAX;
+        }
+        let concrete =
+            Self::resolve_type_var(&self.data.def(g_nr).attributes[0].typedef, tv_nr, &types[0]);
+        if concrete.is_unknown() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot resolve generic type parameter from argument type"
+            );
             return u32::MAX;
         }
         // Build the mangled name for the instantiated function.
@@ -695,7 +708,7 @@ impl Parser {
             .collect();
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
-        let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete);
+        let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
         let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
@@ -725,6 +738,79 @@ impl Parser {
         }
     }
 
+    /// Unify a template parameter type with a concrete argument type to extract
+    /// what the type variable `tv_nr` resolves to.
+    /// E.g. template `vector<T>` + concrete `vector<integer>` → `integer`.
+    fn resolve_type_var(template_tp: &Type, tv_nr: u32, concrete_tp: &Type) -> Type {
+        match template_tp {
+            Type::Reference(d, _) if *d == tv_nr => concrete_tp.clone(),
+            Type::Vector(inner, _) => {
+                if let Type::Vector(c_inner, _) = concrete_tp {
+                    Self::resolve_type_var(inner, tv_nr, c_inner)
+                } else {
+                    Type::Unknown(0)
+                }
+            }
+            _ => Type::Unknown(0),
+        }
+    }
+
+    /// Re-resolve a Call target: if the called function's first parameter references
+    /// the type variable, look up the correct overload for the concrete type.
+    fn re_resolve_call(d_nr: u32, tv_nr: u32, concrete: &Type, data: &Data) -> u32 {
+        if d_nr == u32::MAX || d_nr as usize >= data.definitions.len() {
+            return d_nr;
+        }
+        let def = &data.definitions[d_nr as usize];
+        if def.attributes.is_empty() {
+            return d_nr;
+        }
+        // Check if any attribute's type references the type variable.
+        let has_tv = def
+            .attributes
+            .iter()
+            .any(|a| Self::type_contains_tv(&a.typedef, tv_nr));
+        if !has_tv {
+            // Also check for Integer(0, tv_nr) patterns — operators sometimes encode
+            // type info in the Integer bounds.
+            return d_nr;
+        }
+        // Resolve the concrete first-arg type by substituting tv_nr in the attribute type.
+        let concrete_arg =
+            Self::substitute_type(def.attributes[0].typedef.clone(), tv_nr, concrete);
+        // Extract the user-facing function name from the mangled definition name.
+        // Mangled names: "t_<LEN><Type>_<name>" or "n_<name>" or operator names.
+        let name = &def.name;
+        let fn_name = if let Some(rest) = name.strip_prefix("t_") {
+            // Skip the LEN digits and type name, extract name after the underscore.
+            if let Some(idx) = rest.find('_') {
+                &rest[idx + 1..]
+            } else {
+                name.as_str()
+            }
+        } else if let Some(rest) = name.strip_prefix("n_") {
+            rest
+        } else {
+            // Operator name — use as-is for find_fn.
+            name.as_str()
+        };
+        let resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        if resolved != u32::MAX && resolved != d_nr {
+            resolved
+        } else {
+            d_nr
+        }
+    }
+
+    /// Check if a type references the type variable.
+    fn type_contains_tv(tp: &Type, tv_nr: u32) -> bool {
+        match tp {
+            Type::Reference(d, _) | Type::Unknown(d) => *d == tv_nr,
+            Type::Vector(inner, _) => Self::type_contains_tv(inner, tv_nr),
+            _ => false,
+        }
+    }
+
     /// Substitute all occurrences of `Type::Reference(tv_nr, _)` with `concrete` in a type.
     fn substitute_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
@@ -737,20 +823,24 @@ impl Parser {
         }
     }
 
-    /// Recursively substitute types in a Value IR tree.
-    fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type) -> Value {
+    /// Recursively substitute types in a Value IR tree and re-resolve Call targets
+    /// whose first parameter references the type variable.
+    fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type, data: &Data) -> Value {
         match val {
-            Value::Call(d, args) => Value::Call(
-                d,
-                args.into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete))
-                    .collect(),
-            ),
+            Value::Call(d, args) => {
+                let new_args: Vec<_> = args
+                    .into_iter()
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .collect();
+                // Re-resolve call target if it references the type variable.
+                let new_d = Self::re_resolve_call(d, tv_nr, concrete, data);
+                Value::Call(new_d, new_args)
+            }
             Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
                 operators: bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
                     .collect(),
                 result: Self::substitute_type(bl.result, tv_nr, concrete),
                 name: bl.name,
@@ -759,21 +849,21 @@ impl Parser {
             })),
             Value::Set(v, expr) => Value::Set(
                 v,
-                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data)),
             ),
             Value::Return(expr) => Value::Return(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete,
+                *expr, tv_nr, concrete, data,
             ))),
             Value::If(cond, t, f) => Value::If(
-                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete)),
-                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete)),
-                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete, data)),
             ),
             Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
                 operators: bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
                     .collect(),
                 result: Self::substitute_type(bl.result, tv_nr, concrete),
                 name: bl.name,
@@ -781,18 +871,22 @@ impl Parser {
                 var_size: bl.var_size,
             })),
             Value::Drop(expr) => Value::Drop(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete,
+                *expr, tv_nr, concrete, data,
             ))),
             Value::Insert(ops) => Value::Insert(
                 ops.into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
                     .collect(),
             ),
             Value::Iter(name, create, next, extra) => Value::Iter(
                 name,
-                Box::new(Self::substitute_type_in_value(*create, tv_nr, concrete)),
-                Box::new(Self::substitute_type_in_value(*next, tv_nr, concrete)),
-                Box::new(Self::substitute_type_in_value(*extra, tv_nr, concrete)),
+                Box::new(Self::substitute_type_in_value(
+                    *create, tv_nr, concrete, data,
+                )),
+                Box::new(Self::substitute_type_in_value(*next, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(
+                    *extra, tv_nr, concrete, data,
+                )),
             ),
             other => other,
         }

@@ -269,6 +269,9 @@ impl Parser {
             t.clone()
         } else if let Type::RefVar(tp) = t {
             *tp.clone()
+        } else if t.is_unknown() {
+            // First pass: type not yet resolved; suppress error until second pass.
+            Type::Unknown(0)
         } else {
             diagnostic!(self.lexer, Level::Error, "Indexing a non vector");
             Type::Unknown(0)
