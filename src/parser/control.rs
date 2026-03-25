@@ -1796,7 +1796,9 @@ impl Parser {
                 let elem = *elm.clone();
                 let hint = match (name, arg_idx) {
                     ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem))),
-                    ("filter", 1) => Some(Type::Function(vec![elem], Box::new(Type::Boolean))),
+                    ("filter" | "any" | "all" | "count_if", 1) => {
+                        Some(Type::Function(vec![elem], Box::new(Type::Boolean)))
+                    }
                     ("reduce", 2) => {
                         let init_tp = types.get(1).cloned().unwrap_or(elem.clone());
                         Some(Type::Function(
@@ -1851,6 +1853,9 @@ impl Parser {
             "sort" => return self.parse_sort(val, list, types),
             "insert" => return self.parse_insert(val, list, types),
             "reverse" => return self.parse_reverse(val, list, types),
+            "any" => return self.parse_any(val, list, types),
+            "all" => return self.parse_all(val, list, types),
+            "count_if" => return self.parse_count_if(val, list, types),
             _ => {}
         }
         if let Some(tp) = self.try_fn_ref_call(val, name, list, types) {
