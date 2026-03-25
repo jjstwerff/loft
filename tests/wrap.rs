@@ -288,7 +288,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from([])
+    HashSet::from(["48-generics.loft"])
 }
 
 macro_rules! script_test {
@@ -457,6 +457,14 @@ fn file_result() -> std::io::Result<()> {
         false,
         true,
     )
+}
+
+/// P5.2: Verify generic function call-site instantiation.
+#[test]
+#[ignore = "P5.2: generic function instantiation not yet implemented"]
+fn generics() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(PathBuf::from("tests/scripts/48-generics.loft"), false, true)
 }
 
 /// Parse, type-check, compile, and execute one `.loft` test file.

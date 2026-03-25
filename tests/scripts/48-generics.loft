@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P5.2: Generic function call-site instantiation.
+
+fn identity<T>(x: T) -> T { x }
+fn first<T>(v: vector<T>) -> T { v[0] }
+fn wrap<T>(x: T) -> vector<T> { [x] }
+fn pair<T>(a: T, b: T) -> vector<T> { [a, b] }
+
+fn main() {
+  // identity with different types
+  assert(identity(42) == 42, "identity integer");
+  assert(identity(3.14) == 3.14, "identity float");
+  assert(identity("hello") == "hello", "identity text");
+  assert(identity(true) == true, "identity boolean");
+
+  // first element from vector
+  assert(first([10, 20, 30]) == 10, "first integer");
+  assert(first([1.5, 2.5]) == 1.5, "first float");
+
+  // wrap into single-element vector
+  v = wrap(99);
+  assert(len(v) == 1, "wrap length");
+  assert(v[0] == 99, "wrap value");
+
+  // pair creates two-element vector
+  p = pair(1, 2);
+  assert(len(p) == 2, "pair length");
+  assert(p[0] == 1, "pair first");
+  assert(p[1] == 2, "pair second");
+
+  println("P5.2: generic instantiation ok");
+}
