@@ -49,6 +49,20 @@ fn main() {
     Order { status: _, amount } => assert(amount == 99.0, "wildcard sub: {amount}")
   }
 
+  // --- Duplicate bindings across conditional arms (non-text return) ---
+  r = match o1 {
+    Order { status: Paid, amount } => amount
+    Order { status: Refunded, amount } => amount + 1.0
+    _ => 0.0
+  };
+  assert(r == 99.0, "dup bind paid: {r}");
+  r2 = match o2 {
+    Order { status: Paid, amount } => amount
+    Order { status: Refunded, amount } => amount + 1.0
+    _ => 0.0
+  };
+  assert(r2 == 51.0, "dup bind refunded: {r2}");
+
   // --- Or-pattern in field sub-pattern ---
   match o1 {
     Order { status: Paid | Refunded } => assert(true, "or-pattern match paid")

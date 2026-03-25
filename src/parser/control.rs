@@ -323,6 +323,9 @@ impl Parser {
         let mut covered: HashSet<u32> = HashSet::new();
         let mut has_wildcard = false;
         let mut result_type = Type::Void;
+        // L2: field bindings in conditional arms are hoisted before the if-chain
+        // to avoid codegen stack-layout issues with text operations inside branches.
+        let mut hoisted_bindings: Vec<Value> = Vec::new();
 
         loop {
             if self.lexer.peek_token("}") {
@@ -435,7 +438,9 @@ impl Parser {
                                     // Plain binding — creates a local variable.
                                     let v = self.create_var(&field_name, &field_type);
                                     self.vars.defined(v);
-                                    arm_stmts.push(v_set(v, field_val));
+                                    // Hoist the binding before the if-chain so the
+                                    // codegen doesn't allocate inside the branch.
+                                    hoisted_bindings.push(v_set(v, field_val));
                                 }
                             } else if !self.first_pass {
                                 diagnostic!(
@@ -837,8 +842,15 @@ impl Parser {
         // Emit the match:
         // - Plain enum: { match_subj = subject; chain }  (temp var to eval subject once)
         // - Struct enum: chain only  (subject_val is already the original expression/var)
-        *code = if let Some((v, init)) = preamble {
-            v_block(vec![v_set(v, init), chain], result_type.clone(), "match")
+        // L2: hoisted bindings are prepended so field reads happen before the if-chain.
+        *code = if !hoisted_bindings.is_empty() || preamble.is_some() {
+            let mut stmts = Vec::new();
+            if let Some((v, init)) = preamble {
+                stmts.push(v_set(v, init));
+            }
+            stmts.append(&mut hoisted_bindings);
+            stmts.push(chain);
+            v_block(stmts, result_type.clone(), "match")
         } else {
             chain
         };
