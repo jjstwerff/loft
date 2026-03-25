@@ -613,3 +613,18 @@ fn keyword_panic_as_fn() {
         .error("Expect name in function definition at keyword_panic_as_fn:1:9")
         .error("Syntax error: unexpected Token(\"panic\") at keyword_panic_as_fn:1:9");
 }
+
+/// P5.3: operator on generic type T produces a generic-specific error.
+#[test]
+fn generic_operator_error() {
+    code!("fn bad<T>(x: T, y: T) -> T { x + y }\nfn test() {}").error(
+        "generic type T: operator '+' requires a concrete type at generic_operator_error:1:36",
+    );
+}
+
+/// P5.3: field access on generic type T produces a generic-specific error.
+#[test]
+fn generic_field_error() {
+    code!("fn bad<T>(x: T) -> integer { x.name }\nfn test() {}")
+        .error("generic type T: field access requires a concrete type at generic_field_error:1:38");
+}

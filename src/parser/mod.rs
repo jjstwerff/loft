@@ -603,6 +603,23 @@ impl Parser {
         }
     }
 
+    /// P5.3: Check if a type is a generic type variable (a dummy struct used as T).
+    /// Returns the type variable name if it is, None otherwise.
+    pub(crate) fn generic_type_name(&self, tp: &Type) -> Option<&str> {
+        if let Type::Reference(d, _) = tp {
+            let d = *d as usize;
+            if d < self.data.definitions.len()
+                && self.data.definitions[d].def_type == DefType::Struct
+                && self.data.definitions[d].attributes.is_empty()
+                && self.context != u32::MAX
+                && self.data.definitions[self.context as usize].def_type == DefType::Generic
+            {
+                return Some(&self.data.definitions[d].name);
+            }
+        }
+        None
+    }
+
     /// Search for definitions with the given name and call that with the given parameters.
     fn call(
         &mut self,
@@ -641,7 +658,16 @@ impl Parser {
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else {
-            diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            // P5.3: generic-specific error for method calls on T.
+            if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "generic type {tv_name}: method call requires a concrete type",
+                );
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            }
             Type::Unknown(0)
         }
     }
@@ -1228,7 +1254,16 @@ impl Parser {
                 return tp;
             }
         }
-        if types.len() > 1 {
+        // P5.3: generic-specific error message for operators on T.
+        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        if let Some(tv_name) = generic_name {
+            specific!(
+                self.lexer,
+                &self.lexer.peek(),
+                Level::Error,
+                "generic type {tv_name}: operator '{op}' requires a concrete type",
+            );
+        } else if types.len() > 1 {
             specific!(
                 self.lexer,
                 &self.lexer.peek(),

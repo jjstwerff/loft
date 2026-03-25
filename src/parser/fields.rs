@@ -9,6 +9,7 @@ use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, 
 // Field access, indexing, and iterator operations.
 
 impl Parser {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
             diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
@@ -67,12 +68,21 @@ impl Parser {
                 {
                     return self.parse_vector_method(code, &t, &field);
                 }
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Unknown field {}.{field}",
-                    self.data.def(dnr).name
-                );
+                // P5.3: generic-specific error for field access on T.
+                if let Some(tv_name) = self.generic_type_name(&t) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "generic type {tv_name}: field access requires a concrete type",
+                    );
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown field {}.{field}",
+                        self.data.def(dnr).name
+                    );
+                }
                 // Consume a trailing `(…)` to avoid cascading parse errors.
                 if self.lexer.has_token("(") {
                     self.skip_remaining_args();
