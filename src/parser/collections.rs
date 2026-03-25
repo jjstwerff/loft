@@ -1458,13 +1458,43 @@ use #count instead"
 
             let field_read = self.get_field(struct_def_nr, a, source_expr.clone());
             let variant_def_nr = self.data.def_nr(variant_name);
-            // Struct-enum constructors need the discriminant as the first argument.
-            let disc = self.data.def(variant_def_nr).attributes[0].value.clone();
-            let fv_constructor = Value::Call(variant_def_nr, vec![disc, field_read]);
-            let field_constructor =
-                Value::Call(field_def_nr, vec![Value::Text(attr_name), fv_constructor]);
 
-            blocks.push(v_set(loop_var, field_constructor));
+            // Build FieldValue variant using the parser's object construction pattern:
+            // OpDatabase allocates the record, then set_field sets each attribute.
+            let fv_type = Type::Enum(self.data.def(variant_def_nr).parent, true, Vec::new());
+            let fv_work = self.vars.work_refs(&fv_type, &mut self.lexer);
+            let fv_known = i32::from(self.data.def(variant_def_nr).known_type);
+            let disc_val = self.data.def(variant_def_nr).attributes[0].value.clone();
+            let mut fv_ops: Vec<Value> = vec![
+                v_set(fv_work, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(fv_work), Value::Int(fv_known)]),
+                self.set_field_no_check(variant_def_nr, 0, 0, Value::Var(fv_work), disc_val),
+                self.set_field_no_check(variant_def_nr, 1, 0, Value::Var(fv_work), field_read),
+            ];
+            fv_ops.push(Value::Var(fv_work));
+            let fv_expr = v_block(fv_ops, fv_type.clone(), "fv_ctor");
+
+            // Build StructField using the same pattern.
+            let sf_work = self.vars.work_refs(&field_type, &mut self.lexer);
+            let sf_known = i32::from(self.data.def(field_def_nr).known_type);
+            self.data
+                .set_referenced(field_def_nr, self.context, Value::Null);
+            let mut sf_ops: Vec<Value> = vec![
+                v_set(sf_work, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(sf_work), Value::Int(sf_known)]),
+                self.set_field_no_check(
+                    field_def_nr,
+                    0,
+                    0,
+                    Value::Var(sf_work),
+                    Value::Text(attr_name),
+                ),
+                self.set_field_no_check(field_def_nr, 1, 0, Value::Var(sf_work), fv_expr),
+            ];
+            sf_ops.push(Value::Var(sf_work));
+            let sf_result = v_block(sf_ops, field_type.clone(), "sf_ctor");
+
+            blocks.push(v_set(loop_var, sf_result));
             blocks.push(body.clone());
         }
 
