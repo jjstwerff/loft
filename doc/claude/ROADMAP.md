@@ -24,9 +24,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | S14    | Struct-enum stdlib field positions (#80)        | M  | ✓      |            | PLANNING.md S14     |
 | S15    | Struct-enum same-name variant field offsets (#81)| M | ✓      |            | PLANNING.md S15     |
 | A10    | Field iteration (`for f in s#fields`)           | M  | ✓      |            | PLANNING.md A10     |
-| A10.0  | ↳ Remove `fields` from KEYWORDS                | S  | ✓      | ✓ done     | lexer.rs            |
-| A10.1  | ↳ `StructField` + `FieldValue` types            | S  | ✓      | ✓ done     | user code           |
-| A10.2  | ↳ `ident#fields` detection in `iter_op`         | S  | ✓      | ✓ done     | collections.rs      |
 | A10.3  | ↳ Loop unrolling in `parse_field_iteration`     | M  | ✓      | S14, S15   | collections.rs      |
 | A10.4  | ↳ Error messages, docs, tests                   | S  | ✓      | A10.3      | LOFT.md, tests/     |
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
