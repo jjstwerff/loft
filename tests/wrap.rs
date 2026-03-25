@@ -386,6 +386,18 @@ fn main(args: vector<text>) {
     state.execute_argv("main", &p.data, &args);
 }
 
+/// T2: Verify `size()` returns Unicode code-point count, not byte length.
+#[test]
+#[ignore = "T2: size() opcode not yet implemented"]
+fn size_text() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(
+        PathBuf::from("tests/scripts/41-size-text.loft"),
+        false,
+        true,
+    )
+}
+
 /// Parse, type-check, compile, and execute one `.loft` test file.
 ///
 /// The default library in `default/` is loaded first, then `entry` is parsed on
