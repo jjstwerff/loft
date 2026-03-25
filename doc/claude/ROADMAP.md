@@ -21,11 +21,17 @@ plain English describing the purpose of the code.
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
 | A10    | Field iteration (`for f in s#fields`)                   | Medium    |             | Design eval 2026-03-18  |
-| A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     |             | lexer.rs                |
-| A10.1  | ↳ `Field` + `FieldValue` types in stdlib                | Small     | A10.0       | 01_code.loft            |
-| A10.2  | ↳ `ident#fields` → `Value::FieldsOf` in parser          | Small     | A10.1       | collections.rs, data.rs |
-| A10.3  | ↳ Loop unrolling for `Type::FieldsOf`                   | Medium    | A10.2       | collections.rs          |
+| A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     | ✓ done      | lexer.rs                |
+| A10.1  | ↳ `StructField` + `FieldValue` types in stdlib          | Small     | ✓ done      | 01_code.loft            |
+| A10.2  | ↳ `ident#fields` detection in `iter_op`                 | Small     | ✓ done      | collections.rs          |
+| A10.3  | ↳ Loop unrolling in `parse_field_iteration`             | Medium    | **blocked** | collections.rs          |
 | A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
+
+**A10.3 blocker:** The codegen does not support programmatic struct-enum variant
+construction via `Value::Call(variant_def_nr, [disc, field])`.  The parser's normal
+struct-init path uses a different IR shape.  Fix: either teach codegen to handle raw
+`Value::Call` for struct-enum variants, or emit the same IR that the parser's
+struct-init produces.  See commit `254ad8c` for the current unrolling code.
 
 ---
 
