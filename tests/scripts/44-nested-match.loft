@@ -63,6 +63,20 @@ fn main() {
   };
   assert(r2 == 51.0, "dup bind refunded: {r2}");
 
+  // --- Duplicate bindings + text return (previously crashed) ---
+  t1 = match o1 {
+    Order { status: Paid, amount } => "paid:{amount}"
+    Order { status: Refunded, amount } => "refunded:{amount}"
+    _ => "other"
+  };
+  assert(t1 == "paid:99", "text bind paid: {t1}");
+  t2 = match o2 {
+    Order { status: Paid, amount } => "paid:{amount}"
+    Order { status: Refunded, amount } => "refunded:{amount}"
+    _ => "other"
+  };
+  assert(t2 == "refunded:50", "text bind refunded: {t2}");
+
   // --- Or-pattern in field sub-pattern ---
   match o1 {
     Order { status: Paid | Refunded } => assert(true, "or-pattern match paid")

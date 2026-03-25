@@ -419,7 +419,6 @@ impl Parser {
                 // L2: fields may carry `:` sub-patterns that generate conditions.
                 let mut arm_stmts: Vec<Value> = Vec::new();
                 let mut field_conditions: Vec<Value> = Vec::new();
-                let mut has_bindings = false;
                 if self.lexer.peek_token("{") {
                     self.lexer.token("{");
                     while !self.lexer.peek_token("}") {
@@ -442,7 +441,6 @@ impl Parser {
                                     // Hoist the binding before the if-chain so the
                                     // codegen doesn't allocate inside the branch.
                                     hoisted_bindings.push(v_set(v, field_val));
-                                    has_bindings = true;
                                 }
                             } else if !self.first_pass {
                                 diagnostic!(
@@ -467,23 +465,6 @@ impl Parser {
                 } else {
                     self.expression(&mut arm_code)
                 };
-                // L2 limitation: conditional arms with hoisted bindings and
-                // text-returning bodies trigger a debug text-lifetime assertion.
-                // Reject the combination; the workaround is subject.field access.
-                if !field_conditions.is_empty()
-                    && has_bindings
-                    && matches!(arm_type, Type::Text(_))
-                    && !self.first_pass
-                {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "field bindings and sub-patterns cannot be combined \
-                         in text-returning arms; access fields via the match \
-                         subject instead (e.g. {}.field)",
-                        self.data.def(e_nr).name
-                    );
-                }
                 arm_stmts.push(arm_code);
                 let block = v_block(arm_stmts, arm_type.clone(), "struct_match");
                 if result_type == Type::Void {
