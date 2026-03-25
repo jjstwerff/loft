@@ -35,6 +35,30 @@ plain English describing the purpose of the code.
    Mixed-type structs (int + float + text) produce garbage.
 Both must be fixed before A10 can deliver mixed-type field iteration.
 
+| A5     | Closure capture for lambdas                             | Very High | P1          | PLANNING.md A5       |
+| A5.1   | ↳ Capture analysis (identify free variables)            | Small     | P1          | scopes.rs            |
+| A5.2   | ↳ Closure record layout                                 | Small     | A5.1        | data.rs, typedef.rs  |
+| A5.3   | ↳ Capture at call site                                  | Medium    | A5.2        | codegen.rs           |
+| A5.4   | ↳ Closure body reads via closure record                 | Medium    | A5.3        | codegen.rs, fill.rs  |
+| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)                      | Small     | A5.4        | scopes.rs            |
+| T1     | Tuple types                                             | Very High |             | TUPLES.md            |
+| T1.1   | ↳ Type system (`Type::Tuple`, offsets)                  | Medium    |             | data.rs, typedef.rs  |
+| T1.2   | ↳ Parser (notation, literals, destructuring)            | Medium    | T1.1        | parser/              |
+| T1.3   | ↳ Scope analysis (intervals, lifetimes)                 | Small     | T1.2        | scopes.rs            |
+| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)             | Medium    | T1.3        | state/codegen.rs     |
+| T1.5   | ↳ Reference-tuple parameters                            | Small     | T1.4        | compiler             |
+| T1.6   | ↳ Tuple-aware mutation guard                            | Small     | T1.4        | scopes.rs            |
+| T1.7   | ↳ `not null` for tuple integer elements                 | Small     | T1.4        | typedef.rs           |
+| CO1    | Coroutines (`yield`, `iterator<T>`, `yield from`)       | Very High | TR1         | COROUTINE.md         |
+| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`                | Small     | TR1.2       | typedef.rs           |
+| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`               | High      | CO1.1       | state/mod.rs, data.rs |
+| CO1.3  | ↳ `OpYield` (serialise stack to heap)                   | High      | CO1.2       | state/mod.rs         |
+| CO1.4  | ↳ `yield from` delegation                               | Medium    | CO1.3       | state/mod.rs         |
+| CO1.5  | ↳ `for item in generator` integration                   | Small     | CO1.3       | parser/collections.rs |
+| CO1.6  | ↳ `next()` / `exhausted()` stdlib                       | Small     | CO1.2       | native.rs            |
+
+_CO1 depends on TR1 (stack trace introspection) from 0.9.0._
+
 ---
 
 ## 0.8.4 — HTTP client
@@ -99,27 +123,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID     | Title                                                   | Effort    | Depends on  | Source               |
 |--------|---------------------------------------------------------|-----------|-------------|----------------------|
-| A5     | Closure capture for lambdas                             | Very High | P1          | PLANNING.md A5       |
-| A5.1   | ↳ Capture analysis (identify free variables)            | Small     | P1          | scopes.rs            |
-| A5.2   | ↳ Closure record layout                                 | Small     | A5.1        | data.rs, typedef.rs  |
-| A5.3   | ↳ Capture at call site                                  | Medium    | A5.2        | codegen.rs           |
-| A5.4   | ↳ Closure body reads via closure record                 | Medium    | A5.3        | codegen.rs, fill.rs  |
-| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)                      | Small     | A5.4        | scopes.rs            |
-| T1     | Tuple types                                             | Very High |             | TUPLES.md            |
-| T1.1   | ↳ Type system (`Type::Tuple`, offsets)                  | Medium    |             | data.rs, typedef.rs  |
-| T1.2   | ↳ Parser (notation, literals, destructuring)            | Medium    | T1.1        | parser/              |
-| T1.3   | ↳ Scope analysis (intervals, lifetimes)                 | Small     | T1.2        | scopes.rs            |
-| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)             | Medium    | T1.3        | state/codegen.rs     |
-| T1.5   | ↳ Reference-tuple parameters                            | Small     | T1.4        | compiler             |
-| T1.6   | ↳ Tuple-aware mutation guard                            | Small     | T1.4        | scopes.rs            |
-| T1.7   | ↳ `not null` for tuple integer elements                 | Small     | T1.4        | typedef.rs           |
-| CO1    | Coroutines (`yield`, `iterator<T>`, `yield from`)       | Very High | TR1         | COROUTINE.md         |
-| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`                | Small     | TR1.2       | typedef.rs           |
-| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`               | High      | CO1.1       | state/mod.rs, data.rs |
-| CO1.3  | ↳ `OpYield` (serialise stack to heap)                   | High      | CO1.2       | state/mod.rs         |
-| CO1.4  | ↳ `yield from` delegation                               | Medium    | CO1.3       | state/mod.rs         |
-| CO1.5  | ↳ `for item in generator` integration                   | Small     | CO1.3       | parser/collections.rs |
-| CO1.6  | ↳ `next()` / `exhausted()` stdlib                       | Small     | CO1.2       | native.rs            |
 | O1     | Superinstruction peephole rewriting                     | Medium    |             | compile.rs           |
 | O2     | Stack raw pointer cache (eliminate store-indirection)   | High      |             | PERFORMANCE.md P2    |
 | O4     | Native: direct-emit local collections                   | High      |             | PERFORMANCE.md N1    |
