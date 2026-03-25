@@ -22,16 +22,18 @@ plain English describing the purpose of the code.
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
 | A10    | Field iteration (`for f in s#fields`)                   | Medium    |             | Design eval 2026-03-18  |
 | A10.0  | ↳ Remove `fields` from KEYWORDS                         | Small     | ✓ done      | lexer.rs                |
-| A10.1  | ↳ `StructField` + `FieldValue` types in stdlib          | Small     | ✓ done      | 01_code.loft            |
+| A10.1  | ↳ `StructField` + `FieldValue` types                    | Small     | ✓ done      | user code (not stdlib)  |
 | A10.2  | ↳ `ident#fields` detection in `iter_op`                 | Small     | ✓ done      | collections.rs          |
 | A10.3  | ↳ Loop unrolling in `parse_field_iteration`             | Medium    | **blocked** | collections.rs          |
 | A10.4  | ↳ Error messages, docs, tests                           | Small     | A10.3       | LOFT.md, tests/         |
 
-**A10.3 blocker:** The codegen does not support programmatic struct-enum variant
-construction via `Value::Call(variant_def_nr, [disc, field])`.  The parser's normal
-struct-init path uses a different IR shape.  Fix: either teach codegen to handle raw
-`Value::Call` for struct-enum variants, or emit the same IR that the parser's
-struct-init produces.  See commit `254ad8c` for the current unrolling code.
+**A10.3 blockers** (two pre-existing struct-enum issues, not in A10 code):
+1. **#80** — Struct-enums in `default/*.loft` have broken field positions. Types must
+   be in user code.
+2. **#81** — Struct-enum variants with same-named fields (`v`) but different types
+   read from the wrong offset at match time. Uniform-type structs (all-float) work.
+   Mixed-type structs (int + float + text) produce garbage.
+Both must be fixed before A10 can deliver mixed-type field iteration.
 
 ---
 

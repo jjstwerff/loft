@@ -141,6 +141,41 @@ fn main() {
 
 ---
 
+## C9 — Struct-enums in default library have broken field positions
+
+Struct-enum types defined in `default/*.loft` crash at runtime with "Fld N is
+outside of record" because field positions return `u16::MAX`. User-defined
+struct-enums in program files work correctly.
+
+**Reproducer:** define `pub enum Fv { X { v: boolean } }` in `default/01_code.loft`,
+then `x = X { v: true }` in user code.
+**Test:** none (discovered during A10 development).
+**Workaround:** define struct-enums in user code or a `use`-imported library file.
+**Planned fix:** PROBLEMS.md #80 — database schema initialization for default library.
+
+---
+
+## C10 — Struct-enum variants with same-named fields read wrong offset
+
+When a struct-enum has variants like `FvInt { v: integer }` and `FvFloat { v: float }`,
+the match arm for `FvInt { v }` reads `v` from the wrong position, returning garbage.
+
+**Reproducer:**
+```loft
+enum Fv { FvInt { v: integer }, FvFloat { v: float } }
+fn main() {
+  x = FvInt { v: 42 };
+  match x { FvInt { v } => assert(v == 42, "got: {v}"), _ => {} }
+  // Assertion fails: v reads from FvFloat's offset
+}
+```
+**Test:** none (discovered during A10 development).
+**Workaround:** use distinct field names per variant, or avoid mixed-type struct-enums.
+**Planned fix:** PROBLEMS.md #81 — struct-enum variant field offset alignment.
+**Blocks:** A10 field iteration for mixed-type structs.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
