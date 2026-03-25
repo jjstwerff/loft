@@ -20,6 +20,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID     | Title                                          | E  | Design | Depends on | Source              |
 |--------|-------------------------------------------------|----|--------|------------|---------------------|
+| L8     | Warn on format specifier / type mismatch        | S  | ✓      |            | PLANNING.md L8      |
 | S14    | Struct-enum stdlib field positions (#80)        | M  | ✓      |            | PLANNING.md S14     |
 | S15    | Struct-enum same-name variant field offsets (#81)| M | ✓      |            | PLANNING.md S15     |
 | A10    | Field iteration (`for f in s#fields`)           | M  | ✓      |            | PLANNING.md A10     |
@@ -28,12 +29,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | A10.2  | ↳ `ident#fields` detection in `iter_op`         | S  | ✓      | ✓ done     | collections.rs      |
 | A10.3  | ↳ Loop unrolling in `parse_field_iteration`     | M  | ✓      | S14, S15   | collections.rs      |
 | A10.4  | ↳ Error messages, docs, tests                   | S  | ✓      | A10.3      | LOFT.md, tests/     |
-| A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
-| A5.1   | ↳ Capture analysis (identify free variables)    | S  | ✓      |            | scopes.rs           |
-| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1       | data.rs, typedef.rs |
-| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2       | codegen.rs          |
-| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
-| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
 | T1.1   | ↳ Type system (`Type::Tuple`, offsets)          | M  | ✓      |            | data.rs, typedef.rs |
 | T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1       | parser/             |
@@ -42,6 +37,12 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4       | compiler            |
 | T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
 | T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
+| A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
+| A5.1   | ↳ Capture analysis (identify free variables)    | S  | ✓      |            | scopes.rs           |
+| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1       | data.rs, typedef.rs |
+| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2       | codegen.rs          |
+| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
+| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
 | TR1    | Stack trace introspection                       | M  | ✓      |            | STACKTRACE.md       |
 | TR1.1  | ↳ Shadow call-frame vector                      | S  | ✓      |            | state/mod.rs        |
 | TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations   | S  | ✓      | TR1.1      | 04_stacktrace.loft  |
@@ -54,7 +55,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |
 | CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3      | collections.rs      |
 | CO1.6  | ↳ `next()` / `exhausted()` stdlib               | S  | ✓      | CO1.2      | native.rs           |
-| L8     | Warn on format specifier / type mismatch        | S  | ✓      |            | PLANNING.md L8      |
 
 ---
 
@@ -115,21 +115,21 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID     | Title                                          | E  | Design | Depends on | Source              |
 |--------|-------------------------------------------------|----|--------|------------|---------------------|
+| L7     | Non-zero exit code on parse/runtime errors     | S  | —      |            | CAVEATS.md C6       |
+| S17    | Slot: text below TOS in nested scopes          | M  | —      |            | CAVEATS.md C4       |
+| S18    | Slot: sequential file blocks conflict          | M  | —      |            | CAVEATS.md C5       |
+| A12    | Lazy work-variable initialization              | M  | ~      |            | PLANNING.md A12     |
+| S16    | Native codegen: enum method dispatch           | MH | —      |            | CAVEATS.md C2       |
 | O1     | Superinstruction peephole rewriting            | M  | ~      |            | compile.rs          |
 | O2     | Stack raw pointer cache                        | H  | ~      |            | PERFORMANCE.md P2   |
-| O4     | Native: direct-emit local collections          | H  | ~      |            | PERFORMANCE.md N1   |
-| O5     | Native: omit `stores` from pure functions      | H  | ~      | O4         | PERFORMANCE.md N2   |
-| O7     | WASM: pre-allocate format string buffers       | M  | —      | W1         | PERFORMANCE.md W1   |
 | A4     | Spatial index operations                       | H  | ~      |            | PROBLEMS.md #22     |
 | A4.1   | ↳ Insert + exact lookup                         | M  | ~      |            | database.rs         |
 | A4.2   | ↳ Bounding-box range query                      | M  | ~      | A4.1       | database.rs         |
 | A4.3   | ↳ Removal                                       | S  | ~      | A4.1       | database.rs         |
 | A4.4   | ↳ Full iteration                                | S  | ~      | A4.2, A4.3 | database.rs         |
-| A12    | Lazy work-variable initialization              | M  | ~      |            | PLANNING.md A12     |
-| S16    | Native codegen: enum method dispatch           | MH | —      |            | CAVEATS.md C2       |
-| S17    | Slot: text below TOS in nested scopes          | M  | —      |            | CAVEATS.md C4       |
-| S18    | Slot: sequential file blocks conflict          | M  | —      |            | CAVEATS.md C5       |
-| L7     | Non-zero exit code on parse/runtime errors     | S  | —      |            | CAVEATS.md C6       |
+| O4     | Native: direct-emit local collections          | H  | ~      |            | PERFORMANCE.md N1   |
+| O5     | Native: omit `stores` from pure functions      | H  | ~      | O4         | PERFORMANCE.md N2   |
+| O7     | WASM: pre-allocate format string buffers       | M  | —      | W1         | PERFORMANCE.md W1   |
 
 ---
 
