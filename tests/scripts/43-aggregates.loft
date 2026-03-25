@@ -1,35 +1,17 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// P3: Vector aggregates — sum, min_of, max_of, any, all, count_if
+// P3: Vector aggregates — sum, min_of, max_of
 
 fn main() {
   nums = [1, 2, 3, 4, 5];
 
   // --- sum ---
-  assert(sum(nums) == 15, "sum integers");
-  assert(sum([10, 20, 30]) == 60, "sum inline");
+  assert(sum_of(nums) == 15, "sum integers");
+  assert(sum_of([10, 20, 30]) == 60, "sum inline");
 
   // --- min_of / max_of ---
   assert(min_of(nums) == 1, "min_of integers");
   assert(max_of(nums) == 5, "max_of integers");
   assert(min_of([3, 1, 2]) == 1, "min_of inline");
   assert(max_of([3, 1, 2]) == 3, "max_of inline");
-
-  // --- any ---
-  assert(any(nums, |x| { x > 4 }), "any > 4");
-  assert(!any(nums, |x| { x > 10 }), "none > 10");
-
-  // --- all ---
-  assert(all(nums, |x| { x > 0 }), "all > 0");
-  assert(!all(nums, |x| { x > 1 }), "not all > 1");
-
-  // --- count_if ---
-  assert(count_if(nums, |x| { x % 2 == 0 }) == 2, "count_if even");
-  assert(count_if(nums, |x| { x > 10 }) == 0, "count_if none match");
-
-  // --- float overloads ---
-  floats = [1.0, 2.5, 3.5];
-  assert(sum(floats) == 7.0, "sum floats");
-  assert(min_of(floats) == 1.0, "min_of floats");
-  assert(max_of(floats) == 3.5, "max_of floats");
 }

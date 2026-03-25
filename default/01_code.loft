@@ -908,3 +908,18 @@ fn OpSiLoad2CmpBranch(a: const u16, b: const u16, off: const i16);
 fn OpSiLoadConstMulStore(a: const u16, k: const integer, c: const u16);
 fn OpSiLoad2MulStore(a: const u16, b: const u16, c: const u16);
 fn OpNop();
+// --- Vector aggregates ---
+// Internal helpers for reduce-based aggregates.
+fn __add_int(a: integer, b: integer) -> integer { a + b }
+fn __add_float(a: float, b: float) -> float { a + b }
+fn __min_int(a: integer, b: integer) -> integer { if a < b { a } else { b } }
+fn __min_float(a: float, b: float) -> float { if a < b { a } else { b } }
+fn __max_int(a: integer, b: integer) -> integer { if a > b { a } else { b } }
+fn __max_float(a: float, b: float) -> float { if a > b { a } else { b } }
+
+// Sum of all integer elements. Returns 0 for an empty vector.
+pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
+// Smallest integer element.
+pub fn min_of(v: vector<integer>) -> integer { reduce(v, 2147483646, __min_int) }
+// Largest integer element.
+pub fn max_of(v: vector<integer>) -> integer { reduce(v, -2147483647, __max_int) }
