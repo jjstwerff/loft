@@ -131,6 +131,13 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.3   | ↳ Removal                                               | Small     | A4.1        | database.rs          |
 | A4.4   | ↳ Full iteration                                        | Small     | A4.2, A4.3  | database.rs, io.rs   |
 | A12    | Lazy work-variable initialization                       | Medium    | A12.1–A12.3 | PLANNING.md A12      |
+| S14    | Struct-enum stdlib field positions (#80)                 | Medium    |             | CAVEATS.md C9        |
+| S15    | Struct-enum same-name variant field offsets (#81)        | Medium    |             | CAVEATS.md C10       |
+| S16    | Native codegen: enum method dispatch (#C2)              | Small–Med |             | CAVEATS.md C2        |
+| S17    | Slot: text below TOS in nested scopes (#C4)             | Medium    |             | CAVEATS.md C4        |
+| S18    | Slot: sequential file blocks conflict (#C5)             | Medium    |             | CAVEATS.md C5        |
+| L7     | Non-zero exit code on parse/runtime errors (#C6)        | Small     |             | CAVEATS.md C6        |
+| L8     | Warn on format specifier / type mismatch (#C14)         | Small     |             | CAVEATS.md C14       |
 
 ---
 

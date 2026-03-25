@@ -44,7 +44,7 @@ The `--native` and `--native-wasm` backends cannot compile programs that call
 
 **Test:** `tests/native.rs` — `SCRIPTS_NATIVE_SKIP` includes `42-file-result.loft`.
 **Workaround:** avoid `--native` for programs using `FileResult.ok()`.
-**Planned fix:** native codegen for enum methods (no specific PLANNING item yet).
+**Planned fix:** S16 in [ROADMAP.md](ROADMAP.md) (1.1+).
 
 ---
 
@@ -76,7 +76,7 @@ slot below the actual top-of-stack, causing a codegen panic.
 
 **Test:** `tests/slots.rs` — `text_below_tos_nested_loops` (`#[ignore]`, B-dir class)
 **Workaround:** restructure code to avoid deeply nested text assignments inside loops.
-**Planned fix:** scope-exit approximation improvement (no specific PLANNING item).
+**Planned fix:** S17 in [ROADMAP.md](ROADMAP.md) (1.1+).
 **Docs:** [SLOT_FAILURES.md](SLOT_FAILURES.md) § B-dir.
 
 ---
@@ -88,7 +88,7 @@ override that overlaps with a subsequent variable.
 
 **Test:** `tests/slots.rs` — `sequential_file_blocks_read_conflict` (`#[ignore]`, B-binary class)
 **Workaround:** reuse a single file variable across blocks instead of re-declaring.
-**Planned fix:** codegen `running_tos` overestimate correction (no specific PLANNING item).
+**Planned fix:** S18 in [ROADMAP.md](ROADMAP.md) (1.1+).
 **Docs:** [SLOT_FAILURES.md](SLOT_FAILURES.md) § B-binary.
 
 ---
@@ -169,7 +169,7 @@ fn main() {
   // Assertion fails: v reads from FvFloat's offset
 }
 ```
-**Test:** none (discovered during A10 development).
+**Test:** `tests/scripts/46-caveats.loft` — `test_c10_same_named_field_offset`
 **Workaround:** use distinct field names per variant, or avoid mixed-type struct-enums.
 **Planned fix:** PROBLEMS.md #81 — struct-enum variant field offset alignment.
 **Blocks:** A10 field iteration for mixed-type structs.
@@ -193,7 +193,7 @@ fn main() {
 }
 ```
 
-**Test:** `tests/scripts/46-caveats.loft` — `test_no_while`
+**Test:** `tests/scripts/46-caveats.loft` — `test_c11_no_while`
 **Workaround:** `for i in 0..LARGE { if condition { break } }`
 **Docs:** [00-vs-rust.html](../00-vs-rust.html) § No while loop; [00-vs-python.html](../00-vs-python.html) § No while loop.
 
@@ -213,7 +213,7 @@ fn main() {
 }
 ```
 
-**Test:** `tests/scripts/46-caveats.loft` — `test_no_exceptions` (verifies assert aborts)
+**Test:** none (cannot test abort from inside loft).
 **Workaround:** validate inputs before operations; use `FileResult` for file I/O errors.
 **Docs:** [00-vs-python.html](../00-vs-python.html) § No exception handling.
 
@@ -252,7 +252,7 @@ fn main() {
 }
 ```
 
-**Test:** `tests/scripts/46-caveats.loft` — `test_format_specifier_ignored`
+**Test:** `tests/scripts/46-caveats.loft` — `test_c14_format_specifier_ignored`
 **Workaround:** ensure format specifiers match the value type.
 **Docs:** [00-vs-rust.html](../00-vs-rust.html) § String formatting.
 
