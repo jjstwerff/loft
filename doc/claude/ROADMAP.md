@@ -25,9 +25,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4 (done)| scopes.rs           |
 | T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4 (done)| typedef.rs          |
 | CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1 (done) | COROUTINE.md        |
-| CO1.6a | ↳ Fix `next()` codegen stack tracking           | S  | ✓      | CO1.3c (done)| control.rs, codegen |
-| CO1.6b | ↳ Verify `exhausted()` after yield/resume       | S  | ✓      | CO1.6a     | codegen.rs          |
-| CO1.6c | ↳ `next()` returns typed null after exhaustion   | S  | ✓      | CO1.6a     | state/mod.rs        |
 | CO1.3d | ↳ Text serialisation (`serialise_text_slots`)   | MH | ✓      | CO1.3b (done)| state/mod.rs      |
 
 ---
