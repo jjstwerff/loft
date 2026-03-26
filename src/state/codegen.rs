@@ -257,6 +257,41 @@ impl State {
                 self.code_add(value_size);
                 Type::Void
             }
+            Value::TuplePut(var_nr, elem_idx, value) => {
+                // T1.4: write to element elem_idx of tuple variable var_nr.
+                let tuple_tp = stack.function.tp(*var_nr).clone();
+                let Type::Tuple(ref elems) = tuple_tp else {
+                    panic!("TuplePut on non-tuple variable");
+                };
+                let idx = *elem_idx as usize;
+                let elem_tp = elems[idx].clone();
+                let offsets = crate::data::element_offsets(elems);
+                let elem_offset = offsets[idx] as u16;
+                // Generate the value to write.
+                self.generate(value, stack, false);
+                // Compute distance from stack top to the element's position.
+                let tuple_var_base = stack.function.stack(*var_nr);
+                let elem_abs_pos = tuple_var_base + elem_offset;
+                let var_pos = stack.position - elem_abs_pos;
+                match &elem_tp {
+                    Type::Integer(_, _) | Type::Function(_, _) => {
+                        stack.add_op("OpPutInt", self);
+                    }
+                    Type::Boolean => stack.add_op("OpPutBool", self),
+                    Type::Long => stack.add_op("OpPutLong", self),
+                    Type::Float => stack.add_op("OpPutFloat", self),
+                    Type::Single => stack.add_op("OpPutSingle", self),
+                    Type::Character => stack.add_op("OpPutCharacter", self),
+                    Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                    Type::Text(_) => stack.add_op("OpAppendText", self),
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                        stack.add_op("OpPutRef", self);
+                    }
+                    _ => panic!("TuplePut: unsupported element type {elem_tp:?}"),
+                }
+                self.code_add(var_pos);
+                Type::Void
+            }
         }
     }
 
@@ -1550,6 +1585,10 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         }
         Value::TupleGet(var, idx) => {
             eprint!("{}.{idx}", vars.name(*var));
+        }
+        Value::TuplePut(var, idx, val) => {
+            eprint!("{}.{idx} = ", vars.name(*var));
+            print_ir(val, data, vars, depth);
         }
         Value::Yield(inner) => {
             eprint!("yield ");

@@ -220,6 +220,11 @@ impl Scopes {
             Value::TupleGet(var, idx) => {
                 Value::TupleGet(*self.var_mapping.get(var).unwrap_or(var), *idx)
             }
+            Value::TuplePut(var, idx, inner) => Value::TuplePut(
+                *self.var_mapping.get(var).unwrap_or(var),
+                *idx,
+                Box::new(self.scan(inner, function, data)),
+            ),
             Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
             _ => val.clone(),
         }

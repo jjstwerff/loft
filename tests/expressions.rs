@@ -255,7 +255,6 @@ fn tuple_destructure_basic() {
 }
 
 #[test]
-#[ignore = "T1.4: tuple element assignment codegen not yet implemented"]
 fn tuple_element_assign() {
     // Assigning to an individual tuple element: t.0 = expr.
     expr!("t = (1, 2); t.0 = 10; t.0 + t.1").result(Value::Int(12));

@@ -152,6 +152,7 @@ impl Output<'_> {
                 write!(w, ")")?;
             }
             Value::TupleGet(var, idx) => write!(w, "var_{var}.{idx}")?,
+            Value::TuplePut(var, idx, _val) => write!(w, "var_{var}.{idx} = ...")?,
             Value::Yield(inner) => {
                 write!(w, "yield ")?;
                 self.output_code_inner(w, inner)?;

@@ -95,6 +95,8 @@ pub enum Value {
     Tuple(Vec<Value>),
     // T1.4: Read element idx of tuple variable var_nr.
     TupleGet(u16, u16),
+    // T1.4: Write value to element idx of tuple variable var_nr.
+    TuplePut(u16, u16, Box<Value>),
     // CO1.3c: Yield a value from a generator function.
     Yield(Box<Value>),
 }
@@ -1717,6 +1719,10 @@ impl Data {
             }
             Value::TupleGet(var, idx) => {
                 write!(write, "{}.{idx}", vars.name(*var))
+            }
+            Value::TuplePut(var, idx, val) => {
+                write!(write, "{}.{idx} = ", vars.name(*var))?;
+                self.show_code(write, vars, val, indent, false)
             }
             Value::Yield(inner) => {
                 write!(write, "yield ")?;

@@ -43,6 +43,7 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
                 || inline_ref_set_in(c, r, depth + 1)
         }
         Value::Tuple(elems) => elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
+        Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
         // Leaf variants — cannot contain a Set node.
         Value::Null
         | Value::Int(_)
@@ -637,6 +638,17 @@ use a separate collection or add after the loop"
                 );
             }
             return Type::Void;
+        }
+        // T1.4-fix-a: tuple element assignment t.0 = expr.
+        if let Value::TupleGet(var_nr, idx) = code {
+            let var_nr = *var_nr;
+            let idx = *idx;
+            if self.lexer.has_token("=") {
+                let mut rhs = Value::Null;
+                self.expression(&mut rhs);
+                *code = Value::TuplePut(var_nr, idx, Box::new(rhs));
+                return Type::Void;
+            }
         }
         let to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
