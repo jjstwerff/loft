@@ -217,3 +217,178 @@ fn call_stack_recursive() {
     .expr("fib(10)")
     .result(Value::Int(55));
 }
+
+// ── T1.2 — Tuple parser (notation, literals, destructuring) ─────────────────
+
+#[test]
+#[ignore = "T1.2: tuple type notation not yet implemented"]
+fn tuple_type_return() {
+    // A function returning a tuple type should parse and compile.
+    code!(
+        "fn pair(a: integer, b: integer) -> (integer, integer) {
+            (a, b)
+         }"
+    )
+    .expr("pair(3, 7).0")
+    .result(Value::Int(3));
+}
+
+#[test]
+#[ignore = "T1.2: tuple literal parsing not yet implemented"]
+fn tuple_literal_basic() {
+    // A tuple literal assigned to a variable; element access via .0 / .1.
+    expr!("t = (10, 20); t.0 + t.1").result(Value::Int(30));
+}
+
+#[test]
+#[ignore = "T1.2: tuple element access not yet implemented"]
+fn tuple_element_access_three() {
+    // Three-element tuple with mixed types — access each element.
+    expr!("t = (1, 2, 3); t.0 + t.1 + t.2").result(Value::Int(6));
+}
+
+#[test]
+#[ignore = "T1.2: tuple destructuring not yet implemented"]
+fn tuple_destructure_basic() {
+    // LHS destructuring: (a, b) = expr.
+    code!("fn pair(x: integer) -> (integer, integer) { (x, x * 2) }")
+        .expr("(a, b) = pair(5); a + b")
+        .result(Value::Int(15));
+}
+
+#[test]
+#[ignore = "T1.2: tuple element assignment not yet implemented"]
+fn tuple_element_assign() {
+    // Assigning to an individual tuple element: t.0 = expr.
+    expr!("t = (1, 2); t.0 = 10; t.0 + t.1").result(Value::Int(12));
+}
+
+#[test]
+#[ignore = "T1.2: tuple type annotation not yet implemented"]
+fn tuple_type_annotation() {
+    // Explicit tuple type annotation on a variable.
+    expr!("t: (integer, integer) = (3, 4); t.0 + t.1").result(Value::Int(7));
+}
+
+#[test]
+#[ignore = "T1.2: tuple as function parameter not yet implemented"]
+fn tuple_parameter() {
+    // Tuple type as a function parameter.
+    code!("fn sum_pair(p: (integer, integer)) -> integer { p.0 + p.1 }")
+        .expr("sum_pair((10, 20))")
+        .result(Value::Int(30));
+}
+
+#[test]
+#[ignore = "T1.2: tuple with text element not yet implemented"]
+fn tuple_with_text() {
+    // Tuple containing a text element — verify text is accessible.
+    code!("fn greet(name: text) -> (integer, text) { (len(name), name) }")
+        .expr("greet(\"hello\").0")
+        .result(Value::Int(5));
+}
+
+// ── A5.3 — Closure capture at call site ─────────────────────────────────────
+
+#[test]
+#[ignore = "A5.3: closure capture at call site not yet implemented"]
+fn closure_capture_integer() {
+    // A lambda captures an integer from the enclosing scope.
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)").result(Value::Int(15));
+}
+
+#[test]
+#[ignore = "A5.3: closure capture at call site not yet implemented"]
+fn closure_capture_after_change() {
+    // Capture is by value at the point of lambda creation — changing original after
+    // creation does not affect the captured value.
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)").result(Value::Int(15));
+}
+
+#[test]
+#[ignore = "A5.3: closure capture at call site not yet implemented"]
+fn closure_capture_multiple() {
+    // A lambda captures two variables from the enclosing scope.
+    expr!("a = 3; b = 7; f = fn(x: integer) -> integer { a + b + x }; f(10)")
+        .result(Value::Int(20));
+}
+
+#[test]
+#[ignore = "A5.3: closure capture at call site not yet implemented"]
+fn closure_capture_text() {
+    // Captured text is deep-copied — independent of the original after capture.
+    code!(
+        "fn make_greeter(prefix: text) -> fn(text) -> text {
+            fn(name: text) -> text { \"{prefix} {name}\" }
+         }"
+    )
+    .expr("make_greeter(\"Hello\")(\"world\")")
+    .result(Value::str("Hello world"));
+}
+
+// ── CO1.2 — OpCoroutineCreate + OpCoroutineNext ─────────────────────────────
+
+#[test]
+#[ignore = "CO1.2: OpCoroutineCreate not yet implemented"]
+fn coroutine_create_basic() {
+    // A generator function should return an iterator without executing the body.
+    code!(
+        "fn count() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn test_count() -> integer {
+            gen = count();
+            next(gen)
+         }"
+    )
+    .expr("test_count()")
+    .result(Value::Int(1));
+}
+
+#[test]
+#[ignore = "CO1.2: OpCoroutineNext not yet implemented"]
+fn coroutine_next_sequence() {
+    // Successive next() calls advance the generator.
+    code!(
+        "fn count() -> iterator<integer> { yield 10; yield 20; yield 30; }
+         fn sum_three() -> integer {
+            gen = count();
+            a = next(gen);
+            b = next(gen);
+            c = next(gen);
+            a + b + c
+         }"
+    )
+    .expr("sum_three()")
+    .result(Value::Int(60));
+}
+
+#[test]
+#[ignore = "CO1.2: OpCoroutineCreate not yet implemented"]
+fn coroutine_exhausted() {
+    // After all yields, exhausted() returns true.
+    code!(
+        "fn single() -> iterator<integer> { yield 42; }
+         fn check() -> boolean {
+            gen = single();
+            next(gen);
+            exhausted(gen)
+         }"
+    )
+    .expr("check()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "CO1.2: coroutine for-loop integration not yet implemented"]
+fn coroutine_for_loop() {
+    // Generator consumed by a for loop.
+    code!(
+        "fn range3() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn sum_gen() -> integer {
+            total = 0;
+            for n in range3() { total += n; }
+            total
+         }"
+    )
+    .expr("sum_gen()")
+    .result(Value::Int(6));
+}
