@@ -141,6 +141,16 @@ impl Output<'_> {
                 self.output_call_ref(w, *v_nr, args)?;
             }
             Value::Iter(..) => write!(w, "{code:?}")?,
+            Value::Tuple(elems) => {
+                write!(w, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    self.output_code_inner(w, e)?;
+                }
+                write!(w, ")")?;
+            }
         }
         Ok(())
     }

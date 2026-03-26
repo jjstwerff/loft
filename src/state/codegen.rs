@@ -202,6 +202,16 @@ impl State {
                 }
                 Type::Void
             }
+            Value::Tuple(elems) => {
+                // T1.2: generate each element onto contiguous stack slots.
+                // Full codegen will be implemented in T1.4.
+                let mut types = Vec::new();
+                for e in elems {
+                    let t = self.generate(e, stack, false);
+                    types.push(t);
+                }
+                Type::Tuple(types)
+            }
         }
     }
 
@@ -1256,6 +1266,7 @@ fn ir_contains_var(value: &Value, v: u16) -> bool {
 /// clean.  Produces a lot of output for large functions, so the filter is
 /// important.
 #[cfg(debug_assertions)]
+#[allow(clippy::too_many_lines)]
 fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usize) {
     let pad = "  ".repeat(depth);
     match value {
@@ -1348,6 +1359,16 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
             }
             // `next` is the advance expression: omit for brevity
             let _ = next;
+        }
+        Value::Tuple(elems) => {
+            eprint!("(");
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 {
+                    eprint!(", ");
+                }
+                print_ir(e, data, vars, depth);
+            }
+            eprint!(")");
         }
     }
 }

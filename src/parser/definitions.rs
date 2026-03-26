@@ -538,11 +538,7 @@ impl Parser {
         let mut returned_not_null = false;
         let result = if self.lexer.has_token("->") {
             // Will be the correct def_nr on the second pass
-            if let Some(type_name) = self.lexer.has_identifier() {
-                let Some(tp) = self.parse_type(self.data.def_nr(&fn_name), &type_name, true) else {
-                    // Message
-                    return false;
-                };
+            if let Some(tp) = self.parse_type_full(self.data.def_nr(&fn_name), true) {
                 if self.lexer.has_keyword("not") {
                     self.lexer.token("null");
                     returned_not_null = true;
@@ -664,35 +660,18 @@ impl Parser {
                     reference = true;
                 }
                 // Will be the correct def_nr on the second pass
-                if self.lexer.has_token("fn") {
-                    self.parse_fn_type(self.data.def_nr(fn_name))
-                } else {
-                    if self.lexer.has_keyword("const") {
-                        constant = true;
-                    }
-                    if let Some(type_name) = self.lexer.has_identifier() {
-                        if let Some(tp) =
-                            self.parse_type(self.data.def_nr(fn_name), &type_name, false)
-                        {
-                            if reference {
-                                Type::RefVar(Box::new(tp))
-                            } else {
-                                tp
-                            }
-                        } else {
-                            if !self.first_pass {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "'{type_name}' is not a type"
-                                );
-                            }
-                            Type::Unknown(0)
-                        }
+                if self.lexer.has_keyword("const") {
+                    constant = true;
+                }
+                if let Some(tp) = self.parse_type_full(self.data.def_nr(fn_name), false) {
+                    if reference {
+                        Type::RefVar(Box::new(tp))
                     } else {
-                        diagnostic!(self.lexer, Level::Error, "Expecting a type");
-                        return true;
+                        tp
                     }
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Expecting a type");
+                    return true;
                 }
             } else {
                 Type::Unknown(0)
@@ -734,9 +713,10 @@ impl Parser {
         let mut args = Vec::new();
         self.lexer.token("(");
         loop {
-            if let Some(id) = self.lexer.has_identifier()
-                && let Some(tp) = self.parse_type(d_nr, &id, false)
-            {
+            if self.lexer.peek_token(")") {
+                break;
+            }
+            if let Some(tp) = self.parse_type_full(d_nr, false) {
                 args.push(tp);
             }
             if !self.lexer.has_token(",") {
@@ -745,8 +725,7 @@ impl Parser {
         }
         self.lexer.token(")");
         if self.lexer.has_token("->")
-            && let Some(id) = self.lexer.has_identifier()
-            && let Some(tp2) = self.parse_type(d_nr, &id, false)
+            && let Some(tp2) = self.parse_type_full(d_nr, false)
         {
             r_type = tp2;
         }
@@ -809,6 +788,44 @@ impl Parser {
             } else {
                 Some(self.data.def(tp_nr).returned.clone())
             }
+        } else {
+            None
+        }
+    }
+
+    /// Parse a type expression that may be a tuple `(T1, T2, ...)` or an identifier-based type.
+    /// This is the entry point for type positions (return types, parameter types, annotations).
+    pub(crate) fn parse_type_full(&mut self, on_d: u32, returned: bool) -> Option<Type> {
+        if self.lexer.has_token("(") {
+            // Tuple type: (T1, T2, ...)
+            let mut types = Vec::new();
+            loop {
+                if self.lexer.peek_token(")") {
+                    break;
+                }
+                if let Some(tp) = self.parse_type_full(on_d, false) {
+                    types.push(tp);
+                } else {
+                    break;
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token(")");
+            if types.len() < 2 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Tuple types require at least 2 elements"
+                );
+                return types.into_iter().next();
+            }
+            Some(Type::Tuple(types))
+        } else if self.lexer.has_token("fn") {
+            Some(self.parse_fn_type(on_d))
+        } else if let Some(id) = self.lexer.has_identifier() {
+            self.parse_type(on_d, &id, returned)
         } else {
             None
         }

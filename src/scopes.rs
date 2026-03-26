@@ -116,6 +116,7 @@ impl Scopes {
         result
     }
 
+    #[allow(clippy::too_many_lines)]
     fn scan_inner(&mut self, val: &Value, function: &mut Function, data: &Data) -> Value {
         match val {
             Value::Var(ov) => Value::Var(*self.var_mapping.get(ov).unwrap_or(ov)),
@@ -213,6 +214,9 @@ impl Scopes {
                 Box::new(self.scan(next, function, data)),
                 Box::new(self.scan(extra, function, data)),
             ),
+            Value::Tuple(elems) => {
+                Value::Tuple(elems.iter().map(|v| self.scan(v, function, data)).collect())
+            }
             _ => val.clone(),
         }
     }

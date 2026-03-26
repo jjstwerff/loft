@@ -40,6 +40,7 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
                 || inline_ref_set_in(b, r, depth + 1)
                 || inline_ref_set_in(c, r, depth + 1)
         }
+        Value::Tuple(elems) => elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
         // Leaf variants — cannot contain a Set node.
         Value::Null
         | Value::Int(_)
@@ -482,6 +483,7 @@ use a separate collection or add after the loop"
     }
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
@@ -500,8 +502,7 @@ use a separate collection or add after the loop"
             let lnk = self.lexer.link();
             self.lexer.cont(); // consume ":"
             let mut got_annotation = false;
-            if let Some(type_name) = self.lexer.has_identifier()
-                && let Some(tp) = self.parse_type(u32::MAX, &type_name, false)
+            if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
             {
                 self.change_var_type(*v_nr, &tp);
@@ -511,6 +512,68 @@ use a separate collection or add after the loop"
             if !got_annotation {
                 self.lexer.revert(lnk);
             }
+        }
+        // T1.2: LHS tuple destructuring — (a, b) = expr
+        if let Value::Tuple(vars) = code
+            && self.lexer.has_token("=")
+        {
+            let var_nrs: Vec<u16> = vars
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Var(nr) = v {
+                        Some(*nr)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if var_nrs.len() != vars.len() {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Tuple destructuring requires plain variable names"
+                );
+            }
+            let mut rhs = Value::Null;
+            let rhs_type = self.expression(&mut rhs);
+            if let Type::Tuple(ref rhs_elems) = rhs_type {
+                if rhs_elems.len() != var_nrs.len() {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple arity mismatch: left has {} names, right has {} elements",
+                        var_nrs.len(),
+                        rhs_elems.len()
+                    );
+                }
+                // Assign each element to its variable.
+                // T1.4 will emit proper codegen; for now build Set IR.
+                let mut steps = Vec::new();
+                for (i, &v_nr) in var_nrs.iter().enumerate() {
+                    if !self.first_pass && self.vars.exists(v_nr) {
+                        self.vars.defined(v_nr);
+                        if i < rhs_elems.len() {
+                            self.change_var_type(v_nr, &rhs_elems[i]);
+                        }
+                    }
+                    // Placeholder: Set(v_nr, element_i_of_rhs)
+                    steps.push(Value::Set(
+                        v_nr,
+                        Box::new(Value::Call(
+                            u32::MAX,
+                            vec![rhs.clone(), Value::Int(i as i32)],
+                        )),
+                    ));
+                }
+                *code = Value::Insert(steps);
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot destructure a non-tuple value"
+                );
+            }
+            return Type::Void;
         }
         let to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {

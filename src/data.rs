@@ -91,6 +91,8 @@ pub enum Value {
     Iter(u16, Box<Value>, Box<Value>, Box<Value>),
     /// Key structure
     Keys(Vec<Key>),
+    /// T1.2: Tuple literal — elements are evaluated left-to-right onto contiguous stack slots.
+    Tuple(Vec<Value>),
 }
 
 #[allow(dead_code)]
@@ -1699,6 +1701,16 @@ impl Data {
                 write!(write, "&{keys:?}")
             }
             Value::Line(line) => write!(write, "[{line}] "),
+            Value::Tuple(elems) => {
+                write!(write, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(write, ", ")?;
+                    }
+                    self.show_code(write, vars, e, indent, false)?;
+                }
+                write!(write, ")")
+            }
         }
     }
 

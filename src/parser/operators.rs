@@ -280,7 +280,34 @@ impl Parser {
             }
             if self.lexer.has_token(".") {
                 *parent_tp = t.clone();
-                t = self.field(code, t);
+                // T1.2: tuple element access — t.0, t.1, etc.
+                if let Type::Tuple(ref elems) = t {
+                    if let Some(idx) = self.lexer.has_integer() {
+                        let idx = idx as usize;
+                        if idx >= elems.len() {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Tuple index {idx} out of range — tuple has {} elements",
+                                elems.len()
+                            );
+                            t = Type::Unknown(0);
+                        } else {
+                            t = elems[idx].clone();
+                            // T1.4 will emit proper codegen; for now store index in IR.
+                            let tuple_val = code.clone();
+                            *code = Value::Call(u32::MAX, vec![tuple_val, Value::Int(idx as i32)]);
+                        }
+                    } else {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Tuple element access requires a numeric index (e.g. .0, .1)"
+                        );
+                    }
+                } else {
+                    t = self.field(code, t);
+                }
                 // If the method returned an owned ref and more chaining follows, capture
                 // it in a work-ref so scopes.rs emits OpFreeRef at end-of-scope.
                 // Without this, the store allocated by the callee leaks and the LIFO

@@ -165,6 +165,7 @@ impl Parser {
     //              <identifier:var> |
     //              <number> | <float> | <cstring> |
     //              'true' | 'false' | 'null'
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_single(
         &mut self,
         var_tp: &Type,
@@ -181,8 +182,36 @@ impl Parser {
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {
             let t = self.expression(val);
-            self.lexer.token(")");
-            t
+            if self.lexer.has_token(",") {
+                // T1.2: Tuple literal — (expr, expr, ...)
+                let mut values = vec![val.clone()];
+                let mut types = vec![t];
+                loop {
+                    if self.lexer.peek_token(")") {
+                        break;
+                    }
+                    let mut v = Value::Null;
+                    let t2 = self.expression(&mut v);
+                    values.push(v);
+                    types.push(t2);
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.token(")");
+                if types.len() < 2 {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple literals require at least 2 elements"
+                    );
+                }
+                *val = Value::Tuple(values);
+                Type::Tuple(types)
+            } else {
+                self.lexer.token(")");
+                t
+            }
         } else if self.lexer.peek_token("{") {
             self.parse_block("block", val, &Type::Unknown(0))
         } else if self.lexer.has_token("[") {
@@ -334,12 +363,7 @@ impl Parser {
 
         // Parse optional return type annotation.
         let result = if self.lexer.has_token("->") {
-            if let Some(type_name) = self.lexer.has_identifier() {
-                self.parse_type(d_nr, &type_name, true)
-                    .unwrap_or(Type::Void)
-            } else {
-                Type::Void
-            }
+            self.parse_type_full(d_nr, true).unwrap_or(Type::Void)
         } else {
             Type::Void
         };
@@ -506,12 +530,7 @@ impl Parser {
                 "Return-type annotations are not allowed in |x| lambdas — \
                  use fn(…) -> <ret> {{ ... }} instead"
             );
-            if let Some(type_name) = self.lexer.has_identifier() {
-                self.parse_type(d_nr, &type_name, true)
-                    .unwrap_or(Type::Void)
-            } else {
-                Type::Void
-            }
+            self.parse_type_full(d_nr, true).unwrap_or(Type::Void)
         } else if let Type::Function(_, ret) = &hint_params_ret {
             *ret.clone()
         } else {
