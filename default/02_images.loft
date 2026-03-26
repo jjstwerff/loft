@@ -327,3 +327,9 @@ fn OpReverseVector(r: vector, size: const u16);
 #rust"vector::reverse_vector(&@r, u32::from(@size), &mut s.database.allocations);"
 fn OpSortVector(r: vector, db_tp: const u16);
 #rust"{{ let t = @db_tp; let elem_size = stores.size(t); let is_float = t == 2 || t == 3; vector::sort_vector(&@r, elem_size, is_float, &mut stores.allocations); }}"
+
+// CO1.2: Coroutine opcodes
+fn OpCoroutineCreate(d_nr: const i32, args_size: const u16, to: const i32);
+#rust"s.coroutine_create(@d_nr as u32, u32::from(@args_size), @to as u32);"
+fn OpCoroutineNext(value_size: const u16);
+#rust"s.coroutine_next(u32::from(@value_size));"

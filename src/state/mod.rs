@@ -304,6 +304,94 @@ impl State {
             .expect("coroutine_frame_mut: empty slot")
     }
 
+    // CO1.2: Create a coroutine frame — copy arguments into the frame without
+    // entering the function body.
+    pub fn coroutine_create(&mut self, d_nr: u32, args_size: u32, entry_pos: u32) {
+        let args_base = self.stack_pos - args_size;
+        let mut stack_bytes = vec![0u8; args_size as usize];
+        let store = self.database.store(&self.stack_cur);
+        let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + args_base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, stack_bytes.as_mut_ptr(), args_size as usize);
+        }
+        self.stack_pos = args_base;
+
+        let frame = CoroutineFrame {
+            d_nr,
+            status: CoroutineStatus::Created,
+            code_pos: entry_pos,
+            stack_base: 0,
+            caller_return_pos: 0,
+            stack_bytes,
+            text_owned: Vec::new(),
+            call_frames: Vec::new(),
+            call_depth: 0,
+        };
+        let idx = self.allocate_coroutine(frame);
+
+        let db_ref = DbRef {
+            store_nr: COROUTINE_STORE,
+            rec: idx as u32,
+            pos: 0,
+        };
+        self.put_stack(db_ref);
+    }
+
+    /// CO1.2: Advance a coroutine — restore stack, resume execution.
+    /// # Panics
+    /// Panics on re-entrant advance (coroutine already running).
+    pub fn coroutine_next(&mut self, value_size: u32) {
+        let gen_ref = *self.get_stack::<DbRef>();
+
+        if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
+            self.stack_pos += value_size;
+            return;
+        }
+        let idx = gen_ref.rec as usize;
+        let status = self.coroutine_frame_mut(idx).status;
+
+        match status {
+            CoroutineStatus::Exhausted => {
+                self.stack_pos += value_size;
+            }
+            CoroutineStatus::Running => {
+                panic!("re-entrant advance on coroutine {idx}");
+            }
+            CoroutineStatus::Created | CoroutineStatus::Suspended => {
+                let caller_return_pos = self.code_pos;
+                let call_depth = self.call_stack.len();
+                let stack_base = self.stack_pos;
+                {
+                    let f = self.coroutine_frame_mut(idx);
+                    f.caller_return_pos = caller_return_pos;
+                    f.call_depth = call_depth;
+                    f.stack_base = stack_base;
+                    f.status = CoroutineStatus::Running;
+                }
+
+                let bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
+                let code_pos = self.coroutine_frame_mut(idx).code_pos;
+                let saved_frames: Vec<_> = self
+                    .coroutine_frame_mut(idx)
+                    .call_frames
+                    .drain(..)
+                    .collect();
+
+                let dest = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
+                }
+                self.stack_pos += bytes.len() as u32;
+                self.call_stack.extend(saved_frames);
+                self.active_coroutines.push(idx);
+                self.code_pos = code_pos;
+            }
+        }
+    }
+
     /**
     Clear the stack of local variables, possibly return a value.
     * `value` - Size of the return value.
