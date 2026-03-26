@@ -629,7 +629,13 @@ use a separate collection or add after the loop"
                     }
                     steps.push(Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16))));
                 }
-                *code = Value::Insert(steps);
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple destructuring not yet implemented (T1.4)"
+                    );
+                }
             } else if !self.first_pass {
                 diagnostic!(
                     self.lexer,
