@@ -108,6 +108,11 @@ All notable changes to the loft language and interpreter.
   generator calls, `OpCoroutineYield` for yield statements, and `OpCoroutineReturn`
   at generator body end.  `iterator<T>` single-parameter syntax now accepted.
 
+- **Generator type fixes** (CO1.3c-fix) — Generator body return-type check
+  suppressed.  `next(gen)` and `exhausted(gen)` wired as special dispatch calls.
+  Coroutine iterators no longer materialised into vectors.  `Type::Iterator` sized
+  as DbRef.  `coroutine_create_basic` and `coroutine_next_sequence` tests pass.
+
 - **Closure lifetime** (A5.5) — Closure record work variable is already freed by
   existing `OpFreeRef` scope-exit logic.  No new code needed.
 
