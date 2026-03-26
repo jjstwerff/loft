@@ -414,3 +414,20 @@ fn coroutine_for_loop() {
     .expr("sum_gen()")
     .result(Value::Int(6));
 }
+
+// ── CO1.3e — Nested yield (generator calls helper function) ─────────────────
+
+#[test]
+fn coroutine_call_helper_between_yields() {
+    // A generator calls a regular function between yields.
+    // The call frame is saved/restored across the yield/resume cycle.
+    code!(
+        "fn double(x: integer) -> integer { x * 2 }
+         fn gen() -> iterator<integer> {
+            yield double(5);
+            yield double(10);
+         }"
+    )
+    .expr("total = 0; for n in gen() { total += n; }; total")
+    .result(Value::Int(30));
+}
