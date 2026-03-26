@@ -141,6 +141,10 @@ All notable changes to the loft language and interpreter.
   advances the sub-generator and forwards each value via `yield`.  Test `#[ignore]`
   pending slot-assignment fix.
 
+- **Tuple element assignment** (T1.4) — `t.0 = expr` now works via `Value::TuplePut`
+  IR variant.  Parser detects `TupleGet` on the LHS of `=` and routes through
+  element-write codegen.
+
 ### Bug fixes
 
 - **Fix #87** — `static_call` no longer snapshots the call stack on every native
