@@ -472,7 +472,42 @@ the recompile overhead that caching was designed to address)
   **Effort:** Small (verification + fix, not greenfield).
 
 - **CO1.4** — `yield from`: sub-generator delegation.
-- **CO1.5** — `for item in generator`: iterator protocol integration.
+- **CO1.5** — `for item in generator`: iterator protocol integration.  Split into sub-steps:
+
+  **CO1.5a — `iterator()` bypass for coroutine types** (`src/parser/collections.rs`):
+  The `iterator()` function (line 43) converts a collection type into an iterator IR.
+  For vector/sorted/hash types, it emits `OpIterate`/`OpStep`/`OpGetVector` sequences.
+  For coroutine iterators (`Type::Iterator(_, Type::Null)`), no conversion is needed —
+  the expression already IS an iterator.
+  **Current behaviour:** line 62 checks `if is_type == should` and returns early if
+  the types match.  But `is_type` is `Iterator(Integer(MIN,MAX), Null)` while `should`
+  is `Iterator(Integer(MIN,MAX), Null)` from line 779 — these SHOULD match via `==`.
+  Verify that the `is_type == should` path works; if not, add an explicit
+  `if matches!(is_type, Type::Iterator(_, it) if **it == Type::Null)` guard.
+  *Test:* `for n in gen() { total += n; }` compiles without errors.
+  **Effort:** Small.
+
+  **CO1.5b — For-loop advance via `OpCoroutineNext`** (`src/parser/collections.rs`, `src/state/codegen.rs`):
+  The for-loop advance step (`iter_next`) needs to emit `OpCoroutineNext(value_size)`
+  and check for null to terminate.  For collection iterators, `OpStep` + `OpNext` do
+  this.  For coroutines, the advance is `next(gen)` (push DbRef, OpCoroutineNext) and
+  the null check is a comparison against the type's null sentinel.
+  **Design:** in `iterator()`, when the is_type is a coroutine iterator, emit:
+  - `create_iter`: store the gen DbRef in a variable (or leave it as the expression).
+  - `iter_next`: `Value::Call(OpCoroutineNext, [Var(gen)])` — but must use the fixed
+    stack-tracking pattern from CO1.6a (not through the operator path).
+  - Null termination: compare the yielded value against `i32::MIN` (integer null) via
+    `OpGotoFalse` on a null check.
+  **Depends on:** CO1.6a (correct `next()` stack tracking).
+  *Test:* `for n in gen() { total += n; }` runs correctly, `total == sum of yields`.
+  **Effort:** Medium.
+
+  **CO1.5c — `e#remove` rejection on generator iterators** (`src/parser/collections.rs`):
+  Per COROUTINE.md § SC-CO-11, `e#remove` inside a `for item in gen` loop must be a
+  compile-time error.  Detect when the loop's collection is a coroutine iterator and
+  emit: `"cannot remove from a generator iterator"`.
+  *Test:* `for n in gen() { n#remove; }` produces the expected error.
+  **Effort:** Small.
 - **CO1.6** — `next()` / `exhausted()` stdlib.  `OpCoroutineExhausted` is implemented; `exhausted(gen)` and `next(gen)` are dispatched from `dispatch_call`.  Three remaining defects — split into sub-steps:
 
   **CO1.6a — Fix `next()` codegen stack tracking** (`src/parser/control.rs`, `src/state/codegen.rs`):

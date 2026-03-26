@@ -31,7 +31,9 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | CO1.3d | ↳ Text serialisation (`serialise_text_slots`)   | MH | ✓      | CO1.3b (done)| state/mod.rs      |
 | CO1.3e | ↳ Nested yield (stackful: yield inside helper)  | S  | ✓      | CO1.3c (done)| state/mod.rs      |
 | CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3c (done)| state/mod.rs      |
-| CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3c (done)| collections.rs    |
+| CO1.5a | ↳ `iterator()` bypass for coroutine types       | S  | ✓      | CO1.3c (done)| collections.rs    |
+| CO1.5b | ↳ For-loop advance via `OpCoroutineNext`        | M  | ✓      | CO1.5a, CO1.6a| collections.rs  |
+| CO1.5c | ↳ `e#remove` rejection on generator iterators   | S  | ✓      | CO1.5a     | collections.rs    |
 
 ---
 
