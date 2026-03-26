@@ -129,25 +129,33 @@ impl Parser {
             .find(|(n, _)| n == name)
             .cloned()
         {
-            // A5.3: variable exists in the enclosing scope — will be captured
-            // via the closure record synthesized in A5.2.  Emit error until A5.4
-            // (closure body reads) is implemented — codegen cannot yet redirect
-            // captured reads to the closure record.
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "lambda captures variable '{name}' — closure body reads not yet implemented (A5.4)"
-            );
             // A5.2: record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
                 self.captured_names.push((name.to_string(), ctype.clone()));
             }
-            // Create the variable in the lambda scope so parsing can continue
-            // without cascading errors.
-            let v_nr = self.create_var(name, &ctype);
-            self.var_usages(v_nr, true);
-            t = ctype;
-            *code = Value::Var(v_nr);
+            // A5.4: if we have a closure parameter (second pass), emit field read
+            // from the closure record.  Otherwise create a placeholder variable.
+            // A5.4: if we have a closure parameter (second pass), emit field read.
+            let closure_d_nr = if self.closure_param == u16::MAX || self.first_pass {
+                u32::MAX
+            } else {
+                self.data.def(self.context).closure_record
+            };
+            let fnr = if closure_d_nr == u32::MAX {
+                usize::MAX
+            } else {
+                self.data.attr(closure_d_nr, name)
+            };
+            if fnr == usize::MAX {
+                // First pass, no closure param, or field not found — placeholder variable.
+                let v_nr = self.create_var(name, &ctype);
+                self.var_usages(v_nr, true);
+                t = ctype;
+                *code = Value::Var(v_nr);
+            } else {
+                *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
+                t = self.data.attr_type(closure_d_nr, fnr);
+            }
         } else if self.data.def_nr(name) != u32::MAX {
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {

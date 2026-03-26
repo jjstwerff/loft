@@ -112,6 +112,9 @@ pub struct Parser {
     /// A5.2: accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
+    /// A5.4: variable number of the __closure parameter inside a lambda body (second pass).
+    /// `u16::MAX` when not inside a capturing lambda.
+    pub(crate) closure_param: u16,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
     /// Decremented after each init(expr) is parsed.
     pub(crate) init_field_tracking: bool,
@@ -263,6 +266,7 @@ impl Parser {
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             captured_names: Vec::new(),
+            closure_param: u16::MAX,
             init_field_tracking: false,
             init_field_deps: Vec::new(),
         }

@@ -385,7 +385,20 @@ impl Parser {
             }
         }
 
+        // A5.4: on second pass, if closure record exists, add hidden __closure param.
+        let outer_closure_param = self.closure_param;
+        if !self.first_pass {
+            let closure_rec = self.data.def(d_nr).closure_record;
+            if closure_rec != u32::MAX {
+                let closure_tp = Type::Reference(closure_rec, vec![]);
+                let v_nr = self.create_var("__closure", &closure_tp);
+                self.vars.become_argument(v_nr);
+                self.closure_param = v_nr;
+            }
+        }
+
         self.parse_code();
+        self.closure_param = outer_closure_param;
         self.data.op_code(d_nr);
         self.data.definitions[d_nr as usize]
             .variables
