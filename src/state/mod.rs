@@ -107,8 +107,9 @@ pub struct State {
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
     /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
-    /// Used by `OpStackTrace` to resolve function names.
     pub(crate) data_ptr: *const crate::data::Data,
+    /// Fix #87: cached library index for `n_stack_trace`.  `u16::MAX` = not yet resolved.
+    pub(crate) stack_trace_lib_nr: u16,
     /// Coroutine frame storage (CO1.1).  Index 0 is always `None` (null sentinel).
     pub coroutines: Vec<Option<Box<CoroutineFrame>>>,
     /// Indices of currently-running coroutines in `coroutines`.
@@ -154,6 +155,7 @@ impl State {
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
+            stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None], // index 0 = null sentinel
             active_coroutines: Vec::new(),
             generate_depth: 0,
@@ -202,9 +204,17 @@ impl State {
 
     pub fn static_call(&mut self) {
         let call = *self.code::<u16>();
-        // TR1.3: snapshot call_stack into Stores so native functions can build
-        // a stack trace without direct State access.
-        if !self.call_stack.is_empty() && !self.data_ptr.is_null() {
+        // Fix #87: resolve n_stack_trace index lazily, then only snapshot for that call.
+        if self.stack_trace_lib_nr == u16::MAX
+            && let Some(&nr) = self.library_names.get("n_stack_trace")
+        {
+            self.stack_trace_lib_nr = nr;
+        }
+        // TR1.3: snapshot call_stack only when n_stack_trace is being called.
+        if call == self.stack_trace_lib_nr
+            && !self.call_stack.is_empty()
+            && !self.data_ptr.is_null()
+        {
             // SAFETY: data_ptr is set in execute_argv and valid during execution.
             let data = unsafe { &*self.data_ptr };
             self.database.call_stack_snapshot = self
@@ -638,6 +648,7 @@ impl State {
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
+            stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None],
             active_coroutines: Vec::new(),
             generate_depth: 0,
