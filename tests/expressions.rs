@@ -105,6 +105,23 @@ fn stack_trace_function_names() {
     .result(Value::str("caller"));
 }
 
+// ── TR1.4 — Call-site line numbers ───────────────────────────────────────────
+
+#[test]
+#[ignore = "TR1.4: call-site line not yet stored in CallFrame"]
+fn call_frame_has_line() {
+    // Verify that stack_trace() reports a non-zero line for a known call site.
+    // Blocked by #85, but the diagnostic is correct.
+    code!(
+        "fn check_line(n: integer) -> integer {
+            frames = stack_trace();
+            if len(frames) > 0 { frames[0].line + n - n } else { -1 + n - n }
+         }"
+    )
+    .expr("check_line(0)")
+    .result(Value::Int(4)); // called from expr wrapper at line ~4
+}
+
 // ── TR1.2 — StackFrame + ArgValue type declarations ─────────────────────────
 // Verify the types from default/04_stacktrace.loft can be constructed and used.
 
