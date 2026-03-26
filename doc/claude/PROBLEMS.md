@@ -32,6 +32,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 80 | Struct-enums in default library have broken field positions | Medium | Define in user code instead of `default/*.loft` |
 | 81 | Struct-enum variants with same-named fields read wrong offset | Medium | Use distinct field names per variant |
+| 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
+| 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 
 ---
 
@@ -257,6 +259,77 @@ the second arm reused the first arm's variable and type.  The value read as garb
 the correct type.  The user-visible field name is temporarily aliased to the per-arm
 variable so the arm body resolves it correctly; the alias is restored after each arm.
 Added `set_name`/`remove_name` methods to `Function` for name map manipulation.
+
+---
+
+### 85. Struct-enum local variable leaks stack space (debug assertion)
+
+**Symptom:** Constructing a struct-enum variant as a local variable and returning a
+scalar from the function triggers a debug-mode assertion in `fn_return`:
+
+```
+assertion `left == right` failed: Stack not correctly cleared: 8 != 4
+```
+
+**Reproducer:**
+```loft
+fn test() -> integer {
+    v = IntVal { n: 42 };
+    match v { IntVal { n } => n, _ => 0 }
+}
+```
+
+The struct-enum reference (12-byte `DbRef`) is allocated on the stack but not freed
+before return.  The assertion is gated by `cfg!(debug_assertions)` so release builds
+are unaffected, but the leaked stack space is real in both modes.
+
+**Workaround:** Pass the enum value as a function parameter instead of storing it in a
+local:
+```loft
+fn check(v: ArgValue) -> integer { match v { IntVal { n } => n, _ => 0 } }
+check(IntVal { n: 42 })
+```
+
+**Root cause:** Scope analysis (`scopes.rs`) does not emit `OpFreeRef` for struct-enum
+locals whose lifetime ends at the function return.  The `text_positions` cleanup in
+`fn_return` handles orphaned text values but not reference-type values.
+
+**Fix path:** Extend scope exit in `scopes.rs::free_vars()` to emit `OpFreeRef` for
+struct-enum locals, or ensure the codegen marks such variables with a correct live
+interval so the existing cleanup path handles them.
+
+**Discovered:** 2026-03-26, during TR1.2 testing.
+
+---
+
+### 86. Lambda capture produced misleading codegen self-reference error
+
+**Symptom:** A lambda that referenced an outer-scope variable crashed in codegen with:
+
+```
+[generate_set] first-assignment of 'count' (var_nr=1) in 'n___lambda_0'
+contains a Var(1) self-reference — storage not yet allocated
+```
+
+**Reproducer:**
+```loft
+fn test() {
+    count = 0;
+    f = fn(x: integer) { count += x; };
+    f(1);
+}
+```
+
+The parser created a new local `count` inside the lambda, but `count += x` desugars to
+`count = count + x` — the RHS reads the same uninitialized variable, triggering the
+self-reference guard in `generate_set`.
+
+**Status:** *(mitigated by A5.1)* — The parser now detects the outer-scope reference
+and emits a clear error ("lambda captures variable 'count' — closure capture is not yet
+supported") before codegen runs.  The underlying issue (no actual closure capture) is
+tracked as A5.2–A5.5.
+
+**Discovered:** 2026-03-26, during A5.1 testing.
 
 ---
 
