@@ -55,3 +55,42 @@ fn if_typing() {
 }
 
 // N6 generated_code_compiles and native_test_suite moved to tests/native.rs
+
+// ── TR1.1 — Shadow call-frame vector ────────────────────────────────────────
+// Verify that function calls still work after the OpCall bytecode format change
+// (d_nr + args_size operands added for the shadow call-frame vector).
+
+#[test]
+#[ignore = "TR1.1: shadow call-frame vector not yet implemented"]
+fn call_stack_nested_calls() {
+    code!(
+        "fn add(a: integer, b: integer) -> integer { a + b }
+         fn double(x: integer) -> integer { add(x, x) }
+         fn quad(x: integer) -> integer { double(double(x)) }"
+    )
+    .expr("quad(3)")
+    .result(Value::Int(12));
+}
+
+#[test]
+#[ignore = "TR1.1: shadow call-frame vector not yet implemented"]
+fn call_stack_fn_ref() {
+    code!(
+        "fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+         fn inc(n: integer) -> integer { n + 1 }"
+    )
+    .expr("apply(fn inc, 41)")
+    .result(Value::Int(42));
+}
+
+#[test]
+#[ignore = "TR1.1: shadow call-frame vector not yet implemented"]
+fn call_stack_recursive() {
+    code!(
+        "fn fib(n: integer) -> integer {
+            if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+         }"
+    )
+    .expr("fib(10)")
+    .result(Value::Int(55));
+}
