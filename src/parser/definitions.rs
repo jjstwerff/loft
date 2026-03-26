@@ -1019,14 +1019,19 @@ impl Parser {
         let mut check_message = Value::Null;
         let mut nullable = true;
         let mut is_computed = false;
+        let mut is_init = false;
         loop {
             if self.lexer.has_keyword("not") {
                 // This field cannot be null, this allows for 256 values in a byte
                 self.lexer.token("null");
                 nullable = false;
             }
-            is_computed |=
-                self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
+            {
+                let (comp, init) =
+                    self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
+                is_computed |= comp;
+                is_init |= init;
+            }
             if self.lexer.has_token("assert") {
                 // assert(condition) or assert(condition, message) on struct fields.
                 self.lexer.token("(");
@@ -1077,6 +1082,9 @@ impl Parser {
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
             }
+            if is_init {
+                self.data.definitions[d_nr as usize].attributes[a].init = true;
+            }
             if check != Value::Null {
                 self.data.definitions[d_nr as usize].attributes[a].check = check;
                 self.data.definitions[d_nr as usize].attributes[a].check_message = check_message;
@@ -1085,6 +1093,9 @@ impl Parser {
             let a = self.data.attr(d_nr, a_name);
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
+            }
+            if is_init {
+                self.data.definitions[d_nr as usize].attributes[a].init = true;
             }
             if value != Value::Null {
                 self.data.set_attr_value(d_nr, a, value);
@@ -1096,7 +1107,9 @@ impl Parser {
         }
     }
 
-    // <field_default> ::= 'virtual' <value-expr> | 'default' '(' <value-expr> ')'
+    // <field_default> ::= 'virtual' <value-expr> | 'init' '(' <value-expr> ')'
+    //                   | 'default' '(' <value-expr> ')'
+    // Returns (is_computed, is_init).
     pub(crate) fn parse_field_default(
         &mut self,
         value: &mut Value,
@@ -1104,14 +1117,25 @@ impl Parser {
         _d_nr: u32,
         _a_name: &String,
         defined: &mut bool,
-    ) -> bool {
+    ) -> (bool, bool) {
         let mut is_computed = false;
+        let mut is_init = false;
         if self.lexer.has_keyword("computed") || self.lexer.has_keyword("virtual") {
             is_computed = true;
             // Computed field: calculate on every access, no store space.
-            // The expression is stored directly in the attribute value and inlined
-            // at every access site.  Var(0) references the record (replaced by
-            // replace_record_ref at the access site).
+            self.lexer.token("(");
+            let tp = self.expression(value);
+            if a_type.is_unknown() {
+                *a_type = tp;
+                *defined = true;
+            } else {
+                self.convert(value, &tp, a_type);
+            }
+            self.lexer.token(")");
+        }
+        if self.lexer.has_keyword("init") {
+            is_init = true;
+            // L7: init(expr) — stored at creation, writable after. $ allowed.
             self.lexer.token("(");
             let tp = self.expression(value);
             if a_type.is_unknown() {
@@ -1128,11 +1152,10 @@ impl Parser {
                 Level::Error,
                 "default(expr) is removed; use 'computed(expr)' for calculated fields or '= expr' for stored defaults"
             );
-            // Consume the expression to recover parsing.
             self.lexer.token("(");
             self.expression(value);
             self.lexer.token(")");
         }
-        is_computed
+        (is_computed, is_init)
     }
 }

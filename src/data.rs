@@ -474,6 +474,8 @@ pub struct Attribute {
     pub mutable: bool,
     /// Only return the default on this field.
     pub constant: bool,
+    /// L7: init(expr) field — stored at creation, writable after. `$` allowed.
+    pub init: bool,
     /// This attribute is allowed to be null in the substructure.
     pub nullable: bool,
     /// This attribute is holding the primary reference of its records.
@@ -793,6 +795,7 @@ impl Data {
             typedef,
             mutable: true,
             constant: false,
+            init: false,
             nullable: true,
             primary: false,
             value: Value::Null,
