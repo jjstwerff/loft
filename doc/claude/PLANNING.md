@@ -471,12 +471,10 @@ the recompile overhead that caching was designed to address)
   must correctly save and restore the helper's call frame.
   **Effort:** Small (verification + fix, not greenfield).
 
-- **CO1.4** — `yield from`: sub-generator delegation.
-- **CO1.5** — *(completed 0.8.3)* `for item in generator` integration.  Detects generator
-  calls in `iterator()`, creates `__gen` variable, emits `OpCoroutineNext` advance +
-  null-check termination.  All 6 coroutine tests pass.
-
-  **CO1.5c** — `e#remove` rejection on generator iterators — pending.
+- **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
+  advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
+- **CO1.5** — *(completed 0.8.3)* `for item in generator` integration + `e#remove` rejection.
+- **CO1.3e** — *(completed 0.8.3)* Nested yield verified — helper call between yields.
 
 - **CO1.6** — *(completed 0.8.3)* `next()` / `exhausted()` stdlib, stack tracking fix,
   null sentinel on exhaustion.  `OpCoroutineNext` and `OpCoroutineExhausted` bypass the

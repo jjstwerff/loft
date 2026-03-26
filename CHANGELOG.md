@@ -131,6 +131,16 @@ All notable changes to the loft language and interpreter.
   variable, and uses `OpCoroutineNext` as the advance step with null-check
   termination.  All 6 coroutine tests pass.
 
+- **`e#remove` rejection** (CO1.5c) — `#remove` on a generator for-loop variable
+  produces a compile error (existing guard; coroutine loops never call `set_loop`).
+
+- **Nested yield verified** (CO1.3e) — Generator calling a helper function between
+  yields correctly saves/restores call frames across yield/resume.
+
+- **`yield from` parsing** (CO1.4) — `yield from sub_gen` desugars to a loop that
+  advances the sub-generator and forwards each value via `yield`.  Test `#[ignore]`
+  pending slot-assignment fix.
+
 ### Bug fixes
 
 - **Fix #87** — `static_call` no longer snapshots the call stack on every native
