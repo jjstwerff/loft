@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Generics
+// @TITLE: Generic functions
+// A generic function uses a type variable to work with any type.
+// Write the function once; the compiler creates a specialised copy for each
+// concrete type you call it with.
+// ## Declaring a generic function
+// Place a single type variable in angle brackets after the function name.
+// The type variable must appear in the first parameter (directly or as a
+// container element like vector<T>).
+fn identity<T>(x: T) -> T { x }
+// ## Calling a generic function
+// No special syntax at the call site — the compiler infers T from the first
+// argument's type and creates a specialised copy automatically.
+fn test_identity() {
+  assert(identity(42) == 42);
+  assert(identity(3.14) == 3.14);
+  assert(identity("hello") == "hello");
+  assert(identity(true) == true);
+}
+// ## Multiple parameters of the same type
+// Additional parameters can also use T.  They all share the same concrete type.
+fn pick_second<T>(a: T, b: T) -> T {
+  _x = a;
+  b
+}
+fn test_pick_second() {
+  assert(pick_second(1, 99) == 99);
+  assert(pick_second("a", "b") == "b");
+}
+// ## Allowed operations on T
+// Inside a generic function you may only use operations that do not depend
+// on what T actually is: assign, return, and store in variables.
+// Type-specific operations like arithmetic, field access, and method calls
+// are compile-time errors.
+// ## Disallowed operations
+// The compiler rejects operations that require knowing what T is.
+// For example, `x + y` on two T values gives:
+//   "generic type T: operator '+' requires a concrete type"
+// Similarly, `x.field` gives:
+//   "generic type T: field access requires a concrete type"
+fn main() {
+  test_identity();
+  test_pick_second();
+}
