@@ -34,7 +34,9 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
                 || inline_ref_set_in(then_val, r, depth + 1)
                 || inline_ref_set_in(else_val, r, depth + 1)
         }
-        Value::Return(inner) | Value::Drop(inner) => inline_ref_set_in(inner, r, depth + 1),
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+            inline_ref_set_in(inner, r, depth + 1)
+        }
         Value::Iter(_, a, b, c) => {
             inline_ref_set_in(a, r, depth + 1)
                 || inline_ref_set_in(b, r, depth + 1)
@@ -176,6 +178,20 @@ impl Parser {
             Type::Void
         } else if self.lexer.has_token("return") {
             self.parse_return(val);
+            Type::Void
+        } else if self.lexer.has_token("yield") {
+            // CO1.3c: yield expr — only valid inside generator functions.
+            let r_type = self.data.def(self.context).returned.clone();
+            if !matches!(r_type, Type::Iterator(_, _)) && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "yield is only allowed inside generator functions (return type must be iterator<T>)"
+                );
+            }
+            let mut v = Value::Null;
+            self.expression(&mut v);
+            *val = Value::Yield(Box::new(v));
             Type::Void
         } else if self.lexer.peek_token("{") {
             self.parse_block("block", val, &Type::Void)

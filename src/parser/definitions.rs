@@ -881,17 +881,24 @@ impl Parser {
                         Type::Reference(sub_nr, Vec::new())
                     }
                     "iterator" => {
-                        self.lexer.token(",");
+                        // CO1.3c: comma and second type are optional for generators.
+                        // iterator<T> = generator yield type; iterator<T, I> = collection iterator.
                         let mut it_tp = Type::Null;
-                        if let Some(iter) = self.lexer.has_identifier() {
-                            if let Some(it) = self.parse_type(on_d, &iter, false) {
-                                self.data.set_referenced(sub_nr, on_d, Value::Null);
-                                it_tp = it;
+                        if self.lexer.has_token(",") {
+                            if let Some(iter) = self.lexer.has_identifier() {
+                                if let Some(it) = self.parse_type(on_d, &iter, false) {
+                                    self.data.set_referenced(sub_nr, on_d, Value::Null);
+                                    it_tp = it;
+                                } else {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "Expect an iterator type"
+                                    );
+                                }
                             } else {
                                 diagnostic!(self.lexer, Level::Error, "Expect an iterator type");
                             }
-                        } else {
-                            diagnostic!(self.lexer, Level::Error, "Expect an iterator type");
                         }
                         self.lexer.token(">");
                         Type::Iterator(Box::new(tp), Box::new(it_tp))

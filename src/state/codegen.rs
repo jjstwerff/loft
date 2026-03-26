@@ -249,6 +249,14 @@ impl State {
                 self.code_add(var_pos);
                 self.insert_types(elem_tp.clone(), code_pos, stack)
             }
+            Value::Yield(inner) => {
+                // CO1.3c: emit the yielded expression, then OpCoroutineYield.
+                let t = self.generate(inner, stack, false);
+                let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
+                stack.add_op("OpCoroutineYield", self);
+                self.code_add(value_size);
+                Type::Void
+            }
         }
     }
 
@@ -341,15 +349,27 @@ impl State {
     pub(super) fn gen_return(&mut self, v: &Value, stack: &mut Stack) -> Type {
         self.generate(v, stack, false);
         let return_type = &stack.data.def(stack.def_nr).returned;
-        if return_type != &Type::Void {
-            let ret_nr = stack.data.type_def_nr(return_type);
-            let known = stack.data.def(ret_nr).known_type;
-            self.types.insert(self.code_pos, known);
+        // CO1.3c: generator functions use OpCoroutineReturn instead of OpReturn.
+        if matches!(return_type, Type::Iterator(_, _)) {
+            // For generators, `return` means exhaust — push null of the yield type.
+            let yield_size = if let Type::Iterator(inner, _) = return_type {
+                size(inner, &Context::Argument)
+            } else {
+                0
+            };
+            stack.add_op("OpCoroutineReturn", self);
+            self.code_add(yield_size);
+        } else {
+            if return_type != &Type::Void {
+                let ret_nr = stack.data.type_def_nr(return_type);
+                let known = stack.data.def(ret_nr).known_type;
+                self.types.insert(self.code_pos, known);
+            }
+            stack.add_op("OpReturn", self);
+            self.code_add(self.arguments);
+            self.code_add(size(return_type, &Context::Argument) as u8);
+            self.code_add(stack.position);
         }
-        stack.add_op("OpReturn", self);
-        self.code_add(self.arguments);
-        self.code_add(size(return_type, &Context::Argument) as u8);
-        self.code_add(stack.position);
         Type::Void
     }
 
@@ -804,7 +824,13 @@ impl State {
             stack.data.def(op).returned.clone()
         } else {
             self.calls.entry(op).or_default().push(self.code_pos);
-            stack.add_op("OpCall", self);
+            // CO1.3c: emit OpCoroutineCreate for generator function calls.
+            let is_generator = matches!(stack.data.def(op).returned, Type::Iterator(_, _));
+            if is_generator {
+                stack.add_op("OpCoroutineCreate", self);
+            } else {
+                stack.add_op("OpCall", self);
+            }
             self.code_add(op); // d_nr: u32
             let args_size: u16 = stack
                 .data
@@ -1105,12 +1131,23 @@ impl State {
 
     pub(super) fn add_return(&mut self, stack: &mut Stack, code: u32) {
         let return_type = &stack.data.def(stack.def_nr).returned;
-        stack.add_op("OpReturn", self);
-        self.code_add(self.arguments);
-        self.code_add(size(return_type, &Context::Argument) as u8);
-        self.code_add(stack.position);
-        if return_type != &Type::Void {
-            self.types.insert(code, self.known_type(return_type, stack));
+        // CO1.3c: generator functions use OpCoroutineReturn.
+        if matches!(return_type, Type::Iterator(_, _)) {
+            let yield_size = if let Type::Iterator(inner, _) = return_type {
+                size(inner, &Context::Argument)
+            } else {
+                0
+            };
+            stack.add_op("OpCoroutineReturn", self);
+            self.code_add(yield_size);
+        } else {
+            stack.add_op("OpReturn", self);
+            self.code_add(self.arguments);
+            self.code_add(size(return_type, &Context::Argument) as u8);
+            self.code_add(stack.position);
+            if return_type != &Type::Void {
+                self.types.insert(code, self.known_type(return_type, stack));
+            }
         }
     }
 
@@ -1472,6 +1509,10 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         }
         Value::TupleGet(var, idx) => {
             eprint!("{}.{idx}", vars.name(*var));
+        }
+        Value::Yield(inner) => {
+            eprint!("yield ");
+            print_ir(inner, data, vars, depth);
         }
     }
 }

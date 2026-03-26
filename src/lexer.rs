@@ -136,6 +136,7 @@ static KEYWORDS: &[&str] = &[
     "continue",
     "break",
     "return",
+    "yield",
     "true",
     "false",
     "null",
