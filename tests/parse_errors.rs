@@ -685,6 +685,17 @@ fn closure_record_multi_capture() {
     .warning("closure record '__closure_0' created with 2 fields: a(integer), b(float) at closure_record_multi_capture:4:56");
 }
 
+// ── CO1.5c — e#remove rejection on generator iterators ──────────────────────
+
+#[test]
+fn generator_remove_rejected() {
+    code!(
+        "fn gen() -> iterator<integer> { yield 1; yield 2; }
+         fn test() { for n in gen() { n#remove; } }"
+    )
+    .error("'n#remove' is only valid on a loop iteration variable (e.g. 'for n in collection { n#remove }') at generator_remove_rejected:2:48");
+}
+
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
 
 /// #91: two init fields referencing each other via $ should produce an error.

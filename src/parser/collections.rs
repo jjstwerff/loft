@@ -438,8 +438,8 @@ use #count instead"
         } else if self.lexer.has_keyword("first") {
             self.iter_op_count_or_first(code, name, t, true);
         } else if self.lexer.has_keyword("remove") {
-            // For sorted/index/spacial loops the packed i64 state is in {name}#iter_state;
-            // for other loops (vector) the state is the plain i32 {name}#index.
+            // CO1.5c: #remove on generator iterators is already rejected by the
+            // loop_value == Null check below — coroutine for-loops never call set_loop.
             if !self.first_pass && *self.vars.loop_value(index_var) == Value::Null {
                 diagnostic!(
                     self.lexer,
