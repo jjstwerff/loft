@@ -21,23 +21,18 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
-| T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1 (done)| parser/             |
-| T1.3   | ↳ Scope analysis (intervals, lifetimes)         | S  | ✓      | T1.2       | scopes.rs           |
-| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)     | M  | ✓      | T1.3       | state/codegen.rs    |
+| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)     | M  | ✓      | T1.3 (done)| state/codegen.rs    |
 | T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4       | compiler            |
 | T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
 | T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
 | A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
-| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2 (done)| codegen.rs          |
-| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
+| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3 (done)| codegen.rs, fill.rs |
 | A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
-| TR1    | Stack trace introspection                       | M  | ✓      |            | STACKTRACE.md       |
 | CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1 (done) | COROUTINE.md        |
-| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`       | H  | ✓      | CO1.1 (done)| state/mod.rs       |
-| CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2      | state/mod.rs        |
+| CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2 (done)| state/mod.rs       |
 | CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |
 | CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3      | collections.rs      |
-| CO1.6  | ↳ `next()` / `exhausted()` stdlib               | S  | ✓      | CO1.2      | native.rs           |
+| CO1.6  | ↳ `next()` / `exhausted()` stdlib               | S  | ✓      | CO1.2 (done)| native.rs          |
 
 ---
 

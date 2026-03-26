@@ -72,6 +72,21 @@ All notable changes to the loft language and interpreter.
   enum.  Helper functions `element_size`, `element_offsets`, and `owned_elements`
   provide reusable layout calculations for tuples and closure records.
 
+- **Tuple parser** (T1.2) — Tuple type notation `(T1, T2)` is recognized in all type
+  positions.  Tuple literals `(expr, expr)`, element access `t.0`, and LHS
+  destructuring `(a, b) = expr` are parsed.  `Value::Tuple` IR variant added.
+
+- **Tuple scope analysis** (T1.3) — Scope analysis recognizes `Type::Tuple` variables
+  and identifies owned elements for reverse-order cleanup on scope exit.
+
+- **Closure capture diagnostic** (A5.3) — The closure capture error message now
+  indicates that closure body reads (A5.4) are the remaining blocker.  The closure
+  record struct from A5.2 is still synthesized.
+
+- **Coroutine opcodes** (CO1.2) — `OpCoroutineCreate` and `OpCoroutineNext` opcodes
+  implemented.  Create copies arguments into a `CoroutineFrame` without entering the
+  body.  Next restores the frame's stack and resumes execution.
+
 ### Bug fixes
 
 - **Fix #87** — `static_call` no longer snapshots the call stack on every native

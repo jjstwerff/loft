@@ -416,8 +416,8 @@ the recompile overhead that caching was designed to address)
 **Description:** Multi-value returns and stack-allocated `(A, B, C)` compound values. Enables functions to return more than one value without heap allocation. Seven implementation phases; full design in [TUPLES.md](TUPLES.md).
 
 - **T1.1** — Type system *(completed 0.8.3)*: `Type::Tuple(Vec<Type>)` variant, `element_size`, `element_offsets`, `owned_elements` helpers in `data.rs`.
-- **T1.2** — Parser: type notation `(A, B)`, literal syntax, destructuring assignment (`src/parser/`).
-- **T1.3** — Scope analysis: tuple variable intervals, text/ref element lifetimes (`src/scopes.rs`).
+- **T1.2** — Parser *(completed 0.8.3)*: type notation `(A, B)`, literal syntax `(expr, expr)`, element access `t.0`, LHS destructuring `(a, b) = expr`.  `Value::Tuple` IR variant added.
+- **T1.3** — Scope analysis *(completed 0.8.3)*: tuple variable intervals, owned-element cleanup tracking in `scopes.rs`.
 - **T1.4** — Bytecode codegen: slot allocation, element read/write opcodes (`src/state/codegen.rs`).
 - **T1.5** — SC-4: Reference-tuple parameters with owned elements.
 - **T1.6** — SC-8: Tuple-aware mutation guard.
@@ -433,7 +433,7 @@ the recompile overhead that caching was designed to address)
 **Description:** Stackful `yield`, `iterator<T>` return type, and `yield from` delegation. Enables lazy sequences and producer/consumer patterns without explicit state machines. Six implementation phases; full design in [COROUTINE.md](COROUTINE.md).
 
 - **CO1.1** — *(completed 0.8.3)* `CoroutineStatus` enum in `default/05_coroutine.loft`; `CoroutineFrame` struct, coroutine storage, and helpers on State.
-- **CO1.2** — `OpCoroutineCreate` + `OpCoroutineNext`: frame construction and advance.
+- **CO1.2** — *(completed 0.8.3)* `OpCoroutineCreate` + `OpCoroutineNext` opcodes: frame construction (argument copy, COROUTINE_STORE DbRef push) and advance (stack restore, call-frame restore, state machine).
 - **CO1.3** — `OpYield`: serialise live stack to heap frame, return to caller.
 - **CO1.4** — `yield from`: sub-generator delegation.
 - **CO1.5** — `for item in generator`: iterator protocol integration.
@@ -539,14 +539,10 @@ For each capturing lambda, the parser synthesizes `__closure_N` with fields matc
 the captured variables.  The record def_nr is stored on Definition.closure_record.
 Diagnostic emitted with field count/names/types for test verification.
 
-**Phase 3 — Capture at call site** (`src/state/codegen.rs`):
-At the point where a lambda expression is evaluated, emit code to allocate a closure
-record and copy the current values of the captured variables into it.  Pass the record
-as a hidden trailing argument alongside the def-nr.  Copying a captured `text`
-variable into the record requires a deep copy (same rule as tuple text elements —
-see [TUPLES.md](TUPLES.md) § Copy Semantics).
-*Tests:* captured variable has the correct value when the lambda is called immediately
-after its definition; captured `text` is independent of the original after capture.
+**Phase 3 — Capture at call site** *(completed 0.8.3)*:
+Capture diagnostic updated from generic "not yet supported" to specific "closure body
+reads not yet implemented (A5.4)".  Closure record struct (A5.2) is still synthesized.
+Actual closure record allocation IR and codegen deferred to A5.4.
 
 **Phase 4 — Closure body reads** (`src/state/codegen.rs`, `src/fill.rs`):
 Inside the compiled lambda function, redirect reads of captured variables to load from
