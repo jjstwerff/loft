@@ -706,3 +706,14 @@ fn circular_init_error() {
         .error("circular init dependency: a -> b -> a at circular_init_error:5:3")
         .error("circular init dependency: b -> a -> b at circular_init_error:5:3");
 }
+
+// ── Fix #91 — Circular init detection ────────────────────────────────────────
+
+/// #91: two init fields referencing each other via $ should produce an error.
+#[test]
+#[ignore = "#91: circular-init detection not yet implemented"]
+fn circular_init_error() {
+    code!("struct Bad {\n  a: integer init($.b),\n  b: integer init($.a),\n}\nfn test() {}")
+        .error("circular init dependency: a -> b -> a at circular_init_error:5:3")
+        .error("circular init dependency: b -> a -> b at circular_init_error:5:3");
+}
