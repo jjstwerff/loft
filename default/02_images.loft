@@ -333,3 +333,7 @@ fn OpCoroutineCreate(d_nr: const i32, args_size: const u16, to: const i32);
 #rust"s.coroutine_create(@d_nr as u32, u32::from(@args_size), @to as u32);"
 fn OpCoroutineNext(value_size: const u16);
 #rust"s.coroutine_next(u32::from(@value_size));"
+
+// CO1.6: Coroutine stdlib opcodes
+fn OpCoroutineExhausted(gen: reference) -> boolean;
+#rust"s.coroutine_exhausted(&@gen)"

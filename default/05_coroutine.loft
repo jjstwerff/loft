@@ -12,3 +12,8 @@ pub enum CoroutineStatus {
   Running,
   Exhausted
 }
+
+/// CO1.6: Returns true if the coroutine has finished producing values.
+pub fn exhausted(gen: reference) -> boolean {
+  OpCoroutineExhausted(gen)
+}

@@ -392,6 +392,22 @@ impl State {
         }
     }
 
+    // CO1.6: check if a coroutine is exhausted.
+    #[must_use]
+    pub fn coroutine_exhausted(&self, gen_ref: &DbRef) -> bool {
+        if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
+            return true; // null iterator is exhausted
+        }
+        let idx = gen_ref.rec as usize;
+        if idx >= self.coroutines.len() {
+            return true;
+        }
+        match &self.coroutines[idx] {
+            Some(frame) => frame.status == CoroutineStatus::Exhausted,
+            None => true,
+        }
+    }
+
     /**
     Clear the stack of local variables, possibly return a value.
     * `value` - Size of the return value.
