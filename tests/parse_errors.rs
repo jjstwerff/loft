@@ -659,7 +659,6 @@ fn local_not_captured() {
 
 /// A5.2: closure record is synthesized with the correct captured variable.
 #[test]
-#[ignore = "A5.2: closure record layout not yet implemented"]
 fn closure_record_single_capture() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
@@ -670,7 +669,6 @@ fn closure_record_single_capture() {
 
 /// A5.2: multiple captures produce a record with multiple fields.
 #[test]
-#[ignore = "A5.2: closure record layout not yet implemented"]
 fn closure_record_multi_capture() {
     code!(
         "fn test() {\n  a = 1;\n  b = 2.0;\n  f = fn(x: integer) -> float { (a + x) as float + b };\n  assert(f(3) == 6.0);\n}"
