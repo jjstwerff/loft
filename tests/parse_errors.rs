@@ -653,3 +653,28 @@ fn local_not_captured() {
         "fn test() {\n  f = fn(x: integer) -> integer { y = x + 1; y };\n  assert(f(1) == 2);\n}"
     );
 }
+
+// ── A5.2 — Closure record layout ────────────────────────────────────────────
+
+/// A5.2: closure record is synthesized with the correct captured variable.
+#[test]
+#[ignore = "A5.2: closure record layout not yet implemented"]
+fn closure_record_single_capture() {
+    code!(
+        "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
+    )
+    .warning("closure record '__closure_0' created with 1 field: count(integer)")
+    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_single_capture:3:32");
+}
+
+/// A5.2: multiple captures produce a record with multiple fields.
+#[test]
+#[ignore = "A5.2: closure record layout not yet implemented"]
+fn closure_record_multi_capture() {
+    code!(
+        "fn test() {\n  a = 1;\n  b = 2.0;\n  f = fn(x: integer) -> float { (a + x) as float + b };\n  assert(f(3) == 6.0);\n}"
+    )
+    .warning("closure record '__closure_0' created with 2 fields: a(integer), b(float)")
+    .error("lambda captures variable 'a' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:52")
+    .error("lambda captures variable 'b' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:67");
+}
