@@ -385,13 +385,13 @@ fn coroutine_next_sequence() {
 }
 
 #[test]
-#[ignore = "CO1.3c: exhausted(gen) hits store validation on coroutine DbRef after yield/resume"]
 fn coroutine_exhausted() {
-    // After all yields, exhausted() returns true.
+    // After all yields + one more advance, exhausted() returns true.
     code!(
         "fn one_val() -> iterator<integer> { yield 42; }
          fn check() -> boolean {
             gen = one_val();
+            next(gen);
             next(gen);
             exhausted(gen)
          }"

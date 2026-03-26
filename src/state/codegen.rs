@@ -777,6 +777,40 @@ impl State {
             last = n as u16;
         }
         let name = stack.data.def(op).name.clone();
+        // CO1.6a: OpCoroutineNext/OpCoroutineExhausted take a gen DbRef from the
+        // stack at runtime, but their declarations have only const params.
+        // Bypass the operator path and manually handle the stack adjustment.
+        if name == "OpCoroutineNext" && parameters.len() >= 2 {
+            // CO1.6a: parameters[0]=gen expr, parameters[1]=Int(value_size).
+            self.generate(&parameters[0], stack, false); // push DbRef (+12)
+            let value_size = if let Value::Int(n) = &parameters[1] {
+                *n as u16
+            } else {
+                4 // fallback: integer
+            };
+            self.remember_stack(stack.position);
+            self.code_add(stack.data.def(op).op_code as u8);
+            self.code_add(value_size);
+            // Stack: -12 (DbRef consumed) + value_size (yielded value pushed).
+            stack.position -= super::size_ref() as u16;
+            stack.position += value_size;
+            // Return type is the yield type — inferred from value_size for now.
+            return match value_size {
+                1 => Type::Boolean,
+                8 => Type::Long,
+                _ => I32.clone(),
+            };
+        }
+        if name == "OpCoroutineExhausted" && !parameters.is_empty() {
+            // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
+            self.generate(&parameters[0], stack, false);
+            self.remember_stack(stack.position);
+            self.code_add(stack.data.def(op).op_code as u8);
+            // Stack: -12 (DbRef consumed) + 1 (bool pushed).
+            stack.position -= super::size_ref() as u16;
+            stack.position += 1;
+            return Type::Boolean;
+        }
         if stack.data.def(op).is_operator() {
             let before_stack = stack.position;
             self.remember_stack(stack.position);

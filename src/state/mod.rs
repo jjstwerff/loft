@@ -344,7 +344,10 @@ impl State {
         let gen_ref = *self.get_stack::<DbRef>();
 
         if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
-            self.stack_pos += value_size;
+            // CO1.6c: zero-fill so the consumer reads a proper null sentinel.
+            for _ in 0..value_size {
+                self.put_stack(0u8);
+            }
             return;
         }
         let idx = gen_ref.rec as usize;
@@ -352,7 +355,10 @@ impl State {
 
         match status {
             CoroutineStatus::Exhausted => {
-                self.stack_pos += value_size;
+                // CO1.6c: zero-fill for null return.
+                for _ in 0..value_size {
+                    self.put_stack(0u8);
+                }
             }
             CoroutineStatus::Running => {
                 panic!("re-entrant advance on coroutine {idx}");

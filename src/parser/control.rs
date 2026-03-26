@@ -1861,11 +1861,16 @@ impl Parser {
             "all" => return self.parse_all(val, list, types),
             "count_if" => return self.parse_count_if(val, list, types),
             "next" if types.len() == 1 => {
-                // CO1.3c: next(gen) — advance a coroutine iterator.
+                // CO1.6a: next(gen) — advance a coroutine iterator.
+                // Encode value_size as second parameter so codegen can emit it.
                 if let Type::Iterator(inner, _) = &types[0] {
                     let yield_tp = (**inner).clone();
+                    let value_size =
+                        crate::variables::size(&yield_tp, &crate::data::Context::Argument);
                     let op = self.data.def_nr("OpCoroutineNext");
-                    *val = Value::Call(op, list.to_vec());
+                    let mut args = list.to_vec();
+                    args.push(Value::Int(i32::from(value_size)));
+                    *val = Value::Call(op, args);
                     return yield_tp;
                 }
                 if self.first_pass {
