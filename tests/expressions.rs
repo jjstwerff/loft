@@ -108,7 +108,7 @@ fn stack_trace_function_names() {
 // ── TR1.4 — Call-site line numbers ───────────────────────────────────────────
 
 #[test]
-#[ignore = "TR1.4: call-site line not yet stored in CallFrame"]
+#[ignore = "TR1.4: blocked by Problem #85 — struct-enum/reference local stack cleanup"]
 fn call_frame_has_line() {
     // Verify that stack_trace() reports a non-zero line for a known call site.
     // Blocked by #85, but the diagnostic is correct.
