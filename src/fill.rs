@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 252] = &[
+pub const OPERATORS: &[fn(&mut State); 253] = &[
     goto,
     goto_word,
     goto_false,
@@ -260,6 +260,7 @@ pub const OPERATORS: &[fn(&mut State); 252] = &[
     coroutine_create,
     coroutine_next,
     coroutine_return,
+    coroutine_yield,
     coroutine_exhausted,
 ];
 
@@ -1919,6 +1920,11 @@ fn coroutine_next(s: &mut State) {
 fn coroutine_return(s: &mut State) {
     let v_value_size = *s.code::<u16>();
     s.coroutine_return(u32::from(v_value_size));
+}
+
+fn coroutine_yield(s: &mut State) {
+    let v_value_size = *s.code::<u16>();
+    s.coroutine_yield(u32::from(v_value_size));
 }
 
 fn coroutine_exhausted(s: &mut State) {

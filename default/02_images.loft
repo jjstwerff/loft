@@ -338,6 +338,10 @@ fn OpCoroutineNext(value_size: const u16);
 fn OpCoroutineReturn(value_size: const u16);
 #rust"s.coroutine_return(u32::from(@value_size));"
 
+// CO1.3b: Yield — suspend generator, return value to consumer
+fn OpCoroutineYield(value_size: const u16);
+#rust"s.coroutine_yield(u32::from(@value_size));"
+
 // CO1.6: Coroutine stdlib opcodes
 fn OpCoroutineExhausted(gen: reference) -> boolean;
 #rust"s.coroutine_exhausted(&@gen)"

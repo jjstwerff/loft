@@ -408,6 +408,71 @@ impl State {
         }
     }
 
+    /// CO1.3b: suspend a running coroutine — serialise stack, return yielded value.
+    /// # Panics
+    /// Panics if no coroutine is currently active.
+    pub fn coroutine_yield(&mut self, value_size: u32) {
+        let idx = *self
+            .active_coroutines
+            .last()
+            .expect("OpYield outside active coroutine");
+
+        // Compute regions.
+        let stack_top = self.stack_pos;
+        let frame = self.coroutine_frame_mut(idx);
+        let base = frame.stack_base;
+        let value_start = stack_top - value_size;
+        let locals_len = (value_start - base) as usize;
+
+        // Serialise locals (integer-only path — no text_owned handling yet).
+        let mut locals_bytes = vec![0u8; locals_len];
+        let store = self.database.store(&self.stack_cur);
+        let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, locals_bytes.as_mut_ptr(), locals_len);
+        }
+
+        // Copy yielded value bytes separately (for the slide step).
+        let vs = value_size as usize;
+        let mut value_bytes = vec![0u8; vs];
+        let val_src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + value_start);
+        unsafe {
+            std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
+        }
+
+        // Extract frame fields before mutable borrow conflicts.
+        let call_depth = self.coroutine_frame_mut(idx).call_depth;
+        let caller_return_pos = self.coroutine_frame_mut(idx).caller_return_pos;
+
+        // Save call frames above the base depth.
+        let saved_frames = self.call_stack[call_depth..].to_vec();
+        self.call_stack.truncate(call_depth);
+
+        let code_pos = self.code_pos;
+        {
+            let frame = self.coroutine_frame_mut(idx);
+            frame.stack_bytes = locals_bytes;
+            // text_owned stays empty — CO1.3d will handle text serialisation.
+            frame.call_frames = saved_frames;
+            frame.code_pos = code_pos;
+            frame.status = CoroutineStatus::Suspended;
+        }
+        self.active_coroutines.pop();
+
+        // Slide the yielded value to stack_base.
+        let dest = self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), dest, vs);
+        }
+        self.stack_pos = base + value_size;
+
+        // Return to consumer.
+        self.code_pos = caller_return_pos;
+    }
+
     /// CO1.3a: exhaust a running coroutine — cleanup and return null to consumer.
     /// # Panics
     /// Panics if no coroutine is currently active.
