@@ -176,6 +176,8 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     /// A rewritten type into append statements (mostly Text or structures)
     Rewritten(Box<Type>),
+    /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
+    Tuple(Vec<Type>),
 }
 
 impl Type {
@@ -439,6 +441,69 @@ impl Type {
         }
         res
     }
+}
+
+// ── T1.1 — Tuple element layout helpers ─────────────────────────────────────
+
+/// Stack width in bytes of a single element type.
+/// Uses the same sizing as `variables::size(tp, &Context::Argument)`.
+#[must_use]
+pub fn element_size(t: &Type) -> usize {
+    match t {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Integer(_, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
+        Type::Long | Type::Float => 8,
+        Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
+        Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _)
+        | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
+        Type::Tuple(elems) => {
+            element_offsets(elems).last().map_or(0, |&off| off)
+                + elems.last().map_or(0, element_size)
+        }
+        _ => 0,
+    }
+}
+
+/// Byte offset of each element in a tuple-like layout.
+/// Element *i* starts at `offsets[i]`; total size is `offsets[last] + element_size(last)`.
+#[must_use]
+pub fn element_offsets(types: &[Type]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(types.len());
+    let mut pos: usize = 0;
+    for t in types {
+        offsets.push(pos);
+        pos += element_size(t);
+    }
+    offsets
+}
+
+/// `(offset, index)` pairs for elements that need cleanup on scope exit
+/// (text, reference, vector, collection, struct-enum).
+#[must_use]
+pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
+    let offsets = element_offsets(types);
+    let mut result = Vec::new();
+    for (i, t) in types.iter().enumerate() {
+        match t {
+            Type::Text(_)
+            | Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                result.push((offsets[i], i));
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 impl Display for Type {
@@ -1436,6 +1501,10 @@ impl Data {
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
             Type::Rewritten(inner) => self.type_name_str(inner),
             Type::Spacial(d_nr, _, _) => format!("spacial<{}>", self.def(*d_nr).name),
+            Type::Tuple(elems) => {
+                let es: Vec<String> = elems.iter().map(|e| self.type_name_str(e)).collect();
+                format!("({})", es.join(", "))
+            }
         }
     }
 

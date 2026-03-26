@@ -1004,6 +1004,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         | Type::Sorted(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Spacial(_, _, _) => size_of::<DbRef>() as u16,
+        Type::Tuple(elems) => crate::data::element_size(&Type::Tuple(elems.clone())) as u16,
         _ => 0,
     }
 }

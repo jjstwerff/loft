@@ -56,6 +56,37 @@ fn if_typing() {
 
 // N6 generated_code_compiles and native_test_suite moved to tests/native.rs
 
+// ── T1.1 — Type::Tuple helpers ──────────────────────────────────────────────
+
+#[test]
+#[ignore = "T1.1: Type::Tuple not yet added to type system"]
+fn tuple_element_offsets() {
+    // element_offsets for [integer, text, float] should be [0, 4, 28]
+    // (integer=4, text=24 on 64-bit via Str struct, float=8)
+    use loft::data::{Type, element_offsets};
+    let types = [
+        Type::Integer(i32::MIN, i32::MAX as u32),
+        Type::Text(vec![]),
+        Type::Float,
+    ];
+    let offsets = element_offsets(&types);
+    assert_eq!(offsets, vec![0, 4, 28]);
+}
+
+#[test]
+#[ignore = "T1.1: Type::Tuple not yet added to type system"]
+fn tuple_owned_elements() {
+    // owned_elements for [integer, text, reference<T>] should return text and ref entries
+    use loft::data::{Type, owned_elements};
+    let types = [
+        Type::Integer(i32::MIN, i32::MAX as u32),
+        Type::Text(vec![]),
+        Type::Reference(0, vec![]),
+    ];
+    let owned = owned_elements(&types);
+    assert_eq!(owned.len(), 2);
+}
+
 // ── CO1.1 — CoroutineStatus enum ────────────────────────────────────────────
 // Verify the CoroutineStatus enum from default/05_coroutine.loft.
 
