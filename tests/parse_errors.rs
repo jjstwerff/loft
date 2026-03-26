@@ -638,7 +638,7 @@ fn capture_detected() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
-    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at capture_detected:3:24");
+    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at capture_detected:3:32");
 }
 
 /// A5.1: lambda that does NOT reference outer variables has no capture error.

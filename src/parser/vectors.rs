@@ -308,6 +308,9 @@ impl Parser {
         );
         let outer_loop = self.in_loop;
         self.in_loop = false;
+        // A5.1: save outer scope variable names/types for capture detection.
+        let outer_capture =
+            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
 
         self.lexer.token("(");
         let mut arguments = Vec::new();
@@ -365,6 +368,7 @@ impl Parser {
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
+        self.capture_context = outer_capture;
 
         self.data.def_used(d_nr);
         *code = Value::Int(d_nr as i32);
@@ -464,6 +468,9 @@ impl Parser {
         );
         let outer_loop = self.in_loop;
         self.in_loop = false;
+        // A5.1: save outer scope variable names/types for capture detection.
+        let outer_capture =
+            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
 
         self.context = if self.first_pass {
             self.data.add_fn(&mut self.lexer, &lambda_name, &arguments)
@@ -474,6 +481,7 @@ impl Parser {
             self.context = outer_context;
             self.vars = outer_vars;
             self.in_loop = outer_loop;
+            self.capture_context = outer_capture;
             return Type::Unknown(0);
         }
         let d_nr = self.context;
@@ -544,6 +552,7 @@ impl Parser {
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
+        self.capture_context = outer_capture;
 
         self.data.def_used(d_nr);
         *code = Value::Int(d_nr as i32);

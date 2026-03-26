@@ -105,6 +105,10 @@ pub struct Parser {
     /// A10: set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
     /// Checked by `parse_for` to take the unrolling path. Reset after use.
     pub(crate) fields_of: u32,
+    /// A5.1: outer-scope variable names and types, populated when parsing a lambda body.
+    /// When a variable is not found in the lambda's scope but exists here, it is a capture.
+    /// Empty when not inside a lambda.
+    pub(crate) capture_context: Vec<(String, Type)>,
 }
 
 // Operators ordered on their precedence
@@ -249,6 +253,7 @@ impl Parser {
             lambda_counter: 0,
             lambda_hint: Type::Unknown(0),
             fields_of: u32::MAX,
+            capture_context: Vec::new(),
         }
     }
 

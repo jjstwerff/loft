@@ -123,6 +123,25 @@ impl Parser {
                 self.var_usages(v_nr, true);
                 *code = Value::Var(v_nr);
             }
+        } else if let Some((_cname, ctype)) = self
+            .capture_context
+            .iter()
+            .find(|(n, _)| n == name)
+            .cloned()
+        {
+            // A5.1: variable exists in the enclosing scope but not in the lambda.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "lambda captures variable '{name}' from enclosing scope — \
+                 closure capture is not yet supported, pass it as a parameter"
+            );
+            // Create the variable in the lambda scope so parsing can continue
+            // without cascading errors.
+            let v_nr = self.create_var(name, &ctype);
+            self.var_usages(v_nr, true);
+            t = ctype;
+            *code = Value::Var(v_nr);
         } else if self.data.def_nr(name) != u32::MAX {
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {

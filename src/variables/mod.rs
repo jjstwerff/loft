@@ -611,6 +611,14 @@ impl Function {
         u16::MAX
     }
 
+    /// A5.1: Return all variable names and their types for capture analysis.
+    pub fn all_names_and_types(&self) -> Vec<(String, Type)> {
+        self.variables
+            .iter()
+            .map(|v| (v.name.clone(), v.type_def.clone()))
+            .collect()
+    }
+
     pub fn next_var(&self) -> u16 {
         self.variables.len() as u16
     }
