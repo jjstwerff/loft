@@ -80,25 +80,26 @@ fn coroutine_status_ordering() {
 // Verify that stack_trace() returns a vector of StackFrame.
 
 #[test]
-#[ignore = "TR1.3: stack_trace() opcode not yet implemented"]
+#[ignore = "TR1.3: blocked by Problem #85 — struct-enum/reference local stack cleanup"]
 fn stack_trace_returns_frames() {
+    // stack_trace() returns one frame per fn_call (entry function excluded).
     code!(
-        "fn inner() -> integer { len(stack_trace()) }
-         fn middle() -> integer { inner() }
-         fn test() -> integer { middle() }"
+        "fn inner(n: integer) -> integer { len(stack_trace()) + n - n }
+         fn outer(n: integer) -> integer { inner(n) }"
     )
-    .result(Value::Int(2)); // inner's call_stack has: test->middle (2 frames)
+    .expr("outer(0)")
+    .result(Value::Int(2)); // outer->inner (test is entry, not on call_stack)
 }
 
 #[test]
-#[ignore = "TR1.3: stack_trace() opcode not yet implemented"]
+#[ignore = "TR1.3: blocked by Problem #85 — struct-enum/reference local stack cleanup"]
 fn stack_trace_function_names() {
     code!(
-        "fn callee() -> text {
+        "fn get_caller_name() -> text {
             frames = stack_trace();
             if len(frames) > 0 { frames[len(frames) - 1].function } else { \"none\" }
          }
-         fn caller() -> text { callee() }"
+         fn caller() -> text { get_caller_name() }"
     )
     .expr("caller()")
     .result(Value::str("caller"));

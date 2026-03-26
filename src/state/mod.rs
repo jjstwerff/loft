@@ -199,8 +199,7 @@ impl State {
     pub fn static_call(&mut self) {
         let call = *self.code::<u16>();
         // TR1.3: snapshot call_stack into Stores so native functions can build
-        // a stack trace without direct State access.  Only populated when needed
-        // — the native function checks and consumes it.
+        // a stack trace without direct State access.
         if !self.call_stack.is_empty() && !self.data_ptr.is_null() {
             // SAFETY: data_ptr is set in execute_argv and valid during execution.
             let data = unsafe { &*self.data_ptr };
