@@ -540,6 +540,15 @@ impl State {
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
         self.stack_pos = 4;
+        // Fix #88: push a synthetic CallFrame for the entry function so it
+        // appears in stack_trace() output.
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 0,
+            line: 0,
+        });
         // If fn main declares a vector<text> parameter, push argv before the return address.
         let attrs = &data.def(d_nr).attributes;
         if attrs.len() == 1 && matches!(attrs[0].typedef, Type::Vector(_, _)) {
@@ -602,6 +611,8 @@ impl State {
             }
         }
 
+        // Fix #88: pop the synthetic entry-function frame.
+        self.call_stack.pop();
         self.database.parallel_ctx = None;
     }
 
