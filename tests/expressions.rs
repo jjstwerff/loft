@@ -61,7 +61,6 @@ fn if_typing() {
 // (d_nr + args_size operands added for the shadow call-frame vector).
 
 #[test]
-#[ignore = "TR1.1: shadow call-frame vector not yet implemented"]
 fn call_stack_nested_calls() {
     code!(
         "fn add(a: integer, b: integer) -> integer { a + b }
@@ -73,18 +72,16 @@ fn call_stack_nested_calls() {
 }
 
 #[test]
-#[ignore = "TR1.1: shadow call-frame vector not yet implemented"]
 fn call_stack_fn_ref() {
     code!(
         "fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
          fn inc(n: integer) -> integer { n + 1 }"
     )
-    .expr("apply(fn inc, 41)")
+    .expr("apply(inc, 41)")
     .result(Value::Int(42));
 }
 
 #[test]
-#[ignore = "TR1.1: shadow call-frame vector not yet implemented"]
 fn call_stack_recursive() {
     code!(
         "fn fib(n: integer) -> integer {
