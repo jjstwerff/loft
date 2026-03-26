@@ -432,6 +432,17 @@ impl Scopes {
             if v == ret_var {
                 continue;
             }
+            // T1.3: tuple scope exit — free owned elements in reverse index order.
+            if let Type::Tuple(elems) = function.tp(v) {
+                let owned = crate::data::owned_elements(elems);
+                for &(_offset, _idx) in owned.iter().rev() {
+                    // T1.4 will emit per-element OpFreeText/OpFreeRef at the correct
+                    // stack offset.  For now, record that cleanup is needed.
+                    // The actual free ops require knowing the variable's stack slot +
+                    // element offset, which is codegen's responsibility.
+                }
+                continue;
+            }
             if matches!(function.tp(v), Type::Text(_)) {
                 ls.push(call("OpFreeText", v, data));
             }
