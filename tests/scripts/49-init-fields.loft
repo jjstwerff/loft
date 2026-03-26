@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// L7: init(expr) stored field initialiser with $ reference.
+
+struct Metrics {
+    c: integer,
+    b: integer computed($.c),
+    a: integer init($.b * 5),
+}
+
+fn main() {
+  m = Metrics { c: 3 };
+  assert(m.a == 15, "init from computed: expected 15, got {m.a}");
+  assert(m.b == 3, "computed follows c");
+
+  // init fields are frozen at construction — not recomputed
+  m.c = 10;
+  assert(m.b == 10, "computed tracks c");
+  assert(m.a == 15, "init stays frozen");
+
+  // init fields are writable after construction
+  m.a = 99;
+  assert(m.a == 99, "init is writable");
+
+  println("L7: init fields ok");
+}
