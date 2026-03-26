@@ -20,10 +20,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| P5     | First-parameter generic functions (`fn name<T>(...)`)   | Medium    |             | Design 2026-03-25       |
-| P5.2   | ↳ Call-site instantiation + name mangling               | Medium    | P5.1 (done) | control.rs              |
-| P5.3   | ↳ Validation errors for disallowed uses of T            | Small     | P5.1 (done) | parser/ (second pass)   |
-| P5.4   | ↳ Tests + LOFT.md § Generic functions                   | Small     | P5.2, P5.3  | tests/docs/, LOFT.md    |
 | L7     | `init(expr)` stored field initialiser with `$` reference | Small–Med |             | Design 2026-03-25       |
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
 | T1.1   | ↳ Type system (`Type::Tuple`, offsets)          | M  | ✓      |            | data.rs, typedef.rs |
@@ -34,18 +30,15 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
 | T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
 | A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
-| A5.1   | ↳ Capture analysis (identify free variables)    | S  | ✓      |            | scopes.rs           |
-| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1       | data.rs, typedef.rs |
+| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1 (done)| data.rs, typedef.rs |
 | A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2       | codegen.rs          |
 | A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
 | A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
 | TR1    | Stack trace introspection                       | M  | ✓      |            | STACKTRACE.md       |
-| TR1.1  | ↳ Shadow call-frame vector                      | S  | ✓      |            | state/mod.rs        |
-| TR1.2  | ↳ `ArgValue` + `StackFrame` type declarations   | S  | ✓      | TR1.1      | 04_stacktrace.loft  |
-| TR1.3  | ↳ `stack_trace()` materialisation               | M  | ✓      | TR1.2      | state/mod.rs        |
+| TR1.3  | ↳ `stack_trace()` materialisation               | M  | ✓      | TR1.2 (done)| state/mod.rs       |
 | TR1.4  | ↳ Call-site line numbers in frames              | S  | ✓      | TR1.3      | state/codegen.rs    |
 | CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1        | COROUTINE.md        |
-| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`        | S  | ✓      | TR1.2      | typedef.rs          |
+| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`        | S  | ✓      | TR1.2 (done)| typedef.rs         |
 | CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`       | H  | ✓      | CO1.1      | state/mod.rs        |
 | CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2      | state/mod.rs        |
 | CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |

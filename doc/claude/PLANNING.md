@@ -48,7 +48,6 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
 - [P — Prototype Features](#p--prototype-features)
-  - [P5 — First-parameter generic functions](#p5--first-parameter-generic-functions) *(0.8.3)*
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
@@ -91,8 +90,7 @@ or type system; 0.8.2 correctness work is a prerequisite.
 **Lambda expressions (P1):** ✓ completed in 0.8.2.
 **Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
 
-**Generic functions (P5):**
-- **P5** — First-parameter generic functions: `fn name<T>(param: T, ...)` with demand-driven instantiation.
+**Generic functions (P5):** ✓ completed — all four phases (parse, instantiate, validate, test+docs).
 
 **Pattern extensions (L2):**
 - **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
@@ -524,121 +522,6 @@ the recompile overhead that caching was designed to address)
 
 ---
 
-### P5  First-parameter generic functions
-**Sources:** Design conversation 2026-03-25
-**Severity:** Medium — container helpers, identity-like functions, and pass-through
-wrappers must be written once per concrete element type today; any new numeric type
-(e.g. `u16`) immediately requires duplicating every such helper
-**Description:** A single type variable `<T>` bound to the first parameter lets the
-programmer write a function body once and have the compiler instantiate it for each
-concrete type it is called with.
-
-```loft
-fn identity<T>(x: T) -> T { x }
-fn first<T>(v: vector<T>) -> T { v[0] }
-fn wrap<T>(x: T) -> vector<T> { [x] }
-fn pair<T>(a: T, b: T) -> vector<T> { [a, b] }
-fn print_and_return<T>(x: T, label: text) -> T { println(label); x }
-```
-
-`T` may appear in the first parameter position, any additional parameter of the same
-type, and the return type.  It may also appear as the element type of a container
-(`vector<T>`, `hash<T[key]>`, etc.) in any parameter or return position.
-
-#### Allowed operations on T
-Only operations that are defined on the container, not on T itself, are permitted:
-
-| Allowed | Reason |
-|---|---|
-| Pass T through — assign, return, store in `vector<T>` | No type-specific code |
-| `v[i]` where `v: vector<T>` | Indexing dispatches on the container, not on T |
-| `v += [x]` where `v: vector<T>`, `x: T` | Append dispatches on the container |
-| `len(v)` where `v: vector<T>` | Structural operation on the container |
-| Concrete-typed parameters alongside T | No constraint on non-T params |
-
-#### Disallowed operations — compile-time errors
-
-| Situation | Error message |
-|---|---|
-| `x.field` where `x: T` | `generic type T: field access requires a concrete type — write a typed overload for each type that needs '{field}'` |
-| `x + y`, `x - y`, etc. where x or y is T | `generic type T: operator '{op}' requires a concrete type — operators are type-specific` |
-| `x.method()` where `x: T` | `generic type T: method call requires a concrete type — write a typed overload for each type that needs '{method}'` |
-| `T { field: val }` construction | `generic type T: struct construction requires a concrete type` |
-| `match x { ... }` where `x: T` | `generic type T: match requires a concrete type` |
-| `x as SomeType` cast where `x: T` | `generic type T: explicit cast requires a concrete type` |
-| Second type variable `<T, U>` | `only one type variable is supported; replace 'U' with a concrete type or write separate overloads` |
-| T only in non-first position | `type variable T must appear as the first parameter — move T to the first parameter position` |
-| Recursive generic call | `generic functions cannot call themselves recursively — instantiation is demand-driven` |
-| T used in first-pass before any call | *(not an error — templates are not compiled until first use)* |
-
-#### Implementation mechanics
-
-Instantiation reuses the existing `t_<LEN><Type>_name` naming scheme, so no changes
-to `find_fn`, bytecode compilation, or the runtime are required for instantiated
-functions.  A generic `fn identity<T>` called with `x: Point` produces a concrete
-definition stored as `t_5Point_identity`, indistinguishable from a hand-written
-`fn identity(self: Point) -> Point { self }`.
-
-The call-site lookup sequence in `parse_call` becomes:
-1. Look for an exact typed match as today (`t_<LEN><Type>_name` or `n_name`).
-2. If not found, look for `DefType::Generic` under `n_name`.
-3. If found and arg[0]'s type is concrete: clone the template IR, substitute
-   `Type::Unknown("T")` → concrete type, register the instantiated definition, emit
-   the call.
-4. If arg[0]'s type is still unknown at the call site: emit
-   `cannot infer type for generic parameter T — provide an explicit type annotation`.
-
-**Fix path:**
-
-**P5.1 — Parser: `<T>` syntax + template registration** *(completed 0.8.3)*:
-Implemented: `<T>` detection after `fn name`, `DefType::Generic` variant, T registered
-as a struct for type resolution, validation that T appears in first parameter
-(including container element positions like `vector<T>`).  Template bodies are parsed
-normally but skipped by byte_code and scope analysis.
-
-**P5.2 — Call-site instantiation** (`src/parser/control.rs`):
-In the not-found branch of `parse_call`, check whether a `DefType::Generic` exists
-with the same name.  If yes, resolve arg[0]'s type; if it is concrete, call a new
-`instantiate_generic(data, generic_def_nr, concrete_type)` function that:
-1. Clones the template's `Value` IR and attribute list.
-2. Replaces every `Type::Unknown("T")` with the concrete type.
-3. Adds a new `DefType::Function` definition under the mangled name.
-4. Calls `byte_code` on the new definition immediately so it is ready for execution.
-Returns the new definition's `d_nr` and proceeds with the call as normal.
-
-**P5.3 — Validation errors** (`src/parser/` — second pass of template body):
-While parsing the template body, represent T as `Type::Unknown(GENERIC_T_SENTINEL)`
-where `GENERIC_T_SENTINEL = u32::MAX - 1` — a value not used by any other
-`Type::Unknown` producer (forward references use 1..u32::MAX-2; the parallel-worker
-placeholder uses u32::MAX).  This avoids any change to the `Type` enum and leaves
-all existing exhaustive match arms unchanged.
-
-Guard `typedef.rs`'s forward-resolution loop so that it skips the sentinel value
-(~3 lines).  Then at each error emission site, add a sentinel check before the
-existing diagnostic:
-
-| Error site | File | Change |
-|---|---|---|
-| Field access on unknown | `fields.rs:13` | `if tp == SENTINEL` → specific field error |
-| Operator no match | `mod.rs` `call_op` | `if types[i] == SENTINEL` → specific operator error |
-| Unary operator | `operators.rs:185` | Thread `Type` to the error site; add sentinel check |
-| Method/function not found | `mod.rs:629` | Check arg[0] type before lookup failure error |
-| match / cast on unknown | `control.rs` | Add sentinel check at each arm |
-
-Total change: ~36 lines across 4–5 existing files; no enum changes; no impact on
-compiled code that does not use generics.
-
-**P5.4 — Tests + docs** (`tests/docs/`, `doc/claude/LOFT.md`):
-- `tests/docs/35-generics.loft`: identity, first, wrap, pair, cross-type calls, each
-  of the disallowed operations (each must produce the specified error message).
-- Add a § "Generic functions" section to `LOFT.md` after the Polymorphism section.
-
-**Effort:** Medium (definitions.rs, data.rs, control.rs, ~120–180 lines net new;
-no changes to fill.rs, scopes.rs, or the runtime)
-**Target:** 0.8.3
-
----
-
 ### T1  Tuple types
 **Sources:** TUPLES.md
 **Description:** Multi-value returns and stack-allocated `(A, B, C)` compound values. Enables functions to return more than one value without heap allocation. Seven implementation phases; full design in [TUPLES.md](TUPLES.md).
@@ -756,11 +639,11 @@ require the compiler to identify captured variables, allocate a closure record, 
 it as a hidden argument to the lambda body.  This is a significant IR and bytecode change.
 **Fix path:**
 
-**Phase 1 — Capture analysis** (`src/scopes.rs`, `src/parser/expressions.rs`):
-Walk the lambda body's IR and identify all free variables (variables referenced inside
-the body that are defined in an enclosing scope).  No code generation yet.
-*Tests:* static analysis correctly identifies free variables in sample lambdas; variables
-defined inside the lambda are not flagged; non-capturing lambdas produce an empty set.
+**Phase 1 — Capture analysis** *(completed 0.8.3)*:
+Parser detects variables from enclosing scopes referenced inside lambdas.  Emits a clear
+error ("lambda captures variable 'name' — closure capture is not yet supported") and
+creates a placeholder variable so parsing continues without cascading errors.  Capture
+context saved/restored in both parse_lambda and parse_lambda_short.
 
 **Phase 2 — Closure record layout** (`src/data.rs`, `src/typedef.rs`):
 For each capturing lambda, synthesise an anonymous struct type whose fields hold the
@@ -1135,8 +1018,8 @@ All steps done.  Step 8 was completed earlier.  Step 10:
 **Sources:** STACKTRACE.md
 **Description:** `stack_trace()` stdlib function returning `vector<StackFrame>`, where each frame exposes function name, source file, and line number. Full design in [STACKTRACE.md](STACKTRACE.md). Prerequisite for CO1 (coroutines use the frame vector for yield/resume).
 
-- **TR1.1** — Shadow call-frame vector: push/pop a `(fn_name, line)` entry on each function call/return in `src/state/mod.rs`.
-- **TR1.2** — Type declarations: `ArgValue` enum and `StackFrame` struct in `default/04_stacktrace.loft`.
+- **TR1.1** — Shadow call-frame vector *(completed 0.8.3)*: CallFrame struct and call_stack on State; OpCall encodes d_nr and args_size; fn_call pushes, fn_return pops.
+- **TR1.2** — Type declarations *(completed 0.8.3)*: ArgValue, ArgInfo, VarInfo, StackFrame in `default/04_stacktrace.loft`.
 - **TR1.3** — Materialisation: `stack_trace()` native function builds `vector<StackFrame>` from the shadow vector.
 - **TR1.4** — Call-site line numbers: track source position in the call frame for accurate per-frame line reporting.
 

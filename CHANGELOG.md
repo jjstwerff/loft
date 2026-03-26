@@ -28,10 +28,24 @@ All notable changes to the loft language and interpreter.
   at compile time. Each iteration provides `f.name` (field name) and `f.value` (a
   `FieldValue` enum wrapping the typed value). Works for uniform and mixed-type structs.
 
-- **Generic function syntax** — `fn name<T>(x: T) -> T { ... }` declares a generic
-  function template. T must appear in the first parameter (directly or as a container
-  element like `vector<T>`). Templates are stored but not compiled until call-site
-  instantiation (P5.2).
+- **Generic functions** — `fn name<T>(x: T) -> T { ... }` declares a generic function.
+  T must appear in the first parameter (directly or as `vector<T>`). The compiler creates
+  specialised copies per concrete type at each call site (P5.2). Disallowed operations on
+  T (arithmetic, field access, methods) produce clear compile-time errors (P5.3).
+  Documentation test and LOFT.md section added (P5.4).
+
+- **Shadow call-frame vector** (TR1.1) — The interpreter now tracks a shadow call stack
+  with function identity and argument layout on each call/return.  The OpCall bytecode
+  format encodes the definition number and argument size.  Foundation for `stack_trace()`.
+
+- **Stack trace types** (TR1.2) — `ArgValue`, `ArgInfo`, `VarInfo`, and `StackFrame` types
+  declared in `default/04_stacktrace.loft`.  These will be materialised by `stack_trace()`
+  in TR1.3.
+
+- **Closure capture analysis** (A5.1) — Lambdas that reference variables from an enclosing
+  scope now produce a clear error: "lambda captures variable 'name' — closure capture is
+  not yet supported, pass it as a parameter".  Previously this silently created a broken
+  local variable.
 
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
