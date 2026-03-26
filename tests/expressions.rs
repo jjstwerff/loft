@@ -60,7 +60,6 @@ fn if_typing() {
 // Verify the CoroutineStatus enum from default/05_coroutine.loft.
 
 #[test]
-#[ignore = "CO1.1: CoroutineStatus not yet in default library"]
 fn coroutine_status_construct() {
     code!(
         "fn check(s: CoroutineStatus) -> boolean {
@@ -72,7 +71,6 @@ fn coroutine_status_construct() {
 }
 
 #[test]
-#[ignore = "CO1.1: CoroutineStatus not yet in default library"]
 fn coroutine_status_ordering() {
     // Enum variant ordering: Created < Suspended < Running < Exhausted
     expr!("CoroutineStatus.Created < CoroutineStatus.Exhausted").result(Value::Boolean(true));
