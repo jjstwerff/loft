@@ -1330,7 +1330,10 @@ impl State {
                 }
                 stack.add_op("OpAppendText", self);
             }
-            Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
+            Type::Vector(_, _)
+            | Type::Reference(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Iterator(_, _) => {
                 stack.add_op("OpPutRef", self);
             }
             Type::Tuple(elems) => {

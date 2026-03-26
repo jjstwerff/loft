@@ -159,7 +159,8 @@ impl Parser {
         result
     }
 
-    // <expression> ::= <for> | 'continue' | 'break' | 'return' <return> | '{' <block> | <operators>
+    // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn expression(&mut self, val: &mut Value) -> Type {
         if self.lexer.has_token("for") {
             self.parse_for(val);
@@ -189,10 +190,55 @@ impl Parser {
                     "yield is only allowed inside generator functions (return type must be iterator<T>)"
                 );
             }
-            let mut v = Value::Null;
-            self.expression(&mut v);
-            *val = Value::Yield(Box::new(v));
-            Type::Void
+            if self.lexer.has_keyword("from") {
+                // CO1.4: yield from sub_gen — desugar to:
+                //   __sub = sub; loop { __item = next(__sub); if !__item break; yield __item; }
+                let mut sub = Value::Null;
+                let sub_type = self.expression(&mut sub);
+                if let Type::Iterator(inner, _) = &sub_type {
+                    let elem_tp = (**inner).clone();
+                    let sub_var = self.create_unique("__yf_sub", &sub_type);
+                    self.vars.defined(sub_var);
+                    let item_var = self.create_unique("__yf_item", &elem_tp);
+                    self.vars.defined(item_var);
+                    let op = self.data.def_nr("OpCoroutineNext");
+                    let value_size =
+                        crate::variables::size(&elem_tp, &crate::data::Context::Argument);
+                    let next_call = Value::Call(
+                        op,
+                        vec![Value::Var(sub_var), Value::Int(i32::from(value_size))],
+                    );
+                    let mut test = Value::Var(item_var);
+                    self.convert(&mut test, &elem_tp, &Type::Boolean);
+                    test = self.cl("OpNot", &[test]);
+                    let lp = vec![
+                        crate::data::v_set(item_var, next_call),
+                        crate::data::v_if(
+                            test,
+                            crate::data::v_block(vec![Value::Break(0)], Type::Void, "break"),
+                            Value::Null,
+                        ),
+                        Value::Yield(Box::new(Value::Var(item_var))),
+                    ];
+                    let steps = vec![
+                        crate::data::v_set(sub_var, sub),
+                        crate::data::v_loop(lp, "yield from"),
+                    ];
+                    *val = crate::data::v_block(steps, Type::Void, "yield from block");
+                } else if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "yield from requires an iterator expression"
+                    );
+                }
+                Type::Void
+            } else {
+                let mut v = Value::Null;
+                self.expression(&mut v);
+                *val = Value::Yield(Box::new(v));
+                Type::Void
+            }
         } else if self.lexer.peek_token("{") {
             self.parse_block("block", val, &Type::Void)
         } else {

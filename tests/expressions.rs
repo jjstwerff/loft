@@ -431,3 +431,22 @@ fn coroutine_call_helper_between_yields() {
     .expr("total = 0; for n in gen() { total += n; }; total")
     .result(Value::Int(30));
 }
+
+// ── CO1.4 — yield from delegation ───────────────────────────────────────────
+
+#[test]
+#[ignore = "CO1.4: yield from slot assignment regression — needs IR restructuring"]
+fn coroutine_yield_from() {
+    // yield from delegates to a sub-generator.
+    code!(
+        "fn inner() -> iterator<integer> { yield 10; yield 20; }
+         fn outer() -> iterator<integer> { yield 1; yield from inner(); yield 2; }
+         fn sum_all() -> integer {
+            total = 0;
+            for n in outer() { total += n; }
+            total
+         }"
+    )
+    .expr("sum_all()")
+    .result(Value::Int(33));
+}
