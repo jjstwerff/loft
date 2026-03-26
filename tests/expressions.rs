@@ -401,7 +401,6 @@ fn coroutine_exhausted() {
 }
 
 #[test]
-#[ignore = "CO1.5: for-loop over generator not yet wired"]
 fn coroutine_for_loop() {
     // Generator consumed by a for loop.
     code!(

@@ -344,10 +344,8 @@ impl State {
         let gen_ref = *self.get_stack::<DbRef>();
 
         if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
-            // CO1.6c: zero-fill so the consumer reads a proper null sentinel.
-            for _ in 0..value_size {
-                self.put_stack(0u8);
-            }
+            // CO1.6c: push typed null sentinel.
+            self.push_null_value(value_size);
             return;
         }
         let idx = gen_ref.rec as usize;
@@ -355,10 +353,7 @@ impl State {
 
         match status {
             CoroutineStatus::Exhausted => {
-                // CO1.6c: zero-fill for null return.
-                for _ in 0..value_size {
-                    self.put_stack(0u8);
-                }
+                self.push_null_value(value_size);
             }
             CoroutineStatus::Running => {
                 panic!("re-entrant advance on coroutine {idx}");
@@ -411,6 +406,19 @@ impl State {
         match &self.coroutines[idx] {
             Some(frame) => frame.status == CoroutineStatus::Exhausted,
             None => true,
+        }
+    }
+
+    // CO1.6c: push a typed null sentinel onto the stack.
+    fn push_null_value(&mut self, value_size: u32) {
+        match value_size {
+            4 => self.put_stack(i32::MIN), // integer null sentinel
+            8 => self.put_stack(i64::MIN), // long null sentinel
+            _ => {
+                for _ in 0..value_size {
+                    self.put_stack(0u8);
+                }
+            }
         }
     }
 
