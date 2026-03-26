@@ -436,43 +436,21 @@ the recompile overhead that caching was designed to address)
 - **CO1.2** — *(completed 0.8.3)* `OpCoroutineCreate` + `OpCoroutineNext` opcodes: frame construction (argument copy, COROUTINE_STORE DbRef push) and advance (stack restore, call-frame restore, state machine).
 - **CO1.3** — `OpYield` + `OpCoroutineReturn` + parser `yield` keyword.  Split into five independently testable sub-steps:
 
-  **CO1.3a — `OpCoroutineReturn` opcode (runtime only)** (`src/fill.rs`, `src/state/mod.rs`):
-  Implement `OpCoroutineReturn(value_size: u16)` as described in COROUTINE.md § Exhaustion.
-  The opcode clears `text_owned` and `stack_bytes`, truncates `call_stack` to `call_depth`,
-  marks the frame `Exhausted`, pops `active_coroutines`, rewinds `stack_pos` to
-  `frame.stack_base`, pushes `value_size` null bytes, and jumps to `caller_return_pos`.
-  Declare in `default/02_images.loft` with `#rust` annotation; add to `OPERATORS` array.
-  Fixes issue #96.
-  *Test:* a manually-constructed `Created` frame (via `OpCoroutineCreate`) can be advanced
-  once with `OpCoroutineNext` and then `OpCoroutineReturn` fires; `exhausted()` returns true
-  afterward.  This test builds the bytecode sequence directly in Rust, bypassing the parser.
-  **Effort:** Small.
+  **CO1.3a — `OpCoroutineReturn` opcode** *(completed 0.8.3)*:
+  `coroutine_return(value_size)` on State: clears text_owned/stack_bytes, truncates
+  call_stack, marks Exhausted, pops active_coroutines, pushes null, returns to consumer.
+  Fixes #96.
 
-  **CO1.3b — `OpYield` opcode (runtime only, integer-only)** (`src/fill.rs`, `src/state/mod.rs`):
-  Implement `OpYield(value_size: u16)` for the **integer-only case** (no text serialisation).
-  Steps: read `active_coroutines.last()` → serialise `stack[stack_base..stack_pos]` into
-  `stack_bytes` → save call frames above `call_depth` → set `code_pos` to current position →
-  mark `Suspended` → pop `active_coroutines` → slide yielded value bytes to `stack_base` →
-  set `stack_pos = stack_base + value_size` → jump to `caller_return_pos`.
-  Text serialisation (`serialise_text_slots`) is deferred to CO1.3d; for now `text_owned`
-  stays empty and the invariant "no text locals in the yielded generator" must hold.
-  Declare in `default/02_images.loft` with `#rust` annotation; add to `OPERATORS` array.
-  Fixes issue #95 (active_coroutines now popped on yield).
-  *Test:* a generator that yields a single integer → `OpCoroutineCreate` + `OpCoroutineNext`
-  returns the value; second advance returns null.  Built in Rust bypassing the parser.
-  **Effort:** Medium.
+  **CO1.3b — `OpCoroutineYield` opcode (integer-only)** *(completed 0.8.3)*:
+  `coroutine_yield(value_size)` on State: serialises stack[stack_base..stack_pos] into
+  stack_bytes, saves call frames, suspends, slides yielded value to stack_base, returns
+  to consumer.  Text serialisation deferred to CO1.3d.  Fixes #95.
 
-  **CO1.3c — Parser: `yield` keyword + `iterator<T>` return type** (`src/parser/control.rs`, `src/parser/definitions.rs`):
-  Recognise `yield expr;` as a statement inside functions whose return type is `iterator<T>`.
-  Emit `Value::Call(OpYield_d_nr, [expr])` or a new `Value::Yield(Box<Value>)` IR node.
-  In codegen, when encountering a call to a function returning `iterator<T>`, emit
-  `OpCoroutineCreate` instead of `OpCall`.  When encountering `Value::Yield`, emit the
-  expression followed by `OpYield(value_size)`.  At the end of a generator body, emit
-  `OpCoroutineReturn(value_size)` instead of `OpReturn`.
-  This is the step that makes the user-facing `yield` keyword work.
-  *Test:* `fn count() -> iterator<integer> { yield 1; yield 2; }` — advance twice, get 1
-  then 2, then exhausted.  Uses the `code!()` / `expr!()` test macros.
-  **Effort:** Medium.
+  **CO1.3c — Parser: `yield` keyword + codegen emit** *(completed 0.8.3)*:
+  `yield` lexer keyword added.  `yield expr` parsed as `Value::Yield(Box<Value>)`.
+  `iterator<T>` single-parameter syntax accepted.  Codegen: OpCoroutineCreate for
+  generator calls, OpCoroutineYield for yield, OpCoroutineReturn for generator return.
+  Remaining: generator body return-type check suppression and `next()` wiring.
 
   **CO1.3d — Text serialisation (`serialise_text_slots`)** (`src/state/mod.rs`):
   Implement `serialise_text_slots` per COROUTINE.md § serialise_text_slots contract.
@@ -607,14 +585,11 @@ Hidden `__closure` parameter added on second pass.  Captured variable reads redi
 to `get_field` on the closure record.  Read-only captures work; mutable captures
 (`count += x`) pending — codegen panics on self-reference for write targets.
 
-**Phase 5 — Lifetime and cleanup** (`src/scopes.rs`):
-Emit `OpFreeRef` for the closure record at the end of the enclosing scope.  When the
-record contains `text` or `reference` captures, free them in **reverse field index
-order** before releasing the record itself — the same LIFO invariant required by tuple
-scope exit (see [TUPLES.md](TUPLES.md) § Calling Convention, Scope exit order).  Use
-`owned_elements` from Phase 2 to enumerate the fields that need freeing.
-*Tests:* no store leak after a lambda goes out of scope; LIFO free order is respected
-when multiple closures are live simultaneously; a `text` capture is freed exactly once.
+**Phase 5 — Lifetime and cleanup** *(completed 0.8.3)*:
+Closure record work variable (Type::Reference with empty deps) is already freed by
+the existing OpFreeRef scope-exit logic in get_free_vars.  No new code needed.
+Per-field text/reference cleanup inside the record is pending — only matters when
+text captures become testable.
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1 (done)

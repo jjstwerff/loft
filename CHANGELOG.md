@@ -95,6 +95,22 @@ All notable changes to the loft language and interpreter.
   implemented.  Create copies arguments into a `CoroutineFrame` without entering the
   body.  Next restores the frame's stack and resumes execution.
 
+- **`OpCoroutineReturn`** (CO1.3a) — Opcode to exhaust a running coroutine: clears
+  frame state, pushes null, returns to consumer.
+
+- **`OpCoroutineYield`** (CO1.3b) — Opcode to suspend a generator: serialises the
+  live stack to `stack_bytes`, saves call frames, slides the yielded value to the
+  frame base, and returns to the consumer.  Integer-only path; text serialisation
+  pending (CO1.3d).
+
+- **`yield` keyword** (CO1.3c) — Parser recognises `yield expr` in generator
+  functions (return type `iterator<T>`).  Codegen emits `OpCoroutineCreate` for
+  generator calls, `OpCoroutineYield` for yield statements, and `OpCoroutineReturn`
+  at generator body end.  `iterator<T>` single-parameter syntax now accepted.
+
+- **Closure lifetime** (A5.5) — Closure record work variable is already freed by
+  existing `OpFreeRef` scope-exit logic.  No new code needed.
+
 - **`exhausted()` stdlib** (CO1.6) — `OpCoroutineExhausted` opcode and `pub fn
   exhausted(gen) -> boolean` declared in `05_coroutine.loft`.
 

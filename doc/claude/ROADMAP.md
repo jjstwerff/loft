@@ -24,16 +24,11 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4 (done)| compiler            |
 | T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4 (done)| scopes.rs           |
 | T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4 (done)| typedef.rs          |
-| A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
-| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4 (done)| scopes.rs           |
 | CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1 (done) | COROUTINE.md        |
-| CO1.3a | ↳ `OpCoroutineReturn` (exhaust + cleanup)       | S  | ✓      | CO1.2 (done)| fill.rs, state/     |
-| CO1.3b | ↳ `OpYield` runtime (integer-only, no text)     | M  | ✓      | CO1.3a     | fill.rs, state/     |
-| CO1.3c | ↳ Parser: `yield` keyword + codegen emit        | M  | ✓      | CO1.3b     | parser/, codegen.rs |
-| CO1.3d | ↳ Text serialisation (`serialise_text_slots`)   | MH | ✓      | CO1.3b     | state/mod.rs        |
-| CO1.3e | ↳ Nested yield (stackful: yield inside helper)  | S  | ✓      | CO1.3c     | state/mod.rs        |
-| CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3c     | state/mod.rs        |
-| CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3c     | collections.rs      |
+| CO1.3d | ↳ Text serialisation (`serialise_text_slots`)   | MH | ✓      | CO1.3b (done)| state/mod.rs      |
+| CO1.3e | ↳ Nested yield (stackful: yield inside helper)  | S  | ✓      | CO1.3c (done)| state/mod.rs      |
+| CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3c (done)| state/mod.rs      |
+| CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3c (done)| collections.rs    |
 
 ---
 
