@@ -34,8 +34,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 81 | Struct-enum variants with same-named fields read wrong offset | Medium | Use distinct field names per variant |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
-| 87 | `static_call` snapshots call stack on every native function call | Medium | N/A — performance regression from TR1.3 |
-| 88 | Entry function missing from `stack_trace()` output | Low | N/A — call from a nested function to see the trace |
+| 87 | *(fixed)* `static_call` snapshots call stack on every native function call | Medium | Fixed — now only snapshots for `n_stack_trace` |
+| 88 | *(fixed)* Entry function missing from `stack_trace()` output | Low | Fixed — synthetic CallFrame pushed in `execute_argv` |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 

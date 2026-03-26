@@ -20,10 +20,8 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| L7     | `init(expr)` stored field initialiser with `$` reference | Small–Med |             | Design 2026-03-25       |
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
-| T1.1   | ↳ Type system (`Type::Tuple`, offsets)          | M  | ✓      |            | data.rs, typedef.rs |
-| T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1       | parser/             |
+| T1.2   | ↳ Parser (notation, literals, destructuring)    | M  | ✓      | T1.1 (done)| parser/             |
 | T1.3   | ↳ Scope analysis (intervals, lifetimes)         | S  | ✓      | T1.2       | scopes.rs           |
 | T1.4   | ↳ Bytecode codegen (slot alloc, read/write)     | M  | ✓      | T1.3       | state/codegen.rs    |
 | T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4       | compiler            |

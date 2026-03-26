@@ -64,6 +64,22 @@ All notable changes to the loft language and interpreter.
   Exhausted) declared in `default/05_coroutine.loft`.  `CoroutineFrame` struct and
   coroutine storage infrastructure added to State.
 
+- **`init(expr)` field initialiser** (L7) — `init(expr)` field modifier evaluates once
+  at record creation (with `$` access), stores the result, and allows mutation afterward.
+  Complements `computed(expr)` (read-only, recomputed on every access).
+
+- **Tuple type system** (T1.1) — `Type::Tuple(Vec<Type>)` variant added to the type
+  enum.  Helper functions `element_size`, `element_offsets`, and `owned_elements`
+  provide reusable layout calculations for tuples and closure records.
+
+### Bug fixes
+
+- **Fix #87** — `static_call` no longer snapshots the call stack on every native
+  function call; the snapshot now only runs when `n_stack_trace` is dispatched.
+
+- **Fix #88** — `stack_trace()` now includes the entry function (main/test) as the
+  outermost frame.
+
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
 
