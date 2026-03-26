@@ -76,6 +76,34 @@ fn coroutine_status_ordering() {
     expr!("CoroutineStatus.Created < CoroutineStatus.Exhausted").result(Value::Boolean(true));
 }
 
+// ── TR1.3 — stack_trace() materialisation ────────────────────────────────────
+// Verify that stack_trace() returns a vector of StackFrame.
+
+#[test]
+#[ignore = "TR1.3: stack_trace() opcode not yet implemented"]
+fn stack_trace_returns_frames() {
+    code!(
+        "fn inner() -> integer { len(stack_trace()) }
+         fn middle() -> integer { inner() }
+         fn test() -> integer { middle() }"
+    )
+    .result(Value::Int(2)); // inner's call_stack has: test->middle (2 frames)
+}
+
+#[test]
+#[ignore = "TR1.3: stack_trace() opcode not yet implemented"]
+fn stack_trace_function_names() {
+    code!(
+        "fn callee() -> text {
+            frames = stack_trace();
+            if len(frames) > 0 { frames[len(frames) - 1].function } else { \"none\" }
+         }
+         fn caller() -> text { callee() }"
+    )
+    .expr("caller()")
+    .result(Value::str("caller"));
+}
+
 // ── TR1.2 — StackFrame + ArgValue type declarations ─────────────────────────
 // Verify the types from default/04_stacktrace.loft can be constructed and used.
 
