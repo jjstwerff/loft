@@ -633,7 +633,6 @@ fn generic_field_error() {
 
 /// A5.1: lambda referencing an outer variable is detected as a capture.
 #[test]
-#[ignore = "A5.1: closure capture analysis not yet implemented"]
 fn capture_detected() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
@@ -643,14 +642,12 @@ fn capture_detected() {
 
 /// A5.1: lambda that does NOT reference outer variables has no capture error.
 #[test]
-#[ignore = "A5.1: closure capture analysis not yet implemented"]
 fn no_capture_no_error() {
     code!("fn test() {\n  f = fn(x: integer) -> integer { x + 1 };\n  assert(f(1) == 2);\n}");
 }
 
 /// A5.1: variable defined inside the lambda is not flagged as captured.
 #[test]
-#[ignore = "A5.1: closure capture analysis not yet implemented"]
 fn local_not_captured() {
     code!(
         "fn test() {\n  f = fn(x: integer) -> integer { y = x + 1; y };\n  assert(f(1) == 2);\n}"
