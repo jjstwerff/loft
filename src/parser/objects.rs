@@ -129,12 +129,14 @@ impl Parser {
             .find(|(n, _)| n == name)
             .cloned()
         {
-            // A5.1: variable exists in the enclosing scope but not in the lambda.
+            // A5.3: variable exists in the enclosing scope — will be captured
+            // via the closure record synthesized in A5.2.  Emit error until A5.4
+            // (closure body reads) is implemented — codegen cannot yet redirect
+            // captured reads to the closure record.
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "lambda captures variable '{name}' from enclosing scope — \
-                 closure capture is not yet supported, pass it as a parameter"
+                "lambda captures variable '{name}' — closure body reads not yet implemented (A5.4)"
             );
             // A5.2: record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {

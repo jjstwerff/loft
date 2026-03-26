@@ -404,7 +404,9 @@ impl Parser {
         self.capture_context = outer_capture;
 
         self.data.def_used(d_nr);
+
         *code = Value::Int(d_nr as i32);
+
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
@@ -592,7 +594,9 @@ impl Parser {
         self.capture_context = outer_capture;
 
         self.data.def_used(d_nr);
+
         *code = Value::Int(d_nr as i32);
+
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();

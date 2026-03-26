@@ -634,10 +634,11 @@ fn generic_field_error() {
 /// A5.1: lambda referencing an outer variable is detected as a capture.
 #[test]
 fn capture_detected() {
+    // A5.3: capture detected, closure record synthesized. Body reads deferred to A5.4.
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
-    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at capture_detected:3:32")
+    .error("lambda captures variable 'count' — closure body reads not yet implemented (A5.4) at capture_detected:3:32")
     .warning("closure record '__closure_0' created with 1 field: count(integer) at capture_detected:3:38");
 }
 
@@ -660,22 +661,24 @@ fn local_not_captured() {
 /// A5.2: closure record is synthesized with the correct captured variable.
 #[test]
 fn closure_record_single_capture() {
+    // A5.3: capture detected, closure record synthesized. Body reads deferred to A5.4.
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
     .warning("closure record '__closure_0' created with 1 field: count(integer) at closure_record_single_capture:3:38")
-    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_single_capture:3:32");
+    .error("lambda captures variable 'count' — closure body reads not yet implemented (A5.4) at closure_record_single_capture:3:32");
 }
 
 /// A5.2: multiple captures produce a record with multiple fields.
 #[test]
 fn closure_record_multi_capture() {
+    // A5.3: capture detected, closure record synthesized. Body reads deferred to A5.4.
     code!(
         "fn test() {\n  a = 1;\n  b = 2.0;\n  f = fn(x: integer) -> float { (a + x) as float + b };\n  assert(f(3) == 6.0);\n}"
     )
     .warning("closure record '__closure_0' created with 2 fields: a(integer), b(float) at closure_record_multi_capture:4:56")
-    .error("lambda captures variable 'a' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:37")
-    .error("lambda captures variable 'b' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:55");
+    .error("lambda captures variable 'a' — closure body reads not yet implemented (A5.4) at closure_record_multi_capture:4:37")
+    .error("lambda captures variable 'b' — closure body reads not yet implemented (A5.4) at closure_record_multi_capture:4:55");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
