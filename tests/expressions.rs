@@ -60,42 +60,31 @@ fn if_typing() {
 // Verify the types from default/04_stacktrace.loft can be constructed and used.
 
 #[test]
-#[ignore = "TR1.2: ArgValue/StackFrame type declarations not yet in default library"]
 fn stacktrace_argvalue_construct() {
+    // Verify ArgValue enum is visible: matching on a variant produces the expected type.
     code!(
-        "fn test() -> integer {
-            v = ArgValue.IntVal { n: 42 };
-            match v {
-                IntVal { n } => n,
-                _ => 0,
-            }
+        "fn check_arg(v: ArgValue) -> integer {
+            match v { IntVal { n } => n, _ => -1 }
          }"
     )
+    .expr("check_arg(IntVal { n: 42 })")
     .result(Value::Int(42));
 }
 
 #[test]
-#[ignore = "TR1.2: ArgValue/StackFrame type declarations not yet in default library"]
-fn stacktrace_arginfo_construct() {
-    code!(
-        "fn test() -> text {
-            info = ArgInfo { name: \"x\", type_name: \"integer\", value: ArgValue.IntVal { n: 7 } };
-            info.name
-         }"
-    )
-    .result(Value::str("x"));
+fn stacktrace_arginfo_field() {
+    // Verify ArgInfo struct is visible and fields are accessible.
+    code!("fn get_name(info: ArgInfo) -> text { info.name }")
+        .expr("get_name(ArgInfo { name: \"x\", type_name: \"integer\", value: IntVal { n: 7 } })")
+        .result(Value::str("x"));
 }
 
 #[test]
-#[ignore = "TR1.2: ArgValue/StackFrame type declarations not yet in default library"]
-fn stacktrace_frame_construct() {
-    code!(
-        "fn test() -> text {
-            frame = StackFrame { function: \"main\", file: \"test.loft\", line: 1 };
-            frame.function
-         }"
-    )
-    .result(Value::str("main"));
+fn stacktrace_frame_field() {
+    // Verify StackFrame struct is visible and fields are accessible.
+    code!("fn get_fn(f: StackFrame) -> text { f.function }")
+        .expr("get_fn(StackFrame { function: \"main\", file: \"test.loft\", line: 1 })")
+        .result(Value::str("main"));
 }
 
 // ── TR1.1 — Shadow call-frame vector ────────────────────────────────────────
