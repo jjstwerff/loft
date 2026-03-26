@@ -635,6 +635,7 @@ fn generic_field_error() {
 #[test]
 #[ignore = "A5.4: mutable capture (count += x) not yet supported — codegen panics on self-reference"]
 fn capture_detected() {
+    // A5.3: capture detected, closure record synthesized. Body reads deferred to A5.4.
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
@@ -662,6 +663,7 @@ fn local_not_captured() {
 #[test]
 #[ignore = "A5.4: mutable capture (count += x) not yet supported — codegen panics on self-reference"]
 fn closure_record_single_capture() {
+    // A5.3: capture detected, closure record synthesized. Body reads deferred to A5.4.
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
