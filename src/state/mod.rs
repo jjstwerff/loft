@@ -78,6 +78,43 @@ pub struct CoroutineFrame {
     pub call_depth: usize,
 }
 
+/// Reserved store number for coroutine `DbRef` encoding (CO1.1).
+/// Cannot clash with real Stores allocations (limited by `Stores::max`).
+pub const COROUTINE_STORE: u16 = u16::MAX;
+
+/// Lifecycle state of a coroutine frame (CO1.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoroutineStatus {
+    Created,
+    Suspended,
+    Running,
+    Exhausted,
+}
+
+/// Runtime state of a single coroutine instance (CO1.1).
+/// Holds the serialised stack and metadata needed to suspend and resume.
+#[derive(Clone, Debug)]
+pub struct CoroutineFrame {
+    /// Generator function definition number.
+    pub d_nr: u32,
+    /// Current lifecycle state.
+    pub status: CoroutineStatus,
+    /// Bytecode position to resume from (set by yield).
+    pub code_pos: u32,
+    /// Absolute stack position during execution.
+    pub stack_base: u32,
+    /// Return address in the consumer.
+    pub caller_return_pos: u32,
+    /// Serialised stack locals (copied on suspend, restored on resume).
+    pub stack_bytes: Vec<u8>,
+    /// Owned text slot copies (offset, content) taken on suspend.
+    pub text_owned: Vec<(u32, String)>,
+    /// Saved call stack entries from the generator's call frames.
+    pub call_frames: Vec<CallFrame>,
+    /// Call depth baseline when the coroutine was last running.
+    pub call_depth: usize,
+}
+
 /// Internal State of the interpreter to run bytecode.
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
