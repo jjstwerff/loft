@@ -38,6 +38,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 88 | *(fixed)* Entry function missing from `stack_trace()` output | Low | Fixed — synthetic CallFrame pushed in `execute_argv` |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
+| 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
+| 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
+| 93 | T1.1 missing tuple-in-struct-field rejection rule | None | No impact until T1.2 parser support lands |
 
 ---
 
@@ -423,6 +426,70 @@ and passes it to `fn_call`, eliminating the runtime lookup entirely.  This would
 increase each OpCall instruction by 4 bytes.
 
 **Discovered:** 2026-03-26, during TR1.4 implementation.
+
+---
+
+### 91. L7 `init(expr)` missing circular-init detection and parameter form
+
+**Symptom:** Two `init` fields that reference each other via `$` (e.g. `a: integer
+init($.b)` and `b: integer init($.a)`) are not detected at compile time.  At runtime
+the behaviour is undefined — the fields may read uninitialised memory or produce
+garbage values.  Additionally, `init(expr)` on function parameters (dynamic defaults
+computed from earlier parameters) is not implemented.
+
+**Scope:** The core struct-field `init(expr)` works correctly: evaluated once at
+creation, `$` references resolved, writable after construction.  Only the safety
+guard (circular detection) and the convenience extension (parameter form) are missing.
+
+**Workaround:** Do not write two `init` fields that reference each other.  For
+dynamic parameter defaults, compute the default at the call site and pass it
+explicitly.
+
+**Fix path:**
+1. Circular detection: after parsing all struct fields, collect `init` fields, walk
+   each init expression for `$.<field>` accesses, build a directed graph, DFS for
+   cycles, emit `diagnostic!(Level::Error, ...)`.
+2. Parameter form: in `parse_arguments`, accept `init(expr)` alongside `= expr`;
+   store the expression in `Attribute.value`; at the call site, emit the expression
+   when no argument is supplied.
+
+**Discovered:** 2026-03-26, during L7 implementation.
+
+---
+
+### 92. `stack_trace()` in parallel workers returns empty
+
+**Symptom:** Calling `stack_trace()` from inside a parallel `for` loop body returns
+an empty vector.  The function does not panic — it silently produces zero frames.
+
+**Root cause:** The `execute_at` / `execute_at_raw` / `execute_at_ref` functions used
+by parallel workers do not set `State.data_ptr`.  The `static_call` snapshot check
+sees `data_ptr.is_null()` and skips the snapshot.
+
+**Workaround:** Call `stack_trace()` from the main thread only.
+
+**Fix path:** Set `data_ptr` from the `ParallelCtx.data` pointer at the start of each
+`execute_at` variant, or pass it through the `WorkerProgram` struct.
+
+**Discovered:** 2026-03-26, during fix #87/#88 implementation review.
+
+---
+
+### 93. T1.1 missing tuple-in-struct-field rejection rule
+
+**Symptom:** The TUPLES.md Phase 1 design specifies that `Type::Tuple` should be
+rejected in struct field positions and `Type::RefVar` in tuple element positions.
+These compile-time rejection rules are not implemented.
+
+**Impact:** None currently — there is no parser support for tuple syntax (T1.2), so
+users cannot create `Type::Tuple` values.  The rejections become necessary when T1.2
+lands to prevent accidental misuse.
+
+**Fix path:** Add checks in `typedef.rs::fill_all()`: when processing struct fields,
+emit an error if `attribute.typedef` is `Type::Tuple`.  Similarly reject `RefVar`
+inside tuple elements.
+
+**Discovered:** 2026-03-26, during T1.1 implementation.
 
 ---
 
