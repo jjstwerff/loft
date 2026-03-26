@@ -931,6 +931,23 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
     let snapshot = std::mem::take(&mut stores.call_stack_snapshot);
     let sf_elm = stores.name("StackFrame");
     let sf_size = u32::from(stores.size(sf_elm));
+    // Fix #89: validate that hard-coded field offsets match the actual type layout.
+    // Fix #89: validate that hard-coded field offsets match the actual type layout.
+    debug_assert_eq!(
+        stores.position(sf_elm, "function"),
+        0,
+        "StackFrame.function offset mismatch"
+    );
+    debug_assert_eq!(
+        stores.position(sf_elm, "file"),
+        4,
+        "StackFrame.file offset mismatch"
+    );
+    debug_assert_eq!(
+        stores.position(sf_elm, "line"),
+        8,
+        "StackFrame.line offset mismatch"
+    );
     let vec = stores.database(sf_size);
     stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
 

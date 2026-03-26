@@ -678,6 +678,10 @@ impl State {
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations (infinite-loop guard).
     pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i32 {
+        // Fix #92: set data_ptr so stack_trace() works in parallel workers.
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+        }
         self.stack_pos = 4;
         self.put_stack(*arg); // 12 bytes → stack_pos = 16
         self.put_stack(u32::MAX); // 4 bytes  → stack_pos = 20
@@ -704,6 +708,9 @@ impl State {
         extra_args: &[u64],
         return_size: u32,
     ) -> u64 {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+        }
         self.stack_pos = 4;
         // Push extra context args first (they precede the element arg in the
         // function's parameter list: fn worker(element, extra1, extra2, ...)).
@@ -738,6 +745,9 @@ impl State {
     /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
     /// record lives in `self.database` (the worker's cloned stores).
     pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+        }
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {
