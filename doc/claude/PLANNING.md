@@ -543,7 +543,7 @@ the recompile overhead that caching was designed to address)
 **Sources:** COROUTINE.md
 **Description:** Stackful `yield`, `iterator<T>` return type, and `yield from` delegation. Enables lazy sequences and producer/consumer patterns without explicit state machines. Six implementation phases; full design in [COROUTINE.md](COROUTINE.md).
 
-- **CO1.1** — `iterator<T>` type + `CoroutineStatus` enum in `default/05_coroutine.loft`.
+- **CO1.1** — *(completed 0.8.3)* `CoroutineStatus` enum in `default/05_coroutine.loft`; `CoroutineFrame` struct, coroutine storage, and helpers on State.
 - **CO1.2** — `OpCoroutineCreate` + `OpCoroutineNext`: frame construction and advance.
 - **CO1.3** — `OpYield`: serialise live stack to heap frame, return to caller.
 - **CO1.4** — `yield from`: sub-generator delegation.
@@ -645,17 +645,10 @@ error ("lambda captures variable 'name' — closure capture is not yet supported
 creates a placeholder variable so parsing continues without cascading errors.  Capture
 context saved/restored in both parse_lambda and parse_lambda_short.
 
-**Phase 2 — Closure record layout** (`src/data.rs`, `src/typedef.rs`):
-For each capturing lambda, synthesise an anonymous struct type whose fields hold the
-captured variables; verify field offsets and total size.
-The element-size table and offset arithmetic introduced for tuples (see
-[TUPLES.md](TUPLES.md) § Memory Layout) are identical for closure record fields; use
-the shared helpers `element_size`, `element_offsets`, and `owned_elements` from
-`data.rs` rather than duplicating the logic.  The closure record is heap-allocated
-(a store record) and passed as a hidden trailing argument alongside the def-nr — it
-does not use the stack-only tuple layout.
-*Tests:* closure struct has the correct field count, types, and sizes; `sizeof` matches
-the expected layout; a record containing a `text` capture has `owned_elements` count 1.
+**Phase 2 — Closure record layout** *(completed 0.8.3)*:
+For each capturing lambda, the parser synthesizes `__closure_N` with fields matching
+the captured variables.  The record def_nr is stored on Definition.closure_record.
+Diagnostic emitted with field count/names/types for test verification.
 
 **Phase 3 — Capture at call site** (`src/state/codegen.rs`):
 At the point where a lambda expression is evaluated, emit code to allocate a closure
@@ -1020,8 +1013,8 @@ All steps done.  Step 8 was completed earlier.  Step 10:
 
 - **TR1.1** — Shadow call-frame vector *(completed 0.8.3)*: CallFrame struct and call_stack on State; OpCall encodes d_nr and args_size; fn_call pushes, fn_return pops.
 - **TR1.2** — Type declarations *(completed 0.8.3)*: ArgValue, ArgInfo, VarInfo, StackFrame in `default/04_stacktrace.loft`.
-- **TR1.3** — Materialisation: `stack_trace()` native function builds `vector<StackFrame>` from the shadow vector.
-- **TR1.4** — Call-site line numbers: track source position in the call frame for accurate per-frame line reporting.
+- **TR1.3** — Materialisation *(completed 0.8.3)*: `stack_trace()` native function builds `vector<StackFrame>` from snapshot. Tests blocked by Problem #85.
+- **TR1.4** — Call-site line numbers *(completed 0.8.3)*: CallFrame stores source line directly; resolved in fn_call. Tests blocked by Problem #85.
 
 **Effort:** Medium
 **Target:** 0.9.0

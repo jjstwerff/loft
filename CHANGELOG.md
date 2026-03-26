@@ -47,6 +47,23 @@ All notable changes to the loft language and interpreter.
   not yet supported, pass it as a parameter".  Previously this silently created a broken
   local variable.
 
+- **Closure record layout** (A5.2) — For each capturing lambda, the parser now synthesizes
+  an anonymous struct type (`__closure_N`) whose fields match the captured variables'
+  names and types.  The record def_nr is stored on the lambda's Definition.
+
+- **`stack_trace()` function** (TR1.3) — Returns `vector<StackFrame>` with function name,
+  file, and call-site line for each active call frame.  Arguments/variables vectors are
+  left empty (full population is future work).  Implemented as a native function with
+  call-stack snapshot bridging State to Stores.
+
+- **Call-site line numbers** (TR1.4) — `CallFrame` now stores the source line directly,
+  resolved from `line_numbers` at call time.  Eliminates the per-frame HashMap lookup
+  during stack trace materialisation.
+
+- **Coroutine types** (CO1.1) — `CoroutineStatus` enum (Created, Suspended, Running,
+  Exhausted) declared in `default/05_coroutine.loft`.  `CoroutineFrame` struct and
+  coroutine storage infrastructure added to State.
+
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.
 

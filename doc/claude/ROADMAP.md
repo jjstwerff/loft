@@ -30,16 +30,12 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
 | T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
 | A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
-| A5.2   | ↳ Closure record layout                         | S  | ✓      | A5.1 (done)| data.rs, typedef.rs |
-| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2       | codegen.rs          |
+| A5.3   | ↳ Capture at call site                          | M  | ✓      | A5.2 (done)| codegen.rs          |
 | A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3       | codegen.rs, fill.rs |
 | A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
 | TR1    | Stack trace introspection                       | M  | ✓      |            | STACKTRACE.md       |
-| TR1.3  | ↳ `stack_trace()` materialisation               | M  | ✓      | TR1.2 (done)| state/mod.rs       |
-| TR1.4  | ↳ Call-site line numbers in frames              | S  | ✓      | TR1.3      | state/codegen.rs    |
-| CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1        | COROUTINE.md        |
-| CO1.1  | ↳ `iterator<T>` type + `CoroutineStatus`        | S  | ✓      | TR1.2 (done)| typedef.rs         |
-| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`       | H  | ✓      | CO1.1      | state/mod.rs        |
+| CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1 (done) | COROUTINE.md        |
+| CO1.2  | ↳ `OpCoroutineCreate` + `OpCoroutineNext`       | H  | ✓      | CO1.1 (done)| state/mod.rs       |
 | CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2      | state/mod.rs        |
 | CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |
 | CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3      | collections.rs      |
