@@ -473,7 +473,47 @@ the recompile overhead that caching was designed to address)
 
 - **CO1.4** — `yield from`: sub-generator delegation.
 - **CO1.5** — `for item in generator`: iterator protocol integration.
-- **CO1.6** — *(completed 0.8.3)* `exhausted()` stdlib function via `OpCoroutineExhausted` opcode.  `next()` uses `OpCoroutineNext` (CO1.2).
+- **CO1.6** — `next()` / `exhausted()` stdlib.  `OpCoroutineExhausted` is implemented; `exhausted(gen)` and `next(gen)` are dispatched from `dispatch_call`.  Three remaining defects — split into sub-steps:
+
+  **CO1.6a — Fix `next()` codegen stack tracking** (`src/parser/control.rs`, `src/state/codegen.rs`):
+  **Root cause:** `dispatch_call` emits `Value::Call(OpCoroutineNext, [gen_val])`, treating the
+  gen DbRef as an operator argument.  But `OpCoroutineNext(value_size: const u16)` declares NO
+  mutable parameters — only a const `value_size`.  The codegen operator path (line 780–806 in
+  `codegen.rs`) therefore never pushes gen onto the stack, and `stack.operator()` subtracts
+  0 params / adds 0 return.  Meanwhile the runtime `coroutine_next()` pops 12 bytes (DbRef) via
+  `get_stack::<DbRef>()` and pushes `value_size` bytes.  After `next(gen)`, the codegen's
+  `stack.position` is +12 too high.  Every subsequent `OpVar*` distance is wrong.
+  **Fix:** Do not emit `Value::Call(OpCoroutineNext, [gen_val])`.  Instead emit an `Insert` block:
+  1. Generate `gen_val` (push DbRef, +12)
+  2. Emit `OpCoroutineNext(value_size)` as a raw opcode (not through `Value::Call`)
+  3. Manually adjust `stack.position`: −12 (DbRef consumed) + value_size (yielded value pushed)
+  A clean way: introduce `Value::CoroutineNext(Box<Value>, Type)` which codegen handles directly,
+  or keep the current `Value::Call` but add a special-case in `generate_call` for `OpCoroutineNext`
+  that bypasses the operator path and manually adjusts the stack.
+  *Test:* `coroutine_exhausted` passes — reading `gen` after `next(gen)` no longer hits garbage.
+  **Effort:** Small.
+
+  **CO1.6b — Fix `exhausted()` on coroutine DbRef after yield/resume** (`src/state/codegen.rs`):
+  **Root cause:** Same stack-tracking drift as CO1.6a.  After `next(gen)`, the codegen's
+  `stack.position` is wrong, so `OpVarRef(distance)` for the second `gen` read computes the
+  wrong distance and reads garbage bytes (not `u16::MAX` store_nr).
+  **Fix:** CO1.6a fixes the underlying stack tracking; this step is verification only.
+  If `exhausted()` also uses `Value::Call(OpCoroutineExhausted, [gen_val])` and the operator
+  has `gen: reference` as a mutable parameter, the codegen handles it correctly because
+  `reference` IS a mutable param and `stack.operator()` subtracts 12.  Verify this is the case.
+  *Test:* enable `coroutine_exhausted` test.
+  **Effort:** Small (verification after CO1.6a).
+
+  **CO1.6c — `next()` returns typed null after exhaustion** (`src/state/mod.rs`):
+  When the generator is exhausted, `coroutine_next()` executes the `Exhausted` branch:
+  `self.stack_pos += value_size`.  This advances the stack pointer without writing any bytes.
+  The consumer reads whatever was on the stack — possibly stale yielded values.
+  **Fix:** Zero-fill `value_size` bytes (same as `coroutine_return` does) before advancing
+  `stack_pos`, or write the type-appropriate null sentinel (`i32::MIN` for integer, `0` for
+  bool, null pointer for text).  For the integer-only path, `i32::MIN` is the correct null.
+  *Test:* `next(gen)` on an exhausted generator returns `null` (the integer null sentinel),
+  not the previous yielded value.
+  **Effort:** Small.
 
 **Effort:** Very High
 **Depends:** TR1
