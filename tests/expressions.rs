@@ -56,6 +56,48 @@ fn if_typing() {
 
 // N6 generated_code_compiles and native_test_suite moved to tests/native.rs
 
+// ── TR1.2 — StackFrame + ArgValue type declarations ─────────────────────────
+// Verify the types from default/04_stacktrace.loft can be constructed and used.
+
+#[test]
+#[ignore = "TR1.2: ArgValue/StackFrame type declarations not yet in default library"]
+fn stacktrace_argvalue_construct() {
+    code!(
+        "fn test() -> integer {
+            v = ArgValue.IntVal { n: 42 };
+            match v {
+                IntVal { n } => n,
+                _ => 0,
+            }
+         }"
+    )
+    .result(Value::Int(42));
+}
+
+#[test]
+#[ignore = "TR1.2: ArgValue/StackFrame type declarations not yet in default library"]
+fn stacktrace_arginfo_construct() {
+    code!(
+        "fn test() -> text {
+            info = ArgInfo { name: \"x\", type_name: \"integer\", value: ArgValue.IntVal { n: 7 } };
+            info.name
+         }"
+    )
+    .result(Value::str("x"));
+}
+
+#[test]
+#[ignore = "TR1.2: ArgValue/StackFrame type declarations not yet in default library"]
+fn stacktrace_frame_construct() {
+    code!(
+        "fn test() -> text {
+            frame = StackFrame { function: \"main\", file: \"test.loft\", line: 1 };
+            frame.function
+         }"
+    )
+    .result(Value::str("main"));
+}
+
 // ── TR1.1 — Shadow call-frame vector ────────────────────────────────────────
 // Verify that function calls still work after the OpCall bytecode format change
 // (d_nr + args_size operands added for the shadow call-frame vector).
