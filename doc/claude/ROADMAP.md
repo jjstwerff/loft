@@ -21,18 +21,15 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | ID     | Title                                                   | Effort    | Depends on  | Source                  |
 |--------|---------------------------------------------------------|-----------|-------------|-------------------------|
 | T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
-| T1.4   | ↳ Bytecode codegen (slot alloc, read/write)     | M  | ✓      | T1.3 (done)| state/codegen.rs    |
-| T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4       | compiler            |
-| T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4       | scopes.rs           |
-| T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4       | typedef.rs          |
+| T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4 (done)| compiler            |
+| T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4 (done)| scopes.rs           |
+| T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4 (done)| typedef.rs          |
 | A5     | Closure capture for lambdas                     | VH | ✓      |            | PLANNING.md A5      |
-| A5.4   | ↳ Closure body reads via closure record         | M  | ✓      | A5.3 (done)| codegen.rs, fill.rs |
-| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4       | scopes.rs           |
+| A5.5   | ↳ Lifetime + cleanup (`OpFreeRef`)              | S  | ✓      | A5.4 (done)| scopes.rs           |
 | CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1 (done) | COROUTINE.md        |
 | CO1.3  | ↳ `OpYield` (serialise stack to heap)           | H  | ✓      | CO1.2 (done)| state/mod.rs       |
 | CO1.4  | ↳ `yield from` delegation                       | M  | ✓      | CO1.3      | state/mod.rs        |
 | CO1.5  | ↳ `for item in generator` integration           | S  | ✓      | CO1.3      | collections.rs      |
-| CO1.6  | ↳ `next()` / `exhausted()` stdlib               | S  | ✓      | CO1.2 (done)| native.rs          |
 
 ---
 

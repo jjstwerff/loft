@@ -418,7 +418,7 @@ the recompile overhead that caching was designed to address)
 - **T1.1** — Type system *(completed 0.8.3)*: `Type::Tuple(Vec<Type>)` variant, `element_size`, `element_offsets`, `owned_elements` helpers in `data.rs`.
 - **T1.2** — Parser *(completed 0.8.3)*: type notation `(A, B)`, literal syntax `(expr, expr)`, element access `t.0`, LHS destructuring `(a, b) = expr`.  `Value::Tuple` IR variant added.
 - **T1.3** — Scope analysis *(completed 0.8.3)*: tuple variable intervals, owned-element cleanup tracking in `scopes.rs`.
-- **T1.4** — Bytecode codegen: slot allocation, element read/write opcodes (`src/state/codegen.rs`).
+- **T1.4** — Bytecode codegen *(completed 0.8.3)*: `Value::TupleGet` IR, element read via `OpVar*` at offset, tuple set via per-element `OpPut*`, tuple parameters.  6 tests passing; function-return convention, text elements, destructuring, and element assignment remain for follow-up.
 - **T1.5** — SC-4: Reference-tuple parameters with owned elements.
 - **T1.6** — SC-8: Tuple-aware mutation guard.
 - **T1.7** — SC-7: `not null` annotation for tuple integer elements.
@@ -437,7 +437,7 @@ the recompile overhead that caching was designed to address)
 - **CO1.3** — `OpYield`: serialise live stack to heap frame, return to caller.
 - **CO1.4** — `yield from`: sub-generator delegation.
 - **CO1.5** — `for item in generator`: iterator protocol integration.
-- **CO1.6** — `next()` / `exhausted()` stdlib functions.
+- **CO1.6** — *(completed 0.8.3)* `exhausted()` stdlib function via `OpCoroutineExhausted` opcode.  `next()` uses `OpCoroutineNext` (CO1.2).
 
 **Effort:** Very High
 **Depends:** TR1
@@ -544,12 +544,10 @@ Capture diagnostic updated from generic "not yet supported" to specific "closure
 reads not yet implemented (A5.4)".  Closure record struct (A5.2) is still synthesized.
 Actual closure record allocation IR and codegen deferred to A5.4.
 
-**Phase 4 — Closure body reads** (`src/state/codegen.rs`, `src/fill.rs`):
-Inside the compiled lambda function, redirect reads of captured variables to load from
-the closure record argument rather than the (non-existent) enclosing stack frame.
-*Tests:* captured variable is correctly read after the enclosing function has returned;
-modifying the original variable after capture does not affect the lambda's copy (value
-semantics — mutable capture is out of scope for this item).
+**Phase 4 — Closure body reads** *(completed 0.8.3)*:
+Hidden `__closure` parameter added on second pass.  Captured variable reads redirect
+to `get_field` on the closure record.  Read-only captures work; mutable captures
+(`count += x`) pending — codegen panics on self-reference for write targets.
 
 **Phase 5 — Lifetime and cleanup** (`src/scopes.rs`):
 Emit `OpFreeRef` for the closure record at the end of the enclosing scope.  When the

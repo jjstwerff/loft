@@ -83,9 +83,20 @@ All notable changes to the loft language and interpreter.
   indicates that closure body reads (A5.4) are the remaining blocker.  The closure
   record struct from A5.2 is still synthesized.
 
+- **Tuple bytecode codegen** (T1.4) — `Value::TupleGet(var, idx)` IR variant for
+  element reads.  Codegen emits `OpVar*` at the element's stack offset.  Tuple
+  literals, element access, type annotations, and parameters now work end-to-end.
+
+- **Closure body reads** (A5.4) — Captured variable reads inside lambdas now redirect
+  to field loads from a hidden `__closure` parameter backed by the A5.2 closure record
+  struct.  Read-only captures work; mutable captures are pending.
+
 - **Coroutine opcodes** (CO1.2) — `OpCoroutineCreate` and `OpCoroutineNext` opcodes
   implemented.  Create copies arguments into a `CoroutineFrame` without entering the
   body.  Next restores the frame's stack and resumes execution.
+
+- **`exhausted()` stdlib** (CO1.6) — `OpCoroutineExhausted` opcode and `pub fn
+  exhausted(gen) -> boolean` declared in `05_coroutine.loft`.
 
 ### Bug fixes
 
