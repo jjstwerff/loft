@@ -983,6 +983,8 @@ impl Parser {
         let context = self.context;
         self.context = d_nr;
         self.lexer.token("{");
+        // #91: collect init field dependency info for circular detection.
+        let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
             let Some(a_name) = self.lexer.has_identifier() else {
@@ -999,15 +1001,46 @@ impl Parser {
                 );
             }
             self.lexer.token(":");
+            self.init_field_deps.clear();
             self.parse_field(d_nr, &a_name);
+            if !self.init_field_deps.is_empty() {
+                init_deps.push((a_name.clone(), self.init_field_deps.clone()));
+            }
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
             }
         }
         self.lexer.token("}");
         self.lexer.has_token(";");
+        // #91: check for circular init dependencies (second pass, all fields known).
+        if !self.first_pass {
+            self.check_circular_init(&init_deps);
+        }
         self.context = context;
         true
+    }
+
+    /// #91: DFS cycle detection on init field dependencies.
+    fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>)]) {
+        let names: HashSet<String> = init_deps.iter().map(|(n, _)| n.clone()).collect();
+        for (start, deps) in init_deps {
+            let mut visited: Vec<String> = vec![start.clone()];
+            let mut stack = deps.clone();
+            while let Some(dep) = stack.pop() {
+                if dep == *start {
+                    visited.push(start.clone());
+                    let path = visited.join(" -> ");
+                    diagnostic!(self.lexer, Level::Error, "circular init dependency: {path}");
+                    break;
+                }
+                if names.contains(&dep) && !visited.contains(&dep) {
+                    visited.push(dep.clone());
+                    if let Some((_, subdeps)) = init_deps.iter().find(|(n, _)| *n == dep) {
+                        stack.extend(subdeps.clone());
+                    }
+                }
+            }
+        }
     }
 
     // <field> ::= { <field_limit> | 'not' 'null' | <field_default> | 'check' '(' <expr> ')' | <type-id> [ '[' ['-'] <field> { ',' ['-'] <field> } ']' ] } }
@@ -1136,6 +1169,9 @@ impl Parser {
         if self.lexer.has_keyword("init") {
             is_init = true;
             // L7: init(expr) — stored at creation, writable after. $ allowed.
+            // #91: enable dep tracking for circular-init detection.
+            self.init_field_tracking = true;
+            self.init_field_deps.clear();
             self.lexer.token("(");
             let tp = self.expression(value);
             if a_type.is_unknown() {
@@ -1145,6 +1181,7 @@ impl Parser {
                 self.convert(value, &tp, a_type);
             }
             self.lexer.token(")");
+            self.init_field_tracking = false;
         }
         if self.lexer.has_keyword("default") {
             diagnostic!(

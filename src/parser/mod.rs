@@ -112,6 +112,11 @@ pub struct Parser {
     /// A5.2: accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
+    /// #91: when > 0, record $.<field> accesses for circular-init detection.
+    /// Decremented after each init(expr) is parsed.
+    pub(crate) init_field_tracking: bool,
+    /// #91: field names accessed via $ during the current init(expr) parse.
+    pub(crate) init_field_deps: Vec<String>,
 }
 
 // Operators ordered on their precedence
@@ -258,6 +263,8 @@ impl Parser {
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             captured_names: Vec::new(),
+            init_field_tracking: false,
+            init_field_deps: Vec::new(),
         }
     }
 
@@ -1013,6 +1020,13 @@ impl Parser {
     }
 
     fn get_field(&mut self, d_nr: u32, f_nr: usize, code: Value) -> Value {
+        // #91: track $.<field> accesses during init(expr) parsing.
+        if self.init_field_tracking && code == Value::Var(0) && f_nr != usize::MAX {
+            let name = self.data.attr_name(d_nr, f_nr);
+            if !self.init_field_deps.contains(&name) {
+                self.init_field_deps.push(name);
+            }
+        }
         let tp = self.data.attr_type(d_nr, f_nr);
         let nullable = self.data.attr_nullable(d_nr, f_nr);
         self.expr_not_null = !nullable;
