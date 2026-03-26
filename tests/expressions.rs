@@ -284,6 +284,35 @@ fn tuple_with_text() {
         .result(Value::Int(5));
 }
 
+// ── T1.5 — Reference-tuple parameters ────────────────────────────────────────
+
+#[test]
+#[ignore = "T1.5: RefVar(Tuple) element access not yet wired in operators.rs"]
+fn ref_tuple_param_swap() {
+    // &(integer, integer) parameter — swap elements via reference.
+    code!(
+        "fn swap(pair: &(integer, integer)) {
+            tmp = pair.0;
+            pair.0 = pair.1;
+            pair.1 = tmp;
+         }"
+    )
+    .expr("p = (3, 7); swap(&p); p.0 * 10 + p.1")
+    .result(Value::Int(73));
+}
+
+// ── T1.6 — Tuple-aware mutation guard ────────────────────────────────────────
+
+#[test]
+#[ignore = "T1.6: tuple mutation guard requires T1.5 ref-param element access"]
+fn ref_tuple_unused_mutation_error() {
+    // &(integer, integer) parameter that is never mutated — should produce a warning.
+    code!("fn read_only(pair: &(integer, integer)) -> integer { pair.0 + pair.1 }")
+        .expr("read_only(&(3, 7))")
+        .warning("Parameter 'pair' does not need to be a reference")
+        .result(Value::Int(10));
+}
+
 // ── A5.3 — Closure capture at call site ─────────────────────────────────────
 
 #[test]
