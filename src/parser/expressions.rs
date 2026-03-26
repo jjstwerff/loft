@@ -366,8 +366,11 @@ use a separate collection or add after the loop"
         if var_nr == u16::MAX {
             self.validate_write(to, &parent_tp);
         }
-        // materialise an iterator (e.g. v[a..b] slice) into a vector variable.
+        // materialise a collection iterator (e.g. v[a..b] slice) into a vector variable.
+        // CO1.3c: skip materialisation for coroutine iterators (second type is Null).
+        let is_coroutine_iter = matches!(&s_type, Type::Iterator(_, it) if **it == Type::Null);
         if matches!(&s_type, Type::Iterator(_, _))
+            && !is_coroutine_iter
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
             && matches!(op, "=" | "+=")

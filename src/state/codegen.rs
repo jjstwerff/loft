@@ -1007,6 +1007,10 @@ impl State {
                     .insert(self.code_pos, stack.data.def(*c).known_type);
                 stack.add_op("OpVarRef", self);
             }
+            // CO1.3c: iterator variables are DbRef-sized (coroutine frame reference).
+            Type::Iterator(_, _) => {
+                stack.add_op("OpVarRef", self);
+            }
             Type::Tuple(elems) => {
                 // T1.4: read whole tuple by reading each element.
                 let elems = elems.clone();

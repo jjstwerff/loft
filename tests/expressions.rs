@@ -325,7 +325,6 @@ fn closure_capture_text() {
 // ── CO1.2 — OpCoroutineCreate + OpCoroutineNext ─────────────────────────────
 
 #[test]
-#[ignore = "CO1.2: OpCoroutineCreate not yet implemented"]
 fn coroutine_create_basic() {
     // A generator function should return an iterator without executing the body.
     code!(
@@ -340,7 +339,6 @@ fn coroutine_create_basic() {
 }
 
 #[test]
-#[ignore = "CO1.2: OpCoroutineNext not yet implemented"]
 fn coroutine_next_sequence() {
     // Successive next() calls advance the generator.
     code!(
@@ -358,13 +356,13 @@ fn coroutine_next_sequence() {
 }
 
 #[test]
-#[ignore = "CO1.2: OpCoroutineCreate not yet implemented"]
+#[ignore = "CO1.3c: exhausted(gen) hits store validation on coroutine DbRef after yield/resume"]
 fn coroutine_exhausted() {
     // After all yields, exhausted() returns true.
     code!(
-        "fn single() -> iterator<integer> { yield 42; }
+        "fn one_val() -> iterator<integer> { yield 42; }
          fn check() -> boolean {
-            gen = single();
+            gen = one_val();
             next(gen);
             exhausted(gen)
          }"
@@ -374,7 +372,7 @@ fn coroutine_exhausted() {
 }
 
 #[test]
-#[ignore = "CO1.2: coroutine for-loop integration not yet implemented"]
+#[ignore = "CO1.5: for-loop over generator not yet wired"]
 fn coroutine_for_loop() {
     // Generator consumed by a for loop.
     code!(
