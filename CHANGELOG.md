@@ -119,6 +119,18 @@ All notable changes to the loft language and interpreter.
 - **`exhausted()` stdlib** (CO1.6) — `OpCoroutineExhausted` opcode and `pub fn
   exhausted(gen) -> boolean` declared in `05_coroutine.loft`.
 
+- **`next()` stack tracking fix** (CO1.6a) — `OpCoroutineNext` and
+  `OpCoroutineExhausted` now bypass the operator codegen path.  Stack position
+  manually adjusted for DbRef consumption and value push.
+
+- **Null sentinel on exhaustion** (CO1.6c) — `coroutine_next` pushes `i32::MIN`
+  (integer null) when the generator is exhausted, not uninitialized bytes.
+
+- **For-loop over generators** (CO1.5a+b) — `for n in gen() { ... }` works.
+  The iterator protocol detects generator calls, stores the DbRef in a `__gen`
+  variable, and uses `OpCoroutineNext` as the advance step with null-check
+  termination.  All 6 coroutine tests pass.
+
 ### Bug fixes
 
 - **Fix #87** — `static_call` no longer snapshots the call stack on every native
