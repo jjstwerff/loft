@@ -59,22 +59,20 @@ fn if_typing() {
 // ── T1.1 — Type::Tuple helpers ──────────────────────────────────────────────
 
 #[test]
-#[ignore = "T1.1: Type::Tuple not yet added to type system"]
 fn tuple_element_offsets() {
-    // element_offsets for [integer, text, float] should be [0, 4, 28]
-    // (integer=4, text=24 on 64-bit via Str struct, float=8)
-    use loft::data::{Type, element_offsets};
+    use loft::data::{Type, element_offsets, element_size};
     let types = [
         Type::Integer(i32::MIN, i32::MAX as u32),
         Type::Text(vec![]),
         Type::Float,
     ];
     let offsets = element_offsets(&types);
-    assert_eq!(offsets, vec![0, 4, 28]);
+    // integer=4 at 0, text=Str size at 4, float=8 after text
+    let text_sz = element_size(&Type::Text(vec![]));
+    assert_eq!(offsets, vec![0, 4, 4 + text_sz]);
 }
 
 #[test]
-#[ignore = "T1.1: Type::Tuple not yet added to type system"]
 fn tuple_owned_elements() {
     // owned_elements for [integer, text, reference<T>] should return text and ref entries
     use loft::data::{Type, owned_elements};
