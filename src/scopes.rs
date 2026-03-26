@@ -217,6 +217,9 @@ impl Scopes {
             Value::Tuple(elems) => {
                 Value::Tuple(elems.iter().map(|v| self.scan(v, function, data)).collect())
             }
+            Value::TupleGet(var, idx) => {
+                Value::TupleGet(*self.var_mapping.get(var).unwrap_or(var), *idx)
+            }
             _ => val.clone(),
         }
     }

@@ -93,6 +93,8 @@ pub enum Value {
     Keys(Vec<Key>),
     /// T1.2: Tuple literal — elements are evaluated left-to-right onto contiguous stack slots.
     Tuple(Vec<Value>),
+    // T1.4: Read element idx of tuple variable var_nr.
+    TupleGet(u16, u16),
 }
 
 #[allow(dead_code)]
@@ -1710,6 +1712,9 @@ impl Data {
                     self.show_code(write, vars, e, indent, false)?;
                 }
                 write!(write, ")")
+            }
+            Value::TupleGet(var, idx) => {
+                write!(write, "{}.{idx}", vars.name(*var))
             }
         }
     }

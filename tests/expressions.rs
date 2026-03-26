@@ -221,7 +221,7 @@ fn call_stack_recursive() {
 // ── T1.2 — Tuple parser (notation, literals, destructuring) ─────────────────
 
 #[test]
-#[ignore = "T1.2: tuple type notation not yet implemented"]
+#[ignore = "T1.4: tuple return from function + temp element access needs work-var codegen"]
 fn tuple_type_return() {
     // A function returning a tuple type should parse and compile.
     code!(
@@ -234,21 +234,19 @@ fn tuple_type_return() {
 }
 
 #[test]
-#[ignore = "T1.2: tuple literal parsing not yet implemented"]
 fn tuple_literal_basic() {
     // A tuple literal assigned to a variable; element access via .0 / .1.
     expr!("t = (10, 20); t.0 + t.1").result(Value::Int(30));
 }
 
 #[test]
-#[ignore = "T1.2: tuple element access not yet implemented"]
 fn tuple_element_access_three() {
     // Three-element tuple with mixed types — access each element.
     expr!("t = (1, 2, 3); t.0 + t.1 + t.2").result(Value::Int(6));
 }
 
 #[test]
-#[ignore = "T1.2: tuple destructuring not yet implemented"]
+#[ignore = "T1.4: tuple destructuring codegen needs tuple-returning function support"]
 fn tuple_destructure_basic() {
     // LHS destructuring: (a, b) = expr.
     code!("fn pair(x: integer) -> (integer, integer) { (x, x * 2) }")
@@ -257,21 +255,19 @@ fn tuple_destructure_basic() {
 }
 
 #[test]
-#[ignore = "T1.2: tuple element assignment not yet implemented"]
+#[ignore = "T1.4: tuple element assignment codegen not yet implemented"]
 fn tuple_element_assign() {
     // Assigning to an individual tuple element: t.0 = expr.
     expr!("t = (1, 2); t.0 = 10; t.0 + t.1").result(Value::Int(12));
 }
 
 #[test]
-#[ignore = "T1.2: tuple type annotation not yet implemented"]
 fn tuple_type_annotation() {
     // Explicit tuple type annotation on a variable.
     expr!("t: (integer, integer) = (3, 4); t.0 + t.1").result(Value::Int(7));
 }
 
 #[test]
-#[ignore = "T1.2: tuple as function parameter not yet implemented"]
 fn tuple_parameter() {
     // Tuple type as a function parameter.
     code!("fn sum_pair(p: (integer, integer)) -> integer { p.0 + p.1 }")
@@ -280,7 +276,7 @@ fn tuple_parameter() {
 }
 
 #[test]
-#[ignore = "T1.2: tuple with text element not yet implemented"]
+#[ignore = "T1.4: tuple with text element needs text-return calling convention"]
 fn tuple_with_text() {
     // Tuple containing a text element — verify text is accessible.
     code!("fn greet(name: text) -> (integer, text) { (len(name), name) }")

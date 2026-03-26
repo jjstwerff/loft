@@ -123,6 +123,7 @@ impl State {
         result
     }
 
+    #[allow(clippy::too_many_lines)]
     fn generate_inner(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
         match val {
             Value::Int(value) => {
@@ -203,14 +204,50 @@ impl State {
                 Type::Void
             }
             Value::Tuple(elems) => {
-                // T1.2: generate each element onto contiguous stack slots.
-                // Full codegen will be implemented in T1.4.
+                // T1.4: generate each element onto contiguous stack slots.
                 let mut types = Vec::new();
                 for e in elems {
                     let t = self.generate(e, stack, false);
                     types.push(t);
                 }
                 Type::Tuple(types)
+            }
+            Value::TupleGet(var_nr, elem_idx) => {
+                // T1.4: read element elem_idx from tuple variable var_nr.
+                let tuple_tp = stack.function.tp(*var_nr).clone();
+                let Type::Tuple(ref elems) = tuple_tp else {
+                    panic!("TupleGet on non-tuple variable");
+                };
+                let idx = *elem_idx as usize;
+                let elem_tp = elems[idx].clone();
+                let offsets = crate::data::element_offsets(elems);
+                let elem_offset = offsets[idx] as u16;
+                // The element is at tuple_var_stack_pos + elem_offset.
+                // Compute distance from current stack top to that position.
+                let tuple_var_pos = stack.function.stack(*var_nr);
+                let elem_abs_pos = tuple_var_pos + elem_offset;
+                let var_pos = stack.position - elem_abs_pos;
+                let code_pos = self.code_pos;
+                match &elem_tp {
+                    Type::Integer(_, _) | Type::Function(_, _) => {
+                        stack.add_op("OpVarInt", self);
+                    }
+                    Type::Boolean => stack.add_op("OpVarBool", self),
+                    Type::Long => stack.add_op("OpVarLong", self),
+                    Type::Float => stack.add_op("OpVarFloat", self),
+                    Type::Single => stack.add_op("OpVarSingle", self),
+                    Type::Character => stack.add_op("OpVarCharacter", self),
+                    Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
+                    Type::Text(_) => stack.add_op("OpVarText", self),
+                    Type::Reference(c, _) | Type::Enum(c, true, _) => {
+                        self.types
+                            .insert(self.code_pos, stack.data.def(*c).known_type);
+                        stack.add_op("OpVarRef", self);
+                    }
+                    _ => panic!("TupleGet: unsupported element type {elem_tp:?}"),
+                }
+                self.code_add(var_pos);
+                self.insert_types(elem_tp.clone(), code_pos, stack)
             }
         }
     }
@@ -894,6 +931,7 @@ impl State {
         ret_type
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_var(&mut self, stack: &mut Stack, variable: u16) -> Type {
         assert!(
             stack.function.stack(variable) <= stack.position,
@@ -942,6 +980,36 @@ impl State {
                 self.types
                     .insert(self.code_pos, stack.data.def(*c).known_type);
                 stack.add_op("OpVarRef", self);
+            }
+            Type::Tuple(elems) => {
+                // T1.4: read whole tuple by reading each element.
+                let elems = elems.clone();
+                let tuple_base = stack.function.stack(variable);
+                let offsets = crate::data::element_offsets(&elems);
+                for (i, elem_tp) in elems.iter().enumerate() {
+                    let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
+                    match elem_tp {
+                        Type::Integer(_, _) | Type::Function(_, _) => {
+                            stack.add_op("OpVarInt", self);
+                        }
+                        Type::Boolean => stack.add_op("OpVarBool", self),
+                        Type::Long => stack.add_op("OpVarLong", self),
+                        Type::Float => stack.add_op("OpVarFloat", self),
+                        Type::Single => stack.add_op("OpVarSingle", self),
+                        Type::Character => stack.add_op("OpVarCharacter", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
+                        Type::Text(_) => stack.add_op("OpVarText", self),
+                        Type::Reference(c, _) | Type::Enum(c, true, _) => {
+                            self.types
+                                .insert(self.code_pos, stack.data.def(*c).known_type);
+                            stack.add_op("OpVarRef", self);
+                        }
+                        _ => panic!("Tuple var: unsupported element type {elem_tp:?}"),
+                    }
+                    self.code_add(elem_pos);
+                    // Note: add_op already adjusts stack.position for the pushed value.
+                }
+                return self.insert_types(stack.function.tp(variable).clone(), code, stack);
             }
             _ => panic!(
                 "Unknown var '{}' type {} at {}",
@@ -1190,6 +1258,38 @@ impl State {
             Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
                 stack.add_op("OpPutRef", self);
             }
+            Type::Tuple(elems) => {
+                // T1.4: store each element from the stack into the variable.
+                // Elements are on the stack in order; emit OpPut* for each in
+                // reverse order (last element is at top of stack).
+                let elems = elems.clone();
+                let offsets = crate::data::element_offsets(&elems);
+                let tuple_var_base = stack.function.stack(var);
+                for i in (0..elems.len()).rev() {
+                    let elem_abs = tuple_var_base + offsets[i] as u16;
+                    // After popping previous elements, adjust position.
+                    let pos = stack.position - elem_abs;
+                    match &elems[i] {
+                        Type::Integer(_, _) | Type::Function(_, _) => {
+                            stack.add_op("OpPutInt", self);
+                        }
+                        Type::Boolean => stack.add_op("OpPutBool", self),
+                        Type::Long => stack.add_op("OpPutLong", self),
+                        Type::Float => stack.add_op("OpPutFloat", self),
+                        Type::Single => stack.add_op("OpPutSingle", self),
+                        Type::Character => stack.add_op("OpPutCharacter", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                        Type::Text(_) => stack.add_op("OpAppendText", self),
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                            stack.add_op("OpPutRef", self);
+                        }
+                        _ => panic!("Tuple set: unsupported element type {:?}", elems[i]),
+                    }
+                    self.code_add(pos);
+                    // Note: add_op already adjusts stack.position for the popped element.
+                }
+                return;
+            }
             _ => panic!(
                 "Unknown var {} type {} at {}",
                 stack.function.name(var),
@@ -1369,6 +1469,9 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
                 print_ir(e, data, vars, depth);
             }
             eprint!(")");
+        }
+        Value::TupleGet(var, idx) => {
+            eprint!("{}.{idx}", vars.name(*var));
         }
     }
 }

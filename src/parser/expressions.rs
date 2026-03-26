@@ -54,7 +54,8 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Line(_)
         | Value::Break(_)
         | Value::Continue(_)
-        | Value::Keys(_) => false,
+        | Value::Keys(_)
+        | Value::TupleGet(_, _) => false,
     }
 }
 
@@ -546,7 +547,13 @@ use a separate collection or add after the loop"
                         rhs_elems.len()
                     );
                 }
-                // Assign types to destructured variables; codegen deferred to T1.4.
+                // T1.4: create a temp variable for the RHS tuple, then read elements.
+                let tmp_tp = rhs_type.clone();
+                let tmp = self.vars.work_refs(&tmp_tp, &mut self.lexer);
+                if !self.first_pass {
+                    self.change_var_type(tmp, &tmp_tp);
+                }
+                let mut steps = vec![Value::Set(tmp, Box::new(rhs))];
                 for (i, &v_nr) in var_nrs.iter().enumerate() {
                     if !self.first_pass && self.vars.exists(v_nr) {
                         self.vars.defined(v_nr);
@@ -554,14 +561,9 @@ use a separate collection or add after the loop"
                             self.change_var_type(v_nr, &rhs_elems[i]);
                         }
                     }
+                    steps.push(Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16))));
                 }
-                if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Tuple destructuring not yet implemented (T1.4)"
-                    );
-                }
+                *code = Value::Insert(steps);
             } else if !self.first_pass {
                 diagnostic!(
                     self.lexer,
