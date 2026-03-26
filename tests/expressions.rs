@@ -56,6 +56,28 @@ fn if_typing() {
 
 // N6 generated_code_compiles and native_test_suite moved to tests/native.rs
 
+// ── CO1.1 — CoroutineStatus enum ────────────────────────────────────────────
+// Verify the CoroutineStatus enum from default/05_coroutine.loft.
+
+#[test]
+#[ignore = "CO1.1: CoroutineStatus not yet in default library"]
+fn coroutine_status_construct() {
+    code!(
+        "fn check(s: CoroutineStatus) -> boolean {
+               match s { Created => true, _ => false }
+           }"
+    )
+    .expr("check(CoroutineStatus.Created)")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "CO1.1: CoroutineStatus not yet in default library"]
+fn coroutine_status_ordering() {
+    // Enum variant ordering: Created < Suspended < Running < Exhausted
+    expr!("CoroutineStatus.Created < CoroutineStatus.Exhausted").result(Value::Boolean(true));
+}
+
 // ── TR1.2 — StackFrame + ArgValue type declarations ─────────────────────────
 // Verify the types from default/04_stacktrace.loft can be constructed and used.
 
