@@ -87,7 +87,8 @@ impl State {
         if let Some(v) = self.calls.get(&def_nr) {
             let old = self.code_pos;
             for pos in v.clone() {
-                self.code_pos = pos + 3;
+                // skip opcode(1) + d_nr(4) + args_size(2) to reach the i32 target
+                self.code_pos = pos + 7;
                 self.code_add(start as i32);
             }
             self.code_pos = old;
@@ -757,7 +758,15 @@ impl State {
         } else {
             self.calls.entry(op).or_default().push(self.code_pos);
             stack.add_op("OpCall", self);
-            self.code_add(0u16);
+            self.code_add(op); // d_nr: u32
+            let args_size: u16 = stack
+                .data
+                .def(op)
+                .attributes
+                .iter()
+                .map(|a| size(&a.typedef, &Context::Argument))
+                .sum();
+            self.code_add(args_size);
             self.code_add(stack.data.def(op).code_position as i32);
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {

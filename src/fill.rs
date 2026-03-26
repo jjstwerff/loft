@@ -286,9 +286,10 @@ fn goto_false_word(s: &mut State) {
 }
 
 fn call(s: &mut State) {
-    let v_size = *s.code::<u16>();
+    let v_d_nr = *s.code::<i32>();
+    let v_args_size = *s.code::<u16>();
     let v_to = *s.code::<i32>();
-    s.fn_call(v_size, v_to);
+    s.fn_call(v_d_nr as u32, v_args_size, v_to);
 }
 
 fn op_return(s: &mut State) {

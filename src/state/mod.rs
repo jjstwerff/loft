@@ -23,6 +23,22 @@ use std::sync::Arc;
 
 pub const STRING_NULL: &str = "\0";
 
+/// One entry in the shadow call-frame vector (TR1.1).
+/// Pushed by `fn_call`, popped by `fn_return`.  Stores enough information for
+/// `stack_trace()` to reconstruct function names, source lines, and argument
+/// values without walking the raw bytecode stack.
+#[derive(Clone, Debug)]
+pub struct CallFrame {
+    /// Definition number of the called function.
+    pub d_nr: u32,
+    /// Bytecode position of the call instruction (for line-number lookup).
+    pub call_pos: u32,
+    /// Absolute stack position of the first argument byte.
+    pub args_base: u32,
+    /// Total byte size of all parameters.
+    pub args_size: u16,
+}
+
 /// Internal State of the interpreter to run bytecode.
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
@@ -49,6 +65,8 @@ pub struct State {
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: HashMap<u32, u32>,
     pub(crate) fn_positions: Vec<u32>,
+    /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
+    pub call_stack: Vec<CallFrame>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
 }
@@ -88,6 +106,7 @@ impl State {
             text_positions: BTreeSet::new(),
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
+            call_stack: Vec::new(),
             generate_depth: 0,
         }
     }
@@ -101,11 +120,18 @@ impl State {
 
     /// Call a function, remember the current code position on the stack.
     ///
-    /// * `size` - the amount of stack space maximally needed for the new function.
+    /// * `d_nr` - definition number of the called function.
+    /// * `args_size` - total byte size of all parameters.
     /// * `to` - the code position where the called function resides.
-    pub fn fn_call(&mut self, _size: u16, to: i32) {
+    pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
+        let args_base = self.stack_pos - u32::from(args_size);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: self.code_pos,
+            args_base,
+            args_size,
+        });
         self.put_stack(self.code_pos);
-        // TODO allow to switch stacks
         self.code_pos = to as u32;
     }
 
@@ -120,7 +146,7 @@ impl State {
             "fn_call_ref: d_nr {d_nr} out of range"
         );
         let code_pos = self.fn_positions[d_nr] as i32;
-        self.fn_call(arg_size, code_pos);
+        self.fn_call(d_nr as u32, arg_size, code_pos);
     }
 
     pub fn static_call(&mut self) {
@@ -160,6 +186,7 @@ impl State {
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
+        self.call_stack.pop();
     }
 
     /**
@@ -503,6 +530,7 @@ impl State {
             text_positions: BTreeSet::new(),
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
+            call_stack: Vec::new(),
             generate_depth: 0,
         }
     }
