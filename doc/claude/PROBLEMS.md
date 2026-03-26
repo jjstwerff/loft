@@ -34,6 +34,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 81 | Struct-enum variants with same-named fields read wrong offset | Medium | Use distinct field names per variant |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
+| 87 | `static_call` snapshots call stack on every native function call | Medium | N/A — performance regression from TR1.3 |
+| 88 | Entry function missing from `stack_trace()` output | Low | N/A — call from a nested function to see the trace |
+| 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
+| 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 
 ---
 
@@ -330,6 +334,95 @@ supported") before codegen runs.  The underlying issue (no actual closure captur
 tracked as A5.2–A5.5.
 
 **Discovered:** 2026-03-26, during A5.1 testing.
+
+---
+
+### 87. `static_call` snapshots call stack on every native function call
+
+**Symptom:** Performance regression introduced by TR1.3.  `static_call` now clones
+function names and file paths for every frame in `call_stack` on **every** native
+function call — all 56 registered functions — even though only `n_stack_trace` uses
+the snapshot.  Programs with deep call stacks and frequent native calls (string
+operations, I/O, math) allocate Strings and a Vec on every call.
+
+**Root cause:** The snapshot in `static_call` (state/mod.rs) runs unconditionally
+whenever `call_stack` is non-empty and `data_ptr` is set.  It cannot distinguish
+which native function is about to be called before the dispatch happens.
+
+**Fix path:** Check whether the native function about to be called is `n_stack_trace`
+before building the snapshot.  Compare `call` (the library index read from bytecode)
+against a cached index for `n_stack_trace` stored on State at init time.  Skip the
+snapshot for all other native functions.
+
+**Discovered:** 2026-03-26, during TR1.3 implementation.
+
+---
+
+### 88. Entry function missing from `stack_trace()` output
+
+**Symptom:** `stack_trace()` called from `main()` returns an empty vector.  Called
+from a function invoked by `main()`, the trace starts at that function — `main`
+itself never appears.
+
+**Root cause:** `execute_argv` jumps directly to the entry function by setting
+`code_pos = pos` without going through `fn_call`.  No `CallFrame` is pushed for the
+entry function.  All other calls go through `fn_call` which pushes correctly.
+
+**Workaround:** Call `stack_trace()` from a nested function, not from `main` directly.
+
+**Fix path:** Push a synthetic `CallFrame` for the entry function at the start of
+`execute_argv` (after the `fn_positions` setup), pop it after the dispatch loop exits.
+The synthetic frame uses `d_nr` from the entry function lookup and `call_pos = 0`
+(no call site).
+
+**Discovered:** 2026-03-26, during TR1.3 testing.
+
+---
+
+### 89. Hard-coded `StackFrame` field offsets in `n_stack_trace`
+
+**Symptom:** `n_stack_trace` in native.rs writes StackFrame fields at hard-coded byte
+offsets (0, 4, 8) that must match the field order in `default/04_stacktrace.loft`.
+If the struct definition is reordered, fields are renamed, or types change, the
+native function silently writes to wrong positions — producing garbage values at
+runtime with no compile-time or startup check.
+
+**Root cause:** Native functions cannot call into the type system at runtime.  The
+field layout is determined by `calc::calculate_positions` during compilation, but
+`n_stack_trace` hard-codes the result.
+
+**Workaround:** Do not modify the StackFrame struct without updating the offsets in
+`n_stack_trace`.
+
+**Fix path:** At startup (in `native::init` or `compile::byte_code`), look up the
+StackFrame type's field positions from the database schema and store them in a
+struct on State.  The native function reads positions from that struct instead of
+using literals.  Alternatively, assert the expected layout at startup and panic
+with a clear message if it doesn't match.
+
+**Discovered:** 2026-03-26, during TR1.3 implementation.
+
+---
+
+### 90. `fn_call` HashMap lookup for line number on every call
+
+**Symptom:** TR1.4 added `self.line_numbers.get(&self.code_pos)` to `fn_call`,
+which runs on every loft function call.  Before TR1.4, the line lookup only happened
+during the rare `stack_trace()` snapshot.  This adds a HashMap probe to the hot path.
+
+**Root cause:** The source line is not encoded in the OpCall bytecode operands.
+It is stored in a separate `line_numbers: HashMap<u32, u32>` keyed by bytecode
+position, and must be looked up at runtime.
+
+**Workaround:** None needed — the overhead is small (O(1) amortised HashMap lookup)
+relative to the `Vec::push` and function dispatch already in `fn_call`.
+
+**Fix path (if measured as significant):** Encode the source line as an additional
+OpCall bytecode operand (u32) in codegen.  The `call` handler in fill.rs reads it
+and passes it to `fn_call`, eliminating the runtime lookup entirely.  This would
+increase each OpCall instruction by 4 bytes.
+
+**Discovered:** 2026-03-26, during TR1.4 implementation.
 
 ---
 
