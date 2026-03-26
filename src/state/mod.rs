@@ -104,6 +104,9 @@ pub struct State {
     pub(crate) fn_positions: Vec<u32>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
+    /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
+    /// Used by `OpStackTrace` to resolve function names.
+    pub(crate) data_ptr: *const crate::data::Data,
     /// Coroutine frame storage (CO1.1).  Index 0 is always `None` (null sentinel).
     pub coroutines: Vec<Option<Box<CoroutineFrame>>>,
     /// Indices of currently-running coroutines in `coroutines`.
@@ -148,6 +151,7 @@ impl State {
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
+            data_ptr: std::ptr::null(),
             coroutines: vec![None], // index 0 = null sentinel
             active_coroutines: Vec::new(),
             generate_depth: 0,
@@ -194,6 +198,28 @@ impl State {
 
     pub fn static_call(&mut self) {
         let call = *self.code::<u16>();
+        // TR1.3: snapshot call_stack into Stores so native functions can build
+        // a stack trace without direct State access.  Only populated when needed
+        // — the native function checks and consumes it.
+        if !self.call_stack.is_empty() && !self.data_ptr.is_null() {
+            // SAFETY: data_ptr is set in execute_argv and valid during execution.
+            let data = unsafe { &*self.data_ptr };
+            self.database.call_stack_snapshot = self
+                .call_stack
+                .iter()
+                .map(|f| {
+                    let def = &data.definitions[f.d_nr as usize];
+                    let name = if def.name.starts_with("n_") {
+                        def.name[2..].to_string()
+                    } else {
+                        def.name.clone()
+                    };
+                    let file = def.position.file.clone();
+                    let line = self.line_numbers.get(&f.call_pos).copied().unwrap_or(0);
+                    (name, file, line)
+                })
+                .collect();
+        }
         let mut stack = self.stack_cur;
         stack.pos = 8 + self.stack_pos;
         self.library[call as usize](&mut self.database, &mut stack);
@@ -491,6 +517,7 @@ impl State {
         let tc_ptr = &raw const self.text_code;
         let lib_ptr = &raw const self.library;
         let data_ptr = std::ptr::from_ref::<Data>(data);
+        self.data_ptr = data_ptr;
         self.database.parallel_ctx = Some(Box::new(ParallelCtx {
             bytecode: bc_ptr,
             text_code: tc_ptr,
@@ -608,6 +635,7 @@ impl State {
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
+            data_ptr: std::ptr::null(),
             coroutines: vec![None],
             active_coroutines: Vec::new(),
             generate_depth: 0,

@@ -44,3 +44,8 @@ pub struct StackFrame {
   arguments: vector<ArgInfo>,
   variables: vector<VarInfo>,
 }
+
+/// Return the current call stack as a vector of frames, outermost first.
+/// Arguments are not yet populated (empty vectors); line numbers use the
+/// call-site position from the shadow call-frame vector.
+pub fn stack_trace() -> vector<StackFrame>;

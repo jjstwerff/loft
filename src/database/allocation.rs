@@ -253,6 +253,7 @@ impl Stores {
             logger: self.logger.clone(),
             had_fatal: false,
             start_time: self.start_time,
+            call_stack_snapshot: Vec::new(),
         }
     }
 
