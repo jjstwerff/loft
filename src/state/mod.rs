@@ -408,6 +408,42 @@ impl State {
         }
     }
 
+    /// CO1.3a: exhaust a running coroutine — cleanup and return null to consumer.
+    /// # Panics
+    /// Panics if no coroutine is currently active.
+    pub fn coroutine_return(&mut self, value_size: u32) {
+        let idx = *self
+            .active_coroutines
+            .last()
+            .expect("OpCoroutineReturn outside active coroutine");
+        let frame = self.coroutine_frame_mut(idx);
+
+        // Drop serialised state.
+        frame.text_owned.clear();
+        frame.stack_bytes.clear();
+
+        let call_depth = frame.call_depth;
+        let stack_base = frame.stack_base;
+        let caller_return_pos = frame.caller_return_pos;
+
+        // Exhaust.
+        frame.status = CoroutineStatus::Exhausted;
+        self.active_coroutines.pop();
+
+        // Restore call stack to consumer depth.
+        self.call_stack.truncate(call_depth);
+
+        // Rewind stack to frame base; push typed null.
+        self.stack_pos = stack_base;
+        // Zero-fill value_size bytes as the null return value.
+        for _ in 0..value_size {
+            self.put_stack(0u8);
+        }
+
+        // Return to consumer.
+        self.code_pos = caller_return_pos;
+    }
+
     /**
     Clear the stack of local variables, possibly return a value.
     * `value` - Size of the return value.
