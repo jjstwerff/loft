@@ -434,7 +434,65 @@ the recompile overhead that caching was designed to address)
 
 - **CO1.1** — *(completed 0.8.3)* `CoroutineStatus` enum in `default/05_coroutine.loft`; `CoroutineFrame` struct, coroutine storage, and helpers on State.
 - **CO1.2** — *(completed 0.8.3)* `OpCoroutineCreate` + `OpCoroutineNext` opcodes: frame construction (argument copy, COROUTINE_STORE DbRef push) and advance (stack restore, call-frame restore, state machine).
-- **CO1.3** — `OpYield`: serialise live stack to heap frame, return to caller.
+- **CO1.3** — `OpYield` + `OpCoroutineReturn` + parser `yield` keyword.  Split into five independently testable sub-steps:
+
+  **CO1.3a — `OpCoroutineReturn` opcode (runtime only)** (`src/fill.rs`, `src/state/mod.rs`):
+  Implement `OpCoroutineReturn(value_size: u16)` as described in COROUTINE.md § Exhaustion.
+  The opcode clears `text_owned` and `stack_bytes`, truncates `call_stack` to `call_depth`,
+  marks the frame `Exhausted`, pops `active_coroutines`, rewinds `stack_pos` to
+  `frame.stack_base`, pushes `value_size` null bytes, and jumps to `caller_return_pos`.
+  Declare in `default/02_images.loft` with `#rust` annotation; add to `OPERATORS` array.
+  Fixes issue #96.
+  *Test:* a manually-constructed `Created` frame (via `OpCoroutineCreate`) can be advanced
+  once with `OpCoroutineNext` and then `OpCoroutineReturn` fires; `exhausted()` returns true
+  afterward.  This test builds the bytecode sequence directly in Rust, bypassing the parser.
+  **Effort:** Small.
+
+  **CO1.3b — `OpYield` opcode (runtime only, integer-only)** (`src/fill.rs`, `src/state/mod.rs`):
+  Implement `OpYield(value_size: u16)` for the **integer-only case** (no text serialisation).
+  Steps: read `active_coroutines.last()` → serialise `stack[stack_base..stack_pos]` into
+  `stack_bytes` → save call frames above `call_depth` → set `code_pos` to current position →
+  mark `Suspended` → pop `active_coroutines` → slide yielded value bytes to `stack_base` →
+  set `stack_pos = stack_base + value_size` → jump to `caller_return_pos`.
+  Text serialisation (`serialise_text_slots`) is deferred to CO1.3d; for now `text_owned`
+  stays empty and the invariant "no text locals in the yielded generator" must hold.
+  Declare in `default/02_images.loft` with `#rust` annotation; add to `OPERATORS` array.
+  Fixes issue #95 (active_coroutines now popped on yield).
+  *Test:* a generator that yields a single integer → `OpCoroutineCreate` + `OpCoroutineNext`
+  returns the value; second advance returns null.  Built in Rust bypassing the parser.
+  **Effort:** Medium.
+
+  **CO1.3c — Parser: `yield` keyword + `iterator<T>` return type** (`src/parser/control.rs`, `src/parser/definitions.rs`):
+  Recognise `yield expr;` as a statement inside functions whose return type is `iterator<T>`.
+  Emit `Value::Call(OpYield_d_nr, [expr])` or a new `Value::Yield(Box<Value>)` IR node.
+  In codegen, when encountering a call to a function returning `iterator<T>`, emit
+  `OpCoroutineCreate` instead of `OpCall`.  When encountering `Value::Yield`, emit the
+  expression followed by `OpYield(value_size)`.  At the end of a generator body, emit
+  `OpCoroutineReturn(value_size)` instead of `OpReturn`.
+  This is the step that makes the user-facing `yield` keyword work.
+  *Test:* `fn count() -> iterator<integer> { yield 1; yield 2; }` — advance twice, get 1
+  then 2, then exhausted.  Uses the `code!()` / `expr!()` test macros.
+  **Effort:** Medium.
+
+  **CO1.3d — Text serialisation (`serialise_text_slots`)** (`src/state/mod.rs`):
+  Implement `serialise_text_slots` per COROUTINE.md § serialise_text_slots contract.
+  Call it from `coroutine_create` (fixes issue #94) and `OpYield`.  Also implement the
+  resume-time patch in `coroutine_next` (write `Str` pointers from `text_owned` into
+  `stack_bytes` before copying to the live stack).
+  *Test:* a generator that takes a `text` parameter and yields `len(text)` — the text
+  must survive the yield/resume cycle without dangling pointers.
+  **Effort:** Medium–High (the `Str` layout and `database.free_dynamic_str` integration
+  require careful pointer handling).
+
+  **CO1.3e — Nested yield (yield inside helper function)** (`src/state/mod.rs`):
+  Verify and fix the call-stack save/restore in `OpYield` and `OpCoroutineNext` for the
+  case where `yield` fires inside a function called from the generator (stackful yield).
+  The `call_frames` save/restore is already sketched in CO1.3b but has not been tested
+  with actual nested calls.
+  *Test:* `fn helper() -> integer { yield 42; }` called from a generator; the yield
+  must correctly save and restore the helper's call frame.
+  **Effort:** Small (verification + fix, not greenfield).
+
 - **CO1.4** — `yield from`: sub-generator delegation.
 - **CO1.5** — `for item in generator`: iterator protocol integration.
 - **CO1.6** — *(completed 0.8.3)* `exhausted()` stdlib function via `OpCoroutineExhausted` opcode.  `next()` uses `OpCoroutineNext` (CO1.2).
