@@ -288,7 +288,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from(["49-init-fields.loft"])
+    HashSet::from([])
 }
 
 macro_rules! script_test {
@@ -468,7 +468,6 @@ fn generics() -> std::io::Result<()> {
 
 /// L7: Verify init(expr) stored field initialiser with $ reference.
 #[test]
-#[ignore = "L7: init(expr) field modifier not yet implemented"]
 fn init_fields() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
