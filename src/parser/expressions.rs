@@ -546,9 +546,7 @@ use a separate collection or add after the loop"
                         rhs_elems.len()
                     );
                 }
-                // Assign each element to its variable.
-                // T1.4 will emit proper codegen; for now build Set IR.
-                let mut steps = Vec::new();
+                // Assign types to destructured variables; codegen deferred to T1.4.
                 for (i, &v_nr) in var_nrs.iter().enumerate() {
                     if !self.first_pass && self.vars.exists(v_nr) {
                         self.vars.defined(v_nr);
@@ -556,16 +554,14 @@ use a separate collection or add after the loop"
                             self.change_var_type(v_nr, &rhs_elems[i]);
                         }
                     }
-                    // Placeholder: Set(v_nr, element_i_of_rhs)
-                    steps.push(Value::Set(
-                        v_nr,
-                        Box::new(Value::Call(
-                            u32::MAX,
-                            vec![rhs.clone(), Value::Int(i as i32)],
-                        )),
-                    ));
                 }
-                *code = Value::Insert(steps);
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple destructuring not yet implemented (T1.4)"
+                    );
+                }
             } else if !self.first_pass {
                 diagnostic!(
                     self.lexer,

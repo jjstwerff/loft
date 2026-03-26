@@ -294,9 +294,15 @@ impl Parser {
                             t = Type::Unknown(0);
                         } else {
                             t = elems[idx].clone();
-                            // T1.4 will emit proper codegen; for now store index in IR.
-                            let tuple_val = code.clone();
-                            *code = Value::Call(u32::MAX, vec![tuple_val, Value::Int(idx as i32)]);
+                            if !self.first_pass {
+                                // T1.4 will emit proper codegen for tuple element access.
+                                // Until then, emit error so codegen does not run.
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "Tuple element access not yet implemented (T1.4)"
+                                );
+                            }
                         }
                     } else {
                         diagnostic!(

@@ -40,7 +40,11 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 | 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
-| 93 | T1.1 missing tuple-in-struct-field rejection rule | None | No impact until T1.2 parser support lands |
+| 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
+| 94 | CO1.2 text arguments not serialized in `coroutine_create` | High | Avoid `text` parameters in generator functions |
+| 95 | CO1.2 `active_coroutines` not popped on coroutine body return | High | N/A — coroutines cannot safely return yet (CO1.3) |
+| 96 | CO1.2 no `OpCoroutineReturn` — `OpReturn` corrupts coroutine state | High | N/A — coroutines cannot safely return yet (CO1.3) |
+| 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
 
 ---
 
@@ -481,15 +485,91 @@ sees `data_ptr.is_null()` and skips the snapshot.
 rejected in struct field positions and `Type::RefVar` in tuple element positions.
 These compile-time rejection rules are not implemented.
 
-**Impact:** None currently — there is no parser support for tuple syntax (T1.2), so
-users cannot create `Type::Tuple` values.  The rejections become necessary when T1.2
-lands to prevent accidental misuse.
+**Impact:** Low — T1.2 parser support has landed, so users can now write tuple type
+notation.  The rejection rules should be added before T1.4 (codegen) to prevent
+struct fields with tuple types from reaching the runtime.
 
 **Fix path:** Add checks in `typedef.rs::fill_all()`: when processing struct fields,
 emit an error if `attribute.typedef` is `Type::Tuple`.  Similarly reject `RefVar`
 inside tuple elements.
 
 **Discovered:** 2026-03-26, during T1.1 implementation.
+
+---
+
+### 94. CO1.2 text arguments not serialized in coroutine_create
+
+**Symptom:** `coroutine_create` copies raw argument bytes into the frame's `stack_bytes`
+but does not process dynamic `Str` slots.  If a generator function takes a `text`
+parameter, the saved `Str` pointer references memory on the live stack that is freed
+after the arguments are popped.  Resuming the coroutine would read a dangling pointer.
+
+**Impact:** High — memory corruption if a generator is called with a text argument.
+No user-visible impact yet because the compiler does not emit `OpCoroutineCreate`
+(parser integration is CO1.3+).
+
+**Fix path:** Implement `serialise_text_slots()` per COROUTINE.md § SC-CO-1: iterate
+`Str` slots in the saved bytes, clone each dynamic `String` into `text_owned`, and
+rewrite the `Str` pointer.  Call it in `coroutine_create` after copying argument bytes.
+
+**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
+
+---
+
+### 95. CO1.2 active_coroutines not popped on coroutine body return
+
+**Symptom:** When a coroutine body reaches the end or calls `return`, the ordinary
+`OpReturn` / `fn_return` runs.  It pops the call stack but does not pop
+`active_coroutines` or mark the frame as `Exhausted`.  The active list grows
+unbounded and the re-entrant check may fire incorrectly.
+
+**Impact:** High — leaked entries in `active_coroutines`.  No user-visible impact
+yet because the compiler does not emit `OpCoroutineCreate`.
+
+**Fix path:** Either (a) modify `fn_return` to detect it is inside a running
+coroutine (check `active_coroutines.last()`) and clean up, or (b) implement
+`OpCoroutineReturn` per COROUTINE.md § Runtime Design and have the compiler emit
+it instead of `OpReturn` for generator functions.  Approach (b) is cleaner; plan
+for CO1.3.
+
+**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
+
+---
+
+### 96. CO1.2 no OpCoroutineReturn — OpReturn corrupts coroutine state
+
+**Symptom:** There is no `OpCoroutineReturn` opcode.  When a running coroutine
+exits via `OpReturn`, the return address `get_var::<u32>(0)` reads from the
+coroutine's serialized stack — not from `frame.caller_return_pos` where
+`coroutine_next` stored the consumer's continuation.  This produces a wrong
+jump target.
+
+**Impact:** High — control flow corruption on coroutine body completion.  No
+user-visible impact yet because no parser path emits `OpCoroutineCreate`.
+
+**Fix path:** Implement `OpCoroutineReturn` in CO1.3 alongside `OpYield`.  The
+opcode should: clear `text_owned`, clear `stack_bytes`, mark `Exhausted`, pop
+`active_coroutines`, rewind stack to `frame.stack_base`, push a null value of the
+appropriate size, and jump to `frame.caller_return_pos`.
+
+**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
+
+---
+
+### 97. T1.2 compound assignment on tuple destructuring not rejected
+
+**Symptom:** `(a, b) += expr` does not trigger the tuple destructuring path (which
+only checks for `=`).  It falls through to the regular assignment loop, which fails
+with a generic error instead of a clear "compound assignment not supported on tuple
+destructuring" diagnostic.
+
+**Impact:** Low — confusing error message; no silent wrong behaviour.
+
+**Fix path:** Before the regular assignment loop, check if the LHS is
+`Value::Tuple` and the operator is a compound one (`+=`, `-=`, etc.); emit a
+targeted diagnostic.
+
+**Discovered:** 2026-03-26, during T1.2 regression evaluation.
 
 ---
 
