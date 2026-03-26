@@ -109,6 +109,9 @@ pub struct Parser {
     /// When a variable is not found in the lambda's scope but exists here, it is a capture.
     /// Empty when not inside a lambda.
     pub(crate) capture_context: Vec<(String, Type)>,
+    /// A5.2: accumulates captured variable names and types during lambda body parsing.
+    /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
+    pub(crate) captured_names: Vec<(String, Type)>,
 }
 
 // Operators ordered on their precedence
@@ -254,6 +257,7 @@ impl Parser {
             lambda_hint: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
+            captured_names: Vec::new(),
         }
     }
 

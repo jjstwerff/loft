@@ -136,6 +136,10 @@ impl Parser {
                 "lambda captures variable '{name}' from enclosing scope — \
                  closure capture is not yet supported, pass it as a parameter"
             );
+            // A5.2: record the capture for closure record synthesis.
+            if !self.captured_names.iter().any(|(n, _)| n == name) {
+                self.captured_names.push((name.to_string(), ctype.clone()));
+            }
             // Create the variable in the lambda scope so parsing can continue
             // without cascading errors.
             let v_nr = self.create_var(name, &ctype);

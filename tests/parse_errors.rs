@@ -637,7 +637,8 @@ fn capture_detected() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
-    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at capture_detected:3:32");
+    .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at capture_detected:3:32")
+    .warning("closure record '__closure_0' created with 1 field: count(integer) at capture_detected:3:38");
 }
 
 /// A5.1: lambda that does NOT reference outer variables has no capture error.
@@ -663,7 +664,7 @@ fn closure_record_single_capture() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
-    .warning("closure record '__closure_0' created with 1 field: count(integer)")
+    .warning("closure record '__closure_0' created with 1 field: count(integer) at closure_record_single_capture:3:38")
     .error("lambda captures variable 'count' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_single_capture:3:32");
 }
 
@@ -674,7 +675,7 @@ fn closure_record_multi_capture() {
     code!(
         "fn test() {\n  a = 1;\n  b = 2.0;\n  f = fn(x: integer) -> float { (a + x) as float + b };\n  assert(f(3) == 6.0);\n}"
     )
-    .warning("closure record '__closure_0' created with 2 fields: a(integer), b(float)")
-    .error("lambda captures variable 'a' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:52")
-    .error("lambda captures variable 'b' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:67");
+    .warning("closure record '__closure_0' created with 2 fields: a(integer), b(float) at closure_record_multi_capture:4:56")
+    .error("lambda captures variable 'a' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:37")
+    .error("lambda captures variable 'b' from enclosing scope — closure capture is not yet supported, pass it as a parameter at closure_record_multi_capture:4:55");
 }

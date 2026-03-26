@@ -560,6 +560,9 @@ pub struct Definition {
     pub variables: Function,
     /// Whether this definition was declared with `pub`.
     pub pub_visible: bool,
+    /// A5.2: definition number of the closure record struct for capturing lambdas.
+    /// `u32::MAX` if this function does not capture.
+    pub closure_record: u32,
 }
 
 impl Definition {
@@ -835,6 +838,7 @@ impl Data {
             code_length: 0,
             variables: Function::new(name, &position.file),
             pub_visible: false,
+            closure_record: u32::MAX,
         };
         self.definitions.push(new_def);
         rec

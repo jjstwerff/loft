@@ -311,6 +311,8 @@ impl Parser {
         // A5.1: save outer scope variable names/types for capture detection.
         let outer_capture =
             std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        // A5.2: clear captured_names so we collect only this lambda's captures.
+        let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.lexer.token("(");
         let mut arguments = Vec::new();
@@ -364,6 +366,13 @@ impl Parser {
         self.data.definitions[d_nr as usize]
             .variables
             .append(&mut self.vars);
+
+        // A5.2: synthesize closure record if any captures were detected.
+        if !self.captured_names.is_empty() {
+            self.synthesize_closure_record(d_nr, &lambda_name);
+        }
+        let captured = std::mem::replace(&mut self.captured_names, outer_captured);
+        drop(captured);
 
         self.context = outer_context;
         self.vars = outer_vars;
@@ -471,6 +480,7 @@ impl Parser {
         // A5.1: save outer scope variable names/types for capture detection.
         let outer_capture =
             std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.context = if self.first_pass {
             self.data.add_fn(&mut self.lexer, &lambda_name, &arguments)
@@ -482,6 +492,7 @@ impl Parser {
             self.vars = outer_vars;
             self.in_loop = outer_loop;
             self.capture_context = outer_capture;
+            self.captured_names = outer_captured;
             return Type::Unknown(0);
         }
         let d_nr = self.context;
@@ -549,6 +560,13 @@ impl Parser {
             .variables
             .append(&mut self.vars);
 
+        // A5.2: synthesize closure record if any captures were detected.
+        if !self.captured_names.is_empty() {
+            self.synthesize_closure_record(d_nr, &lambda_name);
+        }
+        let captured = std::mem::replace(&mut self.captured_names, outer_captured);
+        drop(captured);
+
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
@@ -560,6 +578,42 @@ impl Parser {
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
         Type::Function(arg_types, Box::new(ret_type))
+    }
+
+    /// A5.2: Synthesize an anonymous struct definition for the captured variables
+    /// of a lambda. Emits a diagnostic with the record layout for test verification.
+    fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
+        let record_name = lambda_name.replace("__lambda_", "__closure_");
+        let captures = self.captured_names.clone();
+
+        if self.first_pass {
+            // Create the struct definition in the first pass.
+            let record_d_nr = self
+                .data
+                .add_def(&record_name, self.lexer.pos(), DefType::Struct);
+            for (name, tp) in &captures {
+                self.data
+                    .add_attribute(&mut self.lexer, record_d_nr, name, tp.clone());
+            }
+            // Store the closure record def_nr on the lambda's definition.
+            self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
+        } else {
+            let record_d_nr = self.data.def_nr(&record_name);
+            if record_d_nr != u32::MAX {
+                self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
+            }
+        }
+
+        // Emit a diagnostic listing the record fields for test verification.
+        let fields: Vec<String> = captures.iter().map(|(n, t)| format!("{n}({t})")).collect();
+        let count = captures.len();
+        diagnostic!(
+            self.lexer,
+            Level::Warning,
+            "closure record '{record_name}' created with {count} {}: {}",
+            if count == 1 { "field" } else { "fields" },
+            fields.join(", ")
+        );
     }
 
     // <for-vector> ::= 'for' <id> 'in' <range> ['if' <cond>] '{' <expr> '}'
