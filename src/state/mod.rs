@@ -39,6 +39,43 @@ pub struct CallFrame {
     pub args_size: u16,
 }
 
+/// Reserved store number for coroutine `DbRef` encoding (CO1.1).
+/// Cannot clash with real Stores allocations (limited by `Stores::max`).
+pub const COROUTINE_STORE: u16 = u16::MAX;
+
+/// Lifecycle state of a coroutine frame (CO1.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoroutineStatus {
+    Created,
+    Suspended,
+    Running,
+    Exhausted,
+}
+
+/// Runtime state of a single coroutine instance (CO1.1).
+/// Holds the serialised stack and metadata needed to suspend and resume.
+#[derive(Clone, Debug)]
+pub struct CoroutineFrame {
+    /// Generator function definition number.
+    pub d_nr: u32,
+    /// Current lifecycle state.
+    pub status: CoroutineStatus,
+    /// Bytecode position to resume from (set by yield).
+    pub code_pos: u32,
+    /// Absolute stack position during execution.
+    pub stack_base: u32,
+    /// Return address in the consumer.
+    pub caller_return_pos: u32,
+    /// Serialised stack locals (copied on suspend, restored on resume).
+    pub stack_bytes: Vec<u8>,
+    /// Owned text slot copies (offset, content) taken on suspend.
+    pub text_owned: Vec<(u32, String)>,
+    /// Saved call stack entries from the generator's call frames.
+    pub call_frames: Vec<CallFrame>,
+    /// Call depth baseline when the coroutine was last running.
+    pub call_depth: usize,
+}
+
 /// Internal State of the interpreter to run bytecode.
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
@@ -67,6 +104,10 @@ pub struct State {
     pub(crate) fn_positions: Vec<u32>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
+    /// Coroutine frame storage (CO1.1).  Index 0 is always `None` (null sentinel).
+    pub coroutines: Vec<Option<Box<CoroutineFrame>>>,
+    /// Indices of currently-running coroutines in `coroutines`.
+    pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
 }
@@ -107,6 +148,8 @@ impl State {
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
+            coroutines: vec![None], // index 0 = null sentinel
+            active_coroutines: Vec::new(),
             generate_depth: 0,
         }
     }
@@ -187,6 +230,40 @@ impl State {
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
         self.call_stack.pop();
+    }
+
+    // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
+
+    /// Allocate a coroutine frame. Returns the index (always >= 1).
+    pub fn allocate_coroutine(&mut self, frame: CoroutineFrame) -> usize {
+        // Reuse the first free slot (index >= 1).
+        for (i, slot) in self.coroutines.iter_mut().enumerate().skip(1) {
+            if slot.is_none() {
+                *slot = Some(Box::new(frame));
+                return i;
+            }
+        }
+        let idx = self.coroutines.len();
+        self.coroutines.push(Some(Box::new(frame)));
+        idx
+    }
+
+    /// Free a coroutine frame, making the slot available for reuse.
+    pub fn free_coroutine(&mut self, idx: usize) {
+        if idx > 0 && idx < self.coroutines.len() {
+            self.coroutines[idx] = None;
+        }
+    }
+
+    /// Get a mutable reference to a coroutine frame.
+    ///
+    /// # Panics
+    /// Panics if `idx` is 0 (null), out of range, or the slot is empty.
+    pub fn coroutine_frame_mut(&mut self, idx: usize) -> &mut CoroutineFrame {
+        assert!(idx > 0, "coroutine_frame_mut: null index");
+        self.coroutines[idx]
+            .as_mut()
+            .expect("coroutine_frame_mut: empty slot")
     }
 
     /**
@@ -531,6 +608,8 @@ impl State {
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
+            coroutines: vec![None],
+            active_coroutines: Vec::new(),
             generate_depth: 0,
         }
     }
