@@ -37,6 +37,8 @@ pub struct CallFrame {
     pub args_base: u32,
     /// Total byte size of all parameters.
     pub args_size: u16,
+    /// Source line number of the call site (TR1.4).  0 if unknown.
+    pub line: u32,
 }
 
 /// Reserved store number for coroutine `DbRef` encoding (CO1.1).
@@ -172,11 +174,13 @@ impl State {
     /// * `to` - the code position where the called function resides.
     pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
         let args_base = self.stack_pos - u32::from(args_size);
+        let line = self.line_numbers.get(&self.code_pos).copied().unwrap_or(0);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: self.code_pos,
             args_base,
             args_size,
+            line,
         });
         self.put_stack(self.code_pos);
         self.code_pos = to as u32;
@@ -214,8 +218,7 @@ impl State {
                         def.name.clone()
                     };
                     let file = def.position.file.clone();
-                    let line = self.line_numbers.get(&f.call_pos).copied().unwrap_or(0);
-                    (name, file, line)
+                    (name, file, f.line)
                 })
                 .collect();
         }
