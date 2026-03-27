@@ -231,6 +231,14 @@ All notable changes to the loft language and interpreter.
   with ≥ 2 segments.  This avoids repeated `String` reallocations during format-string
   assembly, reducing the wasm/native performance gap on string-heavy workloads.
 
+- **VirtFS JavaScript class** (W1.10) — `tests/wasm/virt-fs.mjs` provides a full in-memory
+  virtual filesystem for WASM Node.js tests.  Features: tree-based JSON representation
+  (`$type`/`$content` conventions), base64 binary support, path normalisation (`.`/`..`/`//`),
+  `snapshot()`/`restore()` for test isolation, binary cursors (`seek`/`readBytes`/`writeBytes`),
+  `toJSON()`/`fromJSON()` serialisation, and a minimal test harness (`harness.mjs`).
+  13 unit tests in `virt-fs.test.mjs` cover all operations.  Runs via
+  `node tests/wasm/virt-fs.test.mjs` when Node.js is available.
+
 ---
 
 ## [0.8.2] — 2026-03-24

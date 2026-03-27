@@ -1591,7 +1591,7 @@ once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 
 ---
 
-### W1  WASM Foundation *(W1.1–W1.9 completed 0.8.3; W1.10–W1.13 deferred)*
+### W1  WASM Foundation *(W1.1–W1.10 completed 0.8.3; W1.11–W1.13 deferred)*
 **Sources:** [WASM.md](WASM.md) — full design and 14-step implementation plan
 **Severity/Value:** High — nothing else in Tier W is possible without this
 **Description:** Compile the loft interpreter itself as a WASM module
@@ -1613,8 +1613,10 @@ env, and log operations through `globalThis.loftHost`.
 8. **W1.8** `src/png_store.rs`: extract `decode_into_store<R: Read>()`; WASM reads bytes via `host_read_binary` + `Cursor<Vec<u8>>`
 9. **W1.9** `src/wasm.rs`: implement `#[wasm_bindgen] fn compile_and_run(files_js: JsValue) -> JsValue`; wire parse → scope → codegen → execute → return result
 
-**Steps W1.10–W1.13 (JavaScript):** require Node.js + wasm-pack:
-10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs`
+**Step W1.10 (JavaScript):** completed 0.8.3:
+10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs` — all 13 unit tests pass under Node.js
+
+**Steps W1.11–W1.13 (JavaScript):** require Node.js + wasm-pack:
 11. **W1.11** `tests/wasm/host.mjs`: `createHost(tree, options)` wiring VirtFS to `loftHost`; `bridge.test.mjs` + `file-io.test.mjs` + `random.test.mjs`
 12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay, persistence); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`
 13. **W1.13** `tests/wasm/suite.mjs`: runs `tests/scripts/*.loft` through the WASM module, compares output against native reference; this is the main confidence gate
@@ -1622,7 +1624,7 @@ env, and log operations through `globalThis.loftHost`.
 **Host bridge API** (JS → Rust): `fs_*`, `random_*`, `time_*`, `env_*`, `log_*` functions
 on `globalThis.loftHost`. Full spec in [WASM.md](WASM.md) § Host Bridge API.
 
-**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9 and W1.10–W1.13 are medium)
+**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9–W1.13 are medium)
 **Depends on:** R1
 **Target:** 0.8.3
 
