@@ -24,7 +24,7 @@ WASM (W1.10—W1.13): JavaScript steps, require Node.js + wasm-pack.
 
 | ID     | Title                                          | E  | Design | Depends on | Source              |
 |--------|-------------------------------------------------|----|--------|------------|---------------------|
-| R1     | Workspace split (`cdylib` + `rlib` lib target) | S  | ~      |            | Cargo.toml          |
+| R1     | Workspace split (`cdylib` + `rlib` lib target) | S  | ✓      |            | Cargo.toml          |
 | W1     | WASM foundation — interpreter as WASM module   | H  | ✓      | R1         | WASM.md             |
 | W1.1   | ↳ Cargo feature gates: `wasm`, `threading`, `wasm-threads` | S | ✓ | R1   | Cargo.toml, src/wasm.rs |
 | W1.2   | ↳ Output capture: `print()` — thread-local buffer under `wasm` | S | ✓ | W1.1 | src/fill.rs, src/wasm.rs |
@@ -43,8 +43,8 @@ WASM (W1.10—W1.13): JavaScript steps, require Node.js + wasm-pack.
 | A7.1   | ↳ `#native` annotation + symbol registration                      | M  | ✓ |            | parser.rs           |
 | A7.2   | ↳ `cdylib` loader (`libloading`)                                  | M  | ✓ | A7.1       | state.rs            |
 | A7.3   | ↳ Package layout + `loft-plugin-api` crate                       | M  | ✓ | A7.2       | new workspace       |
-| L7     | Non-zero exit code on parse/runtime errors     | S  | —      |            | CAVEATS.md C6       |
-| O7     | WASM: pre-allocate format string buffers       | M  | —      | W1         | PERFORMANCE.md W1   |
+| L7     | Non-zero exit code on parse/runtime errors     | S  | ✓      |            | CAVEATS.md C6       |
+| O7     | WASM: pre-allocate format string buffers       | M  | ✓      | W1         | PERFORMANCE.md W1   |
 
 ---
 

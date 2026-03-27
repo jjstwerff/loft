@@ -857,6 +857,52 @@ A10 field iteration test now passes.
 
 ---
 
+### L7  Non-zero exit code on parse/runtime errors
+**Sources:** CAVEATS.md C6, `src/main.rs`, `src/diagnostics.rs`
+**Severity:** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
+**Description:** Two issues in `src/main.rs`:
+
+1. **Parse/compile error path (line 343):** The diagnostic check `if !p.diagnostics.is_empty()` exits with code 1 whenever any diagnostic is present, including warnings-only programs. This is too aggressive: a program with only warnings should execute and exit 0.
+2. **Warning-only programs don't run:** Because warnings cause exit 1 at line 343, a program like `46-caveats.loft` (which has a C14 format-specifier warning) would not execute at all when invoked via the CLI — even though the interpreter test harness runs it fine (bypasses `main.rs`).
+
+**Fix path (`src/main.rs` lines 343–348):**
+```rust
+// Before (exits 1 for any diagnostic including warnings):
+if !p.diagnostics.is_empty() {
+    for l in p.diagnostics.lines() {
+        println!("{l}");
+    }
+    std::process::exit(1);
+}
+```
+```rust
+// After (print all diagnostics, only exit 1 for errors or fatal):
+if !p.diagnostics.is_empty() {
+    for l in p.diagnostics.lines() {
+        println!("{l}");
+    }
+    if p.diagnostics.level() >= Level::Error {
+        std::process::exit(1);
+    }
+}
+```
+Import `Level` from `crate::diagnostics::Level` if not already in scope.
+
+**Scope check diagnostics:** `scopes::check` does not produce a separate `Diagnostics`; its errors are printed directly via the parser’s lexer and collected into `p.diagnostics`. Verify with a scope-error test.
+
+**Runtime fatal path (line 553):** `state.database.had_fatal` already correctly exits 1 on `log_fatal()`. No change needed there.
+
+**`--format-check` path:** Already exits 1 on bad format (line 106). No change needed.
+
+**Test plan:**
+1. `cargo run --bin loft -- tests/scripts/46-caveats.loft` — should print the C14 warning and then execute, printing `caveats: all ok`, exiting 0.
+2. `echo 'fn main() { x = 1' | cargo run --bin loft -- /dev/stdin` — should exit 1.
+3. Add shell-level test in `tests/integration.rs` (or a new `tests/exit_codes.rs`) that invokes the binary and checks `$?`.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
 ### L8  Warn on format specifier / type mismatch *(completed 0.8.3)*
 
 Implemented: compile-time warnings in `append_data()` for numeric format specifiers
@@ -1120,12 +1166,49 @@ Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### O7  wasm: pre-allocate string buffers in format path
-**Sources:** PERFORMANCE.md § W1
-**Description:** Pre-allocate the result string with `String::with_capacity` before format-string loops in generated wasm code, and use `push_str` instead of `+` to avoid intermediate allocations through wasm's linear-memory allocator.
-**Expected gain:** Reduces wasm/native string-building gap from 2× to <1.3×.
+### O7  WASM: pre-allocate format-string buffers in native/wasm codegen
+**Sources:** PERFORMANCE.md § W1 (Design: W1 — wasm string representation)
+**Expected gain:** Reduces wasm/native string-building gap from 2.06× to <1.3× on benchmark 07.
+**Background:** Each format string in loft generates a sequence of bytecodes:
+1. `OpClearStackText` — resets the work-text variable to `""`
+2. N × `Op*Format*` calls — append each segment and value
+3. The completed string is used (moved or assigned)
+
+In native/wasm codegen, `OpClearStackText` emits `var_x.clear()` (`src/generation/text.rs::clear_stack_text`).  Each subsequent `OpAppendText` emits `var_x += &*(expr)`, which calls `String::push_str` internally and triggers a reallocation whenever capacity is exceeded.  In the wasm linear-memory allocator each reallocation requires a potential `memory.grow`, making repeated small appends disproportionately slow.
+
+**Fix path:**
+
+**Step 1 — Profile (verify root cause):**
+Run `bench/run_bench.sh` targeting benchmark 07 with wasm build and capture a `wasmtime --profile` trace.  Confirm that `String` reallocations (calls to `wasm_bindgen::__wbindgen_malloc` or equivalent) account for the majority of the gap.  If the gap is from function-call overhead instead, revisit the approach.
+
+**Step 2 — Count format operations at codegen time:**
+In `src/generation/` the `Output` struct processes bytecodes in order.  Add a pre-scan function `count_format_ops(ops: &[Op]) -> usize` that, for a sequence starting with `OpClearStackText`, counts consecutive `Op*Format*` operations until the next non-format op.  This count is the static upper bound for the number of append calls.
+
+**Step 3 — Emit `with_capacity` in `clear_stack_text`:**
+Modify `src/generation/text.rs::clear_stack_text` to accept the pre-scanned count `n`:
+```rust
+// Before:
+write!(w, "var_{s_nr}.clear()")?;
+
+// After (when n > 1):
+// avg_element_len = 8 is a conservative estimate for mixed text/integer fields
+write!(w, "{{ let _cap = {n} * 8usize; if var_{s_nr}.capacity() < _cap {{ var_{s_nr} = String::with_capacity(_cap); }} else {{ var_{s_nr}.clear(); }} }}")?;
+```
+Use `with_capacity` only for format strings with 2+ segments; single-segment strings (just `clear()`) are unaffected.
+
+**Step 4 — Verify `append_text` uses `push_str`:**
+Confirm line 87 in `text.rs` emits `var_{s_nr} += &*(expr)`.  Rust’s `AddAssign<&str>` on `String` calls `push_str` internally so no allocation is triggered when capacity is sufficient.  No change needed here.
+
+**Step 5 — Feature-gate (optional):**
+The `with_capacity` change benefits both native and wasm builds (reducing allocations in both).  No feature gate required.  If profiling shows native is unaffected, gate behind `#[cfg(feature = "wasm")]` to keep the emitted code simple.
+
+**Step 6 — Benchmark and verify:**
+Re-run benchmark 07 wasm vs native.  Target: gap < 1.3×.  If gap persists, increase `avg_element_len` or apply the capacity hint to `OpClearText` paths as well.
+
+**Files changed:** `src/generation/text.rs` (10–20 lines), `src/generation/dispatch.rs` (pass count to `clear_stack_text`).
+
 **Effort:** Medium
-**Depends:** W1
+**Depends:** W1 (W1.9 — WASM entry point; needed to test the wasm build)
 **Target:** 0.8.3
 
 ---
@@ -1467,21 +1550,33 @@ workspace split needed before starting the Web IDE.
 
 ---
 
-### R1  Workspace split (pre-W1 only — defer until IDE work begins)
-**Description:** When W1 (WASM Foundation) is started, split the single crate into a Cargo
-workspace so `loft-core` can be compiled to both native and `cdylib` (WA1SM) targets
-without pulling CLI code into the WASM bundle:
+### R1  Add `cdylib` + `rlib` crate types for WASM compilation
+**Sources:** WASM.md § Step 1, W1.1
+**Description:** The loft interpreter must be compiled as a `cdylib` (dynamic library) to produce a `.wasm` file via `wasm-bindgen`, and as an `rlib` so the existing native tests and `cargo test` continue to work against the library API.  No workspace split is required for 0.8.3 — the binary targets (`[[bin]] loft`, `[[bin]] gendoc`) are separate compilation units and will not be included in the `cdylib` output.
+
+**Fix path:**
+
+**Step 1 — Add `[lib]` section to `Cargo.toml`:**
+```toml
+[lib]
+name = "loft"
+crate-type = ["cdylib", "rlib"]
 ```
-Cargo.toml                     (workspace root)
-loft-core/                 (all src/ except main.rs, gendoc.rs; crate-type = ["cdylib","rlib"])
-loft-cli/                  ([[bin]] loft; depends on loft-core)
-loft-gendoc/               ([[bin]] gendoc; depends on loft-core)
-ide/                           (W2+: index.html, src/*.js, sw.js, manifest.json)
-```
-This change is a **prerequisite for W1** and should happen at the same time, not before.
-For 1.0 the single-crate layout is correct and should not be changed early.
-**Effort:** Small (Cargo workspace wiring; no logic changes)
-**Depends on:** repo creation (done); gates W1
+If a `[lib]` section already exists, just add the `crate-type` line.
+
+**Step 2 — Add `src/lib.rs` if not present:**
+`src/lib.rs` should already exist and re-export the public API (`pub mod parser`, `pub mod compile`, `pub mod state`, etc.).  Verify it compiles cleanly as a library target with `cargo build --lib`.
+
+**Step 3 — Verify no `main.rs` symbols leak into the `cdylib`:**
+`cargo check --target wasm32-unknown-unknown --features wasm --no-default-features` must pass.  Any use of `std::process::exit`, `std::env::args`, or `dirs::home_dir` in `src/lib.rs`-reachable modules must be feature-gated (done in W1.3–W1.6).
+
+**Step 4 — Deferred workspace split (post-1.0):**
+A full workspace split into `loft-core / loft-cli / loft-gendoc` reduces incremental build times and isolates CLI from the library API.  This is deferred until the Web IDE (W2+) makes it necessary.  The current single-crate layout is sufficient for 0.8.3.
+
+**Verify:** `cargo check` ✔  `cargo test` ✔  `cargo check --target wasm32-unknown-unknown --features wasm --no-default-features` ✔
+
+**Effort:** Small (one `Cargo.toml` change; no logic changes)
+**Depends on:** repo creation (done)
 **Target:** 0.8.3
 
 ---
