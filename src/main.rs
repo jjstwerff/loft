@@ -35,6 +35,7 @@ mod typedef;
 mod variables;
 mod vector;
 
+use crate::diagnostics::Level;
 use crate::native_utils::{
     default_artifact_path, is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
@@ -344,7 +345,9 @@ fn main() {
         for l in p.diagnostics.lines() {
             println!("{l}");
         }
-        std::process::exit(1);
+        if p.diagnostics.level() >= Level::Error {
+            std::process::exit(1);
+        }
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
