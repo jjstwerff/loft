@@ -250,7 +250,7 @@ Scripts using these features are skipped from the native test suite
 
 **Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft`, `48-generics.loft` — all pass in interpreter, all skipped in native.
 **Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use these features.
-**Planned fix:** N8a.1–N8a.3 (tuples), N8b.1–N8b.3 (coroutines), N8c.1–N8c.2 (generics) in [ROADMAP.md](ROADMAP.md) (1.1+); design in [PLANNING.md](PLANNING.md) § N8.
+**Planned fix:** N8a.1–N8a.3 (tuples), N8b.1–N8b.3 (coroutines), N8c.1–N8c.2 (generics) in [ROADMAP.md](ROADMAP.md) (0.8.3); design in [PLANNING.md](PLANNING.md) § N8.
 
 ---
 

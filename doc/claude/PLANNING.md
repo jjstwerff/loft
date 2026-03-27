@@ -1279,7 +1279,7 @@ Fix the missing cases from N8c.1: add null-propagation branches for `maybe<text>
 
 **Overall effort:** N8a Small+Small+Medium; N8b High+High+Medium; N8c Small+Small
 **Depends:** T1 (N8a), CO1 (N8b)
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
