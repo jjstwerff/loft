@@ -1265,15 +1265,32 @@ Extend the state machine emitter to handle `yield from inner()` — the sub-gene
 
 ---
 
-#### N8c.1 — Native: audit `maybe<T>` null-path branches in `generate_*`
+#### N8c.1 — Native: audit which generic instantiations fail and why
 **Effort:** Small · **Depends:** none
-Survey all `generate_*` functions in `src/generation/codegen.rs` for `Type::Named` with type parameters.  List every uncovered case (e.g. null-propagation paths for `maybe<text>`, `maybe<vector<T>>`).  Write a short findings note in NATIVE.md § N8c.  No code changes yet.
-**Output:** A concrete list of missing cases that N8c.2 can fix one by one.
+Generic functions are monomorphized at parse time (`try_generic_instantiation` in
+`src/parser/mod.rs`); each call site produces a concrete `DefType::Function` named
+`t_<len><type>_<name>` (e.g. `t_4text_identity`).  Native codegen sees only concrete
+functions.  The P5 skip is because some monomorphized instantiations produce compile
+errors, not because generics are unsupported at codegen level.
 
-#### N8c.2 — Native: fix `maybe<T>` ref-counted element handling
+Audit procedure:
+1. Temporarily remove `"48-generics.loft"` from `SCRIPTS_NATIVE_SKIP`.
+2. Run `cargo test --test native 2>&1` and capture the exact compile errors.
+3. Inspect the generated `.rs` file for the failing `t_4text_*` functions.
+4. Record findings in NATIVE.md § N8c.1 before writing N8c.2.
+
+Expected: text-returning instantiations lack the `Str::new()` return wrapping or have a text-parameter type mismatch.  Full design in NATIVE.md § N8c.
+**Output:** Exact error message + root-cause note in NATIVE.md § N8c.1.
+
+#### N8c.2 — Native: fix failing monomorphised instantiations
 **Effort:** Small · **Depends:** N8c.1
-Fix the missing cases from N8c.1: add null-propagation branches for `maybe<text>` and `maybe<vector<T>>`; ensure `OpFreeText`/`OpFreeRef` emit correctly when a `maybe` variable goes out of scope holding a non-null owned value.
-**Tests:** add targeted tests in `tests/native.rs` or `tests/scripts/` for each fixed case; remove any corresponding `SCRIPTS_NATIVE_SKIP` entries.
+Apply the fix identified in N8c.1.  If the issue is text-return wrapping: verify
+`output_function()` applies the `Str::new()` path for all `Type::Text` return types
+including `t_*` functions.  If parameter type: fix the call-site argument emission for
+text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
+`SCRIPTS_NATIVE_SKIP`; confirm `cargo test --test native` passes.
+**Tests:** `48-generics.loft` passes in `--native` mode; all four identity instantiations
+(integer, float, text, boolean) and both pick_second instantiations produce correct output.
 
 ---
 

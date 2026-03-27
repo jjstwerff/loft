@@ -816,9 +816,384 @@ before the N2–N9 planning items were completed (PR #36, 2026-03-18).
 
 ---
 
+---
+
+## N8a — Tuple Native Codegen
+
+### Current state
+
+| Component | File | Status |
+|---|---|---|
+| `rust_type(Type::Tuple(_))` | `generation/mod.rs:283` | Returns `"()"` — loses all element type info |
+| `Value::Tuple` emission | `generation/emit.rs:145` | Works: emits `(elem1, elem2, ...)` |
+| `Value::TupleGet(var, idx)` | `generation/emit.rs:155` | Works: emits `var_{var}.{idx}` |
+| `Value::TuplePut(var, idx, val)` | `generation/emit.rs:156` | Stub: emits `var_{var}.{idx} = ...` literally |
+| Tuple-returning function signature | `generation/mod.rs` | Wrong: emits `-> ()` |
+| Tuple-typed local variable | generated code | Wrong: `let mut t: () = (1, 2)` — type mismatch |
+
+Root cause of all failures: a single line in `rust_type()` matches `Type::Tuple(_) | Type::Void` and
+returns `"()"` without inspecting the element types.
+
+---
+
+### N8a.1 — Fix `rust_type()` for `Type::Tuple`
+
+**File:** `src/generation/mod.rs` — the `Type::Tuple` arm inside `rust_type()`.
+
+**Current:**
+```rust
+Type::Tuple(_) | Type::Void => "()".to_string(),
+```
+
+**Fix:**
+```rust
+Type::Tuple(elems) => {
+    let mut s = String::from("(");
+    for (i, e) in elems.iter().enumerate() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(&rust_type(e, context));
+    }
+    s.push(')');
+    s
+},
+Type::Void => "()".to_string(),
+```
+
+`rust_type` already returns `String`; no signature change is needed.
+
+Effect: `(integer, float)` → `(i64, f64)`, `(text, boolean)` → `(String, bool)`, etc.
+
+**Graceful skip until N8a.2:** Add a helper `contains_tuple_put(val: &Value) -> bool` that walks the
+IR tree for `Value::TuplePut`.  In `output_function()`, if the function's IR contains `TuplePut`,
+return early (emit a comment instead of code) so the file still compiles.  This keeps
+`50-tuples.loft` in `SCRIPTS_NATIVE_SKIP` while the rest of the test suite gains correct type
+emission.
+
+**Tests after N8a.1:**
+- Functions that return or pass tuples but never assign to elements compile and link correctly.
+- `50-tuples.loft` still skipped (TuplePut not yet working).
+
+---
+
+### N8a.2 — Fix `Value::TuplePut` and LHS deconstruction
+
+**File:** `src/generation/emit.rs` — the `TuplePut` arm.
+
+**Current:**
+```rust
+Value::TuplePut(var, idx, _val) => write!(w, "var_{var}.{idx} = ..."),
+```
+
+**Fix:**
+```rust
+Value::TuplePut(var, idx, val) => {
+    write!(w, "var_{var}.{idx} = ")?;
+    self.output_code_inner(w, val)?;
+},
+```
+
+**LHS deconstruction** (`(a, b) = foo()`): The IR lowers this to a temporary tuple variable
+plus individual `TuplePut` assignments.  In the emitted Rust, detect the pattern
+`let mut var_tmp = call(...); var_a = var_tmp.0; var_b = var_tmp.1` and either emit it
+as-is (correct but verbose) or collapse it to
+`let (mut var_a, mut var_b) = call(...);` via a peephole in the output pass.
+The verbose form is correct and simpler to implement first.
+
+**Scope exit:** Rust drops tuple elements automatically when the tuple variable goes out of
+scope — no explicit `drop` calls are needed for Rust-native types.  `String` elements inside a
+tuple are freed by Rust's standard RAII.  This requires no additional codegen change.
+
+**Tests after N8a.2:**
+- Tuple element assignment and compound assignment pass in `--native`.
+- LHS deconstruction `(a, b) = foo()` passes.
+
+---
+
+### N8a.3 — Tuple function return
+
+With N8a.1 and N8a.2 complete this should require no additional code changes.
+
+**Verification checklist:**
+1. Function signature emits `-> (i64, f64)` correctly (N8a.1 fixes `rust_type`).
+2. `Value::Return(Value::Tuple(...))` emits `return (elem1, elem2)` — the existing
+   `Value::Return` handler calls `output_code_inner` on the inner value, and
+   `Value::Tuple` already emits the parenthesised list.  No change needed.
+3. Call site receives `(i64, f64)` into a `let mut var_t: (i64, f64) = n_foo(stores);`.
+   Element reads as `var_t.0`, element writes as `var_t.0 = ...` (N8a.2).
+
+**Cleanup:**
+- Remove `"50-tuples.loft"` from `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`.
+- Remove `"46-caveats.loft"` from `SCRIPTS_NATIVE_SKIP` (the tuple element assign
+  section that caused the skip).
+- Run `cargo test --test native` and confirm both pass.
+
+---
+
+## N8b — Coroutine Native Codegen
+
+### Current state
+
+`Value::Yield(inner)` in `src/generation/emit.rs:157` emits the Rust keyword `yield <expr>`.
+This is **invalid on stable Rust** — `yield` exists only on nightly behind
+`#![feature(generators)]`.  Any file containing a coroutine function fails to compile.
+
+No handling exists for the call-site opcodes:
+- `OpCoroutineCreate` — allocates a generator handle
+- `OpCoroutineNext` — advances the generator
+- `OpExhausted` — tests whether the generator is exhausted
+- `OpCoroutineReturn` — emitted at the end of the coroutine body
+
+### Design: hand-written enum state machine
+
+Each coroutine function is transformed into:
+1. A Rust `enum` with one variant per yield point plus `Exhausted`.
+2. A Rust `struct` wrapping the enum (the opaque generator handle).
+3. A `new` associated function (replacing `OpCoroutineCreate` at call sites).
+4. A `next` method returning the yield type or a sentinel (replacing `OpCoroutineNext`).
+
+The handle is allocated in a `codegen_runtime` coroutine table and referenced via a `DbRef`
+with `store_nr == COROUTINE_STORE` — exactly mirroring the interpreter's convention so that
+the same `OpCoroutineNext` call sites work unchanged.
+
+---
+
+### N8b.1 — State-machine transform design + infrastructure
+
+#### Yield-point numbering
+
+A pre-pass (`scan_yield_points(val: &Value) -> Vec<YieldPoint>`) walks the IR tree depth-first
+and records each `Value::Yield` node together with all locals that are live at that point.
+
+For the first implementation, use a **conservative approximation**: all declared local variables
+are live at every yield point.  This over-allocates enum variant fields but is always correct.
+Dead-variable trimming can be added later as an optimisation.
+
+#### Enum and struct emission
+
+For `fn count(n: integer) -> iterator<integer>` with one yield point:
+
+```rust
+// --- generated by loft native codegen ---
+enum NCountState {
+    S0 { n: i64 },           // initial: arguments captured, body not yet started
+    S1 { n: i64, i: i64 },  // suspended at yield; loop variable i is live
+    Exhausted,
+}
+struct NCountGen { state: NCountState }
+
+impl NCountGen {
+    fn new(n: i64) -> Self { NCountGen { state: NCountState::S0 { n } } }
+
+    fn next(&mut self) -> i64 {
+        loop {
+            match std::mem::replace(&mut self.state, NCountState::Exhausted) {
+                NCountState::S0 { n } => {
+                    // body from start to first yield: initialise i, enter loop
+                    let i = 0_i64;
+                    if i >= n { return i64::MIN; }
+                    self.state = NCountState::S1 { n, i: i + 1 };
+                    return i;
+                }
+                NCountState::S1 { n, i } => {
+                    if i >= n { return i64::MIN; }
+                    self.state = NCountState::S1 { n, i: i + 1 };
+                    return i;
+                }
+                NCountState::Exhausted => return i64::MIN,
+            }
+        }
+    }
+}
+```
+
+#### Codegen runtime additions
+
+Add to `codegen_runtime` (a new file `codegen_runtime_coroutine.rs` or inline in
+`codegen_runtime.rs`):
+
+```rust
+pub trait LoftCoroutine: Send {
+    fn advance_i64(&mut self) -> i64;      // iterator<integer>
+    fn advance_f64(&mut self) -> f64;      // iterator<float>
+    fn advance_bool(&mut self) -> bool;    // iterator<boolean>
+    // text yield: deferred to S25
+}
+
+pub fn alloc_coroutine(
+    table: &mut Vec<Option<Box<dyn LoftCoroutine>>>,
+    gen: Box<dyn LoftCoroutine>,
+) -> DbRef { /* find free slot or push; return DbRef with COROUTINE_STORE */ }
+
+pub fn next_i64(table: &mut Vec<Option<Box<dyn LoftCoroutine>>>, db: DbRef) -> i64 {
+    table[db.rec as usize].as_mut().unwrap().advance_i64()
+}
+
+pub fn is_exhausted(table: &Vec<Option<Box<dyn LoftCoroutine>>>, db: DbRef) -> bool {
+    /* check if slot is None or last advance returned sentinel */
+}
+```
+
+The `table` is stored in `Stores` (or a new `CoroutineTable` field passed alongside `stores`).
+
+#### Call-site opcode replacement
+
+In `src/generation/emit.rs` or `dispatch.rs`, when emitting a call whose return type is
+`iterator<T>`:
+- `OpCoroutineCreate` / call to `n_count` → `codegen_runtime::alloc_coroutine(&mut stores.coroutines, Box::new(NCountGen::new(n)))`
+- `OpCoroutineNext` → `codegen_runtime::next_i64(&mut stores.coroutines, gen_dbref)`
+- `OpExhausted` → `codegen_runtime::is_exhausted(&stores.coroutines, gen_dbref)`
+
+#### New source file
+
+Create `src/generation/coroutine.rs` containing:
+- `scan_yield_points` — yield-point scanner
+- `emit_coroutine_state_enum` — emits the state enum
+- `emit_coroutine_struct_and_impl` — emits the struct + `new` + `next`
+- A hook in `output_function()`: if the function contains `Value::Yield`, delegate to
+  `coroutine.rs` instead of emitting a plain function.
+
+---
+
+### N8b.2 — Basic coroutine emission (integer/float/bool yields, no text)
+
+Steps:
+1. Implement `src/generation/coroutine.rs` with the design from N8b.1.
+2. In `output_function()` (`generation/mod.rs`), add a check:
+   ```rust
+   if ir_contains_yield(&def.code) {
+       return output_coroutine_function(w, def_nr, data, output);
+   }
+   ```
+3. In `output_coroutine_function`, emit state enum, struct, `new`, `next`.
+4. In `next()`, the body is split at each `Value::Yield` into state arms.  Each arm runs
+   the segment of IR up to the next yield, then sets the new state and returns the value.
+5. Loop constructs (`for i in 0..n { yield i; }`) are rewritten as a conditional transition:
+   the loop body becomes a state that re-enters itself while the condition holds.
+6. **Guard text yields:** `debug_assert!(!matches!(yield_type, Type::Text(_)), "text yield in native coroutine requires S25")`.
+7. Add `NCountGen::new` and `NCountGen::next` to `impl LoftCoroutine`.
+8. Emit call-site translations for `OpCoroutineCreate` and `OpCoroutineNext`.
+
+**Tests after N8b.2:**
+- `tests/scripts/51-coroutines.loft` sections with integer/float/boolean yields pass in `--native`.
+- Text-yield sections produce a compile-time skip or `#[ignore]` test.
+- `cargo test --test native -- coroutines` passes the non-text sections.
+
+---
+
+### N8b.3 — `yield from` delegation
+
+`yield from inner()` desugars in the interpreter to: loop, call `next(inner)`, if not exhausted
+`yield` the result, else break.  In the state machine, this introduces a sub-generator field.
+
+**Generated pattern:**
+
+```rust
+NCountState::YieldFrom_1 { sub_gen, outer_locals... } => {
+    // sub_gen implements LoftCoroutine
+    let val = sub_gen.advance_i64();
+    if val == i64::MIN {
+        // sub-generator exhausted — transition to post-yield-from state
+        self.state = NCountState::S2 { outer_locals... };
+        continue; // loop to process S2 immediately
+    }
+    // sub-generator still live — stay in YieldFrom_1 with updated sub_gen
+    self.state = NCountState::YieldFrom_1 { sub_gen, outer_locals... };
+    return val;
+}
+```
+
+The sub-generator type is `Box<dyn LoftCoroutine>` (to handle heterogeneous inner generators).
+
+**Steps:**
+1. Detect `Value::YieldFrom` in `scan_yield_points`; record it as a `YieldFromPoint`.
+2. In the state enum, emit `YieldFrom_N { sub_gen: Box<dyn LoftCoroutine>, live_vars... }`.
+3. In `next()`, emit the arm as shown above.
+4. At the `yield from` call site, emit `alloc_coroutine(...)` for the inner generator and
+   store it in the `YieldFrom_N` variant.
+
+**Tests after N8b.3:**
+- Remove `"51-coroutines.loft"` from `SCRIPTS_NATIVE_SKIP`.
+- Full coroutine test suite passes in `--native` (text-yield tests may still be guarded
+  pending S25).
+
+---
+
+## N8c — Generic Function Instantiation
+
+### Current state
+
+Generic functions (`fn f<T>`) are **monomorphized at the bytecode IR phase** in
+`src/parser/mod.rs::try_generic_instantiation()`.  Each call site with a concrete type
+produces a `DefType::Function` named `t_<len><type>_<name>`
+(e.g. `t_7integer_identity`, `t_4text_identity`).
+
+By the time native codegen runs, all generic functions have been replaced by concrete
+functions.  Native codegen does not need to implement polymorphism — it only needs to
+correctly emit the monomorphized instantiations.
+
+The skip reason in `tests/native.rs` — "P5: native codegen does not handle generic function
+instantiation" — means that **some monomorphized instantiations produce compile errors**, not
+that generics themselves are unsupported at the codegen level.
+
+### N8c.1 — Audit: which instantiations fail and why
+
+**Test file:** `tests/scripts/48-generics.loft`
+
+Instantiations created by the test:
+
+| Call | Monomorphized name | Return type | Expected issue |
+|---|---|---|---|
+| `identity(42)` | `t_7integer_identity` | `integer` | Likely OK |
+| `identity(3.14)` | `t_5float_identity` | `float` | Likely OK |
+| `identity("hello")` | `t_4text_identity` | `text` | **Likely fails** — text-return wrapping |
+| `identity(true)` | `t_7boolean_identity` | `boolean` | Likely OK |
+| `pick_second(1, 99)` | `t_7integer_pick_second` | `integer` | Likely OK |
+| `pick_second("a", "b")` | `t_4text_pick_second` | `text` | **Likely fails** — same |
+
+**Audit procedure:**
+1. Temporarily remove `"48-generics.loft"` from `SCRIPTS_NATIVE_SKIP`.
+2. Run `cargo test --test native 2>&1 | head -80` to capture compile errors.
+3. Open the generated `.rs` file for the failing test and inspect the emitted bodies of
+   `t_4text_identity` and `t_4text_pick_second`.
+4. Compare with a hand-written native text-returning function to identify the difference.
+
+**Expected finding:** Text-returning monomorphized functions lack the `Str::new(...)` return
+wrapping that `output_function()` applies only when `def.returned == Type::Text(_)`.  The
+wrapping logic reads the `returned` field of the definition; for monomorphized functions this
+field should hold `Type::Text(...)` after substitution, so the wrapping should apply.  The
+actual failure may instead be in how text *parameters* are passed (the `Str` vs `String`
+boundary) or in how the substituted function body calls `output_code_inner`.
+
+Record the exact error message and line in `NATIVE.md § N8c.1 findings` before writing N8c.2.
+
+### N8c.2 — Fix
+
+Based on N8c.1 audit findings (to be filled in after the audit):
+
+**If the issue is text-return wrapping:** Ensure `output_function()` checks `def.returned` for
+`Type::Text` on all functions, including `t_*`-named monomorphized ones.  The check should
+already be generic (not name-specific), so this may point to a type-substitution bug in the
+parser's `try_generic_instantiation` where `returned` is not correctly updated.
+
+**If the issue is text-parameter handling:** In `rust_type(Type::Text(_), Context::Argument)`,
+verify that `Str` (borrowed reference) is emitted for text parameters of monomorphized
+functions, matching the convention used for hand-written functions.
+
+**If the issue is call-site argument type:** Ensure the call-site emission for
+`t_4text_identity(stores, arg)` passes `arg` as `&*var_arg` (a `Str` borrow) rather than
+a `String` move.
+
+**Cleanup after fix:**
+- Remove `"48-generics.loft"` from `SCRIPTS_NATIVE_SKIP`.
+- `cargo test --test native` confirms the generic tests pass.
+
+---
+
 ## See also
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and detailed designs for O4 (direct collection emit), O5 (pure function `stores` omission), O6 (`long` sentinel removal) — the native-codegen performance items
 - [COMPILER.md](COMPILER.md) — Compiler pipeline: lexer, parser, IR, bytecode
 - [INTERMEDIATE.md](INTERMEDIATE.md) — IR Value tree structure
 - [DESIGN.md](DESIGN.md) — Algorithm analysis for major subsystems
 - [DATABASE.md](DATABASE.md) — Runtime data store and type schema
+- [COROUTINE.md](COROUTINE.md) — Interpreter coroutine design; CO1.3d text serialisation (S25)
+- [SAFE.md](SAFE.md) — Safety analysis for coroutine text handling (P2-R1/R2/R3)
