@@ -1,16 +1,57 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! A7.2 — Native extension loader.
+//! A7.2/A7.3 — Native extension loader.
 //!
 //! Loads platform shared libraries that expose a `loft_register_v1` C-ABI
 //! entry point and registers their native functions with the interpreter via
 //! `State::static_fn()`.
 //!
-//! The feature is gated behind the `native-extensions` Cargo feature flag to
-//! keep the default build free of the `libloading` dependency.
+//! The loading path is gated behind the `native-extensions` Cargo feature to
+//! keep the default build free of the `libloading` dependency.  The
+//! `LoftPluginCtx` struct is always available because plugin crates that
+//! depend on `loft-plugin-api` need its definition even when building without
+//! the full interpreter.
+
+use std::ffi::c_char;
 
 use crate::state::State;
+
+/// C-ABI context passed to `loft_register_v1` in a native extension.
+///
+/// Plugin crates receive a `*mut LoftPluginCtx` and call `register_fn` once
+/// for each native function they expose.  The fields beginning with `_` are
+/// internal to the interpreter; plugins must not read or write them directly.
+///
+/// This struct has a stable `repr(C)` layout.  New fields may be appended in
+/// minor versions; plugins must not assume a fixed size.
+#[repr(C)]
+#[allow(clippy::pub_underscore_fields, dead_code)]
+pub struct LoftPluginCtx {
+    /// Reserved for future interpreter state pointer.  Must be null; plugins
+    /// must not dereference it.
+    pub _state: *mut (),
+    /// Call this once per native function to register it with the interpreter.
+    ///
+    /// `name` must be a null-terminated C string following the loft naming
+    /// convention (`n_<fn>` for globals, `t_<N><Type>_<method>` for methods).
+    /// `func` is cast from `fn(&mut Stores, &mut DbRef)` at the plugin side.
+    pub register_fn: unsafe extern "C" fn(
+        ctx: *mut LoftPluginCtx,
+        name: *const c_char,
+        func: unsafe extern "C" fn(*mut (), *mut ()),
+    ),
+    /// Internal staging pointer used by the trampoline.  Must not be
+    /// accessed by plugins.
+    pub _staged: *mut (),
+}
+
+/// # Safety
+///
+/// `LoftPluginCtx` contains raw pointers.  The interpreter constructs one on
+/// the stack before calling `loft_register_v1` and the pointers are valid for
+/// the duration of that call.
+unsafe impl Send for LoftPluginCtx {}
 
 /// Load all pending native extension libraries into `state`.
 ///
@@ -34,23 +75,9 @@ pub fn load_all(_state: &mut State, _paths: Vec<String>) {}
 /// Panics if the library cannot be opened or does not export `loft_register_v1`.
 #[cfg(feature = "native-extensions")]
 pub fn load_one(state: &mut State, path: &str) {
-    use crate::database::Stores;
-    use crate::keys::DbRef;
     use crate::state::Call;
     use libloading::{Library, Symbol};
     use std::ffi::CStr;
-    use std::os::raw::c_char;
-
-    #[repr(C)]
-    struct LoftPluginCtx {
-        _state: *mut (),
-        register_fn: unsafe extern "C" fn(
-            ctx: *mut LoftPluginCtx,
-            name: *const c_char,
-            func: unsafe extern "C" fn(*mut (), *mut ()),
-        ),
-        _staged: *mut (),
-    }
 
     unsafe extern "C" fn trampoline_register(
         ctx: *mut LoftPluginCtx,
