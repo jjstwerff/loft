@@ -1300,6 +1300,42 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ---
 
+### S31  Native harness: pass `--extern` for optional feature deps
+**Sources:** CAVEATS.md C27
+**Severity:** Medium — `rand`, `rand_seed`, `rand_indices` and any future optional-dep functions are silently untested in native mode.
+**Description:** The native test harness in `tests/native.rs` compiles generated `.rs` files by invoking `rustc` directly with `--extern loft=libloft.rlib`.  Optional feature dependencies (`rand_core`, `rand_pcg`) are not passed as `--extern` flags, so any generated code that uses the `random` feature fails to compile with `E0433: use of undeclared crate or module 'rand_core'`.  `15-random.loft` and `21-random.loft` are therefore in `SCRIPTS_NATIVE_SKIP` / `NATIVE_SKIP`.
+
+**Fix path:**
+1. In `find_loft_rlib()` (`tests/native.rs`), after locating the `deps/` directory, scan it for `.rlib` files matching the optional deps listed in `Cargo.toml` (`rand_core`, `rand_pcg`, `png`, etc.).
+2. Build a `Vec<(String, PathBuf)>` of `(crate_name, rlib_path)` pairs.
+3. Pass each as an additional `--extern <crate_name>=<path>` argument in the `rustc` invocations inside `run_native_test`.
+4. Remove `"15-random.loft"` from `SCRIPTS_NATIVE_SKIP` and `"21-random.loft"` from `NATIVE_SKIP`.
+5. Confirm `cargo test --test native` passes for both random files.
+
+**Tests:** `15-random.loft` and `21-random.loft` pass in native mode.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+### S32  Fix slot conflict in `20-binary.loft` (`rv` / `_read_34`)
+**Sources:** CAVEATS.md C28
+**Severity:** Medium — a binary file I/O test is excluded from both interpreter and native CI.
+**Description:** The two-zone slot allocator assigns overlapping slots `[820, 832)` to both `rv` (live `[1016, 1110]`) and `_read_34` (live `[1008, 1109]`) in `n_main` of `tests/scripts/20-binary.loft`.  The live ranges overlap, so the slot validator panics in debug builds.  `20-binary.loft` is in `ignored_scripts()` (wrap), `SCRIPTS_NATIVE_SKIP` (native scripts), and the `binary` test is `#[ignore]`.
+
+**Fix path:**
+1. Run `LOFT_LOG=variables cargo test --test wrap binary 2>&1` to dump the full variable table for `n_main`.
+2. Identify why `rv` and `_read_34` are assigned the same slot despite overlapping live ranges.  Likely cause: one is a short-lived `_read_*` temp in an inner scope that the zone-2 allocator reuses too aggressively when another variable with a long live range occupies the same zone-2 slot.
+3. Apply the minimal fix to the zone-2 reuse logic in `src/variables/slots.rs` to prevent the overlap.
+4. Remove `"20-binary.loft"` from `ignored_scripts()` and `SCRIPTS_NATIVE_SKIP`; remove the manual `#[ignore]` from the `binary` test; re-enable.
+5. Run `make ci` to confirm no regressions.
+
+**Tests:** `binary` and `loft_suite` (wrap) pass; `20-binary.loft` passes in native mode.
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
 ### O1  Superinstruction merging
 **Status: deferred indefinitely — opcode table is full (254/256 used)**
 **Sources:** PERFORMANCE.md § P1
