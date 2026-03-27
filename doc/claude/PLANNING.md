@@ -1082,6 +1082,140 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
+### S22  Fix parallel worker auto-lock in release builds
+**Sources:** SAFE.md § P1-R1, CAVEATS.md C22
+**Severity:** Medium — release builds silently return wrong results when a worker writes to a `const` argument.
+**Description:** The auto-lock insertion (`n_set_store_lock`) for `const` worker arguments is guarded by `#[cfg(debug_assertions)]` in `parser/expressions.rs`.  Release builds never lock the input stores, so a buggy worker that accidentally mutates a `const` argument silently discards the write into a 256-byte dummy buffer and continues with stale data.
+**Fix path:**
+1. Remove the `#[cfg(debug_assertions)]` guards from the two auto-lock insertion sites in `parse_code` and `expression` that emit `n_set_store_lock` for `const` parameters and local const variables.
+2. In `addr_mut` (`store.rs`), change the release-build dummy-buffer path to `panic!("write to locked store")` — no legitimate code path should hit it once auto-lock is unconditional.
+3. Add an integration test that runs a `par()` loop whose worker attempts to push to its `const` input in release mode; assert the panic fires with a clear message.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S23  Compiler + runtime: reject `yield` inside `par()` body
+**Sources:** SAFE.md § P2-R6, CAVEATS.md C25, COROUTINE.md § SC-CO-4
+**Severity:** Medium — `yield` or generator calls inside `par(...)` produce out-of-bounds panics or silent wrong results depending on frame-index collision.
+**Description:** No compiler check prevents `yield` or calls to `iterator<T>`-returning functions inside `par(...)` bodies.  Worker `State` instances hold only a null-sentinel `coroutines` table; a DbRef produced by the main thread indexes into it incorrectly.
+**Fix path:**
+1. In `src/parser/collections.rs` (parallel-for desugaring) and wherever `par(...)` body parsing begins, add an `inside_par_body: bool` flag to the parser context.
+2. In `parse_yield` and any site that resolves a function call returning `iterator<T>`, emit a compile error when `inside_par_body` is true.
+3. In `coroutine_next` (`state/mod.rs`), add a bounds check: `if idx >= self.coroutines.len() { panic!("iterator<T> DbRef out of range in worker") }`.  This defence-in-depth guard catches the case where the compiler check is missing.
+4. Test: a loft program that calls a generator inside `par(...)` produces a compile error; one that bypasses the check triggers the runtime guard in debug.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S24  Compiler + runtime: reject `e#remove` on generator iterator
+**Sources:** SAFE.md § P2-R9, CAVEATS.md C26, COROUTINE.md § SC-CO-11
+**Severity:** Medium — release builds silently corrupt a real store record; debug builds panic with an uninformative out-of-bounds message.
+**Description:** `e#remove` on a generator-typed loop variable passes a DbRef with `store_nr == u16::MAX` (the coroutine sentinel) to `database::remove`.  In debug `u16::MAX` overflows `allocations`; in release `u16::MAX % len` selects a real store and the `rec` (frame index ≈ 1–2) deletes a real record.
+**Fix path:**
+1. In `src/parser/fields.rs` (or wherever `e#remove` is resolved), check whether the loop's collection type is `iterator<T>` (backed by `OpCoroutineCreate`).  If so, emit: `error: e#remove is not valid on a generator iterator`.
+2. In `database::remove` (or the calling opcode), add: `if db.store_nr == COROUTINE_STORE { debug_assert!(false, "remove on coroutine DbRef"); return; }`.  The `return` prevents release-build corruption even if the compiler check is missing.
+3. Test: `e#remove` on a generator iterator is a compile error; a debug-only test verifies the runtime guard fires if the check is bypassed.
+**Effort:** Extra Small
+**Target:** 0.9.0
+
+---
+
+### S25  CO1.3d — coroutine text serialisation (must land atomically)
+**Sources:** SAFE.md § P2-R1/R2/R3, CAVEATS.md C23/C24, COROUTINE.md § CO1.3d/SC-CO-1/SC-CO-8/SC-CO-10
+**Severity:** Critical (P2-R1 use-after-free) / High (P2-R2 memory leak) — both caused by `text_owned` being permanently empty.
+**Description:** `CoroutineFrame.text_owned` is designed to hold owned copies of all dynamic-text locals across suspension.  The serialisation path (`serialise_text_slots`) is specified in COROUTINE.md but not implemented.  Until it lands, text arguments dangle (C23) and text locals leak (C24).  **Must land atomically** — implementing `free_dynamic_str` at yield without simultaneously implementing the pointer-patch at resume and the String drain at exhaustion introduces an explicit use-after-free.
+**Fix path:**
+
+#### S25.1 — `serialise_text_slots` at coroutine create + yield
+1. Implement `serialise_text_slots(stack_bytes, text_slot_layout, stores) -> Vec<(u32, String)>` per COROUTINE.md spec:
+   - Walk each text slot in `stack_bytes` by (offset, Type) from the function definition.
+   - Skip null Str and static Str (ptr inside `text_code`).
+   - Call `s.str().to_owned()` to make an owned `String`; call `free_dynamic_str` on the original.
+   - Patch `stack_bytes` with a Str pointing to the owned buffer; record `(offset, String)` in `text_owned`.
+2. Call `serialise_text_slots` from `coroutine_create` (text arg slots) and `coroutine_yield` (all text locals).
+3. Add `debug_assert!(def.text_slot_count == 0, …)` to `coroutine_yield` until S25.1 is complete (M8-b from SAFE.md).
+
+#### S25.2 — Pointer-patch on resume + String drain on exhaustion
+1. In `coroutine_next`: before copying `stack_bytes` to live stack, write updated `Str` pointers from `text_owned` buffers into the bytes (M6-b from SAFE.md).
+2. In `coroutine_return`: drain `text_owned` with `for (_, s) in frame.text_owned.drain(..) { drop(s); }` before `stack_bytes.clear()` (M7-a from SAFE.md).
+3. Add a leak-detection test: generator with text local, yields once, loop broken — verify no allocation escapes under Miri or similar.
+
+**Effort:** Large (S25.1 + S25.2 combined; must not be split across releases)
+**Target:** 1.1+
+
+---
+
+### S26  `OpFreeCoroutine` at for-loop exit
+**Sources:** SAFE.md § P2-R7, COROUTINE.md § Phase 1
+**Severity:** Low — memory growth; `State::coroutines` accumulates one `Box<CoroutineFrame>` per generator invocation forever.
+**Description:** `coroutine_return` marks the frame `Exhausted` but never sets the slot to `None`.  The `free_coroutine(idx)` helper is designed but never called.  Programs that create many generators in a loop grow `State::coroutines` without bound.
+**Fix path:**
+1. In the `for … in gen { }` desugaring codegen, emit `OpFreeCoroutine(gen_slot)` at loop exit (both exhaustion and `break`).
+2. Implement `OpFreeCoroutine` in `fill.rs`: call `free_coroutine(idx)` which sets `coroutines[idx] = None`.
+3. Optionally, lazily free in `coroutine_exhausted` when it first observes `Exhausted` status (covers the `explicit-advance` API path).
+**Effort:** Medium
+**Target:** 1.1+
+
+---
+
+### S27  Coroutine `text_positions` save/restore across yield/resume
+**Sources:** SAFE.md § P2-R4
+**Severity:** Medium (debug-only) — `text_positions` BTreeSet becomes inconsistent across yield/resume, causing false double-free misses and masking missing `OpFreeText` for unrelated code.
+**Description:** `coroutine_yield` rewinds `stack_pos` but does not remove text-local entries from `State::text_positions`.  The orphaned entries interfere with the debug detector for unrelated text frees at the same stack positions.
+**Fix path:**
+1. In `coroutine_yield` (debug path): collect `text_positions` entries in `[base, locals_end)`, remove them, store in `frame.saved_text_positions: BTreeSet<u32>`.
+2. In `coroutine_next` (debug path): re-insert `frame.saved_text_positions` and clear it.
+3. In `coroutine_return` (debug path): clear `frame.saved_text_positions` without reinserting.
+**Effort:** Small (debug-only path)
+**Target:** 1.1+
+
+---
+
+### S28  Debug generation-counter for stale DbRef detection in coroutines
+**Sources:** SAFE.md § P2-R8, COROUTINE.md § SC-CO-2
+**Severity:** Medium — a generator resuming after its backing record or store was freed silently reads/writes wrong data with no diagnostic.
+**Description:** A `DbRef` live in a generator local at a `yield` point can refer to memory freed or resized by the consumer between iterations.  Worse than ordinary functions: the suspension window spans many `next()` calls.
+**Fix path:**
+1. Add `generation: u32` to `Store`; increment on every `claim`, `delete`, and `resize`.
+2. When `coroutine_create` / `coroutine_yield` saves a `DbRef` to `stack_bytes`, also record `(store_nr, generation_at_save)` in a new `frame.store_generations: Vec<(u16, u32)>`.
+3. At `coroutine_next`, verify each saved store's current generation matches; emit a runtime diagnostic on mismatch.
+**Effort:** Medium
+**Target:** 1.1+
+
+---
+
+### S29  Parallel store hardening: `thread::scope` + LIFO assert + skip claims
+**Sources:** SAFE.md § P1-R2/P1-R3/P1-R4
+**Severity:** Low/Medium — three independent low-effort fixes for parallel store infrastructure.
+**Description:**
+- **P1-R2:** `run_parallel_direct` uses a raw `*mut u8` with a lifetime invariant enforced only by convention; `thread::spawn` + manual join does not give compile-time guarantees.
+- **P1-R3:** `clone_locked` copies `self.claims` (all live record offsets) into worker clones that never call `validate()` — wasted O(records) allocation per worker.
+- **P1-R4:** `free_named` relies on LIFO store freeing order; out-of-order frees stall `max` and may cause subsequent `database()` to reuse a live slot.
+**Fix path:**
+1. Replace `thread::spawn` + manual join in `run_parallel_direct` with `std::thread::scope` (Rust 1.63+) to give compile-time lifetime enforcement over `out_ptr`.
+2. Add `clone_locked_for_worker` on `Store` that omits `claims: HashSet::new()`; use it in `Stores::clone_for_worker`.
+3. Add `debug_assert!(store_nr == self.max - 1, "free() must be called in LIFO order")` in `free_named`.
+**Effort:** Small (three independent one-function changes)
+**Target:** 1.1+
+
+---
+
+### S30  `WorkerStores` newtype for type-level non-aliasing
+**Sources:** SAFE.md § P1-R5
+**Severity:** Low — no current bug; guards against future extensions to the parallel dispatch that could silently allow workers to hold main-thread `DbRef` values.
+**Description:** The architecture relies on convention (workers receive cloned stores and may not hold main-thread `DbRef`s) rather than Rust types.  A future refactor extending worker dispatch could silently break the invariant.
+**Fix path:**
+1. Introduce `WorkerStores(Stores)` newtype, constructible only by `clone_for_worker` (private inner field).
+2. Worker closures receive `WorkerStores`; the type is `Send` but not `Sync`, preventing cross-thread sharing.
+3. Long-term: add `origin: StoreOrigin` tag to `DbRef` and a debug assert in `copy_from_worker` that all result DbRefs have worker origin, not main-thread origin.
+**Effort:** Medium
+**Depends:** S29 (clean parallel store state first)
+**Target:** 1.1+
+
+---
+
 ## N — Native Codegen
 
 All N-tier items (N1–N9) are completed.  Native test parity achieved 2026-03-23:

@@ -281,9 +281,133 @@ loop variables; no additional IR restructuring was required.
 `#[ignore]` removed).
 **Fixed by:** CO1.4-fix — two-zone slot redesign covered the yield-from case.
 
+## C22 — Parallel workers: silent wrong results in release builds
+
+`par(...)` workers that write to a `const` input silently discard the write in
+release builds (the write lands in a 256-byte thread-local dummy buffer) and
+continue with stale data.  The locked-store guard is `debug_assert!`-only, so
+only debug builds panic.
+
+**Reproducer:**
+```loft
+fn worker(const items: vector<integer>, idx: integer) -> integer {
+  items.push(0);  // writes to const arg — silently discarded in release
+  items[idx]
+}
+fn main() {
+  data = [1, 2, 3];
+  result = par(worker(data, 0..3));
+  // release: may return wrong values; debug: panics immediately
+}
+```
+
+**Test:** none (release-build behaviour only).
+**Workaround:** never write to `const` parameters; always test `par()` loops in debug mode.
+**Planned fix:** S22 in [ROADMAP.md](ROADMAP.md) — remove `#[cfg(debug_assertions)]` guard on auto-lock.
+**Docs:** [SAFE.md](SAFE.md) § P1-R1.
+
+---
+
+## C23 — Coroutine with `text` argument: use-after-free on first resume
+
+A generator that takes a `text` parameter stores the `Str` pointer verbatim in
+`stack_bytes` at creation time.  If the caller's string goes out of scope before
+the first `next()` call, the generator resumes with a dangling pointer and
+silently reads freed memory.  No panic is emitted in debug or release builds.
+
+**Reproducer:**
+```loft
+fn words(sentence: text) -> iterator<text> { yield sentence; }
+fn main() {
+  gen = words("hello world");
+  // if the literal String is freed before next(), first resume reads garbage
+  w = next(gen);
+}
+```
+
+**Test:** none (requires memory sanitizer; no loft-level reproducer triggers a clear failure).
+**Workaround:** keep text arguments live for the generator's entire lifetime.
+**Planned fix:** S25 in [ROADMAP.md](ROADMAP.md) — CO1.3d `serialise_text_slots` at coroutine create.
+**Docs:** [SAFE.md](SAFE.md) § P2-R1, [COROUTINE.md](COROUTINE.md) § SC-CO-1.
+
+---
+
+## C24 — Coroutine with `text` locals: memory leak on exhaustion
+
+Generators that have `text` local variables and yield at least once leak those
+`String` allocations when exhausted.  `stack_bytes.clear()` treats its payload
+as plain bytes — no `String` destructors are called.  The `text_owned`
+serialisation path (CO1.3d) that would own these allocations is not yet
+implemented.
+
+**Reproducer:**
+```loft
+fn gen_texts() -> iterator<integer> {
+  greeting = "hello";  // text local on the generator stack
+  yield 1;
+  // exhaustion: greeting's String heap allocation is leaked
+}
+```
+
+**Test:** none (requires allocator leak detection).
+**Workaround:** none; avoid text locals in generators where memory pressure matters.
+**Planned fix:** S25 in [ROADMAP.md](ROADMAP.md) — CO1.3d (must land atomically with C23 fix).
+**Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3.
+
+---
+
+## C25 — `yield` inside `par()` body: panic or wrong results
+
+The compiler does not reject `yield` expressions or generator calls inside a
+`par(...)` body.  At runtime a worker indexes its own (nearly empty) `coroutines`
+table with a `rec` from the main thread.  Out-of-bounds `rec` → Rust panic;
+in-bounds collision → worker silently advances the wrong generator.
+
+**Reproducer:**
+```loft
+fn gen() -> iterator<integer> { yield 1; }
+fn main() {
+  result = par(fn(i: integer) -> integer { next(gen()) }(0..4));
+  // panics or returns wrong values depending on worker coroutine table state
+}
+```
+
+**Test:** none (unsafe to run as a test).
+**Workaround:** never use `yield` or generator calls inside `par(...)` bodies.
+**Planned fix:** S23 in [ROADMAP.md](ROADMAP.md) — `inside_par_body` compiler flag + runtime bounds guard.
+**Docs:** [SAFE.md](SAFE.md) § P2-R6, [COROUTINE.md](COROUTINE.md) § SC-CO-4.
+
+---
+
+## C26 — `e#remove` on a generator iterator: store corruption in release
+
+`e#remove` on a generator-typed loop variable is not rejected at compile time.
+At runtime `remove()` receives a DbRef with `store_nr == u16::MAX`.  Debug
+builds panic (out-of-bounds).  Release builds compute `u16::MAX % allocations.len()`
+as the store index and delete a real record, silently corrupting that store's
+free list.
+
+**Reproducer:**
+```loft
+fn gen_items() -> iterator<integer> { for i in 0..5 { yield i; } }
+fn main() {
+  for e in gen_items() {
+    e#remove;  // release: deletes an arbitrary record in a real store
+  }
+}
+```
+
+**Test:** none (debug panics; release silently corrupts — unsafe to automate).
+**Workaround:** only use `e#remove` with store-backed collection iterators.
+**Planned fix:** S24 in [ROADMAP.md](ROADMAP.md) — compiler rejection + runtime guard in `remove()`.
+**Docs:** [SAFE.md](SAFE.md) § P2-R9, [COROUTINE.md](COROUTINE.md) § SC-CO-11.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — language design asymmetries
 - [SLOT_FAILURES.md](SLOT_FAILURES.md) — slot assignment bug classes
+- [SAFE.md](SAFE.md) — safety analysis for parallel workers and coroutines
 - [LOFT.md](LOFT.md) § Known Limitations — user-facing summary

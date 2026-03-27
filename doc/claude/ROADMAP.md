@@ -41,6 +41,9 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
+| S22       | Fix parallel worker auto-lock in release builds      | S  | ✓      |              | SAFE.md § P1-R1            |
+| S23       | Compiler + runtime: reject `yield` inside `par()`   | S  | ✓      |              | SAFE.md § P2-R6            |
+| S24       | Compiler + runtime: reject `e#remove` on generator  | XS | ✓      |              | SAFE.md § P2-R9            |
 | L1        | Error recovery after token failures                  | M  | ~      |              | DEVELOPERS.md              |
 | A2        | Logger: hot-reload, run-mode, release + debug        | M  | ✓      |              | LOGGER.md                  |
 | A2.1      | ↳ Wire hot-reload in log functions                   | S  | ✓      |              | native.rs                  |
@@ -92,6 +95,14 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | —      | N8b.2        | NATIVE.md § N8b            |
 | N8c.1     | Native: audit `maybe<T>` null-path branches          | S  | —      |              | NATIVE.md § N8c            |
 | N8c.2     | ↳ Fix `maybe<T>` ref-counted element handling        | S  | ~      | N8c.1        | NATIVE.md § N8c            |
+| S25       | CO1.3d: coroutine text serialisation (atomic)        | L  | ✓      |              | SAFE.md § P2-R1/R2/R3      |
+| S25.1     | ↳ `serialise_text_slots` at create + yield           | M  | ✓      |              | COROUTINE.md § CO1.3d      |
+| S25.2     | ↳ Pointer-patch on resume + `String` drain on return | M  | ✓      | S25.1        | COROUTINE.md § CO1.3d      |
+| S26       | `OpFreeCoroutine` at for-loop exit                   | M  | ~      |              | SAFE.md § P2-R7            |
+| S27       | Coroutine `text_positions` save/restore on yield     | S  | ✓      |              | SAFE.md § P2-R4            |
+| S28       | Debug generation-counter for stale DbRef in coroutines | M | ~    |              | SAFE.md § P2-R8            |
+| S29       | Parallel store: `thread::scope` + LIFO assert + skip claims | S | ✓ |             | SAFE.md § P1-R2/R3/R4      |
+| S30       | `WorkerStores` newtype for type-level non-aliasing   | M  | ✓      | S29          | SAFE.md § P1-R5            |
 
 ---
 
