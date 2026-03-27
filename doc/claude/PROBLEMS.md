@@ -30,8 +30,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
-| 80 | Struct-enums in default library have broken field positions | Medium | Define in user code instead of `default/*.loft` |
-| 81 | Struct-enum variants with same-named fields read wrong offset | Medium | Use distinct field names per variant |
+| 80 | *(fixed — S14)* Struct-enums in default library have broken field positions | Medium | Fixed |
+| 81 | *(fixed — S15)* Struct-enum variants with same-named fields read wrong offset | Medium | Fixed |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 | 87 | *(fixed)* `static_call` snapshots call stack on every native function call | Medium | Fixed — now only snapshots for `n_stack_trace` |
@@ -41,9 +41,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
-| 94 | CO1.2 text arguments not serialized in `coroutine_create` | High | Avoid `text` parameters in generator functions |
-| 95 | CO1.2 `active_coroutines` not popped on coroutine body return | High | N/A — coroutines cannot safely return yet (CO1.3) |
-| 96 | CO1.2 no `OpCoroutineReturn` — `OpReturn` corrupts coroutine state | High | N/A — coroutines cannot safely return yet (CO1.3) |
+| 94 | *(fixed — CO1.3d)* CO1.2 text arguments not serialized in `coroutine_create` | High | Fixed |
+| 95 | *(fixed — CO1.3a)* CO1.2 `active_coroutines` not popped on coroutine body return | High | Fixed |
+| 96 | *(fixed — CO1.3a)* CO1.2 no `OpCoroutineReturn` — `OpReturn` corrupts coroutine state | High | Fixed |
 | 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
 
 ---
@@ -497,46 +497,40 @@ inside tuple elements.
 
 ---
 
-### 94. CO1.2 text arguments not serialized in coroutine_create
+### 94. *(fixed — CO1.3d)* CO1.2 text arguments not serialized in coroutine_create
 
 **Symptom:** `coroutine_create` copies raw argument bytes into the frame's `stack_bytes`
 but does not process dynamic `Str` slots.  If a generator function takes a `text`
 parameter, the saved `Str` pointer references memory on the live stack that is freed
 after the arguments are popped.  Resuming the coroutine would read a dangling pointer.
 
-**Impact:** High — memory corruption if a generator is called with a text argument.
-No user-visible impact yet because the compiler does not emit `OpCoroutineCreate`
-(parser integration is CO1.3+).
-
-**Fix path:** Implement `serialise_text_slots()` per COROUTINE.md § SC-CO-1: iterate
-`Str` slots in the saved bytes, clone each dynamic `String` into `text_owned`, and
-rewrite the `Str` pointer.  Call it in `coroutine_create` after copying argument bytes.
+**Fix:** Two-part fix in CO1.3d: (1) `coroutine_create` appends a 4-byte return-address
+slot to `stack_bytes` so `get_var` offsets computed at codegen time remain valid on every
+resume; (2) `Value::Yield` codegen decrements `stack.position` by the yielded value size
+after `OpCoroutineYield`, so variable accesses on second and later resumes use correct
+offsets.  `coroutine_text_param_survives_yield` test passes.
 
 **Discovered:** 2026-03-26, during CO1.2 regression evaluation.
 
 ---
 
-### 95. CO1.2 active_coroutines not popped on coroutine body return
+### 95. *(fixed — CO1.3a)* CO1.2 active_coroutines not popped on coroutine body return
 
 **Symptom:** When a coroutine body reaches the end or calls `return`, the ordinary
 `OpReturn` / `fn_return` runs.  It pops the call stack but does not pop
 `active_coroutines` or mark the frame as `Exhausted`.  The active list grows
 unbounded and the re-entrant check may fire incorrectly.
 
-**Impact:** High — leaked entries in `active_coroutines`.  No user-visible impact
-yet because the compiler does not emit `OpCoroutineCreate`.
-
-**Fix path:** Either (a) modify `fn_return` to detect it is inside a running
-coroutine (check `active_coroutines.last()`) and clean up, or (b) implement
-`OpCoroutineReturn` per COROUTINE.md § Runtime Design and have the compiler emit
-it instead of `OpReturn` for generator functions.  Approach (b) is cleaner; plan
-for CO1.3.
+**Fix:** `OpCoroutineReturn` implemented in CO1.3a: clears `text_owned` / `stack_bytes`,
+marks `Exhausted`, pops `active_coroutines`, rewinds stack to `frame.stack_base`,
+pushes null, jumps to `frame.caller_return_pos`.  Generator codegen emits this opcode
+instead of `OpReturn` at function exit.
 
 **Discovered:** 2026-03-26, during CO1.2 regression evaluation.
 
 ---
 
-### 96. CO1.2 no OpCoroutineReturn — OpReturn corrupts coroutine state
+### 96. *(fixed — CO1.3a)* CO1.2 no OpCoroutineReturn — OpReturn corrupts coroutine state
 
 **Symptom:** There is no `OpCoroutineReturn` opcode.  When a running coroutine
 exits via `OpReturn`, the return address `get_var::<u32>(0)` reads from the
@@ -544,13 +538,7 @@ coroutine's serialized stack — not from `frame.caller_return_pos` where
 `coroutine_next` stored the consumer's continuation.  This produces a wrong
 jump target.
 
-**Impact:** High — control flow corruption on coroutine body completion.  No
-user-visible impact yet because no parser path emits `OpCoroutineCreate`.
-
-**Fix path:** Implement `OpCoroutineReturn` in CO1.3 alongside `OpYield`.  The
-opcode should: clear `text_owned`, clear `stack_bytes`, mark `Exhausted`, pop
-`active_coroutines`, rewind stack to `frame.stack_base`, push a null value of the
-appropriate size, and jump to `frame.caller_return_pos`.
+**Fix:** `OpCoroutineReturn` implemented in CO1.3a — see #95 above.
 
 **Discovered:** 2026-03-26, during CO1.2 regression evaluation.
 

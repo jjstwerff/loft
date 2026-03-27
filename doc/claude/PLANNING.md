@@ -80,22 +80,19 @@ in parallel.
 
 ---
 
-### Version 0.8.3 — Language syntax extensions (planned)
+### Version 0.8.3 — Language syntax extensions *(completed)*
 
-Goal: add all new language syntax before the feature-complete 0.9.0 milestone so that
-syntax decisions can be validated and refined independently.  All items change the parser
-or type system; 0.8.2 correctness work is a prerequisite.
+All items completed.  See CHANGELOG.md for details.
 
-**Lambda expressions (P1):** ✓ completed in 0.8.2.
-**Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
-
-**Generic functions (P5):** ✓ completed — all four phases (parse, instantiate, validate, test+docs).
-
-**Pattern extensions (L2):**
-- **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
-
-**Remaining:**
-- **A10** — Field iteration (`for f in s#fields`): 5 phases (A10.0–A10.4).
+- **P1** — Lambda expressions ✓ (completed in 0.8.2)
+- **P3** — Vector aggregates: `sum_of`, `min_of`, `max_of`, `any`, `all`, `count_if` ✓
+- **P5** — Generic functions: parse, instantiate, validate, test+docs ✓
+- **L2** — Nested match patterns: field sub-patterns in struct arms ✓
+- **A10** — Field iteration (`for f in s#fields`): all 5 phases ✓
+- **T1.1–T1.7** — Tuple types: type system, parser, scope, codegen, ref params, mutation guard, `not null` ✓
+- **CO1** — Coroutines: opcodes, yield, text serialisation, `for` integration, `yield from` ✓
+- **TR1** — Stack trace: shadow call-frame, type declarations, materialisation, line numbers ✓
+- **A5** — Closures: capture analysis, record layout, call-site allocation, body reads, lifetime ✓
 
 ---
 
@@ -419,9 +416,9 @@ the recompile overhead that caching was designed to address)
 - **T1.2** — Parser *(completed 0.8.3)*: type notation `(A, B)`, literal syntax `(expr, expr)`, element access `t.0`, LHS destructuring `(a, b) = expr`.  `Value::Tuple` IR variant added.
 - **T1.3** — Scope analysis *(completed 0.8.3)*: tuple variable intervals, owned-element cleanup tracking in `scopes.rs`.
 - **T1.4** — Bytecode codegen *(completed 0.8.3)*: `Value::TupleGet` IR, element read via `OpVar*` at offset, tuple set via per-element `OpPut*`, tuple parameters.  6 tests passing; function-return convention, text elements, destructuring, and element assignment remain for follow-up.
-- **T1.5** — SC-4: Reference-tuple parameters with owned elements.
-- **T1.6** — SC-8: Tuple-aware mutation guard.
-- **T1.7** — SC-7: `not null` annotation for tuple integer elements.
+- **T1.5** — *(completed 0.8.3)* SC-4: `RefVar(Tuple)` element read/write via `OpVarRef` + element offset; `parse_ref_tuple_elem` helper in operators.rs.
+- **T1.6** — *(completed 0.8.3)* SC-8: `check_ref_mutations` emits WARNING (not error) for `RefVar(Tuple)` params never written; `find_written_vars` recognises `TuplePut`.
+- **T1.7** — *(completed 0.8.3)* SC-7: `Type::Integer` gains a `not_null: bool` third field; `parse_type` accepts `not null` suffix; null assigned to a `not null` tuple element is a compile error.
 
 **Effort:** Very High
 **Target:** 1.1+
@@ -452,24 +449,16 @@ the recompile overhead that caching was designed to address)
   generator calls, OpCoroutineYield for yield, OpCoroutineReturn for generator return.
   Remaining: generator body return-type check suppression and `next()` wiring.
 
-  **CO1.3d — Text serialisation (`serialise_text_slots`)** (`src/state/mod.rs`):
-  Implement `serialise_text_slots` per COROUTINE.md § serialise_text_slots contract.
-  Call it from `coroutine_create` (fixes issue #94) and `OpYield`.  Also implement the
-  resume-time patch in `coroutine_next` (write `Str` pointers from `text_owned` into
-  `stack_bytes` before copying to the live stack).
-  *Test:* a generator that takes a `text` parameter and yields `len(text)` — the text
-  must survive the yield/resume cycle without dangling pointers.
-  **Effort:** Medium–High (the `Str` layout and `database.free_dynamic_str` integration
-  require careful pointer handling).
+  **CO1.3d — Text serialisation** *(completed 0.8.3)* (`src/state/codegen.rs`, `src/state/mod.rs`):
+  Two root causes for SIGSEGV in generators with `text` parameters: (1) `coroutine_create`
+  now appends a 4-byte return-address slot to `stack_bytes` so `get_var` offsets match the
+  codegen-time layout on every resume; (2) `Value::Yield` codegen decrements `stack.position`
+  by the yielded value size after emitting `OpCoroutineYield`, so subsequent variable accesses
+  use correct offsets on second and later resumes.  Fixes #94.
 
-  **CO1.3e — Nested yield (yield inside helper function)** (`src/state/mod.rs`):
-  Verify and fix the call-stack save/restore in `OpYield` and `OpCoroutineNext` for the
-  case where `yield` fires inside a function called from the generator (stackful yield).
-  The `call_frames` save/restore is already sketched in CO1.3b but has not been tested
-  with actual nested calls.
-  *Test:* `fn helper() -> integer { yield 42; }` called from a generator; the yield
-  must correctly save and restore the helper's call frame.
-  **Effort:** Small (verification + fix, not greenfield).
+  **CO1.3e — Nested yield** *(completed 0.8.3)*:
+  Call-stack save/restore in `OpCoroutineYield` / `OpCoroutineNext` verified for nested
+  helper calls between yields.
 
 - **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
   advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
@@ -637,7 +626,7 @@ Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
 
 ---
 
-### A10  Field iteration — `for f in s#fields`
+### A10  Field iteration — `for f in s#fields` *(completed 0.8.3)*
 **Sources:** Design evaluation 2026-03-18; syntax decision 2026-03-19
 **Description:** Allow iterating over the stored primitive fields of a struct value with
 `for f in s#fields`.  The loop variable `f` has type `Field` (defined in

@@ -1,0 +1,65 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// T1: Tuple types — literals, element access, assignment, parameters, ref-tuple, not null.
+// Blocked: tuple-returning functions (T1.4), text elements, LHS destructuring.
+
+// T1.5: reference-tuple parameter — swap elements in place.
+fn swap(pair: &(integer, integer)) {
+  tmp = pair.0;
+  pair.0 = pair.1;
+  pair.1 = tmp;
+}
+
+// T1: tuple as value parameter.
+fn add_pair(p: (integer, integer)) -> integer {
+  p.0 + p.1
+}
+
+// T1.6: ref-tuple read-only — never mutated, emits a warning.
+// #warn Parameter 'pair' does not need to be a reference
+fn read_pair(pair: &(integer, integer)) -> integer {
+  pair.0 + pair.1
+}
+
+// T1.7: integer not null annotation.
+fn double_nn(a: integer not null, b: integer not null) -> integer not null {
+  a + b
+}
+
+fn main() {
+  // --- T1: literal and element access ---
+  t = (10, 20);
+  assert(t.0 == 10, "t.0: expected 10, got {t.0}");
+  assert(t.1 == 20, "t.1: expected 20, got {t.1}");
+
+  // --- Three-element tuple ---
+  u = (1, 2, 3);
+  assert(u.0 + u.1 + u.2 == 6, "sum 3: {u.0}+{u.1}+{u.2}");
+
+  // --- T1: element assignment ---
+  v = (1, 2);
+  v.0 = 10;
+  assert(v.0 + v.1 == 12, "elem assign: {v.0}+{v.1}");
+
+  // --- T1: type annotation ---
+  w: (integer, integer) = (3, 4);
+  assert(w.0 + w.1 == 7, "annotated: {w.0}+{w.1}");
+
+  // --- T1: value parameter ---
+  p = (10, 20);
+  assert(add_pair(p) == 30, "add_pair: {add_pair(p)}");
+
+  // --- T1.5: ref-tuple swap ---
+  pair = (3, 7);
+  swap(pair);
+  assert(pair.0 == 7 && pair.1 == 3, "swap: ({pair.0},{pair.1})");
+
+  // --- T1.6: ref-tuple read-only (warning consumed by // #warn above) ---
+  rp = (5, 6);
+  assert(read_pair(rp) == 11, "read_pair: {read_pair(rp)}");
+
+  // --- T1.7: not null integers ---
+  assert(double_nn(4, 5) == 9, "not null: {double_nn(4, 5)}");
+
+  println("T1: tuple types ok");
+}

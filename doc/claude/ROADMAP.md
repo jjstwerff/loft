@@ -16,19 +16,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.3 — Language syntax extensions
-
-| ID     | Title                                                   | Effort    | Depends on  | Source                  |
-|--------|---------------------------------------------------------|-----------|-------------|-------------------------|
-| T1     | Tuple types                                     | VH | ✓      |            | TUPLES.md           |
-| T1.5   | ↳ Reference-tuple parameters                    | S  | ✓      | T1.4 (done)| compiler            |
-| T1.6   | ↳ Tuple-aware mutation guard                    | S  | ✓      | T1.4 (done)| scopes.rs           |
-| T1.7   | ↳ `not null` for tuple integer elements         | S  | ✓      | T1.4 (done)| typedef.rs          |
-| CO1    | Coroutines (`yield`, `iterator<T>`)             | VH | ✓      | TR1 (done) | COROUTINE.md        |
-| CO1.3d | ↳ Text serialisation (`serialise_text_slots`)   | MH | ✓      | CO1.3b (done)| state/mod.rs      |
-
----
-
 ## 0.8.4 — HTTP client
 
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
@@ -90,7 +77,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | S17    | Slot: text below TOS in nested scopes          | M  | —      |            | CAVEATS.md C4       |
 | S18    | Slot: sequential file blocks conflict          | M  | —      |            | CAVEATS.md C5       |
 | A12    | Lazy work-variable initialization              | M  | ~      |            | PLANNING.md A12     |
-| S16    | Native codegen: enum method dispatch           | MH | Done   |            | resolved — C2 removed |
 | O1     | Superinstruction peephole rewriting            | M  | ~      |            | compile.rs          |
 | O2     | Stack raw pointer cache                        | H  | ~      |            | PERFORMANCE.md P2   |
 | A4     | Spatial index operations                       | H  | ~      |            | PROBLEMS.md #22     |
