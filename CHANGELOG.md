@@ -8,6 +8,21 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now
+  compiles and executes correctly.  The `+=` operator on a captured integer variable
+  routes through `call_to_set_op` → `OpSetInt`, bypassing the `generate_set`
+  self-reference guard that previously caused a codegen panic.  Test `capture_detected`
+  in `tests/parse_errors.rs` passes without `#[ignore]`.  Text capture remains
+  blocked by two runtime bugs (see CAVEATS.md C1).
+
+- **Lambda function type no longer includes text work variables** (A5.6a fix) —
+  `parse_lambda` previously built the `Function(params, ret)` type from
+  `data.attributes(d_nr)`, which also includes internal text work variables
+  registered by `text_return()`.  This caused spurious "expects N argument(s),
+  got M" errors when calling text-returning lambdas via function references.  The
+  type is now built directly from the declared `arguments` list, which is always
+  correct regardless of how many work variables are registered.
+
 - **Closure capture works in debug builds** (A5.6) — The debug-mode store leak
   where closure record variables (`___clos_N`) were never freed has been fixed.
   `scopes.rs` now pre-registers block-result Reference variables at the enclosing

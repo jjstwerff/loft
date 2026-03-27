@@ -19,33 +19,39 @@ build can be retested quickly.
 
 ---
 
-## C1 — Lambda closure capture: two remaining restrictions
+## C1 — Lambda closure capture: one remaining restriction
 
 Read-only capture of non-text values (integers, floats, booleans, enums) works
-in both debug and release builds (A5.3 + A5.6).  Two restrictions remain:
+in both debug and release builds.  Mutable capture (`count += x`) also works (A5.6a).
+One restriction remains:
 
-1. **Text capture not supported** — text values inside a closure record
-   need text-in-struct serialisation, which is not yet implemented.
-2. **Mutable capture not supported** — `count += x` inside a lambda crashes in
-   codegen with a self-reference guard error.
+1. **Text capture not supported** — two runtime bugs block it:
+   - **Bug 1 (stack layout):** `OpSetText`/`OpGetText` on the closure record produces a garbage
+     `DbRef` in the lambda's stack frame, causing store-bounds panics at runtime.
+   - **Bug 2 (text work buffers):** Text-returning lambdas via `CallRef` require the caller to
+     pre-allocate a text work buffer (`RefVar(Text)` argument), which `generate_call` does but
+     `generate_call_ref` does not.  `codegen.rs:generate_call_ref` has a `debug_assert` that
+     fires immediately in debug builds when this case is hit.
+   Root cause of Bug 1: `OpCallRef` stack frame setup vs. where the lambda's bytecode expects
+   `__closure` to live; needs a dedicated investigation with targeted logging.
 
 **Note:** The current implementation captures variable values at the call site,
 not at the point of lambda definition.  `closure_capture_after_change` documents
 this: `x = 10; f = fn(y) { x + y }; x = 99; f(5)` returns 104, not 15.
 Capture-at-definition-time is a deferred improvement.
 
-**Reproducer (restriction 2):**
+**Reproducer (restriction 1):**
 ```loft
 fn test() {
-  count = 0;
-  f = fn(x: integer) { count += x; };  // mutable capture — codegen panic
-  f(10);
+  prefix = "Hello";
+  greet = fn(name: text) -> text { "{prefix}, {name}!" };  // text capture — runtime crash
+  greet("World");
 }
 ```
 
-**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` (all pass); `closure_capture_text` (`#[ignore]`, restriction 1); `tests/parse_errors.rs` — `capture_detected` (`#[ignore]`, restriction 2)
-**Workaround:** pass needed values as explicit function arguments.
-**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (1.1+) — mutable capture + text capture; design in [PLANNING.md](PLANNING.md) § A5.6.
+**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` (all pass); `closure_capture_text` (`#[ignore]`, restriction 1); `tests/parse_errors.rs` — `capture_detected` (passes, mutable capture)
+**Workaround:** pass captured text values as explicit function arguments.
+**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (1.1+); needs investigation of `OpCallRef` stack layout + `generate_call_ref` text buffer allocation.
 **Docs:** [LOFT.md](LOFT.md) § Lambda expressions.
 
 ---

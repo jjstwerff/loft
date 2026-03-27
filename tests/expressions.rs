@@ -345,7 +345,9 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.3: text closure capture needs text-in-struct serialisation"]
+#[ignore = "A5.6b: text capture blocked by two runtime bugs — (1) OpSetText/OpGetText on \
+closure records produces garbage DbRef in the lambda stack frame; (2) text-returning lambdas \
+via CallRef don't allocate text work variable buffers. See CAVEATS.md C1."]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(

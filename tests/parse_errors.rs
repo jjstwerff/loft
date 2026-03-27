@@ -633,7 +633,6 @@ fn generic_field_error() {
 
 /// A5.1: lambda referencing an outer variable is detected as a capture.
 #[test]
-#[ignore = "A5.4: mutable capture (count += x) not yet supported — codegen panics on self-reference"]
 fn capture_detected() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"

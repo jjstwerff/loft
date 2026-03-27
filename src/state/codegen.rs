@@ -1102,6 +1102,19 @@ impl State {
             panic!("generate_call_ref: variable is not Type::Function");
         };
         let ret_type = *ret_type;
+        // A5.6b: text-returning lambdas require the caller to pre-allocate a text work
+        // buffer (RefVar(Text) argument), which generate_call does but generate_call_ref
+        // does not. Guard against silent garbage-stack reads in debug builds.
+        #[cfg(debug_assertions)]
+        if let Type::Text(ls) = &ret_type {
+            debug_assert!(
+                ls.is_empty(),
+                "CallRef to text-returning fn-ref '{}': {} text work buffer(s) required but \
+                 not allocated by caller — see CAVEATS.md C1 Bug 2",
+                stack.function.name(v_nr),
+                ls.len()
+            );
+        }
         for arg in args {
             self.generate(arg, stack, false);
         }

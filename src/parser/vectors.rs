@@ -424,12 +424,12 @@ impl Parser {
 
         self.emit_lambda_code(code, d_nr);
 
-        let n_args = self.data.attributes(d_nr);
-        // Exclude hidden __closure parameter from the user-visible Function type.
-        let arg_types: Vec<Type> = (0..n_args)
-            .filter(|&a| self.data.attr_name(d_nr, a) != "__closure")
-            .map(|a| self.data.attr_type(d_nr, a))
-            .collect();
+        // Build the user-visible function type from the declared arguments only.
+        // Using data.attributes(d_nr) is wrong here: text_return() registers text work
+        // variables (e.g. __work_1) as definition attributes for stack allocation, and
+        // the second-pass closure injection also adds a hidden __closure attribute.
+        // Neither should appear in the public Function type — only declared params do.
+        let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
         Type::Function(arg_types, Box::new(ret_type))
     }
