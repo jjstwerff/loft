@@ -315,25 +315,33 @@ fn ref_tuple_unused_mutation_error() {
 // ── A5.3 — Closure capture at call site ─────────────────────────────────────
 
 #[test]
-#[ignore = "A5.3: closure capture at call site not yet implemented"]
+#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
 fn closure_capture_integer() {
     // A lambda captures an integer from the enclosing scope.
-    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)").result(Value::Int(15));
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)")
+        .warning("closure record '__closure_0' created with 1 field: x(integer) at closure_capture_integer:2:67")
+        .warning("Variable x is never read at closure_capture_integer:2:22")
+        .result(Value::Int(15));
 }
 
 #[test]
-#[ignore = "A5.3: closure capture at call site not yet implemented"]
+#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
 fn closure_capture_after_change() {
     // Capture is by value at the point of lambda creation — changing original after
     // creation does not affect the captured value.
-    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)").result(Value::Int(15));
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
+        .warning("closure record '__closure_0' created with 1 field: x(integer)")
+        .result(Value::Int(15));
 }
 
 #[test]
-#[ignore = "A5.3: closure capture at call site not yet implemented"]
+#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
 fn closure_capture_multiple() {
     // A lambda captures two variables from the enclosing scope.
     expr!("a = 3; b = 7; f = fn(x: integer) -> integer { a + b + x }; f(10)")
+        .warning("Variable a is never read")
+        .warning("Variable b is never read")
+        .warning("closure record '__closure_0' created with 2 fields: a(integer), b(integer)")
         .result(Value::Int(20));
 }
 

@@ -1014,10 +1014,18 @@ impl State {
         }
         // fn-ref variable is below the pushed arguments; compute distance from current top
         let fn_var_dist = stack.position - stack.function.stack(v_nr);
-        let total_arg_size: u16 = param_types
+        // A5.3: total_arg_size includes all args pushed including hidden __closure.
+        let declared_size: u16 = param_types
             .iter()
             .map(|t| size(t, &Context::Argument))
             .sum();
+        let extra = if args.len() > param_types.len() {
+            // Hidden closure arg is a DbRef (12 bytes).
+            (args.len() - param_types.len()) as u16 * super::size_ref() as u16
+        } else {
+            0
+        };
+        let total_arg_size = declared_size + extra;
         stack.add_op("OpCallRef", self);
         self.code_add(fn_var_dist);
         self.code_add(total_arg_size);

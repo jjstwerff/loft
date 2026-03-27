@@ -418,7 +418,7 @@ impl Parser {
 
         self.data.def_used(d_nr);
 
-        *code = Value::Int(d_nr as i32);
+        self.emit_lambda_code(code, d_nr);
 
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
@@ -608,12 +608,49 @@ impl Parser {
 
         self.data.def_used(d_nr);
 
-        *code = Value::Int(d_nr as i32);
+        self.emit_lambda_code(code, d_nr);
 
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
         Type::Function(arg_types, Box::new(ret_type))
+    }
+
+    // A5.3-complete: emit the lambda value — plain Int(d_nr) for non-capturing
+    // lambdas, or an Insert block that allocates and populates the closure record.
+    fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
+        let closure_rec_d = self.data.def(d_nr).closure_record;
+        if closure_rec_d != u32::MAX && !self.first_pass {
+            let rec_tp = Type::Reference(closure_rec_d, vec![]);
+            let w = self.create_unique("__clos", &rec_tp);
+            self.vars.defined(w);
+            let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
+            let mut steps: Vec<Value> = Vec::new();
+            // Allocate the closure record on the heap.
+            steps.push(crate::data::v_set(w, Value::Null));
+            steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
+            // Populate fields from captured variables in the outer scope.
+            let n_attrs = self.data.attributes(closure_rec_d);
+            for aid in 0..n_attrs {
+                let cap_name = self.data.attr_name(closure_rec_d, aid);
+                let v_nr = self.vars.var(&cap_name);
+                if v_nr != u16::MAX {
+                    steps.push(self.set_field_no_check(
+                        closure_rec_d,
+                        aid,
+                        0,
+                        Value::Var(w),
+                        Value::Var(v_nr),
+                    ));
+                }
+            }
+            // The last expression is the d_nr — becomes the fn-ref value.
+            steps.push(Value::Int(d_nr as i32));
+            *code = Value::Insert(steps);
+            self.last_closure_work_var = w;
+        } else {
+            *code = Value::Int(d_nr as i32);
+        }
     }
 
     /// A5.2: Synthesize an anonymous struct definition for the captured variables

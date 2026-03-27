@@ -80,6 +80,19 @@ impl Parser {
             } else {
                 t = self.parse_call(code, source, &nm);
             }
+        } else if self.closure_param != u16::MAX
+            && !self.first_pass
+            && self.data.def(self.context).closure_record != u32::MAX
+            && self
+                .data
+                .attr(self.data.def(self.context).closure_record, name)
+                != usize::MAX
+        {
+            // A5.3/A5.4: redirect captured variable reads to closure record field.
+            let closure_d_nr = self.data.def(self.context).closure_record;
+            let fnr = self.data.attr(closure_d_nr, name);
+            *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
+            t = self.data.attr_type(closure_d_nr, fnr);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
             if self.lexer.has_token("#") {

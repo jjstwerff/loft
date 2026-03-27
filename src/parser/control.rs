@@ -1922,6 +1922,12 @@ impl Parser {
             for (i, expected) in param_types.iter().enumerate() {
                 self.convert(&mut converted[i], &types[i], expected);
             }
+            // A5.3-complete: inject hidden __closure argument.
+            // The closure_vars map points to the work variable holding the pre-allocated
+            // closure record.  Read it and pass as hidden trailing arg.
+            if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
+                converted.push(Value::Var(closure_w));
+            }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);
         }

@@ -673,6 +673,11 @@ use a separate collection or add after the loop"
                     self.append_to_file(code, file_v);
                     return Type::Void;
                 }
+                // A5.3: record closure association if the RHS was a capturing lambda.
+                if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
+                    self.closure_vars.insert(var_nr, self.last_closure_work_var);
+                    self.last_closure_work_var = u16::MAX;
+                }
                 return self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
             }
         }

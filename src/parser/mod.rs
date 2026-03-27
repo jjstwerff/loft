@@ -115,6 +115,10 @@ pub struct Parser {
     /// A5.4: variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
+    // A5.3: maps fn-ref variable numbers to their closure record work variable numbers.
+    pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
+    // A5.3: last closure work variable created by emit_lambda_code (transient).
+    pub(crate) last_closure_work_var: u16,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
     /// Decremented after each init(expr) is parsed.
     pub(crate) init_field_tracking: bool,
@@ -267,6 +271,8 @@ impl Parser {
             capture_context: Vec::new(),
             captured_names: Vec::new(),
             closure_param: u16::MAX,
+            closure_vars: std::collections::HashMap::new(),
+            last_closure_work_var: u16::MAX,
             init_field_tracking: false,
             init_field_deps: Vec::new(),
         }
