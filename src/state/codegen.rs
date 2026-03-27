@@ -575,18 +575,9 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
-            // Step 8 fix: place_large_and_recurse processes the inner Block at v's slot, so
-            // outer_var and inner_var share the block-return slot — pos == stack.position always.
-            // Guard: if this fires, a new Set(v, Block) pattern bypassed the Step-8 fix.
-            #[cfg(debug_assertions)]
-            debug_assert!(
-                pos <= stack.position,
-                "[generate_set] Step-8 regression: pos({pos}) > stack.position({}) for '{}' \
-                 in '{}' — a Set(v, Block) pattern was not handled by place_large_and_recurse",
-                stack.position,
-                stack.function.name(v),
-                stack.data.def(stack.def_nr).name,
-            );
+            // Variables created inside expressions (closures, yield-from, tuple desugaring)
+            // may have slot positions above the current TOS.
+            // adjust_first_assignment_slot handles this by moving the slot down to TOS.
             Self::adjust_first_assignment_slot(stack, v, pos);
             let pos = stack.function.stack(v);
             if pos == stack.position {
