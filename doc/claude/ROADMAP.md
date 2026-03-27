@@ -84,7 +84,14 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | O4        | Native: direct-emit local collections                | H  | ~      |              | PERFORMANCE.md N1          |
 | O5        | Native: omit `stores` from pure functions            | H  | ~      | O4           | PERFORMANCE.md N2          |
 | A5.6      | Closure: text capture (mutable done; 2 runtime bugs) | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
-| N8        | Native codegen: tuples, coroutines, generics         | H  | ✓      | T1, CO1      | CAVEATS.md C19             |
+| N8a.1     | Native: `Type::Tuple` dispatch in code generator     | S  | ~      | T1           | NATIVE.md § N8a            |
+| N8a.2     | ↳ Tuple construction and element access              | S  | ~      | N8a.1        | NATIVE.md § N8a            |
+| N8a.3     | ↳ Tuple function return (multi-value Rust struct)    | M  | ~      | N8a.2        | NATIVE.md § N8a            |
+| N8b.1     | Native: coroutine state-machine transform design     | H  | —      | CO1          | COROUTINE.md, NATIVE.md    |
+| N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | —      | N8b.1        | NATIVE.md § N8b            |
+| N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | —      | N8b.2        | NATIVE.md § N8b            |
+| N8c.1     | Native: audit `maybe<T>` null-path branches          | S  | —      |              | NATIVE.md § N8c            |
+| N8c.2     | ↳ Fix `maybe<T>` ref-counted element handling        | S  | ~      | N8c.1        | NATIVE.md § N8c            |
 
 ---
 

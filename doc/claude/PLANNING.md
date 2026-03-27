@@ -1091,20 +1091,60 @@ Full design in [NATIVE.md](NATIVE.md).
 ---
 
 ### N8  Native codegen: extend to tuples, coroutines, and generics
-**Sources:** CAVEATS.md C19, NATIVE.md, PLANNING.md T1/CO1
+**Sources:** CAVEATS.md C19, NATIVE.md, TUPLES.md, COROUTINE.md
 **Severity:** Medium — programs using tuples, coroutines, or `maybe<T>` cannot be compiled with `--native`.
-**Description:** The native (`--native`) code generator currently falls back to the interpreter for three feature areas:
-- **Tuples:** `Type::Tuple` values: construction, element reads/writes, function return.
-- **Coroutines:** `OpCoroutineCreate`, `OpCoroutineYield`, `OpCoroutineNext`, `OpCoroutineReturn` — require stack serialisation that has no direct Rust equivalent without the interpreter’s store-backed stack.
-- **Generics / `maybe<T>`:** parametric types like `maybe<integer>` are partially supported but edge cases remain (null propagation paths, ref-counted text inside maybe).
+**Description:** The native (`--native`) code generator currently falls back to the interpreter for three feature areas (see CAVEATS.md C19): tuples, coroutines, and generic/maybe types.  Each area is split into independently shippable sub-items below.
 
-**Fix path:** Each area is an independent sub-item:
-- **N8a — Tuple native codegen:** Emit tuple as multiple stack variables; element access as direct offset read; function return as multiple return values via a struct.
-- **N8b — Coroutine native codegen:** Requires a Rust generator or state-machine transform (e.g., via `genawaiter` or hand-written enum state machine).  High complexity; likely 1.2+.
-- **N8c — Generic/maybe native codegen:** Audit null-path branches in `generate_*` for `Type::Named` with type parameters; add missing cases.
+---
 
-**Effort:** High (N8a Medium, N8b Very High, N8c Small)
-**Depends:** T1 (for N8a), CO1 (for N8b)
+#### N8a.1 — Native: `Type::Tuple` dispatch in code generator
+**Effort:** Small · **Depends:** T1
+Add `Type::Tuple` to all `output_type`, `output_init`, `output_set`, and variable-declaration paths in `src/generation/`.  Until N8a.2 is done, functions that use tuples should be gracefully skipped (added to `SCRIPTS_NATIVE_SKIP`).
+**Tests:** compile without errors for files that don’t use tuple operations; skip gate for `50-tuples.loft`.
+
+#### N8a.2 — Native: tuple construction and element access
+**Effort:** Small · **Depends:** N8a.1
+Emit a tuple literal as consecutive scalar assignments onto the Rust stack frame.  Emit element reads (`.0`, `.1`, …) as direct field reads from the emitted Rust struct/tuple.  Emit `OpPutInt`/`OpPutText` analogs for element writes.
+**Tests:** `tests/scripts/50-tuples.loft` passes in `--native` mode for construction and read sections; element assignment and deconstruction covered by sub-tests.
+
+#### N8a.3 — Native: tuple function return (multi-value Rust struct)
+**Effort:** Medium · **Depends:** N8a.2
+Tuple-returning functions emit a generated Rust struct (e.g. `struct Ret_foo { f0: i64, f1: String }`) as the return type.  Caller deconstructs the struct into local slots.  LHS deconstruction (`(a, b) = foo()`) handled in the call site template.
+**Tests:** `50-tuples.loft` fully passes in `--native` mode (no `SCRIPTS_NATIVE_SKIP` entry).
+
+---
+
+#### N8b.1 — Native: coroutine state-machine transform design
+**Effort:** High · **Depends:** CO1
+Design and document the Rust enum state machine that represents a suspended coroutine.  Each `yield` point becomes a variant that stores all live locals.  Write the state-machine emitter skeleton in `src/generation/`; no working coroutines yet, but the infrastructure compiles.  Document the design in NATIVE.md § N8b.
+**Note:** Using `genawaiter` or `async-std` generators is an alternative; evaluate before committing to the hand-written state machine approach.
+
+#### N8b.2 — Native: basic coroutine emission (yield/resume cycle)
+**Effort:** High · **Depends:** N8b.1
+Emit `OpCoroutineCreate`, `OpCoroutineNext`, `OpYield`, and `OpCoroutineReturn` using the state machine from N8b.1.  Cover coroutines with integer/float/boolean yields and no text locals (text serialisation adds complexity, tackled as a follow-on).
+**Tests:** `tests/scripts/51-coroutines.loft` basic sections pass in `--native`; text-yield sections remain skipped.
+
+#### N8b.3 — Native: `yield from` delegation in native coroutine
+**Effort:** Medium · **Depends:** N8b.2
+Extend the state machine emitter to handle `yield from inner()` — the sub-generator loop is inlined into the outer state machine as an additional state range.  Requires careful handling of the sub-generator’s exhaustion sentinel.
+**Tests:** `51-coroutines.loft` fully passes in `--native` mode (yield-from sections un-skipped).
+
+---
+
+#### N8c.1 — Native: audit `maybe<T>` null-path branches in `generate_*`
+**Effort:** Small · **Depends:** none
+Survey all `generate_*` functions in `src/generation/codegen.rs` for `Type::Named` with type parameters.  List every uncovered case (e.g. null-propagation paths for `maybe<text>`, `maybe<vector<T>>`).  Write a short findings note in NATIVE.md § N8c.  No code changes yet.
+**Output:** A concrete list of missing cases that N8c.2 can fix one by one.
+
+#### N8c.2 — Native: fix `maybe<T>` ref-counted element handling
+**Effort:** Small · **Depends:** N8c.1
+Fix the missing cases from N8c.1: add null-propagation branches for `maybe<text>` and `maybe<vector<T>>`; ensure `OpFreeText`/`OpFreeRef` emit correctly when a `maybe` variable goes out of scope holding a non-null owned value.
+**Tests:** add targeted tests in `tests/native.rs` or `tests/scripts/` for each fixed case; remove any corresponding `SCRIPTS_NATIVE_SKIP` entries.
+
+---
+
+**Overall effort:** N8a Small+Small+Medium; N8b High+High+Medium; N8c Small+Small
+**Depends:** T1 (N8a), CO1 (N8b)
 **Target:** 1.1+
 
 ---
