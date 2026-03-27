@@ -11,12 +11,15 @@ fn test_c1_lambda_no_capture() {
   assert(doubled[4] == 10, "C1: lambda map result");
 }
 
-// C8 — Predicate aggregates not available; verify sum_of/min_of/max_of work.
-fn test_c8_available_aggregates() {
+// P3 regression — all vector aggregates implemented (sum_of/min_of/max_of/any/all/count_if).
+fn test_p3_aggregates() {
   nums = [3, 1, 4, 1, 5];
-  assert(sum_of(nums) == 14, "C8: sum_of works");
-  assert(min_of(nums) == 1, "C8: min_of works");
-  assert(max_of(nums) == 5, "C8: max_of works");
+  assert(sum_of(nums) == 14, "P3: sum_of works");
+  assert(min_of(nums) == 1, "P3: min_of works");
+  assert(max_of(nums) == 5, "P3: max_of works");
+  assert(any(nums, |x| { x > 4 }), "P3: any works");
+  assert(!all(nums, |x| { x > 2 }), "P3: all works");
+  assert(count_if(nums, |x| { x == 1 }) == 2, "P3: count_if works");
 }
 
 // S15 regression: struct-enum variants with same-named fields now read the correct offset.
@@ -63,7 +66,7 @@ fn test_c19_tuple_basics() {
 
 fn main() {
   test_c1_lambda_no_capture();
-  test_c8_available_aggregates();
+  test_p3_aggregates();
   test_s15_same_named_field_offset();
   test_c11_no_while();
   test_c14_format_specifier_ignored();

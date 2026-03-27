@@ -43,7 +43,7 @@ fn test() {
 
 **Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_text` / `closure_capture_multiple` (`#[ignore]` until debug leak fixed); `tests/parse_errors.rs` — `capture_detected` (`#[ignore]`, A5.4)
 **Workaround:** pass needed values as explicit function arguments.
-**Planned fix:** A5.4 (mutable capture) — debug-mode leak and text capture are tracked in [PROBLEMS.md](PROBLEMS.md) § 85.
+**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (1.1+) — mutable capture + text capture; design in [PLANNING.md](PLANNING.md) § A5.6.
 **Docs:** [LOFT.md](LOFT.md) § Lambda expressions.
 
 ---
@@ -65,7 +65,7 @@ numbers, time functions, and dynamic function references (`CallRef`).
 | `22-time.loft` | `todo!()` |
 
 **Workaround:** use the interpreter (`cargo run --bin loft`) instead of `--native-wasm`.
-**Planned fix:** W1 (WASM foundation), targeted for 1.0.0.
+**Planned fix:** W1 in [ROADMAP.md](ROADMAP.md) (0.8.3) — interpreter-as-WASM entry point; full feature coverage targeted alongside W1 completion.
 
 ---
 
@@ -105,6 +105,7 @@ loft nonexistent.loft; echo $?   # prints 0
 
 **Test:** none (shell-level behaviour).
 **Workaround:** capture output and grep for `Error:` or `panicked`.
+**Planned fix:** L7 in [ROADMAP.md](ROADMAP.md) (0.8.3) — emit non-zero exit code on parse/runtime errors.
 **Docs:** [LOFT.md](LOFT.md) § Known Limitations.
 
 ---
@@ -121,25 +122,6 @@ may still reach the runtime panics.
 
 ---
 
-## C8 — Predicate aggregates (`any`, `all`, `count_if`) not implemented
-
-Only `sum_of`, `min_of`, `max_of` are available for `vector<integer>`.
-Lambda-based predicate aggregates require compiler special-casing for
-iterator loop generation that is not yet implemented.
-
-**Reproducer:**
-```loft
-fn main() {
-  nums = [1, 2, 3];
-  // These would be: any(nums, |x| { x > 2 })  — not available yet
-}
-```
-
-**Test:** none (feature not implemented).
-**Planned fix:** P3 predicate aggregates (deferred — needs compiler loop IR work).
-**Docs:** [PLANNING.md](PLANNING.md) § P3; [ROADMAP.md](ROADMAP.md) deferred note.
-
----
 
 ## C11 — No `while` loop
 
@@ -207,27 +189,6 @@ fn main() {
 
 ---
 
-## C15 — Parallel for: limited return types and no struct references
-
-`par(...)` workers can only return primitive types (`integer`, `long`, `float`,
-`boolean`, `text`, plain `enum`). Struct references cannot be returned.
-Context must be embedded in the worker's extra arguments.
-
-**Reproducer:**
-```loft
-struct Point { x: float, y: float }
-// This does NOT work — cannot return struct from par worker:
-// for p in points par(result = transform(p)) { ... }
-```
-
-**Test:** none needed (compile error produced).
-**Workaround:** return primitive values; reconstruct structs after the parallel loop.
-**Docs:** [THREADING.md](THREADING.md) § Supported return types; [00-vs-rust.html](../00-vs-rust.html) § Parallel for-loops.
-
----
-
-
----
 
 ## C16 — Struct-enum local variable: debug assertion fails
 
