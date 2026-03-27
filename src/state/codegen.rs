@@ -515,6 +515,42 @@ impl State {
         }
     }
 
+    pub(super) fn gen_set_first_tuple_null(&mut self, stack: &mut Stack, v: u16) {
+        let Type::Tuple(elems) = stack.function.tp(v).clone() else {
+            return;
+        };
+        for elem in &elems {
+            match elem {
+                Type::Integer(_, _, _) | Type::Function(_, _) => {
+                    stack.add_op("OpConstInt", self);
+                    self.code_add(0i32);
+                }
+                Type::Boolean => {
+                    stack.add_op("OpConstFalse", self);
+                }
+                Type::Long => {
+                    stack.add_op("OpConstLong", self);
+                    self.code_add(0i64);
+                }
+                Type::Single => {
+                    stack.add_op("OpConstSingle", self);
+                    self.code_add(0.0f32);
+                }
+                Type::Float => {
+                    stack.add_op("OpConstFloat", self);
+                    self.code_add(0.0f64);
+                }
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
+                    stack.add_op("OpConvRefFromNull", self);
+                }
+                other => panic!(
+                    "gen_set_first_tuple_null: unsupported element type {:?}",
+                    other
+                ),
+            }
+        }
+    }
+
     pub(super) fn gen_set_first_vector_null(&mut self, stack: &mut Stack, v: u16) {
         if let Type::Vector(elm_tp, dep) = stack.function.tp(v).clone() {
             if dep.is_empty() {
@@ -678,6 +714,10 @@ impl State {
                     && *value == Value::Null
                 {
                     self.gen_set_first_vector_null(stack, v);
+                } else if matches!(stack.function.tp(v), Type::Tuple(_))
+                    && *value == Value::Null
+                {
+                    self.gen_set_first_tuple_null(stack, v);
                 } else {
                     self.generate(value, stack, false);
                 }
@@ -685,6 +725,10 @@ impl State {
                 // Slot is below current TOS — primitive reusing a dead variable's slot.
                 // Use set_var() so the value is generated at TOS then stored at pos via OpPutX.
                 debug_assert!(pos < stack.position);
+                // Zone-1 Tuple null-init: space pre-reserved by OpReserveFrame; nothing to emit.
+                if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
+                    return;
+                }
                 // Text variables MUST be initialised with OpText (direct placement) before any
                 // OpAppendText call.  If a Text variable lands here (pos < TOS) it means
                 // assign_slots under-estimated the physical TOS at first_def: the pre-assigned

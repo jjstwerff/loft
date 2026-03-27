@@ -221,7 +221,6 @@ fn call_stack_recursive() {
 // ── T1.2 — Tuple parser (notation, literals, destructuring) ─────────────────
 
 #[test]
-#[ignore = "T1.4: tuple return from function + temp element access needs work-var codegen"]
 fn tuple_type_return() {
     // A function returning a tuple type should parse and compile.
     code!(
@@ -246,7 +245,6 @@ fn tuple_element_access_three() {
 }
 
 #[test]
-#[ignore = "T1.4: tuple destructuring codegen needs tuple-returning function support"]
 fn tuple_destructure_basic() {
     // LHS destructuring: (a, b) = expr.
     code!("fn pair(x: integer) -> (integer, integer) { (x, x * 2) }")
@@ -275,7 +273,7 @@ fn tuple_parameter() {
 }
 
 #[test]
-#[ignore = "T1.4: tuple with text element needs text-return calling convention"]
+#[ignore = "T1.8b: text element lifetime/storage model (Str vs String mismatch in element_size)"]
 fn tuple_with_text() {
     // Tuple containing a text element — verify text is accessible.
     code!("fn greet(name: text) -> (integer, text) { (len(name), name) }")

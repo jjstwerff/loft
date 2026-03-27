@@ -653,7 +653,7 @@ use a separate collection or add after the loop"
                 }
                 let mut steps = vec![Value::Set(tmp, Box::new(rhs))];
                 for (i, &v_nr) in var_nrs.iter().enumerate() {
-                    if !self.first_pass && self.vars.exists(v_nr) {
+                    if self.vars.exists(v_nr) {
                         self.vars.defined(v_nr);
                         if i < rhs_elems.len() {
                             self.change_var_type(v_nr, &rhs_elems[i]);

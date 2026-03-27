@@ -8,6 +8,16 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **Tuple function return + destructuring** (T1.8a) — Functions declared `-> (T1, T2)`
+  now work end-to-end: the return value is materialised on the caller's stack, element
+  access (`pair(3,7).0`) compiles and executes correctly, and LHS tuple destructuring
+  (`(a, b) = pair(5)`) is fully supported.  Two fixes enabled this: the two-zone slot
+  allocator now emits a no-op for zone-1 Tuple null-inits (space pre-reserved by
+  `OpReserveFrame`) and a per-element push for zone-2 Tuple null-inits; the parser
+  now marks destructuring targets as defined and types them on both passes so
+  `known_var_or_type` does not fire a false "Unknown variable" on the second pass.
+  Tuples containing `text` elements remain deferred (T1.8b, C20).
+
 - **`size(t)` character count** — `size("héllo")` returns 5 (Unicode code points),
   complementing `len()` which returns byte length. Backed by a new `OpSizeText` opcode.
 

@@ -253,20 +253,19 @@ Scripts using these features are skipped from the native test suite
 
 ---
 
-## C20 — Tuple types: function return and text elements not yet implemented
+## C20 — Tuple types: function return with text elements not yet implemented *(T1.8a fixed)*
 
-Tuple literals, element access (`.0`, `.1`), element assignment, and tuple
-parameters all work.  Two further cases do not:
+Tuple literals, element access (`.0`, `.1`), element assignment, tuple parameters,
+function return of non-text tuples (`-> (integer, integer)`), and LHS destructuring
+(`(a, b) = pair(5)`) all work.  One case remains:
 
-1. **Tuple return type** — A function declared `-> (integer, integer)` cannot
-   have its return value used: calling the function and accessing a return
-   element requires work-variable codegen that is not yet written.
-2. **Tuple containing `text`** — A `(integer, text)` tuple cannot be returned
-   from a function; text-return calling conventions are not yet wired.
+1. **Tuple containing `text`** — A `(integer, text)` tuple cannot be returned
+   from a function; `element_size(Text)` = 16B (`Str`) but `OpAppendText` requires
+   24B (`String`) — a storage model mismatch not yet resolved.
 
-**Tests:** `tests/expressions.rs` — `tuple_type_return`, `tuple_destructure_basic`, `tuple_with_text` (`#[ignore = "T1.4: ..."]`)
-**Workaround:** Return structs or individual values instead of tuples with multiple or text elements.
-**Planned fix:** T1.8 in [ROADMAP.md](ROADMAP.md) (1.1+) — function return convention (T1.8a) and text element lifetime (T1.8b); design in [PLANNING.md](PLANNING.md) § T1.8.
+**Tests:** `tests/expressions.rs` — `tuple_type_return` (passes), `tuple_destructure_basic` (passes), `tuple_with_text` (`#[ignore = "T1.8b: ..."]`)
+**Workaround:** Return structs or individual values instead of tuples containing text elements.
+**Planned fix:** T1.8b in [ROADMAP.md](ROADMAP.md) (1.1+) — text element lifetime/storage model; design in [PLANNING.md](PLANNING.md) § T1.8.
 
 ---
 
