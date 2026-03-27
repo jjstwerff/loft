@@ -213,8 +213,33 @@ impl State {
                 Type::Tuple(types)
             }
             Value::TupleGet(var_nr, elem_idx) => {
-                // T1.4: read element elem_idx from tuple variable var_nr.
                 let tuple_tp = stack.function.tp(*var_nr).clone();
+                // T1.5: RefVar(Tuple) — read element through the DbRef using OpGetInt/etc.
+                if let Type::RefVar(ref inner) = tuple_tp
+                    && let Type::Tuple(ref elems) = **inner
+                {
+                    let idx = *elem_idx as usize;
+                    let elem_tp = elems[idx].clone();
+                    let offsets = crate::data::element_offsets(elems);
+                    let elem_offset = offsets[idx] as u16;
+                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    let code_pos = self.code_pos;
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(var_pos);
+                    match &elem_tp {
+                        Type::Integer(_, _) | Type::Function(_, _) => {
+                            stack.add_op("OpGetInt", self);
+                        }
+                        Type::Long => stack.add_op("OpGetLong", self),
+                        Type::Float => stack.add_op("OpGetFloat", self),
+                        Type::Single => stack.add_op("OpGetSingle", self),
+                        Type::Character => stack.add_op("OpGetCharacter", self),
+                        _ => panic!("RefTupleGet: unsupported element type {elem_tp:?}"),
+                    }
+                    self.code_add(elem_offset);
+                    return self.insert_types(elem_tp, code_pos, stack);
+                }
+                // T1.4: read element elem_idx from tuple variable var_nr.
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TupleGet on non-tuple variable");
                 };
@@ -258,8 +283,32 @@ impl State {
                 Type::Void
             }
             Value::TuplePut(var_nr, elem_idx, value) => {
-                // T1.4: write to element elem_idx of tuple variable var_nr.
                 let tuple_tp = stack.function.tp(*var_nr).clone();
+                // T1.5: RefVar(Tuple) — write element through the DbRef using OpSetInt/etc.
+                if let Type::RefVar(ref inner) = tuple_tp
+                    && let Type::Tuple(ref elems) = **inner
+                {
+                    let idx = *elem_idx as usize;
+                    let elem_tp = elems[idx].clone();
+                    let offsets = crate::data::element_offsets(elems);
+                    let elem_offset = offsets[idx] as u16;
+                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(var_pos);
+                    self.generate(value, stack, false);
+                    match &elem_tp {
+                        Type::Integer(_, _) | Type::Function(_, _) => {
+                            stack.add_op("OpSetInt", self);
+                        }
+                        Type::Long => stack.add_op("OpSetLong", self),
+                        Type::Float => stack.add_op("OpSetFloat", self),
+                        Type::Character => stack.add_op("OpSetCharacter", self),
+                        _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
+                    }
+                    self.code_add(elem_offset);
+                    return Type::Void;
+                }
+                // T1.4: write to element elem_idx of tuple variable var_nr.
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TuplePut on non-tuple variable");
                 };

@@ -2097,6 +2097,11 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
         Value::Return(v) | Value::Drop(v) => {
             find_written_vars(v, data, written);
         }
+        // T1.5: TuplePut writes to the ref-tuple variable via its element assignment.
+        Value::TuplePut(var_nr, _, inner) => {
+            written.insert(*var_nr);
+            find_written_vars(inner, data, written);
+        }
         Value::Iter(_, create, next, extra) => {
             find_written_vars(create, data, written);
             find_written_vars(next, data, written);
