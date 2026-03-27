@@ -197,6 +197,37 @@ All notable changes to the loft language and interpreter.
 
 ---
 
+## [0.8.3] — 2026-03-27
+
+### New features
+
+- **WASM output capture** (W1.2) — `output_push` / `output_take` helpers buffer `println`
+  output in a thread-local string.  Used by `compile_and_run()` to collect program output
+  without touching the filesystem.
+
+- **WASM `compile_and_run()` entry point** (W1.9) — A `compile_and_run(files_json) -> String`
+  function accepts a JSON array of `{name, content}` objects, runs the loft pipeline entirely
+  in memory, and returns `{output, diagnostics, success}` JSON.  Exported via `wasm_bindgen`
+  when built with `--features wasm`.  Default standard library files are embedded with
+  `include_str!()`.  A virtual filesystem (`VIRT_FS`) routes `use` imports to the supplied
+  in-memory files.
+
+- **`#native "symbol"` annotation** (A7.1) — Functions declared in loft can carry a
+  `#native "symbol_name"` annotation.  When the compiler resolves such a function it emits
+  an `OpStaticCall` pointing to `symbol_name` in the native registry instead of the loft
+  function name.  This decouples the loft identifier from the Rust symbol.
+
+- **Native extension loader** (A7.2) — The `native-extensions` Cargo feature enables
+  loading cdylib shared libraries at runtime via `libloading`.  `extensions::load_all()`
+  is called between byte-code generation and execution; each library must export a
+  C-ABI `loft_register_v1(*mut LoftPluginCtx)` entry point.
+
+- **`LoftPluginCtx` public ABI** (A7.3) — `LoftPluginCtx` is a stable `repr(C)` struct
+  published from `loft::extensions` and mirrored in the standalone `loft-plugin-api` crate.
+  Plugin crates call `ctx.register_fn(name, fn_ptr)` once per exported function.
+
+---
+
 ## [0.8.2] — 2026-03-24
 
 ### New features
@@ -361,6 +392,7 @@ First release.
 
 ---
 
+[0.8.3]: https://github.com/jjstwerff/loft/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/jjstwerff/loft/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/jjstwerff/loft/compare/v0.1.0...v0.8.0
 [0.1.0]: https://github.com/jjstwerff/loft/releases/tag/v0.1.0

@@ -628,7 +628,7 @@ leaks in debug mode (assertion fires) and is double-freed in release.
 
 ---
 
-### A7  Native extension libraries
+### A7  Native extension libraries *(completed 0.8.3)*
 **Sources:** [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2
 **Severity:** Low — core language and stdlib cover most use cases; native extensions target
 specialised domains (graphics, audio, database drivers) that cannot be expressed in loft
@@ -1591,7 +1591,7 @@ once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 
 ---
 
-### W1  WASM Foundation
+### W1  WASM Foundation *(W1.1–W1.9 completed 0.8.3; W1.10–W1.13 deferred)*
 **Sources:** [WASM.md](WASM.md) — full design and 14-step implementation plan
 **Severity/Value:** High — nothing else in Tier W is possible without this
 **Description:** Compile the loft interpreter itself as a WASM module

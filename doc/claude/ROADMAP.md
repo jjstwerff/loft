@@ -16,34 +16,17 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.3 — WASM runtime + native extensions
+## 0.8.3 — WASM runtime + native extensions *(Rust steps done; JS steps deferred)*
 
-WASM (W1.1—W1.9): Rust steps, each verified with
-`cargo check --features wasm --no-default-features` + `cargo test` (native green).
-WASM (W1.10—W1.13): JavaScript steps, require Node.js + wasm-pack.
+W1.1–W1.9 (Rust) and A7.1–A7.3 completed in 0.8.3.
+W1.10–W1.13 (JavaScript) require Node.js + wasm-pack — deferred to a later milestone.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| R1        | Workspace split (`cdylib` + `rlib` lib target)       | S  | ✓      |              | Cargo.toml                 |
-| W1        | WASM foundation — interpreter as WASM module         | H  | ✓      | R1           | WASM.md                    |
-| W1.1      | ↳ Feature gates: `wasm`, `threading`, `wasm-threads` | S  | ✓      | R1           | Cargo.toml, src/wasm.rs    |
-| W1.2      | ↳ Output capture: `print()` → thread-local buffer    | S  | ✓      | W1.1         | src/fill.rs, src/wasm.rs   |
-| W1.3      | ↳ Sequential `par()` fallback when `threading` off   | S  | ✓      | W1.1         | src/parallel.rs            |
-| W1.4      | ↳ Logger host bridge: I/O gated; `host_log_write`    | S  | ✓      | W1.1         | src/logger.rs              |
-| W1.5      | ↳ Random host bridge: `rand_int`/`rand_seed`         | S  | ✓      | W1.1         | src/ops.rs                 |
-| W1.6      | ↳ Time + env bridges: `SystemTime`, `std::env` gated | S  | ✓      | W1.1         | native.rs, db/format.rs    |
-| W1.7      | ↳ File I/O host bridges: `std::fs` gated; `fs_*`     | M  | ✓      | W1.1         | src/state/io.rs            |
-| W1.8      | ↳ PNG decoding: `decode_into_store<R: Read>`         | S  | ✓      | W1.1         | src/png_store.rs           |
-| W1.9      | ↳ `compile_and_run()` WASM entry point               | M  | ✓      | W1.2—W1.8    | src/wasm.rs                |
 | W1.10     | ↳ VirtFS JS class + unit tests                       | M  | ✓      | W1.9         | tests/wasm/virt-fs.mjs     |
 | W1.11     | ↳ Host factory `createHost` + bridge tests           | M  | ✓      | W1.9, W1.10  | tests/wasm/host.mjs        |
 | W1.12     | ↳ LayeredFS + base-tree builder (`build-base-fs.js`) | M  | ✓      | W1.10        | tests/wasm/layered-fs.mjs  |
 | W1.13     | ↳ Full loft test suite via WASM (`suite.mjs`)        | M  | ✓      | W1.11        | tests/wasm/suite.mjs       |
-| A7        | Native extension libraries (`cdylib`)                | H  | ✓      |              | EXTERNAL_LIBS.md           |
-| A7.1      | ↳ `#native` annotation + symbol registration         | M  | ✓      |              | parser.rs                  |
-| A7.2      | ↳ `cdylib` loader (`libloading`)                     | M  | ✓      | A7.1         | state.rs                   |
-| A7.3      | ↳ Package layout + `loft-plugin-api` crate           | M  | ✓      | A7.2         | new workspace              |
-| L7        | Non-zero exit code on parse/runtime errors           | S  | ✓      |              | CAVEATS.md C6              |
 | O7        | WASM: pre-allocate format string buffers             | M  | ✓      | W1           | PERFORMANCE.md W1          |
 
 ---
