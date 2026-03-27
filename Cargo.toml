@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "compilers"]
 [lib]
 name = "loft"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "loft"
