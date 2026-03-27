@@ -40,3 +40,6 @@ mod stack;
 
 pub mod documentation;
 pub mod formatter;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
