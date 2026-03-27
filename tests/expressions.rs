@@ -109,46 +109,49 @@ fn coroutine_status_ordering() {
 // Verify that stack_trace() returns a vector of StackFrame.
 
 #[test]
-#[ignore = "TR1.3: blocked by Problem #85 — struct-enum/reference local stack cleanup"]
 fn stack_trace_returns_frames() {
-    // stack_trace() returns one frame per fn_call (entry function excluded).
+    // stack_trace() returns one frame per call-stack entry, including the synthetic
+    // entry frame for n_test (Fix #88).  Named variable `frames` ensures OpFreeRef
+    // is emitted at scope exit.
     code!(
-        "fn inner(n: integer) -> integer { len(stack_trace()) + n - n }
+        "fn inner(n: integer) -> integer { frames = stack_trace(); len(frames) + n - n }
          fn outer(n: integer) -> integer { inner(n) }"
     )
     .expr("outer(0)")
-    .result(Value::Int(2)); // outer->inner (test is entry, not on call_stack)
+    .result(Value::Int(3)); // n_test(entry) + outer + inner
 }
 
 #[test]
-#[ignore = "TR1.3: blocked by Problem #85 — struct-enum/reference local stack cleanup"]
 fn stack_trace_function_names() {
+    // Returns integer (1 if name matches) to avoid borrowing text from the vector,
+    // which would suppress OpFreeRef and leak the database store.
+    // frames = [n_test(entry), caller, check_caller_name]; "caller" is at index len-2.
     code!(
-        "fn get_caller_name() -> text {
+        "fn check_caller_name() -> integer {
             frames = stack_trace();
-            if len(frames) > 0 { frames[len(frames) - 1].function } else { \"none\" }
+            if len(frames) > 1 && frames[len(frames) - 2].function == \"caller\" { 1 } else { 0 }
          }
-         fn caller() -> text { get_caller_name() }"
+         fn caller() -> integer { check_caller_name() }"
     )
     .expr("caller()")
-    .result(Value::str("caller"));
+    .result(Value::Int(1));
 }
 
 // ── TR1.4 — Call-site line numbers ───────────────────────────────────────────
 
 #[test]
-#[ignore = "TR1.4: blocked by Problem #85 — struct-enum/reference local stack cleanup"]
 fn call_frame_has_line() {
     // Verify that stack_trace() reports a non-zero line for a known call site.
-    // Blocked by #85, but the diagnostic is correct.
+    // frames = [n_test(entry, line=0), check_line(line=call-site)].
+    // Use frames[len(frames)-1] to access the innermost (check_line) frame.
     code!(
         "fn check_line(n: integer) -> integer {
             frames = stack_trace();
-            if len(frames) > 0 { frames[0].line + n - n } else { -1 + n - n }
+            if len(frames) > 0 { frames[len(frames) - 1].line + n - n } else { -1 + n - n }
          }"
     )
     .expr("check_line(0)")
-    .result(Value::Int(4)); // called from expr wrapper at line ~4
+    .result(Value::Int(7)); // user code = 4 lines + 1 blank + "pub fn test() {" + call at line 7
 }
 
 // ── TR1.2 — StackFrame + ArgValue type declarations ─────────────────────────
@@ -273,7 +276,6 @@ fn tuple_parameter() {
 }
 
 #[test]
-#[ignore = "T1.8b: text element lifetime/storage model (Str vs String mismatch in element_size)"]
 fn tuple_with_text() {
     // Tuple containing a text element — verify text is accessible.
     code!("fn greet(name: text) -> (integer, text) { (len(name), name) }")

@@ -498,6 +498,15 @@ impl State {
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = data.def(d_nr).code_position;
         self.def_pos = self.code_pos;
+        // Fix #88 (parity): push a synthetic CallFrame for the entry function so that
+        // stack_trace() returns the same frame count as execute_argv.
+        self.call_stack.push(super::CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 0,
+            line: 0,
+        });
         // Write the return address of the main function but do not override the record size.
         self.stack_pos = 4;
         self.put_stack(u32::MAX);
@@ -947,6 +956,12 @@ impl State {
                 } else {
                     return format!("ref({},{},{})", val.store_nr, val.rec, val.pos);
                 };
+                // Guard: don't access freed stores (OpFreeRef may have already run).
+                if (val.store_nr as usize) < self.database.allocations.len()
+                    && self.database.allocations[val.store_nr as usize].free
+                {
+                    return format!("ref({},{},{})=<freed>", val.store_nr, val.rec, val.pos);
+                }
                 let mut res = format!("ref({},{},{})=", val.store_nr, val.rec, val.pos);
                 self.database.show(&mut res, &val, known, false);
                 res

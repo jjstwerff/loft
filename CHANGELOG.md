@@ -8,6 +8,25 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **`stack_trace()` vector fields zeroed + call-site line numbers** (S19) —
+  `stack_trace()` now returns correct call-site line numbers (`StackFrame.line`)
+  for every frame.  Three fixes: `n_stack_trace` explicitly zeroes the
+  `arguments` and `variables` fields of each `StackFrame` element so that
+  reused store blocks don't leave garbage data; `execute_log_steps` now
+  pushes the same synthetic entry `CallFrame` as `execute_argv` (Fix #88
+  parity); `fn_call` now resolves call-site lines with a BTreeMap backward
+  range search, recovering the correct source line even when `code_pos` has
+  advanced past the `line_numbers` entry.
+  Tests `stack_trace_returns_frames`, `stack_trace_function_names`, and
+  `call_frame_has_line` all pass without `#[ignore]`.
+
+- **Tuple text elements** (T1.8b) — Functions returning `(integer, text)` (or any
+  tuple containing a `text` element) now compile and execute correctly.  Text elements
+  are stored as `Str` (16B borrowed reference) in tuple slots via the new `OpPutText`
+  opcode, consistent with loft's text-argument convention.  Four codegen sites were
+  updated: null-init now emits `OpConvTextFromNull`; slot stores use `OpPutText` instead
+  of `OpAppendText`; tuple element reads use `OpArgText` instead of `OpVarText`.
+
 - **Tuple function return + destructuring** (T1.8a) — Functions declared `-> (T1, T2)`
   now work end-to-end: the return value is materialised on the caller's stack, element
   access (`pair(3,7).0`) compiles and executes correctly, and LHS tuple destructuring
@@ -16,7 +35,6 @@ All notable changes to the loft language and interpreter.
   `OpReserveFrame`) and a per-element push for zone-2 Tuple null-inits; the parser
   now marks destructuring targets as defined and types them on both passes so
   `known_var_or_type` does not fire a false "Unknown variable" on the second pass.
-  Tuples containing `text` elements remain deferred (T1.8b, C20).
 
 - **`size(t)` character count** — `size("héllo")` returns 5 (Unicode code points),
   complementing `len()` which returns byte length. Backed by a new `OpSizeText` opcode.

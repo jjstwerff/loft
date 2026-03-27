@@ -170,25 +170,28 @@ error instead of a silent no-op.
 ---
 
 
-## C16 — Struct-enum local variable: debug assertion fails
+## C16 — Struct-enum local variable: debug assertion fails *(fixed in S19)*
 
-Constructing a struct-enum variant as a local variable and returning a scalar
-from the function triggers a debug-mode assertion in release builds of the
-test runner:
+**Fixed.**  The three `stack_trace_*` / `call_frame_*` tests that were
+`#[ignore]`-d under Problem #85 now pass without workarounds.  Two root
+causes were addressed:
 
-```
-assertion failed: Stack not correctly cleared: 8 != 4
-```
+1. **Reused-store garbage in vector fields** — `n_stack_trace` now explicitly
+   zeroes the `arguments` and `variables` fields of each `StackFrame` element
+   so that reused (non-zeroed) store blocks don't leave garbage data that
+   `is_null` misreads as a valid `first_block_rec`.
+2. **Synthetic entry frame** — `execute_log_steps` now pushes the same
+   synthetic `CallFrame` for the entry function as `execute_argv` does
+   (Fix #88 parity), so `stack_trace()` returns a consistent frame count
+   regardless of which execution path is used.
+3. **Call-site line numbers** — `fn_call` now uses a BTreeMap backward
+   range search (`range(..=code_pos).next_back()`) so that the nearest
+   source line is returned even when `code_pos` has advanced past the
+   `line_numbers` entry for the call instruction.
 
-**Reproducer:**
-```loft
-fn get(v: ArgValue) -> integer { match v { IntVal { n } => n, _ => 0 } }
-// fails when called as: get(IntVal { n: 42 })
-```
-
-**Tests:** `tests/expressions.rs` — `stack_trace_*` and `call_frame_*` (`#[ignore = "TR1.3: blocked by Problem #85"]`)
-**Workaround:** Pass the struct-enum value as a function parameter rather than assigning it to a local variable.
-**Planned fix:** S19 in [ROADMAP.md](ROADMAP.md) (0.9.0) — extend `scopes.rs::free_vars()` to emit `OpFreeRef` for struct-enum locals; design in [PLANNING.md](PLANNING.md) § S19.
+**Tests:** `tests/expressions.rs` — `stack_trace_returns_frames`,
+`stack_trace_function_names`, `call_frame_has_line` (all pass, `#[ignore]` removed).
+**Fixed by:** S19 — `n_stack_trace` field zeroing + entry-frame parity + BTreeMap line lookup.
 
 ---
 
@@ -253,19 +256,19 @@ Scripts using these features are skipped from the native test suite
 
 ---
 
-## C20 — Tuple types: function return with text elements not yet implemented *(T1.8a fixed)*
+## C20 — Tuple types: function return with text elements *(fixed in T1.8b)*
 
-Tuple literals, element access (`.0`, `.1`), element assignment, tuple parameters,
-function return of non-text tuples (`-> (integer, integer)`), and LHS destructuring
-(`(a, b) = pair(5)`) all work.  One case remains:
+**Fixed.**  A `(integer, text)` tuple can now be returned from a function.
+Text elements are stored as `Str` (16B borrowed reference) in tuple slots, consistent
+with loft's existing text-argument and text-return conventions.  The new `OpPutText`
+opcode stores a `Str` into a tuple slot (analogous to `OpPutInt`).
 
-1. **Tuple containing `text`** — A `(integer, text)` tuple cannot be returned
-   from a function; `element_size(Text)` = 16B (`Str`) but `OpAppendText` requires
-   24B (`String`) — a storage model mismatch not yet resolved.
+**Note:** Returning a locally-constructed text value (e.g. `"a" + "b"`) inside a
+tuple has the same lifetime caveat as returning `text` directly from a function —
+this is a pre-existing interpreter limitation, not introduced by T1.8b.
 
-**Tests:** `tests/expressions.rs` — `tuple_type_return` (passes), `tuple_destructure_basic` (passes), `tuple_with_text` (`#[ignore = "T1.8b: ..."]`)
-**Workaround:** Return structs or individual values instead of tuples containing text elements.
-**Planned fix:** T1.8b in [ROADMAP.md](ROADMAP.md) (1.1+) — text element lifetime/storage model; design in [PLANNING.md](PLANNING.md) § T1.8.
+**Test:** `tests/expressions.rs` — `tuple_with_text` (passes, `#[ignore]` removed).
+**Fixed by:** T1.8b — `OpPutText` opcode + codegen fixes for tuple text slots.
 
 ---
 

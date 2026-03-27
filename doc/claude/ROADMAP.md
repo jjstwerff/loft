@@ -52,7 +52,6 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | P2.2      | ↳ Single-statement execution                         | M  | ✓      | P2.1         | main.rs, repl.rs           |
 | P2.3      | ↳ Automatic value output                             | S  | ✓      | P2.2         | repl.rs                    |
 | P2.4      | ↳ Error recovery in session                          | M  | ✓      | P2.2, L1     | repl.rs, parser.rs         |
-| S19       | Fix #85: struct-enum locals not freed (debug)        | S  | ✓      |              | CAVEATS.md C16             |
 | S20       | Fix #91: init(expr) circular dep detection           | S  | ✓      |              | CAVEATS.md C18             |
 | S21       | Fix #92: stack_trace() empty in par workers          | S  | ✓      |              | CAVEATS.md C17             |
 
@@ -87,7 +86,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.4      | ↳ Full iteration                                     | S  | ~      | A4.2, A4.3   | database.rs                |
 | O4        | Native: direct-emit local collections                | H  | ~      |              | PERFORMANCE.md N1          |
 | O5        | Native: omit `stores` from pure functions            | H  | ~      | O4           | PERFORMANCE.md N2          |
-| T1.8b     | Tuple: text element lifetime/storage model           | M  | ✓      | T1.1–7       | CAVEATS.md C20             |
 | CO1.4-fix | `yield from` slot-assignment regression fix          | M  | ✓      | CO1.4        | CAVEATS.md C21             |
 | A5.6      | Closure: mutable + text capture                      | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
 | N8        | Native codegen: tuples, coroutines, generics         | H  | ✓      | T1, CO1      | CAVEATS.md C19             |

@@ -998,7 +998,10 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         stores
             .store_mut(&vec)
             .set_int(elm.rec, elm.pos + 8, *line as i32);
-        // arguments and variables left as zero (null vectors).
+        // Explicitly zero arguments and variables so that reused (non-zeroed) store
+        // blocks don't leave garbage data that looks like a valid first_block_rec.
+        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
+        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     stores.put(stack, vec);

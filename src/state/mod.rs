@@ -17,7 +17,7 @@ use crate::database::{ParallelCtx, Stores};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Str};
 use crate::log_config::LogConfig;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Error, Write};
 use std::sync::Arc;
 
@@ -102,7 +102,7 @@ pub struct State {
     pub library: Arc<Vec<Call>>,
     pub library_names: HashMap<String, u16>,
     pub(crate) text_positions: BTreeSet<u32>,
-    pub(crate) line_numbers: HashMap<u32, u32>,
+    pub(crate) line_numbers: BTreeMap<u32, u32>,
     pub(crate) fn_positions: Vec<u32>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
@@ -151,7 +151,7 @@ impl State {
             library: Arc::new(Vec::new()),
             library_names: HashMap::new(),
             text_positions: BTreeSet::new(),
-            line_numbers: HashMap::new(),
+            line_numbers: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
@@ -182,7 +182,15 @@ impl State {
     /// * `to` - the code position where the called function resides.
     pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
         let args_base = self.stack_pos - u32::from(args_size);
-        let line = self.line_numbers.get(&self.code_pos).copied().unwrap_or(0);
+        // Find the nearest source line at or before the current code position.
+        // line_numbers entries are emitted before the first instruction on each line,
+        // so after consuming a Call instruction code_pos is past the entry — use
+        // range(..=code_pos).next_back() to recover the most recent line.
+        let line = self
+            .line_numbers
+            .range(..=self.code_pos)
+            .next_back()
+            .map_or(0, |(_, &v)| v);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: self.code_pos,
@@ -898,7 +906,7 @@ impl State {
             calls: HashMap::new(),
             types: HashMap::new(),
             text_positions: BTreeSet::new(),
-            line_numbers: HashMap::new(),
+            line_numbers: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
