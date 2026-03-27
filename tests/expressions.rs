@@ -303,12 +303,11 @@ fn ref_tuple_param_swap() {
 // ── T1.6 — Tuple-aware mutation guard ────────────────────────────────────────
 
 #[test]
-#[ignore = "T1.6: tuple mutation guard requires T1.5 ref-param element access"]
 fn ref_tuple_unused_mutation_error() {
     // &(integer, integer) parameter that is never mutated — should produce a warning.
     code!("fn read_only(pair: &(integer, integer)) -> integer { pair.0 + pair.1 }")
-        .expr("read_only((3, 7))")
-        .warning("Parameter 'pair' does not need to be a reference")
+        .expr("p = (3, 7); read_only(p)")
+        .warning("Parameter 'pair' does not need to be a reference at ref_tuple_unused_mutation_error:1:53")
         .result(Value::Int(10));
 }
 

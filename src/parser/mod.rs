@@ -1903,12 +1903,24 @@ impl Parser {
             {
                 let src = self.vars.var_source(a_nr as u16);
                 self.lexer.to(src);
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Parameter '{}' has & but is never modified; remove the &",
-                    a.name
-                );
+                // T1.6: RefVar(Tuple) — downgrade to warning since elements are stack values;
+                // other RefVar types are an error (the & serves no purpose and misleads).
+                if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Tuple(_)))
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "Parameter '{}' does not need to be a reference",
+                        a.name
+                    );
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Parameter '{}' has & but is never modified; remove the &",
+                        a.name
+                    );
+                }
             }
             // warn when `const` is used on a primitive parameter that is never
             // written to — the annotation is redundant since the parameter would not
