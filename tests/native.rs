@@ -40,6 +40,8 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     "50-tuples.loft",
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
+    // T1: caveats script uses tuple element assign — interpreter-only.
+    "46-caveats.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

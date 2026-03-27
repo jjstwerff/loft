@@ -19,26 +19,32 @@ build can be retested quickly.
 
 ---
 
-## C1 — Lambda closure capture not supported
+## C1 — Lambda closure capture: partial support, three remaining restrictions
 
-Lambdas cannot capture variables from the enclosing scope.  A lambda that
-references an outer variable produces incorrect results or a compile error.
+Read-only capture of non-text values (integers, floats, booleans, enums) now
+works in release mode (A5.3).  Three restrictions remain:
 
-**Reproducer:**
+1. **Debug-mode store leak** — a captured value allocates a closure record that
+   is not freed before `fn_return`, triggering the stack-size assertion.
+   Tests pass under `--release` but are `#[ignore]`-d in debug builds.
+2. **Text capture not supported** — text values inside a closure record
+   need text-in-struct serialisation, which is not yet implemented.
+3. **Mutable capture not supported** — `count += x` inside a lambda crashes in
+   codegen with a self-reference guard error.
+
+**Reproducer (restriction 3):**
 ```loft
 fn test() {
   count = 0;
-  f = fn(x: integer) { count += x; };
+  f = fn(x: integer) { count += x; };  // mutable capture — codegen panic
   f(10);
-  f(32);
-  assert(count == 42, "expected 42, got {count}");
 }
 ```
 
-**Test:** `tests/issues.rs` — `p1_1_lambda_void_body` (`#[ignore]`, A5 1.1+)
+**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_text` / `closure_capture_multiple` (`#[ignore]` until debug leak fixed); `tests/parse_errors.rs` — `capture_detected` (`#[ignore]`, A5.4)
 **Workaround:** pass needed values as explicit function arguments.
-**Planned fix:** A5 (closure capture), targeted for 1.1+.
-**Docs:** [LOFT.md](LOFT.md) § Lambda expressions — states "cannot capture variables from surrounding scope".
+**Planned fix:** A5.4 (mutable capture) — debug-mode leak and text capture are tracked in [PROBLEMS.md](PROBLEMS.md) § 85.
+**Docs:** [LOFT.md](LOFT.md) § Lambda expressions.
 
 ---
 
@@ -217,6 +223,125 @@ struct Point { x: float, y: float }
 **Docs:** [THREADING.md](THREADING.md) § Supported return types; [00-vs-rust.html](../00-vs-rust.html) § Parallel for-loops.
 
 ---
+
+
+---
+
+## C16 — Struct-enum local variable: debug assertion fails
+
+Constructing a struct-enum variant as a local variable and returning a scalar
+from the function triggers a debug-mode assertion in release builds of the
+test runner:
+
+```
+assertion failed: Stack not correctly cleared: 8 != 4
+```
+
+**Reproducer:**
+```loft
+fn get(v: ArgValue) -> integer { match v { IntVal { n } => n, _ => 0 } }
+// fails when called as: get(IntVal { n: 42 })
+```
+
+**Tests:** `tests/expressions.rs` — `stack_trace_*` and `call_frame_*` (`#[ignore = "TR1.3: blocked by Problem #85"]`)
+**Workaround:** Pass the struct-enum value as a function parameter rather than assigning it to a local variable.
+**Planned fix:** [PROBLEMS.md](PROBLEMS.md) § 85 — extend `scopes.rs::free_vars()` to emit `OpFreeRef` for struct-enum locals.
+
+---
+
+## C17 — `stack_trace()` returns empty from parallel workers
+
+Calling `stack_trace()` inside a `par(...)` loop body returns an empty vector
+instead of the actual call frames.  The function does not error — it silently
+returns zero frames.
+
+**Reproducer:**
+```loft
+fn check() -> integer {
+  total = 0;
+  for _ in 0..4 par(total += len(stack_trace())) {}
+  total  // always 0, even though calls are active
+}
+```
+
+**Test:** none (no parallel-worker test for stack_trace yet).
+**Workaround:** Call `stack_trace()` from the main thread only.
+**Planned fix:** [PROBLEMS.md](PROBLEMS.md) § 92 — set `data_ptr` in `execute_at*` parallel entry points.
+
+---
+
+## C18 — `init(expr)` circular field dependency silently accepted
+
+Two struct fields that reference each other through `init($.other)` are
+not detected at compile time.  At runtime the result is undefined — fields
+may read uninitialised memory.
+
+**Reproducer:**
+```loft
+struct Bad {
+  a: integer init($.b),
+  b: integer init($.a),
+}
+// No compile error; runtime behaviour is undefined.
+```
+
+**Test:** `tests/parse_errors.rs` — `circular_init_error` (`#[ignore = "#91: circular-init detection not yet implemented"]`)
+**Workaround:** Do not write mutually referencing `init` fields.
+**Planned fix:** [PROBLEMS.md](PROBLEMS.md) § 91 — DFS cycle check after struct field parsing.
+
+---
+
+## C19 — Native codegen: tuples, coroutines, and generics interpreter-only
+
+The `--native` backend does not support three language features:
+
+| Feature | Interpreter | `--native` |
+|---------|-------------|-----------|
+| Tuple types (`(integer, float)`) | Yes | No |
+| Coroutines (`yield`, `iterator<T>`) | Yes | No |
+| Generic functions (`fn f<T>`) | Yes | No |
+
+Scripts using these features are skipped from the native test suite
+(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).
+
+**Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft`, `48-generics.loft` — all pass in interpreter, all skipped in native.
+**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use these features.
+**Planned fix:** Targeted for the 0.8.3 milestone alongside native-extension support.
+
+---
+
+## C20 — Tuple types: function return and text elements not yet implemented
+
+Tuple literals, element access (`.0`, `.1`), element assignment, and tuple
+parameters all work.  Two further cases do not:
+
+1. **Tuple return type** — A function declared `-> (integer, integer)` cannot
+   have its return value used: calling the function and accessing a return
+   element requires work-variable codegen that is not yet written.
+2. **Tuple containing `text`** — A `(integer, text)` tuple cannot be returned
+   from a function; text-return calling conventions are not yet wired.
+
+**Tests:** `tests/expressions.rs` — `tuple_type_return`, `tuple_destructure_basic`, `tuple_with_text` (`#[ignore = "T1.4: ..."]`)
+**Workaround:** Return structs or individual values instead of tuples with multiple or text elements.
+**Planned fix:** T1.4 follow-up — work-variable codegen for tuple return (deferred to T1.4 completion).
+
+---
+
+## C21 — `yield from` has a slot assignment regression
+
+`yield from inner()` — delegation to a sub-generator — compiles but produces
+wrong slot assignments when the outer generator has variables before the
+`yield from`.  The test is `#[ignore]`-d pending an IR restructuring.
+
+**Reproducer:**
+```loft
+fn inner() -> iterator<integer> { yield 10; yield 20; }
+fn outer() -> iterator<integer> { yield 1; yield from inner(); yield 2; }
+```
+
+**Tests:** `tests/expressions.rs` — `coroutine_yield_from` (`#[ignore = "CO1.4: yield from slot assignment regression"]`); `tests/scripts/51-coroutines.loft` — exercises the working subset of coroutines
+**Workaround:** Inline the sub-generator's yields manually or collect the sub-generator into a vector first.
+**Planned fix:** CO1.4 — IR restructuring to separate generator state from iterator frame slots.
 
 ## See also
 

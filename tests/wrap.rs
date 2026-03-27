@@ -477,6 +477,13 @@ fn init_fields() -> std::io::Result<()> {
     )
 }
 
+/// Regression tests for documented caveats (CAVEATS.md).
+#[test]
+fn caveats() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(PathBuf::from("tests/scripts/46-caveats.loft"), false, true)
+}
+
 /// Parse, type-check, compile, and execute one `.loft` test file.
 ///
 /// The default library in `default/` is loaded first, then `entry` is parsed on
