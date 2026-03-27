@@ -246,7 +246,7 @@ impl Output<'_> {
     /// Infer the result type of an expression for generating typed null defaults.
     pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
         match v {
-            Value::Int(_) => Some(Type::Integer(i32::MIN + 1, i32::MAX as u32)),
+            Value::Int(_) => Some(Type::Integer(i32::MIN + 1, i32::MAX as u32, false)),
             Value::Long(_) => Some(Type::Long),
             Value::Float(_) => Some(Type::Float),
             Value::Single(_) => Some(Type::Single),
@@ -267,7 +267,7 @@ impl Output<'_> {
     /// Emit a typed null sentinel for the given type.
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
         match tp {
-            Type::Integer(_, _) | Type::Character => write!(w, "i32::MIN"),
+            Type::Integer(_, _, _) | Type::Character => write!(w, "i32::MIN"),
             Type::Long => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),

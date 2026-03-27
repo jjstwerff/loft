@@ -146,7 +146,7 @@ impl Output<'_> {
                 }
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
                 // Integer parameter receiving a char value needs explicit cast.
-                if matches!(a.typedef, Type::Integer(_, _)) {
+                if matches!(a.typedef, Type::Integer(_, _, _)) {
                     let val_is_char = match &vals[a_nr] {
                         Value::Var(n) => {
                             matches!(self.data.def(self.def_nr).variables.tp(*n), Type::Character)

@@ -19,23 +19,15 @@ fn test_c8_available_aggregates() {
   assert(max_of(nums) == 5, "C8: max_of works");
 }
 
-// C10 — Struct-enum variants with same-named fields read wrong offset.
-// This test documents the CURRENT broken behaviour.
-// When #81 is fixed, the assertion should be updated to expect v == 42.
+// S15 regression: struct-enum variants with same-named fields now read the correct offset.
 enum TwoVal { TvInt { v: integer }, TvFloat { v: float } }
 
-fn test_c10_same_named_field_offset() {
+fn test_s15_same_named_field_offset() {
   x = TvInt { v: 42 };
-  matched = false;
   match x {
-    TvInt { v } => {
-      // BUG: v reads from TvFloat's offset, producing garbage.
-      // When #81 is fixed, this should be: assert(v == 42, ...)
-      matched = true;
-    },
-    _ => {}
+    TvInt { v } => assert(v == 42, "S15: TvInt v should be 42, got {v}"),
+    _ => assert(false, "S15: wrong match arm")
   }
-  assert(matched, "C10: TvInt variant matched");
 }
 
 // C11 — No while loop: for + break is the workaround.

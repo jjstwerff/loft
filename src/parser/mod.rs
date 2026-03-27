@@ -115,6 +115,12 @@ pub struct Parser {
     /// A5.4: variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
+    // A5.3: maps fn-ref variable numbers to their closure record work variable numbers.
+    pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
+    // A5.3: last closure work variable created by emit_lambda_code (transient).
+    pub(crate) last_closure_work_var: u16,
+    // A5.3: closure allocation expression to inject at the call site.
+    pub(crate) last_closure_alloc: Option<Box<Value>>,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
     /// Decremented after each init(expr) is parsed.
     pub(crate) init_field_tracking: bool,
@@ -267,6 +273,9 @@ impl Parser {
             capture_context: Vec::new(),
             captured_names: Vec::new(),
             closure_param: u16::MAX,
+            closure_vars: std::collections::HashMap::new(),
+            last_closure_work_var: u16::MAX,
+            last_closure_alloc: None,
             init_field_tracking: false,
             init_field_deps: Vec::new(),
         }
@@ -594,7 +603,7 @@ impl Parser {
             {
                 return true;
             }
-            if let (Type::Enum(_, false, _), Type::Integer(_, _)) = (test_type, should) {
+            if let (Type::Enum(_, false, _), Type::Integer(_, _, _)) = (test_type, should) {
                 return true;
             }
             if let Type::Reference(r, _) = should
@@ -1051,7 +1060,7 @@ impl Parser {
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
-            Type::Integer(min, _) => {
+            Type::Integer(min, _, _) => {
                 let s = tp.size(nullable);
                 if s == 1 {
                     self.cl("OpGetByte", &[code, p, Value::Int(*min)])
@@ -1150,7 +1159,7 @@ impl Parser {
             None
         };
         let set_op = match tp {
-            Type::Integer(min, _) => {
+            Type::Integer(min, _, _) => {
                 let m = Value::Int(min);
                 let s = tp.size(self.data.attr_nullable(d_nr, f_nr));
                 if s == 1 {
@@ -1417,7 +1426,7 @@ impl Parser {
                 actual.push(actual_code);
                 continue;
             }
-            if let (Type::Integer(_, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
+            if let (Type::Integer(_, _, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
                 let cd = if matches!(actual_code, Value::Enum(_, _)) {
                     actual_code
                 } else {
@@ -1894,12 +1903,24 @@ impl Parser {
             {
                 let src = self.vars.var_source(a_nr as u16);
                 self.lexer.to(src);
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Parameter '{}' has & but is never modified; remove the &",
-                    a.name
-                );
+                // T1.6: RefVar(Tuple) — downgrade to warning since elements are stack values;
+                // other RefVar types are an error (the & serves no purpose and misleads).
+                if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Tuple(_)))
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "Parameter '{}' does not need to be a reference",
+                        a.name
+                    );
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Parameter '{}' has & but is never modified; remove the &",
+                        a.name
+                    );
+                }
             }
             // warn when `const` is used on a primitive parameter that is never
             // written to — the annotation is redundant since the parameter would not
@@ -1914,7 +1935,7 @@ impl Parser {
                 && !written.contains(&(a_nr as u16))
                 && matches!(
                     base_tp,
-                    Type::Integer(_, _)
+                    Type::Integer(_, _, _)
                         | Type::Long
                         | Type::Float
                         | Type::Single
@@ -1938,7 +1959,7 @@ impl Parser {
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)
     pub fn null(&mut self, tp: &Type) -> Value {
         match tp {
-            Type::Integer(_, _) | Type::Character => self.cl("OpConvIntFromNull", &[]),
+            Type::Integer(_, _, _) | Type::Character => self.cl("OpConvIntFromNull", &[]),
             Type::Boolean => self.cl("OpConvBoolFromNull", &[]),
             Type::Enum(tp, _, _) => self.cl(
                 "OpConvEnumFromNull",
@@ -2087,6 +2108,11 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
         }
         Value::Return(v) | Value::Drop(v) => {
             find_written_vars(v, data, written);
+        }
+        // T1.5: TuplePut writes to the ref-tuple variable via its element assignment.
+        Value::TuplePut(var_nr, _, inner) => {
+            written.insert(*var_nr);
+            find_written_vars(inner, data, written);
         }
         Value::Iter(_, create, next, extra) => {
             find_written_vars(create, data, written);

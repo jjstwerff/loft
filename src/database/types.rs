@@ -616,7 +616,7 @@ impl Stores {
 
     pub fn db_type(&mut self, tp: &crate::data::Type, data: &crate::data::Data) -> u16 {
         match tp {
-            crate::data::Type::Integer(minimum, _) => {
+            crate::data::Type::Integer(minimum, _, _) => {
                 let s = tp.size(true);
                 if s == 1 {
                     self.byte(*minimum, true)

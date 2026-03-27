@@ -213,8 +213,33 @@ impl State {
                 Type::Tuple(types)
             }
             Value::TupleGet(var_nr, elem_idx) => {
-                // T1.4: read element elem_idx from tuple variable var_nr.
                 let tuple_tp = stack.function.tp(*var_nr).clone();
+                // T1.5: RefVar(Tuple) — read element through the DbRef using OpGetInt/etc.
+                if let Type::RefVar(ref inner) = tuple_tp
+                    && let Type::Tuple(ref elems) = **inner
+                {
+                    let idx = *elem_idx as usize;
+                    let elem_tp = elems[idx].clone();
+                    let offsets = crate::data::element_offsets(elems);
+                    let elem_offset = offsets[idx] as u16;
+                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    let code_pos = self.code_pos;
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(var_pos);
+                    match &elem_tp {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
+                            stack.add_op("OpGetInt", self);
+                        }
+                        Type::Long => stack.add_op("OpGetLong", self),
+                        Type::Float => stack.add_op("OpGetFloat", self),
+                        Type::Single => stack.add_op("OpGetSingle", self),
+                        Type::Character => stack.add_op("OpGetCharacter", self),
+                        _ => panic!("RefTupleGet: unsupported element type {elem_tp:?}"),
+                    }
+                    self.code_add(elem_offset);
+                    return self.insert_types(elem_tp, code_pos, stack);
+                }
+                // T1.4: read element elem_idx from tuple variable var_nr.
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TupleGet on non-tuple variable");
                 };
@@ -229,7 +254,7 @@ impl State {
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
                 match &elem_tp {
-                    Type::Integer(_, _) | Type::Function(_, _) => {
+                    Type::Integer(_, _, _) | Type::Function(_, _) => {
                         stack.add_op("OpVarInt", self);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
@@ -255,11 +280,38 @@ impl State {
                 let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
                 stack.add_op("OpCoroutineYield", self);
                 self.code_add(value_size);
+                // CO1.3d: OpCoroutineYield suspends and transfers the value to the caller.
+                // The evaluation stack is empty again on resume, so undo the push.
+                stack.position -= value_size;
                 Type::Void
             }
             Value::TuplePut(var_nr, elem_idx, value) => {
-                // T1.4: write to element elem_idx of tuple variable var_nr.
                 let tuple_tp = stack.function.tp(*var_nr).clone();
+                // T1.5: RefVar(Tuple) — write element through the DbRef using OpSetInt/etc.
+                if let Type::RefVar(ref inner) = tuple_tp
+                    && let Type::Tuple(ref elems) = **inner
+                {
+                    let idx = *elem_idx as usize;
+                    let elem_tp = elems[idx].clone();
+                    let offsets = crate::data::element_offsets(elems);
+                    let elem_offset = offsets[idx] as u16;
+                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(var_pos);
+                    self.generate(value, stack, false);
+                    match &elem_tp {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
+                            stack.add_op("OpSetInt", self);
+                        }
+                        Type::Long => stack.add_op("OpSetLong", self),
+                        Type::Float => stack.add_op("OpSetFloat", self),
+                        Type::Character => stack.add_op("OpSetCharacter", self),
+                        _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
+                    }
+                    self.code_add(elem_offset);
+                    return Type::Void;
+                }
+                // T1.4: write to element elem_idx of tuple variable var_nr.
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TuplePut on non-tuple variable");
                 };
@@ -274,7 +326,7 @@ impl State {
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 match &elem_tp {
-                    Type::Integer(_, _) | Type::Function(_, _) => {
+                    Type::Integer(_, _, _) | Type::Function(_, _) => {
                         stack.add_op("OpPutInt", self);
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
@@ -575,18 +627,9 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
-            // Step 8 fix: place_large_and_recurse processes the inner Block at v's slot, so
-            // outer_var and inner_var share the block-return slot — pos == stack.position always.
-            // Guard: if this fires, a new Set(v, Block) pattern bypassed the Step-8 fix.
-            #[cfg(debug_assertions)]
-            debug_assert!(
-                pos <= stack.position,
-                "[generate_set] Step-8 regression: pos({pos}) > stack.position({}) for '{}' \
-                 in '{}' — a Set(v, Block) pattern was not handled by place_large_and_recurse",
-                stack.position,
-                stack.function.name(v),
-                stack.data.def(stack.def_nr).name,
-            );
+            // Variables created inside expressions (closures, yield-from, tuple desugaring)
+            // may have slot positions above the current TOS.
+            // adjust_first_assignment_slot handles this by moving the slot down to TOS.
             Self::adjust_first_assignment_slot(stack, v, pos);
             let pos = stack.function.stack(v);
             if pos == stack.position {
@@ -1014,10 +1057,18 @@ impl State {
         }
         // fn-ref variable is below the pushed arguments; compute distance from current top
         let fn_var_dist = stack.position - stack.function.stack(v_nr);
-        let total_arg_size: u16 = param_types
+        // A5.3: total_arg_size includes all args pushed including hidden __closure.
+        let declared_size: u16 = param_types
             .iter()
             .map(|t| size(t, &Context::Argument))
             .sum();
+        let extra = if args.len() > param_types.len() {
+            // Hidden closure arg is a DbRef (12 bytes).
+            (args.len() - param_types.len()) as u16 * super::size_ref() as u16
+        } else {
+            0
+        };
+        let total_arg_size = declared_size + extra;
         stack.add_op("OpCallRef", self);
         self.code_add(fn_var_dist);
         self.code_add(total_arg_size);
@@ -1041,7 +1092,7 @@ impl State {
         let code = self.code_pos;
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
-            Type::Integer(_, _) | Type::Function(_, _) => stack.add_op("OpVarInt", self),
+            Type::Integer(_, _, _) | Type::Function(_, _) => stack.add_op("OpVarInt", self),
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
@@ -1088,7 +1139,7 @@ impl State {
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
                     match elem_tp {
-                        Type::Integer(_, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
                             stack.add_op("OpVarInt", self);
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
@@ -1121,7 +1172,7 @@ impl State {
         if let Type::RefVar(tp) = stack.function.tp(variable) {
             let txt = matches!(**tp, Type::Text(_));
             match &**tp {
-                Type::Integer(_, _) => stack.add_op("OpGetInt", self),
+                Type::Integer(_, _, _) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
                 Type::Long => stack.add_op("OpGetLong", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
@@ -1234,17 +1285,17 @@ impl State {
 
     pub(super) fn add_const(&mut self, tp: &Type, p: &Value, stack: &Stack, before_stack: u16) {
         match tp {
-            Type::Integer(0, 255) => {
+            Type::Integer(0, 255, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as u8);
                 }
             }
-            Type::Integer(-128, 127) => {
+            Type::Integer(-128, 127, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as i8);
                 }
             }
-            Type::Integer(0, 65535) => {
+            Type::Integer(0, 65535, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as u16);
                 } else if let Value::Var(v) = p {
@@ -1252,12 +1303,12 @@ impl State {
                     self.code_add(before_stack - r);
                 }
             }
-            Type::Integer(-32768, 32767) => {
+            Type::Integer(-32768, 32767, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as i16);
                 }
             }
-            Type::Integer(_, _) => {
+            Type::Integer(_, _, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr);
                 }
@@ -1322,7 +1373,7 @@ impl State {
             self.code_add(var_pos);
             self.generate(value, stack, false);
             match *tp {
-                Type::Integer(_, _) => stack.add_op("OpSetInt", self),
+                Type::Integer(_, _, _) => stack.add_op("OpSetInt", self),
                 Type::Character => stack.add_op("OpSetCharacter", self),
                 Type::Long => stack.add_op("OpSetLong", self),
                 Type::Single => stack.add_op("OpSetSingle", self),
@@ -1352,7 +1403,7 @@ impl State {
         self.generate(value, stack, false);
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
-            Type::Integer(_, _) | Type::Function(_, _) => stack.add_op("OpPutInt", self),
+            Type::Integer(_, _, _) | Type::Function(_, _) => stack.add_op("OpPutInt", self),
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
@@ -1383,7 +1434,7 @@ impl State {
                     // After popping previous elements, adjust position.
                     let pos = stack.position - elem_abs;
                     match &elems[i] {
-                        Type::Integer(_, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
                             stack.add_op("OpPutInt", self);
                         }
                         Type::Boolean => stack.add_op("OpPutBool", self),

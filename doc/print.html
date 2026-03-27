@@ -43,6 +43,7 @@
 <li><a href="#22-time">Time</a> — <span class="toc-desc">Wall-clock time and elapsed time</span></li>
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
 <li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
+<li><a href="#25-generics">Generics</a> — <span class="toc-desc">Generic functions</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-math">Math</a></li>
@@ -51,6 +52,8 @@
 <li class="toc-indent"><a href="#stdlib-text">Text</a></li>
 <li class="toc-indent"><a href="#stdlib-collections">Collections</a></li>
 <li class="toc-indent"><a href="#stdlib-output-and-diagnostics">Output and Diagnostics</a></li>
+<li class="toc-indent"><a href="#stdlib-vector-aggregates">Vector aggregates</a></li>
+<li class="toc-indent"><a href="#stdlib-a10-field-iteration-support-types">A10: Field iteration support types</a></li>
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
 <li class="toc-indent"><a href="#stdlib-random">Random</a></li>
@@ -966,7 +969,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <h1>File</h1>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.</p>
+<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>);
@@ -985,7 +988,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c[<span class="nm">1</span>] == <span class="st">"    terrain = ["</span>, <span class="st">"Line was '{c[1]}'"</span>);</code></pre>
 <p><code>exists</code> and <code>delete</code> are safe to call when the file is absent. <code>delete</code> returns false rather than crashing when nothing is there.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">exists</a></span>(<span class="st">"test.bin"</span>), <span class="st">"File should not exist before the test."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"nonexistent_xyz.bin"</span>), <span class="st">"delete on missing file returns false"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"nonexistent_xyz.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete on missing file not ok"</span>);</code></pre>
 <h2 id="writing-a-text-or-binary-file">Writing a Text or Binary File</h2>
 <p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set <code>f#format</code> to LittleEndian or BigEndian before writing binary data. Use <code>f += value</code> to append the raw bytes of any scalar value (u8, u16, i32, long, single, float, or text).</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test.bin"</span>);
@@ -1004,8 +1007,8 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
  }  <span class="cm">// The file closes when the handle goes out of scope.</span></code></pre>
 <p><code>move(src, dst)</code> renames a file. It refuses if the destination already exists or if either path would leave the project directory.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">exists</a></span>(<span class="st">"test.bin"</span>), <span class="st">"File should exist after writing."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"test.bin"</span>, <span class="st">"../test.bin"</span>), <span class="st">"Should refuse to move outside the project."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"test.bin"</span>, <span class="st">"test2.bin"</span>), <span class="st">"Could not move the file."</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"test.bin"</span>, <span class="st">"../test.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Should refuse to move outside the project."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"test.bin"</span>, <span class="st">"test2.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not move the file."</span>);</code></pre>
 <h2 id="reading-back-what-you-wrote">Reading Back What You Wrote</h2>
 <p>When you open an existing file the default format is TextFile. Set <code>f#format</code> to match the format used when writing before you read any bytes. <code>f#read(n) as T</code> reads exactly n bytes and interprets them as type T. <code>f#index</code> is the byte offset where the last read started. <code>f#next</code> is the current read position; assign to it to seek anywhere.</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test2.bin"</span>);
@@ -1030,7 +1033,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  f#next = <span class="nm">0l</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="fn-call">read</span>(<span class="nm">4</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">i32</a></span> == <span class="nm">0x3020100</span>, <span class="st">"Seek-and-reread matches original."</span>);
  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>), <span class="st">"Could not remove the test file."</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove the test file."</span>);</code></pre>
 <h2 id="working-with-vectors-and-struct-data">Working with Vectors and Struct Data</h2>
 <p><code>f += vector&lt;T&gt;</code> writes every element in sequence as raw bytes, which is the fastest way to dump a whole collection to disk. Setting <code>f#size = n</code> truncates or zero-extends the file to exactly n bytes — useful for discarding the tail after you have finished writing.</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"buffer.bin"</span>);
@@ -1042,7 +1045,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  f#size = <span class="nm">8l</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">8l</span>, <span class="st">"Truncated to 8 bytes"</span>);
  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>), <span class="st">"Could not remove buffer.bin after vector write test."</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin after vector write test."</span>);</code></pre>
 <p>Write a count followed by individual float values. <code>sizeof(T)</code> returns the byte width of a type, so you can compute the correct read length without hard-coding magic numbers.</p>
 <pre><code> {buf = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"buffer.bin"</span>);
   buf#format = <span class="en">LittleEndian</span>;
@@ -1059,7 +1062,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   n = f#<span class="fn-call">read</span>(<span class="nm">4</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">i32</a></span>;
   b.data = f#<span class="fn-call">read</span>(n * <span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">single</a></span>));
  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>), <span class="st">"Could not remove buffer.bin."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin."</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="14-image">
@@ -1822,6 +1825,39 @@ for e in data#errors { log_warn(e) }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);
 }</code></pre>
 </section>
+<section class="print-section" id="25-generics">
+<h1>Generics</h1>
+<p>A generic function uses a type variable to work with any type. Write the function once; the compiler creates a specialised copy for each concrete type you call it with.</p>
+<h2 id="declaring-a-generic-function">Declaring a generic function</h2>
+<p>Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector&lt;T&gt;).</p>
+<pre><code><span class="kw">fn</span> identity&lt;<span class="en">T</span>&gt;(x: <span class="en">T</span>) -&gt; <span class="en">T</span> { x }</code></pre>
+<h2 id="calling-a-generic-function">Calling a generic function</h2>
+<p>No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">test_identity</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">42</span>) == <span class="nm">42</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">3.14</span>) == <span class="nm">3.14</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="kw">true</span>) == <span class="kw">true</span>);
+}</code></pre>
+<h2 id="multiple-parameters-of-the-same-type">Multiple parameters of the same type</h2>
+<p>Additional parameters can also use T.  They all share the same concrete type.</p>
+<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(a: <span class="en">T</span>, b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  _x = a;
+  b
+}
+<span class="kw">fn</span> <span class="fn-call">test_pick_second</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>);
+}</code></pre>
+<h2 id="allowed-operations-on-t">Allowed operations on T</h2>
+<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.</p>
+<h2 id="disallowed-operations">Disallowed operations</h2>
+<p>The compiler rejects operations that require knowing what T is. For example, <code>x + y</code> on two T values gives: "generic type T: operator <code>+</code> requires a concrete type" Similarly, <code>x.field</code> gives: "generic type T: field access requires a concrete type"</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="fn-call">test_identity</span>();
+  <span class="fn-call">test_pick_second</span>();
+}</code></pre>
+</section>
 <section class="print-section" id="00-performance">
 <h1>Performance</h1>
 
@@ -2236,6 +2272,10 @@ for e in data#errors { log_warn(e) }
 <p>Number of bytes in the text. Use for bounds checks and iteration limits.</p>
 </div>
 <div class="item">
+<pre><code>pub fn size(both: text) -&gt; integer</code></pre>
+<p>Number of Unicode code points (characters) in the text.</p>
+</div>
+<div class="item">
 <pre><code>pub fn len(both: character) -&gt; integer</code></pre>
 <p>Byte length of the character's UTF-8 encoding (1–4).</p>
 </div>
@@ -2378,6 +2418,40 @@ for e in data#errors { log_warn(e) }
 <div class="item">
 <pre><code>pub fn println(v1: text)</code></pre>
 </div>
+<h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
+<p class="section-desc">Internal helpers for reduce-based aggregates.</p>
+<div class="item">
+<pre><code>pub fn sum_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
+<p>Sum of all integer elements. Returns 0 for an empty vector.</p>
+</div>
+<div class="item">
+<pre><code>pub fn min_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
+<p>Smallest integer element.</p>
+</div>
+<div class="item">
+<pre><code>pub fn max_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
+<p>Largest integer element.</p>
+</div>
+<h2 id="stdlib-a10-field-iteration-support-types">A10: Field iteration support types</h2>
+<div class="item">
+<pre><code>pub enum FieldValue {
+  FvBool   { v: boolean },
+  FvInt    { v: integer },
+  FvLong   { v: long },
+  FvFloat  { v: float },
+  FvSingle { v: single },
+  FvChar   { v: character },
+  FvText   { v: text }
+}</code></pre>
+<p>Wraps a field value in a type-discriminated enum for compile-time field iteration.</p>
+</div>
+<div class="item">
+<pre><code>pub struct StructField {
+  name:  text not null,
+  value: FieldValue,
+}</code></pre>
+<p>Represents a single struct field during compile-time iteration.</p>
+</div>
 <h2 id="stdlib-file-system">File System</h2>
 <div class="item">
 <pre><code>pub struct EnvVariable {
@@ -2409,6 +2483,19 @@ for e in data#errors { log_warn(e) }
   Directory,
   NotExists
 }</code></pre>
+</div>
+<div class="item">
+<pre><code>pub enum FileResult {
+  Ok,
+  NotFound,
+  PermissionDenied,
+  IsDirectory,
+  NotDirectory,
+  Other
+}</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
 </div>
 <div class="item">
 <pre><code>pub struct File {
@@ -2446,19 +2533,19 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn exists(path: text) -&gt; boolean</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn delete(path: text) -&gt; boolean</code></pre>
+<pre><code>pub fn delete(path: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn move(from: text, to: text) -&gt; boolean</code></pre>
+<pre><code>pub fn move(from: text, to: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn mkdir(path: text) -&gt; boolean</code></pre>
+<pre><code>pub fn mkdir(path: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn mkdir_all(path: text) -&gt; boolean</code></pre>
+<pre><code>pub fn mkdir_all(path: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn set_file_size(self: File, size: long) -&gt; boolean</code></pre>
+<pre><code>pub fn set_file_size(self: File, size: long) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn files(self: File) -&gt; vector &lt; File &gt;</code></pre>

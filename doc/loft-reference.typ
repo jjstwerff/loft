@@ -2702,7 +2702,7 @@ A file handle lets you read and write files without worrying about when the OS o
 
 === Inspecting the File System
 
-`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns false if it was not there. Clean up any leftover files from a previous interrupted run.
+`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns a `FileResult` enum; use `.ok()` to check success. Clean up any leftover files from a previous interrupted run.
 
 ```rust
 fn cleanup() {
@@ -2737,7 +2737,7 @@ Asking for the format of a directory path returns Directory, not a file format. 
 
 ```rust
   assert(!exists("test.bin"), "File should not exist before the test.");
-  assert(!delete("nonexistent_xyz.bin"), "delete on missing file returns false");
+  assert(!delete("nonexistent_xyz.bin").ok(), "delete on missing file not ok");
 ```
 
 === Writing a Text or Binary File
@@ -2773,8 +2773,8 @@ Text is written as raw UTF-8 bytes with no length prefix.
 
 ```rust
   assert(exists("test.bin"), "File should exist after writing.");
-  assert(!move("test.bin", "../test.bin"), "Should refuse to move outside the project.");
-  assert(move("test.bin", "test2.bin"), "Could not move the file.");
+  assert(!move("test.bin", "../test.bin").ok(), "Should refuse to move outside the project.");
+  assert(move("test.bin", "test2.bin").ok(), "Could not move the file.");
 ```
 
 === Reading Back What You Wrote
@@ -2820,7 +2820,7 @@ You can seek back to any position and re-read.
   f#next = 0l;
   assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
  }
-  assert(delete("test2.bin"), "Could not remove the test file.");
+  assert(delete("test2.bin").ok(), "Could not remove the test file.");
 ```
 
 === Working with Vectors and Struct Data
@@ -2841,7 +2841,7 @@ Truncate to the first two integers.
   f#size = 8l;
   assert(f#size == 8l, "Truncated to 8 bytes");
  }
-  assert(delete("buffer.bin"), "Could not remove buffer.bin after vector write test.");
+  assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
 ```
 
 Write a count followed by individual float values. `sizeof(T)` returns the byte width of a type, so you can compute the correct read length without hard-coding magic numbers.
@@ -2866,7 +2866,7 @@ Read the count, then use it to read exactly that many floats directly into a str
   n = f#read(4) as i32;
   b.data = f#read(n * sizeof(single));
  }
-  assert(delete("buffer.bin"), "Could not remove buffer.bin.");
+  assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 }
 ```
 
@@ -4291,6 +4291,72 @@ fn main() {
 ```
 
 
+= Generics
+
+A generic function uses a type variable to work with any type. Write the function once; the compiler creates a specialised copy for each concrete type you call it with.
+
+=== Declaring a generic function
+
+Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector\<T\>).
+
+```rust
+fn identity<T>(x: T) -> T { x }
+```
+
+=== Calling a generic function
+
+No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.
+
+```rust
+fn test_identity() {
+  assert(identity(42) == 42);
+  assert(identity(3.14) == 3.14);
+  assert(identity("hello") == "hello");
+  assert(identity(true) == true);
+}
+```
+
+=== Multiple parameters of the same type
+
+Additional parameters can also use T.  They all share the same concrete type.
+
+```rust
+fn pick_second<T>(a: T, b: T) -> T {
+  _x = a;
+  b
+}
+fn test_pick_second() {
+  assert(pick_second(1, 99) == 99);
+  assert(pick_second("a", "b") == "b");
+}
+```
+
+=== Allowed operations on T
+
+Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.
+
+=== Disallowed operations
+
+The compiler rejects operations that require knowing what T is. For example, `x + y` on two T values gives:
+
+```
+"generic type T: operator '+' requires a concrete type"
+```
+
+Similarly, `x.field` gives:
+
+```
+"generic type T: field access requires a concrete type"
+```
+
+```rust
+fn main() {
+  test_identity();
+  test_pick_second();
+}
+```
+
+
 = Standard Library
 
 == Types
@@ -4622,6 +4688,12 @@ pub fn len(both: text) -> integer
 Number of bytes in the text. Use for bounds checks and iteration limits.
 
 ```rust
+pub fn size(both: text) -> integer
+```
+
+Number of Unicode code points (characters) in the text.
+
+```rust
 pub fn len(both: character) -> integer
 ```
 
@@ -4835,6 +4907,53 @@ Writes v to standard output without a newline. Use for progress output and build
 pub fn println(v1: text)
 ```
 
+== Vector aggregates
+
+Internal helpers for reduce-based aggregates.
+
+```rust
+pub fn sum_of(v: vector<integer>) -> integer
+```
+
+Sum of all integer elements. Returns 0 for an empty vector.
+
+```rust
+pub fn min_of(v: vector<integer>) -> integer
+```
+
+Smallest integer element.
+
+```rust
+pub fn max_of(v: vector<integer>) -> integer
+```
+
+Largest integer element.
+
+== A10: Field iteration support types
+
+```rust
+pub enum FieldValue {
+  FvBool   { v: boolean },
+  FvInt    { v: integer },
+  FvLong   { v: long },
+  FvFloat  { v: float },
+  FvSingle { v: single },
+  FvChar   { v: character },
+  FvText   { v: text }
+}
+```
+
+Wraps a field value in a type-discriminated enum for compile-time field iteration.
+
+```rust
+pub struct StructField {
+  name:  text not null,
+  value: FieldValue,
+}
+```
+
+Represents a single struct field during compile-time iteration.
+
 == File System
 
 ```rust
@@ -4871,6 +4990,21 @@ pub enum Format {
   Directory,
   NotExists
 }
+```
+
+```rust
+pub enum FileResult {
+  Ok,
+  NotFound,
+  PermissionDenied,
+  IsDirectory,
+  NotDirectory,
+  Other
+}
+```
+
+```rust
+pub fn ok(self: FileResult) -> boolean
 ```
 
 ```rust
@@ -4918,23 +5052,23 @@ pub fn exists(path: text) -> boolean
 ```
 
 ```rust
-pub fn delete(path: text) -> boolean
+pub fn delete(path: text) -> FileResult
 ```
 
 ```rust
-pub fn move(from: text, to: text) -> boolean
+pub fn move(from: text, to: text) -> FileResult
 ```
 
 ```rust
-pub fn mkdir(path: text) -> boolean
+pub fn mkdir(path: text) -> FileResult
 ```
 
 ```rust
-pub fn mkdir_all(path: text) -> boolean
+pub fn mkdir_all(path: text) -> FileResult
 ```
 
 ```rust
-pub fn set_file_size(self: File, size: long) -> boolean
+pub fn set_file_size(self: File, size: long) -> FileResult
 ```
 
 ```rust

@@ -593,7 +593,7 @@ use #count instead"
             }
         }
         match tp {
-            Type::Integer(_, _) => {
+            Type::Integer(_, _, _) => {
                 let value = self.cl("OpConvLongFromInt", std::slice::from_ref(format));
                 self.append_data_long(list, start, var, value, state);
             }
@@ -980,7 +980,7 @@ use #count instead"
         // never runs `a` directly — the parallel map handles that.)
         let elem_var_nr = self.create_var(elem_var, &elem_tp);
         self.vars.defined(elem_var_nr);
-        if matches!(elem_tp, Type::Integer(_, _)) {
+        if matches!(elem_tp, Type::Integer(_, _, _)) {
             self.vars.in_use(elem_var_nr, true);
         }
 
@@ -1096,7 +1096,7 @@ use #count instead"
         };
         let b_var = self.create_var(result_name, &b_type);
         self.vars.defined(b_var);
-        if matches!(b_type, Type::Integer(_, _) | Type::Unknown(_)) {
+        if matches!(b_type, Type::Integer(_, _, _) | Type::Unknown(_)) {
             self.vars.in_use(b_var, true);
         }
         // Reference return: b_var borrows from the result vector — must not be freed.
@@ -1511,7 +1511,7 @@ use #count instead"
 
             let variant_name = match &attr_type {
                 Type::Boolean => "FvBool",
-                Type::Integer(_, _) => "FvInt",
+                Type::Integer(_, _, _) => "FvInt",
                 Type::Long => "FvLong",
                 Type::Float => "FvFloat",
                 Type::Single => "FvSingle",
@@ -1564,7 +1564,7 @@ use #count instead"
         }
         // Fallback for primitive types
         match elm {
-            Type::Integer(_, _)
+            Type::Integer(_, _, _)
             | Type::Single
             | Type::Boolean
             | Type::Character
@@ -1592,7 +1592,7 @@ use #count instead"
         if let Type::Vector(elm, _) = &types[0] {
             if !matches!(
                 elm.as_ref(),
-                Type::Integer(_, _) | Type::Long | Type::Float | Type::Single
+                Type::Integer(_, _, _) | Type::Long | Type::Float | Type::Single
             ) {
                 diagnostic!(
                     self.lexer,

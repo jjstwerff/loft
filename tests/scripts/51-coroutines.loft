@@ -1,0 +1,59 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// CO1: Coroutines — yield, iterator<T>, next(), exhausted(), for-loop, text param, nested call.
+// Blocked: yield from (CO1.4 slot-assignment regression).
+
+fn count() -> iterator<integer> {
+  yield 10;
+  yield 20;
+  yield 30;
+}
+
+fn one_val() -> iterator<integer> {
+  yield 42;
+}
+
+fn double(x: integer) -> integer { x * 2 }
+
+fn gen_doubles() -> iterator<integer> {
+  yield double(5);
+  yield double(10);
+}
+
+fn gen_len(s: text) -> iterator<integer> {
+  yield len(s);
+  yield len(s);
+}
+
+fn main() {
+  // --- CO1.3: next() advances generator ---
+  gen = count();
+  a = next(gen);
+  b = next(gen);
+  c = next(gen);
+  assert(a + b + c == 60, "sequence sum: {a}+{b}+{c}");
+
+  // --- CO1.6: exhausted() after all yields consumed ---
+  g = one_val();
+  next(g);
+  next(g);
+  done = exhausted(g);
+  assert(done, "exhausted after last yield");
+
+  // --- CO1.5: for-loop over generator ---
+  total = 0;
+  for n in count() { total += n; }
+  assert(total == 60, "for-loop sum: {total}");
+
+  // --- CO1.3e: nested call — helper invoked between yields ---
+  total2 = 0;
+  for n in gen_doubles() { total2 += n; }
+  assert(total2 == 30, "nested call yields: {total2}");
+
+  // --- CO1.3d: text parameter survives yield/resume ---
+  total3 = 0;
+  for n in gen_len("hello") { total3 += n; }
+  assert(total3 == 10, "text param survives yield: {total3}");
+
+  println("CO1: coroutines ok");
+}

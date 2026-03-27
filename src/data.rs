@@ -25,7 +25,7 @@ static OPERATORS: &[&str] = &[
     "OpCast",
 ];
 
-pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32);
+pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
@@ -122,7 +122,7 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
     match tp {
         Type::Boolean => Value::Boolean(false),
         Type::Enum(tp, _, _) => Value::Enum(0, data.def(*tp).known_type),
-        Type::Integer(_, _)
+        Type::Integer(_, _, _)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
@@ -146,8 +146,8 @@ pub enum Type {
     /// Result of a function without return type.
     Void,
     /// The given definition might hold restrictions on this number.
-    /// (minimum, maximum).
-    Integer(i32, u32),
+    /// (minimum, maximum, `not_null`).
+    Integer(i32, u32, bool),
     /// A store with the given base record type. (nullable)
     Boolean,
     Long,
@@ -298,7 +298,7 @@ impl Type {
             || (matches!(self, Type::Enum(_, _, _)) && matches!(other, Type::Enum(_, _, _)))
             || (matches!(self, Type::Reference(_, _)) && matches!(other, Type::Reference(_, _)))
             || (matches!(self, Type::Vector(_, _)) && matches!(other, Type::Vector(_, _)))
-            || (matches!(self, Type::Integer(_, _)) && matches!(other, Type::Integer(_, _)))
+            || (matches!(self, Type::Integer(_, _, _)) && matches!(other, Type::Integer(_, _, _)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
     }
 
@@ -313,16 +313,21 @@ impl Type {
             | (Type::Spacial(r, rf, _), Type::Spacial(o, of, _)) => return r == o && rf == of,
             (Type::Sorted(r, rf, _), Type::Sorted(o, of, _))
             | (Type::Index(r, rf, _), Type::Index(o, of, _)) => return r == o && rf == of,
+            // T1.7: tuple equality ignores `not_null` on Integer elements (runtime type is same).
+            (Type::Tuple(se), Type::Tuple(oe)) => {
+                return se.len() == oe.len()
+                    && se.iter().zip(oe.iter()).all(|(a, b)| a.is_equal(b));
+            }
             _ => {}
         }
         self == other
-            || (matches!(self, Type::Integer(_, _)) && matches!(other, Type::Integer(_, _)))
+            || (matches!(self, Type::Integer(_, _, _)) && matches!(other, Type::Integer(_, _, _)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
     }
 
     #[must_use]
     pub fn size(&self, nullable: bool) -> u8 {
-        if let Type::Integer(min, max) = self {
+        if let Type::Integer(min, max, _) = self {
             let c_min = i64::from(*min);
             let c_max = i64::from(*max);
             if c_max - c_min < 256 || (nullable && c_max - c_min == 256) {
@@ -459,7 +464,7 @@ impl Type {
 pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Integer(_, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
+        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
         Type::Long | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)
@@ -517,10 +522,11 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Integer(min, max) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
+            Type::Integer(min, max, _) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
                 f.write_str("integer")
             }
-            Type::Integer(min, max) if *min == 0 && *max == 256 => f.write_str("byte"),
+            Type::Integer(min, max, _) if *min == 0 && *max == 256 => f.write_str("byte"),
+            Type::Integer(min, max, _) => f.write_str(&format!("integer({min}, {max})")),
             Type::Vector(tp, link) if matches!(tp as &Type, Type::Unknown(_)) => {
                 f.write_str(&format!("vector#{link:?}"))
             }
@@ -1428,7 +1434,7 @@ impl Data {
     pub fn type_def_nr(&self, tp: &Type) -> u32 {
         match tp {
             Type::Rewritten(t) => self.type_def_nr(t),
-            Type::Integer(_, _) => self.source_nr(0, "integer"),
+            Type::Integer(_, _, _) => self.source_nr(0, "integer"),
             Type::Long => self.source_nr(0, "long"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
@@ -1455,7 +1461,7 @@ impl Data {
     pub fn type_elm(&self, tp: &Type) -> u32 {
         match tp {
             Type::Rewritten(t) => self.type_elm(t),
-            Type::Integer(_, _) => self.source_nr(0, "integer"),
+            Type::Integer(_, _, _) => self.source_nr(0, "integer"),
             Type::Long => self.source_nr(0, "long"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
@@ -1484,10 +1490,10 @@ impl Data {
             Type::Unknown(_) => "unknown".to_string(),
             Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
-            Type::Integer(min, max) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
+            Type::Integer(min, max, _) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
                 "integer".to_string()
             }
-            Type::Integer(_, _) => "integer".to_string(),
+            Type::Integer(_, _, _) => "integer".to_string(),
             Type::Boolean => "boolean".to_string(),
             Type::Long => "long".to_string(),
             Type::Float => "float".to_string(),
@@ -1530,19 +1536,19 @@ impl Data {
             return result;
         }
         match tp {
-            Type::Integer(from, to)
+            Type::Integer(from, to, _)
                 if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
             {
                 "u8"
             }
-            Type::Integer(from, to)
+            Type::Integer(from, to, _)
                 if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
             {
                 "u16"
             }
-            Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
-            Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
-            Type::Integer(_, _) => "i32",
+            Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
+            Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
+            Type::Integer(_, _, _) => "i32",
             Type::Enum(_, false, _) => "u8",
             Type::Text(_) if context == &Context::Variable => "String",
             Type::Text(_) => "Str",

@@ -80,22 +80,19 @@ in parallel.
 
 ---
 
-### Version 0.8.3 — Language syntax extensions (planned)
+### Version 0.8.3 — Language syntax extensions *(completed)*
 
-Goal: add all new language syntax before the feature-complete 0.9.0 milestone so that
-syntax decisions can be validated and refined independently.  All items change the parser
-or type system; 0.8.2 correctness work is a prerequisite.
+All items completed.  See CHANGELOG.md for details.
 
-**Lambda expressions (P1):** ✓ completed in 0.8.2.
-**Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
-
-**Generic functions (P5):** ✓ completed — all four phases (parse, instantiate, validate, test+docs).
-
-**Pattern extensions (L2):**
-- **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
-
-**Remaining:**
-- **A10** — Field iteration (`for f in s#fields`): 5 phases (A10.0–A10.4).
+- **P1** — Lambda expressions ✓ (completed in 0.8.2)
+- **P3** — Vector aggregates: `sum_of`, `min_of`, `max_of`, `any`, `all`, `count_if` ✓
+- **P5** — Generic functions: parse, instantiate, validate, test+docs ✓
+- **L2** — Nested match patterns: field sub-patterns in struct arms ✓
+- **A10** — Field iteration (`for f in s#fields`): all 5 phases ✓
+- **T1.1–T1.7** — Tuple types: type system, parser, scope, codegen, ref params, mutation guard, `not null` ✓
+- **CO1** — Coroutines: opcodes, yield, text serialisation, `for` integration, `yield from` ✓
+- **TR1** — Stack trace: shadow call-frame, type declarations, materialisation, line numbers ✓
+- **A5** — Closures: capture analysis, record layout, call-site allocation, body reads, lifetime ✓
 
 ---
 
@@ -263,7 +260,7 @@ It also keeps each milestone small enough to be fully understood in a single pas
 **The small-steps principle in practice:**
 Each milestone is a strict subset of the next.  0.8.2 hardens correctness; 0.8.3 adds new
 syntax; 0.8.4 adds HTTP and JSON on top of lambdas; 0.9.0 completes runtime infrastructure
-and tooling; 1.0.0 adds exactly R1 + W1–W6 on top of a complete 0.9.0.  No item moves
+and tooling; 0.8.3 adds R1 + W1 (WASM runtime); 1.0.0 adds W2–W6 (IDE) on top of a complete 0.9.0.  No item moves
 forward until the test suite for the previous item is green.  This prevents the "everything
 at once" failure mode where half-finished features interact and regressions are hard to pin.
 
@@ -419,9 +416,9 @@ the recompile overhead that caching was designed to address)
 - **T1.2** — Parser *(completed 0.8.3)*: type notation `(A, B)`, literal syntax `(expr, expr)`, element access `t.0`, LHS destructuring `(a, b) = expr`.  `Value::Tuple` IR variant added.
 - **T1.3** — Scope analysis *(completed 0.8.3)*: tuple variable intervals, owned-element cleanup tracking in `scopes.rs`.
 - **T1.4** — Bytecode codegen *(completed 0.8.3)*: `Value::TupleGet` IR, element read via `OpVar*` at offset, tuple set via per-element `OpPut*`, tuple parameters.  6 tests passing; function-return convention, text elements, destructuring, and element assignment remain for follow-up.
-- **T1.5** — SC-4: Reference-tuple parameters with owned elements.
-- **T1.6** — SC-8: Tuple-aware mutation guard.
-- **T1.7** — SC-7: `not null` annotation for tuple integer elements.
+- **T1.5** — *(completed 0.8.3)* SC-4: `RefVar(Tuple)` element read/write via `OpVarRef` + element offset; `parse_ref_tuple_elem` helper in operators.rs.
+- **T1.6** — *(completed 0.8.3)* SC-8: `check_ref_mutations` emits WARNING (not error) for `RefVar(Tuple)` params never written; `find_written_vars` recognises `TuplePut`.
+- **T1.7** — *(completed 0.8.3)* SC-7: `Type::Integer` gains a `not_null: bool` third field; `parse_type` accepts `not null` suffix; null assigned to a `not null` tuple element is a compile error.
 
 **Effort:** Very High
 **Target:** 1.1+
@@ -452,24 +449,16 @@ the recompile overhead that caching was designed to address)
   generator calls, OpCoroutineYield for yield, OpCoroutineReturn for generator return.
   Remaining: generator body return-type check suppression and `next()` wiring.
 
-  **CO1.3d — Text serialisation (`serialise_text_slots`)** (`src/state/mod.rs`):
-  Implement `serialise_text_slots` per COROUTINE.md § serialise_text_slots contract.
-  Call it from `coroutine_create` (fixes issue #94) and `OpYield`.  Also implement the
-  resume-time patch in `coroutine_next` (write `Str` pointers from `text_owned` into
-  `stack_bytes` before copying to the live stack).
-  *Test:* a generator that takes a `text` parameter and yields `len(text)` — the text
-  must survive the yield/resume cycle without dangling pointers.
-  **Effort:** Medium–High (the `Str` layout and `database.free_dynamic_str` integration
-  require careful pointer handling).
+  **CO1.3d — Text serialisation** *(completed 0.8.3)* (`src/state/codegen.rs`, `src/state/mod.rs`):
+  Two root causes for SIGSEGV in generators with `text` parameters: (1) `coroutine_create`
+  now appends a 4-byte return-address slot to `stack_bytes` so `get_var` offsets match the
+  codegen-time layout on every resume; (2) `Value::Yield` codegen decrements `stack.position`
+  by the yielded value size after emitting `OpCoroutineYield`, so subsequent variable accesses
+  use correct offsets on second and later resumes.  Fixes #94.
 
-  **CO1.3e — Nested yield (yield inside helper function)** (`src/state/mod.rs`):
-  Verify and fix the call-stack save/restore in `OpYield` and `OpCoroutineNext` for the
-  case where `yield` fires inside a function called from the generator (stackful yield).
-  The `call_frames` save/restore is already sketched in CO1.3b but has not been tested
-  with actual nested calls.
-  *Test:* `fn helper() -> integer { yield 42; }` called from a generator; the yield
-  must correctly save and restore the helper's call frame.
-  **Effort:** Small (verification + fix, not greenfield).
+  **CO1.3e — Nested yield** *(completed 0.8.3)*:
+  Call-stack save/restore in `OpCoroutineYield` / `OpCoroutineNext` verified for nested
+  helper calls between yields.
 
 - **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
   advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
@@ -633,11 +622,11 @@ Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl
 Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
 **Effort:** High (parser, compiler, extensions loader, plugin API crate)
 **Depends on:** —
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
-### A10  Field iteration — `for f in s#fields`
+### A10  Field iteration — `for f in s#fields` *(completed 0.8.3)*
 **Sources:** Design evaluation 2026-03-18; syntax decision 2026-03-19
 **Description:** Allow iterating over the stored primitive fields of a struct value with
 `for f in s#fields`.  The loop variable `f` has type `Field` (defined in
@@ -1021,7 +1010,7 @@ Full design in [NATIVE.md](NATIVE.md).
 **Expected gain:** Reduces wasm/native string-building gap from 2× to <1.3×.
 **Effort:** Medium
 **Depends:** W1
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1377,7 +1366,7 @@ This change is a **prerequisite for W1** and should happen at the same time, not
 For 1.0 the single-crate layout is correct and should not be changed early.
 **Effort:** Small (Cargo workspace wiring; no logic changes)
 **Depends on:** repo creation (done); gates W1
-**Target:** 1.0.0
+**Target:** 0.8.3
 
 ---
 
@@ -1392,21 +1381,39 @@ once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 ---
 
 ### W1  WASM Foundation
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M1
+**Sources:** [WASM.md](WASM.md) — full design and 14-step implementation plan
 **Severity/Value:** High — nothing else in Tier W is possible without this
-**Description:** Compile the interpreter to WASM and expose a typed JS API.
-Requires four bounded Rust changes, all behind `#[cfg(feature="wasm")]`:
-1. `Cargo.toml` — `wasm` feature gating `wasm-bindgen`, `serde`, `serde-wasm-bindgen`; add `crate-type = ["cdylib","rlib"]`
-2. `src/diagnostics.rs` — add `DiagEntry { level, file, line, col, message }` and `structured: Vec<DiagEntry>`; populate from `Lexer::diagnostic()` which already has `position: Position`
-3. `src/fill.rs` — `op_print` writes to a `thread_local` `String` buffer instead of `print!()`
-4. `src/parser/mod.rs` — virtual FS `thread_local HashMap<String,String>` checked before the real filesystem so `use` statements resolve from browser-supplied files
-5. `src/wasm.rs` (new) — `compile_and_run(files: JsValue) -> JsValue` and `get_symbols(files: JsValue) -> JsValue`
+**Description:** Compile the loft interpreter itself as a WASM module
+(`wasm32-unknown-unknown` + `wasm-bindgen`) so it can run in browsers and Node.js.
+This is distinct from the existing `--native-wasm` flag (which compiles *loft programs* to WASM).
+The WASM module exposes `compile_and_run([{name, content}])` returning
+`{output, diagnostics, success}`. The JS host provides filesystem, random, time,
+env, and log operations through `globalThis.loftHost`.
 
-JS deliverable: `ide/src/wasm-bridge.js` with `initWasm()` + `compileAndRun()`.
-JS tests (4): hello-world, compile-error with position, multi-file `use`, runtime output capture.
-**Effort:** Medium (Rust changes bounded; most risk is in virtual-FS wiring)
+**Steps W1.1–W1.9 (Rust):** all behind `#[cfg(feature = "wasm")]`, verifiable with
+`cargo check --features wasm --no-default-features` + `cargo test` (native green):
+1. **W1.1** `Cargo.toml`: `wasm`/`threading`/`wasm-threads` features + optional deps (`wasm-bindgen`, `serde`, `web-sys`); `crate-type = ["cdylib","rlib"]`
+2. **W1.2** `src/fill.rs`: `print()` writes to thread-local buffer under `wasm`, real `print!()` otherwise
+3. **W1.3** `src/parallel.rs`: `run_parallel_*` gated on `threading`; sequential fallback when `not(threading)`; `tests/threading.rs` guarded by `#![cfg(feature = "threading")]`
+4. **W1.4** `src/logger.rs`: file I/O, rotation, `Instant`/`SystemTime` gated on `not(wasm)`; WASM calls `crate::wasm::host_log_write()`
+5. **W1.5** `src/ops.rs`: random functions already gated on `random`; WASM branch calls `host_random_int`/`host_random_seed` when `wasm` and `not(random)`
+6. **W1.6** `src/native.rs` + `src/database/format.rs`: `SystemTime`, `std::env`, `dirs` gated; WASM stubs call `time_now`, `time_ticks`, `env_variable`, `arguments`, path bridges
+7. **W1.7** `src/state/io.rs`: every `std::fs` call gated on `not(wasm)`; WASM branches call `fs_exists`, `fs_read_text`, `fs_write_text`, `fs_read_binary`, `fs_write_binary`, `fs_delete`, `fs_move`, `fs_mkdir`, `fs_mkdir_all`, `fs_list_dir`, `fs_seek`, `fs_read_bytes`, `fs_write_bytes`, `fs_get_cursor`
+8. **W1.8** `src/png_store.rs`: extract `decode_into_store<R: Read>()`; WASM reads bytes via `host_read_binary` + `Cursor<Vec<u8>>`
+9. **W1.9** `src/wasm.rs`: implement `#[wasm_bindgen] fn compile_and_run(files_js: JsValue) -> JsValue`; wire parse → scope → codegen → execute → return result
+
+**Steps W1.10–W1.13 (JavaScript):** require Node.js + wasm-pack:
+10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs`
+11. **W1.11** `tests/wasm/host.mjs`: `createHost(tree, options)` wiring VirtFS to `loftHost`; `bridge.test.mjs` + `file-io.test.mjs` + `random.test.mjs`
+12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay, persistence); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`
+13. **W1.13** `tests/wasm/suite.mjs`: runs `tests/scripts/*.loft` through the WASM module, compares output against native reference; this is the main confidence gate
+
+**Host bridge API** (JS → Rust): `fs_*`, `random_*`, `time_*`, `env_*`, `log_*` functions
+on `globalThis.loftHost`. Full spec in [WASM.md](WASM.md) § Host Bridge API.
+
+**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9 and W1.10–W1.13 are medium)
 **Depends on:** R1
-**Target:** 1.0.0
+**Target:** 0.8.3
 
 ---
 

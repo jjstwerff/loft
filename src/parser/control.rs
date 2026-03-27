@@ -47,6 +47,7 @@ pub(crate) fn definitely_returns(val: &Value) -> bool {
 
 impl Parser {
     // <block> ::= '}' | <expression> {';' <expression} '}'
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
         if let Value::Var(v) = val
             && let Type::Reference(r, _) = self.vars.tp(*v).clone()
@@ -64,6 +65,8 @@ impl Parser {
         let mut t = Type::Void;
         let mut l = Vec::new();
         let mut terminated: Option<&str> = None;
+        // T1.7: track the start-position of the last expression for not-null diagnostics.
+        let mut last_expr_peek = self.lexer.peek();
         loop {
             let line = self.lexer.pos().line;
             if line > self.line {
@@ -88,6 +91,7 @@ impl Parser {
                 terminated = None;
             }
             let mut n = Value::Null;
+            last_expr_peek = self.lexer.peek();
             t = self.expression(&mut n);
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
@@ -126,6 +130,48 @@ impl Parser {
             let mut code = l.pop().unwrap().clone();
             self.un_ref(&mut t, &mut code);
             l.push(code);
+        }
+        // T1.7: check for null assigned to `integer not null` tuple elements in the
+        // last expression of the block (the implicit return value).
+        // After emitting the error, update the type to remove Null elements so that
+        // type-conversion validation does not produce a redundant type-mismatch error.
+        if !self.first_pass
+            && !l.is_empty()
+            && let Type::Tuple(expected) = result
+            && let Type::Tuple(t_elems) = &t
+        {
+            let expected = expected.clone();
+            let t_elems = t_elems.clone();
+            let mut fixed = false;
+            let new_elems: Vec<Type> = t_elems
+                .iter()
+                .zip(expected.iter())
+                .map(|(te, ex)| {
+                    if matches!(te, Type::Null) && matches!(ex, Type::Integer(_, _, true)) {
+                        fixed = true;
+                        ex.clone()
+                    } else {
+                        te.clone()
+                    }
+                })
+                .collect();
+            if fixed && let Some(Value::Tuple(elems)) = l.last_mut() {
+                let expected = expected.clone();
+                for (elem_val, elem_tp) in elems.iter_mut().zip(expected.iter()) {
+                    if matches!(elem_val, Value::Null)
+                        && matches!(elem_tp, Type::Integer(_, _, true))
+                    {
+                        specific!(
+                            &mut self.lexer,
+                            &last_expr_peek,
+                            Level::Error,
+                            "cannot assign null to 'integer not null' element"
+                        );
+                        *elem_val = Value::Call(self.data.def_nr("OpConvIntFromNull"), vec![]);
+                    }
+                }
+                t = Type::Tuple(new_elems);
+            }
         }
         t = self.block_result(context, result, &t, &mut l);
         *val = v_block(l, t.clone(), "block");
@@ -276,7 +322,7 @@ impl Parser {
                 (*d_nr, true, true, true)
             }
             // scalar types — dispatch to scalar match handler.
-            Type::Integer(_, _)
+            Type::Integer(_, _, _)
             | Type::Long
             | Type::Float
             | Type::Single
@@ -999,7 +1045,7 @@ impl Parser {
         let lit_type = if let Some(n) = self.lexer.has_integer() {
             let v = n as i32;
             lit = Value::Int(if negate { -v } else { v });
-            Type::Integer(i32::MIN + 1, i32::MAX as u32)
+            Type::Integer(i32::MIN + 1, i32::MAX as u32, false)
         } else if let Some(n) = self.lexer.has_long() {
             let v = n as i64;
             lit = Value::Long(if negate { -v } else { v });
@@ -1256,7 +1302,7 @@ impl Parser {
                         cond.get_or_insert(Value::Null),
                         "<=",
                         &[Value::Int(fixed), len_call],
-                        &[Type::Integer(0, 0), Type::Integer(0, 0)],
+                        &[Type::Integer(0, 0, false), Type::Integer(0, 0, false)],
                     );
                 } else {
                     // length == fixed
@@ -1264,7 +1310,7 @@ impl Parser {
                         cond.get_or_insert(Value::Null),
                         "==",
                         &[len_call, Value::Int(fixed)],
-                        &[Type::Integer(0, 0), Type::Integer(0, 0)],
+                        &[Type::Integer(0, 0, false), Type::Integer(0, 0, false)],
                     );
                 }
                 // Bind head elements: head[i] = v[i]
@@ -1486,7 +1532,7 @@ impl Parser {
             }
         } else if let Type::Text(_) = in_type {
             Type::Character
-        } else if let Type::Reference(_, _) | Type::Integer(_, _) | Type::Long = in_type {
+        } else if let Type::Reference(_, _) | Type::Integer(_, _, _) | Type::Long = in_type {
             in_type.clone()
         } else {
             if !self.first_pass {
@@ -1582,6 +1628,9 @@ impl Parser {
         let mut v = Value::Null;
         let r_type = self.data.def(self.context).returned.clone();
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
+            // T1.7: save the position of the first token in the return expression,
+            // used to report `not null` violations at the tuple literal site.
+            let expr_start = self.lexer.peek();
             let t = self.expression(&mut v);
             if r_type == Type::Void {
                 diagnostic!(
@@ -1591,6 +1640,23 @@ impl Parser {
                 );
                 *val = Value::Return(Box::new(Value::Null));
                 return;
+            }
+            // T1.7: check for null assigned to `integer not null` tuple elements.
+            if !self.first_pass
+                && let (Value::Tuple(elems), Type::Tuple(expected)) = (&v, &r_type)
+            {
+                for (elem_val, elem_tp) in elems.iter().zip(expected.iter()) {
+                    if matches!(elem_val, Value::Null)
+                        && matches!(elem_tp, Type::Integer(_, _, true))
+                    {
+                        specific!(
+                            &mut self.lexer,
+                            &expr_start,
+                            Level::Error,
+                            "cannot assign null to 'integer not null' element"
+                        );
+                    }
+                }
             }
             if t == Type::Null {
                 v = self.null(&r_type);
@@ -1921,6 +1987,14 @@ impl Parser {
             let mut converted = list.to_vec();
             for (i, expected) in param_types.iter().enumerate() {
                 self.convert(&mut converted[i], &types[i], expected);
+            }
+            // A5.3: inject hidden __closure argument — the closure allocation
+            // expression is generated inline so it runs at the call site, avoiding
+            // the slot-position issue with pre-allocated work variables.
+            if let Some(closure_alloc) = self.last_closure_alloc.take() {
+                converted.push(*closure_alloc);
+            } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
+                converted.push(Value::Var(closure_w));
             }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);

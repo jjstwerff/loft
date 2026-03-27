@@ -75,11 +75,24 @@ impl Parser {
                 let et = self.expression(&mut p);
                 self.lexer.token(")");
                 let tp = self.data.def(self.data.type_def_nr(&et)).known_type;
-                t = Type::Integer(0, 65536);
+                t = Type::Integer(0, 65536, false);
                 *code = Value::Int(i32::from(tp));
             } else {
                 t = self.parse_call(code, source, &nm);
             }
+        } else if self.closure_param != u16::MAX
+            && !self.first_pass
+            && self.data.def(self.context).closure_record != u32::MAX
+            && self
+                .data
+                .attr(self.data.def(self.context).closure_record, name)
+                != usize::MAX
+        {
+            // A5.3/A5.4: redirect captured variable reads to closure record field.
+            let closure_d_nr = self.data.def(self.context).closure_record;
+            let fnr = self.data.attr(closure_d_nr, name);
+            *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
+            t = self.data.attr_type(closure_d_nr, fnr);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
             if self.lexer.has_token("#") {
@@ -326,7 +339,7 @@ impl Parser {
     /// Ensure byte/short integer types used in file I/O are registered in the database.
     pub(crate) fn ensure_io_type(&mut self, t: &Type) {
         match t {
-            Type::Integer(min, _) => match t.size(false) {
+            Type::Integer(min, _, _) => match t.size(false) {
                 1 => {
                     self.database.byte(*min, false);
                 }

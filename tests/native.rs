@@ -36,6 +36,10 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     "45-field-iter.loft",
     // P5: native codegen does not handle generic function instantiation.
     "48-generics.loft",
+    // T1: native codegen does not support tuple types (interpreter-only).
+    "50-tuples.loft",
+    // CO1: native codegen does not support coroutines/yield (interpreter-only).
+    "51-coroutines.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

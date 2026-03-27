@@ -480,8 +480,69 @@ fn init_fields() -> std::io::Result<()> {
 /// Parse, type-check, compile, and execute one `.loft` test file.
 ///
 /// The default library in `default/` is loaded first, then `entry` is parsed on
-/// top of it.  Any parse or type errors are printed and immediately fail the
-/// test.  On success the bytecode is generated and `main` is called.
+/// Extract `// #warn <text>` declarations from a `.loft` source file.
+///
+/// Each matching comment declares that the script is expected to produce a
+/// `Warning:` diagnostic whose message contains `<text>` as a substring.
+/// Lines of the form `// #warn Parameter 'x' does not need to be a reference`
+/// allow a script that intentionally triggers a warning to still pass.
+fn expected_warnings(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            t.strip_prefix("// #warn ").map(|s| s.trim().to_string())
+        })
+        .collect()
+}
+
+/// Validate diagnostics against `// #warn` declarations in the script source.
+///
+/// Returns `Ok(())` when every diagnostic is either:
+/// - a `Warning:` line whose message matches a declared `// #warn` pattern, or
+/// - absent (no unexpected diagnostics remain).
+///
+/// Returns `Err` when any diagnostic is unexpected or any declared warning was
+/// not emitted.  All mismatches are printed before returning.
+fn check_diagnostics(diagnostics: &[String], expected: &[String]) -> std::io::Result<()> {
+    let mut unmatched_expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+    let mut unexpected: Vec<&str> = Vec::new();
+
+    for diag in diagnostics {
+        if diag.starts_with("Warning: ") {
+            if let Some(pos) = unmatched_expected
+                .iter()
+                .position(|pat| diag.contains(*pat))
+            {
+                println!("expected warning matched: {diag}");
+                unmatched_expected.remove(pos);
+            } else {
+                println!("unexpected warning: {diag}");
+                unexpected.push(diag);
+            }
+        } else {
+            println!("unexpected diagnostic: {diag}");
+            unexpected.push(diag);
+        }
+    }
+    for pat in &unmatched_expected {
+        println!("expected warning not emitted: {pat}");
+    }
+    if unexpected.is_empty() && unmatched_expected.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::from(std::io::ErrorKind::InvalidData))
+    }
+}
+
+/// Compile and run a single `.loft` script test.
+///
+/// Scripts may declare expected compile-time warnings with `// #warn <text>`
+/// comments.  Each such comment consumes one matching `Warning:` diagnostic.
+/// Unexpected diagnostics (errors or unmatched warnings) fail the test.
+///
+/// Any parse or type errors are printed and immediately fail the test.
+/// On success the bytecode is generated and `main` is called.
 ///
 /// When `debug` is true (debug builds only) a human-readable bytecode dump is
 /// written to `tests/dumps/<filename>.txt` and the interpreter emits a full
@@ -489,6 +550,8 @@ fn init_fields() -> std::io::Result<()> {
 /// without the execution trace for any non-debug test invocation.
 fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()> {
     println!("run {entry:?}");
+    let source = std::fs::read_to_string(&entry)?;
+    let expected = expected_warnings(&source);
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;
@@ -497,11 +560,8 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     let types = p.database.types.len();
     let path = entry.to_string_lossy().to_string();
     p.parse(&path, false);
-    for l in p.diagnostics.lines() {
-        println!("{l}");
-    }
     if !p.diagnostics.is_empty() {
-        return Err(Error::from(std::io::ErrorKind::InvalidData));
+        check_diagnostics(p.diagnostics.lines(), &expected)?;
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);

@@ -325,6 +325,12 @@ impl Parser {
                             "Tuple element access requires a numeric index (e.g. .0, .1)"
                         );
                     }
+                } else if let Type::RefVar(ref inner) = t
+                    && let Type::Tuple(ref elems) = **inner
+                {
+                    // T1.5: element access through a reference-tuple parameter — pair.0, pair.1.
+                    let elems = elems.clone();
+                    self.parse_ref_tuple_elem(&mut t, code, &elems);
                 } else {
                     t = self.field(code, t);
                 }
@@ -359,6 +365,35 @@ impl Parser {
             }
         }
         t
+    }
+
+    /// T1.5: parse a `.N` element index on a `&(T1, T2, ...)` reference-tuple.
+    /// Updates `t` to the element type and rewrites `code` to `TupleGet(var, idx)`
+    /// when `code` is a plain variable reference.
+    fn parse_ref_tuple_elem(&mut self, t: &mut Type, code: &mut Value, elems: &[Type]) {
+        if let Some(idx) = self.lexer.has_integer() {
+            let idx = idx as usize;
+            if idx >= elems.len() {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Tuple index {idx} out of range — tuple has {} elements",
+                    elems.len()
+                );
+                *t = Type::Unknown(0);
+            } else {
+                *t = elems[idx].clone();
+                if let Value::Var(var_nr) = code {
+                    *code = Value::TupleGet(*var_nr, idx as u16);
+                }
+            }
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Tuple element access requires a numeric index (e.g. .0, .1)"
+            );
+        }
     }
 
     #[allow(clippy::too_many_lines)]

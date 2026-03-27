@@ -767,10 +767,20 @@ impl Parser {
         }
         let mut dep = Vec::new();
         self.parse_depended(returned, &mut dep);
-        let mut min = 0;
-        let mut max = 0;
-        if type_name == "integer" && self.parse_type_limit(&mut min, &mut max) {
-            return Some(Type::Integer(min, max));
+        let mut min = i32::MIN + 1;
+        let mut max = i32::MAX as u32;
+        if type_name == "integer" {
+            let has_limit = self.parse_type_limit(&mut min, &mut max);
+            // T1.7: check for `not null` annotation after the integer type
+            let not_null = if self.lexer.has_keyword("not") {
+                self.lexer.token("null");
+                true
+            } else {
+                false
+            };
+            if has_limit || not_null {
+                return Some(Type::Integer(min, max, not_null));
+            }
         }
         let dt = self.data.def_type(tp_nr);
         if tp_nr != u32::MAX

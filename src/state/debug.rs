@@ -323,7 +323,7 @@ impl State {
         } else if a_nr == 0
             && !a.mutable
             && a.name == "pos"
-            && a.typedef == Type::Integer(0, 65535)
+            && a.typedef == Type::Integer(0, 65535, false)
             && self.stack.contains_key(&p)
         {
             let pos = i32::from(*self.code::<u16>());
@@ -445,19 +445,19 @@ impl State {
     */
     pub(super) fn dump_attribute(&mut self, a: &Attribute) -> String {
         match a.typedef {
-            Type::Integer(min, max) if i64::from(max) - i64::from(min) <= 256 && min == 0 => {
+            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 256 && min == 0 => {
                 format!("{}", i32::from(*self.code::<u8>()))
             }
-            Type::Integer(min, max) if i64::from(max) - i64::from(min) <= 65536 && min == 0 => {
+            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 65536 && min == 0 => {
                 format!("{}", i32::from(*self.code::<u16>()))
             }
-            Type::Integer(min, max) if i64::from(max) - i64::from(min) <= 256 => {
+            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 256 => {
                 format!("{}", i32::from(*self.code::<i8>()))
             }
-            Type::Integer(min, max) if i64::from(max) - i64::from(min) <= 65536 => {
+            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 65536 => {
                 format!("{}", i32::from(*self.code::<i16>()))
             }
-            Type::Integer(_, _) => format!("{}", *self.code::<i32>()),
+            Type::Integer(_, _, _) => format!("{}", *self.code::<i32>()),
             Type::Boolean => format!("{}", *self.code::<u8>() == 1),
             Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
             Type::Long => format!("{}", *self.code::<i64>()),
@@ -656,7 +656,10 @@ impl State {
                     self.code_pos = cur;
                     self.stack_pos = stack;
                     return Ok(op);
-                } else if a_nr == 0 && a.name == "pos" && a.typedef == Type::Integer(0, 65535) {
+                } else if a_nr == 0
+                    && a.name == "pos"
+                    && a.typedef == Type::Integer(0, 65535, false)
+                {
                     let pos = *self.code::<u16>();
                     assert!(
                         u32::from(pos) <= self.stack_pos,
@@ -877,7 +880,7 @@ impl State {
     // TODO dump of data structures with only the top level records, limited array sizes
     pub(super) fn dump_stack(&mut self, typedef: &Type, code: u32, data: &Data) -> String {
         match typedef {
-            Type::Integer(_, _) => format!("{}", *self.get_stack::<i32>()),
+            Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i32>()),
             Type::Character => {
                 let c = *self.get_stack::<char>();
                 if c == char::from(0) {

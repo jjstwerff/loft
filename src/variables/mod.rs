@@ -981,18 +981,18 @@ impl Function {
 
 pub fn size(tp: &Type, context: &Context) -> u16 {
     match tp {
-        Type::Integer(min, max)
+        Type::Integer(min, max, _)
             if context == &Context::Constant && i64::from(*max) - i64::from(*min) <= 256 =>
         {
             1
         }
-        Type::Integer(min, max)
+        Type::Integer(min, max, _)
             if context == &Context::Constant && i64::from(*max) - i64::from(*min) <= 65536 =>
         {
             2
         }
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Integer(_, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
+        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
         Type::Long | Type::Float => 8,
         Type::Text(_) if context == &Context::Variable => size_of::<String>() as u16,
         Type::Text(_) => size_of::<&str>() as u16,

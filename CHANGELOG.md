@@ -141,9 +141,35 @@ All notable changes to the loft language and interpreter.
   advances the sub-generator and forwards each value via `yield`.  Test `#[ignore]`
   pending slot-assignment fix.
 
+- **Closure call-site allocation** (A5.3) — Capturing lambdas now allocate the
+  closure record on the heap, populate fields from captured variables, and inject
+  the record as a hidden argument at call sites.  Multi-capture variable redirect
+  fixed (pre-has_var check).  Blocked by slot-assignment issue at codegen time.
+
 - **Tuple element assignment** (T1.4) — `t.0 = expr` now works via `Value::TuplePut`
   IR variant.  Parser detects `TupleGet` on the LHS of `=` and routes through
   element-write codegen.
+
+- **Reference-tuple parameters** (T1.5) — A `RefVar(Tuple)` parameter can now have
+  its elements read and written using `.0`, `.1` … notation.  Codegen emits
+  `OpVarRef` plus element `OpGet*`/`OpSet*` at the correct byte offset.
+
+- **Unused-mutation guard for tuple refs** (T1.6) — Passing a tuple by reference to
+  a function that never writes its elements now produces a WARNING (not an error),
+  consistent with the existing scalar-ref mutation guard.
+
+- **`integer not null` annotation** (T1.7) — `Type::Integer` gains a third boolean
+  field (`not_null`).  The parser accepts the `not null` suffix on integer type names.
+  Assigning a nullable value to a `not null` element in a tuple literal is a
+  compile-time error.
+
+- **Text parameter survives coroutine yield** (CO1.3d) — Two root causes for SIGSEGV
+  in generators that hold a `text` parameter across `yield`:
+  (1) `coroutine_create` now appends the 4-byte return-address slot to `stack_bytes`
+  so that `get_var` offsets match the codegen-time layout on every resume;
+  (2) `Value::Yield` codegen now decrements `stack.position` by the yielded value's
+  size after emitting `OpCoroutineYield`, so subsequent variable accesses in the same
+  generator use correct offsets on the second and later resumes.
 
 ### Bug fixes
 

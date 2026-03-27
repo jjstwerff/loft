@@ -215,7 +215,7 @@ pub fn disassemble(
                     }
                     // Decode based on size.
                     match a_size {
-                        1 if matches!(a.typedef, Type::Integer(_, _)) => {
+                        1 if matches!(a.typedef, Type::Integer(_, _, _)) => {
                             let v = bytecode[cursor] as i8;
                             // Check if this is a jump offset.
                             if op_name.contains("Goto") {
