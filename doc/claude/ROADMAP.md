@@ -47,6 +47,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8c.2     | ↳ Fix failing monomorphised instantiations           | S  | ✓      | N8c.1        | NATIVE.md § N8c            |
 | S31       | Native harness: pass `--extern` for optional deps    | S  | ~      |              | CAVEATS.md C27             |
 | S32       | Fix slot conflict in `20-binary.loft` (`rv`/`_read_34`) | M | ~   |              | CAVEATS.md C28             |
+| S33       | Native: fix `14-image.loft` PNG width=0 in CI       | S  | ~      |              | CAVEATS.md C29             |
 
 ---
 

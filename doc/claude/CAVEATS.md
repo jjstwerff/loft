@@ -404,6 +404,29 @@ fn main() {
 
 ---
 
+## C29 — Native tests: `14-image.loft` PNG width returns 0 in CI (all platforms)
+
+The native binary compiled from `tests/docs/14-image.loft` panics in CI (Ubuntu,
+macOS, Windows) with `width=0` at the `assert(img.width == 256, ...)` check.  The
+test passes locally.  Root cause not yet traced.
+
+`n_file` calls `stores.get_file()` which sets the format byte to `1` (PNG); then
+`t_4File_png` calls `stores.get_png("tests/example/map.png", &result)` with the
+file path string.  If `get_png` silently fails to open the PNG (e.g. wrong working
+directory on CI, or a `get_png` return-value that is ignored in native code), it
+leaves width/height at 0.  The same code path works in the interpreter because the
+bytecode executor handles the return value differently.
+
+**Reproducer:** run `cargo test --test native native_dir` on any CI platform with
+`14-image.loft` not skipped.
+
+**Test:** `14-image.loft` is in `NATIVE_SKIP`.
+**Workaround:** test PNG functionality via the interpreter (`loft_suite` passes).
+**Planned fix:** S33 — add diagnostic logging to `get_png` native path; verify
+working directory and return-value handling; remove from skip list.
+
+---
+
 ## C27 — Native tests: `rand_core` unavailable in standalone rustc compilation
 
 `rand_core` and `rand_pcg` are optional feature dependencies of the loft crate

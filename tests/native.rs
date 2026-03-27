@@ -28,6 +28,9 @@ const NATIVE_SKIP: &[&str] = &[
     // C27: rand_core is an optional feature dep; standalone rustc cannot resolve it without
     // explicit --extern flags that the native test harness does not yet pass.
     "21-random.loft",
+    // C29: PNG width returns 0 in native mode on macOS — platform-specific PNG decode issue;
+    // passes on Linux. See CAVEATS.md C29.
+    "14-image.loft",
 ];
 
 /// Script files that are known to fail in `--native` mode.

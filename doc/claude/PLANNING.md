@@ -1318,6 +1318,23 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ---
 
+### S33  Native: fix `14-image.loft` PNG width=0 in CI
+**Sources:** CAVEATS.md C29
+**Severity:** Low — PNG functionality is covered by the interpreter tests; only the native CI path is uncovered.
+**Description:** The native binary for `tests/docs/14-image.loft` panics in CI (Ubuntu, macOS, Windows) with `width=0`.  Passes locally.  `stores.get_png()` is called with the relative path `"tests/example/map.png"` but silently leaves width=0, suggesting either a working-directory mismatch in CI or a codegen issue where the `get_png` return value is not handled correctly in native mode.
+
+**Fix path:**
+1. Print the working directory inside the compiled binary to verify it matches the repo root when run by the native test harness.
+2. Check whether `stores.get_png()` returns an error code that the interpreter checks but native codegen ignores (look for a mismatch between the bytecode `get_png` call and the native emission in `dispatch.rs`).
+3. Fix the root cause (cwd, ignored return, or path mismatch) and remove `"14-image.loft"` from `NATIVE_SKIP`.
+4. Confirm `cargo test --test native native_dir` passes in CI.
+
+**Tests:** `14-image.loft` passes in `native_dir` in CI on all platforms.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
 ### S32  Fix slot conflict in `20-binary.loft` (`rv` / `_read_34`)
 **Sources:** CAVEATS.md C28
 **Severity:** Medium — a binary file I/O test is excluded from both interpreter and native CI.
