@@ -36,8 +36,8 @@ fn OpGotoFalse(step: const i8, if_false: boolean);
 #rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpGotoFalseWord(step: const i16, if_false: boolean);
 #rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
-fn OpCall(size: const u16, to: const i32);
-#rust"s.fn_call(@size, @to);"
+fn OpCall(d_nr: const i32, args_size: const u16, to: const i32);
+#rust"s.fn_call(@d_nr as u32, @args_size, @to);"
 fn OpReturn(ret: const u16, value: const u8, discard: const u16);
 #rust"s.fn_return(@ret, @value, @discard);"
 fn OpFreeStack(value: const u8, discard: const u16);

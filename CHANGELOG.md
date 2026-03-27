@@ -28,10 +28,130 @@ All notable changes to the loft language and interpreter.
   at compile time. Each iteration provides `f.name` (field name) and `f.value` (a
   `FieldValue` enum wrapping the typed value). Works for uniform and mixed-type structs.
 
-- **Generic function syntax** — `fn name<T>(x: T) -> T { ... }` declares a generic
-  function template. T must appear in the first parameter (directly or as a container
-  element like `vector<T>`). Templates are stored but not compiled until call-site
-  instantiation (P5.2).
+- **Generic functions** — `fn name<T>(x: T) -> T { ... }` declares a generic function.
+  T must appear in the first parameter (directly or as `vector<T>`). The compiler creates
+  specialised copies per concrete type at each call site (P5.2). Disallowed operations on
+  T (arithmetic, field access, methods) produce clear compile-time errors (P5.3).
+  Documentation test and LOFT.md section added (P5.4).
+
+- **Shadow call-frame vector** (TR1.1) — The interpreter now tracks a shadow call stack
+  with function identity and argument layout on each call/return.  The OpCall bytecode
+  format encodes the definition number and argument size.  Foundation for `stack_trace()`.
+
+- **Stack trace types** (TR1.2) — `ArgValue`, `ArgInfo`, `VarInfo`, and `StackFrame` types
+  declared in `default/04_stacktrace.loft`.  These will be materialised by `stack_trace()`
+  in TR1.3.
+
+- **Closure capture analysis** (A5.1) — Lambdas that reference variables from an enclosing
+  scope now produce a clear error: "lambda captures variable 'name' — closure capture is
+  not yet supported, pass it as a parameter".  Previously this silently created a broken
+  local variable.
+
+- **Closure record layout** (A5.2) — For each capturing lambda, the parser now synthesizes
+  an anonymous struct type (`__closure_N`) whose fields match the captured variables'
+  names and types.  The record def_nr is stored on the lambda's Definition.
+
+- **`stack_trace()` function** (TR1.3) — Returns `vector<StackFrame>` with function name,
+  file, and call-site line for each active call frame.  Arguments/variables vectors are
+  left empty (full population is future work).  Implemented as a native function with
+  call-stack snapshot bridging State to Stores.
+
+- **Call-site line numbers** (TR1.4) — `CallFrame` now stores the source line directly,
+  resolved from `line_numbers` at call time.  Eliminates the per-frame HashMap lookup
+  during stack trace materialisation.
+
+- **Coroutine types** (CO1.1) — `CoroutineStatus` enum (Created, Suspended, Running,
+  Exhausted) declared in `default/05_coroutine.loft`.  `CoroutineFrame` struct and
+  coroutine storage infrastructure added to State.
+
+- **`init(expr)` field initialiser** (L7) — `init(expr)` field modifier evaluates once
+  at record creation (with `$` access), stores the result, and allows mutation afterward.
+  Complements `computed(expr)` (read-only, recomputed on every access).
+
+- **Tuple type system** (T1.1) — `Type::Tuple(Vec<Type>)` variant added to the type
+  enum.  Helper functions `element_size`, `element_offsets`, and `owned_elements`
+  provide reusable layout calculations for tuples and closure records.
+
+- **Tuple parser** (T1.2) — Tuple type notation `(T1, T2)` is recognized in all type
+  positions.  Tuple literals `(expr, expr)`, element access `t.0`, and LHS
+  destructuring `(a, b) = expr` are parsed.  `Value::Tuple` IR variant added.
+
+- **Tuple scope analysis** (T1.3) — Scope analysis recognizes `Type::Tuple` variables
+  and identifies owned elements for reverse-order cleanup on scope exit.
+
+- **Closure capture diagnostic** (A5.3) — The closure capture error message now
+  indicates that closure body reads (A5.4) are the remaining blocker.  The closure
+  record struct from A5.2 is still synthesized.
+
+- **Tuple bytecode codegen** (T1.4) — `Value::TupleGet(var, idx)` IR variant for
+  element reads.  Codegen emits `OpVar*` at the element's stack offset.  Tuple
+  literals, element access, type annotations, and parameters now work end-to-end.
+
+- **Closure body reads** (A5.4) — Captured variable reads inside lambdas now redirect
+  to field loads from a hidden `__closure` parameter backed by the A5.2 closure record
+  struct.  Read-only captures work; mutable captures are pending.
+
+- **Coroutine opcodes** (CO1.2) — `OpCoroutineCreate` and `OpCoroutineNext` opcodes
+  implemented.  Create copies arguments into a `CoroutineFrame` without entering the
+  body.  Next restores the frame's stack and resumes execution.
+
+- **`OpCoroutineReturn`** (CO1.3a) — Opcode to exhaust a running coroutine: clears
+  frame state, pushes null, returns to consumer.
+
+- **`OpCoroutineYield`** (CO1.3b) — Opcode to suspend a generator: serialises the
+  live stack to `stack_bytes`, saves call frames, slides the yielded value to the
+  frame base, and returns to the consumer.  Integer-only path; text serialisation
+  pending (CO1.3d).
+
+- **`yield` keyword** (CO1.3c) — Parser recognises `yield expr` in generator
+  functions (return type `iterator<T>`).  Codegen emits `OpCoroutineCreate` for
+  generator calls, `OpCoroutineYield` for yield statements, and `OpCoroutineReturn`
+  at generator body end.  `iterator<T>` single-parameter syntax now accepted.
+
+- **Generator type fixes** (CO1.3c-fix) — Generator body return-type check
+  suppressed.  `next(gen)` and `exhausted(gen)` wired as special dispatch calls.
+  Coroutine iterators no longer materialised into vectors.  `Type::Iterator` sized
+  as DbRef.  `coroutine_create_basic` and `coroutine_next_sequence` tests pass.
+
+- **Closure lifetime** (A5.5) — Closure record work variable is already freed by
+  existing `OpFreeRef` scope-exit logic.  No new code needed.
+
+- **`exhausted()` stdlib** (CO1.6) — `OpCoroutineExhausted` opcode and `pub fn
+  exhausted(gen) -> boolean` declared in `05_coroutine.loft`.
+
+- **`next()` stack tracking fix** (CO1.6a) — `OpCoroutineNext` and
+  `OpCoroutineExhausted` now bypass the operator codegen path.  Stack position
+  manually adjusted for DbRef consumption and value push.
+
+- **Null sentinel on exhaustion** (CO1.6c) — `coroutine_next` pushes `i32::MIN`
+  (integer null) when the generator is exhausted, not uninitialized bytes.
+
+- **For-loop over generators** (CO1.5a+b) — `for n in gen() { ... }` works.
+  The iterator protocol detects generator calls, stores the DbRef in a `__gen`
+  variable, and uses `OpCoroutineNext` as the advance step with null-check
+  termination.  All 6 coroutine tests pass.
+
+- **`e#remove` rejection** (CO1.5c) — `#remove` on a generator for-loop variable
+  produces a compile error (existing guard; coroutine loops never call `set_loop`).
+
+- **Nested yield verified** (CO1.3e) — Generator calling a helper function between
+  yields correctly saves/restores call frames across yield/resume.
+
+- **`yield from` parsing** (CO1.4) — `yield from sub_gen` desugars to a loop that
+  advances the sub-generator and forwards each value via `yield`.  Test `#[ignore]`
+  pending slot-assignment fix.
+
+- **Tuple element assignment** (T1.4) — `t.0 = expr` now works via `Value::TuplePut`
+  IR variant.  Parser detects `TupleGet` on the LHS of `=` and routes through
+  element-write codegen.
+
+### Bug fixes
+
+- **Fix #87** — `static_call` no longer snapshots the call stack on every native
+  function call; the snapshot now only runs when `n_stack_trace` is dispatched.
+
+- **Fix #88** — `stack_trace()` now includes the entry function (main/test) as the
+  outermost frame.
 
 - **Null-coalescing fix** — `f() ?? default` no longer calls `f()` twice; non-trivial
   LHS expressions are materialised into a temporary before the null check.

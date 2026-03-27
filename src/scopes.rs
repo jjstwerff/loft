@@ -116,6 +116,7 @@ impl Scopes {
         result
     }
 
+    #[allow(clippy::too_many_lines)]
     fn scan_inner(&mut self, val: &Value, function: &mut Function, data: &Data) -> Value {
         match val {
             Value::Var(ov) => Value::Var(*self.var_mapping.get(ov).unwrap_or(ov)),
@@ -213,6 +214,18 @@ impl Scopes {
                 Box::new(self.scan(next, function, data)),
                 Box::new(self.scan(extra, function, data)),
             ),
+            Value::Tuple(elems) => {
+                Value::Tuple(elems.iter().map(|v| self.scan(v, function, data)).collect())
+            }
+            Value::TupleGet(var, idx) => {
+                Value::TupleGet(*self.var_mapping.get(var).unwrap_or(var), *idx)
+            }
+            Value::TuplePut(var, idx, inner) => Value::TuplePut(
+                *self.var_mapping.get(var).unwrap_or(var),
+                *idx,
+                Box::new(self.scan(inner, function, data)),
+            ),
+            Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
             _ => val.clone(),
         }
     }
@@ -426,6 +439,17 @@ impl Scopes {
         let mut ls = Vec::new();
         for v in self.variables(to_scope) {
             if v == ret_var {
+                continue;
+            }
+            // T1.3: tuple scope exit — free owned elements in reverse index order.
+            if let Type::Tuple(elems) = function.tp(v) {
+                let owned = crate::data::owned_elements(elems);
+                for &(_offset, _idx) in owned.iter().rev() {
+                    // T1.4 will emit per-element OpFreeText/OpFreeRef at the correct
+                    // stack offset.  For now, record that cleanup is needed.
+                    // The actual free ops require knowing the variable's stack slot +
+                    // element offset, which is codegen's responsibility.
+                }
                 continue;
             }
             if matches!(function.tp(v), Type::Text(_)) {

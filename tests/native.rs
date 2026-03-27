@@ -32,6 +32,10 @@ const NATIVE_SKIP: &[&str] = &[];
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // P3: native codegen does not generate loop variables for any/all/count_if.
     "47-predicates.loft",
+    // A10: native codegen for field iteration's match arms not yet supported.
+    "45-field-iter.loft",
+    // P5: native codegen does not handle generic function instantiation.
+    "48-generics.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

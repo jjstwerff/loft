@@ -59,10 +59,29 @@ impl Parser {
         if matches!(*is_type, Type::Text(_)) {
             return self.iter_text(code, iter_var, pre_var);
         }
+        // CO1.5a: coroutine iterators (from generator function calls) need
+        // a next()-based advance. Detect: the call target returns Iterator.
+        if let Type::Iterator(inner, _) = is_type
+            && !self.first_pass
+            && let Value::Call(d_nr, _) = code
+            && matches!(self.data.def(*d_nr).returned, Type::Iterator(_, _))
+        {
+            let gen_var = self.create_unique("__gen", is_type);
+            self.vars.defined(gen_var);
+            let gen_expr = code.clone();
+            *code = v_set(gen_var, gen_expr);
+            let op = self.data.def_nr("OpCoroutineNext");
+            let yield_tp = (**inner).clone();
+            let value_size = crate::variables::size(&yield_tp, &crate::data::Context::Argument);
+            return Value::Call(
+                op,
+                vec![Value::Var(gen_var), Value::Int(i32::from(value_size))],
+            );
+        }
         if is_type == should {
-            // there was already an iterator.
+            // Non-coroutine pre-existing iterator (sorted/hash/index).
             let orig = code.clone();
-            *code = Value::Null; // there is no iterator to create, we got it already
+            *code = Value::Null;
             return orig;
         }
         if self.first_pass {
@@ -419,8 +438,8 @@ use #count instead"
         } else if self.lexer.has_keyword("first") {
             self.iter_op_count_or_first(code, name, t, true);
         } else if self.lexer.has_keyword("remove") {
-            // For sorted/index/spacial loops the packed i64 state is in {name}#iter_state;
-            // for other loops (vector) the state is the plain i32 {name}#index.
+            // CO1.5c: #remove on generator iterators is already rejected by the
+            // loop_value == Null check below — coroutine for-loops never call set_loop.
             if !self.first_pass && *self.vars.loop_value(index_var) == Value::Null {
                 diagnostic!(
                     self.lexer,
@@ -821,6 +840,10 @@ use #count instead"
                 self.parse_parallel_for_loop(code, &id, &in_type, expr, fill, loop_nr);
                 return;
             }
+            // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
+            let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
+                && !self.first_pass
+                && matches!(&expr, Value::Call(d, _) if matches!(self.data.def(*d).returned, Type::Iterator(_, _)));
             let (_iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             let var_tp = self.for_type(&in_type);
@@ -865,7 +888,8 @@ use #count instead"
             }
             for_steps.push(create_iter);
             let mut lp = vec![for_next];
-            if !matches!(in_type, Type::Iterator(_, _)) {
+            // CO1.5b: coroutine iterators also need the null-check termination.
+            if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
                 let mut test_for = Value::Var(for_var);
                 self.convert(&mut test_for, &var_tp, &Type::Boolean);
                 test_for = self.cl("OpNot", &[test_for]);

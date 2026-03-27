@@ -538,11 +538,7 @@ impl Parser {
         let mut returned_not_null = false;
         let result = if self.lexer.has_token("->") {
             // Will be the correct def_nr on the second pass
-            if let Some(type_name) = self.lexer.has_identifier() {
-                let Some(tp) = self.parse_type(self.data.def_nr(&fn_name), &type_name, true) else {
-                    // Message
-                    return false;
-                };
+            if let Some(tp) = self.parse_type_full(self.data.def_nr(&fn_name), true) {
                 if self.lexer.has_keyword("not") {
                     self.lexer.token("null");
                     returned_not_null = true;
@@ -664,35 +660,18 @@ impl Parser {
                     reference = true;
                 }
                 // Will be the correct def_nr on the second pass
-                if self.lexer.has_token("fn") {
-                    self.parse_fn_type(self.data.def_nr(fn_name))
-                } else {
-                    if self.lexer.has_keyword("const") {
-                        constant = true;
-                    }
-                    if let Some(type_name) = self.lexer.has_identifier() {
-                        if let Some(tp) =
-                            self.parse_type(self.data.def_nr(fn_name), &type_name, false)
-                        {
-                            if reference {
-                                Type::RefVar(Box::new(tp))
-                            } else {
-                                tp
-                            }
-                        } else {
-                            if !self.first_pass {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "'{type_name}' is not a type"
-                                );
-                            }
-                            Type::Unknown(0)
-                        }
+                if self.lexer.has_keyword("const") {
+                    constant = true;
+                }
+                if let Some(tp) = self.parse_type_full(self.data.def_nr(fn_name), false) {
+                    if reference {
+                        Type::RefVar(Box::new(tp))
                     } else {
-                        diagnostic!(self.lexer, Level::Error, "Expecting a type");
-                        return true;
+                        tp
                     }
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Expecting a type");
+                    return true;
                 }
             } else {
                 Type::Unknown(0)
@@ -734,9 +713,10 @@ impl Parser {
         let mut args = Vec::new();
         self.lexer.token("(");
         loop {
-            if let Some(id) = self.lexer.has_identifier()
-                && let Some(tp) = self.parse_type(d_nr, &id, false)
-            {
+            if self.lexer.peek_token(")") {
+                break;
+            }
+            if let Some(tp) = self.parse_type_full(d_nr, false) {
                 args.push(tp);
             }
             if !self.lexer.has_token(",") {
@@ -745,8 +725,7 @@ impl Parser {
         }
         self.lexer.token(")");
         if self.lexer.has_token("->")
-            && let Some(id) = self.lexer.has_identifier()
-            && let Some(tp2) = self.parse_type(d_nr, &id, false)
+            && let Some(tp2) = self.parse_type_full(d_nr, false)
         {
             r_type = tp2;
         }
@@ -814,6 +793,44 @@ impl Parser {
         }
     }
 
+    /// Parse a type expression that may be a tuple `(T1, T2, ...)` or an identifier-based type.
+    /// This is the entry point for type positions (return types, parameter types, annotations).
+    pub(crate) fn parse_type_full(&mut self, on_d: u32, returned: bool) -> Option<Type> {
+        if self.lexer.has_token("(") {
+            // Tuple type: (T1, T2, ...)
+            let mut types = Vec::new();
+            loop {
+                if self.lexer.peek_token(")") {
+                    break;
+                }
+                if let Some(tp) = self.parse_type_full(on_d, false) {
+                    types.push(tp);
+                } else {
+                    break;
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token(")");
+            if types.len() < 2 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Tuple types require at least 2 elements"
+                );
+                return types.into_iter().next();
+            }
+            Some(Type::Tuple(types))
+        } else if self.lexer.has_token("fn") {
+            Some(self.parse_fn_type(on_d))
+        } else if let Some(id) = self.lexer.has_identifier() {
+            self.parse_type(on_d, &id, returned)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn sub_type(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
         if let Some(sub_name) = self.lexer.has_identifier() {
             if let Some(tp) = self.parse_type(on_d, &sub_name, false) {
@@ -864,17 +881,24 @@ impl Parser {
                         Type::Reference(sub_nr, Vec::new())
                     }
                     "iterator" => {
-                        self.lexer.token(",");
+                        // CO1.3c: comma and second type are optional for generators.
+                        // iterator<T> = generator yield type; iterator<T, I> = collection iterator.
                         let mut it_tp = Type::Null;
-                        if let Some(iter) = self.lexer.has_identifier() {
-                            if let Some(it) = self.parse_type(on_d, &iter, false) {
-                                self.data.set_referenced(sub_nr, on_d, Value::Null);
-                                it_tp = it;
+                        if self.lexer.has_token(",") {
+                            if let Some(iter) = self.lexer.has_identifier() {
+                                if let Some(it) = self.parse_type(on_d, &iter, false) {
+                                    self.data.set_referenced(sub_nr, on_d, Value::Null);
+                                    it_tp = it;
+                                } else {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "Expect an iterator type"
+                                    );
+                                }
                             } else {
                                 diagnostic!(self.lexer, Level::Error, "Expect an iterator type");
                             }
-                        } else {
-                            diagnostic!(self.lexer, Level::Error, "Expect an iterator type");
                         }
                         self.lexer.token(">");
                         Type::Iterator(Box::new(tp), Box::new(it_tp))
@@ -983,6 +1007,8 @@ impl Parser {
         let context = self.context;
         self.context = d_nr;
         self.lexer.token("{");
+        // #91: collect init field dependency info for circular detection.
+        let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
             let Some(a_name) = self.lexer.has_identifier() else {
@@ -999,15 +1025,46 @@ impl Parser {
                 );
             }
             self.lexer.token(":");
+            self.init_field_deps.clear();
             self.parse_field(d_nr, &a_name);
+            if !self.init_field_deps.is_empty() {
+                init_deps.push((a_name.clone(), self.init_field_deps.clone()));
+            }
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
             }
         }
         self.lexer.token("}");
         self.lexer.has_token(";");
+        // #91: check for circular init dependencies (second pass, all fields known).
+        if !self.first_pass {
+            self.check_circular_init(&init_deps);
+        }
         self.context = context;
         true
+    }
+
+    /// #91: DFS cycle detection on init field dependencies.
+    fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>)]) {
+        let names: HashSet<String> = init_deps.iter().map(|(n, _)| n.clone()).collect();
+        for (start, deps) in init_deps {
+            let mut visited: Vec<String> = vec![start.clone()];
+            let mut stack = deps.clone();
+            while let Some(dep) = stack.pop() {
+                if dep == *start {
+                    visited.push(start.clone());
+                    let path = visited.join(" -> ");
+                    diagnostic!(self.lexer, Level::Error, "circular init dependency: {path}");
+                    break;
+                }
+                if names.contains(&dep) && !visited.contains(&dep) {
+                    visited.push(dep.clone());
+                    if let Some((_, subdeps)) = init_deps.iter().find(|(n, _)| *n == dep) {
+                        stack.extend(subdeps.clone());
+                    }
+                }
+            }
+        }
     }
 
     // <field> ::= { <field_limit> | 'not' 'null' | <field_default> | 'check' '(' <expr> ')' | <type-id> [ '[' ['-'] <field> { ',' ['-'] <field> } ']' ] } }
@@ -1019,14 +1076,19 @@ impl Parser {
         let mut check_message = Value::Null;
         let mut nullable = true;
         let mut is_computed = false;
+        let mut is_init = false;
         loop {
             if self.lexer.has_keyword("not") {
                 // This field cannot be null, this allows for 256 values in a byte
                 self.lexer.token("null");
                 nullable = false;
             }
-            is_computed |=
-                self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
+            {
+                let (comp, init) =
+                    self.parse_field_default(&mut value, &mut a_type, d_nr, a_name, &mut defined);
+                is_computed |= comp;
+                is_init |= init;
+            }
             if self.lexer.has_token("assert") {
                 // assert(condition) or assert(condition, message) on struct fields.
                 self.lexer.token("(");
@@ -1077,6 +1139,9 @@ impl Parser {
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
             }
+            if is_init {
+                self.data.definitions[d_nr as usize].attributes[a].init = true;
+            }
             if check != Value::Null {
                 self.data.definitions[d_nr as usize].attributes[a].check = check;
                 self.data.definitions[d_nr as usize].attributes[a].check_message = check_message;
@@ -1085,6 +1150,9 @@ impl Parser {
             let a = self.data.attr(d_nr, a_name);
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
+            }
+            if is_init {
+                self.data.definitions[d_nr as usize].attributes[a].init = true;
             }
             if value != Value::Null {
                 self.data.set_attr_value(d_nr, a, value);
@@ -1096,7 +1164,9 @@ impl Parser {
         }
     }
 
-    // <field_default> ::= 'virtual' <value-expr> | 'default' '(' <value-expr> ')'
+    // <field_default> ::= 'virtual' <value-expr> | 'init' '(' <value-expr> ')'
+    //                   | 'default' '(' <value-expr> ')'
+    // Returns (is_computed, is_init).
     pub(crate) fn parse_field_default(
         &mut self,
         value: &mut Value,
@@ -1104,14 +1174,12 @@ impl Parser {
         _d_nr: u32,
         _a_name: &String,
         defined: &mut bool,
-    ) -> bool {
+    ) -> (bool, bool) {
         let mut is_computed = false;
+        let mut is_init = false;
         if self.lexer.has_keyword("computed") || self.lexer.has_keyword("virtual") {
             is_computed = true;
             // Computed field: calculate on every access, no store space.
-            // The expression is stored directly in the attribute value and inlined
-            // at every access site.  Var(0) references the record (replaced by
-            // replace_record_ref at the access site).
             self.lexer.token("(");
             let tp = self.expression(value);
             if a_type.is_unknown() {
@@ -1122,17 +1190,33 @@ impl Parser {
             }
             self.lexer.token(")");
         }
+        if self.lexer.has_keyword("init") {
+            is_init = true;
+            // L7: init(expr) — stored at creation, writable after. $ allowed.
+            // #91: enable dep tracking for circular-init detection.
+            self.init_field_tracking = true;
+            self.init_field_deps.clear();
+            self.lexer.token("(");
+            let tp = self.expression(value);
+            if a_type.is_unknown() {
+                *a_type = tp;
+                *defined = true;
+            } else {
+                self.convert(value, &tp, a_type);
+            }
+            self.lexer.token(")");
+            self.init_field_tracking = false;
+        }
         if self.lexer.has_keyword("default") {
             diagnostic!(
                 self.lexer,
                 Level::Error,
                 "default(expr) is removed; use 'computed(expr)' for calculated fields or '= expr' for stored defaults"
             );
-            // Consume the expression to recover parsing.
             self.lexer.token("(");
             self.expression(value);
             self.lexer.token(")");
         }
-        is_computed
+        (is_computed, is_init)
     }
 }

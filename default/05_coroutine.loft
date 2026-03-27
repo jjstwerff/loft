@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Coroutine runtime types (CO1.1).
+// Loaded after 04_stacktrace.loft.
+
+/// Lifecycle state of a coroutine frame.
+/// Transitions: Created -> Running -> Suspended -> Running -> ... -> Exhausted.
+pub enum CoroutineStatus {
+  Created,
+  Suspended,
+  Running,
+  Exhausted
+}
+
+/// CO1.6: Returns true if the coroutine has finished producing values.
+pub fn exhausted(gen: reference) -> boolean {
+  OpCoroutineExhausted(gen)
+}

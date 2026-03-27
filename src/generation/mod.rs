@@ -276,7 +276,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Unknown(_) => "??",
         Type::Iterator(_, _) => "Iterator",
         Type::Keys => "&[Key]",
-        Type::Void => "()",
+        Type::Tuple(_) | Type::Void => "()",
         Type::Rewritten(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
     }

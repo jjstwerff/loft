@@ -91,6 +91,14 @@ pub enum Value {
     Iter(u16, Box<Value>, Box<Value>, Box<Value>),
     /// Key structure
     Keys(Vec<Key>),
+    /// T1.2: Tuple literal — elements are evaluated left-to-right onto contiguous stack slots.
+    Tuple(Vec<Value>),
+    // T1.4: Read element idx of tuple variable var_nr.
+    TupleGet(u16, u16),
+    // T1.4: Write value to element idx of tuple variable var_nr.
+    TuplePut(u16, u16, Box<Value>),
+    // CO1.3c: Yield a value from a generator function.
+    Yield(Box<Value>),
 }
 
 #[allow(dead_code)]
@@ -176,6 +184,8 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     /// A rewritten type into append statements (mostly Text or structures)
     Rewritten(Box<Type>),
+    /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
+    Tuple(Vec<Type>),
 }
 
 impl Type {
@@ -441,6 +451,69 @@ impl Type {
     }
 }
 
+// ── T1.1 — Tuple element layout helpers ─────────────────────────────────────
+
+/// Stack width in bytes of a single element type.
+/// Uses the same sizing as `variables::size(tp, &Context::Argument)`.
+#[must_use]
+pub fn element_size(t: &Type) -> usize {
+    match t {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Integer(_, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
+        Type::Long | Type::Float => 8,
+        Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
+        Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _)
+        | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
+        Type::Tuple(elems) => {
+            element_offsets(elems).last().map_or(0, |&off| off)
+                + elems.last().map_or(0, element_size)
+        }
+        _ => 0,
+    }
+}
+
+/// Byte offset of each element in a tuple-like layout.
+/// Element *i* starts at `offsets[i]`; total size is `offsets[last] + element_size(last)`.
+#[must_use]
+pub fn element_offsets(types: &[Type]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(types.len());
+    let mut pos: usize = 0;
+    for t in types {
+        offsets.push(pos);
+        pos += element_size(t);
+    }
+    offsets
+}
+
+/// `(offset, index)` pairs for elements that need cleanup on scope exit
+/// (text, reference, vector, collection, struct-enum).
+#[must_use]
+pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
+    let offsets = element_offsets(types);
+    let mut result = Vec::new();
+    for (i, t) in types.iter().enumerate() {
+        match t {
+            Type::Text(_)
+            | Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                result.push((offsets[i], i));
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -474,6 +547,8 @@ pub struct Attribute {
     pub mutable: bool,
     /// Only return the default on this field.
     pub constant: bool,
+    /// L7: init(expr) field — stored at creation, writable after. `$` allowed.
+    pub init: bool,
     /// This attribute is allowed to be null in the substructure.
     pub nullable: bool,
     /// This attribute is holding the primary reference of its records.
@@ -560,6 +635,9 @@ pub struct Definition {
     pub variables: Function,
     /// Whether this definition was declared with `pub`.
     pub pub_visible: bool,
+    /// A5.2: definition number of the closure record struct for capturing lambdas.
+    /// `u32::MAX` if this function does not capture.
+    pub closure_record: u32,
 }
 
 impl Definition {
@@ -790,6 +868,7 @@ impl Data {
             typedef,
             mutable: true,
             constant: false,
+            init: false,
             nullable: true,
             primary: false,
             value: Value::Null,
@@ -835,6 +914,7 @@ impl Data {
             code_length: 0,
             variables: Function::new(name, &position.file),
             pub_visible: false,
+            closure_record: u32::MAX,
         };
         self.definitions.push(new_def);
         rec
@@ -1429,6 +1509,10 @@ impl Data {
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
             Type::Rewritten(inner) => self.type_name_str(inner),
             Type::Spacial(d_nr, _, _) => format!("spacial<{}>", self.def(*d_nr).name),
+            Type::Tuple(elems) => {
+                let es: Vec<String> = elems.iter().map(|e| self.type_name_str(e)).collect();
+                format!("({})", es.join(", "))
+            }
         }
     }
 
@@ -1623,6 +1707,27 @@ impl Data {
                 write!(write, "&{keys:?}")
             }
             Value::Line(line) => write!(write, "[{line}] "),
+            Value::Tuple(elems) => {
+                write!(write, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(write, ", ")?;
+                    }
+                    self.show_code(write, vars, e, indent, false)?;
+                }
+                write!(write, ")")
+            }
+            Value::TupleGet(var, idx) => {
+                write!(write, "{}.{idx}", vars.name(*var))
+            }
+            Value::TuplePut(var, idx, val) => {
+                write!(write, "{}.{idx} = ", vars.name(*var))?;
+                self.show_code(write, vars, val, indent, false)
+            }
+            Value::Yield(inner) => {
+                write!(write, "yield ")?;
+                self.show_code(write, vars, inner, indent, false)
+            }
         }
     }
 

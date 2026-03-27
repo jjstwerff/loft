@@ -34,12 +34,16 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
                 || inline_ref_set_in(then_val, r, depth + 1)
                 || inline_ref_set_in(else_val, r, depth + 1)
         }
-        Value::Return(inner) | Value::Drop(inner) => inline_ref_set_in(inner, r, depth + 1),
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+            inline_ref_set_in(inner, r, depth + 1)
+        }
         Value::Iter(_, a, b, c) => {
             inline_ref_set_in(a, r, depth + 1)
                 || inline_ref_set_in(b, r, depth + 1)
                 || inline_ref_set_in(c, r, depth + 1)
         }
+        Value::Tuple(elems) => elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
+        Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
         // Leaf variants — cannot contain a Set node.
         Value::Null
         | Value::Int(_)
@@ -53,7 +57,8 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Line(_)
         | Value::Break(_)
         | Value::Continue(_)
-        | Value::Keys(_) => false,
+        | Value::Keys(_)
+        | Value::TupleGet(_, _) => false,
     }
 }
 
@@ -155,7 +160,8 @@ impl Parser {
         result
     }
 
-    // <expression> ::= <for> | 'continue' | 'break' | 'return' <return> | '{' <block> | <operators>
+    // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn expression(&mut self, val: &mut Value) -> Type {
         if self.lexer.has_token("for") {
             self.parse_for(val);
@@ -175,6 +181,65 @@ impl Parser {
         } else if self.lexer.has_token("return") {
             self.parse_return(val);
             Type::Void
+        } else if self.lexer.has_token("yield") {
+            // CO1.3c: yield expr — only valid inside generator functions.
+            let r_type = self.data.def(self.context).returned.clone();
+            if !matches!(r_type, Type::Iterator(_, _)) && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "yield is only allowed inside generator functions (return type must be iterator<T>)"
+                );
+            }
+            if self.lexer.has_keyword("from") {
+                // CO1.4: yield from sub_gen — desugar to:
+                //   __sub = sub; loop { __item = next(__sub); if !__item break; yield __item; }
+                let mut sub = Value::Null;
+                let sub_type = self.expression(&mut sub);
+                if let Type::Iterator(inner, _) = &sub_type {
+                    let elem_tp = (**inner).clone();
+                    let sub_var = self.create_unique("__yf_sub", &sub_type);
+                    self.vars.defined(sub_var);
+                    let item_var = self.create_unique("__yf_item", &elem_tp);
+                    self.vars.defined(item_var);
+                    let op = self.data.def_nr("OpCoroutineNext");
+                    let value_size =
+                        crate::variables::size(&elem_tp, &crate::data::Context::Argument);
+                    let next_call = Value::Call(
+                        op,
+                        vec![Value::Var(sub_var), Value::Int(i32::from(value_size))],
+                    );
+                    let mut test = Value::Var(item_var);
+                    self.convert(&mut test, &elem_tp, &Type::Boolean);
+                    test = self.cl("OpNot", &[test]);
+                    let lp = vec![
+                        crate::data::v_set(item_var, next_call),
+                        crate::data::v_if(
+                            test,
+                            crate::data::v_block(vec![Value::Break(0)], Type::Void, "break"),
+                            Value::Null,
+                        ),
+                        Value::Yield(Box::new(Value::Var(item_var))),
+                    ];
+                    let steps = vec![
+                        crate::data::v_set(sub_var, sub),
+                        crate::data::v_loop(lp, "yield from"),
+                    ];
+                    *val = crate::data::v_block(steps, Type::Void, "yield from block");
+                } else if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "yield from requires an iterator expression"
+                    );
+                }
+                Type::Void
+            } else {
+                let mut v = Value::Null;
+                self.expression(&mut v);
+                *val = Value::Yield(Box::new(v));
+                Type::Void
+            }
         } else if self.lexer.peek_token("{") {
             self.parse_block("block", val, &Type::Void)
         } else {
@@ -348,8 +413,11 @@ use a separate collection or add after the loop"
         if var_nr == u16::MAX {
             self.validate_write(to, &parent_tp);
         }
-        // materialise an iterator (e.g. v[a..b] slice) into a vector variable.
+        // materialise a collection iterator (e.g. v[a..b] slice) into a vector variable.
+        // CO1.3c: skip materialisation for coroutine iterators (second type is Null).
+        let is_coroutine_iter = matches!(&s_type, Type::Iterator(_, it) if **it == Type::Null);
         if matches!(&s_type, Type::Iterator(_, _))
+            && !is_coroutine_iter
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
             && matches!(op, "=" | "+=")
@@ -482,6 +550,7 @@ use a separate collection or add after the loop"
     }
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
@@ -500,8 +569,7 @@ use a separate collection or add after the loop"
             let lnk = self.lexer.link();
             self.lexer.cont(); // consume ":"
             let mut got_annotation = false;
-            if let Some(type_name) = self.lexer.has_identifier()
-                && let Some(tp) = self.parse_type(u32::MAX, &type_name, false)
+            if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
             {
                 self.change_var_type(*v_nr, &tp);
@@ -510,6 +578,76 @@ use a separate collection or add after the loop"
             }
             if !got_annotation {
                 self.lexer.revert(lnk);
+            }
+        }
+        // T1.2: LHS tuple destructuring — (a, b) = expr
+        if let Value::Tuple(vars) = code
+            && self.lexer.has_token("=")
+        {
+            let var_nrs: Vec<u16> = vars
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Var(nr) = v {
+                        Some(*nr)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if var_nrs.len() != vars.len() {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Tuple destructuring requires plain variable names"
+                );
+            }
+            let mut rhs = Value::Null;
+            let rhs_type = self.expression(&mut rhs);
+            if let Type::Tuple(ref rhs_elems) = rhs_type {
+                if rhs_elems.len() != var_nrs.len() {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple arity mismatch: left has {} names, right has {} elements",
+                        var_nrs.len(),
+                        rhs_elems.len()
+                    );
+                }
+                // T1.4: create a temp variable for the RHS tuple, then read elements.
+                let tmp_tp = rhs_type.clone();
+                let tmp = self.vars.work_refs(&tmp_tp, &mut self.lexer);
+                if !self.first_pass {
+                    self.change_var_type(tmp, &tmp_tp);
+                }
+                let mut steps = vec![Value::Set(tmp, Box::new(rhs))];
+                for (i, &v_nr) in var_nrs.iter().enumerate() {
+                    if !self.first_pass && self.vars.exists(v_nr) {
+                        self.vars.defined(v_nr);
+                        if i < rhs_elems.len() {
+                            self.change_var_type(v_nr, &rhs_elems[i]);
+                        }
+                    }
+                    steps.push(Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16))));
+                }
+                *code = Value::Insert(steps);
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot destructure a non-tuple value"
+                );
+            }
+            return Type::Void;
+        }
+        // T1.4-fix-a: tuple element assignment t.0 = expr.
+        if let Value::TupleGet(var_nr, idx) = code {
+            let var_nr = *var_nr;
+            let idx = *idx;
+            if self.lexer.has_token("=") {
+                let mut rhs = Value::Null;
+                self.expression(&mut rhs);
+                *code = Value::TuplePut(var_nr, idx, Box::new(rhs));
+                return Type::Void;
             }
         }
         let to = code.clone();

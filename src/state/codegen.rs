@@ -87,7 +87,8 @@ impl State {
         if let Some(v) = self.calls.get(&def_nr) {
             let old = self.code_pos;
             for pos in v.clone() {
-                self.code_pos = pos + 3;
+                // skip opcode(1) + d_nr(4) + args_size(2) to reach the i32 target
+                self.code_pos = pos + 7;
                 self.code_add(start as i32);
             }
             self.code_pos = old;
@@ -122,6 +123,7 @@ impl State {
         result
     }
 
+    #[allow(clippy::too_many_lines)]
     fn generate_inner(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
         match val {
             Value::Int(value) => {
@@ -199,6 +201,95 @@ impl State {
                     stack.add_op("OpStaticCall", self);
                     self.code_add(lib_nr);
                 }
+                Type::Void
+            }
+            Value::Tuple(elems) => {
+                // T1.4: generate each element onto contiguous stack slots.
+                let mut types = Vec::new();
+                for e in elems {
+                    let t = self.generate(e, stack, false);
+                    types.push(t);
+                }
+                Type::Tuple(types)
+            }
+            Value::TupleGet(var_nr, elem_idx) => {
+                // T1.4: read element elem_idx from tuple variable var_nr.
+                let tuple_tp = stack.function.tp(*var_nr).clone();
+                let Type::Tuple(ref elems) = tuple_tp else {
+                    panic!("TupleGet on non-tuple variable");
+                };
+                let idx = *elem_idx as usize;
+                let elem_tp = elems[idx].clone();
+                let offsets = crate::data::element_offsets(elems);
+                let elem_offset = offsets[idx] as u16;
+                // The element is at tuple_var_stack_pos + elem_offset.
+                // Compute distance from current stack top to that position.
+                let tuple_var_pos = stack.function.stack(*var_nr);
+                let elem_abs_pos = tuple_var_pos + elem_offset;
+                let var_pos = stack.position - elem_abs_pos;
+                let code_pos = self.code_pos;
+                match &elem_tp {
+                    Type::Integer(_, _) | Type::Function(_, _) => {
+                        stack.add_op("OpVarInt", self);
+                    }
+                    Type::Boolean => stack.add_op("OpVarBool", self),
+                    Type::Long => stack.add_op("OpVarLong", self),
+                    Type::Float => stack.add_op("OpVarFloat", self),
+                    Type::Single => stack.add_op("OpVarSingle", self),
+                    Type::Character => stack.add_op("OpVarCharacter", self),
+                    Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
+                    Type::Text(_) => stack.add_op("OpVarText", self),
+                    Type::Reference(c, _) | Type::Enum(c, true, _) => {
+                        self.types
+                            .insert(self.code_pos, stack.data.def(*c).known_type);
+                        stack.add_op("OpVarRef", self);
+                    }
+                    _ => panic!("TupleGet: unsupported element type {elem_tp:?}"),
+                }
+                self.code_add(var_pos);
+                self.insert_types(elem_tp.clone(), code_pos, stack)
+            }
+            Value::Yield(inner) => {
+                // CO1.3c: emit the yielded expression, then OpCoroutineYield.
+                let t = self.generate(inner, stack, false);
+                let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
+                stack.add_op("OpCoroutineYield", self);
+                self.code_add(value_size);
+                Type::Void
+            }
+            Value::TuplePut(var_nr, elem_idx, value) => {
+                // T1.4: write to element elem_idx of tuple variable var_nr.
+                let tuple_tp = stack.function.tp(*var_nr).clone();
+                let Type::Tuple(ref elems) = tuple_tp else {
+                    panic!("TuplePut on non-tuple variable");
+                };
+                let idx = *elem_idx as usize;
+                let elem_tp = elems[idx].clone();
+                let offsets = crate::data::element_offsets(elems);
+                let elem_offset = offsets[idx] as u16;
+                // Generate the value to write.
+                self.generate(value, stack, false);
+                // Compute distance from stack top to the element's position.
+                let tuple_var_base = stack.function.stack(*var_nr);
+                let elem_abs_pos = tuple_var_base + elem_offset;
+                let var_pos = stack.position - elem_abs_pos;
+                match &elem_tp {
+                    Type::Integer(_, _) | Type::Function(_, _) => {
+                        stack.add_op("OpPutInt", self);
+                    }
+                    Type::Boolean => stack.add_op("OpPutBool", self),
+                    Type::Long => stack.add_op("OpPutLong", self),
+                    Type::Float => stack.add_op("OpPutFloat", self),
+                    Type::Single => stack.add_op("OpPutSingle", self),
+                    Type::Character => stack.add_op("OpPutCharacter", self),
+                    Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                    Type::Text(_) => stack.add_op("OpAppendText", self),
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                        stack.add_op("OpPutRef", self);
+                    }
+                    _ => panic!("TuplePut: unsupported element type {elem_tp:?}"),
+                }
+                self.code_add(var_pos);
                 Type::Void
             }
         }
@@ -293,15 +384,27 @@ impl State {
     pub(super) fn gen_return(&mut self, v: &Value, stack: &mut Stack) -> Type {
         self.generate(v, stack, false);
         let return_type = &stack.data.def(stack.def_nr).returned;
-        if return_type != &Type::Void {
-            let ret_nr = stack.data.type_def_nr(return_type);
-            let known = stack.data.def(ret_nr).known_type;
-            self.types.insert(self.code_pos, known);
+        // CO1.3c: generator functions use OpCoroutineReturn instead of OpReturn.
+        if matches!(return_type, Type::Iterator(_, _)) {
+            // For generators, `return` means exhaust — push null of the yield type.
+            let yield_size = if let Type::Iterator(inner, _) = return_type {
+                size(inner, &Context::Argument)
+            } else {
+                0
+            };
+            stack.add_op("OpCoroutineReturn", self);
+            self.code_add(yield_size);
+        } else {
+            if return_type != &Type::Void {
+                let ret_nr = stack.data.type_def_nr(return_type);
+                let known = stack.data.def(ret_nr).known_type;
+                self.types.insert(self.code_pos, known);
+            }
+            stack.add_op("OpReturn", self);
+            self.code_add(self.arguments);
+            self.code_add(size(return_type, &Context::Argument) as u8);
+            self.code_add(stack.position);
         }
-        stack.add_op("OpReturn", self);
-        self.code_add(self.arguments);
-        self.code_add(size(return_type, &Context::Argument) as u8);
-        self.code_add(stack.position);
         Type::Void
     }
 
@@ -709,6 +812,40 @@ impl State {
             last = n as u16;
         }
         let name = stack.data.def(op).name.clone();
+        // CO1.6a: OpCoroutineNext/OpCoroutineExhausted take a gen DbRef from the
+        // stack at runtime, but their declarations have only const params.
+        // Bypass the operator path and manually handle the stack adjustment.
+        if name == "OpCoroutineNext" && parameters.len() >= 2 {
+            // CO1.6a: parameters[0]=gen expr, parameters[1]=Int(value_size).
+            self.generate(&parameters[0], stack, false); // push DbRef (+12)
+            let value_size = if let Value::Int(n) = &parameters[1] {
+                *n as u16
+            } else {
+                4 // fallback: integer
+            };
+            self.remember_stack(stack.position);
+            self.code_add(stack.data.def(op).op_code as u8);
+            self.code_add(value_size);
+            // Stack: -12 (DbRef consumed) + value_size (yielded value pushed).
+            stack.position -= super::size_ref() as u16;
+            stack.position += value_size;
+            // Return type is the yield type — inferred from value_size for now.
+            return match value_size {
+                1 => Type::Boolean,
+                8 => Type::Long,
+                _ => I32.clone(),
+            };
+        }
+        if name == "OpCoroutineExhausted" && !parameters.is_empty() {
+            // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
+            self.generate(&parameters[0], stack, false);
+            self.remember_stack(stack.position);
+            self.code_add(stack.data.def(op).op_code as u8);
+            // Stack: -12 (DbRef consumed) + 1 (bool pushed).
+            stack.position -= super::size_ref() as u16;
+            stack.position += 1;
+            return Type::Boolean;
+        }
         if stack.data.def(op).is_operator() {
             let before_stack = stack.position;
             self.remember_stack(stack.position);
@@ -756,8 +893,22 @@ impl State {
             stack.data.def(op).returned.clone()
         } else {
             self.calls.entry(op).or_default().push(self.code_pos);
-            stack.add_op("OpCall", self);
-            self.code_add(0u16);
+            // CO1.3c: emit OpCoroutineCreate for generator function calls.
+            let is_generator = matches!(stack.data.def(op).returned, Type::Iterator(_, _));
+            if is_generator {
+                stack.add_op("OpCoroutineCreate", self);
+            } else {
+                stack.add_op("OpCall", self);
+            }
+            self.code_add(op); // d_nr: u32
+            let args_size: u16 = stack
+                .data
+                .def(op)
+                .attributes
+                .iter()
+                .map(|a| size(&a.typedef, &Context::Argument))
+                .sum();
+            self.code_add(args_size);
             self.code_add(stack.data.def(op).code_position as i32);
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {
@@ -875,6 +1026,7 @@ impl State {
         ret_type
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_var(&mut self, stack: &mut Stack, variable: u16) -> Type {
         assert!(
             stack.function.stack(variable) <= stack.position,
@@ -923,6 +1075,40 @@ impl State {
                 self.types
                     .insert(self.code_pos, stack.data.def(*c).known_type);
                 stack.add_op("OpVarRef", self);
+            }
+            // CO1.3c: iterator variables are DbRef-sized (coroutine frame reference).
+            Type::Iterator(_, _) => {
+                stack.add_op("OpVarRef", self);
+            }
+            Type::Tuple(elems) => {
+                // T1.4: read whole tuple by reading each element.
+                let elems = elems.clone();
+                let tuple_base = stack.function.stack(variable);
+                let offsets = crate::data::element_offsets(&elems);
+                for (i, elem_tp) in elems.iter().enumerate() {
+                    let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
+                    match elem_tp {
+                        Type::Integer(_, _) | Type::Function(_, _) => {
+                            stack.add_op("OpVarInt", self);
+                        }
+                        Type::Boolean => stack.add_op("OpVarBool", self),
+                        Type::Long => stack.add_op("OpVarLong", self),
+                        Type::Float => stack.add_op("OpVarFloat", self),
+                        Type::Single => stack.add_op("OpVarSingle", self),
+                        Type::Character => stack.add_op("OpVarCharacter", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
+                        Type::Text(_) => stack.add_op("OpVarText", self),
+                        Type::Reference(c, _) | Type::Enum(c, true, _) => {
+                            self.types
+                                .insert(self.code_pos, stack.data.def(*c).known_type);
+                            stack.add_op("OpVarRef", self);
+                        }
+                        _ => panic!("Tuple var: unsupported element type {elem_tp:?}"),
+                    }
+                    self.code_add(elem_pos);
+                    // Note: add_op already adjusts stack.position for the pushed value.
+                }
+                return self.insert_types(stack.function.tp(variable).clone(), code, stack);
             }
             _ => panic!(
                 "Unknown var '{}' type {} at {}",
@@ -1018,12 +1204,23 @@ impl State {
 
     pub(super) fn add_return(&mut self, stack: &mut Stack, code: u32) {
         let return_type = &stack.data.def(stack.def_nr).returned;
-        stack.add_op("OpReturn", self);
-        self.code_add(self.arguments);
-        self.code_add(size(return_type, &Context::Argument) as u8);
-        self.code_add(stack.position);
-        if return_type != &Type::Void {
-            self.types.insert(code, self.known_type(return_type, stack));
+        // CO1.3c: generator functions use OpCoroutineReturn.
+        if matches!(return_type, Type::Iterator(_, _)) {
+            let yield_size = if let Type::Iterator(inner, _) = return_type {
+                size(inner, &Context::Argument)
+            } else {
+                0
+            };
+            stack.add_op("OpCoroutineReturn", self);
+            self.code_add(yield_size);
+        } else {
+            stack.add_op("OpReturn", self);
+            self.code_add(self.arguments);
+            self.code_add(size(return_type, &Context::Argument) as u8);
+            self.code_add(stack.position);
+            if return_type != &Type::Void {
+                self.types.insert(code, self.known_type(return_type, stack));
+            }
         }
     }
 
@@ -1168,8 +1365,43 @@ impl State {
                 }
                 stack.add_op("OpAppendText", self);
             }
-            Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
+            Type::Vector(_, _)
+            | Type::Reference(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Iterator(_, _) => {
                 stack.add_op("OpPutRef", self);
+            }
+            Type::Tuple(elems) => {
+                // T1.4: store each element from the stack into the variable.
+                // Elements are on the stack in order; emit OpPut* for each in
+                // reverse order (last element is at top of stack).
+                let elems = elems.clone();
+                let offsets = crate::data::element_offsets(&elems);
+                let tuple_var_base = stack.function.stack(var);
+                for i in (0..elems.len()).rev() {
+                    let elem_abs = tuple_var_base + offsets[i] as u16;
+                    // After popping previous elements, adjust position.
+                    let pos = stack.position - elem_abs;
+                    match &elems[i] {
+                        Type::Integer(_, _) | Type::Function(_, _) => {
+                            stack.add_op("OpPutInt", self);
+                        }
+                        Type::Boolean => stack.add_op("OpPutBool", self),
+                        Type::Long => stack.add_op("OpPutLong", self),
+                        Type::Float => stack.add_op("OpPutFloat", self),
+                        Type::Single => stack.add_op("OpPutSingle", self),
+                        Type::Character => stack.add_op("OpPutCharacter", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                        Type::Text(_) => stack.add_op("OpAppendText", self),
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                            stack.add_op("OpPutRef", self);
+                        }
+                        _ => panic!("Tuple set: unsupported element type {:?}", elems[i]),
+                    }
+                    self.code_add(pos);
+                    // Note: add_op already adjusts stack.position for the popped element.
+                }
+                return;
             }
             _ => panic!(
                 "Unknown var {} type {} at {}",
@@ -1247,6 +1479,7 @@ fn ir_contains_var(value: &Value, v: u16) -> bool {
 /// clean.  Produces a lot of output for large functions, so the filter is
 /// important.
 #[cfg(debug_assertions)]
+#[allow(clippy::too_many_lines)]
 fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usize) {
     let pad = "  ".repeat(depth);
     match value {
@@ -1339,6 +1572,27 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
             }
             // `next` is the advance expression: omit for brevity
             let _ = next;
+        }
+        Value::Tuple(elems) => {
+            eprint!("(");
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 {
+                    eprint!(", ");
+                }
+                print_ir(e, data, vars, depth);
+            }
+            eprint!(")");
+        }
+        Value::TupleGet(var, idx) => {
+            eprint!("{}.{idx}", vars.name(*var));
+        }
+        Value::TuplePut(var, idx, val) => {
+            eprint!("{}.{idx} = ", vars.name(*var));
+            print_ir(val, data, vars, depth);
+        }
+        Value::Yield(inner) => {
+            eprint!("yield ");
+            print_ir(inner, data, vars, depth);
         }
     }
 }

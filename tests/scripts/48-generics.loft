@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P5.2: Generic function call-site instantiation.
+// Generics support pass-through operations: assign and return.
+
+fn identity<T>(x: T) -> T { x }
+
+fn pick_second<T>(a: T, b: T) -> T {
+  _x = a;
+  b
+}
+
+fn main() {
+  // identity with different types
+  assert(identity(42) == 42, "identity integer");
+  assert(identity(3.14) == 3.14, "identity float");
+  assert(identity("hello") == "hello", "identity text");
+  assert(identity(true) == true, "identity boolean");
+
+  // pick_second returns the second argument
+  assert(pick_second(1, 99) == 99, "pick_second integer");
+  assert(pick_second("a", "b") == "b", "pick_second text");
+
+  println("P5.2: generic instantiation ok");
+}

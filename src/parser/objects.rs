@@ -123,6 +123,39 @@ impl Parser {
                 self.var_usages(v_nr, true);
                 *code = Value::Var(v_nr);
             }
+        } else if let Some((_cname, ctype)) = self
+            .capture_context
+            .iter()
+            .find(|(n, _)| n == name)
+            .cloned()
+        {
+            // A5.2: record the capture for closure record synthesis.
+            if !self.captured_names.iter().any(|(n, _)| n == name) {
+                self.captured_names.push((name.to_string(), ctype.clone()));
+            }
+            // A5.4: if we have a closure parameter (second pass), emit field read
+            // from the closure record.  Otherwise create a placeholder variable.
+            // A5.4: if we have a closure parameter (second pass), emit field read.
+            let closure_d_nr = if self.closure_param == u16::MAX || self.first_pass {
+                u32::MAX
+            } else {
+                self.data.def(self.context).closure_record
+            };
+            let fnr = if closure_d_nr == u32::MAX {
+                usize::MAX
+            } else {
+                self.data.attr(closure_d_nr, name)
+            };
+            if fnr == usize::MAX {
+                // First pass, no closure param, or field not found — placeholder variable.
+                let v_nr = self.create_var(name, &ctype);
+                self.var_usages(v_nr, true);
+                t = ctype;
+                *code = Value::Var(v_nr);
+            } else {
+                *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
+                t = self.data.attr_type(closure_d_nr, fnr);
+            }
         } else if self.data.def_nr(name) != u32::MAX {
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {

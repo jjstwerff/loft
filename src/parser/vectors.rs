@@ -165,6 +165,7 @@ impl Parser {
     //              <identifier:var> |
     //              <number> | <float> | <cstring> |
     //              'true' | 'false' | 'null'
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_single(
         &mut self,
         var_tp: &Type,
@@ -181,8 +182,36 @@ impl Parser {
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {
             let t = self.expression(val);
-            self.lexer.token(")");
-            t
+            if self.lexer.has_token(",") {
+                // T1.2: Tuple literal — (expr, expr, ...)
+                let mut values = vec![val.clone()];
+                let mut types = vec![t];
+                loop {
+                    if self.lexer.peek_token(")") {
+                        break;
+                    }
+                    let mut v = Value::Null;
+                    let t2 = self.expression(&mut v);
+                    values.push(v);
+                    types.push(t2);
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.token(")");
+                if types.len() < 2 {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple literals require at least 2 elements"
+                    );
+                }
+                *val = Value::Tuple(values);
+                Type::Tuple(types)
+            } else {
+                self.lexer.token(")");
+                t
+            }
         } else if self.lexer.peek_token("{") {
             self.parse_block("block", val, &Type::Unknown(0))
         } else if self.lexer.has_token("[") {
@@ -308,6 +337,11 @@ impl Parser {
         );
         let outer_loop = self.in_loop;
         self.in_loop = false;
+        // A5.1: save outer scope variable names/types for capture detection.
+        let outer_capture =
+            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        // A5.2: clear captured_names so we collect only this lambda's captures.
+        let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.lexer.token("(");
         let mut arguments = Vec::new();
@@ -329,12 +363,7 @@ impl Parser {
 
         // Parse optional return type annotation.
         let result = if self.lexer.has_token("->") {
-            if let Some(type_name) = self.lexer.has_identifier() {
-                self.parse_type(d_nr, &type_name, true)
-                    .unwrap_or(Type::Void)
-            } else {
-                Type::Void
-            }
+            self.parse_type_full(d_nr, true).unwrap_or(Type::Void)
         } else {
             Type::Void
         };
@@ -356,18 +385,41 @@ impl Parser {
             }
         }
 
+        // A5.4: on second pass, if closure record exists, add hidden __closure param.
+        let outer_closure_param = self.closure_param;
+        if !self.first_pass {
+            let closure_rec = self.data.def(d_nr).closure_record;
+            if closure_rec != u32::MAX {
+                let closure_tp = Type::Reference(closure_rec, vec![]);
+                let v_nr = self.create_var("__closure", &closure_tp);
+                self.vars.become_argument(v_nr);
+                self.closure_param = v_nr;
+            }
+        }
+
         self.parse_code();
+        self.closure_param = outer_closure_param;
         self.data.op_code(d_nr);
         self.data.definitions[d_nr as usize]
             .variables
             .append(&mut self.vars);
 
+        // A5.2: synthesize closure record if any captures were detected.
+        if !self.captured_names.is_empty() {
+            self.synthesize_closure_record(d_nr, &lambda_name);
+        }
+        let captured = std::mem::replace(&mut self.captured_names, outer_captured);
+        drop(captured);
+
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
+        self.capture_context = outer_capture;
 
         self.data.def_used(d_nr);
+
         *code = Value::Int(d_nr as i32);
+
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
@@ -464,6 +516,10 @@ impl Parser {
         );
         let outer_loop = self.in_loop;
         self.in_loop = false;
+        // A5.1: save outer scope variable names/types for capture detection.
+        let outer_capture =
+            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.context = if self.first_pass {
             self.data.add_fn(&mut self.lexer, &lambda_name, &arguments)
@@ -474,6 +530,8 @@ impl Parser {
             self.context = outer_context;
             self.vars = outer_vars;
             self.in_loop = outer_loop;
+            self.capture_context = outer_capture;
+            self.captured_names = outer_captured;
             return Type::Unknown(0);
         }
         let d_nr = self.context;
@@ -487,12 +545,7 @@ impl Parser {
                 "Return-type annotations are not allowed in |x| lambdas — \
                  use fn(…) -> <ret> {{ ... }} instead"
             );
-            if let Some(type_name) = self.lexer.has_identifier() {
-                self.parse_type(d_nr, &type_name, true)
-                    .unwrap_or(Type::Void)
-            } else {
-                Type::Void
-            }
+            self.parse_type_full(d_nr, true).unwrap_or(Type::Void)
         } else if let Type::Function(_, ret) = &hint_params_ret {
             *ret.clone()
         } else {
@@ -541,16 +594,62 @@ impl Parser {
             .variables
             .append(&mut self.vars);
 
+        // A5.2: synthesize closure record if any captures were detected.
+        if !self.captured_names.is_empty() {
+            self.synthesize_closure_record(d_nr, &lambda_name);
+        }
+        let captured = std::mem::replace(&mut self.captured_names, outer_captured);
+        drop(captured);
+
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
+        self.capture_context = outer_capture;
 
         self.data.def_used(d_nr);
+
         *code = Value::Int(d_nr as i32);
+
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
         Type::Function(arg_types, Box::new(ret_type))
+    }
+
+    /// A5.2: Synthesize an anonymous struct definition for the captured variables
+    /// of a lambda. Emits a diagnostic with the record layout for test verification.
+    fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
+        let record_name = lambda_name.replace("__lambda_", "__closure_");
+        let captures = self.captured_names.clone();
+
+        if self.first_pass {
+            // Create the struct definition in the first pass.
+            let record_d_nr = self
+                .data
+                .add_def(&record_name, self.lexer.pos(), DefType::Struct);
+            for (name, tp) in &captures {
+                self.data
+                    .add_attribute(&mut self.lexer, record_d_nr, name, tp.clone());
+            }
+            // Store the closure record def_nr on the lambda's definition.
+            self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
+        } else {
+            let record_d_nr = self.data.def_nr(&record_name);
+            if record_d_nr != u32::MAX {
+                self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
+            }
+        }
+
+        // Emit a diagnostic listing the record fields for test verification.
+        let fields: Vec<String> = captures.iter().map(|(n, t)| format!("{n}({t})")).collect();
+        let count = captures.len();
+        diagnostic!(
+            self.lexer,
+            Level::Warning,
+            "closure record '{record_name}' created with {count} {}: {}",
+            if count == 1 { "field" } else { "fields" },
+            fields.join(", ")
+        );
     }
 
     // <for-vector> ::= 'for' <id> 'in' <range> ['if' <cond>] '{' <expr> '}'

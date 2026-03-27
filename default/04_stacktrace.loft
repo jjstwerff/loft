@@ -1,0 +1,51 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Stack trace introspection types (TR1.2).
+// Loaded after 03_text.loft.  These types are used by the stack_trace()
+// native function (TR1.3) to expose call-frame information to loft programs.
+
+/// Typed union of inspectable argument/variable values.
+/// Each variant wraps one primitive type so that match expressions can
+/// recover the concrete value from a StackFrame's argument list.
+pub enum ArgValue {
+  NullVal,
+  BoolVal   { b: boolean },
+  IntVal    { n: integer },
+  LongVal   { n: long },
+  FloatVal  { f: float },
+  SingleVal { f: single },
+  CharVal   { c: character },
+  TextVal   { t: text },
+  RefVal    { store: integer, rec: integer, pos: integer },
+  FnVal     { d_nr: integer },
+  OtherVal  { description: text }
+}
+
+/// One function argument in a stack frame.
+pub struct ArgInfo {
+  name:      text,
+  type_name: text,
+  value:     ArgValue,
+}
+
+/// One local variable in a stack frame (populated only by stack_trace_full).
+pub struct VarInfo {
+  name:      text,
+  type_name: text,
+  value:     ArgValue,
+}
+
+/// One call frame in the stack trace.
+pub struct StackFrame {
+  function:  text,
+  file:      text,
+  line:      integer,
+  arguments: vector<ArgInfo>,
+  variables: vector<VarInfo>,
+}
+
+/// Return the current call stack as a vector of frames, outermost first.
+/// Arguments are not yet populated (empty vectors); line numbers use the
+/// call-site position from the shadow call-frame vector.
+pub fn stack_trace() -> vector<StackFrame>;

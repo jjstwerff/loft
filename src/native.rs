@@ -75,6 +75,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_rand_indices", n_rand_indices),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
+    ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("i_parse_errors", i_parse_errors),
@@ -922,6 +923,51 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let micros = stores.start_time.elapsed().as_micros() as i64;
     stores.put(stack, micros);
+}
+
+/// TR1.3: Build `vector<StackFrame>` from the call-stack snapshot in Stores.
+/// The snapshot is populated by `State::static_call` before this runs.
+fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
+    let snapshot = std::mem::take(&mut stores.call_stack_snapshot);
+    let sf_elm = stores.name("StackFrame");
+    let sf_size = u32::from(stores.size(sf_elm));
+    // Fix #89: validate that hard-coded field offsets match the actual type layout.
+    // Fix #89: validate that hard-coded field offsets match the actual type layout.
+    debug_assert_eq!(
+        stores.position(sf_elm, "function"),
+        0,
+        "StackFrame.function offset mismatch"
+    );
+    debug_assert_eq!(
+        stores.position(sf_elm, "file"),
+        4,
+        "StackFrame.file offset mismatch"
+    );
+    debug_assert_eq!(
+        stores.position(sf_elm, "line"),
+        8,
+        "StackFrame.line offset mismatch"
+    );
+    let vec = stores.database(sf_size);
+    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+
+    for (fn_name, file, line) in &snapshot {
+        let elm = crate::vector::vector_append(&vec, sf_size, &mut stores.allocations);
+        let fn_str = stores.store_mut(&vec).set_str(fn_name.as_str());
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos, fn_str as i32);
+        let file_str = stores.store_mut(&vec).set_str(file.as_str());
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos + 4, file_str as i32);
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos + 8, *line as i32);
+        // arguments and variables left as zero (null vectors).
+        crate::vector::vector_finish(&vec, &mut stores.allocations);
+    }
+    stores.put(stack, vec);
 }
 
 /// Return the platform path separator as a loft `character`.

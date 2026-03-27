@@ -311,7 +311,7 @@ impl State {
         if (def.name == "OpGotoFalseWord" || def.name == "OpGotoWord") && a_nr == 0 {
             let to = i64::from(p) + 3 + i64::from(*self.code::<i16>()) - i64::from(start_pos);
             write!(f, "jump={to}")?;
-        } else if def.name == "OpCall" && a_nr == 1 {
+        } else if def.name == "OpCall" && a_nr == 2 {
             self.fn_name(f, data)?;
         } else if def.name == "OpStaticCall" {
             let v = *self.code::<u16>();
@@ -646,7 +646,7 @@ impl State {
                     return Ok(op);
                 } else if def.name == "OpReturn" && a_nr == 0 {
                     self.return_attr(&mut attr, a_nr);
-                } else if def.name == "OpCall" && a_nr == 1 {
+                } else if def.name == "OpCall" && a_nr == 2 {
                     self.call_name(&mut attr, a_nr, data);
                 } else if def.name.starts_with("OpGoto") && a_nr == 0 {
                     let to = i64::from(cur) + 2 + i64::from(*self.code::<i16>()) - i64::from(minus);
@@ -966,8 +966,10 @@ pub(super) fn execute_log_impl(
     assert_ne!(d_nr, u32::MAX, "Unknown routine {name}");
 
     // Set up parallel context so n_parallel_for can access bytecode/library.
+    let data_ptr = std::ptr::from_ref::<crate::data::Data>(data);
+    state.data_ptr = data_ptr;
     state.database.parallel_ctx = Some(Box::new(super::ParallelCtx {
-        data: std::ptr::from_ref::<crate::data::Data>(data),
+        data: data_ptr,
         bytecode: &raw const state.bytecode,
         text_code: &raw const state.text_code,
         library: &raw const state.library,

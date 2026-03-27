@@ -8,7 +8,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 248] = &[
+pub const OPERATORS: &[fn(&mut State); 253] = &[
     goto,
     goto_word,
     goto_false,
@@ -257,6 +257,11 @@ pub const OPERATORS: &[fn(&mut State); 248] = &[
     clear_scratch,
     reverse_vector,
     sort_vector,
+    coroutine_create,
+    coroutine_next,
+    coroutine_return,
+    coroutine_yield,
+    coroutine_exhausted,
 ];
 
 fn goto(s: &mut State) {
@@ -286,9 +291,10 @@ fn goto_false_word(s: &mut State) {
 }
 
 fn call(s: &mut State) {
-    let v_size = *s.code::<u16>();
+    let v_d_nr = *s.code::<i32>();
+    let v_args_size = *s.code::<u16>();
     let v_to = *s.code::<i32>();
-    s.fn_call(v_size, v_to);
+    s.fn_call(v_d_nr as u32, v_args_size, v_to);
 }
 
 fn op_return(s: &mut State) {
@@ -1897,4 +1903,32 @@ fn sort_vector(s: &mut State) {
         let is_float = t == 2 || t == 3;
         vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
     }
+}
+
+fn coroutine_create(s: &mut State) {
+    let v_d_nr = *s.code::<i32>();
+    let v_args_size = *s.code::<u16>();
+    let v_to = *s.code::<i32>();
+    s.coroutine_create(v_d_nr as u32, u32::from(v_args_size), v_to as u32);
+}
+
+fn coroutine_next(s: &mut State) {
+    let v_value_size = *s.code::<u16>();
+    s.coroutine_next(u32::from(v_value_size));
+}
+
+fn coroutine_return(s: &mut State) {
+    let v_value_size = *s.code::<u16>();
+    s.coroutine_return(u32::from(v_value_size));
+}
+
+fn coroutine_yield(s: &mut State) {
+    let v_value_size = *s.code::<u16>();
+    s.coroutine_yield(u32::from(v_value_size));
+}
+
+fn coroutine_exhausted(s: &mut State) {
+    let v_gen = *s.get_stack::<DbRef>();
+    let new_value = s.coroutine_exhausted(&v_gen);
+    s.put_stack(new_value);
 }

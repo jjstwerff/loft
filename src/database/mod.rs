@@ -123,6 +123,9 @@ pub struct Stores {
     /// microseconds elapsed since program start; cloned into worker Stores unchanged so
     /// all threads share the same reference point.
     pub start_time: Instant,
+    /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
+    /// Populated by `State::static_call` when `n_stack_trace` is invoked.
+    pub call_stack_snapshot: Vec<(String, String, u32)>,
 }
 
 impl Default for Stores {
@@ -148,6 +151,7 @@ impl Clone for Stores {
             logger: self.logger.clone(),
             had_fatal: false,
             start_time: self.start_time,
+            call_stack_snapshot: Vec::new(),
         }
     }
 }
@@ -360,6 +364,7 @@ impl Stores {
             logger: None,
             had_fatal: false,
             start_time: Instant::now(),
+            call_stack_snapshot: Vec::new(),
         };
         result.base_type("integer", 4); // 0
         result.base_type("long", 8); // 1

@@ -141,6 +141,22 @@ impl Output<'_> {
                 self.output_call_ref(w, *v_nr, args)?;
             }
             Value::Iter(..) => write!(w, "{code:?}")?,
+            Value::Tuple(elems) => {
+                write!(w, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    self.output_code_inner(w, e)?;
+                }
+                write!(w, ")")?;
+            }
+            Value::TupleGet(var, idx) => write!(w, "var_{var}.{idx}")?,
+            Value::TuplePut(var, idx, _val) => write!(w, "var_{var}.{idx} = ...")?,
+            Value::Yield(inner) => {
+                write!(w, "yield ")?;
+                self.output_code_inner(w, inner)?;
+            }
         }
         Ok(())
     }

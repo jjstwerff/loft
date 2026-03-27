@@ -792,6 +792,36 @@ two functions with the same name and different non-variant parameter types are a
 
 ---
 
+## Generic functions
+
+A single type variable `<T>` lets you write a function body once for any type:
+
+```
+fn identity<T>(x: T) -> T { x }
+fn pick_second<T>(a: T, b: T) -> T { _x = a; b }
+```
+
+**Rules:**
+- T must appear in the first parameter (directly or as `vector<T>`, etc.).
+- Only one type variable is allowed.
+- At the call site, T is inferred from the first argument's concrete type.
+- The compiler creates a specialised copy per concrete type automatically.
+
+**Allowed on T:** assign, return, store in variables.
+
+**Disallowed on T (compile-time errors):**
+- Arithmetic: `x + y` → *"generic type T: operator '+' requires a concrete type"*
+- Field access: `x.field` → *"generic type T: field access requires a concrete type"*
+- Method calls: `x.method()` → *"generic type T: method call requires a concrete type"*
+- Match, cast, struct construction on T.
+
+```
+identity(42)      // T = integer → returns 42
+identity("hi")    // T = text → returns "hi"
+```
+
+---
+
 ## File structure
 
 A loft file may contain (in any order):

@@ -42,13 +42,11 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [L4 — Fix empty `[]` literal as mutable vector argument](#l4--fix-empty--literal-as-mutable-vector-argument)
   - [L5 — Fix `v += extra` via `&vector` ref-param](#l5--fix-v--extra-via-vector-ref-param)
   - [L6 — Prevent double evaluation of `expr ?? default`](#l6--prevent-double-evaluation-of-expr--default)
-  - [L7 — `init(expr)` stored field initialiser with `$` reference](#l7--initexpr-stored-field-initialiser-with--reference)
 - [S — Stability Hardening](#s--stability-hardening)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
 - [P — Prototype Features](#p--prototype-features)
-  - [P5 — First-parameter generic functions](#p5--first-parameter-generic-functions) *(0.8.3)*
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
 - [A — Architecture](#a--architecture)
@@ -91,8 +89,7 @@ or type system; 0.8.2 correctness work is a prerequisite.
 **Lambda expressions (P1):** ✓ completed in 0.8.2.
 **Vector aggregates (P3):** `sum_of`, `min_of`, `max_of` for integers ✓ completed. Predicate aggregates (`any`, `all`, `count_if`) deferred — requires compiler special-casing for lambda-based loops.
 
-**Generic functions (P5):**
-- **P5** — First-parameter generic functions: `fn name<T>(param: T, ...)` with demand-driven instantiation.
+**Generic functions (P5):** ✓ completed — all four phases (parse, instantiate, validate, test+docs).
 
 **Pattern extensions (L2):**
 - **L2** — Nested match patterns: field sub-patterns separated by `:` in struct arms.
@@ -336,116 +333,6 @@ before building the null-check conditional.  Tests in `25-null-coalescing.loft`.
 
 ---
 
-### L7  `init(expr)` stored field initialiser with `$` reference
-**Sources:** Design conversation 2026-03-25
-**Severity:** Low–Medium — stored fields with derived defaults currently require the caller to
-compute them manually at every construction site; `computed(expr)` covers the read-only case
-but leaves no option for a mutable field with a smart default
-**Description:** A new field modifier `init(expr)` evaluated once when a record is created
-(like `= expr`) but allowed to reference `$` (the record being constructed) and therefore
-other fields including `computed` ones.  After construction the field is writable like any
-ordinary stored field.
-
-```loft
-struct Metrics {
-    c: integer,                    // stored, writable, no default
-    b: integer computed($.c),      // no storage — inlines $.c at every read
-    a: integer init($.b * 5),      // stored at creation, writable after
-}
-
-m = Metrics { c: 3 };
-// m.a == 15  (init evaluated: $.b → $.c → 3 * 5)
-// m.b == 3   (computed: always $.c)
-m.c = 10;
-// m.b == 10  (computed: follows c)
-// m.a == 15  (stored: frozen at init)
-m.a = 99;    // ok: init fields are freely writable
-```
-
-**Modifier comparison:**
-
-| Modifier | Storage | Writable | Evaluated | `$` allowed |
-|---|---|---|---|---|
-| *(plain)* | yes | yes | never | no |
-| `= literal` | yes | yes | once at init | no |
-| `init(expr)` | yes | yes | once at init | **yes** |
-| `computed(expr)` | no | no | on every read | yes |
-
-`= expr` without `$` keeps its current meaning.  If `= expr` references `$`, it is a parse
-error — users must use `init(expr)` explicitly so the init-time evaluation is visible.
-
-**Evaluation order (struct):** `init(expr)` runs after all explicitly-supplied field values
-have been written, so a `computed` field accessed inside `init` sees the supplied values of
-the fields it depends on.
-
-**Circular-init detection:** Two `init` fields that reference each other are a compile-time
-error.  Build a dependency graph over `init` fields (extract all `$`-accesses from each init
-expression), then DFS for cycles.  Runs during the first parser pass.
-
----
-
-**Function parameter form:**
-
-`init(expr)` is also allowed on function parameters to provide a dynamic default evaluated
-at call time from earlier parameters:
-
-```loft
-fn normalize(x: float, y: float, scale: float init(sqrt(x*x + y*y))) -> Point {
-    Point { x: x / scale, y: y / scale }
-}
-
-normalize(3.0, 4.0)              // scale = 5.0 (computed from x, y)
-normalize(3.0, 4.0, scale: 1.0) // scale = 1.0 (explicit)
-```
-
-The `init` expression is evaluated at the call site when the argument is not supplied; earlier
-parameters are already live stack slots and can be referenced directly (no `$` needed).
-`init` parameters must appear after all parameters they reference, and — like `= expr`
-defaults — after all required parameters.  Referencing a later parameter in `init(expr)` is
-a compile-time error.
-
-Existing `= expr` on parameters stays constant-only; if the expression references a parameter
-name, the parser emits an error and suggests `init(expr)`.
-
----
-
-**Fix path:**
-1. **Lexer** (`src/lexer.rs`): add `"init"` to `KEYWORDS`.
-2. **Parser — field modifier** (`src/parser/definitions.rs`, `parse_field_default`):
-   extend the `computed/virtual` branch to also accept `"init"`; parse the expression the
-   same way (`(` expr `)`); do **not** set `attribute.constant = true`.  Set a new
-   `attribute.init = true` flag instead.
-3. **Data model** (`src/data.rs`): add `pub init: bool` to `Attribute`; default `false`.
-4. **Struct construction** (`src/parser/objects.rs`, field-init loop):
-   for `init` fields, call `replace_record_ref(attr.value, record_ref)` at the call site —
-   already done for stored defaults via `default = Self::replace_record_ref(default, code)`.
-   Computed fields accessed inside the expression are transparently inlined by the existing
-   `get_field` path (it already expands `constant` fields inline).
-5. **Write guard**: the existing guard that errors on assignment to a `computed` field must
-   not fire for `init` fields (`init == true`, `constant == false`); no change needed as
-   `constant` stays `false`.
-6. **Circular-init detection** (`src/parser/definitions.rs`, after parsing all struct
-   fields): collect fields where `attribute.init`, extract `$`-access names via a recursive
-   walk, build a directed graph, DFS for cycles; emit `diagnostic!(Level::Error, …)`.
-7. **Parser — function parameter default** (`src/parser/definitions.rs`, parameter-parsing
-   loop): extend the `= expr` default branch to also accept `init(expr)`; parse the
-   expression in the current parameter scope (earlier params are already registered as
-   `Value::Var(n)`); store the init expression alongside the parameter default.  At the
-   call site, emit the expression as the argument value when no argument is supplied —
-   identical to `= expr` defaults except the expression is not required to be constant.
-8. **Docs**: update the grammar in `LOFT.md` (`field_mod` and `param` productions), add
-   `init` to both the field modifier table and the parameter modifier table, add worked
-   examples for both contexts.
-9. **Tests** (`tests/scripts/init_field.loft`, `tests/scripts/init_param.loft`):
-   - struct: basic `init` from a plain field; from a `computed` field; overridden in literal; mutated after construction; circular → compile error
-   - function: default computed from earlier param; explicit arg overrides; `init` referencing a later param → compile error
-
-**Effort:** Small–Medium (data.rs + lexer.rs + definitions.rs + objects.rs + docs + tests;
-no bytecode or fill.rs changes needed)
-**Target:** 0.8.3
-
----
-
 **Severity:** Low–Medium — a REPL dramatically reduces iteration time when exploring data
 or testing small snippets
 **Description:** Running `loft` with no arguments (or `loft --repl`) enters an
@@ -524,129 +411,14 @@ the recompile overhead that caching was designed to address)
 
 ---
 
-### P5  First-parameter generic functions
-**Sources:** Design conversation 2026-03-25
-**Severity:** Medium — container helpers, identity-like functions, and pass-through
-wrappers must be written once per concrete element type today; any new numeric type
-(e.g. `u16`) immediately requires duplicating every such helper
-**Description:** A single type variable `<T>` bound to the first parameter lets the
-programmer write a function body once and have the compiler instantiate it for each
-concrete type it is called with.
-
-```loft
-fn identity<T>(x: T) -> T { x }
-fn first<T>(v: vector<T>) -> T { v[0] }
-fn wrap<T>(x: T) -> vector<T> { [x] }
-fn pair<T>(a: T, b: T) -> vector<T> { [a, b] }
-fn print_and_return<T>(x: T, label: text) -> T { println(label); x }
-```
-
-`T` may appear in the first parameter position, any additional parameter of the same
-type, and the return type.  It may also appear as the element type of a container
-(`vector<T>`, `hash<T[key]>`, etc.) in any parameter or return position.
-
-#### Allowed operations on T
-Only operations that are defined on the container, not on T itself, are permitted:
-
-| Allowed | Reason |
-|---|---|
-| Pass T through — assign, return, store in `vector<T>` | No type-specific code |
-| `v[i]` where `v: vector<T>` | Indexing dispatches on the container, not on T |
-| `v += [x]` where `v: vector<T>`, `x: T` | Append dispatches on the container |
-| `len(v)` where `v: vector<T>` | Structural operation on the container |
-| Concrete-typed parameters alongside T | No constraint on non-T params |
-
-#### Disallowed operations — compile-time errors
-
-| Situation | Error message |
-|---|---|
-| `x.field` where `x: T` | `generic type T: field access requires a concrete type — write a typed overload for each type that needs '{field}'` |
-| `x + y`, `x - y`, etc. where x or y is T | `generic type T: operator '{op}' requires a concrete type — operators are type-specific` |
-| `x.method()` where `x: T` | `generic type T: method call requires a concrete type — write a typed overload for each type that needs '{method}'` |
-| `T { field: val }` construction | `generic type T: struct construction requires a concrete type` |
-| `match x { ... }` where `x: T` | `generic type T: match requires a concrete type` |
-| `x as SomeType` cast where `x: T` | `generic type T: explicit cast requires a concrete type` |
-| Second type variable `<T, U>` | `only one type variable is supported; replace 'U' with a concrete type or write separate overloads` |
-| T only in non-first position | `type variable T must appear as the first parameter — move T to the first parameter position` |
-| Recursive generic call | `generic functions cannot call themselves recursively — instantiation is demand-driven` |
-| T used in first-pass before any call | *(not an error — templates are not compiled until first use)* |
-
-#### Implementation mechanics
-
-Instantiation reuses the existing `t_<LEN><Type>_name` naming scheme, so no changes
-to `find_fn`, bytecode compilation, or the runtime are required for instantiated
-functions.  A generic `fn identity<T>` called with `x: Point` produces a concrete
-definition stored as `t_5Point_identity`, indistinguishable from a hand-written
-`fn identity(self: Point) -> Point { self }`.
-
-The call-site lookup sequence in `parse_call` becomes:
-1. Look for an exact typed match as today (`t_<LEN><Type>_name` or `n_name`).
-2. If not found, look for `DefType::Generic` under `n_name`.
-3. If found and arg[0]'s type is concrete: clone the template IR, substitute
-   `Type::Unknown("T")` → concrete type, register the instantiated definition, emit
-   the call.
-4. If arg[0]'s type is still unknown at the call site: emit
-   `cannot infer type for generic parameter T — provide an explicit type annotation`.
-
-**Fix path:**
-
-**P5.1 — Parser: `<T>` syntax + template registration** *(completed 0.8.3)*:
-Implemented: `<T>` detection after `fn name`, `DefType::Generic` variant, T registered
-as a struct for type resolution, validation that T appears in first parameter
-(including container element positions like `vector<T>`).  Template bodies are parsed
-normally but skipped by byte_code and scope analysis.
-
-**P5.2 — Call-site instantiation** (`src/parser/control.rs`):
-In the not-found branch of `parse_call`, check whether a `DefType::Generic` exists
-with the same name.  If yes, resolve arg[0]'s type; if it is concrete, call a new
-`instantiate_generic(data, generic_def_nr, concrete_type)` function that:
-1. Clones the template's `Value` IR and attribute list.
-2. Replaces every `Type::Unknown("T")` with the concrete type.
-3. Adds a new `DefType::Function` definition under the mangled name.
-4. Calls `byte_code` on the new definition immediately so it is ready for execution.
-Returns the new definition's `d_nr` and proceeds with the call as normal.
-
-**P5.3 — Validation errors** (`src/parser/` — second pass of template body):
-While parsing the template body, represent T as `Type::Unknown(GENERIC_T_SENTINEL)`
-where `GENERIC_T_SENTINEL = u32::MAX - 1` — a value not used by any other
-`Type::Unknown` producer (forward references use 1..u32::MAX-2; the parallel-worker
-placeholder uses u32::MAX).  This avoids any change to the `Type` enum and leaves
-all existing exhaustive match arms unchanged.
-
-Guard `typedef.rs`'s forward-resolution loop so that it skips the sentinel value
-(~3 lines).  Then at each error emission site, add a sentinel check before the
-existing diagnostic:
-
-| Error site | File | Change |
-|---|---|---|
-| Field access on unknown | `fields.rs:13` | `if tp == SENTINEL` → specific field error |
-| Operator no match | `mod.rs` `call_op` | `if types[i] == SENTINEL` → specific operator error |
-| Unary operator | `operators.rs:185` | Thread `Type` to the error site; add sentinel check |
-| Method/function not found | `mod.rs:629` | Check arg[0] type before lookup failure error |
-| match / cast on unknown | `control.rs` | Add sentinel check at each arm |
-
-Total change: ~36 lines across 4–5 existing files; no enum changes; no impact on
-compiled code that does not use generics.
-
-**P5.4 — Tests + docs** (`tests/docs/`, `doc/claude/LOFT.md`):
-- `tests/docs/35-generics.loft`: identity, first, wrap, pair, cross-type calls, each
-  of the disallowed operations (each must produce the specified error message).
-- Add a § "Generic functions" section to `LOFT.md` after the Polymorphism section.
-
-**Effort:** Medium (definitions.rs, data.rs, control.rs, ~120–180 lines net new;
-no changes to fill.rs, scopes.rs, or the runtime)
-**Target:** 0.8.3
-
----
-
 ### T1  Tuple types
 **Sources:** TUPLES.md
 **Description:** Multi-value returns and stack-allocated `(A, B, C)` compound values. Enables functions to return more than one value without heap allocation. Seven implementation phases; full design in [TUPLES.md](TUPLES.md).
 
-- **T1.1** — Type system: `Type::Tuple`, element offsets, `element_size` helpers (`src/data.rs`, `src/typedef.rs`).
-- **T1.2** — Parser: type notation `(A, B)`, literal syntax, destructuring assignment (`src/parser/`).
-- **T1.3** — Scope analysis: tuple variable intervals, text/ref element lifetimes (`src/scopes.rs`).
-- **T1.4** — Bytecode codegen: slot allocation, element read/write opcodes (`src/state/codegen.rs`).
+- **T1.1** — Type system *(completed 0.8.3)*: `Type::Tuple(Vec<Type>)` variant, `element_size`, `element_offsets`, `owned_elements` helpers in `data.rs`.
+- **T1.2** — Parser *(completed 0.8.3)*: type notation `(A, B)`, literal syntax `(expr, expr)`, element access `t.0`, LHS destructuring `(a, b) = expr`.  `Value::Tuple` IR variant added.
+- **T1.3** — Scope analysis *(completed 0.8.3)*: tuple variable intervals, owned-element cleanup tracking in `scopes.rs`.
+- **T1.4** — Bytecode codegen *(completed 0.8.3)*: `Value::TupleGet` IR, element read via `OpVar*` at offset, tuple set via per-element `OpPut*`, tuple parameters.  6 tests passing; function-return convention, text elements, destructuring, and element assignment remain for follow-up.
 - **T1.5** — SC-4: Reference-tuple parameters with owned elements.
 - **T1.6** — SC-8: Tuple-aware mutation guard.
 - **T1.7** — SC-7: `not null` annotation for tuple integer elements.
@@ -660,12 +432,54 @@ no changes to fill.rs, scopes.rs, or the runtime)
 **Sources:** COROUTINE.md
 **Description:** Stackful `yield`, `iterator<T>` return type, and `yield from` delegation. Enables lazy sequences and producer/consumer patterns without explicit state machines. Six implementation phases; full design in [COROUTINE.md](COROUTINE.md).
 
-- **CO1.1** — `iterator<T>` type + `CoroutineStatus` enum in `default/05_coroutine.loft`.
-- **CO1.2** — `OpCoroutineCreate` + `OpCoroutineNext`: frame construction and advance.
-- **CO1.3** — `OpYield`: serialise live stack to heap frame, return to caller.
-- **CO1.4** — `yield from`: sub-generator delegation.
-- **CO1.5** — `for item in generator`: iterator protocol integration.
-- **CO1.6** — `next()` / `exhausted()` stdlib functions.
+- **CO1.1** — *(completed 0.8.3)* `CoroutineStatus` enum in `default/05_coroutine.loft`; `CoroutineFrame` struct, coroutine storage, and helpers on State.
+- **CO1.2** — *(completed 0.8.3)* `OpCoroutineCreate` + `OpCoroutineNext` opcodes: frame construction (argument copy, COROUTINE_STORE DbRef push) and advance (stack restore, call-frame restore, state machine).
+- **CO1.3** — `OpYield` + `OpCoroutineReturn` + parser `yield` keyword.  Split into five independently testable sub-steps:
+
+  **CO1.3a — `OpCoroutineReturn` opcode** *(completed 0.8.3)*:
+  `coroutine_return(value_size)` on State: clears text_owned/stack_bytes, truncates
+  call_stack, marks Exhausted, pops active_coroutines, pushes null, returns to consumer.
+  Fixes #96.
+
+  **CO1.3b — `OpCoroutineYield` opcode (integer-only)** *(completed 0.8.3)*:
+  `coroutine_yield(value_size)` on State: serialises stack[stack_base..stack_pos] into
+  stack_bytes, saves call frames, suspends, slides yielded value to stack_base, returns
+  to consumer.  Text serialisation deferred to CO1.3d.  Fixes #95.
+
+  **CO1.3c — Parser: `yield` keyword + codegen emit** *(completed 0.8.3)*:
+  `yield` lexer keyword added.  `yield expr` parsed as `Value::Yield(Box<Value>)`.
+  `iterator<T>` single-parameter syntax accepted.  Codegen: OpCoroutineCreate for
+  generator calls, OpCoroutineYield for yield, OpCoroutineReturn for generator return.
+  Remaining: generator body return-type check suppression and `next()` wiring.
+
+  **CO1.3d — Text serialisation (`serialise_text_slots`)** (`src/state/mod.rs`):
+  Implement `serialise_text_slots` per COROUTINE.md § serialise_text_slots contract.
+  Call it from `coroutine_create` (fixes issue #94) and `OpYield`.  Also implement the
+  resume-time patch in `coroutine_next` (write `Str` pointers from `text_owned` into
+  `stack_bytes` before copying to the live stack).
+  *Test:* a generator that takes a `text` parameter and yields `len(text)` — the text
+  must survive the yield/resume cycle without dangling pointers.
+  **Effort:** Medium–High (the `Str` layout and `database.free_dynamic_str` integration
+  require careful pointer handling).
+
+  **CO1.3e — Nested yield (yield inside helper function)** (`src/state/mod.rs`):
+  Verify and fix the call-stack save/restore in `OpYield` and `OpCoroutineNext` for the
+  case where `yield` fires inside a function called from the generator (stackful yield).
+  The `call_frames` save/restore is already sketched in CO1.3b but has not been tested
+  with actual nested calls.
+  *Test:* `fn helper() -> integer { yield 42; }` called from a generator; the yield
+  must correctly save and restore the helper's call frame.
+  **Effort:** Small (verification + fix, not greenfield).
+
+- **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
+  advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
+- **CO1.5** — *(completed 0.8.3)* `for item in generator` integration + `e#remove` rejection.
+- **CO1.3e** — *(completed 0.8.3)* Nested yield verified — helper call between yields.
+
+- **CO1.6** — *(completed 0.8.3)* `next()` / `exhausted()` stdlib, stack tracking fix,
+  null sentinel on exhaustion.  `OpCoroutineNext` and `OpCoroutineExhausted` bypass the
+  operator codegen path; stack.position manually adjusted.  `push_null_value` writes
+  `i32::MIN` / `i64::MIN` for typed null returns.
 
 **Effort:** Very High
 **Depends:** TR1
@@ -756,48 +570,32 @@ require the compiler to identify captured variables, allocate a closure record, 
 it as a hidden argument to the lambda body.  This is a significant IR and bytecode change.
 **Fix path:**
 
-**Phase 1 — Capture analysis** (`src/scopes.rs`, `src/parser/expressions.rs`):
-Walk the lambda body's IR and identify all free variables (variables referenced inside
-the body that are defined in an enclosing scope).  No code generation yet.
-*Tests:* static analysis correctly identifies free variables in sample lambdas; variables
-defined inside the lambda are not flagged; non-capturing lambdas produce an empty set.
+**Phase 1 — Capture analysis** *(completed 0.8.3)*:
+Parser detects variables from enclosing scopes referenced inside lambdas.  Emits a clear
+error ("lambda captures variable 'name' — closure capture is not yet supported") and
+creates a placeholder variable so parsing continues without cascading errors.  Capture
+context saved/restored in both parse_lambda and parse_lambda_short.
 
-**Phase 2 — Closure record layout** (`src/data.rs`, `src/typedef.rs`):
-For each capturing lambda, synthesise an anonymous struct type whose fields hold the
-captured variables; verify field offsets and total size.
-The element-size table and offset arithmetic introduced for tuples (see
-[TUPLES.md](TUPLES.md) § Memory Layout) are identical for closure record fields; use
-the shared helpers `element_size`, `element_offsets`, and `owned_elements` from
-`data.rs` rather than duplicating the logic.  The closure record is heap-allocated
-(a store record) and passed as a hidden trailing argument alongside the def-nr — it
-does not use the stack-only tuple layout.
-*Tests:* closure struct has the correct field count, types, and sizes; `sizeof` matches
-the expected layout; a record containing a `text` capture has `owned_elements` count 1.
+**Phase 2 — Closure record layout** *(completed 0.8.3)*:
+For each capturing lambda, the parser synthesizes `__closure_N` with fields matching
+the captured variables.  The record def_nr is stored on Definition.closure_record.
+Diagnostic emitted with field count/names/types for test verification.
 
-**Phase 3 — Capture at call site** (`src/state/codegen.rs`):
-At the point where a lambda expression is evaluated, emit code to allocate a closure
-record and copy the current values of the captured variables into it.  Pass the record
-as a hidden trailing argument alongside the def-nr.  Copying a captured `text`
-variable into the record requires a deep copy (same rule as tuple text elements —
-see [TUPLES.md](TUPLES.md) § Copy Semantics).
-*Tests:* captured variable has the correct value when the lambda is called immediately
-after its definition; captured `text` is independent of the original after capture.
+**Phase 3 — Capture at call site** *(completed 0.8.3)*:
+Capture diagnostic updated from generic "not yet supported" to specific "closure body
+reads not yet implemented (A5.4)".  Closure record struct (A5.2) is still synthesized.
+Actual closure record allocation IR and codegen deferred to A5.4.
 
-**Phase 4 — Closure body reads** (`src/state/codegen.rs`, `src/fill.rs`):
-Inside the compiled lambda function, redirect reads of captured variables to load from
-the closure record argument rather than the (non-existent) enclosing stack frame.
-*Tests:* captured variable is correctly read after the enclosing function has returned;
-modifying the original variable after capture does not affect the lambda's copy (value
-semantics — mutable capture is out of scope for this item).
+**Phase 4 — Closure body reads** *(completed 0.8.3)*:
+Hidden `__closure` parameter added on second pass.  Captured variable reads redirect
+to `get_field` on the closure record.  Read-only captures work; mutable captures
+(`count += x`) pending — codegen panics on self-reference for write targets.
 
-**Phase 5 — Lifetime and cleanup** (`src/scopes.rs`):
-Emit `OpFreeRef` for the closure record at the end of the enclosing scope.  When the
-record contains `text` or `reference` captures, free them in **reverse field index
-order** before releasing the record itself — the same LIFO invariant required by tuple
-scope exit (see [TUPLES.md](TUPLES.md) § Calling Convention, Scope exit order).  Use
-`owned_elements` from Phase 2 to enumerate the fields that need freeing.
-*Tests:* no store leak after a lambda goes out of scope; LIFO free order is respected
-when multiple closures are live simultaneously; a `text` capture is freed exactly once.
+**Phase 5 — Lifetime and cleanup** *(completed 0.8.3)*:
+Closure record work variable (Type::Reference with empty deps) is already freed by
+the existing OpFreeRef scope-exit logic in get_free_vars.  No new code needed.
+Per-field text/reference cleanup inside the record is pending — only matters when
+text captures become testable.
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1 (done)
@@ -1135,10 +933,10 @@ All steps done.  Step 8 was completed earlier.  Step 10:
 **Sources:** STACKTRACE.md
 **Description:** `stack_trace()` stdlib function returning `vector<StackFrame>`, where each frame exposes function name, source file, and line number. Full design in [STACKTRACE.md](STACKTRACE.md). Prerequisite for CO1 (coroutines use the frame vector for yield/resume).
 
-- **TR1.1** — Shadow call-frame vector: push/pop a `(fn_name, line)` entry on each function call/return in `src/state/mod.rs`.
-- **TR1.2** — Type declarations: `ArgValue` enum and `StackFrame` struct in `default/04_stacktrace.loft`.
-- **TR1.3** — Materialisation: `stack_trace()` native function builds `vector<StackFrame>` from the shadow vector.
-- **TR1.4** — Call-site line numbers: track source position in the call frame for accurate per-frame line reporting.
+- **TR1.1** — Shadow call-frame vector *(completed 0.8.3)*: CallFrame struct and call_stack on State; OpCall encodes d_nr and args_size; fn_call pushes, fn_return pops.
+- **TR1.2** — Type declarations *(completed 0.8.3)*: ArgValue, ArgInfo, VarInfo, StackFrame in `default/04_stacktrace.loft`.
+- **TR1.3** — Materialisation *(completed 0.8.3)*: `stack_trace()` native function builds `vector<StackFrame>` from snapshot. Tests blocked by Problem #85.
+- **TR1.4** — Call-site line numbers *(completed 0.8.3)*: CallFrame stores source line directly; resolved in fn_call. Tests blocked by Problem #85.
 
 **Effort:** Medium
 **Target:** 0.9.0

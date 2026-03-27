@@ -162,8 +162,12 @@ impl Parser {
         let mut tp = t.clone();
         if *result != Type::Void && !matches!(*result, Type::Unknown(_)) {
             let last = l.len() - 1;
-            let ignore = *t == Type::Void
-                && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last]));
+            // CO1.3c: generator bodies return void (values come from yield),
+            // so suppress the void-vs-iterator mismatch.
+            let is_generator = matches!(result, Type::Iterator(_, _));
+            let ignore = is_generator
+                || (*t == Type::Void
+                    && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last])));
             if !self.convert(&mut l[last], t, result) && !ignore {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
@@ -1856,6 +1860,29 @@ impl Parser {
             "any" => return self.parse_any(val, list, types),
             "all" => return self.parse_all(val, list, types),
             "count_if" => return self.parse_count_if(val, list, types),
+            "next" if types.len() == 1 => {
+                // CO1.6a: next(gen) — advance a coroutine iterator.
+                // Encode value_size as second parameter so codegen can emit it.
+                if let Type::Iterator(inner, _) = &types[0] {
+                    let yield_tp = (**inner).clone();
+                    let value_size =
+                        crate::variables::size(&yield_tp, &crate::data::Context::Argument);
+                    let op = self.data.def_nr("OpCoroutineNext");
+                    let mut args = list.to_vec();
+                    args.push(Value::Int(i32::from(value_size)));
+                    *val = Value::Call(op, args);
+                    return yield_tp;
+                }
+                if self.first_pass {
+                    return Type::Unknown(0);
+                }
+            }
+            "exhausted" if types.len() == 1 && matches!(&types[0], Type::Iterator(_, _)) => {
+                // CO1.3c: exhausted(gen) on a coroutine iterator.
+                let op = self.data.def_nr("OpCoroutineExhausted");
+                *val = Value::Call(op, list.to_vec());
+                return Type::Boolean;
+            }
             _ => {}
         }
         if let Some(tp) = self.try_fn_ref_call(val, name, list, types) {

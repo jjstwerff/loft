@@ -23,6 +23,61 @@ use std::sync::Arc;
 
 pub const STRING_NULL: &str = "\0";
 
+/// One entry in the shadow call-frame vector (TR1.1).
+/// Pushed by `fn_call`, popped by `fn_return`.  Stores enough information for
+/// `stack_trace()` to reconstruct function names, source lines, and argument
+/// values without walking the raw bytecode stack.
+#[derive(Clone, Debug)]
+pub struct CallFrame {
+    /// Definition number of the called function.
+    pub d_nr: u32,
+    /// Bytecode position of the call instruction (for line-number lookup).
+    pub call_pos: u32,
+    /// Absolute stack position of the first argument byte.
+    pub args_base: u32,
+    /// Total byte size of all parameters.
+    pub args_size: u16,
+    /// Source line number of the call site (TR1.4).  0 if unknown.
+    pub line: u32,
+}
+
+/// Reserved store number for coroutine `DbRef` encoding (CO1.1).
+/// Cannot clash with real Stores allocations (limited by `Stores::max`).
+pub const COROUTINE_STORE: u16 = u16::MAX;
+
+/// Lifecycle state of a coroutine frame (CO1.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoroutineStatus {
+    Created,
+    Suspended,
+    Running,
+    Exhausted,
+}
+
+/// Runtime state of a single coroutine instance (CO1.1).
+/// Holds the serialised stack and metadata needed to suspend and resume.
+#[derive(Clone, Debug)]
+pub struct CoroutineFrame {
+    /// Generator function definition number.
+    pub d_nr: u32,
+    /// Current lifecycle state.
+    pub status: CoroutineStatus,
+    /// Bytecode position to resume from (set by yield).
+    pub code_pos: u32,
+    /// Absolute stack position during execution.
+    pub stack_base: u32,
+    /// Return address in the consumer.
+    pub caller_return_pos: u32,
+    /// Serialised stack locals (copied on suspend, restored on resume).
+    pub stack_bytes: Vec<u8>,
+    /// Owned text slot copies (offset, content) taken on suspend.
+    pub text_owned: Vec<(u32, String)>,
+    /// Saved call stack entries from the generator's call frames.
+    pub call_frames: Vec<CallFrame>,
+    /// Call depth baseline when the coroutine was last running.
+    pub call_depth: usize,
+}
+
 /// Internal State of the interpreter to run bytecode.
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
@@ -49,6 +104,16 @@ pub struct State {
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: HashMap<u32, u32>,
     pub(crate) fn_positions: Vec<u32>,
+    /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
+    pub call_stack: Vec<CallFrame>,
+    /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
+    pub(crate) data_ptr: *const crate::data::Data,
+    /// Fix #87: cached library index for `n_stack_trace`.  `u16::MAX` = not yet resolved.
+    pub(crate) stack_trace_lib_nr: u16,
+    /// Coroutine frame storage (CO1.1).  Index 0 is always `None` (null sentinel).
+    pub coroutines: Vec<Option<Box<CoroutineFrame>>>,
+    /// Indices of currently-running coroutines in `coroutines`.
+    pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
 }
@@ -88,6 +153,11 @@ impl State {
             text_positions: BTreeSet::new(),
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
+            call_stack: Vec::new(),
+            data_ptr: std::ptr::null(),
+            stack_trace_lib_nr: u16::MAX,
+            coroutines: vec![None], // index 0 = null sentinel
+            active_coroutines: Vec::new(),
             generate_depth: 0,
         }
     }
@@ -101,11 +171,20 @@ impl State {
 
     /// Call a function, remember the current code position on the stack.
     ///
-    /// * `size` - the amount of stack space maximally needed for the new function.
+    /// * `d_nr` - definition number of the called function.
+    /// * `args_size` - total byte size of all parameters.
     /// * `to` - the code position where the called function resides.
-    pub fn fn_call(&mut self, _size: u16, to: i32) {
+    pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
+        let args_base = self.stack_pos - u32::from(args_size);
+        let line = self.line_numbers.get(&self.code_pos).copied().unwrap_or(0);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: self.code_pos,
+            args_base,
+            args_size,
+            line,
+        });
         self.put_stack(self.code_pos);
-        // TODO allow to switch stacks
         self.code_pos = to as u32;
     }
 
@@ -120,11 +199,39 @@ impl State {
             "fn_call_ref: d_nr {d_nr} out of range"
         );
         let code_pos = self.fn_positions[d_nr] as i32;
-        self.fn_call(arg_size, code_pos);
+        self.fn_call(d_nr as u32, arg_size, code_pos);
     }
 
     pub fn static_call(&mut self) {
         let call = *self.code::<u16>();
+        // Fix #87: resolve n_stack_trace index lazily, then only snapshot for that call.
+        if self.stack_trace_lib_nr == u16::MAX
+            && let Some(&nr) = self.library_names.get("n_stack_trace")
+        {
+            self.stack_trace_lib_nr = nr;
+        }
+        // TR1.3: snapshot call_stack only when n_stack_trace is being called.
+        if call == self.stack_trace_lib_nr
+            && !self.call_stack.is_empty()
+            && !self.data_ptr.is_null()
+        {
+            // SAFETY: data_ptr is set in execute_argv and valid during execution.
+            let data = unsafe { &*self.data_ptr };
+            self.database.call_stack_snapshot = self
+                .call_stack
+                .iter()
+                .map(|f| {
+                    let def = &data.definitions[f.d_nr as usize];
+                    let name = if def.name.starts_with("n_") {
+                        def.name[2..].to_string()
+                    } else {
+                        def.name.clone()
+                    };
+                    let file = def.position.file.clone();
+                    (name, file, f.line)
+                })
+                .collect();
+        }
         let mut stack = self.stack_cur;
         stack.pos = 8 + self.stack_pos;
         self.library[call as usize](&mut self.database, &mut stack);
@@ -160,6 +267,260 @@ impl State {
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
+        self.call_stack.pop();
+    }
+
+    // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
+
+    /// Allocate a coroutine frame. Returns the index (always >= 1).
+    pub fn allocate_coroutine(&mut self, frame: CoroutineFrame) -> usize {
+        // Reuse the first free slot (index >= 1).
+        for (i, slot) in self.coroutines.iter_mut().enumerate().skip(1) {
+            if slot.is_none() {
+                *slot = Some(Box::new(frame));
+                return i;
+            }
+        }
+        let idx = self.coroutines.len();
+        self.coroutines.push(Some(Box::new(frame)));
+        idx
+    }
+
+    /// Free a coroutine frame, making the slot available for reuse.
+    pub fn free_coroutine(&mut self, idx: usize) {
+        if idx > 0 && idx < self.coroutines.len() {
+            self.coroutines[idx] = None;
+        }
+    }
+
+    /// Get a mutable reference to a coroutine frame.
+    ///
+    /// # Panics
+    /// Panics if `idx` is 0 (null), out of range, or the slot is empty.
+    pub fn coroutine_frame_mut(&mut self, idx: usize) -> &mut CoroutineFrame {
+        assert!(idx > 0, "coroutine_frame_mut: null index");
+        self.coroutines[idx]
+            .as_mut()
+            .expect("coroutine_frame_mut: empty slot")
+    }
+
+    // CO1.2: Create a coroutine frame — copy arguments into the frame without
+    // entering the function body.
+    pub fn coroutine_create(&mut self, d_nr: u32, args_size: u32, entry_pos: u32) {
+        let args_base = self.stack_pos - args_size;
+        let mut stack_bytes = vec![0u8; args_size as usize];
+        let store = self.database.store(&self.stack_cur);
+        let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + args_base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, stack_bytes.as_mut_ptr(), args_size as usize);
+        }
+        self.stack_pos = args_base;
+
+        let frame = CoroutineFrame {
+            d_nr,
+            status: CoroutineStatus::Created,
+            code_pos: entry_pos,
+            stack_base: 0,
+            caller_return_pos: 0,
+            stack_bytes,
+            text_owned: Vec::new(),
+            call_frames: Vec::new(),
+            call_depth: 0,
+        };
+        let idx = self.allocate_coroutine(frame);
+
+        let db_ref = DbRef {
+            store_nr: COROUTINE_STORE,
+            rec: idx as u32,
+            pos: 0,
+        };
+        self.put_stack(db_ref);
+    }
+
+    /// CO1.2: Advance a coroutine — restore stack, resume execution.
+    /// # Panics
+    /// Panics on re-entrant advance (coroutine already running).
+    pub fn coroutine_next(&mut self, value_size: u32) {
+        let gen_ref = *self.get_stack::<DbRef>();
+
+        if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
+            // CO1.6c: push typed null sentinel.
+            self.push_null_value(value_size);
+            return;
+        }
+        let idx = gen_ref.rec as usize;
+        let status = self.coroutine_frame_mut(idx).status;
+
+        match status {
+            CoroutineStatus::Exhausted => {
+                self.push_null_value(value_size);
+            }
+            CoroutineStatus::Running => {
+                panic!("re-entrant advance on coroutine {idx}");
+            }
+            CoroutineStatus::Created | CoroutineStatus::Suspended => {
+                let caller_return_pos = self.code_pos;
+                let call_depth = self.call_stack.len();
+                let stack_base = self.stack_pos;
+                {
+                    let f = self.coroutine_frame_mut(idx);
+                    f.caller_return_pos = caller_return_pos;
+                    f.call_depth = call_depth;
+                    f.stack_base = stack_base;
+                    f.status = CoroutineStatus::Running;
+                }
+
+                let bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
+                let code_pos = self.coroutine_frame_mut(idx).code_pos;
+                let saved_frames: Vec<_> = self
+                    .coroutine_frame_mut(idx)
+                    .call_frames
+                    .drain(..)
+                    .collect();
+
+                let dest = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
+                }
+                self.stack_pos += bytes.len() as u32;
+                self.call_stack.extend(saved_frames);
+                self.active_coroutines.push(idx);
+                self.code_pos = code_pos;
+            }
+        }
+    }
+
+    // CO1.6: check if a coroutine is exhausted.
+    #[must_use]
+    pub fn coroutine_exhausted(&self, gen_ref: &DbRef) -> bool {
+        if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
+            return true; // null iterator is exhausted
+        }
+        let idx = gen_ref.rec as usize;
+        if idx >= self.coroutines.len() {
+            return true;
+        }
+        match &self.coroutines[idx] {
+            Some(frame) => frame.status == CoroutineStatus::Exhausted,
+            None => true,
+        }
+    }
+
+    // CO1.6c: push a typed null sentinel onto the stack.
+    fn push_null_value(&mut self, value_size: u32) {
+        match value_size {
+            4 => self.put_stack(i32::MIN), // integer null sentinel
+            8 => self.put_stack(i64::MIN), // long null sentinel
+            _ => {
+                for _ in 0..value_size {
+                    self.put_stack(0u8);
+                }
+            }
+        }
+    }
+
+    /// CO1.3b: suspend a running coroutine — serialise stack, return yielded value.
+    /// # Panics
+    /// Panics if no coroutine is currently active.
+    pub fn coroutine_yield(&mut self, value_size: u32) {
+        let idx = *self
+            .active_coroutines
+            .last()
+            .expect("OpYield outside active coroutine");
+
+        // Compute regions.
+        let stack_top = self.stack_pos;
+        let frame = self.coroutine_frame_mut(idx);
+        let base = frame.stack_base;
+        let value_start = stack_top - value_size;
+        let locals_len = (value_start - base) as usize;
+
+        // Serialise locals (integer-only path — no text_owned handling yet).
+        let mut locals_bytes = vec![0u8; locals_len];
+        let store = self.database.store(&self.stack_cur);
+        let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, locals_bytes.as_mut_ptr(), locals_len);
+        }
+
+        // Copy yielded value bytes separately (for the slide step).
+        let vs = value_size as usize;
+        let mut value_bytes = vec![0u8; vs];
+        let val_src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + value_start);
+        unsafe {
+            std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
+        }
+
+        // Extract frame fields before mutable borrow conflicts.
+        let call_depth = self.coroutine_frame_mut(idx).call_depth;
+        let caller_return_pos = self.coroutine_frame_mut(idx).caller_return_pos;
+
+        // Save call frames above the base depth.
+        let saved_frames = self.call_stack[call_depth..].to_vec();
+        self.call_stack.truncate(call_depth);
+
+        let code_pos = self.code_pos;
+        {
+            let frame = self.coroutine_frame_mut(idx);
+            frame.stack_bytes = locals_bytes;
+            // text_owned stays empty — CO1.3d will handle text serialisation.
+            frame.call_frames = saved_frames;
+            frame.code_pos = code_pos;
+            frame.status = CoroutineStatus::Suspended;
+        }
+        self.active_coroutines.pop();
+
+        // Slide the yielded value to stack_base.
+        let dest = self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), dest, vs);
+        }
+        self.stack_pos = base + value_size;
+
+        // Return to consumer.
+        self.code_pos = caller_return_pos;
+    }
+
+    /// CO1.3a: exhaust a running coroutine — cleanup and return null to consumer.
+    /// # Panics
+    /// Panics if no coroutine is currently active.
+    pub fn coroutine_return(&mut self, value_size: u32) {
+        let idx = *self
+            .active_coroutines
+            .last()
+            .expect("OpCoroutineReturn outside active coroutine");
+        let frame = self.coroutine_frame_mut(idx);
+
+        // Drop serialised state.
+        frame.text_owned.clear();
+        frame.stack_bytes.clear();
+
+        let call_depth = frame.call_depth;
+        let stack_base = frame.stack_base;
+        let caller_return_pos = frame.caller_return_pos;
+
+        // Exhaust.
+        frame.status = CoroutineStatus::Exhausted;
+        self.active_coroutines.pop();
+
+        // Restore call stack to consumer depth.
+        self.call_stack.truncate(call_depth);
+
+        // Rewind stack to frame base; push typed null.
+        self.stack_pos = stack_base;
+        // Zero-fill value_size bytes as the null return value.
+        for _ in 0..value_size {
+            self.put_stack(0u8);
+        }
+
+        // Return to consumer.
+        self.code_pos = caller_return_pos;
     }
 
     /**
@@ -387,6 +748,7 @@ impl State {
         let tc_ptr = &raw const self.text_code;
         let lib_ptr = &raw const self.library;
         let data_ptr = std::ptr::from_ref::<Data>(data);
+        self.data_ptr = data_ptr;
         self.database.parallel_ctx = Some(Box::new(ParallelCtx {
             bytecode: bc_ptr,
             text_code: tc_ptr,
@@ -397,6 +759,15 @@ impl State {
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
         self.stack_pos = 4;
+        // Fix #88: push a synthetic CallFrame for the entry function so it
+        // appears in stack_trace() output.
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 0,
+            line: 0,
+        });
         // If fn main declares a vector<text> parameter, push argv before the return address.
         let attrs = &data.def(d_nr).attributes;
         if attrs.len() == 1 && matches!(attrs[0].typedef, Type::Vector(_, _)) {
@@ -459,6 +830,8 @@ impl State {
             }
         }
 
+        // Fix #88: pop the synthetic entry-function frame.
+        self.call_stack.pop();
         self.database.parallel_ctx = None;
     }
 
@@ -503,6 +876,11 @@ impl State {
             text_positions: BTreeSet::new(),
             line_numbers: HashMap::new(),
             fn_positions: Vec::new(),
+            call_stack: Vec::new(),
+            data_ptr: std::ptr::null(),
+            stack_trace_lib_nr: u16::MAX,
+            coroutines: vec![None],
+            active_coroutines: Vec::new(),
             generate_depth: 0,
         }
     }
@@ -519,6 +897,10 @@ impl State {
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations (infinite-loop guard).
     pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i32 {
+        // Fix #92: set data_ptr so stack_trace() works in parallel workers.
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+        }
         self.stack_pos = 4;
         self.put_stack(*arg); // 12 bytes → stack_pos = 16
         self.put_stack(u32::MAX); // 4 bytes  → stack_pos = 20
@@ -545,6 +927,9 @@ impl State {
         extra_args: &[u64],
         return_size: u32,
     ) -> u64 {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+        }
         self.stack_pos = 4;
         // Push extra context args first (they precede the element arg in the
         // function's parameter list: fn worker(element, extra1, extra2, ...)).
@@ -579,6 +964,9 @@ impl State {
     /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
     /// record lives in `self.database` (the worker's cloned stores).
     pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+        }
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {

@@ -32,6 +32,19 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 80 | Struct-enums in default library have broken field positions | Medium | Define in user code instead of `default/*.loft` |
 | 81 | Struct-enum variants with same-named fields read wrong offset | Medium | Use distinct field names per variant |
+| 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
+| 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
+| 87 | *(fixed)* `static_call` snapshots call stack on every native function call | Medium | Fixed — now only snapshots for `n_stack_trace` |
+| 88 | *(fixed)* Entry function missing from `stack_trace()` output | Low | Fixed — synthetic CallFrame pushed in `execute_argv` |
+| 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
+| 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
+| 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
+| 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
+| 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
+| 94 | CO1.2 text arguments not serialized in `coroutine_create` | High | Avoid `text` parameters in generator functions |
+| 95 | CO1.2 `active_coroutines` not popped on coroutine body return | High | N/A — coroutines cannot safely return yet (CO1.3) |
+| 96 | CO1.2 no `OpCoroutineReturn` — `OpReturn` corrupts coroutine state | High | N/A — coroutines cannot safely return yet (CO1.3) |
+| 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
 
 ---
 
@@ -257,6 +270,306 @@ the second arm reused the first arm's variable and type.  The value read as garb
 the correct type.  The user-visible field name is temporarily aliased to the per-arm
 variable so the arm body resolves it correctly; the alias is restored after each arm.
 Added `set_name`/`remove_name` methods to `Function` for name map manipulation.
+
+---
+
+### 85. Struct-enum local variable leaks stack space (debug assertion)
+
+**Symptom:** Constructing a struct-enum variant as a local variable and returning a
+scalar from the function triggers a debug-mode assertion in `fn_return`:
+
+```
+assertion `left == right` failed: Stack not correctly cleared: 8 != 4
+```
+
+**Reproducer:**
+```loft
+fn test() -> integer {
+    v = IntVal { n: 42 };
+    match v { IntVal { n } => n, _ => 0 }
+}
+```
+
+The struct-enum reference (12-byte `DbRef`) is allocated on the stack but not freed
+before return.  The assertion is gated by `cfg!(debug_assertions)` so release builds
+are unaffected, but the leaked stack space is real in both modes.
+
+**Workaround:** Pass the enum value as a function parameter instead of storing it in a
+local:
+```loft
+fn check(v: ArgValue) -> integer { match v { IntVal { n } => n, _ => 0 } }
+check(IntVal { n: 42 })
+```
+
+**Root cause:** Scope analysis (`scopes.rs`) does not emit `OpFreeRef` for struct-enum
+locals whose lifetime ends at the function return.  The `text_positions` cleanup in
+`fn_return` handles orphaned text values but not reference-type values.
+
+**Fix path:** Extend scope exit in `scopes.rs::free_vars()` to emit `OpFreeRef` for
+struct-enum locals, or ensure the codegen marks such variables with a correct live
+interval so the existing cleanup path handles them.
+
+**Discovered:** 2026-03-26, during TR1.2 testing.
+
+---
+
+### 86. Lambda capture produced misleading codegen self-reference error
+
+**Symptom:** A lambda that referenced an outer-scope variable crashed in codegen with:
+
+```
+[generate_set] first-assignment of 'count' (var_nr=1) in 'n___lambda_0'
+contains a Var(1) self-reference — storage not yet allocated
+```
+
+**Reproducer:**
+```loft
+fn test() {
+    count = 0;
+    f = fn(x: integer) { count += x; };
+    f(1);
+}
+```
+
+The parser created a new local `count` inside the lambda, but `count += x` desugars to
+`count = count + x` — the RHS reads the same uninitialized variable, triggering the
+self-reference guard in `generate_set`.
+
+**Status:** *(mitigated by A5.1)* — The parser now detects the outer-scope reference
+and emits a clear error ("lambda captures variable 'count' — closure capture is not yet
+supported") before codegen runs.  The underlying issue (no actual closure capture) is
+tracked as A5.2–A5.5.
+
+**Discovered:** 2026-03-26, during A5.1 testing.
+
+---
+
+### 87. `static_call` snapshots call stack on every native function call
+
+**Symptom:** Performance regression introduced by TR1.3.  `static_call` now clones
+function names and file paths for every frame in `call_stack` on **every** native
+function call — all 56 registered functions — even though only `n_stack_trace` uses
+the snapshot.  Programs with deep call stacks and frequent native calls (string
+operations, I/O, math) allocate Strings and a Vec on every call.
+
+**Root cause:** The snapshot in `static_call` (state/mod.rs) runs unconditionally
+whenever `call_stack` is non-empty and `data_ptr` is set.  It cannot distinguish
+which native function is about to be called before the dispatch happens.
+
+**Fix path:** Check whether the native function about to be called is `n_stack_trace`
+before building the snapshot.  Compare `call` (the library index read from bytecode)
+against a cached index for `n_stack_trace` stored on State at init time.  Skip the
+snapshot for all other native functions.
+
+**Discovered:** 2026-03-26, during TR1.3 implementation.
+
+---
+
+### 88. Entry function missing from `stack_trace()` output
+
+**Symptom:** `stack_trace()` called from `main()` returns an empty vector.  Called
+from a function invoked by `main()`, the trace starts at that function — `main`
+itself never appears.
+
+**Root cause:** `execute_argv` jumps directly to the entry function by setting
+`code_pos = pos` without going through `fn_call`.  No `CallFrame` is pushed for the
+entry function.  All other calls go through `fn_call` which pushes correctly.
+
+**Workaround:** Call `stack_trace()` from a nested function, not from `main` directly.
+
+**Fix path:** Push a synthetic `CallFrame` for the entry function at the start of
+`execute_argv` (after the `fn_positions` setup), pop it after the dispatch loop exits.
+The synthetic frame uses `d_nr` from the entry function lookup and `call_pos = 0`
+(no call site).
+
+**Discovered:** 2026-03-26, during TR1.3 testing.
+
+---
+
+### 89. Hard-coded `StackFrame` field offsets in `n_stack_trace`
+
+**Symptom:** `n_stack_trace` in native.rs writes StackFrame fields at hard-coded byte
+offsets (0, 4, 8) that must match the field order in `default/04_stacktrace.loft`.
+If the struct definition is reordered, fields are renamed, or types change, the
+native function silently writes to wrong positions — producing garbage values at
+runtime with no compile-time or startup check.
+
+**Root cause:** Native functions cannot call into the type system at runtime.  The
+field layout is determined by `calc::calculate_positions` during compilation, but
+`n_stack_trace` hard-codes the result.
+
+**Workaround:** Do not modify the StackFrame struct without updating the offsets in
+`n_stack_trace`.
+
+**Fix path:** At startup (in `native::init` or `compile::byte_code`), look up the
+StackFrame type's field positions from the database schema and store them in a
+struct on State.  The native function reads positions from that struct instead of
+using literals.  Alternatively, assert the expected layout at startup and panic
+with a clear message if it doesn't match.
+
+**Discovered:** 2026-03-26, during TR1.3 implementation.
+
+---
+
+### 90. `fn_call` HashMap lookup for line number on every call
+
+**Symptom:** TR1.4 added `self.line_numbers.get(&self.code_pos)` to `fn_call`,
+which runs on every loft function call.  Before TR1.4, the line lookup only happened
+during the rare `stack_trace()` snapshot.  This adds a HashMap probe to the hot path.
+
+**Root cause:** The source line is not encoded in the OpCall bytecode operands.
+It is stored in a separate `line_numbers: HashMap<u32, u32>` keyed by bytecode
+position, and must be looked up at runtime.
+
+**Workaround:** None needed — the overhead is small (O(1) amortised HashMap lookup)
+relative to the `Vec::push` and function dispatch already in `fn_call`.
+
+**Fix path (if measured as significant):** Encode the source line as an additional
+OpCall bytecode operand (u32) in codegen.  The `call` handler in fill.rs reads it
+and passes it to `fn_call`, eliminating the runtime lookup entirely.  This would
+increase each OpCall instruction by 4 bytes.
+
+**Discovered:** 2026-03-26, during TR1.4 implementation.
+
+---
+
+### 91. L7 `init(expr)` missing circular-init detection and parameter form
+
+**Symptom:** Two `init` fields that reference each other via `$` (e.g. `a: integer
+init($.b)` and `b: integer init($.a)`) are not detected at compile time.  At runtime
+the behaviour is undefined — the fields may read uninitialised memory or produce
+garbage values.  Additionally, `init(expr)` on function parameters (dynamic defaults
+computed from earlier parameters) is not implemented.
+
+**Scope:** The core struct-field `init(expr)` works correctly: evaluated once at
+creation, `$` references resolved, writable after construction.  Only the safety
+guard (circular detection) and the convenience extension (parameter form) are missing.
+
+**Workaround:** Do not write two `init` fields that reference each other.  For
+dynamic parameter defaults, compute the default at the call site and pass it
+explicitly.
+
+**Fix path:**
+1. Circular detection: after parsing all struct fields, collect `init` fields, walk
+   each init expression for `$.<field>` accesses, build a directed graph, DFS for
+   cycles, emit `diagnostic!(Level::Error, ...)`.
+2. Parameter form: in `parse_arguments`, accept `init(expr)` alongside `= expr`;
+   store the expression in `Attribute.value`; at the call site, emit the expression
+   when no argument is supplied.
+
+**Discovered:** 2026-03-26, during L7 implementation.
+
+---
+
+### 92. `stack_trace()` in parallel workers returns empty
+
+**Symptom:** Calling `stack_trace()` from inside a parallel `for` loop body returns
+an empty vector.  The function does not panic — it silently produces zero frames.
+
+**Root cause:** The `execute_at` / `execute_at_raw` / `execute_at_ref` functions used
+by parallel workers do not set `State.data_ptr`.  The `static_call` snapshot check
+sees `data_ptr.is_null()` and skips the snapshot.
+
+**Workaround:** Call `stack_trace()` from the main thread only.
+
+**Fix path:** Set `data_ptr` from the `ParallelCtx.data` pointer at the start of each
+`execute_at` variant, or pass it through the `WorkerProgram` struct.
+
+**Discovered:** 2026-03-26, during fix #87/#88 implementation review.
+
+---
+
+### 93. T1.1 missing tuple-in-struct-field rejection rule
+
+**Symptom:** The TUPLES.md Phase 1 design specifies that `Type::Tuple` should be
+rejected in struct field positions and `Type::RefVar` in tuple element positions.
+These compile-time rejection rules are not implemented.
+
+**Impact:** Low — T1.2 parser support has landed, so users can now write tuple type
+notation.  The rejection rules should be added before T1.4 (codegen) to prevent
+struct fields with tuple types from reaching the runtime.
+
+**Fix path:** Add checks in `typedef.rs::fill_all()`: when processing struct fields,
+emit an error if `attribute.typedef` is `Type::Tuple`.  Similarly reject `RefVar`
+inside tuple elements.
+
+**Discovered:** 2026-03-26, during T1.1 implementation.
+
+---
+
+### 94. CO1.2 text arguments not serialized in coroutine_create
+
+**Symptom:** `coroutine_create` copies raw argument bytes into the frame's `stack_bytes`
+but does not process dynamic `Str` slots.  If a generator function takes a `text`
+parameter, the saved `Str` pointer references memory on the live stack that is freed
+after the arguments are popped.  Resuming the coroutine would read a dangling pointer.
+
+**Impact:** High — memory corruption if a generator is called with a text argument.
+No user-visible impact yet because the compiler does not emit `OpCoroutineCreate`
+(parser integration is CO1.3+).
+
+**Fix path:** Implement `serialise_text_slots()` per COROUTINE.md § SC-CO-1: iterate
+`Str` slots in the saved bytes, clone each dynamic `String` into `text_owned`, and
+rewrite the `Str` pointer.  Call it in `coroutine_create` after copying argument bytes.
+
+**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
+
+---
+
+### 95. CO1.2 active_coroutines not popped on coroutine body return
+
+**Symptom:** When a coroutine body reaches the end or calls `return`, the ordinary
+`OpReturn` / `fn_return` runs.  It pops the call stack but does not pop
+`active_coroutines` or mark the frame as `Exhausted`.  The active list grows
+unbounded and the re-entrant check may fire incorrectly.
+
+**Impact:** High — leaked entries in `active_coroutines`.  No user-visible impact
+yet because the compiler does not emit `OpCoroutineCreate`.
+
+**Fix path:** Either (a) modify `fn_return` to detect it is inside a running
+coroutine (check `active_coroutines.last()`) and clean up, or (b) implement
+`OpCoroutineReturn` per COROUTINE.md § Runtime Design and have the compiler emit
+it instead of `OpReturn` for generator functions.  Approach (b) is cleaner; plan
+for CO1.3.
+
+**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
+
+---
+
+### 96. CO1.2 no OpCoroutineReturn — OpReturn corrupts coroutine state
+
+**Symptom:** There is no `OpCoroutineReturn` opcode.  When a running coroutine
+exits via `OpReturn`, the return address `get_var::<u32>(0)` reads from the
+coroutine's serialized stack — not from `frame.caller_return_pos` where
+`coroutine_next` stored the consumer's continuation.  This produces a wrong
+jump target.
+
+**Impact:** High — control flow corruption on coroutine body completion.  No
+user-visible impact yet because no parser path emits `OpCoroutineCreate`.
+
+**Fix path:** Implement `OpCoroutineReturn` in CO1.3 alongside `OpYield`.  The
+opcode should: clear `text_owned`, clear `stack_bytes`, mark `Exhausted`, pop
+`active_coroutines`, rewind stack to `frame.stack_base`, push a null value of the
+appropriate size, and jump to `frame.caller_return_pos`.
+
+**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
+
+---
+
+### 97. T1.2 compound assignment on tuple destructuring not rejected
+
+**Symptom:** `(a, b) += expr` does not trigger the tuple destructuring path (which
+only checks for `=`).  It falls through to the regular assignment loop, which fails
+with a generic error instead of a clear "compound assignment not supported on tuple
+destructuring" diagnostic.
+
+**Impact:** Low — confusing error message; no silent wrong behaviour.
+
+**Fix path:** Before the regular assignment loop, check if the LHS is
+`Value::Tuple` and the operator is a compound one (`+=`, `-=`, etc.); emit a
+targeted diagnostic.
+
+**Discovered:** 2026-03-26, during T1.2 regression evaluation.
 
 ---
 
