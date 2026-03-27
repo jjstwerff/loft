@@ -291,6 +291,11 @@ impl Parser {
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
+        // W1.9: under the `wasm` feature, check VIRT_FS before trying the real filesystem.
+        #[cfg(feature = "wasm")]
+        if let Some(content) = crate::wasm::virt_fs_get(filename) {
+            return self.parse_virtual(&content, filename, default);
+        }
         self.default = default;
         self.vars.logging = false;
         self.lexer.switch(filename);
@@ -305,6 +310,30 @@ impl Parser {
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.switch(filename);
+            self.parse_file();
+        }
+        self.diagnostics.fill(self.lexer.diagnostics());
+        self.diagnostics.is_empty()
+    }
+
+    /// W1.9: Parse `content` as if it were the file at `filename`.
+    /// Used by the WASM virtual-FS path to bypass real filesystem access.
+    #[cfg(feature = "wasm")]
+    fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
+        self.default = default;
+        self.vars.logging = false;
+        self.first_pass = true;
+        self.pending_imports.clear();
+        self.data.reset();
+        self.lambda_counter = 0;
+        self.lexer.parse_string(content, filename);
+        self.parse_file();
+        let lvl = self.lexer.diagnostics().level();
+        if lvl != Level::Error && lvl != Level::Fatal {
+            self.first_pass = false;
+            self.data.reset();
+            self.lambda_counter = 0;
+            self.lexer.parse_string(content, filename);
             self.parse_file();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
@@ -1743,6 +1772,11 @@ impl Parser {
     }
 
     fn lib_path(&mut self, id: &String) -> String {
+        // W1.9: under the `wasm` feature, check VIRT_FS before filesystem lookups.
+        #[cfg(feature = "wasm")]
+        if crate::wasm::virt_fs_get(&format!("{id}.loft")).is_some() {
+            return format!("{id}.loft");
+        }
         // - a source file, the lib directory in the project (project-supplied)
         let mut f = format!("lib/{id}.loft");
         if !std::path::Path::new(&f).exists() {
