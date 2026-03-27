@@ -75,7 +75,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism    | VH | ✓      | W1.13, W4    | WASM.md — Threading        |
 | A12       | Lazy work-variable initialization                    | M  | ~      |              | PLANNING.md A12            |
-| O1        | Superinstruction peephole rewriting                  | M  | ~      |              | compile.rs                 |
 | O2        | Stack raw pointer cache                              | H  | ~      |              | PERFORMANCE.md P2          |
 | A4        | Spatial index operations                             | H  | ~      |              | PROBLEMS.md #22            |
 | A4.1      | ↳ Insert + exact lookup                              | M  | ~      |              | database.rs                |
@@ -94,6 +93,7 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID    | Title                                                | E  | Notes                            |
 |-------|------------------------------------------------------|----|----------------------------------|
+| O1    | Superinstruction peephole rewriting                  | M  | Blocked: opcode table full (254/256 used); would require opcode-space redesign |
 | P4    | Bytecode cache (`.loftc`)                            | M  | Superseded by native codegen     |
 | A7.4  | External libs: package registry + `loft install`     | M  | 2.x; ecosystem must exist first  |
 

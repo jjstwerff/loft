@@ -56,7 +56,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
-  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(deferred to 1.1+)*
+  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(O1 deferred indefinitely — opcode table full; O2–O7 deferred to 1.1+)*
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
@@ -75,7 +75,7 @@ in parallel.
 **Remaining for 0.8.2:** *(none — all items completed or deferred)*
 
 **Deferred from 0.8.2 (too complex / disruptive for stability):**
-- **O1** — Superinstruction peephole rewriting pass — deferred to 1.1+.
+- **O1** — Superinstruction peephole rewriting pass — deferred indefinitely (opcode table is full: 254/256 used; adding superinstructions would require an opcode-space redesign).
 - **A12** — Lazy work-variable initialization — deferred to 1.1+ (also blocked by Issues 68–70).
 
 ---
@@ -164,7 +164,7 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
 
 **Deferred from 0.9.0:**
-- O1 (superinstruction merging) — Too complex and disruptive for stability; deferred to 1.1+.
+- O1 (superinstruction merging) — Deferred indefinitely; the opcode table is full (254/256 used) and adding superinstructions requires an opcode-space redesign first.
 - A12 (lazy work-variable init) — Too complex and disruptive; also blocked by Issues 68–70; deferred to 1.1+.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
 - A7 (native extension libraries) — Moved to 0.9.0.
@@ -1113,11 +1113,11 @@ Full design in [NATIVE.md](NATIVE.md).
 ---
 
 ### O1  Superinstruction merging
-**Status: deferred to 1.1+ — too complex and disruptive for current release stability**
+**Status: deferred indefinitely — opcode table is full (254/256 used)**
 **Sources:** PERFORMANCE.md § P1
-**Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes 240–245. Six new entries added to the `OPERATORS` array in `src/fill.rs`. Operands encoded in the same byte count as the replaced sequence, so branch targets need no relocation.
-**Expected gain:** 2–4× on tight integer loops; benefits every loop in the interpreter.
-**Effort:** Medium
+**Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes.  Originally targeted the 16 "free" slots above opcode 240, but those slots are now taken (T1.8b `OpPutText` + prior additions).  With 254/256 opcodes used, no slots remain for superinstructions without a redesign of the opcode space (e.g. a two-byte opcode escape or a dedicated superinstruction table).
+**Expected gain:** 2–4× on tight integer loops — the gain remains attractive but the prerequisite work (opcode-space redesign) is High effort and blocks everything else.
+**Effort:** Medium for the peephole pass itself; High to first free up opcode slots.
 **Target:** 1.1+
 
 ---
