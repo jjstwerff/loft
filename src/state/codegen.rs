@@ -889,6 +889,14 @@ impl State {
             stack.position += 1;
             return Type::Boolean;
         }
+        // A7.1: resolve library index — prefer #native symbol, fall back to def name.
+        let native_sym = stack.data.def(op).native.clone();
+        let lib_lookup: &str = if native_sym.is_empty() {
+            &name
+        } else {
+            &native_sym
+        };
+        let lib_nr = self.library_names.get(lib_lookup).copied();
         if stack.data.def(op).is_operator() {
             let before_stack = stack.position;
             self.remember_stack(stack.position);
@@ -916,9 +924,9 @@ impl State {
                 self.add_const(&a.typedef, &parameters[param_idx], stack, before_stack);
             }
             self.op_type(op, &tps, last, code, stack)
-        } else if self.library_names.contains_key(&name) {
+        } else if let Some(lib_idx) = lib_nr {
             stack.add_op("OpStaticCall", self);
-            self.code_add(self.library_names[&name]);
+            self.code_add(lib_idx);
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
             }

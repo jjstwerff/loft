@@ -31,15 +31,14 @@ fn n_add_two(stores: &mut Stores, stack: &mut DbRef) {
 /// A7.1: basic integer native function registered and called from loft.
 /// Symbol name matches the auto-generated loft function name (`n_` prefix).
 #[test]
-#[ignore = "A7.1: enable after #native annotation is implemented"]
 fn native_integer_function() {
     let native_decl = r#"
-pub fn double_it(x: integer): integer not null
+pub fn double_it(x: integer) -> integer not null;
 #native "n_double_it"
 "#;
     let source = r#"
 fn main() {
-    println(double_it(21))
+    println("{double_it(21)}")
 }
 "#;
     let mut p = Parser::new();
@@ -64,15 +63,14 @@ fn main() {
 /// `say_hi` dispatches to `n_add_two` — verifying that the `#native` symbol
 /// name overrides the default `n_<fn>` name lookup.
 #[test]
-#[ignore = "A7.1: enable after #native annotation is implemented"]
 fn native_symbol_name_differs_from_fn_name() {
     let native_decl = r#"
-pub fn say_hi(x: integer): integer not null
+pub fn say_hi(x: integer) -> integer not null;
 #native "n_add_two"
 "#;
     let source = r#"
 fn main() {
-    println(say_hi(40))
+    println("{say_hi(40)}")
 }
 "#;
     let mut p = Parser::new();
