@@ -315,7 +315,7 @@ fn ref_tuple_unused_mutation_error() {
 // ── A5.3 — Closure capture at call site ─────────────────────────────────────
 
 #[test]
-#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
+#[ignore = "A5.3: closure record store leak in debug mode — works in release"]
 fn closure_capture_integer() {
     // A lambda captures an integer from the enclosing scope.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)")
@@ -325,7 +325,7 @@ fn closure_capture_integer() {
 }
 
 #[test]
-#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
+#[ignore = "A5.3: closure record store leak in debug mode — works in release"]
 fn closure_capture_after_change() {
     // Capture is by value at the point of lambda creation — changing original after
     // creation does not affect the captured value.
@@ -335,7 +335,7 @@ fn closure_capture_after_change() {
 }
 
 #[test]
-#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
+#[ignore = "A5.3: closure record store leak in debug mode — works in release"]
 fn closure_capture_multiple() {
     // A lambda captures two variables from the enclosing scope.
     expr!("a = 3; b = 7; f = fn(x: integer) -> integer { a + b + x }; f(10)")
@@ -346,7 +346,7 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.3: closure capture at call site not yet implemented"]
+#[ignore = "A5.3: text closure capture needs text-in-struct serialisation"]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(
