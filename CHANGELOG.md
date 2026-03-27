@@ -8,6 +8,13 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **`init(expr)` circular dependency detection** (S20) — Struct fields that
+  form a mutual initialisation cycle (`a: integer init($.b), b: integer init($.a)`)
+  now produce a compile error naming the cycle (e.g.
+  `circular init dependency: a -> b -> a`).  A DFS cycle check runs after all
+  struct fields are parsed; `$.field` reads inside `init(...)` are tracked by
+  the parser and checked for cycles per root field.
+
 - **`stack_trace()` vector fields zeroed + call-site line numbers** (S19) —
   `stack_trace()` now returns correct call-site line numbers (`StackFrame.line`)
   for every frame.  Three fixes: `n_stack_trace` explicitly zeroes the

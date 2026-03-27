@@ -216,24 +216,16 @@ fn check() -> integer {
 
 ---
 
-## C18 — `init(expr)` circular field dependency silently accepted
+## C18 — `init(expr)` circular field dependency silently accepted *(fixed in S20)*
 
-Two struct fields that reference each other through `init($.other)` are
-not detected at compile time.  At runtime the result is undefined — fields
-may read uninitialised memory.
+**Fixed.**  Mutually-referencing `init(expr)` fields now produce a compile
+error naming the cycle.  A DFS cycle check runs after all struct field
+definitions are parsed (second pass only); `$.field` reads inside `init(...)`
+are tracked via `init_field_tracking`/`init_field_deps` on the parser, and
+`check_circular_init` emits one error per cycle root.
 
-**Reproducer:**
-```loft
-struct Bad {
-  a: integer init($.b),
-  b: integer init($.a),
-}
-// No compile error; runtime behaviour is undefined.
-```
-
-**Test:** `tests/parse_errors.rs` — `circular_init_error` (`#[ignore = "#91: circular-init detection not yet implemented"]`)
-**Workaround:** Do not write mutually referencing `init` fields.
-**Planned fix:** S20 in [ROADMAP.md](ROADMAP.md) (0.9.0) — DFS cycle check after struct field parsing; design in [PLANNING.md](PLANNING.md) § S20.
+**Test:** `tests/parse_errors.rs` — `circular_init_error` (passes, `#[ignore]` removed).
+**Fixed by:** S20 — DFS cycle check in `parse_struct` + `$.`-read dep tracking.
 
 ---
 
