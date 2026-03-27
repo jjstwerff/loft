@@ -169,6 +169,12 @@ impl State {
         lib.push(call);
     }
 
+    /// Register a native Rust function under `symbol` for use by `#native "symbol"` loft
+    /// functions.  Alias for `static_fn` with an external-extension naming convention.
+    pub fn register_native(&mut self, symbol: &str, call: Call) {
+        self.static_fn(symbol, call);
+    }
+
     /// Call a function, remember the current code position on the stack.
     ///
     /// * `d_nr` - definition number of the called function.
