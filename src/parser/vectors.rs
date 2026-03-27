@@ -385,12 +385,16 @@ impl Parser {
             }
         }
 
-        // A5.4: on second pass, if closure record exists, add hidden __closure param.
+        // A5.4: on second pass, if closure record exists, add __closure as attribute+variable.
+        // The codegen (line 40-46) reads definition attributes to assign argument positions.
         let outer_closure_param = self.closure_param;
         if !self.first_pass {
             let closure_rec = self.data.def(d_nr).closure_record;
             if closure_rec != u32::MAX {
                 let closure_tp = Type::Reference(closure_rec, vec![]);
+                // Add as definition attribute so codegen positions it on the stack.
+                self.data
+                    .add_attribute(&mut self.lexer, d_nr, "__closure", closure_tp.clone());
                 let v_nr = self.create_var("__closure", &closure_tp);
                 self.vars.become_argument(v_nr);
                 self.closure_param = v_nr;
@@ -421,7 +425,11 @@ impl Parser {
         self.emit_lambda_code(code, d_nr);
 
         let n_args = self.data.attributes(d_nr);
-        let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
+        // Exclude hidden __closure parameter from the user-visible Function type.
+        let arg_types: Vec<Type> = (0..n_args)
+            .filter(|&a| self.data.attr_name(d_nr, a) != "__closure")
+            .map(|a| self.data.attr_type(d_nr, a))
+            .collect();
         let ret_type = self.data.def(d_nr).returned.clone();
         Type::Function(arg_types, Box::new(ret_type))
     }
@@ -621,21 +629,22 @@ impl Parser {
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
         let closure_rec_d = self.data.def(d_nr).closure_record;
         if closure_rec_d != u32::MAX && !self.first_pass {
+            // Build the closure allocation expression as an inline Block.
+            // This will be injected at the call site as a hidden argument.
             let rec_tp = Type::Reference(closure_rec_d, vec![]);
             let w = self.create_unique("__clos", &rec_tp);
             self.vars.defined(w);
+            self.vars.set_skip_free(w); // Callee owns the record via hidden param.
             let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
-            let mut steps: Vec<Value> = Vec::new();
-            // Allocate the closure record on the heap.
-            steps.push(crate::data::v_set(w, Value::Null));
-            steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
-            // Populate fields from captured variables in the outer scope.
+            let mut alloc_steps: Vec<Value> = Vec::new();
+            alloc_steps.push(crate::data::v_set(w, Value::Null));
+            alloc_steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
             let n_attrs = self.data.attributes(closure_rec_d);
             for aid in 0..n_attrs {
                 let cap_name = self.data.attr_name(closure_rec_d, aid);
                 let v_nr = self.vars.var(&cap_name);
                 if v_nr != u16::MAX {
-                    steps.push(self.set_field_no_check(
+                    alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
                         0,
@@ -644,10 +653,13 @@ impl Parser {
                     ));
                 }
             }
-            // The last expression is the d_nr — becomes the fn-ref value.
-            steps.push(Value::Int(d_nr as i32));
-            *code = Value::Insert(steps);
-            self.last_closure_work_var = w;
+            // Final expression: the closure ref itself.
+            alloc_steps.push(Value::Var(w));
+            let closure_alloc = crate::data::v_block(alloc_steps, rec_tp.clone(), "closure alloc");
+            // Store the closure allocation expression for injection at call site.
+            self.last_closure_alloc = Some(Box::new(closure_alloc));
+            // The lambda value is just the d_nr.
+            *code = Value::Int(d_nr as i32);
         } else {
             *code = Value::Int(d_nr as i32);
         }

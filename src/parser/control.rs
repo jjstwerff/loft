@@ -1922,10 +1922,12 @@ impl Parser {
             for (i, expected) in param_types.iter().enumerate() {
                 self.convert(&mut converted[i], &types[i], expected);
             }
-            // A5.3-complete: inject hidden __closure argument.
-            // The closure_vars map points to the work variable holding the pre-allocated
-            // closure record.  Read it and pass as hidden trailing arg.
-            if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
+            // A5.3: inject hidden __closure argument — the closure allocation
+            // expression is generated inline so it runs at the call site, avoiding
+            // the slot-position issue with pre-allocated work variables.
+            if let Some(closure_alloc) = self.last_closure_alloc.take() {
+                converted.push(*closure_alloc);
+            } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
                 converted.push(Value::Var(closure_w));
             }
             self.var_usages(v_nr, true);

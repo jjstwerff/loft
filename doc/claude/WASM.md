@@ -8,6 +8,11 @@
 - [Node.js Test Harness](#nodejs-test-harness)
 - [Browser vs Node.js Host Comparison](#browser-vs-nodejs-host-comparison)
 - [Implementation Notes](#implementation-notes)
+- [Cargo Feature Gates](#cargo-feature-gates)
+- [Threading in WASM — Two-Tier Design](#threading-in-wasm--two-tier-design)
+- [PNG Image Support in WASM](#png-image-support-in-wasm)
+- [Logging in WASM](#logging-in-wasm)
+- [Test Compatibility Matrix](#test-compatibility-matrix)
 - [See also](#see-also)
 
 ---
@@ -640,6 +645,32 @@ globalThis.loftHost = {
 **Node.js:** `process.env[name] ?? null`.
 **Browser:** returns from a pre-configured `Map` (or null — browsers have no env vars).
 
+### Arguments bridge
+
+```js
+globalThis.loftHost = {
+  // ...
+  arguments()                         -> string[],  // command-line arguments
+};
+```
+
+**Browser:** returns `[]` or values injected by the IDE's "Program arguments" field.
+**Node.js:** `process.argv.slice(2)` or a test-supplied array.
+
+### Logging bridge
+
+```js
+globalThis.loftHost = {
+  // ...
+  log_write(level, message),          // level: "info"|"warn"|"error"|"fatal"
+};
+```
+
+**Browser:** dispatches to `console.info()`, `console.warn()`, `console.error()`.
+**Node.js:** same — `console` methods. No file rotation or directory creation.
+
+See [Logging in WASM](#logging-in-wasm) for the full design.
+
 ### Storage bridge (browser only)
 
 For browser-side persistent storage beyond the virtual filesystem:
@@ -741,6 +772,15 @@ export function createHost(tree, options = {}) {
 
     // environment
     env_variable: (name) => options.env?.[name] ?? null,
+
+    // arguments
+    arguments: () => options.args ?? [],
+
+    // logging — goes to console
+    log_write: (level, msg) => {
+      const fn_ = level === 'fatal' ? 'error' : level;
+      console[fn_](`[loft] ${msg}`);
+    },
 
     // storage
     storage_get:    (k) => storage.get(k) ?? null,
@@ -1024,6 +1064,10 @@ test('binary cursor resets on write', () => { /* ... */ });
 | Output | Thread-local buffer → console panel | Thread-local buffer → string |
 | Binary data | Native `ArrayBuffer` in IndexedDB | base64 in JSON tree |
 | Persistence | IndexedDB survives reload | None (per-test lifecycle) |
+| Threading | Tier 2 (Web Workers) if COEP/COOP, else Tier 1 (sequential) | Sequential (Tier 1) |
+| Logging | `console.*` methods, optional IDE log panel | `console.*` methods |
+| PNG images | Decoded in WASM from VirtFS bytes | Decoded in WASM from VirtFS bytes |
+| Arguments | IDE "arguments" field or `[]` | Test-supplied array or `[]` |
 
 ### When to use which
 
@@ -1103,9 +1147,1067 @@ use `fs.snapshot()` / `fs.restore()`.
 
 ---
 
+## Cargo Feature Gates
+
+The WASM build disables OS-dependent features and enables the host bridge. Two WASM
+build profiles exist — single-threaded and multi-threaded:
+
+```toml
+# Cargo.toml feature definitions
+[features]
+default    = ["png", "mmap", "random", "threading"]
+wasm       = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
+              "dep:js-sys", "dep:web-sys", "png"]
+wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
+png        = ["dep:png"]
+mmap       = ["dep:mmap-storage"]         # disabled for WASM — no file-backed mmap
+random     = ["dep:rand_core", "dep:rand_pcg"]  # disabled for WASM — host provides RNG
+threading  = []                            # enables par() — OS threads or Web Workers
+
+[dependencies]
+wasm-bindgen-rayon = { version = "1.2", optional = true }
+```
+
+**Build commands:**
+
+```sh
+# Single-threaded WASM (works everywhere, including file://)
+wasm-pack build --target web -- --features wasm --no-default-features
+
+# Multi-threaded WASM (requires COEP/COOP headers)
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+  wasm-pack build --target web -- --features wasm-threads --no-default-features
+```
+
+**What each gate controls:**
+
+| Feature | Native | WASM (single) | WASM (threaded) | Notes |
+|---|---|---|---|---|
+| `threading` | ON | OFF | **ON** | OS threads / Web Workers / sequential fallback |
+| `wasm-threads` | — | — | ON | Adds `wasm-bindgen-rayon` for Web Worker pool |
+| `mmap` | ON | OFF | OFF | No file-backed mmap in browser |
+| `random` | ON | OFF | OFF | Host provides RNG via bridge |
+| `png` | ON | **ON** | **ON** | Pure Rust — compiles to WASM |
+| `wasm` | OFF | ON | ON | Host bridge, virtual FS, output capture |
+
+---
+
+## Threading in WASM — Two-Tier Design
+
+### Overview
+
+Loft's `par()` loop attribute spawns OS threads with shared mutable access to the
+Store heap. Browsers can replicate this using **Web Workers + SharedArrayBuffer**,
+but only when specific HTTP headers are present. The design uses two tiers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Runtime detection                         │
+│                                                             │
+│  if (crossOriginIsolated && SharedArrayBuffer) {            │
+│      → Tier 2: Web Worker thread pool (real parallelism)    │
+│  } else {                                                   │
+│      → Tier 1: Sequential fallback (same results, no par)   │
+│  }                                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| Tier | Environment | `par()` behaviour | Build |
+|---|---|---|---|
+| **Tier 1** | `file://`, simple static hosts, Node.js | Sequential — loop body runs inline | `--features wasm` |
+| **Tier 2** | Hosts with COOP/COEP headers, CDN | Real parallelism via Web Workers | `--features wasm-threads` |
+
+### Tier 1 — Sequential fallback
+
+When the `threading` feature is disabled, all parallel entry points execute the loop
+body sequentially in the main thread. The loft program behaves identically — same
+results, same side effects — just without parallelism.
+
+**Rust changes in `src/parallel.rs`:**
+
+```rust
+// The public entry points used by fill.rs:
+
+#[cfg(feature = "threading")]
+pub fn run_parallel_int(/* ... */) { /* existing thread-pool or Web Worker impl */ }
+
+#[cfg(not(feature = "threading"))]
+pub fn run_parallel_int(
+    state: &mut State,
+    stores: &mut Stores,
+    start: i32,
+    end: i32,
+    body_fn: usize,
+) {
+    // Sequential fallback: just run the loop body inline
+    for i in start..end {
+        state.push_int(i);
+        state.call(body_fn, stores);
+    }
+}
+
+// Same pattern for run_parallel_raw, run_parallel_text, etc.
+```
+
+**Bytecode generation (`src/state/codegen.rs`):**
+
+No changes needed. `gen_for` already emits `OpParallelFor*` opcodes regardless of
+target. The opcodes dispatch through `src/fill.rs` to the `parallel.rs` entry points,
+which are swapped at compile time.
+
+**Loft-side behaviour:**
+
+- `par(threads: 4)` attribute is parsed and accepted but ignored — the loop runs
+  sequentially.
+- `fn <name>` references (used for parallel worker functions) still work — they are
+  called inline.
+- No runtime error or warning is emitted. Programs that use `par()` remain valid.
+
+### Tier 2 — Web Worker parallelism
+
+When `SharedArrayBuffer` is available, loft can use real parallel execution in the
+browser. The WASM linear memory (which contains the Store heap) becomes a
+`SharedArrayBuffer` that multiple Web Workers share.
+
+**Why this maps directly to loft's `par()` model:**
+
+| loft native (src/parallel.rs) | WASM + Web Workers |
+|---|---|
+| `std::thread::spawn(closure)` | Web Worker on shared WASM memory |
+| `unsafe { copy_nonoverlapping }` into Store | Same pointers — Store is in shared linear memory |
+| `mpsc::channel` for results | `Atomics.wait()` / `Atomics.notify()` |
+| `thread_local! { RNG }` | Per-Worker TLS (each Worker gets its own) |
+| `thread::available_parallelism()` | `navigator.hardwareConcurrency` |
+
+**Required HTTP headers (server-side):**
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without these headers, the browser blocks `SharedArrayBuffer` construction (Spectre
+mitigation). This is why Tier 2 cannot work from `file://` URLs.
+
+**Rust implementation using `wasm-bindgen-rayon`:**
+
+```rust
+// src/parallel.rs — under #[cfg(all(feature = "threading", feature = "wasm-threads"))]
+
+use wasm_bindgen_rayon::init_thread_pool;
+
+/// Called once at WASM init to spawn the worker pool.
+/// worker_count is typically navigator.hardwareConcurrency.
+#[wasm_bindgen]
+pub fn init_parallel(worker_count: usize) {
+    init_thread_pool(worker_count);
+}
+```
+
+`wasm-bindgen-rayon` provides the glue: it spawns Web Workers that share the WASM
+linear memory, and exposes rayon's thread pool to Rust code. The existing
+`run_parallel_*` functions in `src/parallel.rs` use `std::thread::spawn` which, under
+the atomics target feature, compiles to Web Worker creation.
+
+Alternatively, if loft's parallel model doesn't fit rayon's work-stealing pattern,
+the worker pool can be managed directly:
+
+```rust
+// Direct Web Worker management via wasm-bindgen + js-sys
+#[cfg(all(feature = "threading", feature = "wasm-threads"))]
+mod wasm_workers {
+    use js_sys::SharedArrayBuffer;
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        type Worker;
+
+        #[wasm_bindgen(constructor)]
+        fn new(url: &str) -> Worker;
+
+        #[wasm_bindgen(method, js_name = postMessage)]
+        fn post_message(this: &Worker, msg: &JsValue);
+    }
+
+    /// Each worker receives:
+    /// - The SharedArrayBuffer (WASM linear memory)
+    /// - The function index to execute
+    /// - The iteration range [start, end)
+    /// - The base pointer into Store for writing results
+    pub fn spawn_workers(
+        worker_count: usize,
+        fn_index: usize,
+        start: i32,
+        end: i32,
+        store_base: *mut u8,
+    ) {
+        let chunk_size = (end - start) / worker_count as i32;
+        // ... distribute work, wait for completion via Atomics
+    }
+}
+```
+
+**Worker script (`ide/src/loft-worker.js`):**
+
+```js
+// Loaded by each Web Worker
+import init, { worker_entry } from '../pkg/loft_wasm.js';
+
+self.onmessage = async ({ data }) => {
+  if (data.type === 'init') {
+    // Initialise WASM with shared memory
+    await init(data.module, data.memory);
+    self.postMessage({ type: 'ready' });
+  } else if (data.type === 'run') {
+    // Execute the parallel loop chunk
+    worker_entry(data.fn_index, data.start, data.end);
+    // Signal completion via Atomics (no postMessage needed for result —
+    // results are written directly to shared Store memory)
+    Atomics.store(data.signal, data.worker_id, 1);
+    Atomics.notify(data.signal, data.worker_id);
+  }
+};
+```
+
+**Main thread coordination:**
+
+```js
+// wasm-bridge.js
+async function initWasmThreaded(wasmUrl, workerCount) {
+  // Compile module (shared across workers)
+  const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
+
+  // Create shared memory (this is the WASM linear memory)
+  const memory = new WebAssembly.Memory({
+    initial: 256,       // 16 MB
+    maximum: 16384,     // 1 GB
+    shared: true        // ← SharedArrayBuffer under the hood
+  });
+
+  // Spawn worker pool
+  const workers = [];
+  for (let i = 0; i < workerCount; i++) {
+    const w = new Worker('src/loft-worker.js', { type: 'module' });
+    w.postMessage({ type: 'init', module, memory });
+    workers.push(w);
+  }
+
+  // Wait for all workers to be ready
+  await Promise.all(workers.map(w =>
+    new Promise(resolve => {
+      w.onmessage = (e) => { if (e.data.type === 'ready') resolve(); };
+    })
+  ));
+
+  // Init main thread WASM with same shared memory
+  await init(module, memory);
+
+  return { workers, memory };
+}
+```
+
+**Synchronisation pattern for `par()` loops:**
+
+```
+Main thread                          Workers
+    │                                   │
+    ├─ Prepare iteration ranges         │
+    ├─ Write ranges to shared memory    │
+    ├─ Atomics.store(signal, 0)  ──────→│ Workers wake, read range
+    ├─ Atomics.wait(done, ...)          │ Execute loop body
+    │                                   │ Write results to Store (shared memory)
+    │                              ←────│ Atomics.store(done, 1)
+    ├─ All workers done                 │
+    ├─ Continue execution               │
+    │                                   │
+```
+
+Results don't need to be "sent back" — they're written directly to the Store heap
+in shared memory, exactly like the native `copy_nonoverlapping` pattern.
+
+### Runtime detection and WASM loading
+
+```js
+// app.js — choose tier at startup
+export async function initLoft() {
+  const threaded = typeof SharedArrayBuffer !== 'undefined'
+                && crossOriginIsolated;
+
+  if (threaded) {
+    console.info('[loft] Tier 2: parallel execution via Web Workers');
+    const cores = navigator.hardwareConcurrency || 4;
+    const { workers, memory } = await initWasmThreaded(
+      'pkg/loft_wasm_bg.wasm', cores
+    );
+    return { threaded: true, workers, workerCount: cores };
+  } else {
+    console.info('[loft] Tier 1: sequential execution (no SharedArrayBuffer)');
+    await initWasm('pkg/loft_wasm_bg.wasm');
+    return { threaded: false, workerCount: 0 };
+  }
+}
+```
+
+**IDE status indicator:**
+
+```js
+// Show the user which tier is active
+const badge = document.getElementById('threading-badge');
+if (loftEnv.threaded) {
+  badge.textContent = `⚡ ${loftEnv.workerCount} threads`;
+  badge.title = 'Parallel execution enabled (SharedArrayBuffer)';
+} else {
+  badge.textContent = '1 thread';
+  badge.title = 'Sequential mode — serve with COEP/COOP headers for parallelism';
+}
+```
+
+### Deployment configurations
+
+| Hosting method | Headers | Tier | `par()` |
+|---|---|---|---|
+| `file://index.html` | None | 1 | Sequential |
+| `python -m http.server` | None | 1 | Sequential |
+| Nginx / Apache with COOP+COEP | Yes | 2 | Parallel |
+| Cloudflare Pages (custom headers) | Yes | 2 | Parallel |
+| GitHub Pages | No (can't set headers) | 1 | Sequential |
+| Vercel / Netlify (with `_headers`) | Yes | 2 | Parallel |
+
+**Minimal dev server with headers** (`ide/serve.mjs`):
+
+```js
+import http from 'http';
+import { readFileSync, existsSync } from 'fs';
+
+const MIME = { '.html': 'text/html', '.js': 'text/javascript',
+               '.wasm': 'application/wasm', '.css': 'text/css',
+               '.json': 'application/json' };
+
+http.createServer((req, res) => {
+  const path = `ide${req.url === '/' ? '/index.html' : req.url}`;
+  if (!existsSync(path)) { res.writeHead(404).end(); return; }
+
+  const ext = path.substring(path.lastIndexOf('.'));
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Embedder-Policy': 'require-corp',
+  });
+  res.end(readFileSync(path));
+}).listen(8080);
+
+console.log('Loft IDE: http://localhost:8080 (threads enabled)');
+```
+
+### Build pipeline
+
+```sh
+# ide/build.sh — updated to produce both tiers
+
+#!/bin/sh
+set -e
+
+echo "Building single-threaded WASM..."
+wasm-pack build --target web --out-dir ide/pkg/st -- --features wasm --no-default-features
+
+echo "Building multi-threaded WASM..."
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+  wasm-pack build --target web --out-dir ide/pkg/mt -- --features wasm-threads --no-default-features
+
+echo "Building base filesystem..."
+node ide/scripts/build-base-fs.js
+
+echo "Done. Serve with: node ide/serve.mjs"
+```
+
+The loader picks the right package at runtime:
+
+```js
+const pkg = loftEnv.threaded ? 'pkg/mt/loft_wasm.js' : 'pkg/st/loft_wasm.js';
+```
+
+### Memory considerations for shared WASM
+
+- `WebAssembly.Memory({ shared: true })` requires a fixed `maximum` declared at
+  compile time. For loft this should be generous (1 GB) since the Store heap can
+  grow.
+- Shared memory cannot be grown dynamically in some browsers — set initial size
+  large enough for typical programs (~64 MB) to avoid frequent grows.
+- Each Web Worker loads the full WASM module but shares the same linear memory.
+  Per-worker overhead is ~1-2 MB for the WASM instance plus JS context.
+
+### Test impact
+
+| Test file | Tier 1 | Tier 2 |
+|---|---|---|
+| `tests/threading.rs` | **Skip** — tests Rust `std::thread` directly | **Skip** — same reason |
+| `tests/scripts/22-threading.loft` | Runs (sequential) | Runs (parallel via Workers) |
+| All other tests | Pass | Pass |
+
+The `22-threading.loft` test verifies output correctness (sums, vector contents), not
+execution speed or thread count. It passes under both tiers without changes.
+
+---
+
+## PNG Image Support in WASM
+
+### Why it works
+
+The `png` crate (v0.17) is pure Rust with no OS dependencies. It implements the full
+PNG decode pipeline (inflate, filtering, interlacing) in safe Rust. This compiles to
+WASM without modification.
+
+### Adaptation: buffer-based decoding
+
+The only blocker is that `png_store::read()` opens a file via `std::fs::File::open()`.
+Under `#[cfg(feature = "wasm")]`, it reads from the VirtFS instead:
+
+```rust
+// src/png_store.rs
+
+#[cfg(not(feature = "wasm"))]
+pub fn read(path: &str, store: &mut Store) -> Result<(u32, u32, u32)> {
+    let file = std::fs::File::open(path)?;
+    let decoder = png::Decoder::new(file);
+    decode_into_store(decoder, store)
+}
+
+#[cfg(feature = "wasm")]
+pub fn read(path: &str, store: &mut Store) -> Result<(u32, u32, u32)> {
+    let bytes = crate::wasm::host_read_binary(path)
+        .ok_or_else(|| anyhow!("file not found: {path}"))?;
+    let cursor = std::io::Cursor::new(bytes);
+    let decoder = png::Decoder::new(cursor);
+    decode_into_store(decoder, store)
+}
+
+// Shared decode logic — works with any std::io::Read source
+fn decode_into_store<R: std::io::Read>(
+    decoder: png::Decoder<R>,
+    store: &mut Store,
+) -> Result<(u32, u32, u32)> {
+    let img = store.claim((reader.output_buffer_size() / 8) as u32 + 1);
+    let info = reader.next_frame(store.buffer(img))?;
+    Ok((img, info.width, info.height))
+}
+```
+
+The key insight: `png::Decoder<R>` is generic over `R: Read`. Swapping
+`File` for `Cursor<Vec<u8>>` requires no changes to the decode logic.
+
+### Browser workflow
+
+1. User drags a PNG file onto the IDE, or the PNG is in the VirtFS (base tree or
+   delta).
+2. The VirtFS stores it as a binary node (`"$type": "binary"`, base64 content).
+3. When the loft program calls `file("image.png").png()`, the WASM bridge reads the
+   binary bytes from VirtFS and passes them to `png::Decoder` via a `Cursor`.
+4. Decoded pixels land in the Store heap as usual — the `Image` struct works
+   identically.
+
+### Browser-to-loft PNG import via drag-and-drop
+
+```js
+// In the IDE: handle dropped PNG files
+dropZone.ondrop = async (e) => {
+  for (const file of e.dataTransfer.files) {
+    if (file.name.endsWith('.png')) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      fs.writeBinary(`/project/${file.name}`, bytes);
+    }
+  }
+};
+```
+
+### Displaying Image output in the browser
+
+The reverse direction — loft `Image` → visible in the IDE — can be handled by a
+host bridge that receives pixel data and renders to a `<canvas>`:
+
+```js
+globalThis.loftHost = {
+  // ...
+  display_image(width, height, pixels) {
+    // pixels: Uint8Array of RGB triplets
+    const canvas = document.getElementById('output-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = width;
+    canvas.height = height;
+    const imageData = ctx.createImageData(width, height);
+    for (let i = 0, j = 0; i < pixels.length; i += 3, j += 4) {
+      imageData.data[j]     = pixels[i];     // R
+      imageData.data[j + 1] = pixels[i + 1]; // G
+      imageData.data[j + 2] = pixels[i + 2]; // B
+      imageData.data[j + 3] = 255;           // A
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+};
+```
+
+This is optional — PNG decoding works without it. Display is an IDE convenience.
+
+---
+
+## Logging in WASM
+
+### Problem
+
+The loft logger (`src/logger.rs`) writes to files: it creates log directories,
+rotates log files, and archives old entries. None of this makes sense in a browser.
+
+### Design: console-only logging under `#[cfg(feature = "wasm")]`
+
+All log output goes to the JavaScript console via the host bridge. No file I/O, no
+rotation, no directories.
+
+**Rust changes in `src/logger.rs`:**
+
+```rust
+#[cfg(feature = "wasm")]
+fn write_log_entry(level: Level, message: &str) {
+    // Call JS host to write to console
+    crate::wasm::host_log_write(level.as_str(), message);
+}
+
+#[cfg(not(feature = "wasm"))]
+fn write_log_entry(level: Level, message: &str) {
+    // Existing file-based logging implementation
+    // ...
+}
+```
+
+**Conditional compilation gates:**
+
+```rust
+// Skip all file-based setup in WASM
+#[cfg(not(feature = "wasm"))]
+fn ensure_log_dir() { /* create directory, rotate files */ }
+
+#[cfg(feature = "wasm")]
+fn ensure_log_dir() { /* no-op */ }
+```
+
+**JS host implementation:**
+
+```js
+// Browser
+globalThis.loftHost = {
+  log_write(level, message) {
+    switch (level) {
+      case 'info':  console.info(`[loft] ${message}`);  break;
+      case 'warn':  console.warn(`[loft] ${message}`);  break;
+      case 'error': console.error(`[loft] ${message}`); break;
+      case 'fatal': console.error(`[loft FATAL] ${message}`); break;
+    }
+  }
+};
+
+// Node.js — identical, console methods work the same
+```
+
+**Loft-side behaviour:**
+
+- `log_info()`, `log_warn()`, `log_error()`, `log_fatal()` all work.
+- `log_config()` is accepted but has no effect (no file to configure).
+- Rate limiting still applies — implemented in Rust, not in the file layer.
+
+### IDE integration (optional)
+
+The IDE can capture log output in a dedicated "Log" panel instead of (or alongside)
+the browser console:
+
+```js
+const logEntries = [];
+globalThis.loftHost = {
+  log_write(level, message) {
+    logEntries.push({ level, message, time: Date.now() });
+    renderLogPanel(logEntries);         // update UI
+    console[level === 'fatal' ? 'error' : level](`[loft] ${message}`);
+  }
+};
+```
+
+---
+
+## Test Compatibility Matrix
+
+### Rust integration tests (`tests/*.rs`)
+
+| Test file | Tier 1 (sequential) | Tier 2 (threaded) | Notes |
+|---|---|---|---|
+| `expressions.rs` | Yes | Yes | Pure computation, no OS deps |
+| `enums.rs` | Yes | Yes | Pure computation |
+| `strings.rs` | Yes | Yes | Pure computation |
+| `objects.rs` | Yes | Yes | Pure computation |
+| `vectors.rs` | Yes | Yes | Pure computation |
+| `sizes.rs` | Yes | Yes | Pure computation |
+| `data_structures.rs` | Yes | Yes | Pure computation |
+| `parse_errors.rs` | Yes | Yes | Diagnostic checking, no runtime |
+| `immutability.rs` | Yes | Yes | Diagnostic checking |
+| `slot_assign.rs` | Yes | Yes | Compile-time analysis |
+| `log_config.rs` | Yes | Yes | Unit tests for config parsing |
+| `issues.rs` | Yes | Yes | Reproducers — most are pure computation |
+| `expressions_auto_convert.rs` | Yes | Yes | Pure computation |
+| `threading.rs` | **Skip** | **Skip** | Tests Rust `std::thread` APIs directly — not WASM-portable |
+| `wrap.rs` | Partial | Partial | Runs `.loft` files — needs VirtFS for file-IO tests |
+
+### Loft script tests (`tests/scripts/*.loft`)
+
+| Test file | Tier 1 | Tier 2 | Bridge needed |
+|---|---|---|---|
+| `01-*` through `14-*` | Yes | Yes | Output capture only |
+| `15-random.loft` | Yes | Yes | `random_int`, `random_seed` |
+| `16-time.loft` | Yes | Yes | `time_now`, `time_ticks` |
+| `19-files.loft` | Yes | Yes | Full VirtFS bridge |
+| `22-threading.loft` | Yes (sequential) | Yes (parallel) | Sequential fallback or Web Workers |
+| `42-file-result.loft` | Yes | Yes | VirtFS + `fs_delete`, `fs_move`, `fs_mkdir` |
+
+### Loft doc tests (`tests/docs/*.loft`)
+
+| Test file | Tier 1 | Tier 2 | Bridge needed |
+|---|---|---|---|
+| `13-file.loft` | Yes | Yes | Full VirtFS bridge |
+| `21-random.loft` | Yes | Yes | `random_int`, `random_seed` |
+| `22-time.loft` | Yes | Yes | `time_now`, `time_ticks` |
+| All others | Yes | Yes | Output capture only |
+
+### Summary
+
+| Category | Total | Tier 1 | Tier 2 | Skip | Notes |
+|---|---|---|---|---|---|
+| Rust integration tests | ~15 | 14 | 14 | 1 | Only `threading.rs` skipped (both tiers) |
+| Loft script tests | ~40+ | All | All | 0 | `22-threading` sequential in T1, parallel in T2 |
+| Loft doc tests | ~25+ | All | All | 0 | |
+
+The **only test file that must be skipped** is `tests/threading.rs`, which tests
+Rust-level `std::thread` APIs directly. Every loft-level test — including those
+using `par()` — runs under both tiers. Tier 2 gives real parallelism; Tier 1
+gives identical results sequentially.
+
+---
+
+## Implementation Plan
+
+### Principles
+
+- Each step produces a testable result before moving to the next.
+- Steps are ordered so that earlier steps unblock later ones.
+- Each step works with `cargo test` (native) and/or `wasm-pack build` + Node.js.
+- No step requires the Web IDE — all testing is CLI/Node.js until the final
+  integration step.
+
+---
+
+### Step 1 — Cargo feature scaffolding
+
+**Goal:** `cargo build --features wasm --no-default-features` compiles (with stubs).
+
+**Changes:**
+- `Cargo.toml`: add `wasm`, `wasm-threads`, `threading` features and optional deps
+  (`wasm-bindgen`, `serde`, `serde-wasm-bindgen`, `js-sys`, `web-sys`,
+  `wasm-bindgen-rayon`)
+- `src/lib.rs` (new): `#[cfg(feature = "wasm")] mod wasm;` — expose crate as a
+  library target alongside the binary
+- `src/wasm.rs` (new): empty module with `// TODO` placeholders
+- Add `[lib]` section to `Cargo.toml`: `crate-type = ["cdylib", "rlib"]`
+
+**Test:**
+```sh
+cargo check --features wasm --no-default-features
+cargo check                                          # default features still work
+cargo test                                           # existing tests unchanged
+```
+
+**Verification:** both check commands succeed with zero warnings from new code.
+
+---
+
+### Step 2 — Output capture (`print` → buffer)
+
+**Goal:** `println()` / `print()` output goes to a thread-local buffer under `wasm`.
+
+**Changes:**
+- `src/wasm.rs`: add `output_push()`, `output_take()` with thread-local `String`
+- `src/fill.rs` line 1725: wrap `print!()` in `#[cfg(not(feature = "wasm"))]`,
+  add `#[cfg(feature = "wasm")]` branch calling `crate::wasm::output_push()`
+
+**Test:**
+```sh
+# Native — no change
+cargo test
+
+# WASM — write a Rust unit test in src/wasm.rs:
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn output_capture() {
+        output_push("hello ");
+        output_push("world");
+        assert_eq!(output_take(), "hello world");
+        assert_eq!(output_take(), "");  // cleared after take
+    }
+}
+
+cargo test --features wasm --no-default-features -- wasm::tests
+```
+
+**Verification:** unit test passes; native `cargo test` still passes.
+
+---
+
+### Step 3 — Sequential `par()` fallback
+
+**Goal:** `par()` loops run sequentially when `threading` feature is off.
+
+**Changes:**
+- `src/parallel.rs`: wrap each `run_parallel_*` function body in
+  `#[cfg(feature = "threading")]`; add `#[cfg(not(feature = "threading"))]`
+  sequential versions
+- `src/native.rs`: the call sites (`run_parallel_int(...)` etc.) stay unchanged —
+  the function signatures are identical
+
+**Test:**
+```sh
+# Native with threading — existing tests pass as before
+cargo test
+
+# Without threading — 22-threading.loft produces correct results sequentially
+cargo test --no-default-features --features png,random -- scripts::threading
+cargo test --no-default-features --features png,random -- docs
+```
+
+**Verification:** `22-threading.loft` output matches expected values.
+`tests/threading.rs` is expected to fail (or be `#[cfg]`-gated) without the
+`threading` feature — add `#![cfg(feature = "threading")]` at the top of that file.
+
+---
+
+### Step 4 — Logging to console stub
+
+**Goal:** logger compiles under `wasm` without file I/O.
+
+**Changes:**
+- `src/logger.rs`: gate file I/O functions (`ensure_log_dir`, file write, rotate)
+  behind `#[cfg(not(feature = "wasm"))]`
+- Add `#[cfg(feature = "wasm")]` versions that call `crate::wasm::host_log_write()`
+- `src/wasm.rs`: add `host_log_write()` — for now, a no-op or `web_sys::console::log_1`
+  behind `#[cfg(feature = "wasm")]`
+
+**Test:**
+```sh
+# Compile check
+cargo check --features wasm --no-default-features
+
+# Native logging unchanged
+cargo test -- log_config
+```
+
+**Verification:** compiles cleanly; `log_config.rs` tests still pass on native.
+
+---
+
+### Step 5 — Random bridge stub
+
+**Goal:** `rand()` / `rand_seed()` compile under `wasm` without the `rand_pcg` crate.
+
+**Changes:**
+- `src/ops.rs`: gate the `thread_local! { RNG }` and PCG usage behind
+  `#[cfg(feature = "random")]`
+- Add `#[cfg(all(feature = "wasm", not(feature = "random")))]` versions that call
+  `crate::wasm::host_random_int()` and `crate::wasm::host_random_seed()`
+- `src/wasm.rs`: declare `#[wasm_bindgen]` extern functions for `random_int`,
+  `random_seed`; for Rust-side testing, add `#[cfg(test)]` mock implementations
+
+**Test:**
+```sh
+# Native — rand tests still pass
+cargo test -- scripts::random
+cargo test -- docs::random
+
+# WASM compile check
+cargo check --features wasm --no-default-features
+```
+
+**Verification:** native random tests pass; WASM target compiles.
+
+---
+
+### Step 6 — Time and environment bridge stubs
+
+**Goal:** `now()`, `ticks()`, `env_variable()`, `arguments()`, `directory()`,
+`user_directory()`, `program_directory()` compile under `wasm`.
+
+**Changes:**
+- `src/native.rs` / `src/database/format.rs`: gate `SystemTime`, `Instant`,
+  `std::env::*`, `dirs::home_dir()` behind `#[cfg(not(feature = "wasm"))]`
+- Add `#[cfg(feature = "wasm")]` versions calling host bridge functions
+- `src/wasm.rs`: declare extern functions for `time_now`, `time_ticks`,
+  `env_variable`, `arguments`, `fs_cwd`, `fs_user_dir`, `fs_program_dir`
+
+**Test:**
+```sh
+# Native — time/env tests still pass
+cargo test -- scripts::time
+cargo test -- scripts::files
+
+# WASM compile check
+cargo check --features wasm --no-default-features
+```
+
+**Verification:** native tests pass; WASM target compiles cleanly.
+
+---
+
+### Step 7 — File I/O bridge stubs
+
+**Goal:** all file operations compile under `wasm`, calling host bridge functions
+instead of `std::fs`.
+
+**Changes:**
+- `src/state/io.rs` and `src/database/io.rs`: gate every `std::fs` call behind
+  `#[cfg(not(feature = "wasm"))]`; add `#[cfg(feature = "wasm")]` versions calling
+  host functions (`fs_exists`, `fs_read_text`, `fs_write_text`, `fs_read_binary`,
+  `fs_write_binary`, `fs_delete`, `fs_move`, `fs_mkdir`, `fs_mkdir_all`,
+  `fs_list_dir`, `fs_is_dir`, `fs_is_file`, `fs_file_size`, `fs_seek`,
+  `fs_read_bytes`, `fs_write_bytes`, `fs_get_cursor`)
+- `src/wasm.rs`: declare all `#[wasm_bindgen]` extern functions
+
+**Test:**
+```sh
+# Native — file tests still pass
+cargo test -- scripts::files
+cargo test -- scripts::file_result
+cargo test -- docs::file
+
+# WASM compile check
+cargo check --features wasm --no-default-features
+```
+
+**Verification:** native file I/O tests pass; WASM target compiles. This is the
+largest single step — review the diff carefully for missed `std::fs` calls.
+
+---
+
+### Step 8 — PNG buffer-based decoding
+
+**Goal:** `file("img.png").png()` works under `wasm` by reading bytes from the host
+instead of `std::fs::File`.
+
+**Changes:**
+- `src/png_store.rs`: extract shared logic into `decode_into_store<R: Read>()`; add
+  `#[cfg(feature = "wasm")]` version that reads via `crate::wasm::host_read_binary()`
+  and wraps in `std::io::Cursor`
+
+**Test:**
+```sh
+# Native — any PNG-using tests still pass
+cargo test
+
+# WASM compile check (png feature is ON for wasm)
+cargo check --features wasm --no-default-features
+```
+
+**Verification:** compiles; native PNG tests unchanged.
+
+---
+
+### Step 9 — `compile_and_run()` WASM entry point
+
+**Goal:** the full interpreter is callable from JS via a single function.
+
+**Changes:**
+- `src/wasm.rs`: implement `compile_and_run(files_js: JsValue) -> JsValue` as
+  described in [WEB_IDE.md](WEB_IDE.md) § src/wasm.rs
+- Wire up virtual FS population, parser, scope check, bytecode gen, execution,
+  output collection, diagnostic collection
+- Return `{ output, diagnostics, success }`
+
+**Test:**
+```sh
+# WASM build (first time producing a .wasm file)
+wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --features wasm --no-default-features
+
+# Smoke test from Node.js
+node -e "
+  const loft = require('./tests/wasm/pkg/loft_wasm.js');
+  const r = loft.compile_and_run([{name:'main.loft', content:'fn main(){println(\"hi\")}'}]);
+  console.log(r);
+  process.exit(r.success ? 0 : 1);
+"
+```
+
+**Verification:** prints `{ output: 'hi\n', diagnostics: [], success: true }` and
+exits 0. This is the first time loft actually runs in WASM.
+
+---
+
+### Step 10 — VirtFS implementation (JavaScript)
+
+**Goal:** the `VirtFS` class passes all unit tests in Node.js.
+
+**Changes:**
+- `tests/wasm/virt-fs.mjs`: implement the `VirtFS` class
+- `tests/wasm/harness.mjs`: minimal test runner (`test()`, `assert()`,
+  `assert.deepEqual()`, `assert.throws()`)
+- `tests/wasm/virt-fs.test.mjs`: all unit tests from the [VirtFS unit tests]
+  section of this document
+
+**Test:**
+```sh
+node tests/wasm/virt-fs.test.mjs
+```
+
+**Verification:** all VirtFS tests pass (exists, read, write, delete, move, mkdir,
+binary, cursor, snapshot/restore, toJSON/fromJSON, path resolution).
+
+---
+
+### Step 11 — Host factory and WASM bridge tests
+
+**Goal:** loft programs that do file I/O, random, and time work end-to-end in Node.js
+via WASM.
+
+**Changes:**
+- `tests/wasm/host.mjs`: implement `createHost()` wiring VirtFS to `loftHost`
+- `tests/wasm/bridge.test.mjs`: integration tests from the [WASM bridge integration
+  tests] section (file write/read, exists/delete, directory listing, rand
+  determinism, mkdir_all, binary I/O)
+- `tests/wasm/file-io.test.mjs`: edge case tests
+- `tests/wasm/random.test.mjs`: rand/seed determinism tests
+
+**Test:**
+```sh
+node --experimental-vm-modules tests/wasm/bridge.test.mjs
+node --experimental-vm-modules tests/wasm/random.test.mjs
+node --experimental-vm-modules tests/wasm/file-io.test.mjs
+```
+
+**Verification:** all bridge tests pass — loft programs produce correct output,
+VirtFS reflects writes made by loft code, rand sequences are reproducible.
+
+---
+
+### Step 12 — LayeredFS and base tree
+
+**Goal:** the overlay filesystem works; base tree is generated from project files.
+
+**Changes:**
+- `tests/wasm/layered-fs.mjs`: implement `LayeredFS` extending `VirtFS`
+- `tests/wasm/layered-fs.test.mjs`: tests from the [Node.js testing with layers]
+  section (shadow, delete tracking, coexistence, delta serialise/reload)
+- `ide/scripts/build-base-fs.js`: build script that generates `base-fs.json` from
+  `tests/docs/*.loft`, `doc/*.html`, `default/*.loft`
+
+**Test:**
+```sh
+node tests/wasm/layered-fs.test.mjs
+node ide/scripts/build-base-fs.js && ls -la ide/assets/base-fs.json
+```
+
+**Verification:** LayeredFS tests pass; `base-fs.json` is generated and contains
+expected entries.
+
+---
+
+### Step 13 — Run existing loft test suite through WASM
+
+**Goal:** the bulk of `tests/scripts/*.loft` and `tests/docs/*.loft` produce correct
+output when executed via the WASM module in Node.js.
+
+**Changes:**
+- `tests/wasm/suite.mjs`: test runner that:
+  1. Reads each `.loft` file
+  2. Creates a VirtFS with the file and any supporting fixtures
+  3. Calls `compile_and_run()` via the WASM module
+  4. Compares output against the expected output (from the native test framework's
+     result files, or by running native first and capturing)
+- Skip list: `22-threading.loft` runs but is not compared for timing output;
+  file-I/O tests need fixture trees
+
+**Test:**
+```sh
+# Generate reference output from native
+cargo test 2>&1 | tee tests/wasm/reference-output.txt
+
+# Run through WASM
+node --experimental-vm-modules tests/wasm/suite.mjs
+```
+
+**Verification:** WASM output matches native output for all non-skipped tests.
+This is the major confidence gate — if this passes, the WASM port is functionally
+correct.
+
+---
+
+### Step 14 — Tier 2: Web Worker threading (optional)
+
+**Goal:** `par()` loops use real Web Workers when SharedArrayBuffer is available.
+
+**Changes:**
+- `Cargo.toml`: `wasm-threads` feature adds `wasm-bindgen-rayon`
+- `src/parallel.rs`: add `#[cfg(feature = "wasm-threads")]` implementations that
+  use `wasm-bindgen-rayon` or direct Worker management
+- `ide/src/loft-worker.js`: worker script
+- `ide/src/wasm-bridge.js`: `initWasmThreaded()` with shared memory and worker pool
+- `ide/serve.mjs`: dev server with COOP/COEP headers
+
+**Test:**
+```sh
+# Build threaded WASM
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+  wasm-pack build --target web --out-dir ide/pkg/mt -- --features wasm-threads --no-default-features
+
+# Test with the dev server
+node ide/serve.mjs &
+# Open http://localhost:8080, run a par() program, verify output + thread badge
+```
+
+**Verification:** `22-threading.loft` produces correct output; browser console shows
+worker pool initialisation; IDE badge shows thread count.
+
+---
+
+### Step summary
+
+| Step | What | Test method | Depends on |
+|---|---|---|---|
+| 1 | Cargo features | `cargo check` | — |
+| 2 | Output capture | Rust unit test | 1 |
+| 3 | Sequential `par()` | `cargo test` (no threading) | 1 |
+| 4 | Logging stub | `cargo check` | 1, 2 |
+| 5 | Random bridge | `cargo check` + native tests | 1 |
+| 6 | Time/env bridge | `cargo check` + native tests | 1 |
+| 7 | File I/O bridge | `cargo check` + native tests | 1 |
+| 8 | PNG buffer decode | `cargo check` + native tests | 7 |
+| 9 | `compile_and_run` | `wasm-pack` + Node.js smoke | 2, 4, 5, 6, 7 |
+| 10 | VirtFS (JS) | Node.js unit tests | — |
+| 11 | Host + bridge tests | Node.js + WASM | 9, 10 |
+| 12 | LayeredFS + base tree | Node.js unit tests | 10 |
+| 13 | Full test suite via WASM | Node.js suite runner | 11 |
+| 14 | Tier 2 threading | Browser manual test | 9, 3 |
+
+```
+Steps 1-8: Rust-side — all testable with cargo
+Step 9:    First WASM build — smoke test in Node.js
+Steps 10-12: JavaScript-side — testable with Node.js alone
+Step 13:   Full validation — WASM matches native
+Step 14:   Threading upgrade — browser-only, optional
+```
+
+Steps 1-8 can be done in rough parallel (they touch different files), but the
+dependency arrows above show the minimum ordering. Steps 10-12 have no Rust
+dependency and can be developed in parallel with steps 1-8.
+
+---
+
 ## See also
 - [WEB_IDE.md](WEB_IDE.md) — Full Web IDE architecture, milestones, Rust changes
 - [STDLIB.md](STDLIB.md) § File System — loft file I/O API
 - [STDLIB.md](STDLIB.md) § Random — `rand()`, `rand_seed()`, `rand_indices()`
 - [INTERNALS.md](INTERNALS.md) — Native function registry and `src/state/io.rs`
 - [TESTING.md](TESTING.md) — Rust-side test framework
+- [THREADING.md](THREADING.md) — Parallel execution model (native only)
+- [LOGGER.md](LOGGER.md) — Logging framework (file-based in native, console in WASM)

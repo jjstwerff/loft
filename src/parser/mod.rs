@@ -119,6 +119,8 @@ pub struct Parser {
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // A5.3: last closure work variable created by emit_lambda_code (transient).
     pub(crate) last_closure_work_var: u16,
+    // A5.3: closure allocation expression to inject at the call site.
+    pub(crate) last_closure_alloc: Option<Box<Value>>,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
     /// Decremented after each init(expr) is parsed.
     pub(crate) init_field_tracking: bool,
@@ -273,6 +275,7 @@ impl Parser {
             closure_param: u16::MAX,
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
+            last_closure_alloc: None,
             init_field_tracking: false,
             init_field_deps: Vec::new(),
         }
