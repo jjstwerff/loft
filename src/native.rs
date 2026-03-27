@@ -17,6 +17,7 @@ use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
 use std::sync::Arc;
+#[cfg(not(feature = "wasm"))]
 use std::time::SystemTime;
 
 pub const FUNCTIONS: &[(&str, Call)] = &[
@@ -930,6 +931,7 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
+#[cfg(not(feature = "wasm"))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     let millis = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -937,11 +939,24 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, millis);
 }
 
+#[cfg(feature = "wasm")]
+fn n_now(stores: &mut Stores, stack: &mut DbRef) {
+    stores.put(stack, crate::wasm::host_time_now());
+}
+
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
+#[cfg(not(feature = "wasm"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let micros = stores.start_time.elapsed().as_micros() as i64;
     stores.put(stack, micros);
+}
+
+#[cfg(feature = "wasm")]
+fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
+    let now_ms = crate::wasm::host_time_ticks();
+    let elapsed_micros = (now_ms - stores.start_time_ms) * 1000;
+    stores.put(stack, elapsed_micros);
 }
 
 /// TR1.3: Build `vector<StackFrame>` from the call-stack snapshot in Stores.

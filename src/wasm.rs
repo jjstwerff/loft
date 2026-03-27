@@ -8,6 +8,50 @@
 //!
 //! Steps: W1.1 (this stub) → W1.2 (output capture) → W1.3–W1.8 (bridges) → W1.9 (entry point).
 
+// ── W1.6  Time and environment host bridges ──────────────────────────────────
+
+/// Return the current time as milliseconds since the Unix epoch.
+pub fn host_time_now() -> i64 {
+    // TODO W1.9: call extern "C" { fn time_now() -> i64; }
+    0
+}
+
+/// Return microseconds elapsed since some fixed start point (monotonic).
+pub fn host_time_ticks() -> i64 {
+    // TODO W1.9: call extern "C" { fn time_ticks() -> i64; }
+    0
+}
+
+/// Return the value of environment variable `name`, or empty string if absent.
+pub fn host_env_variable(_name: &str) -> String {
+    // TODO W1.9: call extern "C" { fn env_variable(ptr, len) -> ... }
+    String::new()
+}
+
+/// Return the command-line arguments (always empty under WASM).
+pub fn host_arguments() -> Vec<String> {
+    // TODO W1.9
+    Vec::new()
+}
+
+/// Return the current working directory (empty under WASM).
+pub fn host_fs_cwd() -> String {
+    // TODO W1.9: call extern "C" { fn fs_cwd() -> ... }
+    String::new()
+}
+
+/// Return the user home directory (empty under WASM).
+pub fn host_fs_user_dir() -> String {
+    // TODO W1.9: call extern "C" { fn fs_user_dir() -> ... }
+    String::new()
+}
+
+/// Return the program executable directory (empty under WASM).
+pub fn host_fs_program_dir() -> String {
+    // TODO W1.9: call extern "C" { fn fs_program_dir() -> ... }
+    String::new()
+}
+
 // ── W1.5  Random host bridge ─────────────────────────────────────────────────
 
 /// Return a random integer in `[lo, hi]` inclusive.  Called when `wasm` is

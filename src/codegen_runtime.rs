@@ -23,6 +23,7 @@ use crate::tree;
 use crate::vector;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write as _};
+#[cfg(not(feature = "wasm"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Allocate a database root record for the given type.
@@ -1138,17 +1139,31 @@ pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
+#[cfg(not(feature = "wasm"))]
 pub fn n_now(_stores: &mut Stores) -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(i64::MIN, |d| d.as_millis() as i64)
 }
 
+/// Bytecode equivalent: `n_now` in `src/native.rs`.
+#[cfg(feature = "wasm")]
+pub fn n_now(_stores: &mut Stores) -> i64 {
+    crate::wasm::host_time_now()
+}
+
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
+#[cfg(not(feature = "wasm"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
     stores.start_time.elapsed().as_micros() as i64
+}
+
+/// Bytecode equivalent: `n_ticks` in `src/native.rs`.
+#[cfg(feature = "wasm")]
+pub fn n_ticks(stores: &mut Stores) -> i64 {
+    (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
 }
 
 /// Return the platform path separator as a loft character (`i32`).
