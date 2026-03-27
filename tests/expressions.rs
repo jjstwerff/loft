@@ -440,6 +440,19 @@ fn coroutine_call_helper_between_yields() {
 
 // ── CO1.4 — yield from delegation ───────────────────────────────────────────
 
+// ── T1.7 — `integer not null` annotation for tuple elements ─────────────────
+
+#[test]
+#[ignore = "T1.7: integer not null annotation not yet implemented in the type system"]
+fn not_null_element_assignment() {
+    // `integer not null` element in a tuple type — basic assignment compiles and runs.
+    code!("fn count_pair() -> (integer not null, integer not null) { (1, 2) }")
+        .expr("p = count_pair(); p.0 + p.1")
+        .result(Value::Int(3));
+}
+
+// ── CO1.4 — yield from ───────────────────────────────────────────────────────
+
 #[test]
 #[ignore = "CO1.4: yield from slot assignment regression — needs IR restructuring"]
 fn coroutine_yield_from() {
