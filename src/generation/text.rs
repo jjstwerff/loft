@@ -75,7 +75,17 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let variables = &self.data.def(self.def_nr).variables;
+            let s_nr = sanitize(variables.name(*nr));
+            // When the variable is a `&mut String` parameter (RefVar(Text)), the capacity
+            // re-allocation assignment needs an explicit dereference; auto-deref does not
+            // apply to assignment left-hand sides in Rust.
+            let deref =
+                if variables.is_argument(*nr) && matches!(variables.tp(*nr), Type::RefVar(_)) {
+                    "*"
+                } else {
+                    ""
+                };
             let n = self.next_format_count;
             self.next_format_count = 0;
             if n > 1 {
@@ -84,7 +94,7 @@ impl Output<'_> {
                     w,
                     "{{ let _cap = {n}_usize * 8; \
                      if var_{s_nr}.capacity() < _cap \
-                     {{ var_{s_nr} = String::with_capacity(_cap); }} \
+                     {{ {deref}var_{s_nr} = String::with_capacity(_cap); }} \
                      else {{ var_{s_nr}.clear(); }} }}"
                 )?;
             } else {

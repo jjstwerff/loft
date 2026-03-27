@@ -404,6 +404,49 @@ fn main() {
 
 ---
 
+## C27 — Native tests: `rand_core` unavailable in standalone rustc compilation
+
+`rand_core` and `rand_pcg` are optional feature dependencies of the loft crate
+(enabled by the `random` feature).  When the native test harness compiles generated
+`.rs` files by invoking `rustc` directly, it passes `--extern loft=libloft.rlib` but
+does not pass `--extern rand_core=...` for transitive optional deps.  Any native test
+that calls `rand`, `rand_seed`, or `rand_indices` therefore fails to compile with
+`error[E0433]: failed to resolve: use of undeclared crate or module 'rand_core'`.
+
+**Reproducer:** run `cargo test --test native` with `tests/scripts/15-random.loft` or
+`tests/docs/21-random.loft` included (not skipped).
+
+**Test:** `15-random.loft` and `21-random.loft` are in the native skip lists.
+**Workaround:** avoid random functions in native test scripts until the harness is fixed.
+**Planned fix:** extend `find_loft_rlib` / rustc invocation in `tests/native.rs` to
+collect and pass `--extern` flags for all transitive optional deps from the deps dir.
+
+---
+
+## C28 — Native tests: slot conflict in `20-binary.loft` (`rv` vs `_read_34`)
+
+The slot allocator assigns overlapping slots to `rv` and `_read_34` in `n_main`
+within `tests/scripts/20-binary.loft`:
+
+```
+=== Slot conflict in function 'n_main' ===
+* 'rv'       slot [820, 832)  live [1016, 1110]
+* '_read_34' slot [820, 832)  live [1008, 1109]
+```
+
+Both variables have overlapping live ranges and are assigned the same slot range.
+This is a pre-existing slot assignment regression (category A/B from SLOT_FAILURES.md)
+that the native codegen exposes as a compile or runtime error.
+
+**Reproducer:** run `cargo test --test native` with `20-binary.loft` included.
+
+**Test:** `20-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
+**Workaround:** keep `20-binary.loft` skipped in native tests.
+**Planned fix:** root-cause the slot conflict in the two-zone allocator (see SLOT_FAILURES.md);
+fix and remove from skip list.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths

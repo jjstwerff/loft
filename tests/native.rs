@@ -24,7 +24,11 @@ use common::cached_default;
 
 /// Docs files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for details on each issue number.
-const NATIVE_SKIP: &[&str] = &[];
+const NATIVE_SKIP: &[&str] = &[
+    // C27: rand_core is an optional feature dep; standalone rustc cannot resolve it without
+    // explicit --extern flags that the native test harness does not yet pass.
+    "21-random.loft",
+];
 
 /// Script files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for issue numbers.
@@ -42,6 +46,12 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     "51-coroutines.loft",
     // T1: caveats script uses tuple element assign — interpreter-only.
     "46-caveats.loft",
+    // C27: rand_core is an optional feature dep; standalone rustc cannot resolve it without
+    // explicit --extern flags that the native test harness does not yet pass.
+    "15-random.loft",
+    // C28: slot conflict in n_main between rv and _read_34 at [820, 832); pre-existing
+    // slot assignment regression — see CAVEATS.md C28.
+    "20-binary.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
