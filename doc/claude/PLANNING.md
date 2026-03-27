@@ -260,7 +260,7 @@ It also keeps each milestone small enough to be fully understood in a single pas
 **The small-steps principle in practice:**
 Each milestone is a strict subset of the next.  0.8.2 hardens correctness; 0.8.3 adds new
 syntax; 0.8.4 adds HTTP and JSON on top of lambdas; 0.9.0 completes runtime infrastructure
-and tooling; 1.0.0 adds exactly R1 + W1–W6 on top of a complete 0.9.0.  No item moves
+and tooling; 0.8.3 adds R1 + W1 (WASM runtime); 1.0.0 adds W2–W6 (IDE) on top of a complete 0.9.0.  No item moves
 forward until the test suite for the previous item is green.  This prevents the "everything
 at once" failure mode where half-finished features interact and regressions are hard to pin.
 
@@ -622,7 +622,7 @@ Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl
 Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
 **Effort:** High (parser, compiler, extensions loader, plugin API crate)
 **Depends on:** —
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
@@ -1010,7 +1010,7 @@ Full design in [NATIVE.md](NATIVE.md).
 **Expected gain:** Reduces wasm/native string-building gap from 2× to <1.3×.
 **Effort:** Medium
 **Depends:** W1
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1366,7 +1366,7 @@ This change is a **prerequisite for W1** and should happen at the same time, not
 For 1.0 the single-crate layout is correct and should not be changed early.
 **Effort:** Small (Cargo workspace wiring; no logic changes)
 **Depends on:** repo creation (done); gates W1
-**Target:** 1.0.0
+**Target:** 0.8.3
 
 ---
 
@@ -1381,21 +1381,39 @@ once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 ---
 
 ### W1  WASM Foundation
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M1
+**Sources:** [WASM.md](WASM.md) — full design and 14-step implementation plan
 **Severity/Value:** High — nothing else in Tier W is possible without this
-**Description:** Compile the interpreter to WASM and expose a typed JS API.
-Requires four bounded Rust changes, all behind `#[cfg(feature="wasm")]`:
-1. `Cargo.toml` — `wasm` feature gating `wasm-bindgen`, `serde`, `serde-wasm-bindgen`; add `crate-type = ["cdylib","rlib"]`
-2. `src/diagnostics.rs` — add `DiagEntry { level, file, line, col, message }` and `structured: Vec<DiagEntry>`; populate from `Lexer::diagnostic()` which already has `position: Position`
-3. `src/fill.rs` — `op_print` writes to a `thread_local` `String` buffer instead of `print!()`
-4. `src/parser/mod.rs` — virtual FS `thread_local HashMap<String,String>` checked before the real filesystem so `use` statements resolve from browser-supplied files
-5. `src/wasm.rs` (new) — `compile_and_run(files: JsValue) -> JsValue` and `get_symbols(files: JsValue) -> JsValue`
+**Description:** Compile the loft interpreter itself as a WASM module
+(`wasm32-unknown-unknown` + `wasm-bindgen`) so it can run in browsers and Node.js.
+This is distinct from the existing `--native-wasm` flag (which compiles *loft programs* to WASM).
+The WASM module exposes `compile_and_run([{name, content}])` returning
+`{output, diagnostics, success}`. The JS host provides filesystem, random, time,
+env, and log operations through `globalThis.loftHost`.
 
-JS deliverable: `ide/src/wasm-bridge.js` with `initWasm()` + `compileAndRun()`.
-JS tests (4): hello-world, compile-error with position, multi-file `use`, runtime output capture.
-**Effort:** Medium (Rust changes bounded; most risk is in virtual-FS wiring)
+**Steps W1.1–W1.9 (Rust):** all behind `#[cfg(feature = "wasm")]`, verifiable with
+`cargo check --features wasm --no-default-features` + `cargo test` (native green):
+1. **W1.1** `Cargo.toml`: `wasm`/`threading`/`wasm-threads` features + optional deps (`wasm-bindgen`, `serde`, `web-sys`); `crate-type = ["cdylib","rlib"]`
+2. **W1.2** `src/fill.rs`: `print()` writes to thread-local buffer under `wasm`, real `print!()` otherwise
+3. **W1.3** `src/parallel.rs`: `run_parallel_*` gated on `threading`; sequential fallback when `not(threading)`; `tests/threading.rs` guarded by `#![cfg(feature = "threading")]`
+4. **W1.4** `src/logger.rs`: file I/O, rotation, `Instant`/`SystemTime` gated on `not(wasm)`; WASM calls `crate::wasm::host_log_write()`
+5. **W1.5** `src/ops.rs`: random functions already gated on `random`; WASM branch calls `host_random_int`/`host_random_seed` when `wasm` and `not(random)`
+6. **W1.6** `src/native.rs` + `src/database/format.rs`: `SystemTime`, `std::env`, `dirs` gated; WASM stubs call `time_now`, `time_ticks`, `env_variable`, `arguments`, path bridges
+7. **W1.7** `src/state/io.rs`: every `std::fs` call gated on `not(wasm)`; WASM branches call `fs_exists`, `fs_read_text`, `fs_write_text`, `fs_read_binary`, `fs_write_binary`, `fs_delete`, `fs_move`, `fs_mkdir`, `fs_mkdir_all`, `fs_list_dir`, `fs_seek`, `fs_read_bytes`, `fs_write_bytes`, `fs_get_cursor`
+8. **W1.8** `src/png_store.rs`: extract `decode_into_store<R: Read>()`; WASM reads bytes via `host_read_binary` + `Cursor<Vec<u8>>`
+9. **W1.9** `src/wasm.rs`: implement `#[wasm_bindgen] fn compile_and_run(files_js: JsValue) -> JsValue`; wire parse → scope → codegen → execute → return result
+
+**Steps W1.10–W1.13 (JavaScript):** require Node.js + wasm-pack:
+10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs`
+11. **W1.11** `tests/wasm/host.mjs`: `createHost(tree, options)` wiring VirtFS to `loftHost`; `bridge.test.mjs` + `file-io.test.mjs` + `random.test.mjs`
+12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay, persistence); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`
+13. **W1.13** `tests/wasm/suite.mjs`: runs `tests/scripts/*.loft` through the WASM module, compares output against native reference; this is the main confidence gate
+
+**Host bridge API** (JS → Rust): `fs_*`, `random_*`, `time_*`, `env_*`, `log_*` functions
+on `globalThis.loftHost`. Full spec in [WASM.md](WASM.md) § Host Bridge API.
+
+**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9 and W1.10–W1.13 are medium)
 **Depends on:** R1
-**Target:** 1.0.0
+**Target:** 0.8.3
 
 ---
 
