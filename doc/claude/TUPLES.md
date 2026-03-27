@@ -3,7 +3,7 @@
 
 # Tuple Design
 
-> **Status: planned — not yet implemented.**
+> **Status: completed in 0.8.3.** T1.1–T1.7 implemented; tuple-returning functions (T1.4) and LHS destructuring remain deferred.
 
 Tuples are anonymous, fixed-arity, stack-allocated compound value types. They exist
 as a lightweight mechanism for returning multiple values from a function and for

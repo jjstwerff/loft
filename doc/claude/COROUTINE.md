@@ -3,7 +3,7 @@
 
 # Coroutine Design
 
-> **Status: planned — not yet implemented.**
+> **Status: completed in 0.8.3.** CO1.1–CO1.6 implemented; `yield from` (CO1.4) deferred to 1.1+.
 
 Coroutines give loft programs generator functions: functions that can suspend
 execution with `yield`, return a value to the caller, and resume from the same

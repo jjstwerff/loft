@@ -30,20 +30,13 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
 | 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
-| 80 | *(fixed — S14)* Struct-enums in default library have broken field positions | Medium | Fixed |
-| 81 | *(fixed — S15)* Struct-enum variants with same-named fields read wrong offset | Medium | Fixed |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
-| 87 | *(fixed)* `static_call` snapshots call stack on every native function call | Medium | Fixed — now only snapshots for `n_stack_trace` |
-| 88 | *(fixed)* Entry function missing from `stack_trace()` output | Low | Fixed — synthetic CallFrame pushed in `execute_argv` |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 | 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
-| 94 | *(fixed — CO1.3d)* CO1.2 text arguments not serialized in `coroutine_create` | High | Fixed |
-| 95 | *(fixed — CO1.3a)* CO1.2 `active_coroutines` not popped on coroutine body return | High | Fixed |
-| 96 | *(fixed — CO1.3a)* CO1.2 no `OpCoroutineReturn` — `OpReturn` corrupts coroutine state | High | Fixed |
 | 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
 
 ---
@@ -243,36 +236,6 @@ necessary `extern` block in the generated file.
 
 
 
-### 80. *(fixed)* Stdlib struct-enum field positions broken (S14)
-
-**Symptom:** `Fld 65543 is outside of record N size M` panic when constructing a struct-enum
-variant defined in `default/*.loft`.  User-defined struct-enums worked fine.
-
-**Root cause:** Two issues in `src/typedef.rs`:
-1. `fill_all()` only processed definitions after `start_def`, missing variants from earlier
-   library files loaded by `parse_dir()`.
-2. The enum discriminant field used `database.name("byte")` which returned `u16::MAX` when
-   the byte type hadn't been lazily registered yet.
-
-**Fix:** Changed `fill_all()` loop to start from 0 (not `start_def`) with the `has_type` guard
-preventing double-processing.  Changed the discriminant type from `database.name("byte")` to
-`database.byte(0, false)` which creates the type on demand.
-
----
-
-### 81. *(fixed)* Match arm binding variable type reuse (S15)
-
-**Symptom:** When multiple match arms bind the same field name with different types
-(e.g. `Vi { v } => ...` where v is integer, then `Vf { v } => ...` where v is float),
-the second arm reused the first arm's variable and type.  The value read as garbage.
-
-**Fix:** Each match arm now creates a per-arm unique variable via `create_unique` with
-the correct type.  The user-visible field name is temporarily aliased to the per-arm
-variable so the arm body resolves it correctly; the alias is restored after each arm.
-Added `set_name`/`remove_name` methods to `Function` for name map manipulation.
-
----
-
 ### 85. Struct-enum local variable leaks stack space (debug assertion)
 
 **Symptom:** Constructing a struct-enum variant as a local variable and returning a
@@ -341,48 +304,6 @@ supported") before codegen runs.  The underlying issue (no actual closure captur
 tracked as A5.2–A5.5.
 
 **Discovered:** 2026-03-26, during A5.1 testing.
-
----
-
-### 87. `static_call` snapshots call stack on every native function call
-
-**Symptom:** Performance regression introduced by TR1.3.  `static_call` now clones
-function names and file paths for every frame in `call_stack` on **every** native
-function call — all 56 registered functions — even though only `n_stack_trace` uses
-the snapshot.  Programs with deep call stacks and frequent native calls (string
-operations, I/O, math) allocate Strings and a Vec on every call.
-
-**Root cause:** The snapshot in `static_call` (state/mod.rs) runs unconditionally
-whenever `call_stack` is non-empty and `data_ptr` is set.  It cannot distinguish
-which native function is about to be called before the dispatch happens.
-
-**Fix path:** Check whether the native function about to be called is `n_stack_trace`
-before building the snapshot.  Compare `call` (the library index read from bytecode)
-against a cached index for `n_stack_trace` stored on State at init time.  Skip the
-snapshot for all other native functions.
-
-**Discovered:** 2026-03-26, during TR1.3 implementation.
-
----
-
-### 88. Entry function missing from `stack_trace()` output
-
-**Symptom:** `stack_trace()` called from `main()` returns an empty vector.  Called
-from a function invoked by `main()`, the trace starts at that function — `main`
-itself never appears.
-
-**Root cause:** `execute_argv` jumps directly to the entry function by setting
-`code_pos = pos` without going through `fn_call`.  No `CallFrame` is pushed for the
-entry function.  All other calls go through `fn_call` which pushes correctly.
-
-**Workaround:** Call `stack_trace()` from a nested function, not from `main` directly.
-
-**Fix path:** Push a synthetic `CallFrame` for the entry function at the start of
-`execute_argv` (after the `fn_positions` setup), pop it after the dispatch loop exits.
-The synthetic frame uses `d_nr` from the entry function lookup and `call_pos = 0`
-(no call site).
-
-**Discovered:** 2026-03-26, during TR1.3 testing.
 
 ---
 
@@ -494,53 +415,6 @@ emit an error if `attribute.typedef` is `Type::Tuple`.  Similarly reject `RefVar
 inside tuple elements.
 
 **Discovered:** 2026-03-26, during T1.1 implementation.
-
----
-
-### 94. *(fixed — CO1.3d)* CO1.2 text arguments not serialized in coroutine_create
-
-**Symptom:** `coroutine_create` copies raw argument bytes into the frame's `stack_bytes`
-but does not process dynamic `Str` slots.  If a generator function takes a `text`
-parameter, the saved `Str` pointer references memory on the live stack that is freed
-after the arguments are popped.  Resuming the coroutine would read a dangling pointer.
-
-**Fix:** Two-part fix in CO1.3d: (1) `coroutine_create` appends a 4-byte return-address
-slot to `stack_bytes` so `get_var` offsets computed at codegen time remain valid on every
-resume; (2) `Value::Yield` codegen decrements `stack.position` by the yielded value size
-after `OpCoroutineYield`, so variable accesses on second and later resumes use correct
-offsets.  `coroutine_text_param_survives_yield` test passes.
-
-**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
-
----
-
-### 95. *(fixed — CO1.3a)* CO1.2 active_coroutines not popped on coroutine body return
-
-**Symptom:** When a coroutine body reaches the end or calls `return`, the ordinary
-`OpReturn` / `fn_return` runs.  It pops the call stack but does not pop
-`active_coroutines` or mark the frame as `Exhausted`.  The active list grows
-unbounded and the re-entrant check may fire incorrectly.
-
-**Fix:** `OpCoroutineReturn` implemented in CO1.3a: clears `text_owned` / `stack_bytes`,
-marks `Exhausted`, pops `active_coroutines`, rewinds stack to `frame.stack_base`,
-pushes null, jumps to `frame.caller_return_pos`.  Generator codegen emits this opcode
-instead of `OpReturn` at function exit.
-
-**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
-
----
-
-### 96. *(fixed — CO1.3a)* CO1.2 no OpCoroutineReturn — OpReturn corrupts coroutine state
-
-**Symptom:** There is no `OpCoroutineReturn` opcode.  When a running coroutine
-exits via `OpReturn`, the return address `get_var::<u32>(0)` reads from the
-coroutine's serialized stack — not from `frame.caller_return_pos` where
-`coroutine_next` stored the consumer's continuation.  This produces a wrong
-jump target.
-
-**Fix:** `OpCoroutineReturn` implemented in CO1.3a — see #95 above.
-
-**Discovered:** 2026-03-26, during CO1.2 regression evaluation.
 
 ---
 
