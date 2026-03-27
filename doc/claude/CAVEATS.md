@@ -160,6 +160,7 @@ fn main() {
 
 **Test:** `tests/scripts/46-caveats.loft` — `test_c11_no_while`
 **Workaround:** `for i in 0..LARGE { if condition { break } }`
+**Planned fix:** L10 in [ROADMAP.md](ROADMAP.md) (1.1+) — `while` as syntax sugar over `for + break`.
 **Docs:** [00-vs-rust.html](../00-vs-rust.html) § No while loop; [00-vs-python.html](../00-vs-python.html) § No while loop.
 
 ---
@@ -201,6 +202,7 @@ fn main() {
 
 **Test:** `tests/scripts/46-caveats.loft` — `test_c14_format_specifier_ignored`
 **Workaround:** ensure format specifiers match the value type.
+**Planned fix:** L9 in [ROADMAP.md](ROADMAP.md) (1.1+) — escalate ignored specifiers to compile errors.
 **Docs:** [00-vs-rust.html](../00-vs-rust.html) § String formatting.
 
 ---
@@ -245,7 +247,7 @@ fn get(v: ArgValue) -> integer { match v { IntVal { n } => n, _ => 0 } }
 
 **Tests:** `tests/expressions.rs` — `stack_trace_*` and `call_frame_*` (`#[ignore = "TR1.3: blocked by Problem #85"]`)
 **Workaround:** Pass the struct-enum value as a function parameter rather than assigning it to a local variable.
-**Planned fix:** [PROBLEMS.md](PROBLEMS.md) § 85 — extend `scopes.rs::free_vars()` to emit `OpFreeRef` for struct-enum locals.
+**Planned fix:** S19 in [ROADMAP.md](ROADMAP.md) (0.9.0) — extend `scopes.rs::free_vars()` to emit `OpFreeRef` for struct-enum locals; design in [PLANNING.md](PLANNING.md) § S19.
 
 ---
 
@@ -266,7 +268,7 @@ fn check() -> integer {
 
 **Test:** none (no parallel-worker test for stack_trace yet).
 **Workaround:** Call `stack_trace()` from the main thread only.
-**Planned fix:** [PROBLEMS.md](PROBLEMS.md) § 92 — set `data_ptr` in `execute_at*` parallel entry points.
+**Planned fix:** S21 in [ROADMAP.md](ROADMAP.md) (0.9.0) — set `data_ptr` in `execute_at*` parallel entry points; design in [PLANNING.md](PLANNING.md) § S21.
 
 ---
 
@@ -287,7 +289,7 @@ struct Bad {
 
 **Test:** `tests/parse_errors.rs` — `circular_init_error` (`#[ignore = "#91: circular-init detection not yet implemented"]`)
 **Workaround:** Do not write mutually referencing `init` fields.
-**Planned fix:** [PROBLEMS.md](PROBLEMS.md) § 91 — DFS cycle check after struct field parsing.
+**Planned fix:** S20 in [ROADMAP.md](ROADMAP.md) (0.9.0) — DFS cycle check after struct field parsing; design in [PLANNING.md](PLANNING.md) § S20.
 
 ---
 
@@ -306,7 +308,7 @@ Scripts using these features are skipped from the native test suite
 
 **Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft`, `48-generics.loft` — all pass in interpreter, all skipped in native.
 **Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use these features.
-**Planned fix:** Targeted for the 0.8.3 milestone alongside native-extension support.
+**Planned fix:** N8 in [ROADMAP.md](ROADMAP.md) (1.1+) — native codegen extensions for tuples (N8a), coroutines (N8b), generics (N8c); design in [PLANNING.md](PLANNING.md) § N8.
 
 ---
 
@@ -323,7 +325,7 @@ parameters all work.  Two further cases do not:
 
 **Tests:** `tests/expressions.rs` — `tuple_type_return`, `tuple_destructure_basic`, `tuple_with_text` (`#[ignore = "T1.4: ..."]`)
 **Workaround:** Return structs or individual values instead of tuples with multiple or text elements.
-**Planned fix:** T1.4 follow-up — work-variable codegen for tuple return (deferred to T1.4 completion).
+**Planned fix:** T1.8 in [ROADMAP.md](ROADMAP.md) (1.1+) — function return convention (T1.8a) and text element lifetime (T1.8b); design in [PLANNING.md](PLANNING.md) § T1.8.
 
 ---
 
@@ -341,7 +343,7 @@ fn outer() -> iterator<integer> { yield 1; yield from inner(); yield 2; }
 
 **Tests:** `tests/expressions.rs` — `coroutine_yield_from` (`#[ignore = "CO1.4: yield from slot assignment regression"]`); `tests/scripts/51-coroutines.loft` — exercises the working subset of coroutines
 **Workaround:** Inline the sub-generator's yields manually or collect the sub-generator into a vector first.
-**Planned fix:** CO1.4 — IR restructuring to separate generator state from iterator frame slots.
+**Planned fix:** CO1.4-fix in [ROADMAP.md](ROADMAP.md) (1.1+) — slot allocator must treat coroutine frame as live across `yield from` expansion; design in [PLANNING.md](PLANNING.md) § CO1.4-fix.
 
 ## See also
 

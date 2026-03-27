@@ -420,6 +420,16 @@ the recompile overhead that caching was designed to address)
 - **T1.6** — *(completed 0.8.3)* SC-8: `check_ref_mutations` emits WARNING (not error) for `RefVar(Tuple)` params never written; `find_written_vars` recognises `TuplePut`.
 - **T1.7** — *(completed 0.8.3)* SC-7: `Type::Integer` gains a `not_null: bool` third field; `parse_type` accepts `not null` suffix; null assigned to a `not null` tuple element is a compile error.
 
+- **T1.8** — Tuple function return convention + text elements (C20).
+  Two sub-issues remain after T1.1–T1.7:
+
+  **T1.8a — Function return convention:** A function declared `-> (A, B)` must write its return value directly into the caller’s pre-allocated slot.  This requires (1) codegen to allocate the tuple on the caller’s stack before the call; (2) a `ReturnTuple` IR variant; (3) `OpReturnTuple(size)` that copies from the callee stack to the pre-allocated slot.
+  
+  **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
+
+  **Effort:** Medium  
+  **Target:** 1.1+
+
 **Effort:** Very High
 **Target:** 1.1+
 
@@ -462,6 +472,14 @@ the recompile overhead that caching was designed to address)
 
 - **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
   advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
+
+  **CO1.4-fix — Slot-assignment regression in `yield from`** (C21):
+  The desugared advance-loop introduces a temporary coroutine handle variable whose
+  slot overlaps with the generator’s own stack frame on second resume.  Root cause:
+  the loop-body slot for the `__next` temp is assigned before the generator frame
+  is taken into account.  Fix requires the slot allocator to treat the coroutine
+  frame as live across the entire `yield from` expansion, not just the yield site.
+  **Target:** 1.1+
 - **CO1.5** — *(completed 0.8.3)* `for item in generator` integration + `e#remove` rejection.
 - **CO1.3e** — *(completed 0.8.3)* Nested yield verified — helper call between yields.
 
@@ -585,6 +603,24 @@ Closure record work variable (Type::Reference with empty deps) is already freed 
 the existing OpFreeRef scope-exit logic in get_free_vars.  No new code needed.
 Per-field text/reference cleanup inside the record is pending — only matters when
 text captures become testable.
+
+**Phase 6 — Mutable capture + text capture** (C1 remaining, tracked as A5.6):
+Two remaining restrictions after A5.1–A5.5:
+
+**A5.6a — Mutable capture:** A captured variable used as the target of `+= / -=`
+causes `generate_set` to panic at "self-reference in SetRef target".  The closure
+record’s field must be treated as an `OpVarRef`-relative write target rather than a
+plain slot write.  Requires a new `SetClosureField(field_idx)` IR variant emitted
+by `parse_assign` when the LHS resolves to a captured variable.
+
+**A5.6b — Text capture:** The per-field text cleanup note in Phase 5 is not yet
+implemented.  When a text variable is captured, the closure record holds a
+`Type::Text` field; `get_free_vars` must emit `OpFreeRef` for that field at the
+point where the closure record itself goes out of scope.  Without this, text memory
+leaks in debug mode (assertion fires) and is double-freed in release.
+
+**Effort:** Medium  
+**Target:** 1.1+
 
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1 (done)
@@ -828,6 +864,32 @@ on text/boolean and zero-padding on text.  Tests in `38-parse-warnings.loft`.
 
 ---
 
+### L9  Format specifier / type mismatch — escalate to compile error
+**Sources:** CAVEATS.md C14, PLANNING.md L8
+**Severity:** Low — a mismatched specifier is silently ignored; the format string produces no output difference visible to the user, masking bugs.
+**Description:** L8 added compile-time warnings for numeric format specifiers applied to text/boolean values and zero-padding applied to text.  The next step is to escalate these specific mismatches from warnings to hard compile errors, since the specifier can never have any effect.
+**Fix path:**
+1. In `append_data()` (or the relevant format-codegen path), change the `log_warn!` / warning emit to a `log_error!` / error diagnostic for cases where the specifier has no defined effect on the type (zero-padding on text; `+` / space-sign on boolean).
+2. Numeric-width specifiers on text (e.g., `{s:10}`) are more ambiguous (right-align text?) — leave those as warnings until a spec decision is made.
+3. Update tests in `38-parse-warnings.loft` accordingly.
+**Effort:** Small
+**Target:** 1.1+
+
+---
+
+### L10  `while` loop syntax sugar
+**Sources:** CAVEATS.md C11
+**Severity:** Low — the `for i in 0..BIG { if cond { break } }` workaround is verbose; familiar `while cond { body }` would improve readability.
+**Description:** Loft has no `while` loop; the recommended pattern is `for + break`.  Adding `while` as syntactic sugar over `for` with an implicit large bound is straightforward.  The desugaring is: `while cond { body }` → `for __i in 0..i64::MAX { if !cond { break }; body }`.
+**Fix path:**
+1. Add `while` keyword to the lexer.
+2. In `parse_statement` (or `control.rs`), recognise `while expr { block }` and emit the desugared `for` loop IR.
+3. Tests: `while false {}` never executes; `while i < 10 { i += 1 }` counts to 10.
+**Effort:** Small
+**Target:** 1.1+
+
+---
+
 ### A12  Lazy work-variable initialization
 **Status: deferred to 1.1+ — too complex and disruptive for stability; also blocked by Issues 68–70 (see PROBLEMS.md)**
 **Sources:** Stack efficiency evaluation 2026-03-20
@@ -950,6 +1012,41 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
+### S19  Fix #85: struct-enum locals not freed in debug mode
+**Sources:** PROBLEMS.md #85, CAVEATS.md C16
+**Severity:** Low in production (no assertion), critical in debug builds (SIGABRT).
+**Description:** `scopes.rs::free_vars()` emits `OpFreeRef` for plain struct local variables but not for struct-enum locals.  In debug builds, the store's allocation assert fires at scope exit because the record is still live.
+**Fix path:**
+1. In `get_free_vars` (or equivalent), add a branch for `Type::Named(_, _, _)` that is a struct-enum variant — emit `OpFreeRef` exactly as is done for plain structs.
+2. Regression test: declare a local struct-enum variable inside a `for` or `if` body; verify no assertion fire in debug, value correct in release.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S20  Fix #91: init(expr) circular dependency silently accepted
+**Sources:** PROBLEMS.md #91, CAVEATS.md C18
+**Severity:** Medium — silent undefined behaviour at runtime when two store fields form a mutual initialisation cycle.
+**Description:** The `init(expr)` attribute on struct fields is evaluated at record creation time.  If field A's init expr reads field B and field B's init expr reads field A, the interpreter reads uninitialised memory.  No cycle check is performed.
+**Fix path:**
+1. After all struct field defs are parsed, build a dependency graph: edge A→B if field A's init expr contains a read of field B.
+2. DFS cycle detection over the graph; emit a compile error naming the cycle.
+3. Test: two mutually-referencing `init(...)` fields produce a clear error; acyclic chains are unaffected.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S21  Fix #92: stack_trace() silent empty in parallel workers
+**Sources:** PROBLEMS.md #92, CAVEATS.md C17
+**Severity:** Medium — debugging parallel code is significantly harder without stack traces.
+**Description:** `stack_trace()` reads `state.data_ptr` to walk the call stack.  In parallel workers spawned by `par(...)`, `execute_at` (and `execute_at_ref`) entry points do not set `data_ptr` before dispatch, so the pointer is null and `stack_trace()` returns an empty vec.
+**Fix path:**
+1. In `execute_at` and `execute_at_ref` in `src/state/mod.rs`, set `self.data_ptr = data as *const Data;` (or equivalent) immediately before the dispatch call, mirroring what the single-threaded `execute` path does.
+2. Regression test: call `stack_trace()` inside a `par(...)` worker body; assert the returned vec is non-empty and contains the worker function name.
+**Effort:** Small
+**Target:** 0.9.0
+
 ---
 
 ## N — Native Codegen
@@ -957,6 +1054,25 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 All N-tier items (N1–N9) are completed.  Native test parity achieved 2026-03-23:
 all `.loft` tests pass in both interpreter and native mode.
 Full design in [NATIVE.md](NATIVE.md).
+
+---
+
+### N8  Native codegen: extend to tuples, coroutines, and generics
+**Sources:** CAVEATS.md C19, NATIVE.md, PLANNING.md T1/CO1
+**Severity:** Medium — programs using tuples, coroutines, or `maybe<T>` cannot be compiled with `--native`.
+**Description:** The native (`--native`) code generator currently falls back to the interpreter for three feature areas:
+- **Tuples:** `Type::Tuple` values: construction, element reads/writes, function return.
+- **Coroutines:** `OpCoroutineCreate`, `OpCoroutineYield`, `OpCoroutineNext`, `OpCoroutineReturn` — require stack serialisation that has no direct Rust equivalent without the interpreter’s store-backed stack.
+- **Generics / `maybe<T>`:** parametric types like `maybe<integer>` are partially supported but edge cases remain (null propagation paths, ref-counted text inside maybe).
+
+**Fix path:** Each area is an independent sub-item:
+- **N8a — Tuple native codegen:** Emit tuple as multiple stack variables; element access as direct offset read; function return as multiple return values via a struct.
+- **N8b — Coroutine native codegen:** Requires a Rust generator or state-machine transform (e.g., via `genawaiter` or hand-written enum state machine).  High complexity; likely 1.2+.
+- **N8c — Generic/maybe native codegen:** Audit null-path branches in `generate_*` for `Type::Named` with type parameters; add missing cases.
+
+**Effort:** High (N8a Medium, N8b Very High, N8c Small)
+**Depends:** T1 (for N8a), CO1 (for N8b)
+**Target:** 1.1+
 
 ---
 
