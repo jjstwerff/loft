@@ -141,6 +141,11 @@ All notable changes to the loft language and interpreter.
   advances the sub-generator and forwards each value via `yield`.  Test `#[ignore]`
   pending slot-assignment fix.
 
+- **Closure call-site allocation** (A5.3) — Capturing lambdas now allocate the
+  closure record on the heap, populate fields from captured variables, and inject
+  the record as a hidden argument at call sites.  Multi-capture variable redirect
+  fixed (pre-has_var check).  Blocked by slot-assignment issue at codegen time.
+
 - **Tuple element assignment** (T1.4) — `t.0 = expr` now works via `Value::TuplePut`
   IR variant.  Parser detects `TupleGet` on the LHS of `=` and routes through
   element-write codegen.
