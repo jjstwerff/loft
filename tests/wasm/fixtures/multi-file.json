@@ -1,0 +1,20 @@
+{
+  "/": {
+    "project": {
+      "main.loft": {
+        "$type": "text",
+        "$content": "use \"lib.loft\"\nfn main() {\n  println(greet(\"world\"))\n}"
+      },
+      "lib.loft": {
+        "$type": "text",
+        "$content": "fn greet(name: text) -> text {\n  \"hello \" + name\n}"
+      },
+      "data": {
+        "names.txt": {
+          "$type": "text",
+          "$content": "alice\nbob\ncharlie"
+        }
+      }
+    }
+  }
+}
