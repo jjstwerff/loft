@@ -239,6 +239,13 @@ All notable changes to the loft language and interpreter.
   13 unit tests in `virt-fs.test.mjs` cover all operations.  Runs via
   `node tests/wasm/virt-fs.test.mjs` when Node.js is available.
 
+- **WASM test suite runner** (W1.13) — `tests/wasm/suite.mjs` discovers all loft programs
+  in `tests/scripts/` and `tests/docs/`, runs each through the WASM module with a
+  pre-populated VirtFS, and compares output against the native `cargo run` interpreter.
+  Skips non-deterministic tests (time, unseeded random, images); verifies WASM success only
+  for those.  Run via `node tests/wasm/suite.mjs` after building with `wasm-pack`.
+  This is the main confidence gate for the WASM port.
+
 - **LayeredFS class** (W1.12) — `tests/wasm/layered-fs.mjs` implements a two-layer virtual
   filesystem: an immutable base tree (bundled examples/docs/stdlib) plus a mutable delta
   overlay (user edits, persisted to localStorage).  Reads check delta first then fall through

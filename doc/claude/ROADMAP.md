@@ -18,12 +18,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions *(Rust steps done; JS steps deferred)*
 
-W1.1–W1.9 (Rust), A7.1–A7.3, and W1.10–W1.12 (JS) completed in 0.8.3.
-W1.13 requires Node.js + wasm-pack to run — deferred to a later milestone.
-
-| ID        | Title                                                | E  | Design | Depends on   | Source                     |
-|-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| W1.13     | ↳ Full loft test suite via WASM (`suite.mjs`)        | M  | ✓      | W1.11        | tests/wasm/suite.mjs       |
+W1.1–W1.9 (Rust), A7.1–A7.3, and W1.10–W1.13 (JS) completed in 0.8.3.
 
 ---
 
