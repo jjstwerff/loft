@@ -200,6 +200,7 @@ default/03_text.loft    — text utilities
 | [DATABASE.md](DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix implementations |
 | [INTERNALS.md](INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
 | [THREADING.md](THREADING.md) | Parallel for-loop (`par(...)`), `fn <name>` references, runtime parallel execution |
+| [SAFE.md](SAFE.md) | Thread safety analysis — parallel worker store isolation, risks, and mitigation designs |
 | [LOGGER.md](LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
 | [TESTING.md](TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
 | [DOC.md](DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
