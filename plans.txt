@@ -1,15 +1,3 @@
-
-| S19       | Fix #85: struct-enum locals not freed (debug)        | S  | ✓      |              | CAVEATS.md C16             |
-| S20       | Fix #91: init(expr) circular dep detection           | S  | ✓      |              | CAVEATS.md C18             |
-| S21       | Fix #92: stack_trace() empty in par workers          | S  | ✓      |              | CAVEATS.md C17             |
-| T1.8      | Tuple: function return + text elements               | M  | ✓      | T1.1–7       | CAVEATS.md C20             |
-| CO1.4-fix | `yield from` slot-assignment regression fix          | M  | ✓      | CO1.4        | CAVEATS.md C21             |
-| A5.6      | Closure: mutable + text capture                      | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
-| N8        | Native codegen: tuples, coroutines, generics         | H  | ✓      | T1, CO1      | CAVEATS.md C19             |
-
-:
-reorder user documentation into a more logical flow
-
 update remaining documentation of state.rs with the moved name
 Type cycles detection
 Hash table | 87.5% load threshold
