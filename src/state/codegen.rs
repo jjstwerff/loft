@@ -263,7 +263,7 @@ impl State {
                     Type::Single => stack.add_op("OpVarSingle", self),
                     Type::Character => stack.add_op("OpVarCharacter", self),
                     Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
-                    Type::Text(_) => stack.add_op("OpVarText", self),
+                    Type::Text(_) => stack.add_op("OpArgText", self),
                     Type::Reference(c, _) | Type::Enum(c, true, _) => {
                         self.types
                             .insert(self.code_pos, stack.data.def(*c).known_type);
@@ -543,10 +543,10 @@ impl State {
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
                     stack.add_op("OpConvRefFromNull", self);
                 }
-                other => panic!(
-                    "gen_set_first_tuple_null: unsupported element type {:?}",
-                    other
-                ),
+                Type::Text(_) => {
+                    stack.add_op("OpConvTextFromNull", self);
+                }
+                other => panic!("gen_set_first_tuple_null: unsupported element type {other:?}"),
             }
         }
     }
@@ -714,9 +714,7 @@ impl State {
                     && *value == Value::Null
                 {
                     self.gen_set_first_vector_null(stack, v);
-                } else if matches!(stack.function.tp(v), Type::Tuple(_))
-                    && *value == Value::Null
-                {
+                } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
                     self.gen_set_first_tuple_null(stack, v);
                 } else {
                     self.generate(value, stack, false);
@@ -1200,7 +1198,7 @@ impl State {
                         Type::Single => stack.add_op("OpVarSingle", self),
                         Type::Character => stack.add_op("OpVarCharacter", self),
                         Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
-                        Type::Text(_) => stack.add_op("OpVarText", self),
+                        Type::Text(_) => stack.add_op("OpArgText", self),
                         Type::Reference(c, _) | Type::Enum(c, true, _) => {
                             self.types
                                 .insert(self.code_pos, stack.data.def(*c).known_type);
@@ -1495,7 +1493,7 @@ impl State {
                         Type::Single => stack.add_op("OpPutSingle", self),
                         Type::Character => stack.add_op("OpPutCharacter", self),
                         Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
-                        Type::Text(_) => stack.add_op("OpAppendText", self),
+                        Type::Text(_) => stack.add_op("OpPutText", self),
                         Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                             stack.add_op("OpPutRef", self);
                         }

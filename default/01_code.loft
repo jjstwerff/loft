@@ -632,6 +632,7 @@ fn OpConvBoolFromText(v1: text) -> boolean;
 #rust"@v1 != crate::state::STRING_NULL"
 fn OpText();
 fn OpAppendText(pos: const u16, v1: text);
+fn OpPutText(pos: const u16, value: text);
 fn OpGetTextSub(v1: text, from: integer, till: integer) -> text[v1];
 fn OpTextCharacter(v1: text, v2: integer) -> character;
 #rust"ops::text_character(@v1, @v2)"

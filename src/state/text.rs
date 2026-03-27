@@ -330,6 +330,12 @@ impl State {
         self.put_stack(new_value);
     }
 
+    pub fn put_text(&mut self) {
+        let pos = *self.code::<u16>();
+        let str_val = self.string(); // pops 16B Str; stack_pos -= 16
+        self.put_var(pos, str_val); // writes Str at (stack_pos + 16 - pos) = elem_abs
+    }
+
     pub fn format_long(&mut self) {
         let pos = *self.code::<u16>();
         let radix = *self.code::<u8>();
