@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! Parallel execution: dispatch a worker function over vector elements using OS threads.
+//!
+//! When the `threading` feature is enabled, each `run_parallel_*` function spawns OS
+//! threads.  When `threading` is disabled (e.g. under WASM), the loop body runs
+//! sequentially in the caller's thread — same results, no parallelism.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
@@ -11,7 +15,9 @@ use crate::keys::DbRef;
 use crate::state::State;
 use crate::vector;
 use std::sync::Arc;
+#[cfg(feature = "threading")]
 use std::sync::mpsc;
+#[cfg(feature = "threading")]
 use std::thread;
 
 /// Shared bytecode + library for a single `parallel_for` dispatch.
@@ -19,8 +25,11 @@ type ProgramRefs = (Arc<Vec<u8>>, Arc<Vec<u8>>, Arc<Vec<crate::database::Call>>)
 
 /// Wrapper for `*mut u8` that is `Send + Sync` for cross-thread direct writes.
 /// SAFETY: callers must ensure non-overlapping writes and join all threads.
+#[cfg(feature = "threading")]
 struct SendMutPtr(*mut u8);
+#[cfg(feature = "threading")]
 unsafe impl Send for SendMutPtr {}
+#[cfg(feature = "threading")]
 unsafe impl Sync for SendMutPtr {}
 
 /// Immutable interpreter context shared across all worker threads.
@@ -49,7 +58,7 @@ impl WorkerProgram {
     }
 }
 
-/// Run workers in parallel, writing results directly into `out_ptr`.
+/// Run workers, writing results directly into `out_ptr`.
 /// # Panics
 /// Panics if a worker thread panics.
 /// Each thread writes a non-overlapping slice — no channel, no reordering.
@@ -69,44 +78,67 @@ pub fn run_parallel_direct(
     if n_rows == 0 {
         return;
     }
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let mut handles = Vec::with_capacity(threads);
-    let out = Arc::new(SendMutPtr(out_ptr));
+    #[cfg(feature = "threading")]
+    {
+        let threads = n_threads.max(1).min(n_rows);
+        let program = Arc::new(program);
+        let mut handles = Vec::with_capacity(threads);
+        let out = Arc::new(SendMutPtr(out_ptr));
 
-    for t in 0..threads {
-        let start = t * n_rows / threads;
-        let end = (t + 1) * n_rows / threads;
-        let worker_stores = stores.clone_for_worker();
-        let prog = Arc::clone(&program);
-        let input_t = *input;
-        let extras = extra_args.to_vec();
-        let out_t = Arc::clone(&out);
-        let ret_sz = return_size as usize;
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            let worker_stores = stores.clone_for_worker();
+            let prog = Arc::clone(&program);
+            let input_t = *input;
+            let extras = extra_args.to_vec();
+            let out_t = Arc::clone(&out);
+            let ret_sz = return_size as usize;
 
-        let handle = thread::spawn(move || {
-            let (bytecode, text_code, library) = prog.clone_refs();
-            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
-            for row_idx in start..end {
-                let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
-                let row_ref = vector::get_vector(
-                    &input_t,
-                    element_size,
-                    row_idx_i32,
-                    &state.database.allocations,
-                );
-                let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
-                // Write return_size low bytes of val directly into the output buffer.
-                unsafe {
-                    let dst = out_t.0.add(row_idx * ret_sz);
-                    std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
+            let handle = thread::spawn(move || {
+                let (bytecode, text_code, library) = prog.clone_refs();
+                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                for row_idx in start..end {
+                    let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx_i32,
+                        &state.database.allocations,
+                    );
+                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                    unsafe {
+                        let dst = out_t.0.add(row_idx * ret_sz);
+                        std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
+                    }
                 }
-            }
-        });
-        handles.push(handle);
+            });
+            handles.push(handle);
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
     }
-    for h in handles {
-        h.join().expect("worker thread panicked");
+    #[cfg(not(feature = "threading"))]
+    {
+        let _ = n_threads;
+        let (bytecode, text_code, library) = program.clone_refs();
+        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let ret_sz = return_size as usize;
+        for row_idx in 0..n_rows {
+            let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+            let row_ref = vector::get_vector(
+                input,
+                element_size,
+                row_idx_i32,
+                &state.database.allocations,
+            );
+            let val = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            unsafe {
+                let dst = out_ptr.add(row_idx * ret_sz);
+                std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
+            }
+        }
     }
 }
 
@@ -129,47 +161,67 @@ pub fn run_parallel_raw(
     if n_rows == 0 {
         return Vec::new();
     }
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let (tx, rx) = mpsc::channel::<Vec<(usize, u64)>>();
-    let mut handles = Vec::with_capacity(threads);
-    for t in 0..threads {
-        let start = t * n_rows / threads;
-        let end = (t + 1) * n_rows / threads;
-        let worker_stores = stores.clone_for_worker();
-        let prog = Arc::clone(&program);
-        let tx_t = tx.clone();
-        let input_t = *input;
-        let extras = extra_args.to_vec();
-        let handle = thread::spawn(move || {
-            let (bytecode, text_code, library) = prog.clone_refs();
-            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
-            let mut batch = Vec::with_capacity(end - start);
-            for row_idx in start..end {
-                let row_ref = vector::get_vector(
-                    &input_t,
-                    element_size,
-                    i32::try_from(row_idx).expect("row index fits i32"),
-                    &state.database.allocations,
-                );
-                let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
-                batch.push((row_idx, val));
-            }
-            tx_t.send(batch).expect("channel send failed");
-        });
-        handles.push(handle);
-    }
-    drop(tx);
-    let mut results = vec![0u64; n_rows];
-    for batch in rx {
-        for (idx, val) in batch {
-            results[idx] = val;
+    #[cfg(feature = "threading")]
+    {
+        let threads = n_threads.max(1).min(n_rows);
+        let program = Arc::new(program);
+        let (tx, rx) = mpsc::channel::<Vec<(usize, u64)>>();
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            let worker_stores = stores.clone_for_worker();
+            let prog = Arc::clone(&program);
+            let tx_t = tx.clone();
+            let input_t = *input;
+            let extras = extra_args.to_vec();
+            let handle = thread::spawn(move || {
+                let (bytecode, text_code, library) = prog.clone_refs();
+                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut batch = Vec::with_capacity(end - start);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        i32::try_from(row_idx).expect("row index fits i32"),
+                        &state.database.allocations,
+                    );
+                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+                    batch.push((row_idx, val));
+                }
+                tx_t.send(batch).expect("channel send failed");
+            });
+            handles.push(handle);
         }
+        drop(tx);
+        let mut results = vec![0u64; n_rows];
+        for batch in rx {
+            for (idx, val) in batch {
+                results[idx] = val;
+            }
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+        results
     }
-    for h in handles {
-        h.join().expect("worker thread panicked");
+    #[cfg(not(feature = "threading"))]
+    {
+        let _ = n_threads;
+        let (bytecode, text_code, library) = program.clone_refs();
+        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut results = vec![0u64; n_rows];
+        for row_idx in 0..n_rows {
+            let row_ref = vector::get_vector(
+                input,
+                element_size,
+                i32::try_from(row_idx).expect("row index fits i32"),
+                &state.database.allocations,
+            );
+            results[row_idx] = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+        }
+        results
     }
-    results
 }
 
 /// Parallel text returns: workers copy `Str` to owned `String` before state drops.
@@ -191,47 +243,67 @@ pub fn run_parallel_text(
     if n_rows == 0 {
         return Vec::new();
     }
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let (tx, rx) = mpsc::channel::<Vec<(usize, String)>>();
-    let mut handles = Vec::with_capacity(threads);
-    for t in 0..threads {
-        let start = t * n_rows / threads;
-        let end = (t + 1) * n_rows / threads;
-        let worker_stores = stores.clone_for_worker();
-        let prog = Arc::clone(&program);
-        let tx_t = tx.clone();
-        let input_t = *input;
-        let extras = extra_args.to_vec();
-        let handle = thread::spawn(move || {
-            let (bytecode, text_code, library) = prog.clone_refs();
-            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
-            let mut batch = Vec::with_capacity(end - start);
-            for row_idx in start..end {
-                let row_ref = vector::get_vector(
-                    &input_t,
-                    element_size,
-                    i32::try_from(row_idx).expect("row index fits i32"),
-                    &state.database.allocations,
-                );
-                let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
-                batch.push((row_idx, s));
-            }
-            tx_t.send(batch).expect("channel send failed");
-        });
-        handles.push(handle);
-    }
-    drop(tx);
-    let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-    for batch in rx {
-        for (idx, val) in batch {
-            results[idx] = val;
+    #[cfg(feature = "threading")]
+    {
+        let threads = n_threads.max(1).min(n_rows);
+        let program = Arc::new(program);
+        let (tx, rx) = mpsc::channel::<Vec<(usize, String)>>();
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            let worker_stores = stores.clone_for_worker();
+            let prog = Arc::clone(&program);
+            let tx_t = tx.clone();
+            let input_t = *input;
+            let extras = extra_args.to_vec();
+            let handle = thread::spawn(move || {
+                let (bytecode, text_code, library) = prog.clone_refs();
+                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut batch = Vec::with_capacity(end - start);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        i32::try_from(row_idx).expect("row index fits i32"),
+                        &state.database.allocations,
+                    );
+                    let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
+                    batch.push((row_idx, s));
+                }
+                tx_t.send(batch).expect("channel send failed");
+            });
+            handles.push(handle);
         }
+        drop(tx);
+        let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
+        for batch in rx {
+            for (idx, val) in batch {
+                results[idx] = val;
+            }
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+        results
     }
-    for h in handles {
-        h.join().expect("worker thread panicked");
+    #[cfg(not(feature = "threading"))]
+    {
+        let _ = n_threads;
+        let (bytecode, text_code, library) = program.clone_refs();
+        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
+        for row_idx in 0..n_rows {
+            let row_ref = vector::get_vector(
+                input,
+                element_size,
+                i32::try_from(row_idx).expect("row index fits i32"),
+                &state.database.allocations,
+            );
+            results[row_idx] = state.execute_at_text(fn_pos, &row_ref, extra_args, n_hidden_text);
+        }
+        results
     }
-    results
 }
 
 /// Parallel struct-reference returns: workers send back `(index, DbRef)` batches
@@ -253,46 +325,67 @@ pub fn run_parallel_ref(
     if n_rows == 0 {
         return Vec::new();
     }
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let (tx, rx) = mpsc::channel::<(Vec<(usize, DbRef)>, crate::database::Stores)>();
-    let mut handles = Vec::with_capacity(threads);
-    for t in 0..threads {
-        let start = t * n_rows / threads;
-        let end = (t + 1) * n_rows / threads;
-        let worker_stores = stores.clone_for_worker();
-        let prog = Arc::clone(&program);
-        let tx_t = tx.clone();
-        let input_t = *input;
-        let extras = extra_args.to_vec();
-        let handle = thread::spawn(move || {
-            let (bytecode, text_code, library) = prog.clone_refs();
-            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
-            let mut batch = Vec::with_capacity(end - start);
-            for row_idx in start..end {
-                let row_ref = vector::get_vector(
-                    &input_t,
-                    element_size,
-                    i32::try_from(row_idx).expect("row index fits i32"),
-                    &state.database.allocations,
-                );
-                let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
-                batch.push((row_idx, val));
-            }
-            tx_t.send((batch, state.database))
-                .expect("channel send failed");
-        });
-        handles.push(handle);
+    #[cfg(feature = "threading")]
+    {
+        let threads = n_threads.max(1).min(n_rows);
+        let program = Arc::new(program);
+        let (tx, rx) = mpsc::channel::<(Vec<(usize, DbRef)>, crate::database::Stores)>();
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            let worker_stores = stores.clone_for_worker();
+            let prog = Arc::clone(&program);
+            let tx_t = tx.clone();
+            let input_t = *input;
+            let extras = extra_args.to_vec();
+            let handle = thread::spawn(move || {
+                let (bytecode, text_code, library) = prog.clone_refs();
+                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut batch = Vec::with_capacity(end - start);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        i32::try_from(row_idx).expect("row index fits i32"),
+                        &state.database.allocations,
+                    );
+                    let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
+                    batch.push((row_idx, val));
+                }
+                tx_t.send((batch, state.database))
+                    .expect("channel send failed");
+            });
+            handles.push(handle);
+        }
+        drop(tx);
+        let mut results = Vec::with_capacity(threads);
+        for batch in rx {
+            results.push(batch);
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+        results
     }
-    drop(tx);
-    let mut results = Vec::with_capacity(threads);
-    for batch in rx {
-        results.push(batch);
+    #[cfg(not(feature = "threading"))]
+    {
+        let _ = n_threads;
+        let (bytecode, text_code, library) = program.clone_refs();
+        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut batch = Vec::with_capacity(n_rows);
+        for row_idx in 0..n_rows {
+            let row_ref = vector::get_vector(
+                input,
+                element_size,
+                i32::try_from(row_idx).expect("row index fits i32"),
+                &state.database.allocations,
+            );
+            let val = state.execute_at_ref(fn_pos, &row_ref, extra_args);
+            batch.push((row_idx, val));
+        }
+        vec![(batch, state.database)]
     }
-    for h in handles {
-        h.join().expect("worker thread panicked");
-    }
-    results
 }
 
 /// Parallel integer returns: one `i32` per row, original order.
@@ -311,51 +404,68 @@ pub fn run_parallel_int(
     if n_rows == 0 {
         return Vec::new();
     }
+    #[cfg(feature = "threading")]
+    {
+        let threads = n_threads.max(1).min(n_rows);
+        let program = Arc::new(program);
+        let (tx, rx) = mpsc::channel::<Vec<(usize, i32)>>();
 
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let (tx, rx) = mpsc::channel::<Vec<(usize, i32)>>();
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            let worker_stores = stores.clone_for_worker();
+            let prog = Arc::clone(&program);
+            let tx_t = tx.clone();
+            let input_t = *input;
 
-    // Distribute rows evenly across threads.
-    let mut handles = Vec::with_capacity(threads);
-    for t in 0..threads {
-        let start = t * n_rows / threads;
-        let end = (t + 1) * n_rows / threads;
-        let worker_stores = stores.clone_for_worker();
-        let prog = Arc::clone(&program);
-        let tx_t = tx.clone();
-        let input_t = *input;
-
-        let handle = thread::spawn(move || {
-            let (bytecode, text_code, library) = prog.clone_refs();
-            let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
-            let mut batch = Vec::with_capacity(end - start);
-            for row_idx in start..end {
-                let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
-                let row_ref = vector::get_vector(
-                    &input_t,
-                    element_size,
-                    row_idx_i32,
-                    &state.database.allocations,
-                );
-                let val = state.execute_at(fn_pos, &row_ref);
-                batch.push((row_idx, val));
-            }
-            tx_t.send(batch).expect("channel send failed");
-        });
-        handles.push(handle);
-    }
-    // Drop the original sender so rx finishes when all threads are done.
-    drop(tx);
-
-    let mut results = vec![i32::MIN; n_rows];
-    for batch in rx {
-        for (idx, val) in batch {
-            results[idx] = val;
+            let handle = thread::spawn(move || {
+                let (bytecode, text_code, library) = prog.clone_refs();
+                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut batch = Vec::with_capacity(end - start);
+                for row_idx in start..end {
+                    let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx_i32,
+                        &state.database.allocations,
+                    );
+                    let val = state.execute_at(fn_pos, &row_ref);
+                    batch.push((row_idx, val));
+                }
+                tx_t.send(batch).expect("channel send failed");
+            });
+            handles.push(handle);
         }
+        drop(tx);
+        let mut results = vec![i32::MIN; n_rows];
+        for batch in rx {
+            for (idx, val) in batch {
+                results[idx] = val;
+            }
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+        results
     }
-    for h in handles {
-        h.join().expect("worker thread panicked");
+    #[cfg(not(feature = "threading"))]
+    {
+        let _ = n_threads;
+        let (bytecode, text_code, library) = program.clone_refs();
+        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut results = vec![i32::MIN; n_rows];
+        for row_idx in 0..n_rows {
+            let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+            let row_ref = vector::get_vector(
+                input,
+                element_size,
+                row_idx_i32,
+                &state.database.allocations,
+            );
+            results[row_idx] = state.execute_at(fn_pos, &row_ref);
+        }
+        results
     }
-    results
 }

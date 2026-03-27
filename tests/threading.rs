@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+#![cfg(feature = "threading")]
 
 //! Integration tests for parallel execution (`parallel_for_int`).
 //!
