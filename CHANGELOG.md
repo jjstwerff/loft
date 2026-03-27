@@ -185,6 +185,16 @@ All notable changes to the loft language and interpreter.
 - **Format specifier warnings** — Compile-time warnings for format specifiers that
   have no effect: hex/binary/octal on text or boolean, zero-padding on text.
 
+- **`while` loop** (L10) — `while cond { body }` is now a first-class keyword.
+  Desugars to a loop with an `if !cond { break }` guard at the top, identical to
+  the `for + break` workaround but with familiar syntax.  C11 closed.
+
+### Language changes
+
+- **Format specifier mismatches are now errors** (L9) — Using a radix specifier
+  (`:x`, `:b`, `:o`) on a `text` or `boolean` value, or zero-padding (`:05`) on a
+  `text` value, is now a compile error rather than a silent no-op.  C14 closed.
+
 ### Bug fixes
 
 - **S15: match arm binding type reuse** — When multiple struct-enum match arms bind the

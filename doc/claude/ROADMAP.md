@@ -93,8 +93,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | CO1.4-fix | `yield from` slot-assignment regression fix          | M  | ✓      | CO1.4        | CAVEATS.md C21             |
 | A5.6      | Closure: mutable + text capture                      | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
 | N8        | Native codegen: tuples, coroutines, generics         | H  | ✓      | T1, CO1      | CAVEATS.md C19             |
-| L9        | Format specifier mismatch → compile error            | S  | ✓      | L8           | CAVEATS.md C14             |
-| L10       | `while` loop syntax sugar                            | S  | ✓      |              | CAVEATS.md C11             |
 
 ---
 

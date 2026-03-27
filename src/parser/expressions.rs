@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_loop, v_set};
+use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
@@ -166,6 +166,9 @@ impl Parser {
         if self.lexer.has_token("for") {
             self.parse_for(val);
             Type::Void
+        } else if self.lexer.has_token("while") {
+            self.parse_while(val);
+            Type::Void
         } else if self.lexer.has_token("continue") {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
@@ -271,6 +274,35 @@ impl Parser {
             self.known_var_or_type(val);
             res
         }
+    }
+
+    /// L10: `while <cond> { <body> }` desugars to an infinite loop with a break guard.
+    ///
+    /// The emitted IR is equivalent to:
+    ///   loop { if !cond { break }; body }
+    pub(crate) fn parse_while(&mut self, code: &mut Value) {
+        let mut cond = Value::Null;
+        self.expression(&mut cond);
+        if !self.first_pass && matches!(cond, Value::Null) {
+            diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
+            return;
+        }
+        let not_cond = self.cl("OpNot", &[cond]);
+        let break_if = v_if(
+            not_cond,
+            v_block(vec![Value::Break(0)], Type::Void, "break"),
+            Value::Null,
+        );
+        let loop_nr = self.vars.start_loop();
+        let in_loop = self.in_loop;
+        self.in_loop = true;
+        let mut body = Value::Null;
+        let loop_write_state = self.vars.save_and_clear_write_state();
+        self.parse_block("while", &mut body, &Type::Void);
+        self.vars.restore_write_state(&loop_write_state);
+        self.in_loop = in_loop;
+        self.vars.finish_loop(loop_nr);
+        *code = v_loop(vec![break_if, body], "while");
     }
 
     pub(crate) fn change_var(&mut self, code: &Value, tp: &Type) -> bool {

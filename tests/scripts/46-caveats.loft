@@ -33,22 +33,12 @@ fn test_s15_same_named_field_offset() {
   }
 }
 
-// C11 — No while loop: for + break is the workaround.
-fn test_c11_no_while() {
+// C11 — while loop now supported (L10 fix).
+fn test_c11_while() {
+  i = 0;
   found = false;
-  for i in 0..1000000 {
-    if i * i > 100 { found = true; break }
-  }
-  assert(found, "C11: polling via for+break");
-}
-
-// C14 — Format specifier silently ignored on incompatible types.
-// #warn Zero-padding has no effect on text
-fn test_c14_format_specifier_ignored() {
-  t = "hello";
-  r = "{t:05}";
-  // :05 on text is silently ignored — value is unchanged.
-  assert(r == "hello", "C14: format specifier on text ignored: '{r}'");
+  while !found { i += 1; found = i * i > 100; }
+  assert(found, "C11: while loop works");
 }
 
 // C19 — Tuples work in interpreter (element access and assignment).
@@ -68,8 +58,7 @@ fn main() {
   test_c1_lambda_no_capture();
   test_p3_aggregates();
   test_s15_same_named_field_offset();
-  test_c11_no_while();
-  test_c14_format_specifier_ignored();
+  test_c11_while();
   test_c19_tuple_basics();
   println("caveats: all ok");
 }

@@ -911,28 +911,18 @@ on text/boolean and zero-padding on text.  Tests in `38-parse-warnings.loft`.
 ---
 
 ### L9  Format specifier / type mismatch — escalate to compile error
-**Sources:** CAVEATS.md C14, PLANNING.md L8
-**Severity:** Low — a mismatched specifier is silently ignored; the format string produces no output difference visible to the user, masking bugs.
-**Description:** L8 added compile-time warnings for numeric format specifiers applied to text/boolean values and zero-padding applied to text.  The next step is to escalate these specific mismatches from warnings to hard compile errors, since the specifier can never have any effect.
-**Fix path:**
-1. In `append_data()` (or the relevant format-codegen path), change the `log_warn!` / warning emit to a `log_error!` / error diagnostic for cases where the specifier has no defined effect on the type (zero-padding on text; `+` / space-sign on boolean).
-2. Numeric-width specifiers on text (e.g., `{s:10}`) are more ambiguous (right-align text?) — leave those as warnings until a spec decision is made.
-3. Update tests in `38-parse-warnings.loft` accordingly.
-**Effort:** Small
-**Target:** 1.1+
+**Status: completed**
+Changed `Level::Warning` → `Level::Error` in `append_data()` for radix specifiers on
+text/boolean and zero-padding on text.  Tests updated in `38-parse-warnings.loft`.
+CAVEATS.md C14 closed.
 
 ---
 
 ### L10  `while` loop syntax sugar
-**Sources:** CAVEATS.md C11
-**Severity:** Low — the `for i in 0..BIG { if cond { break } }` workaround is verbose; familiar `while cond { body }` would improve readability.
-**Description:** Loft has no `while` loop; the recommended pattern is `for + break`.  Adding `while` as syntactic sugar over `for` with an implicit large bound is straightforward.  The desugaring is: `while cond { body }` → `for __i in 0..i64::MAX { if !cond { break }; body }`.
-**Fix path:**
-1. Add `while` keyword to the lexer.
-2. In `parse_statement` (or `control.rs`), recognise `while expr { block }` and emit the desugared `for` loop IR.
-3. Tests: `while false {}` never executes; `while i < 10 { i += 1 }` counts to 10.
-**Effort:** Small
-**Target:** 1.1+
+**Status: completed**
+Added `while` keyword to the lexer and `parse_while()` in `expressions.rs`.
+Desugars to `v_loop([if !cond { break }, body])`.  Tests in `46-caveats.loft`.
+CAVEATS.md C11 closed.
 
 ---
 

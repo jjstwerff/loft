@@ -133,6 +133,7 @@ static KEYWORDS: &[&str] = &[
     "in",
     "else",
     "for",
+    "while",
     "continue",
     "break",
     "return",

@@ -18,9 +18,8 @@ fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// A program whose only diagnostic is a compile-time warning must still run
-/// and exit 0.  46-caveats.loft triggers a C14 zero-padding-on-text warning
-/// (`{t:05}`) but is otherwise valid and should print "caveats: all ok".
+/// A program with no diagnostics must run and exit 0.
+/// 46-caveats.loft is a clean caveat regression suite that should print "caveats: all ok".
 #[test]
 fn warning_only_program_exits_zero() {
     let script = workspace_root().join("tests/scripts/46-caveats.loft");

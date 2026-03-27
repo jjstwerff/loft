@@ -123,27 +123,22 @@ may still reach the runtime panics.
 ---
 
 
-## C11 — No `while` loop
+## C11 — No `while` loop *(fixed in L10)*
 
-Loft has no `while` keyword. Polling or retry patterns require `for` with a
-large upper bound and `break`.
+**Fixed.** Loft now supports `while cond { body }` as syntax sugar that desugars
+to a loop with an `if !cond { break }` guard at the top.
 
-**Reproducer:**
 ```loft
 fn main() {
-  // Polling pattern — the only way to loop until a condition:
+  i = 0;
   found = false;
-  for i in 0..1000000 {
-    if i * i > 100 { found = true; break }
-  }
+  while !found { i += 1; found = i * i > 100; }
   assert(found, "found");
 }
 ```
 
-**Test:** `tests/scripts/46-caveats.loft` — `test_c11_no_while`
-**Workaround:** `for i in 0..LARGE { if condition { break } }`
-**Planned fix:** L10 in [ROADMAP.md](ROADMAP.md) (1.1+) — `while` as syntax sugar over `for + break`.
-**Docs:** [00-vs-rust.html](../00-vs-rust.html) § No while loop; [00-vs-python.html](../00-vs-python.html) § No while loop.
+**Test:** `tests/scripts/46-caveats.loft` — `test_c11_while`
+**Fixed by:** L10 — `while` loop syntax sugar.
 
 ---
 
@@ -167,25 +162,13 @@ fn main() {
 
 ---
 
-## C14 — Format specifier silently ignored on incompatible types
+## C14 — Format specifier silently ignored on incompatible types *(fixed in L9)*
 
-A numeric format specifier like `:05` on a text value is silently ignored
-instead of producing a compile error.
+**Fixed.** Using a numeric radix specifier (`:x`, `:b`, `:o`) on a `text` or
+`boolean` value, or zero-padding (`:05`) on a `text` value, is now a compile
+error instead of a silent no-op.
 
-**Reproducer:**
-```loft
-fn main() {
-  t = "hello";
-  r = "{t:05}";
-  // r is "hello", not "0hello" — the :05 specifier is silently dropped.
-  assert(r == "hello", "format: {r}");
-}
-```
-
-**Test:** `tests/scripts/46-caveats.loft` — `test_c14_format_specifier_ignored`
-**Workaround:** ensure format specifiers match the value type.
-**Planned fix:** L9 in [ROADMAP.md](ROADMAP.md) (1.1+) — escalate ignored specifiers to compile errors.
-**Docs:** [00-vs-rust.html](../00-vs-rust.html) § String formatting.
+**Fixed by:** L9 — format specifier mismatch escalated to compile error.
 
 ---
 
