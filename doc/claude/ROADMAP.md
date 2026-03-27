@@ -52,7 +52,6 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | P2.2      | ↳ Single-statement execution                         | M  | ✓      | P2.1         | main.rs, repl.rs           |
 | P2.3      | ↳ Automatic value output                             | S  | ✓      | P2.2         | repl.rs                    |
 | P2.4      | ↳ Error recovery in session                          | M  | ✓      | P2.2, L1     | repl.rs, parser.rs         |
-| S21       | Fix #92: stack_trace() empty in par workers          | S  | ✓      |              | CAVEATS.md C17             |
 
 ---
 

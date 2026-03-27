@@ -556,6 +556,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 text_code,
                 library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },
         )
     };
@@ -644,6 +645,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 text_code,
                 library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },
             n_hidden,
         )

@@ -225,24 +225,35 @@ impl State {
             self.stack_trace_lib_nr = nr;
         }
         // TR1.3: snapshot call_stack only when n_stack_trace is being called.
-        if call == self.stack_trace_lib_nr
-            && !self.call_stack.is_empty()
-            && !self.data_ptr.is_null()
-        {
+        // Fix #92: also works in parallel workers where data_ptr may be null;
+        // frames with d_nr == u32::MAX (synthetic worker frame) get a placeholder name.
+        if call == self.stack_trace_lib_nr && !self.call_stack.is_empty() {
             // SAFETY: data_ptr is set in execute_argv and valid during execution.
-            let data = unsafe { &*self.data_ptr };
+            let data_opt: Option<&Data> = if self.data_ptr.is_null() {
+                None
+            } else {
+                Some(unsafe { &*self.data_ptr })
+            };
             self.database.call_stack_snapshot = self
                 .call_stack
                 .iter()
                 .map(|f| {
-                    let def = &data.definitions[f.d_nr as usize];
-                    let name = if def.name.starts_with("n_") {
-                        def.name[2..].to_string()
+                    if let Some(data) = data_opt
+                        && f.d_nr != u32::MAX
+                        && (f.d_nr as usize) < data.definitions.len()
+                    {
+                        let def = &data.definitions[f.d_nr as usize];
+                        let name = if def.name.starts_with("n_") {
+                            def.name[2..].to_string()
+                        } else {
+                            def.name.clone()
+                        };
+                        let file = def.position.file.clone();
+                        (name, file, f.line)
                     } else {
-                        def.name.clone()
-                    };
-                    let file = def.position.file.clone();
-                    (name, file, f.line)
+                        // Worker frame without Data context — use placeholder.
+                        ("<worker>".to_string(), String::new(), f.line)
+                    }
                 })
                 .collect();
         }
@@ -781,11 +792,17 @@ impl State {
         let lib_ptr = &raw const self.library;
         let data_ptr = std::ptr::from_ref::<Data>(data);
         self.data_ptr = data_ptr;
+        let stk_lib_nr = self
+            .library_names
+            .get("n_stack_trace")
+            .copied()
+            .unwrap_or(u16::MAX);
         self.database.parallel_ctx = Some(Box::new(ParallelCtx {
             bytecode: bc_ptr,
             text_code: tc_ptr,
             library: lib_ptr,
             data: data_ptr,
+            stack_trace_lib_nr: stk_lib_nr,
         }));
 
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
@@ -871,10 +888,17 @@ impl State {
     /// use in a parallel worker thread.  All three are `Arc`-cloned — O(1).
     #[must_use]
     pub fn worker_program(&self) -> crate::parallel::WorkerProgram {
+        // Resolve n_stack_trace now so workers can call stack_trace() (fix #92).
+        let stack_trace_lib_nr = self
+            .library_names
+            .get("n_stack_trace")
+            .copied()
+            .unwrap_or(u16::MAX);
         crate::parallel::WorkerProgram {
             bytecode: Arc::clone(&self.bytecode),
             text_code: Arc::clone(&self.text_code),
             library: Arc::clone(&self.library),
+            stack_trace_lib_nr,
         }
     }
 
@@ -929,10 +953,30 @@ impl State {
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations (infinite-loop guard).
     pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i32 {
-        // Fix #92: set data_ptr so stack_trace() works in parallel workers.
+        // Fix #92: propagate data_ptr, stack_trace_lib_nr, and fn_positions from
+        // ParallelCtx so that stack_trace() works inside parallel workers called via
+        // n_parallel_for_int.  When parallel_ctx is None (direct run_parallel_* path),
+        // stack_trace_lib_nr is already set by WorkerProgram::new_state — don't clobber it.
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
         }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 12,
+            line: 0,
+        });
         self.stack_pos = 4;
         self.put_stack(*arg); // 12 bytes → stack_pos = 16
         self.put_stack(u32::MAX); // 4 bytes  → stack_pos = 20
@@ -961,7 +1005,24 @@ impl State {
     ) -> u64 {
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
         }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 12,
+            line: 0,
+        });
         self.stack_pos = 4;
         // Push extra context args first (they precede the element arg in the
         // function's parameter list: fn worker(element, extra1, extra2, ...)).
@@ -998,7 +1059,24 @@ impl State {
     pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
         }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 12,
+            line: 0,
+        });
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {
@@ -1030,6 +1108,26 @@ impl State {
         extra_args: &[u64],
         n_hidden_text: usize,
     ) -> String {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 12,
+            line: 0,
+        });
         // Allocate String buffers for hidden RefVar(Text) params in the stack store.
         let mut work_crs: Vec<DbRef> = Vec::with_capacity(n_hidden_text);
         for _ in 0..n_hidden_text {

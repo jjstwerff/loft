@@ -195,24 +195,22 @@ causes were addressed:
 
 ---
 
-## C17 — `stack_trace()` returns empty from parallel workers
+## C17 — `stack_trace()` returns empty from parallel workers *(fixed in S21)*
 
-Calling `stack_trace()` inside a `par(...)` loop body returns an empty vector
-instead of the actual call frames.  The function does not error — it silently
-returns zero frames.
+**Fixed.**  `stack_trace()` called inside a `par(...)` worker or any
+`run_parallel_*` worker now returns the actual call frames.
 
-**Reproducer:**
-```loft
-fn check() -> integer {
-  total = 0;
-  for _ in 0..4 par(total += len(stack_trace())) {}
-  total  // always 0, even though calls are active
-}
-```
+Two root causes were addressed:
+1. **`stack_trace_lib_nr` not propagated** — `WorkerProgram` now carries the
+   resolved library index of `n_stack_trace`; `WorkerProgram::new_state` copies
+   it into the worker's `stack_trace_lib_nr` field so the snapshot trigger fires.
+2. **Snapshot skipped when `data_ptr` null** — `static_call` now takes the
+   snapshot even when `data_ptr` is null (direct `run_parallel_*` path), using
+   a `"<worker>"` placeholder for frames whose definition is unavailable.
 
-**Test:** none (no parallel-worker test for stack_trace yet).
-**Workaround:** Call `stack_trace()` from the main thread only.
-**Planned fix:** S21 in [ROADMAP.md](ROADMAP.md) (0.9.0) — set `data_ptr` in `execute_at*` parallel entry points; design in [PLANNING.md](PLANNING.md) § S21.
+**Test:** `tests/threading.rs` — `parallel_stack_trace_non_empty` (passes,
+no `#[ignore]`).
+**Fixed by:** S21 — `WorkerProgram.stack_trace_lib_nr` + null-safe snapshot.
 
 ---
 

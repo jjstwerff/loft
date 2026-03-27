@@ -37,6 +37,10 @@ pub struct ParallelCtx {
     pub text_code: *const Arc<Vec<u8>>,
     pub library: *const Arc<Vec<Call>>,
     pub data: *const crate::data::Data,
+    /// Cached library index of `n_stack_trace`; `u16::MAX` = not found.
+    /// Copied into worker `State::stack_trace_lib_nr` so workers can snapshot
+    /// the call stack when `stack_trace()` is called (fix #92).
+    pub stack_trace_lib_nr: u16,
 }
 
 // Safety: the pointed-to data lives for the duration of `State::execute()`,

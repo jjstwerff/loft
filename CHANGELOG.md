@@ -8,6 +8,18 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **`stack_trace()` works in parallel workers** (S21, fix #92) — Calling
+  `stack_trace()` inside a `par(...)` loop body or any `run_parallel_*` worker
+  now returns the actual call frames instead of an empty vector.  Two changes
+  enable this: (1) `WorkerProgram` now carries `stack_trace_lib_nr` so the
+  resolved index of `n_stack_trace` travels from the main state into each
+  worker state; (2) `static_call` takes the call-stack snapshot when
+  `stack_trace_lib_nr` matches even when `data_ptr` is null, using a
+  `"<worker>"` placeholder for frames that lack `Data` context.  Worker states
+  created via both `n_parallel_for_int` (bytecode path) and the direct
+  `run_parallel_*` Rust API now report correct frame counts.  Test
+  `parallel_stack_trace_non_empty` passes without `#[ignore]`.
+
 - **`init(expr)` circular dependency detection** (S20) — Struct fields that
   form a mutual initialisation cycle (`a: integer init($.b), b: integer init($.a)`)
   now produce a compile error naming the cycle (e.g.

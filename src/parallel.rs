@@ -41,6 +41,10 @@ pub struct WorkerProgram {
     pub bytecode: Arc<Vec<u8>>,
     pub text_code: Arc<Vec<u8>>,
     pub library: Arc<Vec<Call>>,
+    /// Cached library index of `n_stack_trace`; `u16::MAX` = not found.
+    /// Copied into each worker's `State::stack_trace_lib_nr` so that
+    /// `stack_trace()` works inside parallel workers (fix #92).
+    pub stack_trace_lib_nr: u16,
 }
 
 // Safety: WorkerProgram is read-only after construction; Call is fn ptr (Send).
@@ -55,6 +59,14 @@ impl WorkerProgram {
             Arc::clone(&self.text_code),
             Arc::clone(&self.library),
         )
+    }
+
+    /// Create a worker `State` from this program, with `stack_trace_lib_nr` propagated.
+    fn new_state(&self, worker_stores: crate::database::Stores) -> State {
+        let (bytecode, text_code, library) = self.clone_refs();
+        let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+        state.stack_trace_lib_nr = self.stack_trace_lib_nr;
+        state
     }
 }
 
@@ -96,8 +108,7 @@ pub fn run_parallel_direct(
             let ret_sz = return_size as usize;
 
             let handle = thread::spawn(move || {
-                let (bytecode, text_code, library) = prog.clone_refs();
-                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut state = prog.new_state(worker_stores);
                 for row_idx in start..end {
                     let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
                     let row_ref = vector::get_vector(
@@ -122,8 +133,7 @@ pub fn run_parallel_direct(
     #[cfg(not(feature = "threading"))]
     {
         let _ = n_threads;
-        let (bytecode, text_code, library) = program.clone_refs();
-        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut state = program.new_state(stores.clone_for_worker());
         let ret_sz = return_size as usize;
         for row_idx in 0..n_rows {
             let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
@@ -176,8 +186,7 @@ pub fn run_parallel_raw(
             let input_t = *input;
             let extras = extra_args.to_vec();
             let handle = thread::spawn(move || {
-                let (bytecode, text_code, library) = prog.clone_refs();
-                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut state = prog.new_state(worker_stores);
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
                     let row_ref = vector::get_vector(
@@ -208,8 +217,7 @@ pub fn run_parallel_raw(
     #[cfg(not(feature = "threading"))]
     {
         let _ = n_threads;
-        let (bytecode, text_code, library) = program.clone_refs();
-        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut state = program.new_state(stores.clone_for_worker());
         let mut results = vec![0u64; n_rows];
         for row_idx in 0..n_rows {
             let row_ref = vector::get_vector(
@@ -258,8 +266,7 @@ pub fn run_parallel_text(
             let input_t = *input;
             let extras = extra_args.to_vec();
             let handle = thread::spawn(move || {
-                let (bytecode, text_code, library) = prog.clone_refs();
-                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut state = prog.new_state(worker_stores);
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
                     let row_ref = vector::get_vector(
@@ -290,8 +297,7 @@ pub fn run_parallel_text(
     #[cfg(not(feature = "threading"))]
     {
         let _ = n_threads;
-        let (bytecode, text_code, library) = program.clone_refs();
-        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut state = program.new_state(stores.clone_for_worker());
         let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
         for row_idx in 0..n_rows {
             let row_ref = vector::get_vector(
@@ -340,8 +346,7 @@ pub fn run_parallel_ref(
             let input_t = *input;
             let extras = extra_args.to_vec();
             let handle = thread::spawn(move || {
-                let (bytecode, text_code, library) = prog.clone_refs();
-                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut state = prog.new_state(worker_stores);
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
                     let row_ref = vector::get_vector(
@@ -371,8 +376,7 @@ pub fn run_parallel_ref(
     #[cfg(not(feature = "threading"))]
     {
         let _ = n_threads;
-        let (bytecode, text_code, library) = program.clone_refs();
-        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut state = program.new_state(stores.clone_for_worker());
         let mut batch = Vec::with_capacity(n_rows);
         for row_idx in 0..n_rows {
             let row_ref = vector::get_vector(
@@ -420,8 +424,7 @@ pub fn run_parallel_int(
             let input_t = *input;
 
             let handle = thread::spawn(move || {
-                let (bytecode, text_code, library) = prog.clone_refs();
-                let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+                let mut state = prog.new_state(worker_stores);
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
                     let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
@@ -453,8 +456,7 @@ pub fn run_parallel_int(
     #[cfg(not(feature = "threading"))]
     {
         let _ = n_threads;
-        let (bytecode, text_code, library) = program.clone_refs();
-        let mut state = State::new_worker(stores.clone_for_worker(), bytecode, text_code, library);
+        let mut state = program.new_state(stores.clone_for_worker());
         let mut results = vec![i32::MIN; n_rows];
         for row_idx in 0..n_rows {
             let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");

@@ -986,11 +986,17 @@ pub(super) fn execute_log_impl(
     // Set up parallel context so n_parallel_for can access bytecode/library.
     let data_ptr = std::ptr::from_ref::<crate::data::Data>(data);
     state.data_ptr = data_ptr;
+    let stk_lib_nr = state
+        .library_names
+        .get("n_stack_trace")
+        .copied()
+        .unwrap_or(u16::MAX);
     state.database.parallel_ctx = Some(Box::new(super::ParallelCtx {
         data: data_ptr,
         bytecode: &raw const state.bytecode,
         text_code: &raw const state.text_code,
         library: &raw const state.library,
+        stack_trace_lib_nr: stk_lib_nr,
     }));
 
     // If logging is suppressed for this function, fall back to silent execution.
