@@ -103,7 +103,10 @@ pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,
     pub allocations: Vec<Store>,
+    #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
+    #[cfg(feature = "wasm")]
+    pub files: Vec<()>,
     pub max: u16,
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.

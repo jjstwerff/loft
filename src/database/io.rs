@@ -4,11 +4,15 @@
 
 use crate::database::{Parts, Stores};
 use crate::keys::DbRef;
+#[cfg(not(feature = "wasm"))]
 use crate::store::Store;
 use crate::vector;
+#[cfg(not(feature = "wasm"))]
 use std::collections::BTreeMap;
+#[cfg(not(feature = "wasm"))]
 use std::io::Write as _;
 
+#[cfg(not(feature = "wasm"))]
 enum Format {
     TextFile = 1,
     _LittleEndian = 2,
@@ -17,6 +21,7 @@ enum Format {
     NotExists = 5,
 }
 
+#[cfg(not(feature = "wasm"))]
 fn fill_file(path: &std::path::Path, store: &mut Store, file: &DbRef) -> bool {
     store.set_long(file.rec, file.pos + 8, i64::MIN); // current
     store.set_long(file.rec, file.pos + 16, i64::MIN); // next
@@ -332,6 +337,7 @@ impl Stores {
         }
     }
 
+    #[cfg(not(feature = "wasm"))]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
         if file.rec == 0 {
             return false;
@@ -342,6 +348,12 @@ impl Stores {
         fill_file(path, store, file)
     }
 
+    #[cfg(feature = "wasm")]
+    pub fn get_file(&mut self, _file: &DbRef) -> bool {
+        false
+    }
+
+    #[cfg(not(feature = "wasm"))]
     pub fn get_dir(&mut self, file_path: &str, result: &DbRef) -> bool {
         let path = std::path::Path::new(&file_path);
         if let Ok(iter) = std::fs::read_dir(path) {
@@ -379,6 +391,11 @@ impl Stores {
         true
     }
 
+    #[cfg(feature = "wasm")]
+    pub fn get_dir(&mut self, _file_path: &str, _result: &DbRef) -> bool {
+        true
+    }
+
     /**
     Read the binary data from a png image.
     # Panics
@@ -409,19 +426,22 @@ impl Stores {
     }
 
     pub fn write_file(&mut self, file: &DbRef, v: &str) {
-        let f_nr = self.files.len() as i32;
-        let s = self.store_mut(file);
-        let mut file_ref = s.get_int(file.rec, file.pos + 28);
-        if file_ref == i32::MIN {
-            let file_name = s.get_str(s.get_int(file.rec, file.pos + 24) as u32);
-            if let Ok(f) = std::fs::File::create(file_name) {
-                s.set_int(file.rec, file.pos + 28, f_nr);
-                self.files.push(Some(f));
+        #[cfg(not(feature = "wasm"))]
+        {
+            let f_nr = self.files.len() as i32;
+            let s = self.store_mut(file);
+            let mut file_ref = s.get_int(file.rec, file.pos + 28);
+            if file_ref == i32::MIN {
+                let file_name = s.get_str(s.get_int(file.rec, file.pos + 24) as u32);
+                if let Ok(f) = std::fs::File::create(file_name) {
+                    s.set_int(file.rec, file.pos + 28, f_nr);
+                    self.files.push(Some(f));
+                }
+                file_ref = f_nr;
             }
-            file_ref = f_nr;
-        }
-        if let Some(f) = &mut self.files[file_ref as usize] {
-            f.write_all(v.as_bytes()).unwrap_or_default();
+            if let Some(f) = &mut self.files[file_ref as usize] {
+                f.write_all(v.as_bytes()).unwrap_or_default();
+            }
         }
     }
 }

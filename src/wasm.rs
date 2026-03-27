@@ -8,6 +8,72 @@
 //!
 //! Steps: W1.1 (this stub) → W1.2 (output capture) → W1.3–W1.8 (bridges) → W1.9 (entry point).
 
+// ── W1.7  File I/O host bridge stubs ─────────────────────────────────────────
+
+/// Check whether a path exists in the virtual filesystem.
+pub fn host_fs_exists(_path: &str) -> bool {
+    // TODO W1.9: call extern "C" { fn fs_exists(ptr, len) -> bool; }
+    false
+}
+
+/// Read an entire text file.  Returns empty string if absent.
+pub fn host_fs_read_text(_path: &str) -> String {
+    // TODO W1.9
+    String::new()
+}
+
+/// Write `data` as text to `path`, creating or truncating.
+pub fn host_fs_write_text(_path: &str, _data: &str) {}
+
+/// Read raw bytes from `path`.  Returns empty Vec if absent.
+pub fn host_fs_read_binary(_path: &str) -> Vec<u8> {
+    // TODO W1.9
+    Vec::new()
+}
+
+/// Write raw bytes to `path`, creating or truncating.
+pub fn host_fs_write_binary(_path: &str, _data: &[u8]) {}
+
+/// Delete `path`.  Returns true on success.
+pub fn host_fs_delete(_path: &str) -> bool {
+    false
+}
+
+/// Move / rename `from` to `to`.  Returns true on success.
+pub fn host_fs_move(_from: &str, _to: &str) -> bool {
+    false
+}
+
+/// Create a directory.  Returns true on success.
+pub fn host_fs_mkdir(_path: &str) -> bool {
+    false
+}
+
+/// Create a directory and all parents.  Returns true on success.
+pub fn host_fs_mkdir_all(_path: &str) -> bool {
+    false
+}
+
+/// Return a list of names inside `path` (directory listing).
+pub fn host_fs_list_dir(_path: &str) -> Vec<String> {
+    Vec::new()
+}
+
+/// Return `true` if `path` is a directory.
+pub fn host_fs_is_dir(_path: &str) -> bool {
+    false
+}
+
+/// Return `true` if `path` is a regular file.
+pub fn host_fs_is_file(_path: &str) -> bool {
+    false
+}
+
+/// Return the byte size of `path`, or -1 if absent.
+pub fn host_fs_file_size(_path: &str) -> i64 {
+    -1
+}
+
 // ── W1.6  Time and environment host bridges ──────────────────────────────────
 
 /// Return the current time as milliseconds since the Unix epoch.

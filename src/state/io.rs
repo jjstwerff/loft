@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{State, new_ref, size_ref};
-use crate::database::{Parts, ShowDb};
+#[cfg(not(feature = "wasm"))]
+use crate::database::Parts;
+use crate::database::ShowDb;
 use crate::keys::{Content, DbRef, Key};
 use crate::{hash, tree, vector};
+#[cfg(not(feature = "wasm"))]
 use std::fs::{File, OpenOptions};
+#[cfg(not(feature = "wasm"))]
 use std::io::{Read, Seek, SeekFrom, Write};
 
 impl State {
@@ -20,13 +24,18 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        let store = self.database.store(&file);
-        let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
-        let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
-        if let Ok(mut f) = File::open(file_path)
-            && f.read_to_string(buf).is_err()
+        #[cfg(feature = "wasm")]
+        return; // no filesystem access under WASM
+        #[cfg(not(feature = "wasm"))]
         {
-            buf.clear();
+            let store = self.database.store(&file);
+            let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+            let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
+            if let Ok(mut f) = File::open(file_path)
+                && f.read_to_string(buf).is_err()
+            {
+                buf.clear();
+            }
         }
     }
 
@@ -37,99 +46,105 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        let f_nr = self.database.files.len() as i32;
-        let format = self
-            .database
-            .store(&file)
-            .get_byte(file.rec, file.pos + 32, 0);
-        // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
-        if format != 1 && format != 5 && format != 2 && format != 3 {
-            return;
-        }
-        let little_endian = format == 2;
-        let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
-        let file_ref = if file_ref == i32::MIN {
-            // Open the file for writing (creates or truncates), same for text and binary.
-            let file_name = {
-                let store = self.database.store(&file);
-                store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
-                    .to_owned()
-            };
-            match File::create(&file_name) {
-                Ok(f) => {
-                    self.database
-                        .store_mut(&file)
-                        .set_int(file.rec, file.pos + 28, f_nr);
-                    // If the file was marked NotExists, update format to TextFile now that it exists.
-                    if format == 5 {
+        #[cfg(not(feature = "wasm"))]
+        {
+            let f_nr = self.database.files.len() as i32;
+            let format = self
+                .database
+                .store(&file)
+                .get_byte(file.rec, file.pos + 32, 0);
+            // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
+            if format != 1 && format != 5 && format != 2 && format != 3 {
+                return;
+            }
+            let little_endian = format == 2;
+            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+            let file_ref = if file_ref == i32::MIN {
+                // Open the file for writing (creates or truncates), same for text and binary.
+                let file_name = {
+                    let store = self.database.store(&file);
+                    store
+                        .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                        .to_owned()
+                };
+                match File::create(&file_name) {
+                    Ok(f) => {
                         self.database
                             .store_mut(&file)
-                            .set_byte(file.rec, file.pos + 32, 0, 1);
+                            .set_int(file.rec, file.pos + 28, f_nr);
+                        // If the file was marked NotExists, update format to TextFile now that it exists.
+                        if format == 5 {
+                            self.database
+                                .store_mut(&file)
+                                .set_byte(file.rec, file.pos + 32, 0, 1);
+                        }
+                        self.database.files.push(Some(f));
+                        f_nr
                     }
-                    self.database.files.push(Some(f));
-                    f_nr
+                    Err(e) => {
+                        eprintln!("file create error for {file_name:?}: {e}");
+                        return;
+                    }
                 }
-                Err(e) => {
-                    eprintln!("file create error for {file_name:?}: {e}");
-                    return;
-                }
-            }
-        } else {
-            file_ref
-        };
-        // Track position: set #index = where this write starts, then advance #next after.
-        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
-        let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
-        self.database
-            .store_mut(&file)
-            .set_long(file.rec, file.pos + 8, next_pos);
-        // Assemble the bytes to write.
-        let mut data = Vec::new();
-        if self.database.is_text_type(db_tp) {
-            // Text variables in the stack hold a Rust String (not a store record index).
-            let store = self.database.store(&val);
-            let s: &String = store.addr::<String>(val.rec, val.pos);
-            data.extend_from_slice(s.as_bytes());
-        } else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
-            let elem_tp = *elem_tp;
-            // Vector: `val` is a stack pointer holding a DbRef to the vector.
-            // Dereference to reach the actual vector data, then write each element.
-            let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
-            let (v_ptr, store_nr) = {
-                let store = self.database.store(&vec_ref);
-                (
-                    store.get_int(vec_ref.rec, vec_ref.pos) as u32,
-                    vec_ref.store_nr,
-                )
+            } else {
+                file_ref
             };
-            if v_ptr != 0 {
-                let length = self.database.allocations[store_nr as usize].get_int(v_ptr, 4) as u32;
-                let elem_size = u32::from(self.database.size(elem_tp));
-                for i in 0..length {
-                    let elem = DbRef {
-                        store_nr,
-                        rec: v_ptr,
-                        pos: 8 + elem_size * i,
-                    };
-                    self.database
-                        .read_data(&elem, elem_tp, little_endian, &mut data);
-                }
-            }
-        } else {
+            // Track position: set #index = where this write starts, then advance #next after.
+            let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
+            let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
             self.database
-                .read_data(&val, db_tp, little_endian, &mut data);
+                .store_mut(&file)
+                .set_long(file.rec, file.pos + 8, next_pos);
+            // Assemble the bytes to write.
+            let mut data = Vec::new();
+            if self.database.is_text_type(db_tp) {
+                // Text variables in the stack hold a Rust String (not a store record index).
+                let store = self.database.store(&val);
+                let s: &String = store.addr::<String>(val.rec, val.pos);
+                data.extend_from_slice(s.as_bytes());
+            } else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
+                let elem_tp = *elem_tp;
+                // Vector: `val` is a stack pointer holding a DbRef to the vector.
+                // Dereference to reach the actual vector data, then write each element.
+                let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+                let (v_ptr, store_nr) = {
+                    let store = self.database.store(&vec_ref);
+                    (
+                        store.get_int(vec_ref.rec, vec_ref.pos) as u32,
+                        vec_ref.store_nr,
+                    )
+                };
+                if v_ptr != 0 {
+                    let length =
+                        self.database.allocations[store_nr as usize].get_int(v_ptr, 4) as u32;
+                    let elem_size = u32::from(self.database.size(elem_tp));
+                    for i in 0..length {
+                        let elem = DbRef {
+                            store_nr,
+                            rec: v_ptr,
+                            pos: 8 + elem_size * i,
+                        };
+                        self.database
+                            .read_data(&elem, elem_tp, little_endian, &mut data);
+                    }
+                }
+            } else {
+                self.database
+                    .read_data(&val, db_tp, little_endian, &mut data);
+            }
+            let written = data.len();
+            if let Some(f) = &mut self.database.files[file_ref as usize]
+                && let Err(e) = f.write_all(&data)
+            {
+                eprintln!("file write error: {e}");
+            }
+            // Update #next to reflect the end of this write.
+            self.database.store_mut(&file).set_long(
+                file.rec,
+                file.pos + 16,
+                next_pos + written as i64,
+            );
         }
-        let written = data.len();
-        if let Some(f) = &mut self.database.files[file_ref as usize]
-            && let Err(e) = f.write_all(&data)
-        {
-            eprintln!("file write error: {e}");
-        }
-        // Update #next to reflect the end of this write.
-        self.database
-            .store_mut(&file)
-            .set_long(file.rec, file.pos + 16, next_pos + written as i64);
     }
 
     pub fn read_file(&mut self) {
@@ -140,72 +155,77 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        let f_nr = self.database.files.len() as i32;
-        let store = self.database.store_mut(&file);
-        let format = store.get_byte(file.rec, file.pos + 32, 0);
-        // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
-        if format != 1 && format != 5 && format != 2 && format != 3 {
-            return;
-        }
-        let little_endian = format == 2;
-        let mut file_ref = store.get_int(file.rec, file.pos + 28);
-        if file_ref == i32::MIN {
-            let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
-            if let Ok(f) = File::open(file_name) {
-                store.set_int(file.rec, file.pos + 28, f_nr);
-                self.database.files.push(Some(f));
+        #[cfg(not(feature = "wasm"))]
+        {
+            let f_nr = self.database.files.len() as i32;
+            let store = self.database.store_mut(&file);
+            let format = store.get_byte(file.rec, file.pos + 32, 0);
+            // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
+            if format != 1 && format != 5 && format != 2 && format != 3 {
+                return;
             }
-            file_ref = f_nr;
-        }
-        // Save the current position to the current field (file.current = old file.next)
-        // Treat null (i64::MIN) as 0 (start of the file).
-        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
-        let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
-        self.database
-            .store_mut(&file)
-            .set_long(file.rec, file.pos + 8, next_pos);
-        // Read the bytes
-        let n = bytes as usize;
-        let is_text = self.database.is_text_type(db_tp);
-        let mut data = vec![0u8; n];
-        let actual = if let Some(f) = &mut self.database.files[file_ref as usize] {
-            if is_text {
-                f.read(&mut data).unwrap_or_else(|e| {
-                    eprintln!("file read error: {e}");
+            let little_endian = format == 2;
+            let mut file_ref = store.get_int(file.rec, file.pos + 28);
+            if file_ref == i32::MIN {
+                let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+                if let Ok(f) = File::open(file_name) {
+                    store.set_int(file.rec, file.pos + 28, f_nr);
+                    self.database.files.push(Some(f));
+                }
+                file_ref = f_nr;
+            }
+            // Save the current position to the current field (file.current = old file.next)
+            // Treat null (i64::MIN) as 0 (start of the file).
+            let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
+            let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+            self.database
+                .store_mut(&file)
+                .set_long(file.rec, file.pos + 8, next_pos);
+            // Read the bytes
+            let n = bytes as usize;
+            let is_text = self.database.is_text_type(db_tp);
+            let mut data = vec![0u8; n];
+            let actual = if let Some(f) = &mut self.database.files[file_ref as usize] {
+                if is_text {
+                    f.read(&mut data).unwrap_or_else(|e| {
+                        eprintln!("file read error: {e}");
+                        0
+                    })
+                } else if f.read_exact(&mut data).is_ok() {
+                    n
+                } else {
                     0
-                })
-            } else if f.read_exact(&mut data).is_ok() {
-                n
+                }
             } else {
                 0
+            };
+            // Update the next field with actual bytes read
+            self.database.store_mut(&file).set_long(
+                file.rec,
+                file.pos + 16,
+                next_pos + actual as i64,
+            );
+            if is_text {
+                data.truncate(actual);
+                // Text variables in the stack hold a Rust String; write directly into it.
+                let s = unsafe { String::from_utf8_unchecked(data) };
+                *self
+                    .database
+                    .store_mut(&val)
+                    .addr_mut::<String>(val.rec, val.pos) = s;
+            } else if actual == n {
+                if let Parts::Vector(_) = &self.database.types[db_tp as usize].parts {
+                    // Vector variables on the stack hold an inner DbRef; dereference it so
+                    // that write_data / vector_append gets the actual vector location.
+                    let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+                    self.database
+                        .write_data(&vec_ref, db_tp, little_endian, &data);
+                } else {
+                    self.database.write_data(&val, db_tp, little_endian, &data);
+                }
             }
-        } else {
-            0
-        };
-        // Update the next field with actual bytes read
-        self.database
-            .store_mut(&file)
-            .set_long(file.rec, file.pos + 16, next_pos + actual as i64);
-        if is_text {
-            data.truncate(actual);
-            // Text variables in the stack hold a Rust String; write directly into it.
-            let s = unsafe { String::from_utf8_unchecked(data) };
-            *self
-                .database
-                .store_mut(&val)
-                .addr_mut::<String>(val.rec, val.pos) = s;
-        } else if actual == n {
-            if let Parts::Vector(_) = &self.database.types[db_tp as usize].parts {
-                // Vector variables on the stack hold an inner DbRef; dereference it so
-                // that write_data / vector_append gets the actual vector location.
-                let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
-                self.database
-                    .write_data(&vec_ref, db_tp, little_endian, &data);
-            } else {
-                self.database.write_data(&val, db_tp, little_endian, &data);
-            }
+            // For typed non-text reads with incomplete data: leave at null (already initialized)
         }
-        // For typed non-text reads with incomplete data: leave destination at null (already initialized)
     }
 
     pub fn seek_file(&mut self) {
@@ -214,17 +234,20 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
-        if file_ref == i32::MIN {
-            // File not yet open — store the seek position in #next so the first
-            // read/write applies it after opening the file.
-            self.database
-                .store_mut(&file)
-                .set_long(file.rec, file.pos + 16, pos);
-        } else if let Some(f) = &mut self.database.files[file_ref as usize]
-            && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
+        #[cfg(not(feature = "wasm"))]
         {
-            eprintln!("file seek error: {e}");
+            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+            if file_ref == i32::MIN {
+                // File not yet open — store the seek position in #next so the first
+                // read/write applies it after opening the file.
+                self.database
+                    .store_mut(&file)
+                    .set_long(file.rec, file.pos + 16, pos);
+            } else if let Some(f) = &mut self.database.files[file_ref as usize]
+                && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
+            {
+                eprintln!("file seek error: {e}");
+            }
         }
     }
 
@@ -234,16 +257,24 @@ impl State {
             self.put_stack(i64::MIN);
             return;
         }
-        let store = self.database.store(&file);
-        let file_path = store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
-            .to_owned();
-        let size = if let Ok(meta) = std::fs::metadata(&file_path) {
-            meta.len() as i64
-        } else {
-            i64::MIN
-        };
-        self.put_stack(size);
+        #[cfg(feature = "wasm")]
+        {
+            self.put_stack(i64::MIN);
+            return;
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            let store = self.database.store(&file);
+            let file_path = store
+                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .to_owned();
+            let size = if let Ok(meta) = std::fs::metadata(&file_path) {
+                meta.len() as i64
+            } else {
+                i64::MIN
+            };
+            self.put_stack(size);
+        }
     }
 
     pub fn truncate_file(&mut self) {
@@ -253,37 +284,46 @@ impl State {
             self.put_stack(false);
             return;
         }
-        let path = {
-            let store = self.database.store(&file);
-            store
-                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
-                .to_owned()
-        };
-        // Close any open handle: the handle may be in read or write mode with a stale
-        // position, and after resize the position might be beyond the new end of file.
-        let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
-        if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
-            self.database.files[file_ref as usize] = None;
-            self.database
-                .store_mut(&file)
-                .set_int(file.rec, file.pos + 28, i32::MIN);
-            self.database
-                .store_mut(&file)
-                .set_long(file.rec, file.pos + 8, i64::MIN);
-            self.database
-                .store_mut(&file)
-                .set_long(file.rec, file.pos + 16, i64::MIN);
+        #[cfg(feature = "wasm")]
+        {
+            self.put_stack(false);
+            return;
         }
-        let ok = OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .and_then(|f| f.set_len(size as u64))
-            .is_ok();
-        self.put_stack(ok);
+        #[cfg(not(feature = "wasm"))]
+        {
+            let path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            // Close any open handle: the handle may be in read or write mode with a stale
+            // position, and after resize the position might be beyond the new end of file.
+            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+            if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
+                self.database.files[file_ref as usize] = None;
+                self.database
+                    .store_mut(&file)
+                    .set_int(file.rec, file.pos + 28, i32::MIN);
+                self.database
+                    .store_mut(&file)
+                    .set_long(file.rec, file.pos + 8, i64::MIN);
+                self.database
+                    .store_mut(&file)
+                    .set_long(file.rec, file.pos + 16, i64::MIN);
+            }
+            let ok = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .and_then(|f| f.set_len(size as u64))
+                .is_ok();
+            self.put_stack(ok);
+        }
     }
 
     pub fn free_ref(&mut self) {
         let db = *self.get_stack::<DbRef>();
+        #[cfg(not(feature = "wasm"))]
         if db.rec != 0
             && let Some(&file_type) = self.database.names.get("File")
         {

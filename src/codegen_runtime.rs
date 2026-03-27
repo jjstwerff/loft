@@ -21,7 +21,9 @@ use crate::keys::{Content, DbRef, Key, Str};
 use crate::ops;
 use crate::tree;
 use crate::vector;
+#[cfg(not(feature = "wasm"))]
 use std::fs::{File, OpenOptions};
+#[cfg(not(feature = "wasm"))]
 use std::io::{Read, Seek, SeekFrom, Write as _};
 #[cfg(not(feature = "wasm"))]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -78,6 +80,7 @@ pub fn OpFinishRecord(stores: &mut Stores, data: DbRef, record: DbRef, parent_tp
 /// The `name` argument is the loft variable name (e.g. `"var_p"`); it appears in
 /// `LOFT_STORE_LOG` output for diagnosing LIFO store-free order violations.
 pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
+    #[cfg(not(feature = "wasm"))]
     if db.rec != 0
         && let Some(&file_type) = stores.names.get("File")
     {
@@ -441,6 +444,7 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
 /// Read the entire contents of a file into `content`, replacing its previous value.
 /// If the file cannot be opened or read, `content` is cleared.
 /// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
 pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
     if file.rec == 0 {
         return;
@@ -459,10 +463,17 @@ pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
     }
 }
 
+/// WASM stub: file I/O not available; clears content.
+#[cfg(feature = "wasm")]
+pub fn OpGetFileText(_stores: &mut Stores, _file: DbRef, content: &mut String) {
+    content.clear();
+}
+
 /// Seek to `pos` bytes from the start of the file.
 /// If the file handle is not yet open, stores `pos` in `#next` so the first
 /// read/write applies the seek after opening.
 /// Bytecode equivalent: `State::seek_file` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
 pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
     if file.rec == 0 {
         return;
@@ -479,9 +490,14 @@ pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
     }
 }
 
+/// WASM stub: file I/O not available.
+#[cfg(feature = "wasm")]
+pub fn OpSeekFile(_stores: &mut Stores, _file: DbRef, _pos: i64) {}
+
 /// Return the byte size of the file, or `i64::MIN` if the size cannot be determined.
 /// Bytecode equivalent: `State::size_file` in `src/state/io.rs`.
 #[must_use]
+#[cfg(not(feature = "wasm"))]
 pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
     if file.rec == 0 {
         return i64::MIN;
@@ -499,9 +515,17 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
     }
 }
 
+/// WASM stub: file I/O not available; always returns `i64::MIN`.
+#[must_use]
+#[cfg(feature = "wasm")]
+pub fn OpSizeFile(_stores: &Stores, _file: DbRef) -> i64 {
+    i64::MIN
+}
+
 /// Truncate (or extend) the file to `size` bytes.  Closes any open handle first.
 /// Returns `true` on success, `false` on failure.
 /// Bytecode equivalent: `State::truncate_file` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
 pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
     if file.rec == 0 {
         return false;
@@ -533,10 +557,17 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
         .is_ok()
 }
 
+/// WASM stub: file I/O not available; always returns `false`.
+#[cfg(feature = "wasm")]
+pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
+    false
+}
+
 // ─── File I/O ─────────────────────────────────────────────────────────────────
 
 /// Open (or reuse) a file handle for writing.  Returns the index into
 /// `stores.files`, or `i32::MIN` on error.
+#[cfg(not(feature = "wasm"))]
 #[allow(clippy::cast_possible_wrap)]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
@@ -576,6 +607,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
 
 /// Open (or reuse) a file handle for reading, seeking to `initial_pos`.
 /// Returns the index into `stores.files`, or `i32::MIN` on error.
+#[cfg(not(feature = "wasm"))]
 #[allow(clippy::cast_possible_wrap)]
 fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
     let f_nr = stores.files.len() as i32;
@@ -877,6 +909,7 @@ impl FileVal for DbRef {
 
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
 #[allow(clippy::cast_possible_wrap)]
 pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db_tp: i32) {
     if file.rec == 0 {
@@ -914,8 +947,13 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
         .set_long(file.rec, file.pos + 16, next_pos + written);
 }
 
+/// WASM stub: file write not available.
+#[cfg(feature = "wasm")]
+pub fn OpWriteFile<T: FileVal>(_stores: &mut Stores, _file: DbRef, _val: &mut T, _db_tp: i32) {}
+
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
 #[allow(clippy::cast_possible_wrap)]
 pub fn OpReadFile<T: FileVal>(
     stores: &mut Stores,
@@ -965,6 +1003,17 @@ pub fn OpReadFile<T: FileVal>(
     stores
         .store_mut(&file)
         .set_long(file.rec, file.pos + 16, next_pos + nread as i64);
+}
+
+/// WASM stub: file read not available.
+#[cfg(feature = "wasm")]
+pub fn OpReadFile<T: FileVal>(
+    _stores: &mut Stores,
+    _file: DbRef,
+    _val: &mut T,
+    _bytes: i32,
+    _db_tp: i32,
+) {
 }
 
 /// Trait allowing `OpRemove` to work with both plain-vector (`i32` index) and
