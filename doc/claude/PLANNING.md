@@ -1303,16 +1303,33 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 ### S31  Native harness: pass `--extern` for optional feature deps
 **Sources:** CAVEATS.md C27
 **Severity:** Medium — `rand`, `rand_seed`, `rand_indices` and any future optional-dep functions are silently untested in native mode.
-**Description:** The native test harness in `tests/native.rs` compiles generated `.rs` files by invoking `rustc` directly with `--extern loft=libloft.rlib`.  Optional feature dependencies (`rand_core`, `rand_pcg`) are not passed as `--extern` flags, so any generated code that uses the `random` feature fails to compile with `E0433: use of undeclared crate or module 'rand_core'`.  `15-random.loft` and `21-random.loft` are therefore in `SCRIPTS_NATIVE_SKIP` / `NATIVE_SKIP`.
+**Description:** The native test harness compiles generated `.rs` files by invoking `rustc` with `--extern loft=libloft.rlib` and `-L deps_dir`, but does not pass `--extern` flags for transitive optional feature dependencies (`rand_core`, `rand_pcg`).  The deps directory already contains `librand_core-HASH.rlib` and `librand_pcg-HASH.rlib` — they just aren't declared to `rustc` as named crates.  Any generated native code that calls `rand`, `rand_seed`, or `rand_indices` fails to compile with `E0433: use of undeclared crate or module 'rand_core'`.
+
+**Root cause:** `compile_native_job` (`tests/native.rs`) passes `-L deps_dir` but this only makes the directory searchable for library files; `rustc` still requires an explicit `--extern rand_core=...` flag to resolve `extern crate rand_core` references emitted by the codegen runtime.
 
 **Fix path:**
-1. In `find_loft_rlib()` (`tests/native.rs`), after locating the `deps/` directory, scan it for `.rlib` files matching the optional deps listed in `Cargo.toml` (`rand_core`, `rand_pcg`, `png`, etc.).
-2. Build a `Vec<(String, PathBuf)>` of `(crate_name, rlib_path)` pairs.
-3. Pass each as an additional `--extern <crate_name>=<path>` argument in the `rustc` invocations inside `run_native_test`.
-4. Remove `"15-random.loft"` from `SCRIPTS_NATIVE_SKIP` and `"21-random.loft"` from `NATIVE_SKIP`.
-5. Confirm `cargo test --test native` passes for both random files.
 
-**Tests:** `15-random.loft` and `21-random.loft` pass in native mode.
+1. Add a helper function `collect_extern_rlibs(deps_dir: &Path) -> Vec<(String, PathBuf)>` in `tests/native.rs`:
+   - Scan `deps_dir` for files matching `lib*.rlib`
+   - Skip `libloft-*.rlib` (already passed as `--extern loft`)
+   - Extract crate name: strip `lib` prefix and `-<hash>` suffix from the stem
+     (`librand_core-abc123.rlib` → `rand_core`)
+   - Deduplicate by crate name, keeping the most recently modified rlib
+   - Return `Vec<(crate_name, rlib_path)>`
+
+2. In `compile_native_job`, after the existing `--extern loft=...` argument, iterate over `collect_extern_rlibs(&deps_dir)` and add:
+   ```rust
+   for (name, path) in collect_extern_rlibs(&deps_dir) {
+       cmd.arg("--extern").arg(format!("{name}={}", path.display()));
+   }
+   ```
+
+3. Remove `"15-random.loft"` from `SCRIPTS_NATIVE_SKIP` and `"21-random.loft"` from `NATIVE_SKIP`.
+4. Confirm `cargo test --test native` passes for both random files on all platforms.
+
+**Key detail:** The crate name in `--extern` must match the Rust crate name, not the cargo package name.  For `rand_core` and `rand_pcg` the package and crate names are the same.  For crates with hyphens in the package name (e.g. `windows-sys`) the crate name uses underscores — but `liblibname-hash.rlib` already uses the crate name with underscores, so the `rfind('-')` split on the hash works correctly.
+
+**Tests:** `15-random.loft` and `21-random.loft` pass in `--native` mode.
 **Effort:** Small
 **Target:** 0.8.3
 
@@ -1320,16 +1337,49 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ### S33  Native: fix `14-image.loft` PNG width=0 in CI
 **Sources:** CAVEATS.md C29
-**Severity:** Low — PNG functionality is covered by the interpreter tests; only the native CI path is uncovered.
-**Description:** The native binary for `tests/docs/14-image.loft` panics in CI (Ubuntu, macOS, Windows) with `width=0`.  Passes locally.  `stores.get_png()` is called with the relative path `"tests/example/map.png"` but silently leaves width=0, suggesting either a working-directory mismatch in CI or a codegen issue where the `get_png` return value is not handled correctly in native mode.
+**Severity:** Low — PNG functionality is covered by interpreter tests; only the native CI path is affected.
+**Description:** The native binary for `tests/docs/14-image.loft` panics in CI (Ubuntu, macOS, Windows) with `width=0`.  Passes locally.
+
+**Root cause:** The CI workflow runs `cargo build --no-default-features` after `cargo build --all-targets`.  This produces a second `libloft-HASH.rlib` in `target/debug/deps/` that is built **without** the `png` feature.  `find_loft_rlib()` selects the rlib with the highest modification time — the no-features rlib is newer, so it wins.  The no-features rlib has `Stores::get_png` as a stub that always returns `false` (the `#[cfg(not(feature = "png"))]` variant in `database/io.rs`).  When the native binary calls `stores.get_png(...)`, the stub returns immediately, width/height stay at the 0 values set just before the call, and the assert fires.
 
 **Fix path:**
-1. Print the working directory inside the compiled binary to verify it matches the repo root when run by the native test harness.
-2. Check whether `stores.get_png()` returns an error code that the interpreter checks but native codegen ignores (look for a mismatch between the bytecode `get_png` call and the native emission in `dispatch.rs`).
-3. Fix the root cause (cwd, ignored return, or path mismatch) and remove `"14-image.loft"` from `NATIVE_SKIP`.
-4. Confirm `cargo test --test native native_dir` passes in CI.
 
-**Tests:** `14-image.loft` passes in `native_dir` in CI on all platforms.
+The correct fix is to make `find_loft_rlib()` prefer the rlib that was built with the same feature set as the running test binary, rather than the newest-mtime rlib.
+
+Option A (recommended — pin to same profile as test binary):
+1. `std::env::current_exe()` returns the test binary path, e.g. `target/debug/deps/native-HASH`.  Its parent (`target/debug/deps/`) is the debug deps directory.
+2. Search ONLY the current-exe's deps directory for `libloft-*.rlib`, rather than both `release/` and `debug/`.  The test binary was compiled with the same feature flags as the loft rlib in its own deps dir.
+3. In code:
+   ```rust
+   fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
+       // Use the deps/ directory of the current test binary — same build, same features.
+       let deps = std::env::current_exe()
+           .ok()
+           .and_then(|p| p.parent().map(|d| d.to_path_buf()))?;
+       let mut best: Option<(SystemTime, PathBuf)> = None;
+       if let Ok(entries) = std::fs::read_dir(&deps) {
+           for entry in entries.flatten() {
+               let name = entry.file_name().to_string_lossy().to_string();
+               if name.starts_with("libloft-") && name.ends_with(".rlib") {
+                   if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                       if best.as_ref().map_or(true, |(t, _)| mtime > *t) {
+                           best = Some((mtime, entry.path()));
+                       }
+                   }
+               }
+           }
+       }
+       best.map(|(_, rlib)| (rlib, deps))
+   }
+   ```
+4. Remove `"14-image.loft"` from `NATIVE_SKIP`.
+5. Confirm `cargo test --test native native_dir` passes in CI on all three platforms.
+
+Option B (simpler workaround — reorder CI steps): move `cargo build --no-default-features` before `cargo build --all-targets` in `.github/workflows/ci.yml`, so the all-features rlib is always the most recently modified.  Fragile: any future CI change could reverse the order again.
+
+Option A is preferred because it is robust regardless of CI step order.
+
+**Tests:** `14-image.loft` passes in `native_dir` in CI.
 **Effort:** Small
 **Target:** 0.8.3
 
@@ -1337,17 +1387,54 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ### S32  Fix slot conflict in `20-binary.loft` (`rv` / `_read_34`)
 **Sources:** CAVEATS.md C28
-**Severity:** Medium — a binary file I/O test is excluded from both interpreter and native CI.
-**Description:** The two-zone slot allocator assigns overlapping slots `[820, 832)` to both `rv` (live `[1016, 1110]`) and `_read_34` (live `[1008, 1109]`) in `n_main` of `tests/scripts/20-binary.loft`.  The live ranges overlap, so the slot validator panics in debug builds.  `20-binary.loft` is in `ignored_scripts()` (wrap), `SCRIPTS_NATIVE_SKIP` (native scripts), and the `binary` test is `#[ignore]`.
+**Severity:** Medium — binary file I/O test excluded from both interpreter and native CI.
+**Description:** The two-zone slot allocator assigns overlapping slots `[820, 832)` to both `rv` (live `[1016, 1110]`) and `_read_34` (live `[1008, 1109]`) in `n_main` of `tests/scripts/20-binary.loft`.  Both are 12-byte `DbRef` variables (zone-2: large vars > 8 bytes).
+
+**Root cause:** Zone-2 variable placement (`place_large_and_recurse` in `src/variables/slots.rs`) assigns slots by advancing a TOS pointer in IR-walk order.  When an `if` expression is encountered, the code saves `branch_tos` before the then-branch and resets `*tos = branch_tos` after it, allowing the else-branch to reuse the same TOS range.  This is intentional for branch-local variables: variables that are dead after their branch can share slots.
+
+The bug is that zone-2 does **not** check live intervals before reusing a slot.  If a then-branch variable has a live range that extends past the `if` expression (e.g., its value is used later in the function), the TOS reset after the branch incorrectly allows a subsequent zone-2 variable to get the same slot despite overlapping live ranges.
+
+`rv` and `_read_34` are both scope-1 variables.  One is assigned during a branch, its TOS slot is returned to the pool, and a later zone-2 variable (`_read_34`) then receives the same slot even though the first variable is still live.
 
 **Fix path:**
-1. Run `LOFT_LOG=variables cargo test --test wrap binary 2>&1` to dump the full variable table for `n_main`.
-2. Identify why `rv` and `_read_34` are assigned the same slot despite overlapping live ranges.  Likely cause: one is a short-lived `_read_*` temp in an inner scope that the zone-2 allocator reuses too aggressively when another variable with a long live range occupies the same zone-2 slot.
-3. Apply the minimal fix to the zone-2 reuse logic in `src/variables/slots.rs` to prevent the overlap.
-4. Remove `"20-binary.loft"` from `ignored_scripts()` and `SCRIPTS_NATIVE_SKIP`; remove the manual `#[ignore]` from the `binary` test; re-enable.
-5. Run `make ci` to confirm no regressions.
 
-**Tests:** `binary` and `loft_suite` (wrap) pass; `20-binary.loft` passes in native mode.
+1. Run `LOFT_LOG=variables cargo test --test wrap -- --ignored binary 2>&1` to dump the full variable table and confirm which branch/If node causes the TOS reset that triggers the conflict.
+
+2. In `place_large_and_recurse` (`src/variables/slots.rs`), before assigning a new zone-2 slot at `v_slot = *tos`, check that no already-assigned zone-2 variable at `[v_slot, v_slot + v_size)` has an overlapping live range with `[first_def, last_use]`:
+   ```rust
+   // Zone-2 live-interval conflict guard
+   // Skip any candidate slot range that overlaps an already-live zone-2 variable.
+   loop {
+       let v_slot = *tos;
+       let mut conflict = false;
+       for existing in 0..function.variables.len() {
+           let e = &function.variables[existing];
+           if e.stack_pos == u16::MAX { continue; }
+           let e_size = size(&e.type_def, &Context::Variable);
+           if v_slot < e.stack_pos + e_size && v_slot + v_size > e.stack_pos {
+               if function.variables[v].first_def <= e.last_use
+                   && function.variables[v].last_use >= e.first_def
+               {
+                   *tos = e.stack_pos + e_size; // advance past conflicting variable
+                   conflict = true;
+                   break;
+               }
+           }
+       }
+       if !conflict { break; }
+   }
+   function.variables[v].stack_pos = *tos;
+   function.variables[v].pre_assigned_pos = *tos;
+   *tos += v_size;
+   ```
+
+3. Run `make ci` to confirm the slot conflict is resolved and no regressions are introduced.
+
+4. Remove `"20-binary.loft"` from `ignored_scripts()` (wrap.rs), `SCRIPTS_NATIVE_SKIP` (native.rs); remove the `#[ignore]` annotation from the `binary` test in wrap.rs.
+
+5. Run `make ci` again to confirm `binary` and `loft_suite` both pass.
+
+**Tests:** `binary` and `loft_suite` (wrap) pass; `20-binary.loft` passes in `--native` mode.
 **Effort:** Medium
 **Target:** 0.8.3
 

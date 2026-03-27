@@ -407,15 +407,16 @@ fn main() {
 ## C29 — Native tests: `14-image.loft` PNG width returns 0 in CI (all platforms)
 
 The native binary compiled from `tests/docs/14-image.loft` panics in CI (Ubuntu,
-macOS, Windows) with `width=0` at the `assert(img.width == 256, ...)` check.  The
-test passes locally.  Root cause not yet traced.
+macOS, Windows) with `width=0` at the `assert(img.width == 256, ...)` check.
+Passes locally.
 
-`n_file` calls `stores.get_file()` which sets the format byte to `1` (PNG); then
-`t_4File_png` calls `stores.get_png("tests/example/map.png", &result)` with the
-file path string.  If `get_png` silently fails to open the PNG (e.g. wrong working
-directory on CI, or a `get_png` return-value that is ignored in native code), it
-leaves width/height at 0.  The same code path works in the interpreter because the
-bytecode executor handles the return value differently.
+**Root cause:** The CI workflow runs `cargo build --no-default-features` after
+`cargo build --all-targets`.  `find_loft_rlib()` selects the rlib with the highest
+modification time.  The no-features rlib is newer, so the native tests link against
+it — but that rlib has `Stores::get_png` as a stub that always returns `false`
+(`#[cfg(not(feature = "png"))]`).  `stores.get_png()` returns immediately, width
+and height remain at 0, and the assert fires.  Locally only one build is done so
+the all-features rlib is always selected.
 
 **Reproducer:** run `cargo test --test native native_dir` on any CI platform with
 `14-image.loft` not skipped.
