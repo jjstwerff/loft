@@ -8,6 +8,21 @@
 //!
 //! Steps: W1.1 (this stub) → W1.2 (output capture) → W1.3–W1.8 (bridges) → W1.9 (entry point).
 
+// ── W1.5  Random host bridge ─────────────────────────────────────────────────
+
+/// Return a random integer in `[lo, hi]` inclusive.  Called when `wasm` is
+/// enabled and `random` is not — the host provides the RNG.
+pub fn host_random_int(lo: i32, hi: i32) -> i32 {
+    // TODO W1.9: call extern "C" { fn random_int(lo: i32, hi: i32) -> i32; }
+    // Placeholder: return lo so the interpreter does not panic.
+    lo.max(hi)
+}
+
+/// Reseed the host-side RNG.  Called when `wasm` is enabled and `random` is not.
+pub fn host_random_seed(_seed: i64) {
+    // TODO W1.9: call extern "C" { fn random_seed(seed: i64); }
+}
+
 // ── W1.4  Logger host bridge ─────────────────────────────────────────────────
 
 /// Write a log line to the host console.  Under WASM the real filesystem is

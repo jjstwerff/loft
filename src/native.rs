@@ -7,7 +7,7 @@
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
-#[cfg(feature = "random")]
+#[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
 use crate::ops;
 use crate::parallel::{
     WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_ref,
@@ -73,6 +73,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_rand_seed", n_rand_seed),
     #[cfg(feature = "random")]
     ("n_rand_indices", n_rand_indices),
+    #[cfg(all(feature = "wasm", not(feature = "random")))]
+    ("n_rand", n_rand_wasm),
+    #[cfg(all(feature = "wasm", not(feature = "random")))]
+    ("n_rand_seed", n_rand_seed_wasm),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -864,6 +868,21 @@ fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
 /// Seed the thread-local PCG RNG so subsequent `rand()` calls are reproducible.
 #[cfg(feature = "random")]
 fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
+    let v_seed = *stores.get::<i64>(stack);
+    ops::rand_seed(v_seed);
+}
+
+/// WASM bridge: return a random integer via the JS host RNG.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+fn n_rand_wasm(stores: &mut Stores, stack: &mut DbRef) {
+    let v_hi = *stores.get::<i32>(stack);
+    let v_lo = *stores.get::<i32>(stack);
+    stores.put(stack, ops::rand_int(v_lo, v_hi));
+}
+
+/// WASM bridge: seed the JS host RNG.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+fn n_rand_seed_wasm(stores: &mut Stores, stack: &mut DbRef) {
     let v_seed = *stores.get::<i64>(stack);
     ops::rand_seed(v_seed);
 }
