@@ -239,6 +239,15 @@ All notable changes to the loft language and interpreter.
   13 unit tests in `virt-fs.test.mjs` cover all operations.  Runs via
   `node tests/wasm/virt-fs.test.mjs` when Node.js is available.
 
+- **loftHost factory** (W1.11) — `tests/wasm/host.mjs` exports `createHost(tree, options)`
+  which wires a `VirtFS` instance to the full `loftHost` bridge API.  Uses a deterministic
+  xoshiro128** PRNG for reproducible `rand()` / `rand_seed()` behaviour in tests.  Supports
+  configurable `fakeTime`, `fakeTicks`, `env`, and `args` overrides.  Comes with:
+  `bridge.test.mjs` (7 WASM integration tests; skips gracefully when `pkg/` not built),
+  `file-io.test.mjs` (14 host-level edge-case tests, no WASM required),
+  `random.test.mjs` (host PRNG tests + optional WASM-level determinism tests),
+  and three fixtures in `tests/wasm/fixtures/`.
+
 ---
 
 ## [0.8.2] — 2026-03-24

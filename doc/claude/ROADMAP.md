@@ -18,12 +18,11 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions *(Rust steps done; JS steps deferred)*
 
-W1.1–W1.9 (Rust), A7.1–A7.3, and W1.10 (VirtFS JS) completed in 0.8.3.
-W1.11–W1.13 require Node.js + wasm-pack to run — deferred to a later milestone.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10 (VirtFS JS), and W1.11 (host factory) completed in 0.8.3.
+W1.12–W1.13 require Node.js + wasm-pack to run — deferred to a later milestone.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| W1.11     | ↳ Host factory `createHost` + bridge tests           | M  | ✓      | W1.9, W1.10  | tests/wasm/host.mjs        |
 | W1.12     | ↳ LayeredFS + base-tree builder (`build-base-fs.js`) | M  | ✓      | W1.10        | tests/wasm/layered-fs.mjs  |
 | W1.13     | ↳ Full loft test suite via WASM (`suite.mjs`)        | M  | ✓      | W1.11        | tests/wasm/suite.mjs       |
 
