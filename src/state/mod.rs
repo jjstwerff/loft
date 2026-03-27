@@ -351,6 +351,10 @@ impl State {
         unsafe {
             std::ptr::copy_nonoverlapping(src, stack_bytes.as_mut_ptr(), args_size as usize);
         }
+        // CO1.3d: append the 4-byte return-address slot expected by the function body.
+        // fn_call pushes this slot for regular calls; coroutines must include it so that
+        // get_var offsets computed at codegen time remain valid after resume.
+        stack_bytes.extend_from_slice(&[0u8; 4]);
         self.stack_pos = args_base;
 
         let frame = CoroutineFrame {
@@ -729,6 +733,15 @@ impl State {
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
+        // get_var reads T at (stack_pos - pos); pos > stack_pos would underflow.
+        // pos < size_of::<T>() is also invalid (read extends before the frame base).
+        // Note: pos == 0 is valid when accessing a pre-reserved frame slot above the
+        // current evaluation stack (e.g. immediately after ReserveFrame).
+        debug_assert!(
+            u32::from(pos) <= self.stack_pos,
+            "get_var: pos={pos} exceeds stack_pos={} (frame underflow)",
+            self.stack_pos
+        );
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -736,6 +749,11 @@ impl State {
     }
 
     pub fn mut_var<T>(&mut self, pos: u16) -> &mut T {
+        debug_assert!(
+            u32::from(pos) <= self.stack_pos,
+            "mut_var: pos={pos} exceeds stack_pos={} (frame underflow)",
+            self.stack_pos
+        );
         self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),

@@ -280,6 +280,9 @@ impl State {
                 let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
                 stack.add_op("OpCoroutineYield", self);
                 self.code_add(value_size);
+                // CO1.3d: OpCoroutineYield suspends and transfers the value to the caller.
+                // The evaluation stack is empty again on resume, so undo the push.
+                stack.position -= value_size;
                 Type::Void
             }
             Value::TuplePut(var_nr, elem_idx, value) => {

@@ -441,7 +441,6 @@ fn coroutine_call_helper_between_yields() {
 // ── CO1.3d — Text serialisation across yield/resume ─────────────────────────
 
 #[test]
-#[ignore = "CO1.3d: text slots not yet serialised on yield — dangling pointer after resume"]
 fn coroutine_text_param_survives_yield() {
     // A generator that takes a `text` parameter and yields `len(text)`.
     // The text value must survive the yield/resume cycle without dangling pointers.
