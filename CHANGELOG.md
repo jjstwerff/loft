@@ -8,6 +8,13 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **`yield from` slot-assignment regression fixed** (CO1.4-fix) — `yield from
+  inner()` inside a coroutine with local variables before the delegation now
+  produces correct results.  The two-zone slot redesign (S17/S18) already
+  eliminated the overlap between the `__yf_sub` handle and inner loop
+  temporaries; no additional IR restructuring was required.  Test
+  `coroutine_yield_from` passes without `#[ignore]`.
+
 - **`stack_trace()` works in parallel workers** (S21, fix #92) — Calling
   `stack_trace()` inside a `par(...)` loop body or any `run_parallel_*` worker
   now returns the actual call frames instead of an empty vector.  Two changes

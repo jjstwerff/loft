@@ -471,15 +471,12 @@ the recompile overhead that caching was designed to address)
   helper calls between yields.
 
 - **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
-  advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
+  advance-loop + yield forwarding.
 
-  **CO1.4-fix — Slot-assignment regression in `yield from`** (C21):
-  The desugared advance-loop introduces a temporary coroutine handle variable whose
-  slot overlaps with the generator’s own stack frame on second resume.  Root cause:
-  the loop-body slot for the `__next` temp is assigned before the generator frame
-  is taken into account.  Fix requires the slot allocator to treat the coroutine
-  frame as live across the entire `yield from` expansion, not just the yield site.
-  **Target:** 1.1+
+  **CO1.4-fix** — *(completed)* The slot-assignment regression (C21) was resolved
+  by the two-zone slot redesign (S17/S18): the `__yf_sub` coroutine handle and
+  inner loop temporaries no longer overlap.  Test `coroutine_yield_from` passes
+  without `#[ignore]`.
 - **CO1.5** — *(completed 0.8.3)* `for item in generator` integration + `e#remove` rejection.
 - **CO1.3e** — *(completed 0.8.3)* Nested yield verified — helper call between yields.
 

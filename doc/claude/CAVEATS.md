@@ -262,21 +262,16 @@ this is a pre-existing interpreter limitation, not introduced by T1.8b.
 
 ---
 
-## C21 — `yield from` has a slot assignment regression
+## C21 — `yield from` has a slot assignment regression *(fixed in CO1.4-fix)*
 
-`yield from inner()` — delegation to a sub-generator — compiles but produces
-wrong slot assignments when the outer generator has variables before the
-`yield from`.  The test is `#[ignore]`-d pending an IR restructuring.
+**Fixed.**  `yield from inner()` — delegation to a sub-generator — now
+produces correct slot assignments.  The two-zone slot redesign (S17/S18)
+eliminated the overlap between the `__yf_sub` coroutine handle and inner
+loop variables; no additional IR restructuring was required.
 
-**Reproducer:**
-```loft
-fn inner() -> iterator<integer> { yield 10; yield 20; }
-fn outer() -> iterator<integer> { yield 1; yield from inner(); yield 2; }
-```
-
-**Tests:** `tests/expressions.rs` — `coroutine_yield_from` (`#[ignore = "CO1.4: yield from slot assignment regression"]`); `tests/scripts/51-coroutines.loft` — exercises the working subset of coroutines
-**Workaround:** Inline the sub-generator's yields manually or collect the sub-generator into a vector first.
-**Planned fix:** CO1.4-fix in [ROADMAP.md](ROADMAP.md) (1.1+) — slot allocator must treat coroutine frame as live across `yield from` expansion; design in [PLANNING.md](PLANNING.md) § CO1.4-fix.
+**Test:** `tests/expressions.rs` — `coroutine_yield_from` (passes,
+`#[ignore]` removed).
+**Fixed by:** CO1.4-fix — two-zone slot redesign covered the yield-from case.
 
 ## See also
 

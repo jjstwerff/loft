@@ -474,7 +474,6 @@ fn not_null_element_assignment() {
 // ── CO1.4 — yield from ───────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "CO1.4: yield from slot assignment regression — needs IR restructuring"]
 fn coroutine_yield_from() {
     // yield from delegates to a sub-generator.
     code!(
