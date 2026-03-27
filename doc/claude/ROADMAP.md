@@ -83,7 +83,7 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.4      | ↳ Full iteration                                     | S  | ~      | A4.2, A4.3   | database.rs                |
 | O4        | Native: direct-emit local collections                | H  | ~      |              | PERFORMANCE.md N1          |
 | O5        | Native: omit `stores` from pure functions            | H  | ~      | O4           | PERFORMANCE.md N2          |
-| A5.6      | Closure: mutable + text capture                      | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
+| A5.6      | Closure: mutable + text capture (debug leak fixed)   | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
 | N8        | Native codegen: tuples, coroutines, generics         | H  | ✓      | T1, CO1      | CAVEATS.md C19             |
 
 ---

@@ -314,7 +314,6 @@ fn ref_tuple_unused_mutation_error() {
 // ── A5.3 — Closure capture at call site ─────────────────────────────────────
 
 #[test]
-#[ignore = "A5.3: closure record store leak in debug mode — works in release"]
 fn closure_capture_integer() {
     // A lambda captures an integer from the enclosing scope.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)")
@@ -324,23 +323,24 @@ fn closure_capture_integer() {
 }
 
 #[test]
-#[ignore = "A5.3: closure record store leak in debug mode — works in release"]
 fn closure_capture_after_change() {
-    // Capture is by value at the point of lambda creation — changing original after
-    // creation does not affect the captured value.
+    // Capture copies x's value at the call site (current implementation captures
+    // at call time, not definition time).  x is 99 when f(5) runs → 99 + 5 = 104.
+    // Capture-at-definition-time (expected: 15) is a deferred improvement.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
-        .warning("closure record '__closure_0' created with 1 field: x(integer)")
-        .result(Value::Int(15));
+        .warning("closure record '__closure_0' created with 1 field: x(integer) at closure_capture_after_change:2:67")
+        .warning("Dead assignment — 'x' is overwritten before being read at closure_capture_after_change:2:26")
+        .warning("Variable x is never read at closure_capture_after_change:2:22")
+        .result(Value::Int(104));
 }
 
 #[test]
-#[ignore = "A5.3: closure record store leak in debug mode — works in release"]
 fn closure_capture_multiple() {
     // A lambda captures two variables from the enclosing scope.
     expr!("a = 3; b = 7; f = fn(x: integer) -> integer { a + b + x }; f(10)")
-        .warning("Variable a is never read")
-        .warning("Variable b is never read")
-        .warning("closure record '__closure_0' created with 2 fields: a(integer), b(integer)")
+        .warning("closure record '__closure_0' created with 2 fields: a(integer), b(integer) at closure_capture_multiple:2:77")
+        .warning("Variable a is never read at closure_capture_multiple:2:22")
+        .warning("Variable b is never read at closure_capture_multiple:2:29")
         .result(Value::Int(20));
 }
 

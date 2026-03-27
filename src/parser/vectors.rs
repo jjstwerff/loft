@@ -634,7 +634,6 @@ impl Parser {
             let rec_tp = Type::Reference(closure_rec_d, vec![]);
             let w = self.create_unique("__clos", &rec_tp);
             self.vars.defined(w);
-            self.vars.set_skip_free(w); // Callee owns the record via hidden param.
             let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
             let mut alloc_steps: Vec<Value> = Vec::new();
             alloc_steps.push(crate::data::v_set(w, Value::Null));

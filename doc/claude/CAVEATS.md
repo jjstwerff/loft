@@ -19,20 +19,22 @@ build can be retested quickly.
 
 ---
 
-## C1 — Lambda closure capture: partial support, three remaining restrictions
+## C1 — Lambda closure capture: two remaining restrictions
 
-Read-only capture of non-text values (integers, floats, booleans, enums) now
-works in release mode (A5.3).  Three restrictions remain:
+Read-only capture of non-text values (integers, floats, booleans, enums) works
+in both debug and release builds (A5.3 + A5.6).  Two restrictions remain:
 
-1. **Debug-mode store leak** — a captured value allocates a closure record that
-   is not freed before `fn_return`, triggering the stack-size assertion.
-   Tests pass under `--release` but are `#[ignore]`-d in debug builds.
-2. **Text capture not supported** — text values inside a closure record
+1. **Text capture not supported** — text values inside a closure record
    need text-in-struct serialisation, which is not yet implemented.
-3. **Mutable capture not supported** — `count += x` inside a lambda crashes in
+2. **Mutable capture not supported** — `count += x` inside a lambda crashes in
    codegen with a self-reference guard error.
 
-**Reproducer (restriction 3):**
+**Note:** The current implementation captures variable values at the call site,
+not at the point of lambda definition.  `closure_capture_after_change` documents
+this: `x = 10; f = fn(y) { x + y }; x = 99; f(5)` returns 104, not 15.
+Capture-at-definition-time is a deferred improvement.
+
+**Reproducer (restriction 2):**
 ```loft
 fn test() {
   count = 0;
@@ -41,7 +43,7 @@ fn test() {
 }
 ```
 
-**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_text` / `closure_capture_multiple` (`#[ignore]` until debug leak fixed); `tests/parse_errors.rs` — `capture_detected` (`#[ignore]`, A5.4)
+**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` (all pass); `closure_capture_text` (`#[ignore]`, restriction 1); `tests/parse_errors.rs` — `capture_detected` (`#[ignore]`, restriction 2)
 **Workaround:** pass needed values as explicit function arguments.
 **Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (1.1+) — mutable capture + text capture; design in [PLANNING.md](PLANNING.md) § A5.6.
 **Docs:** [LOFT.md](LOFT.md) § Lambda expressions.

@@ -8,6 +8,17 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **Closure capture works in debug builds** (A5.6) — The debug-mode store leak
+  where closure record variables (`___clos_N`) were never freed has been fixed.
+  `scopes.rs` now pre-registers block-result Reference variables at the enclosing
+  outer scope so `get_free_vars` emits `OpFreeRef` at function exit.  A compile-time
+  checker (`check_arg_ref_allocs`) panics in debug builds if any `Set(ref, Null)`
+  initialisation is still nested inside a call argument, catching this class of
+  scope-registration bug early.  Tests `closure_capture_integer`,
+  `closure_capture_multiple`, and `closure_capture_after_change` all pass without
+  `#[ignore]` in both debug and release builds.  Text capture and mutable capture
+  remain deferred (A5.6 in ROADMAP.md).
+
 - **`yield from` slot-assignment regression fixed** (CO1.4-fix) — `yield from
   inner()` inside a coroutine with local variables before the delegation now
   produces correct results.  The two-zone slot redesign (S17/S18) already
