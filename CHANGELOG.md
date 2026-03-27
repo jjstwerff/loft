@@ -239,6 +239,16 @@ All notable changes to the loft language and interpreter.
   13 unit tests in `virt-fs.test.mjs` cover all operations.  Runs via
   `node tests/wasm/virt-fs.test.mjs` when Node.js is available.
 
+- **LayeredFS class** (W1.12) — `tests/wasm/layered-fs.mjs` implements a two-layer virtual
+  filesystem: an immutable base tree (bundled examples/docs/stdlib) plus a mutable delta
+  overlay (user edits, persisted to localStorage).  Reads check delta first then fall through
+  to base; writes always go to delta, leaving the base untouched.  Supports
+  `getDelta()`/`setDelta()`/`saveDelta()`/`resetToBase()`/`isModified()`/`isDeleted()`.
+  `ide/scripts/build-base-fs.js` reads `tests/docs/*.loft`, `doc/*.html`, and
+  `default/*.loft` to emit `ide/assets/base-fs.json`.  20 unit tests in
+  `layered-fs.test.mjs` cover all operations including delta serialisation and snapshot
+  isolation.
+
 - **loftHost factory** (W1.11) — `tests/wasm/host.mjs` exports `createHost(tree, options)`
   which wires a `VirtFS` instance to the full `loftHost` bridge API.  Uses a deterministic
   xoshiro128** PRNG for reproducible `rand()` / `rand_seed()` behaviour in tests.  Supports
