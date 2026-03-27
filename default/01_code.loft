@@ -820,7 +820,7 @@ pub fn log_warn(message: text, file: text, line: integer);
 pub fn log_error(message: text, file: text, line: integer);
 pub fn log_fatal(message: text, file: text, line: integer);
 fn OpPrint(v1: text);
-#rust"print!(\"{{}}\", @v1);"
+#rust"#[cfg(not(feature = \"wasm\"))]\nprint!(\"{{}}\", @v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
 // Writes v to standard output without a newline.
 // Use for progress output and building up a line incrementally.
 pub fn print(v1: text) {

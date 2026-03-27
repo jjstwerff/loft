@@ -31,7 +31,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "W1.2: output capture not yet wired in fill.rs"]
     fn output_capture() {
         output_push("hello ");
         output_push("world");

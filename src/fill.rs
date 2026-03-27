@@ -1722,7 +1722,10 @@ fn panic(s: &mut State) {
 
 fn print(s: &mut State) {
     let v_v1 = s.string();
+    #[cfg(not(feature = "wasm"))]
     print!("{}", v_v1.str());
+    #[cfg(feature = "wasm")]
+    crate::wasm::output_push(v_v1.str());
 }
 
 fn iterate(s: &mut State) {

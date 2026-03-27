@@ -34,6 +34,8 @@ mod tree;
 mod typedef;
 mod variables;
 mod vector;
+#[cfg(feature = "wasm")]
+mod wasm;
 
 use crate::diagnostics::Level;
 use crate::native_utils::{
