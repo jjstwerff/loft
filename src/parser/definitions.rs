@@ -602,17 +602,29 @@ impl Parser {
     }
 
     // <rust> ::= { '#rust' <string> | '#iterator' <string> <string> }
+    // <native> ::= '#native' <string>   (any file)
     pub(crate) fn parse_rust(&mut self) {
-        while self.default && self.lexer.has_token("#") {
+        loop {
+            if !self.lexer.peek_token("#") {
+                break;
+            }
+            // Speculatively consume `#`; revert if the annotation is not recognised.
+            let link = self.lexer.link();
+            self.lexer.has_token("#");
             let id = self.lexer.has_identifier();
-            if id == Some("rust".to_string()) {
+            if id == Some("native".to_string()) {
+                if let Some(sym) = self.lexer.has_cstring() {
+                    self.data.definitions[self.context as usize].native = sym;
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Expect native symbol string");
+                }
+            } else if self.default && id == Some("rust".to_string()) {
                 if let Some(c) = self.lexer.has_cstring() {
                     self.data.definitions[self.context as usize].rust = c;
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust string");
                 }
-            }
-            if id == Some("iterator".to_string()) {
+            } else if self.default && id == Some("iterator".to_string()) {
                 if let Some(init) = self.lexer.has_cstring() {
                     self.data.definitions[self.context as usize].rust = init;
                 } else {
@@ -624,6 +636,10 @@ impl Parser {
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust next string");
                 }
+            } else {
+                // Not a recognised annotation — put the `#` back and stop.
+                self.lexer.revert(link);
+                break;
             }
         }
     }

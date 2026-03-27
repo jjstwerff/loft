@@ -52,6 +52,24 @@ pub fn check(data: &mut Data) {
         let code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
         data.definitions[d_nr as usize].code = code;
         data.definitions[d_nr as usize].variables = function;
+        // A5.6: in debug builds, assert that every owned Reference variable emitted an
+        // OpFreeRef.  Catches scope-registration bugs before they reach the runtime
+        // "Database N not correctly freed" assertion (which fires with no context).
+        #[cfg(debug_assertions)]
+        check_ref_leaks(
+            &data.definitions[d_nr as usize].code,
+            &data.definitions[d_nr as usize].variables,
+            data,
+            &data.definitions[d_nr as usize].name.clone(),
+            &data.definitions[d_nr as usize].returned.clone(),
+            &scopes.var_scope,
+        );
+        #[cfg(debug_assertions)]
+        check_arg_ref_allocs(
+            &data.definitions[d_nr as usize].code,
+            &data.definitions[d_nr as usize].variables,
+            &data.definitions[d_nr as usize].name.clone(),
+        );
         for (v_nr, scope) in scopes.var_scope {
             data.definitions[d_nr as usize]
                 .variables
@@ -88,6 +106,65 @@ pub fn check(data: &mut Data) {
             assign_slots(&mut d.variables, &mut d.code, local_start);
         }
     }
+}
+
+/// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a
+/// `Set(ref_var, Null)` for an owned Reference (dep empty).
+///
+/// Such a nested allocation would place `ConvRefFromNull` on the eval stack
+/// *between* call arguments, corrupting the arg layout and producing a garbage
+/// `y` value inside the callee — the root cause of the A5.6 "Incorrect store"
+/// bug.  `scan_args` in scopes.rs is responsible for bubbling these out; if it
+/// misses a case this check catches it at compile time.
+#[cfg(debug_assertions)]
+fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
+    fn check_args(args: &[Value], function: &Function, fn_name: &str) {
+        for a in args {
+            if let Value::Insert(ops) = a
+                && ops.len() >= 2
+                && let Value::Set(v, val) = &ops[0]
+                && matches!(val.as_ref(), Value::Null)
+                && matches!(function.tp(*v), Type::Reference(_, dep) if dep.is_empty())
+            {
+                panic!(
+                    "[check_arg_ref_allocs] Set('{name}', Null) for owned Reference \
+                     is nested inside a Call/CallRef argument in '{fn_name}'. \
+                     This corrupts the CallRef arg layout (A5.6). \
+                     scan_args in scopes.rs must bubble it out.",
+                    name = function.name(*v),
+                );
+            }
+            walk_check(a, function, fn_name);
+        }
+    }
+    fn walk_check(ir: &Value, function: &Function, fn_name: &str) {
+        match ir {
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                check_args(args, function, fn_name);
+            }
+            Value::Set(_, inner) => walk_check(inner, function, fn_name),
+            Value::If(cond, t, f) => {
+                walk_check(cond, function, fn_name);
+                walk_check(t, function, fn_name);
+                walk_check(f, function, fn_name);
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &bl.operators {
+                    walk_check(op, function, fn_name);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops {
+                    walk_check(op, function, fn_name);
+                }
+            }
+            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                walk_check(inner, function, fn_name);
+            }
+            _ => {}
+        }
+    }
+    walk_check(ir, function, fn_name);
 }
 
 impl Scopes {
@@ -179,30 +256,77 @@ impl Scopes {
                 ))
             }
             Value::Block(bl) => {
+                // A5.6: pre-register a block-result Reference variable at the OUTER scope
+                // before entering the block's inner scope.
+                //
+                // Without this, `scan_set(w, Null)` registers w at the inner scope.
+                // At block exit, `free_vars` skips w (it is `ret_var`). At function exit,
+                // `variables(outer_scope)` omits w (inner scope is not in the chain) →
+                // OpFreeRef is never emitted → Database N not freed.
+                //
+                // Pre-registering at the outer scope causes `scan_set(w, Null)` inside the
+                // block to see `var_scope.contains_key(&w) && *value == Null` → return
+                // Insert([]) (the Set is suppressed from inside the block). We then hoist
+                // Set(w, Null) to the outer level by returning Insert([Set(w,Null), Block]).
+                //
+                // This is necessary (not optional) because DbRef is 12 bytes (> 8) → Zone 2
+                // of slot assignment handles it. Zone 2 of the outer scope's `process_scope`
+                // walks its direct operators and finds Set(w, Null) in the Insert; Zone 2 of
+                // the inner scope skips w (scope mismatch). If Set(w, Null) were left inside
+                // the block, the outer Zone 2 would never see it and the slot would remain
+                // u16::MAX → "variable never assigned a slot" panic at codegen.
+                let mut hoisted_ref: Option<u16> = None;
+                if let Some(Value::Var(ret_v)) = bl.operators.last() {
+                    let ret_v = *self.var_mapping.get(ret_v).unwrap_or(ret_v);
+                    if !self.var_scope.contains_key(&ret_v)
+                        && let Type::Reference(_, dep) | Type::Vector(_, dep) = function.tp(ret_v)
+                        && dep.is_empty()
+                    {
+                        self.var_scope.insert(ret_v, self.scope);
+                        self.var_order.push(ret_v);
+                        hoisted_ref = Some(ret_v);
+                    }
+                }
                 let scope = self.enter_scope();
                 let ls = self.convert(bl, function, data);
                 self.exit_scope();
-                Value::Block(Box::new(Block {
+                let block = Value::Block(Box::new(Block {
                     operators: ls,
                     result: bl.result.clone(),
                     name: bl.name,
                     scope,
                     var_size: 0,
-                }))
+                }));
+                if let Some(w) = hoisted_ref {
+                    // Return Insert([Set(w, Null), Block]) so that:
+                    // 1. Zone-2 slot assignment sees Set(w, Null) at the outer scope level.
+                    // 2. get_free_vars at the outer scope emits OpFreeRef(w) on block exit.
+                    Value::Insert(vec![v_set(w, Value::Null), block])
+                } else {
+                    block
+                }
             }
             Value::Call(d_nr, args) => {
-                let mut ls = Vec::new();
-                for v in args {
-                    ls.push(self.scan(v, function, data));
+                let (preamble, ls) = self.scan_args(args, function, data);
+                let call = Value::Call(*d_nr, ls);
+                if preamble.is_empty() {
+                    call
+                } else {
+                    let mut ops = preamble;
+                    ops.push(call);
+                    Value::Insert(ops)
                 }
-                Value::Call(*d_nr, ls)
             }
             Value::CallRef(v_nr, args) => {
-                let mut ls = Vec::new();
-                for a in args {
-                    ls.push(self.scan(a, function, data));
+                let (preamble, ls) = self.scan_args(args, function, data);
+                let call = Value::CallRef(*v_nr, ls);
+                if preamble.is_empty() {
+                    call
+                } else {
+                    let mut ops = preamble;
+                    ops.push(call);
+                    Value::Insert(ops)
                 }
-                Value::CallRef(*v_nr, ls)
             }
             Value::Insert(ops) => {
                 Value::Insert(ops.iter().map(|v| self.scan(v, function, data)).collect())
@@ -242,6 +366,15 @@ impl Scopes {
             && self.scope != *s
             && !self.stack.contains(s)
         {
+            if std::env::var("LOFT_LOG").as_deref() == Ok("scope_debug") {
+                eprintln!(
+                    "[scope_debug] copy trigger: var={ov} name='{}' \
+                     registered_scope={s} current_scope={} stack={:?} value={value:?}",
+                    function.name(ov),
+                    self.scope,
+                    self.stack,
+                );
+            }
             if let Some(&existing_copy) = self.var_mapping.get(&ov) {
                 // Replace the mapping only if the existing copy's scope has exited.
                 if let Some(&copy_scope) = self.var_scope.get(&existing_copy)
@@ -436,6 +569,7 @@ impl Scopes {
         tp: &Type,
         ret_var: u16,
     ) -> Vec<Value> {
+        let scope_debug = std::env::var("LOFT_LOG").as_deref() == Ok("scope_debug");
         let mut ls = Vec::new();
         for v in self.variables(to_scope) {
             if v == ret_var {
@@ -457,11 +591,74 @@ impl Scopes {
             }
             if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
                 function.tp(v)
-                && dep.is_empty()
-                && !tp.depend().contains(&v)
-                && !function.is_skip_free(v)
             {
-                ls.push(call("OpFreeRef", v, data));
+                let emit = dep.is_empty() && !tp.depend().contains(&v) && !function.is_skip_free(v);
+                if scope_debug && !emit {
+                    eprintln!(
+                        "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
+                         dep_empty={} in_ret={} skip_free={}",
+                        function.name(v),
+                        self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
+                        dep.is_empty(),
+                        tp.depend().contains(&v),
+                        function.is_skip_free(v),
+                    );
+                }
+                if emit {
+                    if scope_debug {
+                        eprintln!(
+                            "[scope_debug] freeing '{}' (var={v}, scope={})",
+                            function.name(v),
+                            self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
+                        );
+                    }
+                    ls.push(call("OpFreeRef", v, data));
+                }
+            }
+        }
+        // scope_debug: also report Reference vars in var_order whose scope is NOT in
+        // the current chain — these are "orphaned" vars that should never happen after
+        // the A5.6 block-pre-registration fix.
+        if scope_debug {
+            let chain: HashSet<u16> = {
+                let mut s = HashSet::new();
+                let mut sc = self.scope;
+                let mut pos = self.stack.len();
+                loop {
+                    if sc == 0 {
+                        break;
+                    }
+                    s.insert(sc);
+                    if sc == to_scope {
+                        break;
+                    }
+                    if pos == 0 {
+                        break;
+                    }
+                    pos -= 1;
+                    sc = self.stack[pos];
+                }
+                s
+            };
+            for &v in &self.var_order {
+                if v == ret_var {
+                    continue;
+                }
+                let v_scope = *self.var_scope.get(&v).unwrap_or(&0);
+                if v_scope == 0 {
+                    continue;
+                }
+                if !chain.contains(&v_scope)
+                    && let Type::Reference(_, dep) = function.tp(v)
+                    && dep.is_empty()
+                    && !function.is_skip_free(v)
+                {
+                    eprintln!(
+                        "[scope_debug] ORPHANED Reference '{}' (var={v}): \
+                         its scope={v_scope} is not in the chain to to_scope={to_scope}",
+                        function.name(v),
+                    );
+                }
             }
         }
         ls
@@ -513,6 +710,51 @@ impl Scopes {
             // Do NOT recurse into Value::Loop.
             _ => {}
         }
+    }
+
+    /// Scan a list of call arguments.
+    ///
+    /// If any scanned arg comes back as `Insert([Set(w, Null), body])` where `w` is an
+    /// owned Reference (dep empty) — a hoisted closure-record allocation — the `Set(w,
+    /// Null)` is lifted out into `preamble` and the arg is replaced with `body` alone.
+    ///
+    /// This prevents `ConvRefFromNull` (12 B) from landing on the eval stack *between*
+    /// other call arguments, which would corrupt the `CallRef` argument layout and cause
+    /// the lambda to receive garbage for `y` (A5.6 "Incorrect store" bug).
+    ///
+    /// Returns `(preamble, scanned_args)`.  The caller wraps the result as
+    /// `Insert([preamble..., Call/CallRef(...)])` when the preamble is non-empty;
+    /// `convert` flattens this so the preamble executes before any args are pushed.
+    fn scan_args(
+        &mut self,
+        args: &[Value],
+        function: &mut Function,
+        data: &Data,
+    ) -> (Vec<Value>, Vec<Value>) {
+        let mut preamble: Vec<Value> = Vec::new();
+        let mut ls: Vec<Value> = Vec::new();
+        for a in args {
+            let scanned = self.scan(a, function, data);
+            if let Value::Insert(ops) = scanned {
+                let is_hoisted = ops.len() == 2
+                    && if let Value::Set(v, val) = &ops[0] {
+                        matches!(val.as_ref(), Value::Null)
+                            && matches!(function.tp(*v), Type::Reference(_, dep) if dep.is_empty())
+                    } else {
+                        false
+                    };
+                if is_hoisted {
+                    let mut it = ops.into_iter();
+                    preamble.push(it.next().unwrap()); // Set(w, Null)
+                    ls.push(it.next().unwrap()); // body (block without alloc)
+                } else {
+                    ls.push(Value::Insert(ops));
+                }
+            } else {
+                ls.push(scanned);
+            }
+        }
+        (preamble, ls)
     }
 }
 
@@ -574,5 +816,100 @@ fn returned_var(expr: &Value) -> u16 {
             v
         }
         _ => u16::MAX,
+    }
+}
+
+/// Recursively collect every variable freed by `OpFreeRef` in `ir`.
+/// Used by `check_ref_leaks` to verify no Reference variable is leaked.
+fn collect_freed_vars(ir: &Value, free_ref_nr: u32, result: &mut HashSet<u16>) {
+    match ir {
+        Value::Call(d_nr, args) if *d_nr == free_ref_nr => {
+            if let Some(Value::Var(v)) = args.first() {
+                result.insert(*v);
+            }
+        }
+        Value::Call(_, args) => {
+            for a in args {
+                collect_freed_vars(a, free_ref_nr, result);
+            }
+        }
+        Value::Set(_, inner) => collect_freed_vars(inner, free_ref_nr, result),
+        Value::If(cond, t, f) => {
+            collect_freed_vars(cond, free_ref_nr, result);
+            collect_freed_vars(t, free_ref_nr, result);
+            collect_freed_vars(f, free_ref_nr, result);
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                collect_freed_vars(op, free_ref_nr, result);
+            }
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                collect_freed_vars(op, free_ref_nr, result);
+            }
+        }
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+            collect_freed_vars(inner, free_ref_nr, result);
+        }
+        _ => {}
+    }
+}
+
+/// After scope analysis, assert that every Reference variable that should be
+/// freed has a corresponding `OpFreeRef` somewhere in `ir`.
+///
+/// A variable "should be freed" when:
+/// - Its type is `Reference(_, dep)` with `dep.is_empty()`
+/// - It is not a function parameter (scope > 0)
+/// - It is not marked `skip_free`
+/// - It is not in the function's return-type dependencies
+///
+/// Only compiled in debug builds; the check panics rather than emitting a
+/// diagnostic so that the failure is visible immediately during development.
+#[cfg(debug_assertions)]
+fn check_ref_leaks(
+    ir: &Value,
+    function: &Function,
+    data: &Data,
+    fn_name: &str,
+    ret_type: &Type,
+    var_scope: &BTreeMap<u16, u16>,
+) {
+    let free_ref_nr = data.def_nr("OpFreeRef");
+    let mut freed: HashSet<u16> = HashSet::new();
+    collect_freed_vars(ir, free_ref_nr, &mut freed);
+
+    let ret_deps: HashSet<u16> = ret_type.depend().into_iter().collect();
+    // The directly-returned variable (e.g. the owned struct constructed by a function
+    // whose return type is Reference) passes ownership to the caller — no FreeRef is
+    // emitted for it and that is correct.  Exclude it so check_ref_leaks does not
+    // false-positive on `fn foo() -> S { S { ... } }`.
+    let direct_ret_var = returned_var(ir);
+
+    for (&v, &scope) in var_scope {
+        if scope == 0 {
+            continue; // function parameter — caller frees
+        }
+        if function.is_skip_free(v) {
+            continue;
+        }
+        if v == direct_ret_var {
+            continue; // ownership transferred to caller
+        }
+        if let Type::Reference(_, dep) = function.tp(v)
+            && dep.is_empty()
+            && !ret_deps.contains(&v)
+            && !freed.contains(&v)
+        {
+            panic!(
+                "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
+                 '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
+                 This is likely a scope-registration bug: the variable was registered \
+                 in an inner block scope that is not reachable from function-exit cleanup.",
+                function.name(v),
+                fn_name
+            );
+        }
     }
 }

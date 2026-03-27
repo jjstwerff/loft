@@ -11,12 +11,15 @@ fn test_c1_lambda_no_capture() {
   assert(doubled[4] == 10, "C1: lambda map result");
 }
 
-// C8 — Predicate aggregates not available; verify sum_of/min_of/max_of work.
-fn test_c8_available_aggregates() {
+// P3 regression — all vector aggregates implemented (sum_of/min_of/max_of/any/all/count_if).
+fn test_p3_aggregates() {
   nums = [3, 1, 4, 1, 5];
-  assert(sum_of(nums) == 14, "C8: sum_of works");
-  assert(min_of(nums) == 1, "C8: min_of works");
-  assert(max_of(nums) == 5, "C8: max_of works");
+  assert(sum_of(nums) == 14, "P3: sum_of works");
+  assert(min_of(nums) == 1, "P3: min_of works");
+  assert(max_of(nums) == 5, "P3: max_of works");
+  assert(any(nums, |x| { x > 4 }), "P3: any works");
+  assert(!all(nums, |x| { x > 2 }), "P3: all works");
+  assert(count_if(nums, |x| { x == 1 }) == 2, "P3: count_if works");
 }
 
 // S15 regression: struct-enum variants with same-named fields now read the correct offset.
@@ -30,19 +33,32 @@ fn test_s15_same_named_field_offset() {
   }
 }
 
-// C11 — No while loop: for + break is the workaround.
-fn test_c11_no_while() {
+// C11 — while loop now supported (L10 fix).
+fn test_c11_while() {
+  i = 0;
   found = false;
-  for i in 0..1000000 {
-    if i * i > 100 { found = true; break }
-  }
-  assert(found, "C11: polling via for+break");
+  while !found { i += 1; found = i * i > 100; }
+  assert(found, "C11: while loop works");
 }
 
-// C14 — Format specifier silently ignored on incompatible types.
-fn test_c14_format_specifier_ignored() {
-  t = "hello";
-  r = "{t:05}";
-  // :05 on text is silently ignored — value is unchanged.
-  assert(r == "hello", "C14: format specifier on text ignored: '{r}'");
+// C19 — Tuples work in interpreter (element access and assignment).
+fn test_c19_tuple_basics() {
+  t = (10, 20);
+  assert(t.0 == 10, "C19: tuple .0");
+  assert(t.1 == 20, "C19: tuple .1");
+  t.0 = 99;
+  assert(t.0 == 99, "C19: tuple element assign");
+}
+
+// C19/C21 — Coroutines tested separately in tests/scripts/51-coroutines.loft.
+// The yield from regression (C21) and native-codegen exclusion (C19) are
+// tracked in CAVEATS.md; their test coverage lives in 51-coroutines.loft.
+
+fn main() {
+  test_c1_lambda_no_capture();
+  test_p3_aggregates();
+  test_s15_same_named_field_offset();
+  test_c11_while();
+  test_c19_tuple_basics();
+  println("caveats: all ok");
 }

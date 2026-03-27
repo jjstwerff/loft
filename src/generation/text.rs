@@ -3,10 +3,28 @@
 
 //! Text and format-string code generation helpers.
 
-use crate::data::{Type, Value};
+use crate::data::{Data, Type, Value};
 use std::io::Write;
 
 use super::{Output, sanitize};
+
+/// O7: count the number of consecutive format/append ops in `ops[start..]`,
+/// skipping `Value::Line` nodes.  Used by `clear_stack_text` to emit a
+/// `String::with_capacity` hint when ≥ 2 segments are present.
+pub(super) fn count_format_ops(ops: &[Value], start: usize, data: &Data) -> usize {
+    ops[start..]
+        .iter()
+        .filter(|v| !matches!(v, Value::Line(_)))
+        .take_while(|v| {
+            if let Value::Call(d, _) = v {
+                let name = &data.def(*d).name;
+                name.starts_with("OpFormat") || name.starts_with("OpAppend")
+            } else {
+                false
+            }
+        })
+        .count()
+}
 
 impl Output<'_> {
     pub(super) fn clear_vector(
@@ -47,14 +65,41 @@ impl Output<'_> {
     }
 
     /// Use this to emit `OpClearStackText` as a `.clear()` call on the target string variable.
+    ///
+    /// O7: when the block lookahead (`next_format_count`) indicates ≥ 2 format/append ops
+    /// follow, emits a `with_capacity` guard instead of a bare `.clear()` to avoid repeated
+    /// `String` reallocations during format-string assembly (significant in WASM linear memory).
     pub(super) fn clear_stack_text(
         &mut self,
         w: &mut dyn Write,
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
-            write!(w, "var_{s_nr}.clear()")?;
+            let variables = &self.data.def(self.def_nr).variables;
+            let s_nr = sanitize(variables.name(*nr));
+            // When the variable is a `&mut String` parameter (RefVar(Text)), the capacity
+            // re-allocation assignment needs an explicit dereference; auto-deref does not
+            // apply to assignment left-hand sides in Rust.
+            let deref =
+                if variables.is_argument(*nr) && matches!(variables.tp(*nr), Type::RefVar(_)) {
+                    "*"
+                } else {
+                    ""
+                };
+            let n = self.next_format_count;
+            self.next_format_count = 0;
+            if n > 1 {
+                // avg_element_len = 8 is a conservative estimate for mixed text/integer fields.
+                write!(
+                    w,
+                    "{{ let _cap = {n}_usize * 8; \
+                     if var_{s_nr}.capacity() < _cap \
+                     {{ {deref}var_{s_nr} = String::with_capacity(_cap); }} \
+                     else {{ var_{s_nr}.clear(); }} }}"
+                )?;
+            } else {
+                write!(w, "var_{s_nr}.clear()")?;
+            }
             return Ok(());
         }
         panic!("Could not parse {vals:?}");

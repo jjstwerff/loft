@@ -1,0 +1,18 @@
+{
+  "/": {
+    "project": {
+      "main.loft": {
+        "$type": "text",
+        "$content": "fn main() {\n  println(\"binary test\")\n}"
+      },
+      "data.bin": {
+        "$type": "binary",
+        "$content": "AQID/w=="
+      },
+      "empty.bin": {
+        "$type": "binary",
+        "$content": ""
+      }
+    }
+  }
+}

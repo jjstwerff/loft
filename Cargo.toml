@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "compilers"]
 [lib]
 name = "loft"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "loft"
@@ -23,17 +24,29 @@ name = "gendoc"
 path = "src/gendoc.rs"
 
 [features]
-default  = ["png", "mmap", "random"]
-png      = ["dep:png"]
-mmap     = ["dep:mmap-storage"]
-random   = ["dep:rand_core", "dep:rand_pcg"]
+default      = ["png", "mmap", "random", "threading"]
+threading    = []
+wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
+                "dep:js-sys", "dep:web-sys", "png"]
+wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
+png          = ["dep:png"]
+mmap         = ["dep:mmap-storage"]
+random            = ["dep:rand_core", "dep:rand_pcg"]
+native-extensions = ["dep:libloading"]
 
 [dependencies]
-rand_core    = { version = "0.9", optional = true }
-rand_pcg     = { version = "0.9", optional = true }
-png          = { version = "0.17", optional = true }
-mmap-storage = { version = "0.10", optional = true }
-dirs         = "5"
+rand_core          = { version = "0.9", optional = true }
+rand_pcg           = { version = "0.9", optional = true }
+png                = { version = "0.17", optional = true }
+mmap-storage       = { version = "0.10", optional = true }
+dirs               = "5"
+wasm-bindgen       = { version = "0.2", optional = true }
+serde              = { version = "1", optional = true, features = ["derive"] }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+js-sys             = { version = "0.3", optional = true }
+web-sys            = { version = "0.3", optional = true, features = ["console"] }
+wasm-bindgen-rayon = { version = "1.2", optional = true }
+libloading         = { version = "0.8", optional = true }
 
 [dev-dependencies]
 stdext = "0.3"

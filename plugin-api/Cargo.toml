@@ -1,0 +1,15 @@
+[package]
+name = "loft-plugin-api"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jurjen Stellingwerff"]
+license = "LGPL-3.0-or-later"
+description = "Stable C-ABI interface for loft native extension plugins"
+homepage = "https://github.com/jjstwerff/loft"
+repository = "https://github.com/jjstwerff/loft"
+keywords = ["loft", "plugin", "extension", "ffi"]
+categories = ["api-bindings"]
+
+[lib]
+name = "loft_plugin_api"
+crate-type = ["rlib", "staticlib"]

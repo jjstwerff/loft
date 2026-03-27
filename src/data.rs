@@ -629,6 +629,8 @@ pub struct Definition {
     pub returned_not_null: bool,
     /// Rust code
     pub rust: String,
+    /// Native symbol name for `#native "symbol"` extern dispatch; empty if not native.
+    pub native: String,
     /// Interpreter operator code
     pub op_code: u16,
     /// Position inside the generated code
@@ -914,6 +916,7 @@ impl Data {
             returned: Type::Unknown(rec),
             returned_not_null: false,
             rust: String::new(),
+            native: String::new(),
             op_code: u16::MAX,
             known_type: u16::MAX,
             code_position: 0,

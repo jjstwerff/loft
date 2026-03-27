@@ -217,9 +217,12 @@ impl Stores {
     */
     #[must_use]
     pub fn os_arguments(&mut self) -> DbRef {
+        #[cfg(not(feature = "wasm"))]
         let args: Vec<String> = std::env::args_os()
             .map(|a| a.to_str().unwrap().to_string())
             .collect();
+        #[cfg(feature = "wasm")]
+        let args: Vec<String> = crate::wasm::host_arguments();
         self.text_vector(&args)
     }
 
@@ -248,6 +251,7 @@ impl Stores {
         let size = u32::from(self.size(elm));
         let vec = self.database(size);
         self.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+        #[cfg(not(feature = "wasm"))]
         for t in std::env::vars_os() {
             let name = t.0.to_str().unwrap();
             let value = t.1.to_str().unwrap();
@@ -267,12 +271,23 @@ impl Stores {
     When the OS provided incorrect variable values (non utf8 tokens inside it)
     */
     #[must_use]
+    #[cfg(not(feature = "wasm"))]
     pub fn os_variable(name: &str) -> crate::keys::Str {
         if let Some(v) = std::env::var_os(name) {
             crate::keys::Str::new(v.to_str().unwrap())
         } else {
             crate::keys::Str::new("")
         }
+    }
+
+    /**
+    Get the value of an environment variable (WASM stub — always returns empty).
+    */
+    #[must_use]
+    #[cfg(feature = "wasm")]
+    pub fn os_variable(name: &str) -> crate::keys::Str {
+        let val = crate::wasm::host_env_variable(name);
+        crate::keys::Str::new(&val)
     }
 
     /**
@@ -283,8 +298,13 @@ impl Stores {
     #[must_use]
     pub fn os_directory(s: &mut String) -> crate::keys::Str {
         s.clear();
+        #[cfg(not(feature = "wasm"))]
         if let Ok(v) = std::env::current_dir() {
             *s += v.to_str().unwrap();
+        }
+        #[cfg(feature = "wasm")]
+        {
+            *s = crate::wasm::host_fs_cwd();
         }
         crate::keys::Str::new(s)
     }
@@ -297,8 +317,13 @@ impl Stores {
     #[must_use]
     pub fn os_home(s: &mut String) -> crate::keys::Str {
         s.clear();
+        #[cfg(not(feature = "wasm"))]
         if let Some(v) = dirs::home_dir() {
             *s += v.to_str().unwrap();
+        }
+        #[cfg(feature = "wasm")]
+        {
+            *s = crate::wasm::host_fs_user_dir();
         }
         crate::keys::Str::new(s)
     }
@@ -311,8 +336,13 @@ impl Stores {
     #[must_use]
     pub fn os_executable(s: &mut String) -> crate::keys::Str {
         s.clear();
+        #[cfg(not(feature = "wasm"))]
         if let Ok(v) = std::env::current_exe() {
             *s += v.to_str().unwrap();
+        }
+        #[cfg(feature = "wasm")]
+        {
+            *s = crate::wasm::host_fs_program_dir();
         }
         crate::keys::Str::new(s)
     }
@@ -324,11 +354,16 @@ impl Stores {
     /// Panics if the current directory path contains non-UTF-8 characters.
     #[must_use]
     pub fn os_directory_native() -> String {
-        let mut s = String::new();
-        if let Ok(v) = std::env::current_dir() {
-            s += v.to_str().unwrap();
+        #[cfg(not(feature = "wasm"))]
+        {
+            let mut s = String::new();
+            if let Ok(v) = std::env::current_dir() {
+                s += v.to_str().unwrap();
+            }
+            s
         }
-        s
+        #[cfg(feature = "wasm")]
+        crate::wasm::host_fs_cwd()
     }
 
     /// Native-codegen variant of `os_home` that returns an owned `String`.
@@ -337,11 +372,16 @@ impl Stores {
     /// Panics if the home directory path contains non-UTF-8 characters.
     #[must_use]
     pub fn os_home_native() -> String {
-        let mut s = String::new();
-        if let Some(v) = dirs::home_dir() {
-            s += v.to_str().unwrap();
+        #[cfg(not(feature = "wasm"))]
+        {
+            let mut s = String::new();
+            if let Some(v) = dirs::home_dir() {
+                s += v.to_str().unwrap();
+            }
+            s
         }
-        s
+        #[cfg(feature = "wasm")]
+        crate::wasm::host_fs_user_dir()
     }
 
     /// Native-codegen variant of `os_executable` that returns an owned `String`.
@@ -350,11 +390,16 @@ impl Stores {
     /// Panics if the executable path contains non-UTF-8 characters.
     #[must_use]
     pub fn os_executable_native() -> String {
-        let mut s = String::new();
-        if let Ok(v) = std::env::current_exe() {
-            s += v.to_str().unwrap();
+        #[cfg(not(feature = "wasm"))]
+        {
+            let mut s = String::new();
+            if let Ok(v) = std::env::current_exe() {
+                s += v.to_str().unwrap();
+            }
+            s
         }
-        s
+        #[cfg(feature = "wasm")]
+        crate::wasm::host_fs_program_dir()
     }
 }
 

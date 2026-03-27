@@ -49,20 +49,31 @@ fn test_unreachable_after_continue() {
   }
 }
 
-// --- L8: Format specifier / type mismatch warnings ---
+// --- L9: Format specifier / type mismatch — now compile errors ---
 
-// @EXPECT_WARNING: Format specifier has no effect on text
+// @EXPECT_ERROR: Format specifier has no effect on text
 fn test_hex_on_text() {
   fw_t = "hello";
   fw_r = "{fw_t:x}";
   assert(len(fw_r) > 0, "hex on text");
 }
 
-// @EXPECT_WARNING: Zero-padding has no effect on text
+// @EXPECT_ERROR: Zero-padding has no effect on text
 fn test_zero_pad_on_text() {
   fw_t2 = "hi";
   fw_r2 = "{fw_t2:05}";
   assert(len(fw_r2) > 0, "zero-pad text");
+}
+
+// --- Dead assignment: assert counts as a read ---
+
+// @EXPECT_WARNING: Dead assignment
+// The first assignment to 'found' is overwritten before being read.
+// assert(found, ...) counts as a read, so the warning targets the first write.
+fn test_dead_assign_assert_reads() {
+  found = false;
+  found = true;
+  assert(found, "assert counts as a read");
 }
 
 // --- Enum dispatch: missing-variant warning ---

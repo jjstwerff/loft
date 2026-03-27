@@ -632,6 +632,7 @@ fn OpConvBoolFromText(v1: text) -> boolean;
 #rust"@v1 != crate::state::STRING_NULL"
 fn OpText();
 fn OpAppendText(pos: const u16, v1: text);
+fn OpPutText(pos: const u16, value: text);
 fn OpGetTextSub(v1: text, from: integer, till: integer) -> text[v1];
 fn OpTextCharacter(v1: text, v2: integer) -> character;
 #rust"ops::text_character(@v1, @v2)"
@@ -820,7 +821,7 @@ pub fn log_warn(message: text, file: text, line: integer);
 pub fn log_error(message: text, file: text, line: integer);
 pub fn log_fatal(message: text, file: text, line: integer);
 fn OpPrint(v1: text);
-#rust"print!(\"{{}}\", @v1);"
+#rust"#[cfg(not(feature = \"wasm\"))]\nprint!(\"{{}}\", @v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
 // Writes v to standard output without a newline.
 // Use for progress output and building up a line incrementally.
 pub fn print(v1: text) {

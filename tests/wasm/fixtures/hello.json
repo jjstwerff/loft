@@ -1,0 +1,10 @@
+{
+  "/": {
+    "project": {
+      "main.loft": {
+        "$type": "text",
+        "$content": "fn main() {\n  println(\"hello\")\n}"
+      }
+    }
+  }
+}

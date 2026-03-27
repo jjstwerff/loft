@@ -633,7 +633,6 @@ fn generic_field_error() {
 
 /// A5.1: lambda referencing an outer variable is detected as a capture.
 #[test]
-#[ignore = "A5.4: mutable capture (count += x) not yet supported — codegen panics on self-reference"]
 fn capture_detected() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
@@ -698,7 +697,6 @@ fn generator_remove_rejected() {
 
 /// #91: two init fields referencing each other via $ should produce an error.
 #[test]
-#[ignore = "#91: circular-init detection not yet implemented"]
 fn circular_init_error() {
     code!("struct Bad {\n  a: integer init($.b),\n  b: integer init($.a),\n}\nfn test() {}")
         .error("circular init dependency: a -> b -> a at circular_init_error:5:3")

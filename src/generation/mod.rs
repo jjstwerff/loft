@@ -180,6 +180,10 @@ pub struct Output<'a> {
     /// Stack of enclosing loop scope ids, innermost last.
     /// Used to emit Rust labeled breaks for `Value::Break(n)` with n > 0.
     pub loop_stack: Vec<u16>,
+    /// O7: number of consecutive format/append ops following the current
+    /// `OpClearStackText`/`OpClearText`.  Set by `output_block` before each
+    /// op is emitted; consumed (and reset to 0) by `clear_stack_text`.
+    pub next_format_count: usize,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -319,6 +323,7 @@ impl Output<'_> {
         self.def_nr = def_nr;
         self.indent = 0;
         self.declared.clear();
+        self.next_format_count = 0;
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).

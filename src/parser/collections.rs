@@ -573,21 +573,22 @@ use #count instead"
         } else {
             "OpFormat"
         };
-        // L8: warn when a format specifier has no effect on the value type.
+        // L9: escalate format-specifier mismatches to compile errors.
+        // A specifier that can never have any effect on the value type is always a bug.
         if !self.first_pass {
             let is_text = matches!(tp, Type::Text(_));
             let is_bool = matches!(tp, Type::Boolean);
             if state.radix != 10 && (is_text || is_bool) {
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
+                    Level::Error,
                     "Format specifier has no effect on {}",
                     tp.name(&self.data)
                 );
             } else if is_text && state.token == "0" && state.width != Value::Int(0) {
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
+                    Level::Error,
                     "Zero-padding has no effect on text"
                 );
             }

@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+#![cfg(feature = "threading")]
 
 //! Integration tests for parallel execution (`parallel_for_int`).
 //!
@@ -450,4 +451,33 @@ fn label(r: const Num) -> text { "v{r.v}" }
         vec!["v10".to_string(), "v20".to_string(), "v30".to_string()],
         "text results"
     );
+}
+
+/// Fix #92 (S21): stack_trace() inside a parallel worker must return a non-empty
+/// frame vector.  Before the fix, data_ptr was null and call_stack was empty in
+/// worker threads, so stack_trace() always returned 0 frames.
+#[test]
+fn parallel_stack_trace_non_empty() {
+    let code = r#"
+struct Num { v: integer }
+fn count_frames(r: const Num) -> integer { frames = stack_trace(); len(frames) + r.v - r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = vec![0, 0, 0];
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_count_frames");
+    assert_ne!(d_nr, u32::MAX, "count_frames function not found");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 1);
+
+    for (i, &n) in results.iter().enumerate() {
+        assert!(
+            n > 0,
+            "worker {i}: stack_trace() returned 0 frames (fix #92 regression)"
+        );
+    }
 }

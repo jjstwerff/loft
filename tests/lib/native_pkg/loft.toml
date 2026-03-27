@@ -1,0 +1,8 @@
+[package]
+name    = "native_pkg"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry  = "src/native_pkg.loft"
+native = "loft_native_test"

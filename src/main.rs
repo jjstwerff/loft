@@ -8,6 +8,7 @@ mod calc;
 mod compile;
 mod data;
 mod database;
+mod extensions;
 mod fill;
 mod formatter;
 mod generation;
@@ -34,7 +35,10 @@ mod tree;
 mod typedef;
 mod variables;
 mod vector;
+#[cfg(feature = "wasm")]
+mod wasm;
 
+use crate::diagnostics::Level;
 use crate::native_utils::{
     default_artifact_path, is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
@@ -344,11 +348,15 @@ fn main() {
         for l in p.diagnostics.lines() {
             println!("{l}");
         }
-        std::process::exit(1);
+        if p.diagnostics.level() >= Level::Error {
+            std::process::exit(1);
+        }
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut p.data);
+    // A7.2: load native extension shared libraries registered during parsing.
+    extensions::load_all(&mut state, std::mem::take(&mut p.pending_native_libs));
 
     // WASM codegen pipeline: --native-wasm
     if let Some(ref wasm_out) = native_wasm {
@@ -383,6 +391,7 @@ fn main() {
                 declared: HashSet::new(),
                 reachable: HashSet::new(),
                 loop_stack: Vec::new(),
+                next_format_count: 0,
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -460,6 +469,7 @@ fn main() {
                 declared: HashSet::new(),
                 reachable: HashSet::new(),
                 loop_stack: Vec::new(),
+                next_format_count: 0,
             };
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");

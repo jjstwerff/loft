@@ -20,6 +20,7 @@ use crate::store::Store;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Write as _};
 use std::sync::{Arc, Mutex};
+#[cfg(not(feature = "wasm"))]
 use std::time::Instant;
 
 /// Type alias for a native function callable from loft bytecode.
@@ -36,6 +37,10 @@ pub struct ParallelCtx {
     pub text_code: *const Arc<Vec<u8>>,
     pub library: *const Arc<Vec<Call>>,
     pub data: *const crate::data::Data,
+    /// Cached library index of `n_stack_trace`; `u16::MAX` = not found.
+    /// Copied into worker `State::stack_trace_lib_nr` so workers can snapshot
+    /// the call stack when `stack_trace()` is called (fix #92).
+    pub stack_trace_lib_nr: u16,
 }
 
 // Safety: the pointed-to data lives for the duration of `State::execute()`,
@@ -102,7 +107,10 @@ pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,
     pub allocations: Vec<Store>,
+    #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
+    #[cfg(feature = "wasm")]
+    pub files: Vec<()>,
     pub max: u16,
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.
@@ -122,7 +130,12 @@ pub struct Stores {
     /// Monotonic timestamp captured at `Stores::new()`.  Used by `ticks()` to return
     /// microseconds elapsed since program start; cloned into worker Stores unchanged so
     /// all threads share the same reference point.
+    #[cfg(not(feature = "wasm"))]
     pub start_time: Instant,
+    /// Under WASM: milliseconds since Unix epoch at program start (from `host_time_now()`).
+    /// Used by `n_ticks` to compute elapsed time without `std::time::Instant`.
+    #[cfg(feature = "wasm")]
+    pub start_time_ms: i64,
     /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
     /// Populated by `State::static_call` when `n_stack_trace` is invoked.
     pub call_stack_snapshot: Vec<(String, String, u32)>,
@@ -150,7 +163,10 @@ impl Clone for Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            #[cfg(not(feature = "wasm"))]
             start_time: self.start_time,
+            #[cfg(feature = "wasm")]
+            start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
         }
     }
@@ -363,7 +379,10 @@ impl Stores {
             parallel_ctx: None,
             logger: None,
             had_fatal: false,
+            #[cfg(not(feature = "wasm"))]
             start_time: Instant::now(),
+            #[cfg(feature = "wasm")]
+            start_time_ms: crate::wasm::host_time_now(),
             call_stack_snapshot: Vec::new(),
         };
         result.base_type("integer", 4); // 0

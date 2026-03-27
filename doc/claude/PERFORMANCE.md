@@ -262,9 +262,11 @@ The 2× gaps on data structures and strings are design-level issues addressed by
 
 ### Background
 
-With 240 opcodes in the `OPERATORS` array and u8 opcodes, **16 opcode slots remain
-(240–255)**. These 16 slots are enough for the highest-impact superinstructions covering
-the four patterns that dominate tight loop bytecode.
+**Blocked:** The opcode table now has 254/256 entries — only 2 slots remain (255–256),
+which is not enough for even one superinstruction sequence.  O1 is deferred indefinitely
+until opcode space is freed (e.g. by a two-byte escape prefix or a dedicated
+superinstruction dispatch table).  The hot-pattern analysis below is preserved for
+reference when that redesign is undertaken.
 
 ### Hot patterns
 

@@ -9,6 +9,7 @@ use std::io::Write;
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn output_set(
         &mut self,
         w: &mut dyn Write,
@@ -97,29 +98,49 @@ impl Output<'_> {
             let null_val = default_native_value(variables.tp(var));
             write!(w, "{null_val}")?;
         } else {
-            self.output_code_inner(w, to)?;
-            if needs_to_string {
-                write!(w, ".to_string()")?;
-            } else if matches!(variables.tp(var), Type::Function(_, _) | Type::Routine(_))
-                && !matches!(to, Value::Null)
+            // O7: when this text assignment opens a multi-segment format string,
+            // pre-allocate capacity to avoid repeated reallocations.
+            if needs_to_string
+                && self.next_format_count > 1
+                && let Value::Text(initial) = to
             {
-                // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
-                // Also covers if-expressions that return fn-ref literals.
-                write!(w, " as u32")?;
-            } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
-                // Variable is a narrow integer type (stored as i32), but the RHS expression
-                // (a function returning u16 or an iterator block returning as u16) produces
-                // the narrow type. Add an explicit `as i32` cast.
-                write!(w, " as i32")?;
-            } else if let Value::Call(d_nr, _) = to {
-                // When the variable type and the called function's return type differ
-                // (e.g., multiple parallel-for loops reusing `b` with different worker types),
-                // add a cast so Rust accepts the assignment.
-                let var_tp_str = rust_type(variables.tp(var), &Context::Variable);
-                let ret = &self.data.def(*d_nr).returned;
-                let ret_str = rust_type(ret, &Context::Variable);
-                if ret_str != var_tp_str && !matches!(ret, Type::Void) {
-                    write!(w, " as {var_tp_str}")?;
+                let n = self.next_format_count;
+                self.next_format_count = 0;
+                let cap = initial.len() + n * 8;
+                if initial.is_empty() {
+                    write!(w, "String::with_capacity({cap}_usize)")?;
+                } else {
+                    write!(
+                        w,
+                        "{{ let mut _s = String::with_capacity({cap}_usize); \
+                         _s.push_str({initial:?}); _s }}"
+                    )?;
+                }
+            } else {
+                self.output_code_inner(w, to)?;
+                if needs_to_string {
+                    write!(w, ".to_string()")?;
+                } else if matches!(variables.tp(var), Type::Function(_, _) | Type::Routine(_))
+                    && !matches!(to, Value::Null)
+                {
+                    // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
+                    // Also covers if-expressions that return fn-ref literals.
+                    write!(w, " as u32")?;
+                } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
+                    // Variable is a narrow integer type (stored as i32), but the RHS expression
+                    // (a function returning u16 or an iterator block returning as u16) produces
+                    // the narrow type. Add an explicit `as i32` cast.
+                    write!(w, " as i32")?;
+                } else if let Value::Call(d_nr, _) = to {
+                    // When the variable type and the called function's return type differ
+                    // (e.g., multiple parallel-for loops reusing `b` with different worker types),
+                    // add a cast so Rust accepts the assignment.
+                    let var_tp_str = rust_type(variables.tp(var), &Context::Variable);
+                    let ret = &self.data.def(*d_nr).returned;
+                    let ret_str = rust_type(ret, &Context::Variable);
+                    if ret_str != var_tp_str && !matches!(ret, Type::Void) {
+                        write!(w, " as {var_tp_str}")?;
+                    }
                 }
             }
         }

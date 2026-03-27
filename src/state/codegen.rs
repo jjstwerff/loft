@@ -263,7 +263,7 @@ impl State {
                     Type::Single => stack.add_op("OpVarSingle", self),
                     Type::Character => stack.add_op("OpVarCharacter", self),
                     Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
-                    Type::Text(_) => stack.add_op("OpVarText", self),
+                    Type::Text(_) => stack.add_op("OpArgText", self),
                     Type::Reference(c, _) | Type::Enum(c, true, _) => {
                         self.types
                             .insert(self.code_pos, stack.data.def(*c).known_type);
@@ -515,6 +515,42 @@ impl State {
         }
     }
 
+    pub(super) fn gen_set_first_tuple_null(&mut self, stack: &mut Stack, v: u16) {
+        let Type::Tuple(elems) = stack.function.tp(v).clone() else {
+            return;
+        };
+        for elem in &elems {
+            match elem {
+                Type::Integer(_, _, _) | Type::Function(_, _) => {
+                    stack.add_op("OpConstInt", self);
+                    self.code_add(0i32);
+                }
+                Type::Boolean => {
+                    stack.add_op("OpConstFalse", self);
+                }
+                Type::Long => {
+                    stack.add_op("OpConstLong", self);
+                    self.code_add(0i64);
+                }
+                Type::Single => {
+                    stack.add_op("OpConstSingle", self);
+                    self.code_add(0.0f32);
+                }
+                Type::Float => {
+                    stack.add_op("OpConstFloat", self);
+                    self.code_add(0.0f64);
+                }
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
+                    stack.add_op("OpConvRefFromNull", self);
+                }
+                Type::Text(_) => {
+                    stack.add_op("OpConvTextFromNull", self);
+                }
+                other => panic!("gen_set_first_tuple_null: unsupported element type {other:?}"),
+            }
+        }
+    }
+
     pub(super) fn gen_set_first_vector_null(&mut self, stack: &mut Stack, v: u16) {
         if let Type::Vector(elm_tp, dep) = stack.function.tp(v).clone() {
             if dep.is_empty() {
@@ -678,6 +714,8 @@ impl State {
                     && *value == Value::Null
                 {
                     self.gen_set_first_vector_null(stack, v);
+                } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
+                    self.gen_set_first_tuple_null(stack, v);
                 } else {
                     self.generate(value, stack, false);
                 }
@@ -685,6 +723,10 @@ impl State {
                 // Slot is below current TOS — primitive reusing a dead variable's slot.
                 // Use set_var() so the value is generated at TOS then stored at pos via OpPutX.
                 debug_assert!(pos < stack.position);
+                // Zone-1 Tuple null-init: space pre-reserved by OpReserveFrame; nothing to emit.
+                if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
+                    return;
+                }
                 // Text variables MUST be initialised with OpText (direct placement) before any
                 // OpAppendText call.  If a Text variable lands here (pos < TOS) it means
                 // assign_slots under-estimated the physical TOS at first_def: the pre-assigned
@@ -889,6 +931,14 @@ impl State {
             stack.position += 1;
             return Type::Boolean;
         }
+        // A7.1: resolve library index — prefer #native symbol, fall back to def name.
+        let native_sym = stack.data.def(op).native.clone();
+        let lib_lookup: &str = if native_sym.is_empty() {
+            &name
+        } else {
+            &native_sym
+        };
+        let lib_nr = self.library_names.get(lib_lookup).copied();
         if stack.data.def(op).is_operator() {
             let before_stack = stack.position;
             self.remember_stack(stack.position);
@@ -916,9 +966,9 @@ impl State {
                 self.add_const(&a.typedef, &parameters[param_idx], stack, before_stack);
             }
             self.op_type(op, &tps, last, code, stack)
-        } else if self.library_names.contains_key(&name) {
+        } else if let Some(lib_idx) = lib_nr {
             stack.add_op("OpStaticCall", self);
-            self.code_add(self.library_names[&name]);
+            self.code_add(lib_idx);
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
             }
@@ -1052,6 +1102,19 @@ impl State {
             panic!("generate_call_ref: variable is not Type::Function");
         };
         let ret_type = *ret_type;
+        // A5.6b: text-returning lambdas require the caller to pre-allocate a text work
+        // buffer (RefVar(Text) argument), which generate_call does but generate_call_ref
+        // does not. Guard against silent garbage-stack reads in debug builds.
+        #[cfg(debug_assertions)]
+        if let Type::Text(ls) = &ret_type {
+            debug_assert!(
+                ls.is_empty(),
+                "CallRef to text-returning fn-ref '{}': {} text work buffer(s) required but \
+                 not allocated by caller — see CAVEATS.md C1 Bug 2",
+                stack.function.name(v_nr),
+                ls.len()
+            );
+        }
         for arg in args {
             self.generate(arg, stack, false);
         }
@@ -1148,7 +1211,7 @@ impl State {
                         Type::Single => stack.add_op("OpVarSingle", self),
                         Type::Character => stack.add_op("OpVarCharacter", self),
                         Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
-                        Type::Text(_) => stack.add_op("OpVarText", self),
+                        Type::Text(_) => stack.add_op("OpArgText", self),
                         Type::Reference(c, _) | Type::Enum(c, true, _) => {
                             self.types
                                 .insert(self.code_pos, stack.data.def(*c).known_type);
@@ -1443,7 +1506,7 @@ impl State {
                         Type::Single => stack.add_op("OpPutSingle", self),
                         Type::Character => stack.add_op("OpPutCharacter", self),
                         Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
-                        Type::Text(_) => stack.add_op("OpAppendText", self),
+                        Type::Text(_) => stack.add_op("OpPutText", self),
                         Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                             stack.add_op("OpPutRef", self);
                         }

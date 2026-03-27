@@ -498,6 +498,15 @@ impl State {
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = data.def(d_nr).code_position;
         self.def_pos = self.code_pos;
+        // Fix #88 (parity): push a synthetic CallFrame for the entry function so that
+        // stack_trace() returns the same frame count as execute_argv.
+        self.call_stack.push(super::CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 0,
+            line: 0,
+        });
         // Write the return address of the main function but do not override the record size.
         self.stack_pos = 4;
         self.put_stack(u32::MAX);
@@ -947,6 +956,12 @@ impl State {
                 } else {
                     return format!("ref({},{},{})", val.store_nr, val.rec, val.pos);
                 };
+                // Guard: don't access freed stores (OpFreeRef may have already run).
+                if (val.store_nr as usize) < self.database.allocations.len()
+                    && self.database.allocations[val.store_nr as usize].free
+                {
+                    return format!("ref({},{},{})=<freed>", val.store_nr, val.rec, val.pos);
+                }
                 let mut res = format!("ref({},{},{})=", val.store_nr, val.rec, val.pos);
                 self.database.show(&mut res, &val, known, false);
                 res
@@ -971,11 +986,17 @@ pub(super) fn execute_log_impl(
     // Set up parallel context so n_parallel_for can access bytecode/library.
     let data_ptr = std::ptr::from_ref::<crate::data::Data>(data);
     state.data_ptr = data_ptr;
+    let stk_lib_nr = state
+        .library_names
+        .get("n_stack_trace")
+        .copied()
+        .unwrap_or(u16::MAX);
     state.database.parallel_ctx = Some(Box::new(super::ParallelCtx {
         data: data_ptr,
         bytecode: &raw const state.bytecode,
         text_code: &raw const state.text_code,
         library: &raw const state.library,
+        stack_trace_lib_nr: stk_lib_nr,
     }));
 
     // If logging is suppressed for this function, fall back to silent execution.

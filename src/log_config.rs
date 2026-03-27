@@ -116,6 +116,12 @@ pub struct LogConfig {
     /// Enable with `LOFT_LOG=all_fns` to see the complete bytecode including
     /// built-in operators and standard-library helpers.
     pub show_all_functions: bool,
+    /// Print scope-analysis diagnostics to stderr: which Reference variables are freed
+    /// or skipped by `get_free_vars`, and any "orphaned" vars whose scope is not in the
+    /// cleanup chain.  Enable with `LOFT_LOG=scope_debug`.
+    /// This field is informational; `scopes.rs` reads `LOFT_LOG` directly so it works
+    /// even in test runs that don't construct a `LogConfig`.
+    pub scope_debug: bool,
 }
 
 impl LogConfig {
@@ -135,6 +141,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -152,6 +159,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -169,6 +177,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -187,6 +196,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -204,6 +214,7 @@ impl LogConfig {
             check_bridging: true,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -221,6 +232,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -238,6 +250,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: false,
+            scope_debug: false,
         }
     }
 
@@ -258,6 +271,31 @@ impl LogConfig {
             check_bridging: false,
             show_variables: true,
             show_all_functions: false,
+            scope_debug: false,
+        }
+    }
+
+    /// Print scope-analysis diagnostics to stderr: freed/skipped Reference vars and
+    /// any "orphaned" vars whose scope is unreachable from function-exit cleanup.
+    ///
+    /// Use `LOFT_LOG=scope_debug` to activate.  Output goes to stderr so it appears
+    /// in `cargo test` output even when the dump file is suppressed.
+    /// The `scopes.rs` module reads `LOFT_LOG` directly, so this preset is
+    /// informational — you do not need to construct a `LogConfig` to enable the trace.
+    #[must_use]
+    pub fn scope_debug() -> Self {
+        Self {
+            phases: LogPhase::static_only(),
+            show_functions: None,
+            trace_opcodes: None,
+            trace_tail: None,
+            annotate_slots: false,
+            snapshot_opcodes: None,
+            snapshot_window: 0,
+            check_bridging: false,
+            show_variables: true,
+            show_all_functions: false,
+            scope_debug: true,
         }
     }
 
@@ -280,6 +318,7 @@ impl LogConfig {
             check_bridging: false,
             show_variables: false,
             show_all_functions: true,
+            scope_debug: false,
         }
     }
 
@@ -298,6 +337,7 @@ impl LogConfig {
     /// | `fn:<name>` | [`Self::function`] |
     /// | `variables` | [`Self::variables`] |
     /// | `all_fns` | [`Self::all_fns`] — bytecode of every function including `default/` |
+    /// | `scope_debug` | [`Self::scope_debug`] — scope-analysis diagnostics to stderr |
     ///
     /// Falls back to [`Self::full`] when the variable is absent or unrecognised.
     #[must_use]
@@ -309,6 +349,7 @@ impl LogConfig {
             Ok("ref_debug") => Self::ref_debug(),
             Ok("bridging") => Self::bridging(),
             Ok("variables") => Self::variables(),
+            Ok("scope_debug") => Self::scope_debug(),
             Ok(s) if s.starts_with("crash_tail") => {
                 let n = s
                     .trim_start_matches("crash_tail")

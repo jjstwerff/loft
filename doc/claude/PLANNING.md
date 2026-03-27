@@ -56,7 +56,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
-  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(deferred to 1.1+)*
+  - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(O1 deferred indefinitely — opcode table full; O2–O7 deferred to 1.1+)*
 - [H — HTTP / Web Services](#h--http--web-services)
 - [R — Repository](#r--repository)
 - [W — Web IDE](#w--web-ide)
@@ -75,7 +75,7 @@ in parallel.
 **Remaining for 0.8.2:** *(none — all items completed or deferred)*
 
 **Deferred from 0.8.2 (too complex / disruptive for stability):**
-- **O1** — Superinstruction peephole rewriting pass — deferred to 1.1+.
+- **O1** — Superinstruction peephole rewriting pass — deferred indefinitely (opcode table is full: 254/256 used; adding superinstructions would require an opcode-space redesign).
 - **A12** — Lazy work-variable initialization — deferred to 1.1+ (also blocked by Issues 68–70).
 
 ---
@@ -164,7 +164,7 @@ HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tool
 - **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
 
 **Deferred from 0.9.0:**
-- O1 (superinstruction merging) — Too complex and disruptive for stability; deferred to 1.1+.
+- O1 (superinstruction merging) — Deferred indefinitely; the opcode table is full (254/256 used) and adding superinstructions requires an opcode-space redesign first.
 - A12 (lazy work-variable init) — Too complex and disruptive; also blocked by Issues 68–70; deferred to 1.1+.
 - A5 (closure capture) — Depends on P1; very high effort; 1.1+.
 - A7 (native extension libraries) — Moved to 0.9.0.
@@ -420,6 +420,16 @@ the recompile overhead that caching was designed to address)
 - **T1.6** — *(completed 0.8.3)* SC-8: `check_ref_mutations` emits WARNING (not error) for `RefVar(Tuple)` params never written; `find_written_vars` recognises `TuplePut`.
 - **T1.7** — *(completed 0.8.3)* SC-7: `Type::Integer` gains a `not_null: bool` third field; `parse_type` accepts `not null` suffix; null assigned to a `not null` tuple element is a compile error.
 
+- **T1.8** — Tuple function return convention + text elements (C20).
+  Two sub-issues remain after T1.1–T1.7:
+
+  **T1.8a — Function return convention:** A function declared `-> (A, B)` must write its return value directly into the caller’s pre-allocated slot.  This requires (1) codegen to allocate the tuple on the caller’s stack before the call; (2) a `ReturnTuple` IR variant; (3) `OpReturnTuple(size)` that copies from the callee stack to the pre-allocated slot.
+  
+  **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
+
+  **Effort:** Medium  
+  **Target:** 1.1+
+
 **Effort:** Very High
 **Target:** 1.1+
 
@@ -461,7 +471,12 @@ the recompile overhead that caching was designed to address)
   helper calls between yields.
 
 - **CO1.4** — *(completed 0.8.3)* `yield from sub_gen` parsed and desugared to
-  advance-loop + yield forwarding.  Test `#[ignore]` pending slot-assignment fix.
+  advance-loop + yield forwarding.
+
+  **CO1.4-fix** — *(completed)* The slot-assignment regression (C21) was resolved
+  by the two-zone slot redesign (S17/S18): the `__yf_sub` coroutine handle and
+  inner loop temporaries no longer overlap.  Test `coroutine_yield_from` passes
+  without `#[ignore]`.
 - **CO1.5** — *(completed 0.8.3)* `for item in generator` integration + `e#remove` rejection.
 - **CO1.3e** — *(completed 0.8.3)* Nested yield verified — helper call between yields.
 
@@ -586,13 +601,31 @@ the existing OpFreeRef scope-exit logic in get_free_vars.  No new code needed.
 Per-field text/reference cleanup inside the record is pending — only matters when
 text captures become testable.
 
+**Phase 6 — Mutable capture + text capture** (C1 remaining, tracked as A5.6):
+Two remaining restrictions after A5.1–A5.5:
+
+**A5.6a — Mutable capture:** A captured variable used as the target of `+= / -=`
+causes `generate_set` to panic at "self-reference in SetRef target".  The closure
+record’s field must be treated as an `OpVarRef`-relative write target rather than a
+plain slot write.  Requires a new `SetClosureField(field_idx)` IR variant emitted
+by `parse_assign` when the LHS resolves to a captured variable.
+
+**A5.6b — Text capture:** The per-field text cleanup note in Phase 5 is not yet
+implemented.  When a text variable is captured, the closure record holds a
+`Type::Text` field; `get_free_vars` must emit `OpFreeRef` for that field at the
+point where the closure record itself goes out of scope.  Without this, text memory
+leaks in debug mode (assertion fires) and is double-freed in release.
+
+**Effort:** Medium  
+**Target:** 1.1+
+
 **Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
 **Depends on:** P1 (done)
 **Target:** 0.8.3
 
 ---
 
-### A7  Native extension libraries
+### A7  Native extension libraries *(completed 0.8.3)*
 **Sources:** [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2
 **Severity:** Low — core language and stdlib cover most use cases; native extensions target
 specialised domains (graphics, audio, database drivers) that cannot be expressed in loft
@@ -821,10 +854,72 @@ A10 field iteration test now passes.
 
 ---
 
+### L7  Non-zero exit code on parse/runtime errors
+**Sources:** CAVEATS.md C6, `src/main.rs`, `src/diagnostics.rs`
+**Severity:** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
+**Description:** Two issues in `src/main.rs`:
+
+1. **Parse/compile error path (line 343):** The diagnostic check `if !p.diagnostics.is_empty()` exits with code 1 whenever any diagnostic is present, including warnings-only programs. This is too aggressive: a program with only warnings should execute and exit 0.
+2. **Warning-only programs don't run:** Because warnings cause exit 1 at line 343, a program like `46-caveats.loft` (which has a C14 format-specifier warning) would not execute at all when invoked via the CLI — even though the interpreter test harness runs it fine (bypasses `main.rs`).
+
+**Fix path (`src/main.rs` lines 343–348):**
+```rust
+// Before (exits 1 for any diagnostic including warnings):
+if !p.diagnostics.is_empty() {
+    for l in p.diagnostics.lines() {
+        println!("{l}");
+    }
+    std::process::exit(1);
+}
+```
+```rust
+// After (print all diagnostics, only exit 1 for errors or fatal):
+if !p.diagnostics.is_empty() {
+    for l in p.diagnostics.lines() {
+        println!("{l}");
+    }
+    if p.diagnostics.level() >= Level::Error {
+        std::process::exit(1);
+    }
+}
+```
+Import `Level` from `crate::diagnostics::Level` if not already in scope.
+
+**Scope check diagnostics:** `scopes::check` does not produce a separate `Diagnostics`; its errors are printed directly via the parser’s lexer and collected into `p.diagnostics`. Verify with a scope-error test.
+
+**Runtime fatal path (line 553):** `state.database.had_fatal` already correctly exits 1 on `log_fatal()`. No change needed there.
+
+**`--format-check` path:** Already exits 1 on bad format (line 106). No change needed.
+
+**Test plan:**
+1. `cargo run --bin loft -- tests/scripts/46-caveats.loft` — should print the C14 warning and then execute, printing `caveats: all ok`, exiting 0.
+2. `echo 'fn main() { x = 1' | cargo run --bin loft -- /dev/stdin` — should exit 1.
+3. Add shell-level test in `tests/integration.rs` (or a new `tests/exit_codes.rs`) that invokes the binary and checks `$?`.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
 ### L8  Warn on format specifier / type mismatch *(completed 0.8.3)*
 
 Implemented: compile-time warnings in `append_data()` for numeric format specifiers
 on text/boolean and zero-padding on text.  Tests in `38-parse-warnings.loft`.
+
+---
+
+### L9  Format specifier / type mismatch — escalate to compile error
+**Status: completed**
+Changed `Level::Warning` → `Level::Error` in `append_data()` for radix specifiers on
+text/boolean and zero-padding on text.  Tests updated in `38-parse-warnings.loft`.
+CAVEATS.md C14 closed.
+
+---
+
+### L10  `while` loop syntax sugar
+**Status: completed**
+Added `while` keyword to the lexer and `parse_while()` in `expressions.rs`.
+Desugars to `v_loop([if !cond { break }, body])`.  Tests in `46-caveats.loft`.
+CAVEATS.md C11 closed.
 
 ---
 
@@ -950,6 +1045,175 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
+### S19  Fix #85: struct-enum locals not freed in debug mode
+**Sources:** PROBLEMS.md #85, CAVEATS.md C16
+**Severity:** Low in production (no assertion), critical in debug builds (SIGABRT).
+**Description:** `scopes.rs::free_vars()` emits `OpFreeRef` for plain struct local variables but not for struct-enum locals.  In debug builds, the store's allocation assert fires at scope exit because the record is still live.
+**Fix path:**
+1. In `get_free_vars` (or equivalent), add a branch for `Type::Named(_, _, _)` that is a struct-enum variant — emit `OpFreeRef` exactly as is done for plain structs.
+2. Regression test: declare a local struct-enum variable inside a `for` or `if` body; verify no assertion fire in debug, value correct in release.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S20  Fix #91: init(expr) circular dependency silently accepted
+**Sources:** PROBLEMS.md #91, CAVEATS.md C18
+**Severity:** Medium — silent undefined behaviour at runtime when two store fields form a mutual initialisation cycle.
+**Description:** The `init(expr)` attribute on struct fields is evaluated at record creation time.  If field A's init expr reads field B and field B's init expr reads field A, the interpreter reads uninitialised memory.  No cycle check is performed.
+**Fix path:**
+1. After all struct field defs are parsed, build a dependency graph: edge A→B if field A's init expr contains a read of field B.
+2. DFS cycle detection over the graph; emit a compile error naming the cycle.
+3. Test: two mutually-referencing `init(...)` fields produce a clear error; acyclic chains are unaffected.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S21  Fix #92: stack_trace() silent empty in parallel workers
+**Sources:** PROBLEMS.md #92, CAVEATS.md C17
+**Severity:** Medium — debugging parallel code is significantly harder without stack traces.
+**Description:** `stack_trace()` reads `state.data_ptr` to walk the call stack.  In parallel workers spawned by `par(...)`, `execute_at` (and `execute_at_ref`) entry points do not set `data_ptr` before dispatch, so the pointer is null and `stack_trace()` returns an empty vec.
+**Fix path:**
+1. In `execute_at` and `execute_at_ref` in `src/state/mod.rs`, set `self.data_ptr = data as *const Data;` (or equivalent) immediately before the dispatch call, mirroring what the single-threaded `execute` path does.
+2. Regression test: call `stack_trace()` inside a `par(...)` worker body; assert the returned vec is non-empty and contains the worker function name.
+**Effort:** Small
+**Target:** 0.9.0
+
+---
+
+### S22  Fix parallel worker auto-lock in release builds
+**Sources:** SAFE.md § P1-R1, CAVEATS.md C22
+**Severity:** Medium — release builds silently return wrong results when a worker writes to a `const` argument.
+**Description:** The auto-lock insertion (`n_set_store_lock`) for `const` worker arguments is guarded by `#[cfg(debug_assertions)]` in `parser/expressions.rs`.  Release builds never lock the input stores, so a buggy worker that accidentally mutates a `const` argument silently discards the write into a 256-byte dummy buffer and continues with stale data.
+**Fix path:**
+1. Remove the `#[cfg(debug_assertions)]` guards from the two auto-lock insertion sites in `parse_code` and `expression` that emit `n_set_store_lock` for `const` parameters and local const variables.
+2. In `addr_mut` (`store.rs`), change the release-build dummy-buffer path to `panic!("write to locked store")` — no legitimate code path should hit it once auto-lock is unconditional.
+3. Add an integration test that runs a `par()` loop whose worker attempts to push to its `const` input in release mode; assert the panic fires with a clear message.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+### S23  Compiler + runtime: reject `yield` inside `par()` body
+**Sources:** SAFE.md § P2-R6, CAVEATS.md C25, COROUTINE.md § SC-CO-4
+**Severity:** Medium — `yield` or generator calls inside `par(...)` produce out-of-bounds panics or silent wrong results depending on frame-index collision.
+**Description:** No compiler check prevents `yield` or calls to `iterator<T>`-returning functions inside `par(...)` bodies.  Worker `State` instances hold only a null-sentinel `coroutines` table; a DbRef produced by the main thread indexes into it incorrectly.
+**Fix path:**
+1. In `src/parser/collections.rs` (parallel-for desugaring) and wherever `par(...)` body parsing begins, add an `inside_par_body: bool` flag to the parser context.
+2. In `parse_yield` and any site that resolves a function call returning `iterator<T>`, emit a compile error when `inside_par_body` is true.
+3. In `coroutine_next` (`state/mod.rs`), add a bounds check: `if idx >= self.coroutines.len() { panic!("iterator<T> DbRef out of range in worker") }`.  This defence-in-depth guard catches the case where the compiler check is missing.
+4. Test: a loft program that calls a generator inside `par(...)` produces a compile error; one that bypasses the check triggers the runtime guard in debug.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+### S24  Compiler + runtime: reject `e#remove` on generator iterator
+**Sources:** SAFE.md § P2-R9, CAVEATS.md C26, COROUTINE.md § SC-CO-11
+**Severity:** Medium — release builds silently corrupt a real store record; debug builds panic with an uninformative out-of-bounds message.
+**Description:** `e#remove` on a generator-typed loop variable passes a DbRef with `store_nr == u16::MAX` (the coroutine sentinel) to `database::remove`.  In debug `u16::MAX` overflows `allocations`; in release `u16::MAX % len` selects a real store and the `rec` (frame index ≈ 1–2) deletes a real record.
+**Fix path:**
+1. In `src/parser/fields.rs` (or wherever `e#remove` is resolved), check whether the loop's collection type is `iterator<T>` (backed by `OpCoroutineCreate`).  If so, emit: `error: e#remove is not valid on a generator iterator`.
+2. In `database::remove` (or the calling opcode), add: `if db.store_nr == COROUTINE_STORE { debug_assert!(false, "remove on coroutine DbRef"); return; }`.  The `return` prevents release-build corruption even if the compiler check is missing.
+3. Test: `e#remove` on a generator iterator is a compile error; a debug-only test verifies the runtime guard fires if the check is bypassed.
+**Effort:** Extra Small
+**Target:** 0.8.3
+
+---
+
+### S25  CO1.3d — coroutine text serialisation (must land atomically)
+**Sources:** SAFE.md § P2-R1/R2/R3, CAVEATS.md C23/C24, COROUTINE.md § CO1.3d/SC-CO-1/SC-CO-8/SC-CO-10
+**Severity:** Critical (P2-R1 use-after-free) / High (P2-R2 memory leak) — both caused by `text_owned` being permanently empty.
+**Description:** `CoroutineFrame.text_owned` is designed to hold owned copies of all dynamic-text locals across suspension.  The serialisation path (`serialise_text_slots`) is specified in COROUTINE.md but not implemented.  Until it lands, text arguments dangle (C23) and text locals leak (C24).  **Must land atomically** — implementing `free_dynamic_str` at yield without simultaneously implementing the pointer-patch at resume and the String drain at exhaustion introduces an explicit use-after-free.
+**Fix path:**
+
+#### S25.1 — `serialise_text_slots` at coroutine create + yield
+1. Implement `serialise_text_slots(stack_bytes, text_slot_layout, stores) -> Vec<(u32, String)>` per COROUTINE.md spec:
+   - Walk each text slot in `stack_bytes` by (offset, Type) from the function definition.
+   - Skip null Str and static Str (ptr inside `text_code`).
+   - Call `s.str().to_owned()` to make an owned `String`; call `free_dynamic_str` on the original.
+   - Patch `stack_bytes` with a Str pointing to the owned buffer; record `(offset, String)` in `text_owned`.
+2. Call `serialise_text_slots` from `coroutine_create` (text arg slots) and `coroutine_yield` (all text locals).
+3. Add `debug_assert!(def.text_slot_count == 0, …)` to `coroutine_yield` until S25.1 is complete (M8-b from SAFE.md).
+
+#### S25.2 — Pointer-patch on resume + String drain on exhaustion
+1. In `coroutine_next`: before copying `stack_bytes` to live stack, write updated `Str` pointers from `text_owned` buffers into the bytes (M6-b from SAFE.md).
+2. In `coroutine_return`: drain `text_owned` with `for (_, s) in frame.text_owned.drain(..) { drop(s); }` before `stack_bytes.clear()` (M7-a from SAFE.md).
+3. Add a leak-detection test: generator with text local, yields once, loop broken — verify no allocation escapes under Miri or similar.
+
+**Effort:** Large (S25.1 + S25.2 combined; must not be split across releases)
+**Target:** 0.8.3
+
+---
+
+### S26  `OpFreeCoroutine` at for-loop exit
+**Sources:** SAFE.md § P2-R7, COROUTINE.md § Phase 1
+**Severity:** Low — memory growth; `State::coroutines` accumulates one `Box<CoroutineFrame>` per generator invocation forever.
+**Description:** `coroutine_return` marks the frame `Exhausted` but never sets the slot to `None`.  The `free_coroutine(idx)` helper is designed but never called.  Programs that create many generators in a loop grow `State::coroutines` without bound.
+**Fix path:**
+1. In the `for … in gen { }` desugaring codegen, emit `OpFreeCoroutine(gen_slot)` at loop exit (both exhaustion and `break`).
+2. Implement `OpFreeCoroutine` in `fill.rs`: call `free_coroutine(idx)` which sets `coroutines[idx] = None`.
+3. Optionally, lazily free in `coroutine_exhausted` when it first observes `Exhausted` status (covers the `explicit-advance` API path).
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+### S27  Coroutine `text_positions` save/restore across yield/resume
+**Sources:** SAFE.md § P2-R4
+**Severity:** Medium (debug-only) — `text_positions` BTreeSet becomes inconsistent across yield/resume, causing false double-free misses and masking missing `OpFreeText` for unrelated code.
+**Description:** `coroutine_yield` rewinds `stack_pos` but does not remove text-local entries from `State::text_positions`.  The orphaned entries interfere with the debug detector for unrelated text frees at the same stack positions.
+**Fix path:**
+1. In `coroutine_yield` (debug path): collect `text_positions` entries in `[base, locals_end)`, remove them, store in `frame.saved_text_positions: BTreeSet<u32>`.
+2. In `coroutine_next` (debug path): re-insert `frame.saved_text_positions` and clear it.
+3. In `coroutine_return` (debug path): clear `frame.saved_text_positions` without reinserting.
+**Effort:** Small (debug-only path)
+**Target:** 0.8.3
+
+---
+
+### S28  Debug generation-counter for stale DbRef detection in coroutines
+**Sources:** SAFE.md § P2-R8, COROUTINE.md § SC-CO-2
+**Severity:** Medium — a generator resuming after its backing record or store was freed silently reads/writes wrong data with no diagnostic.
+**Description:** A `DbRef` live in a generator local at a `yield` point can refer to memory freed or resized by the consumer between iterations.  Worse than ordinary functions: the suspension window spans many `next()` calls.
+**Fix path:**
+1. Add `generation: u32` to `Store`; increment on every `claim`, `delete`, and `resize`.
+2. When `coroutine_create` / `coroutine_yield` saves a `DbRef` to `stack_bytes`, also record `(store_nr, generation_at_save)` in a new `frame.store_generations: Vec<(u16, u32)>`.
+3. At `coroutine_next`, verify each saved store's current generation matches; emit a runtime diagnostic on mismatch.
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+### S29  Parallel store hardening: `thread::scope` + LIFO assert + skip claims
+**Sources:** SAFE.md § P1-R2/P1-R3/P1-R4
+**Severity:** Low/Medium — three independent low-effort fixes for parallel store infrastructure.
+**Description:**
+- **P1-R2:** `run_parallel_direct` uses a raw `*mut u8` with a lifetime invariant enforced only by convention; `thread::spawn` + manual join does not give compile-time guarantees.
+- **P1-R3:** `clone_locked` copies `self.claims` (all live record offsets) into worker clones that never call `validate()` — wasted O(records) allocation per worker.
+- **P1-R4:** `free_named` relies on LIFO store freeing order; out-of-order frees stall `max` and may cause subsequent `database()` to reuse a live slot.
+**Fix path:**
+1. Replace `thread::spawn` + manual join in `run_parallel_direct` with `std::thread::scope` (Rust 1.63+) to give compile-time lifetime enforcement over `out_ptr`.
+2. Add `clone_locked_for_worker` on `Store` that omits `claims: HashSet::new()`; use it in `Stores::clone_for_worker`.
+3. Add `debug_assert!(store_nr == self.max - 1, "free() must be called in LIFO order")` in `free_named`.
+**Effort:** Small (three independent one-function changes)
+**Target:** 0.8.3
+
+---
+
+### S30  `WorkerStores` newtype for type-level non-aliasing
+**Sources:** SAFE.md § P1-R5
+**Severity:** Low — no current bug; guards against future extensions to the parallel dispatch that could silently allow workers to hold main-thread `DbRef` values.
+**Description:** The architecture relies on convention (workers receive cloned stores and may not hold main-thread `DbRef`s) rather than Rust types.  A future refactor extending worker dispatch could silently break the invariant.
+**Fix path:**
+1. Introduce `WorkerStores(Stores)` newtype, constructible only by `clone_for_worker` (private inner field).
+2. Worker closures receive `WorkerStores`; the type is `Send` but not `Sync`, preventing cross-thread sharing.
+3. Long-term: add `origin: StoreOrigin` tag to `DbRef` and a debug assert in `copy_from_worker` that all result DbRefs have worker origin, not main-thread origin.
+**Effort:** Medium
+**Depends:** S29 (clean parallel store state first)
+**Target:** 0.8.3
+
 ---
 
 ## N — Native Codegen
@@ -960,12 +1224,141 @@ Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### O1  Superinstruction merging
-**Status: deferred to 1.1+ — too complex and disruptive for current release stability**
-**Sources:** PERFORMANCE.md § P1
-**Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes 240–245. Six new entries added to the `OPERATORS` array in `src/fill.rs`. Operands encoded in the same byte count as the replaced sequence, so branch targets need no relocation.
-**Expected gain:** 2–4× on tight integer loops; benefits every loop in the interpreter.
+### N8  Native codegen: extend to tuples, coroutines, and generics
+**Sources:** CAVEATS.md C19, NATIVE.md, TUPLES.md, COROUTINE.md
+**Severity:** Medium — programs using tuples, coroutines, or `maybe<T>` cannot be compiled with `--native`.
+**Description:** The native (`--native`) code generator currently falls back to the interpreter for three feature areas (see CAVEATS.md C19): tuples, coroutines, and generic/maybe types.  Each area is split into independently shippable sub-items below.
+
+---
+
+#### N8a.1 — Native: `Type::Tuple` dispatch in code generator
+**Effort:** Small · **Depends:** T1
+Add `Type::Tuple` to all `output_type`, `output_init`, `output_set`, and variable-declaration paths in `src/generation/`.  Until N8a.2 is done, functions that use tuples should be gracefully skipped (added to `SCRIPTS_NATIVE_SKIP`).
+**Tests:** compile without errors for files that don’t use tuple operations; skip gate for `50-tuples.loft`.
+
+#### N8a.2 — Native: tuple construction and element access
+**Effort:** Small · **Depends:** N8a.1
+Emit a tuple literal as consecutive scalar assignments onto the Rust stack frame.  Emit element reads (`.0`, `.1`, …) as direct field reads from the emitted Rust struct/tuple.  Emit `OpPutInt`/`OpPutText` analogs for element writes.
+**Tests:** `tests/scripts/50-tuples.loft` passes in `--native` mode for construction and read sections; element assignment and deconstruction covered by sub-tests.
+
+#### N8a.3 — Native: tuple function return (multi-value Rust struct)
+**Effort:** Medium · **Depends:** N8a.2
+Tuple-returning functions emit a generated Rust struct (e.g. `struct Ret_foo { f0: i64, f1: String }`) as the return type.  Caller deconstructs the struct into local slots.  LHS deconstruction (`(a, b) = foo()`) handled in the call site template.
+**Tests:** `50-tuples.loft` fully passes in `--native` mode (no `SCRIPTS_NATIVE_SKIP` entry).
+
+---
+
+#### N8b.1 — Native: coroutine state-machine transform design
+**Effort:** High · **Depends:** CO1
+Design and document the Rust enum state machine that represents a suspended coroutine.  Each `yield` point becomes a variant that stores all live locals.  Write the state-machine emitter skeleton in `src/generation/`; no working coroutines yet, but the infrastructure compiles.  Document the design in NATIVE.md § N8b.
+**Note:** Using `genawaiter` or `async-std` generators is an alternative; evaluate before committing to the hand-written state machine approach.
+
+#### N8b.2 — Native: basic coroutine emission (yield/resume cycle)
+**Effort:** High · **Depends:** N8b.1
+Emit `OpCoroutineCreate`, `OpCoroutineNext`, `OpYield`, and `OpCoroutineReturn` using the state machine from N8b.1.  Cover coroutines with integer/float/boolean yields and no text locals (text serialisation adds complexity, tackled as a follow-on).
+**Tests:** `tests/scripts/51-coroutines.loft` basic sections pass in `--native`; text-yield sections remain skipped.
+
+#### N8b.3 — Native: `yield from` delegation in native coroutine
+**Effort:** Medium · **Depends:** N8b.2
+Extend the state machine emitter to handle `yield from inner()` — the sub-generator loop is inlined into the outer state machine as an additional state range.  Requires careful handling of the sub-generator’s exhaustion sentinel.
+**Tests:** `51-coroutines.loft` fully passes in `--native` mode (yield-from sections un-skipped).
+
+---
+
+#### N8c.1 — Native: audit which generic instantiations fail and why
+**Effort:** Small · **Depends:** none
+Generic functions are monomorphized at parse time (`try_generic_instantiation` in
+`src/parser/mod.rs`); each call site produces a concrete `DefType::Function` named
+`t_<len><type>_<name>` (e.g. `t_4text_identity`).  Native codegen sees only concrete
+functions.  The P5 skip is because some monomorphized instantiations produce compile
+errors, not because generics are unsupported at codegen level.
+
+Audit procedure:
+1. Temporarily remove `"48-generics.loft"` from `SCRIPTS_NATIVE_SKIP`.
+2. Run `cargo test --test native 2>&1` and capture the exact compile errors.
+3. Inspect the generated `.rs` file for the failing `t_4text_*` functions.
+4. Record findings in NATIVE.md § N8c.1 before writing N8c.2.
+
+Expected: text-returning instantiations lack the `Str::new()` return wrapping or have a text-parameter type mismatch.  Full design in NATIVE.md § N8c.
+**Output:** Exact error message + root-cause note in NATIVE.md § N8c.1.
+
+#### N8c.2 — Native: fix failing monomorphised instantiations
+**Effort:** Small · **Depends:** N8c.1
+Apply the fix identified in N8c.1.  If the issue is text-return wrapping: verify
+`output_function()` applies the `Str::new()` path for all `Type::Text` return types
+including `t_*` functions.  If parameter type: fix the call-site argument emission for
+text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
+`SCRIPTS_NATIVE_SKIP`; confirm `cargo test --test native` passes.
+**Tests:** `48-generics.loft` passes in `--native` mode; all four identity instantiations
+(integer, float, text, boolean) and both pick_second instantiations produce correct output.
+
+---
+
+**Overall effort:** N8a Small+Small+Medium; N8b High+High+Medium; N8c Small+Small
+**Depends:** T1 (N8a), CO1 (N8b)
+**Target:** 0.8.3
+
+---
+
+### S31  Native harness: pass `--extern` for optional feature deps
+**Sources:** CAVEATS.md C27
+**Severity:** Medium — `rand`, `rand_seed`, `rand_indices` and any future optional-dep functions are silently untested in native mode.
+**Description:** The native test harness in `tests/native.rs` compiles generated `.rs` files by invoking `rustc` directly with `--extern loft=libloft.rlib`.  Optional feature dependencies (`rand_core`, `rand_pcg`) are not passed as `--extern` flags, so any generated code that uses the `random` feature fails to compile with `E0433: use of undeclared crate or module 'rand_core'`.  `15-random.loft` and `21-random.loft` are therefore in `SCRIPTS_NATIVE_SKIP` / `NATIVE_SKIP`.
+
+**Fix path:**
+1. In `find_loft_rlib()` (`tests/native.rs`), after locating the `deps/` directory, scan it for `.rlib` files matching the optional deps listed in `Cargo.toml` (`rand_core`, `rand_pcg`, `png`, etc.).
+2. Build a `Vec<(String, PathBuf)>` of `(crate_name, rlib_path)` pairs.
+3. Pass each as an additional `--extern <crate_name>=<path>` argument in the `rustc` invocations inside `run_native_test`.
+4. Remove `"15-random.loft"` from `SCRIPTS_NATIVE_SKIP` and `"21-random.loft"` from `NATIVE_SKIP`.
+5. Confirm `cargo test --test native` passes for both random files.
+
+**Tests:** `15-random.loft` and `21-random.loft` pass in native mode.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+### S33  Native: fix `14-image.loft` PNG width=0 in CI
+**Sources:** CAVEATS.md C29
+**Severity:** Low — PNG functionality is covered by the interpreter tests; only the native CI path is uncovered.
+**Description:** The native binary for `tests/docs/14-image.loft` panics in CI (Ubuntu, macOS, Windows) with `width=0`.  Passes locally.  `stores.get_png()` is called with the relative path `"tests/example/map.png"` but silently leaves width=0, suggesting either a working-directory mismatch in CI or a codegen issue where the `get_png` return value is not handled correctly in native mode.
+
+**Fix path:**
+1. Print the working directory inside the compiled binary to verify it matches the repo root when run by the native test harness.
+2. Check whether `stores.get_png()` returns an error code that the interpreter checks but native codegen ignores (look for a mismatch between the bytecode `get_png` call and the native emission in `dispatch.rs`).
+3. Fix the root cause (cwd, ignored return, or path mismatch) and remove `"14-image.loft"` from `NATIVE_SKIP`.
+4. Confirm `cargo test --test native native_dir` passes in CI.
+
+**Tests:** `14-image.loft` passes in `native_dir` in CI on all platforms.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+### S32  Fix slot conflict in `20-binary.loft` (`rv` / `_read_34`)
+**Sources:** CAVEATS.md C28
+**Severity:** Medium — a binary file I/O test is excluded from both interpreter and native CI.
+**Description:** The two-zone slot allocator assigns overlapping slots `[820, 832)` to both `rv` (live `[1016, 1110]`) and `_read_34` (live `[1008, 1109]`) in `n_main` of `tests/scripts/20-binary.loft`.  The live ranges overlap, so the slot validator panics in debug builds.  `20-binary.loft` is in `ignored_scripts()` (wrap), `SCRIPTS_NATIVE_SKIP` (native scripts), and the `binary` test is `#[ignore]`.
+
+**Fix path:**
+1. Run `LOFT_LOG=variables cargo test --test wrap binary 2>&1` to dump the full variable table for `n_main`.
+2. Identify why `rv` and `_read_34` are assigned the same slot despite overlapping live ranges.  Likely cause: one is a short-lived `_read_*` temp in an inner scope that the zone-2 allocator reuses too aggressively when another variable with a long live range occupies the same zone-2 slot.
+3. Apply the minimal fix to the zone-2 reuse logic in `src/variables/slots.rs` to prevent the overlap.
+4. Remove `"20-binary.loft"` from `ignored_scripts()` and `SCRIPTS_NATIVE_SKIP`; remove the manual `#[ignore]` from the `binary` test; re-enable.
+5. Run `make ci` to confirm no regressions.
+
+**Tests:** `binary` and `loft_suite` (wrap) pass; `20-binary.loft` passes in native mode.
 **Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+### O1  Superinstruction merging
+**Status: deferred indefinitely — opcode table is full (254/256 used)**
+**Sources:** PERFORMANCE.md § P1
+**Description:** Peephole pass in `src/compile.rs` merges common 4-opcode sequences (var/var/op/put) into single opcodes.  Originally targeted the 16 "free" slots above opcode 240, but those slots are now taken (T1.8b `OpPutText` + prior additions).  With 254/256 opcodes used, no slots remain for superinstructions without a redesign of the opcode space (e.g. a two-byte opcode escape or a dedicated superinstruction table).
+**Expected gain:** 2–4× on tight integer loops — the gain remains attractive but the prerequisite work (opcode-space redesign) is High effort and blocks everything else.
+**Effort:** Medium for the peephole pass itself; High to first free up opcode slots.
 **Target:** 1.1+
 
 ---
@@ -1004,12 +1397,49 @@ Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### O7  wasm: pre-allocate string buffers in format path
-**Sources:** PERFORMANCE.md § W1
-**Description:** Pre-allocate the result string with `String::with_capacity` before format-string loops in generated wasm code, and use `push_str` instead of `+` to avoid intermediate allocations through wasm's linear-memory allocator.
-**Expected gain:** Reduces wasm/native string-building gap from 2× to <1.3×.
+### O7  WASM: pre-allocate format-string buffers in native/wasm codegen *(completed 0.8.3)*
+**Sources:** PERFORMANCE.md § W1 (Design: W1 — wasm string representation)
+**Expected gain:** Reduces wasm/native string-building gap from 2.06× to <1.3× on benchmark 07.
+**Background:** Each format string in loft generates a sequence of bytecodes:
+1. `OpClearStackText` — resets the work-text variable to `""`
+2. N × `Op*Format*` calls — append each segment and value
+3. The completed string is used (moved or assigned)
+
+In native/wasm codegen, `OpClearStackText` emits `var_x.clear()` (`src/generation/text.rs::clear_stack_text`).  Each subsequent `OpAppendText` emits `var_x += &*(expr)`, which calls `String::push_str` internally and triggers a reallocation whenever capacity is exceeded.  In the wasm linear-memory allocator each reallocation requires a potential `memory.grow`, making repeated small appends disproportionately slow.
+
+**Fix path:**
+
+**Step 1 — Profile (verify root cause):**
+Run `bench/run_bench.sh` targeting benchmark 07 with wasm build and capture a `wasmtime --profile` trace.  Confirm that `String` reallocations (calls to `wasm_bindgen::__wbindgen_malloc` or equivalent) account for the majority of the gap.  If the gap is from function-call overhead instead, revisit the approach.
+
+**Step 2 — Count format operations at codegen time:**
+In `src/generation/` the `Output` struct processes bytecodes in order.  Add a pre-scan function `count_format_ops(ops: &[Op]) -> usize` that, for a sequence starting with `OpClearStackText`, counts consecutive `Op*Format*` operations until the next non-format op.  This count is the static upper bound for the number of append calls.
+
+**Step 3 — Emit `with_capacity` in `clear_stack_text`:**
+Modify `src/generation/text.rs::clear_stack_text` to accept the pre-scanned count `n`:
+```rust
+// Before:
+write!(w, "var_{s_nr}.clear()")?;
+
+// After (when n > 1):
+// avg_element_len = 8 is a conservative estimate for mixed text/integer fields
+write!(w, "{{ let _cap = {n} * 8usize; if var_{s_nr}.capacity() < _cap {{ var_{s_nr} = String::with_capacity(_cap); }} else {{ var_{s_nr}.clear(); }} }}")?;
+```
+Use `with_capacity` only for format strings with 2+ segments; single-segment strings (just `clear()`) are unaffected.
+
+**Step 4 — Verify `append_text` uses `push_str`:**
+Confirm line 87 in `text.rs` emits `var_{s_nr} += &*(expr)`.  Rust’s `AddAssign<&str>` on `String` calls `push_str` internally so no allocation is triggered when capacity is sufficient.  No change needed here.
+
+**Step 5 — Feature-gate (optional):**
+The `with_capacity` change benefits both native and wasm builds (reducing allocations in both).  No feature gate required.  If profiling shows native is unaffected, gate behind `#[cfg(feature = "wasm")]` to keep the emitted code simple.
+
+**Step 6 — Benchmark and verify:**
+Re-run benchmark 07 wasm vs native.  Target: gap < 1.3×.  If gap persists, increase `avg_element_len` or apply the capacity hint to `OpClearText` paths as well.
+
+**Files changed:** `src/generation/text.rs` (10–20 lines), `src/generation/dispatch.rs` (pass count to `clear_stack_text`).
+
 **Effort:** Medium
-**Depends:** W1
+**Depends:** W1 (W1.9 — WASM entry point; needed to test the wasm build)
 **Target:** 0.8.3
 
 ---
@@ -1351,21 +1781,33 @@ workspace split needed before starting the Web IDE.
 
 ---
 
-### R1  Workspace split (pre-W1 only — defer until IDE work begins)
-**Description:** When W1 (WASM Foundation) is started, split the single crate into a Cargo
-workspace so `loft-core` can be compiled to both native and `cdylib` (WA1SM) targets
-without pulling CLI code into the WASM bundle:
+### R1  Add `cdylib` + `rlib` crate types for WASM compilation
+**Sources:** WASM.md § Step 1, W1.1
+**Description:** The loft interpreter must be compiled as a `cdylib` (dynamic library) to produce a `.wasm` file via `wasm-bindgen`, and as an `rlib` so the existing native tests and `cargo test` continue to work against the library API.  No workspace split is required for 0.8.3 — the binary targets (`[[bin]] loft`, `[[bin]] gendoc`) are separate compilation units and will not be included in the `cdylib` output.
+
+**Fix path:**
+
+**Step 1 — Add `[lib]` section to `Cargo.toml`:**
+```toml
+[lib]
+name = "loft"
+crate-type = ["cdylib", "rlib"]
 ```
-Cargo.toml                     (workspace root)
-loft-core/                 (all src/ except main.rs, gendoc.rs; crate-type = ["cdylib","rlib"])
-loft-cli/                  ([[bin]] loft; depends on loft-core)
-loft-gendoc/               ([[bin]] gendoc; depends on loft-core)
-ide/                           (W2+: index.html, src/*.js, sw.js, manifest.json)
-```
-This change is a **prerequisite for W1** and should happen at the same time, not before.
-For 1.0 the single-crate layout is correct and should not be changed early.
-**Effort:** Small (Cargo workspace wiring; no logic changes)
-**Depends on:** repo creation (done); gates W1
+If a `[lib]` section already exists, just add the `crate-type` line.
+
+**Step 2 — Add `src/lib.rs` if not present:**
+`src/lib.rs` should already exist and re-export the public API (`pub mod parser`, `pub mod compile`, `pub mod state`, etc.).  Verify it compiles cleanly as a library target with `cargo build --lib`.
+
+**Step 3 — Verify no `main.rs` symbols leak into the `cdylib`:**
+`cargo check --target wasm32-unknown-unknown --features wasm --no-default-features` must pass.  Any use of `std::process::exit`, `std::env::args`, or `dirs::home_dir` in `src/lib.rs`-reachable modules must be feature-gated (done in W1.3–W1.6).
+
+**Step 4 — Deferred workspace split (post-1.0):**
+A full workspace split into `loft-core / loft-cli / loft-gendoc` reduces incremental build times and isolates CLI from the library API.  This is deferred until the Web IDE (W2+) makes it necessary.  The current single-crate layout is sufficient for 0.8.3.
+
+**Verify:** `cargo check` ✔  `cargo test` ✔  `cargo check --target wasm32-unknown-unknown --features wasm --no-default-features` ✔
+
+**Effort:** Small (one `Cargo.toml` change; no logic changes)
+**Depends on:** repo creation (done)
 **Target:** 0.8.3
 
 ---
@@ -1380,7 +1822,7 @@ once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 
 ---
 
-### W1  WASM Foundation
+### W1  WASM Foundation *(W1.1–W1.13 all completed 0.8.3)*
 **Sources:** [WASM.md](WASM.md) — full design and 14-step implementation plan
 **Severity/Value:** High — nothing else in Tier W is possible without this
 **Description:** Compile the loft interpreter itself as a WASM module
@@ -1402,16 +1844,23 @@ env, and log operations through `globalThis.loftHost`.
 8. **W1.8** `src/png_store.rs`: extract `decode_into_store<R: Read>()`; WASM reads bytes via `host_read_binary` + `Cursor<Vec<u8>>`
 9. **W1.9** `src/wasm.rs`: implement `#[wasm_bindgen] fn compile_and_run(files_js: JsValue) -> JsValue`; wire parse → scope → codegen → execute → return result
 
-**Steps W1.10–W1.13 (JavaScript):** require Node.js + wasm-pack:
-10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs`
-11. **W1.11** `tests/wasm/host.mjs`: `createHost(tree, options)` wiring VirtFS to `loftHost`; `bridge.test.mjs` + `file-io.test.mjs` + `random.test.mjs`
+**Step W1.10 (JavaScript):** completed 0.8.3:
+10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs` — all 13 unit tests pass under Node.js
+
+**Step W1.11 (JavaScript):** completed 0.8.3:
+11. **W1.11** `tests/wasm/host.mjs`: `createHost(tree, options)` wiring VirtFS to `loftHost`; deterministic xoshiro128** PRNG; `bridge.test.mjs` (7 tests, skips if no pkg), `file-io.test.mjs` (14 host-level tests, no WASM needed), `random.test.mjs` (host + optional WASM level)
+
+**Step W1.12 (JavaScript):** completed 0.8.3:
+12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`; 20 unit tests in `layered-fs.test.mjs`
+
+**Step W1.13 (JavaScript):** completed 0.8.3:
 12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay, persistence); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`
-13. **W1.13** `tests/wasm/suite.mjs`: runs `tests/scripts/*.loft` through the WASM module, compares output against native reference; this is the main confidence gate
+13. **W1.13** `tests/wasm/suite.mjs`: discovers all `fn main()` loft files in `tests/scripts/` and `tests/docs/`; builds a VirtFS pre-populated with fixtures; runs each through WASM; compares output against `cargo run` native reference; skips non-deterministic tests (time, unseeded random, image); exits non-zero on failure
 
 **Host bridge API** (JS → Rust): `fs_*`, `random_*`, `time_*`, `env_*`, `log_*` functions
 on `globalThis.loftHost`. Full spec in [WASM.md](WASM.md) § Host Bridge API.
 
-**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9 and W1.10–W1.13 are medium)
+**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9–W1.13 are medium)
 **Depends on:** R1
 **Target:** 0.8.3
 

@@ -7,7 +7,7 @@
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
-#[cfg(feature = "random")]
+#[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
 use crate::ops;
 use crate::parallel::{
     WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_ref,
@@ -17,6 +17,7 @@ use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
 use std::sync::Arc;
+#[cfg(not(feature = "wasm"))]
 use std::time::SystemTime;
 
 pub const FUNCTIONS: &[(&str, Call)] = &[
@@ -73,6 +74,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_rand_seed", n_rand_seed),
     #[cfg(feature = "random")]
     ("n_rand_indices", n_rand_indices),
+    #[cfg(all(feature = "wasm", not(feature = "random")))]
+    ("n_rand", n_rand_wasm),
+    #[cfg(all(feature = "wasm", not(feature = "random")))]
+    ("n_rand_seed", n_rand_seed_wasm),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -551,6 +556,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 text_code,
                 library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },
         )
     };
@@ -639,6 +645,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 text_code,
                 library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },
             n_hidden,
         )
@@ -868,6 +875,21 @@ fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
     ops::rand_seed(v_seed);
 }
 
+/// WASM bridge: return a random integer via the JS host RNG.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+fn n_rand_wasm(stores: &mut Stores, stack: &mut DbRef) {
+    let v_hi = *stores.get::<i32>(stack);
+    let v_lo = *stores.get::<i32>(stack);
+    stores.put(stack, ops::rand_int(v_lo, v_hi));
+}
+
+/// WASM bridge: seed the JS host RNG.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+fn n_rand_seed_wasm(stores: &mut Stores, stack: &mut DbRef) {
+    let v_seed = *stores.get::<i64>(stack);
+    ops::rand_seed(v_seed);
+}
+
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector when `n <= 0` or `n` is null.
 #[cfg(feature = "random")]
@@ -911,6 +933,7 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
+#[cfg(not(feature = "wasm"))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     let millis = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -918,11 +941,24 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, millis);
 }
 
+#[cfg(feature = "wasm")]
+fn n_now(stores: &mut Stores, stack: &mut DbRef) {
+    stores.put(stack, crate::wasm::host_time_now());
+}
+
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
+#[cfg(not(feature = "wasm"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let micros = stores.start_time.elapsed().as_micros() as i64;
     stores.put(stack, micros);
+}
+
+#[cfg(feature = "wasm")]
+fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
+    let now_ms = crate::wasm::host_time_ticks();
+    let elapsed_micros = (now_ms - stores.start_time_ms) * 1000;
+    stores.put(stack, elapsed_micros);
 }
 
 /// TR1.3: Build `vector<StackFrame>` from the call-stack snapshot in Stores.
@@ -964,7 +1000,10 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         stores
             .store_mut(&vec)
             .set_int(elm.rec, elm.pos + 8, *line as i32);
-        // arguments and variables left as zero (null vectors).
+        // Explicitly zero arguments and variables so that reused (non-zeroed) store
+        // blocks don't leave garbage data that looks like a valid first_block_rec.
+        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
+        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     stores.put(stack, vec);

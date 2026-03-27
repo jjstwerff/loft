@@ -69,6 +69,9 @@ pub struct Parser {
     context: u32,
     /// Extra library directories for 'use' resolution (from --lib / --project flags)
     pub lib_dirs: Vec<String>,
+    /// A7.2: resolved paths of native shared libraries to load after `byte_code()`.
+    /// Populated during `use` processing when a package manifest contains `native`.
+    pub pending_native_libs: Vec<String>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
     /// - Define variables, try to determine their type (can become clear from later code).
@@ -264,6 +267,7 @@ impl Parser {
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),
+            pending_native_libs: Vec::new(),
             pending_imports: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
@@ -287,6 +291,11 @@ impl Parser {
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
+        // W1.9: under the `wasm` feature, check VIRT_FS before trying the real filesystem.
+        #[cfg(feature = "wasm")]
+        if let Some(content) = crate::wasm::virt_fs_get(filename) {
+            return self.parse_virtual(&content, filename, default);
+        }
         self.default = default;
         self.vars.logging = false;
         self.lexer.switch(filename);
@@ -301,6 +310,30 @@ impl Parser {
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.switch(filename);
+            self.parse_file();
+        }
+        self.diagnostics.fill(self.lexer.diagnostics());
+        self.diagnostics.is_empty()
+    }
+
+    /// W1.9: Parse `content` as if it were the file at `filename`.
+    /// Used by the WASM virtual-FS path to bypass real filesystem access.
+    #[cfg(feature = "wasm")]
+    fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
+        self.default = default;
+        self.vars.logging = false;
+        self.first_pass = true;
+        self.pending_imports.clear();
+        self.data.reset();
+        self.lambda_counter = 0;
+        self.lexer.parse_string(content, filename);
+        self.parse_file();
+        let lvl = self.lexer.diagnostics().level();
+        if lvl != Level::Error && lvl != Level::Fatal {
+            self.first_pass = false;
+            self.data.reset();
+            self.lambda_counter = 0;
+            self.lexer.parse_string(content, filename);
             self.parse_file();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
@@ -1739,6 +1772,11 @@ impl Parser {
     }
 
     fn lib_path(&mut self, id: &String) -> String {
+        // W1.9: under the `wasm` feature, check VIRT_FS before filesystem lookups.
+        #[cfg(feature = "wasm")]
+        if crate::wasm::virt_fs_get(&format!("{id}.loft")).is_some() {
+            return format!("{id}.loft");
+        }
         // - a source file, the lib directory in the project (project-supplied)
         let mut f = format!("lib/{id}.loft");
         if !std::path::Path::new(&f).exists() {
@@ -1768,8 +1806,8 @@ impl Parser {
         if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
             f = format!("{base_dir}/lib/{id}.loft");
         }
-        // - a directory with the same name of the current script
-        if !std::path::Path::new(&f).exists() {
+        // - a directory with the same name of the current script (strip the .loft suffix)
+        if !std::path::Path::new(&f).exists() && cur_script.len() >= 5 {
             f = format!("{}/{id}.loft", &cur_script[0..cur_script.len() - 5]);
         }
         // - extra library directories from --lib / --project command-line flags (single-file)
@@ -1850,6 +1888,12 @@ impl Parser {
                     );
                     return None;
                 }
+            }
+            // A7.2: register native shared library path for loading after byte_code().
+            if let Some(ref stem) = m.native {
+                let filename = crate::extensions::platform_lib_name(stem);
+                let lib_path = format!("{pkg_dir}/native/{filename}");
+                self.pending_native_libs.push(lib_path);
             }
             m.entry.map_or_else(
                 || format!("{pkg_dir}/src/{id}.loft"),

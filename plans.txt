@@ -1,5 +1,3 @@
-reorder user documentation into a more logical flow
-
 update remaining documentation of state.rs with the moved name
 Type cycles detection
 Hash table | 87.5% load threshold

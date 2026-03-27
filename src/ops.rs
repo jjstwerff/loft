@@ -118,10 +118,26 @@ pub fn rand_int(lo: i32, hi: i32) -> i32 {
     lo + (r % range) as i32
 }
 
+/// WASM fallback: delegate to the JS host RNG when `random` crate is not available.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+#[must_use]
+pub fn rand_int(lo: i32, hi: i32) -> i32 {
+    if lo == i32::MIN || hi == i32::MIN || lo > hi {
+        return i32::MIN;
+    }
+    crate::wasm::host_random_int(lo, hi)
+}
+
 /// Reseed the thread-local RNG.
 #[cfg(feature = "random")]
 pub fn rand_seed(seed: i64) {
     RNG.with(|rng| *rng.borrow_mut() = Pcg64::seed_from_u64(seed as u64));
+}
+
+/// WASM fallback: delegate seed to the JS host RNG.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+pub fn rand_seed(seed: i64) {
+    crate::wasm::host_random_seed(seed);
 }
 
 /// Fisher-Yates shuffle of a mutable slice of `i32`.

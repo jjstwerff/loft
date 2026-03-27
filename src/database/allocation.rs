@@ -252,7 +252,10 @@ impl Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            #[cfg(not(feature = "wasm"))]
             start_time: self.start_time,
+            #[cfg(feature = "wasm")]
+            start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
         }
     }

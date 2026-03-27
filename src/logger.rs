@@ -325,12 +325,17 @@ impl Logger {
     }
 
     fn write_line(&mut self, line: &str) {
-        let bytes = line.as_bytes();
-        if let Some(ref mut f) = self.file {
-            let _ = f.write_all(bytes);
-            let _ = f.flush();
-            self.current_size += bytes.len() as u64;
+        #[cfg(not(feature = "wasm"))]
+        {
+            let bytes = line.as_bytes();
+            if let Some(ref mut f) = self.file {
+                let _ = f.write_all(bytes);
+                let _ = f.flush();
+                self.current_size += bytes.len() as u64;
+            }
         }
+        #[cfg(feature = "wasm")]
+        crate::wasm::host_log_write(line);
     }
 
     fn open_file(&mut self) {

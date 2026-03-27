@@ -8,6 +8,86 @@ All notable changes to the loft language and interpreter.
 
 ### New features
 
+- **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now
+  compiles and executes correctly.  The `+=` operator on a captured integer variable
+  routes through `call_to_set_op` → `OpSetInt`, bypassing the `generate_set`
+  self-reference guard that previously caused a codegen panic.  Test `capture_detected`
+  in `tests/parse_errors.rs` passes without `#[ignore]`.  Text capture remains
+  blocked by two runtime bugs (see CAVEATS.md C1).
+
+- **Lambda function type no longer includes text work variables** (A5.6a fix) —
+  `parse_lambda` previously built the `Function(params, ret)` type from
+  `data.attributes(d_nr)`, which also includes internal text work variables
+  registered by `text_return()`.  This caused spurious "expects N argument(s),
+  got M" errors when calling text-returning lambdas via function references.  The
+  type is now built directly from the declared `arguments` list, which is always
+  correct regardless of how many work variables are registered.
+
+- **Closure capture works in debug builds** (A5.6) — The debug-mode store leak
+  where closure record variables (`___clos_N`) were never freed has been fixed.
+  `scopes.rs` now pre-registers block-result Reference variables at the enclosing
+  outer scope so `get_free_vars` emits `OpFreeRef` at function exit.  A compile-time
+  checker (`check_arg_ref_allocs`) panics in debug builds if any `Set(ref, Null)`
+  initialisation is still nested inside a call argument, catching this class of
+  scope-registration bug early.  Tests `closure_capture_integer`,
+  `closure_capture_multiple`, and `closure_capture_after_change` all pass without
+  `#[ignore]` in both debug and release builds.  Text capture and mutable capture
+  remain deferred (A5.6 in ROADMAP.md).
+
+- **`yield from` slot-assignment regression fixed** (CO1.4-fix) — `yield from
+  inner()` inside a coroutine with local variables before the delegation now
+  produces correct results.  The two-zone slot redesign (S17/S18) already
+  eliminated the overlap between the `__yf_sub` handle and inner loop
+  temporaries; no additional IR restructuring was required.  Test
+  `coroutine_yield_from` passes without `#[ignore]`.
+
+- **`stack_trace()` works in parallel workers** (S21, fix #92) — Calling
+  `stack_trace()` inside a `par(...)` loop body or any `run_parallel_*` worker
+  now returns the actual call frames instead of an empty vector.  Two changes
+  enable this: (1) `WorkerProgram` now carries `stack_trace_lib_nr` so the
+  resolved index of `n_stack_trace` travels from the main state into each
+  worker state; (2) `static_call` takes the call-stack snapshot when
+  `stack_trace_lib_nr` matches even when `data_ptr` is null, using a
+  `"<worker>"` placeholder for frames that lack `Data` context.  Worker states
+  created via both `n_parallel_for_int` (bytecode path) and the direct
+  `run_parallel_*` Rust API now report correct frame counts.  Test
+  `parallel_stack_trace_non_empty` passes without `#[ignore]`.
+
+- **`init(expr)` circular dependency detection** (S20) — Struct fields that
+  form a mutual initialisation cycle (`a: integer init($.b), b: integer init($.a)`)
+  now produce a compile error naming the cycle (e.g.
+  `circular init dependency: a -> b -> a`).  A DFS cycle check runs after all
+  struct fields are parsed; `$.field` reads inside `init(...)` are tracked by
+  the parser and checked for cycles per root field.
+
+- **`stack_trace()` vector fields zeroed + call-site line numbers** (S19) —
+  `stack_trace()` now returns correct call-site line numbers (`StackFrame.line`)
+  for every frame.  Three fixes: `n_stack_trace` explicitly zeroes the
+  `arguments` and `variables` fields of each `StackFrame` element so that
+  reused store blocks don't leave garbage data; `execute_log_steps` now
+  pushes the same synthetic entry `CallFrame` as `execute_argv` (Fix #88
+  parity); `fn_call` now resolves call-site lines with a BTreeMap backward
+  range search, recovering the correct source line even when `code_pos` has
+  advanced past the `line_numbers` entry.
+  Tests `stack_trace_returns_frames`, `stack_trace_function_names`, and
+  `call_frame_has_line` all pass without `#[ignore]`.
+
+- **Tuple text elements** (T1.8b) — Functions returning `(integer, text)` (or any
+  tuple containing a `text` element) now compile and execute correctly.  Text elements
+  are stored as `Str` (16B borrowed reference) in tuple slots via the new `OpPutText`
+  opcode, consistent with loft's text-argument convention.  Four codegen sites were
+  updated: null-init now emits `OpConvTextFromNull`; slot stores use `OpPutText` instead
+  of `OpAppendText`; tuple element reads use `OpArgText` instead of `OpVarText`.
+
+- **Tuple function return + destructuring** (T1.8a) — Functions declared `-> (T1, T2)`
+  now work end-to-end: the return value is materialised on the caller's stack, element
+  access (`pair(3,7).0`) compiles and executes correctly, and LHS tuple destructuring
+  (`(a, b) = pair(5)`) is fully supported.  Two fixes enabled this: the two-zone slot
+  allocator now emits a no-op for zone-1 Tuple null-inits (space pre-reserved by
+  `OpReserveFrame`) and a per-element push for zone-2 Tuple null-inits; the parser
+  now marks destructuring targets as defined and types them on both passes so
+  `known_var_or_type` does not fire a false "Unknown variable" on the second pass.
+
 - **`size(t)` character count** — `size("héllo")` returns 5 (Unicode code points),
   complementing `len()` which returns byte length. Backed by a new `OpSizeText` opcode.
 
@@ -185,6 +265,26 @@ All notable changes to the loft language and interpreter.
 - **Format specifier warnings** — Compile-time warnings for format specifiers that
   have no effect: hex/binary/octal on text or boolean, zero-padding on text.
 
+- **Slot bug S17: text below TOS in nested scopes** — The two-zone slot redesign
+  (0.8.3) fixed the `[generate_set]` panic for text variables pre-assigned below
+  the actual TOS in deeply nested scopes.  `text_below_tos_nested_loops` passes;
+  `#[ignore]` removed.  CAVEATS.md C4 closed.
+
+- **Slot bug S18: sequential file blocks conflict** — Same two-zone redesign fixed
+  the `validate_slots` panic from ref-variable slot override in sequential file
+  blocks.  `sequential_file_blocks_read_conflict` passes; `#[ignore]` removed.
+  CAVEATS.md C5 closed.
+
+- **`while` loop** (L10) — `while cond { body }` is now a first-class keyword.
+  Desugars to a loop with an `if !cond { break }` guard at the top, identical to
+  the `for + break` workaround but with familiar syntax.  C11 closed.
+
+### Language changes
+
+- **Format specifier mismatches are now errors** (L9) — Using a radix specifier
+  (`:x`, `:b`, `:o`) on a `text` or `boolean` value, or zero-padding (`:05`) on a
+  `text` value, is now a compile error rather than a silent no-op.  C14 closed.
+
 ### Bug fixes
 
 - **S15: match arm binding type reuse** — When multiple struct-enum match arms bind the
@@ -194,6 +294,76 @@ All notable changes to the loft language and interpreter.
 - **S14: stdlib struct-enum field positions** — Struct-enum types defined in the default
   library (`FieldValue`, etc.) no longer panic with "Fld N is outside of record". Fixed
   two issues in `typedef.rs`: loop range for `fill_all()` and lazy byte-type registration.
+
+---
+
+## [0.8.3] — 2026-03-27
+
+### New features
+
+- **WASM output capture** (W1.2) — `output_push` / `output_take` helpers buffer `println`
+  output in a thread-local string.  Used by `compile_and_run()` to collect program output
+  without touching the filesystem.
+
+- **WASM `compile_and_run()` entry point** (W1.9) — A `compile_and_run(files_json) -> String`
+  function accepts a JSON array of `{name, content}` objects, runs the loft pipeline entirely
+  in memory, and returns `{output, diagnostics, success}` JSON.  Exported via `wasm_bindgen`
+  when built with `--features wasm`.  Default standard library files are embedded with
+  `include_str!()`.  A virtual filesystem (`VIRT_FS`) routes `use` imports to the supplied
+  in-memory files.
+
+- **`#native "symbol"` annotation** (A7.1) — Functions declared in loft can carry a
+  `#native "symbol_name"` annotation.  When the compiler resolves such a function it emits
+  an `OpStaticCall` pointing to `symbol_name` in the native registry instead of the loft
+  function name.  This decouples the loft identifier from the Rust symbol.
+
+- **Native extension loader** (A7.2) — The `native-extensions` Cargo feature enables
+  loading cdylib shared libraries at runtime via `libloading`.  `extensions::load_all()`
+  is called between byte-code generation and execution; each library must export a
+  C-ABI `loft_register_v1(*mut LoftPluginCtx)` entry point.
+
+- **`LoftPluginCtx` public ABI** (A7.3) — `LoftPluginCtx` is a stable `repr(C)` struct
+  published from `loft::extensions` and mirrored in the standalone `loft-plugin-api` crate.
+  Plugin crates call `ctx.register_fn(name, fn_ptr)` once per exported function.
+
+- **Format-string buffer pre-allocation** (O7) — The native/WASM code generator now emits
+  `String::with_capacity(N × 8)` instead of `"".to_string()` at the start of format strings
+  with ≥ 2 segments.  This avoids repeated `String` reallocations during format-string
+  assembly, reducing the wasm/native performance gap on string-heavy workloads.
+
+- **VirtFS JavaScript class** (W1.10) — `tests/wasm/virt-fs.mjs` provides a full in-memory
+  virtual filesystem for WASM Node.js tests.  Features: tree-based JSON representation
+  (`$type`/`$content` conventions), base64 binary support, path normalisation (`.`/`..`/`//`),
+  `snapshot()`/`restore()` for test isolation, binary cursors (`seek`/`readBytes`/`writeBytes`),
+  `toJSON()`/`fromJSON()` serialisation, and a minimal test harness (`harness.mjs`).
+  13 unit tests in `virt-fs.test.mjs` cover all operations.  Runs via
+  `node tests/wasm/virt-fs.test.mjs` when Node.js is available.
+
+- **WASM test suite runner** (W1.13) — `tests/wasm/suite.mjs` discovers all loft programs
+  in `tests/scripts/` and `tests/docs/`, runs each through the WASM module with a
+  pre-populated VirtFS, and compares output against the native `cargo run` interpreter.
+  Skips non-deterministic tests (time, unseeded random, images); verifies WASM success only
+  for those.  Run via `node tests/wasm/suite.mjs` after building with `wasm-pack`.
+  This is the main confidence gate for the WASM port.
+
+- **LayeredFS class** (W1.12) — `tests/wasm/layered-fs.mjs` implements a two-layer virtual
+  filesystem: an immutable base tree (bundled examples/docs/stdlib) plus a mutable delta
+  overlay (user edits, persisted to localStorage).  Reads check delta first then fall through
+  to base; writes always go to delta, leaving the base untouched.  Supports
+  `getDelta()`/`setDelta()`/`saveDelta()`/`resetToBase()`/`isModified()`/`isDeleted()`.
+  `ide/scripts/build-base-fs.js` reads `tests/docs/*.loft`, `doc/*.html`, and
+  `default/*.loft` to emit `ide/assets/base-fs.json`.  20 unit tests in
+  `layered-fs.test.mjs` cover all operations including delta serialisation and snapshot
+  isolation.
+
+- **loftHost factory** (W1.11) — `tests/wasm/host.mjs` exports `createHost(tree, options)`
+  which wires a `VirtFS` instance to the full `loftHost` bridge API.  Uses a deterministic
+  xoshiro128** PRNG for reproducible `rand()` / `rand_seed()` behaviour in tests.  Supports
+  configurable `fakeTime`, `fakeTicks`, `env`, and `args` overrides.  Comes with:
+  `bridge.test.mjs` (7 WASM integration tests; skips gracefully when `pkg/` not built),
+  `file-io.test.mjs` (14 host-level edge-case tests, no WASM required),
+  `random.test.mjs` (host PRNG tests + optional WASM-level determinism tests),
+  and three fixtures in `tests/wasm/fixtures/`.
 
 ---
 
@@ -361,6 +531,7 @@ First release.
 
 ---
 
+[0.8.3]: https://github.com/jjstwerff/loft/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/jjstwerff/loft/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/jjstwerff/loft/compare/v0.1.0...v0.8.0
 [0.1.0]: https://github.com/jjstwerff/loft/releases/tag/v0.1.0
