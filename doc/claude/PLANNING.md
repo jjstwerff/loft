@@ -1091,7 +1091,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 2. In `addr_mut` (`store.rs`), change the release-build dummy-buffer path to `panic!("write to locked store")` — no legitimate code path should hit it once auto-lock is unconditional.
 3. Add an integration test that runs a `par()` loop whose worker attempts to push to its `const` input in release mode; assert the panic fires with a clear message.
 **Effort:** Small
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
@@ -1105,7 +1105,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 3. In `coroutine_next` (`state/mod.rs`), add a bounds check: `if idx >= self.coroutines.len() { panic!("iterator<T> DbRef out of range in worker") }`.  This defence-in-depth guard catches the case where the compiler check is missing.
 4. Test: a loft program that calls a generator inside `par(...)` produces a compile error; one that bypasses the check triggers the runtime guard in debug.
 **Effort:** Small
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
@@ -1118,7 +1118,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 2. In `database::remove` (or the calling opcode), add: `if db.store_nr == COROUTINE_STORE { debug_assert!(false, "remove on coroutine DbRef"); return; }`.  The `return` prevents release-build corruption even if the compiler check is missing.
 3. Test: `e#remove` on a generator iterator is a compile error; a debug-only test verifies the runtime guard fires if the check is bypassed.
 **Effort:** Extra Small
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
@@ -1143,7 +1143,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 3. Add a leak-detection test: generator with text local, yields once, loop broken — verify no allocation escapes under Miri or similar.
 
 **Effort:** Large (S25.1 + S25.2 combined; must not be split across releases)
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1156,7 +1156,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 2. Implement `OpFreeCoroutine` in `fill.rs`: call `free_coroutine(idx)` which sets `coroutines[idx] = None`.
 3. Optionally, lazily free in `coroutine_exhausted` when it first observes `Exhausted` status (covers the `explicit-advance` API path).
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1169,7 +1169,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 2. In `coroutine_next` (debug path): re-insert `frame.saved_text_positions` and clear it.
 3. In `coroutine_return` (debug path): clear `frame.saved_text_positions` without reinserting.
 **Effort:** Small (debug-only path)
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1182,7 +1182,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 2. When `coroutine_create` / `coroutine_yield` saves a `DbRef` to `stack_bytes`, also record `(store_nr, generation_at_save)` in a new `frame.store_generations: Vec<(u16, u32)>`.
 3. At `coroutine_next`, verify each saved store's current generation matches; emit a runtime diagnostic on mismatch.
 **Effort:** Medium
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1198,7 +1198,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 2. Add `clone_locked_for_worker` on `Store` that omits `claims: HashSet::new()`; use it in `Stores::clone_for_worker`.
 3. Add `debug_assert!(store_nr == self.max - 1, "free() must be called in LIFO order")` in `free_named`.
 **Effort:** Small (three independent one-function changes)
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1212,7 +1212,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 3. Long-term: add `origin: StoreOrigin` tag to `DbRef` and a debug assert in `copy_from_worker` that all result DbRefs have worker origin, not main-thread origin.
 **Effort:** Medium
 **Depends:** S29 (clean parallel store state first)
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
