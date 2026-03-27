@@ -8,6 +8,15 @@
 //!
 //! Steps: W1.1 (this stub) → W1.2 (output capture) → W1.3–W1.8 (bridges) → W1.9 (entry point).
 
+// ── W1.4  Logger host bridge ─────────────────────────────────────────────────
+
+/// Write a log line to the host console.  Under WASM the real filesystem is
+/// unavailable; this stub forwards the message to `globalThis.loftHost.log_write`
+/// (wired up in W1.9) or does nothing when the host bridge is not yet set up.
+pub fn host_log_write(_line: &str) {
+    // TODO W1.9: call extern "C" { fn host_log_write(ptr: *const u8, len: usize); }
+}
+
 // ── W1.2  Output capture ─────────────────────────────────────────────────────
 
 use std::cell::RefCell;
