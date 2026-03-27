@@ -1,0 +1,5 @@
+// Native extension test package for A7.2 tests.
+// Declares a function backed by a native Rust implementation.
+
+pub fn ext_add_one(x: integer) -> integer not null;
+#native "n_ext_add_one"

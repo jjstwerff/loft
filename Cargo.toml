@@ -31,7 +31,8 @@ wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
 wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
 png          = ["dep:png"]
 mmap         = ["dep:mmap-storage"]
-random       = ["dep:rand_core", "dep:rand_pcg"]
+random            = ["dep:rand_core", "dep:rand_pcg"]
+native-extensions = ["dep:libloading"]
 
 [dependencies]
 rand_core          = { version = "0.9", optional = true }
@@ -45,6 +46,7 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys             = { version = "0.3", optional = true }
 web-sys            = { version = "0.3", optional = true, features = ["console"] }
 wasm-bindgen-rayon = { version = "1.2", optional = true }
+libloading         = { version = "0.8", optional = true }
 
 [dev-dependencies]
 stdext = "0.3"

@@ -8,6 +8,7 @@ mod calc;
 mod compile;
 mod data;
 mod database;
+mod extensions;
 mod fill;
 mod formatter;
 mod generation;
@@ -354,6 +355,8 @@ fn main() {
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut p.data);
+    // A7.2: load native extension shared libraries registered during parsing.
+    extensions::load_all(&mut state, std::mem::take(&mut p.pending_native_libs));
 
     // WASM codegen pipeline: --native-wasm
     if let Some(ref wasm_out) = native_wasm {

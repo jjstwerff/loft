@@ -14,6 +14,10 @@ pub struct Manifest {
     /// Interpreter version requirement from the `[package]` section,
     /// e.g. `">=1.0"`.  `None` means no constraint.
     pub loft_version: Option<String>,
+    /// A7.2: native shared-library stem from `[library] native = "..."`.
+    /// `None` for pure-loft packages.  The interpreter resolves this to the
+    /// platform-correct filename (`lib<stem>.so` / `.dylib` / `.dll`).
+    pub native: Option<String>,
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -35,6 +39,7 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
             match (section.as_str(), key) {
                 ("package", "loft") => manifest.loft_version = Some(value.to_string()),
                 ("library", "entry") => manifest.entry = Some(value.to_string()),
+                ("library", "native") => manifest.native = Some(value.to_string()),
                 _ => {}
             }
         }
