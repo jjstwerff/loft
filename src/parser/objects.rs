@@ -75,7 +75,7 @@ impl Parser {
                 let et = self.expression(&mut p);
                 self.lexer.token(")");
                 let tp = self.data.def(self.data.type_def_nr(&et)).known_type;
-                t = Type::Integer(0, 65536);
+                t = Type::Integer(0, 65536, false);
                 *code = Value::Int(i32::from(tp));
             } else {
                 t = self.parse_call(code, source, &nm);
@@ -339,7 +339,7 @@ impl Parser {
     /// Ensure byte/short integer types used in file I/O are registered in the database.
     pub(crate) fn ensure_io_type(&mut self, t: &Type) {
         match t {
-            Type::Integer(min, _) => match t.size(false) {
+            Type::Integer(min, _, _) => match t.size(false) {
                 1 => {
                     self.database.byte(*min, false);
                 }

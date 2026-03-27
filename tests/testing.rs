@@ -142,7 +142,7 @@ impl Test {
             Value::Text(v) => replace_tokens(v),
             Value::Float(v) => v.to_string(),
             Value::Single(v) => v.to_string(),
-            Value::Null if matches!(self.tp, Type::Text(_) | Type::Integer(_, _)) => {
+            Value::Null if matches!(self.tp, Type::Text(_) | Type::Integer(_, _, _)) => {
                 "null".to_string()
             }
             Value::Null if !matches!(self.tp, Type::Text(_)) => {
@@ -418,7 +418,7 @@ impl Test {
     fn return_type(&self) -> &str {
         let tp = if self.tp.is_unknown() {
             if let Value::Int(_) = self.result {
-                Type::Integer(i32::MIN, i32::MAX as u32)
+                Type::Integer(i32::MIN, i32::MAX as u32, false)
             } else if let Value::Long(_) = self.result {
                 Type::Long
             } else if let Value::Text(_) = self.result {
@@ -433,7 +433,7 @@ impl Test {
         } else {
             self.tp.clone()
         };
-        if let Type::Integer(_, _) = tp {
+        if let Type::Integer(_, _, _) = tp {
             "integer"
         } else if let Type::Text(_) = tp {
             "text"

@@ -10,7 +10,7 @@ mod testing;
 
 use loft::data::{Type, Value};
 
-const INTEGER: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32);
+const INTEGER: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 
 #[test]
 fn expr_add_null() {
@@ -62,7 +62,7 @@ fn if_typing() {
 fn tuple_element_offsets() {
     use loft::data::{Type, element_offsets, element_size};
     let types = [
-        Type::Integer(i32::MIN, i32::MAX as u32),
+        Type::Integer(i32::MIN, i32::MAX as u32, false),
         Type::Text(vec![]),
         Type::Float,
     ];
@@ -77,7 +77,7 @@ fn tuple_owned_elements() {
     // owned_elements for [integer, text, reference<T>] should return text and ref entries
     use loft::data::{Type, owned_elements};
     let types = [
-        Type::Integer(i32::MIN, i32::MAX as u32),
+        Type::Integer(i32::MIN, i32::MAX as u32, false),
         Type::Text(vec![]),
         Type::Reference(0, vec![]),
     ];
@@ -465,7 +465,6 @@ fn coroutine_text_param_survives_yield() {
 // ── T1.7 — `integer not null` annotation for tuple elements ─────────────────
 
 #[test]
-#[ignore = "T1.7: integer not null annotation not yet implemented in the type system"]
 fn not_null_element_assignment() {
     // `integer not null` element in a tuple type — basic assignment compiles and runs.
     code!("fn count_pair() -> (integer not null, integer not null) { (1, 2) }")

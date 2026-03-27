@@ -1091,7 +1091,7 @@ impl Parser {
     pub(crate) fn parse_multiply(&mut self, res: &mut Vec<Value>) -> Option<Type> {
         let mut code = Value::Null;
         let tp = self.parse_operators(&Type::Unknown(0), &mut code, &mut Type::Null, 0);
-        if !matches!(tp, Type::Integer(_, _)) {
+        if !matches!(tp, Type::Integer(_, _, _)) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -1371,7 +1371,7 @@ impl Parser {
             return u16::MAX;
         }
         match in_t {
-            Type::Integer(min, _) => match in_t.size(false) {
+            Type::Integer(min, _, _) => match in_t.size(false) {
                 1 if *min == 0 => self.database.name("byte"),
                 1 => self.database.name(&format!("byte<{min},false>")),
                 2 => self.database.name(&format!("short<{min},false>")),

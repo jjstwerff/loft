@@ -194,18 +194,18 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
-        Type::Integer(from, to)
+        Type::Integer(from, to, _)
             if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
         {
             Some("u8")
         }
-        Type::Integer(from, to)
+        Type::Integer(from, to, _)
             if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
         {
             Some("u16")
         }
-        Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 255 => Some("i8"),
-        Type::Integer(from, to) if i64::from(*to) - i64::from(*from) <= 65536 => Some("i16"),
+        Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => Some("i8"),
+        Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => Some("i16"),
         _ => None,
     }
 }
@@ -232,32 +232,32 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         // cascading type-mismatch errors when the variable is passed to a template
         // operation (e.g. `set_short`) that expects `i32`.  The `return` site adds an
         // explicit `as u16` / `as u8` cast (see `narrow_int_cast`).
-        Type::Integer(from, to)
+        Type::Integer(from, to, _)
             if context == &Context::Result
                 && i64::from(*to) - i64::from(*from) <= 255
                 && i64::from(*from) >= 0 =>
         {
             "u8"
         }
-        Type::Integer(from, to)
+        Type::Integer(from, to, _)
             if context == &Context::Result
                 && i64::from(*to) - i64::from(*from) <= 65536
                 && i64::from(*from) >= 0 =>
         {
             "u16"
         }
-        Type::Integer(from, to)
+        Type::Integer(from, to, _)
             if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 255 =>
         {
             "i8"
         }
-        Type::Integer(from, to)
+        Type::Integer(from, to, _)
             if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 65536 =>
         {
             "i16"
         }
         Type::Enum(_, false, _) => "u8",
-        Type::Integer(_, _) | Type::Character | Type::Null => "i32",
+        Type::Integer(_, _, _) | Type::Character | Type::Null => "i32",
         // null is represented as the null sentinel of the target type
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
@@ -628,7 +628,7 @@ extern crate loft;"
             }
             return Ok(());
         }
-        if let Type::Integer(min, _) = typedef {
+        if let Type::Integer(min, _, _) = typedef {
             let field_size = typedef.size(nullable);
             if field_size == 1 {
                 emit_db_field(

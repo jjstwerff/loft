@@ -478,7 +478,7 @@ use a separate collection or add after the loop"
         }
         // Auto-convert integer to long for a long-typed LHS assignment.
         if matches!(f_type, Type::Long)
-            && matches!(s_type, Type::Integer(_, _))
+            && matches!(s_type, Type::Integer(_, _, _))
             && op == "="
             && !self.first_pass
         {

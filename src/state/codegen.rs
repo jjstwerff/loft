@@ -227,7 +227,7 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     match &elem_tp {
-                        Type::Integer(_, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
                             stack.add_op("OpGetInt", self);
                         }
                         Type::Long => stack.add_op("OpGetLong", self),
@@ -254,7 +254,7 @@ impl State {
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
                 match &elem_tp {
-                    Type::Integer(_, _) | Type::Function(_, _) => {
+                    Type::Integer(_, _, _) | Type::Function(_, _) => {
                         stack.add_op("OpVarInt", self);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
@@ -297,7 +297,7 @@ impl State {
                     self.code_add(var_pos);
                     self.generate(value, stack, false);
                     match &elem_tp {
-                        Type::Integer(_, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
                             stack.add_op("OpSetInt", self);
                         }
                         Type::Long => stack.add_op("OpSetLong", self),
@@ -323,7 +323,7 @@ impl State {
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 match &elem_tp {
-                    Type::Integer(_, _) | Type::Function(_, _) => {
+                    Type::Integer(_, _, _) | Type::Function(_, _) => {
                         stack.add_op("OpPutInt", self);
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
@@ -1089,7 +1089,7 @@ impl State {
         let code = self.code_pos;
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
-            Type::Integer(_, _) | Type::Function(_, _) => stack.add_op("OpVarInt", self),
+            Type::Integer(_, _, _) | Type::Function(_, _) => stack.add_op("OpVarInt", self),
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
@@ -1136,7 +1136,7 @@ impl State {
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
                     match elem_tp {
-                        Type::Integer(_, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
                             stack.add_op("OpVarInt", self);
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
@@ -1169,7 +1169,7 @@ impl State {
         if let Type::RefVar(tp) = stack.function.tp(variable) {
             let txt = matches!(**tp, Type::Text(_));
             match &**tp {
-                Type::Integer(_, _) => stack.add_op("OpGetInt", self),
+                Type::Integer(_, _, _) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
                 Type::Long => stack.add_op("OpGetLong", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
@@ -1282,17 +1282,17 @@ impl State {
 
     pub(super) fn add_const(&mut self, tp: &Type, p: &Value, stack: &Stack, before_stack: u16) {
         match tp {
-            Type::Integer(0, 255) => {
+            Type::Integer(0, 255, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as u8);
                 }
             }
-            Type::Integer(-128, 127) => {
+            Type::Integer(-128, 127, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as i8);
                 }
             }
-            Type::Integer(0, 65535) => {
+            Type::Integer(0, 65535, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as u16);
                 } else if let Value::Var(v) = p {
@@ -1300,12 +1300,12 @@ impl State {
                     self.code_add(before_stack - r);
                 }
             }
-            Type::Integer(-32768, 32767) => {
+            Type::Integer(-32768, 32767, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as i16);
                 }
             }
-            Type::Integer(_, _) => {
+            Type::Integer(_, _, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr);
                 }
@@ -1370,7 +1370,7 @@ impl State {
             self.code_add(var_pos);
             self.generate(value, stack, false);
             match *tp {
-                Type::Integer(_, _) => stack.add_op("OpSetInt", self),
+                Type::Integer(_, _, _) => stack.add_op("OpSetInt", self),
                 Type::Character => stack.add_op("OpSetCharacter", self),
                 Type::Long => stack.add_op("OpSetLong", self),
                 Type::Single => stack.add_op("OpSetSingle", self),
@@ -1400,7 +1400,7 @@ impl State {
         self.generate(value, stack, false);
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
-            Type::Integer(_, _) | Type::Function(_, _) => stack.add_op("OpPutInt", self),
+            Type::Integer(_, _, _) | Type::Function(_, _) => stack.add_op("OpPutInt", self),
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
@@ -1431,7 +1431,7 @@ impl State {
                     // After popping previous elements, adjust position.
                     let pos = stack.position - elem_abs;
                     match &elems[i] {
-                        Type::Integer(_, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _) => {
                             stack.add_op("OpPutInt", self);
                         }
                         Type::Boolean => stack.add_op("OpPutBool", self),

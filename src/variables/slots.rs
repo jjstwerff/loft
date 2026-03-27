@@ -276,7 +276,7 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    const INT: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32);
+    const INT: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 
     /// Wrap `assign_slots` for unit tests: builds a minimal flat Block (scope 0) with
     /// `Value::Set` nodes for every non-argument large (>8 B) variable so Zone 2 can
