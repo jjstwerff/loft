@@ -438,6 +438,28 @@ fn coroutine_call_helper_between_yields() {
     .result(Value::Int(30));
 }
 
+// ── CO1.3d — Text serialisation across yield/resume ─────────────────────────
+
+#[test]
+#[ignore = "CO1.3d: text slots not yet serialised on yield — dangling pointer after resume"]
+fn coroutine_text_param_survives_yield() {
+    // A generator that takes a `text` parameter and yields `len(text)`.
+    // The text value must survive the yield/resume cycle without dangling pointers.
+    code!(
+        "fn gen_len(s: text) -> iterator<integer> {
+            yield len(s);
+            yield len(s);
+         }
+         fn sum_lens() -> integer {
+            total = 0;
+            for n in gen_len(\"hello\") { total += n; }
+            total
+         }"
+    )
+    .expr("sum_lens()")
+    .result(Value::Int(10));
+}
+
 // ── CO1.4 — yield from delegation ───────────────────────────────────────────
 
 // ── T1.7 — `integer not null` annotation for tuple elements ─────────────────
