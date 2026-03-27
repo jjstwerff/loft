@@ -22,7 +22,6 @@ fn workspace_root() -> std::path::PathBuf {
 /// and exit 0.  46-caveats.loft triggers a C14 zero-padding-on-text warning
 /// (`{t:05}`) but is otherwise valid and should print "caveats: all ok".
 #[test]
-#[ignore = "L7: binary exits 1 on any diagnostic including warnings — not fixed yet"]
 fn warning_only_program_exits_zero() {
     let script = workspace_root().join("tests/scripts/46-caveats.loft");
     let out = Command::new(loft_bin())
@@ -44,7 +43,6 @@ fn warning_only_program_exits_zero() {
 
 /// A program with a genuine parse error must exit non-zero.
 #[test]
-#[ignore = "L7: exit-code tests use CARGO_BIN_EXE_loft"]
 fn parse_error_exits_nonzero() {
     // Write a minimal syntax-error script to a temp file.
     let dir = std::env::temp_dir();
