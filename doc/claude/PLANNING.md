@@ -1166,7 +1166,7 @@ Full design in [NATIVE.md](NATIVE.md).
 
 ---
 
-### O7  WASM: pre-allocate format-string buffers in native/wasm codegen
+### O7  WASM: pre-allocate format-string buffers in native/wasm codegen *(completed 0.8.3)*
 **Sources:** PERFORMANCE.md § W1 (Design: W1 — wasm string representation)
 **Expected gain:** Reduces wasm/native string-building gap from 2.06× to <1.3× on benchmark 07.
 **Background:** Each format string in loft generates a sequence of bytecodes:

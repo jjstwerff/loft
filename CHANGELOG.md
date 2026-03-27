@@ -226,6 +226,11 @@ All notable changes to the loft language and interpreter.
   published from `loft::extensions` and mirrored in the standalone `loft-plugin-api` crate.
   Plugin crates call `ctx.register_fn(name, fn_ptr)` once per exported function.
 
+- **Format-string buffer pre-allocation** (O7) — The native/WASM code generator now emits
+  `String::with_capacity(N × 8)` instead of `"".to_string()` at the start of format strings
+  with ≥ 2 segments.  This avoids repeated `String` reallocations during format-string
+  assembly, reducing the wasm/native performance gap on string-heavy workloads.
+
 ---
 
 ## [0.8.2] — 2026-03-24

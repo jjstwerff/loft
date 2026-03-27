@@ -27,7 +27,6 @@ W1.10–W1.13 (JavaScript) require Node.js + wasm-pack — deferred to a later m
 | W1.11     | ↳ Host factory `createHost` + bridge tests           | M  | ✓      | W1.9, W1.10  | tests/wasm/host.mjs        |
 | W1.12     | ↳ LayeredFS + base-tree builder (`build-base-fs.js`) | M  | ✓      | W1.10        | tests/wasm/layered-fs.mjs  |
 | W1.13     | ↳ Full loft test suite via WASM (`suite.mjs`)        | M  | ✓      | W1.11        | tests/wasm/suite.mjs       |
-| O7        | WASM: pre-allocate format string buffers             | M  | ✓      | W1           | PERFORMANCE.md W1          |
 
 ---
 
