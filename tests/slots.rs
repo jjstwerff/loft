@@ -2,27 +2,22 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! Integration tests that replicate slot-assignment bugs found in the wrap-test failures.
-//! Each test is `#[ignore]`d because it currently panics (validate_slots or codegen).
+//! All three tests now pass — the two-zone slot redesign (0.8.3) fixed all B-class bugs.
 //!
-//! Three bug classes reproduced here:
+//! Three bug classes reproduced here (all fixed):
 //!
-//! * **B-dir** (`dir`, `last` wrap tests): A `text` variable is pre-assigned a slot
-//!   *below* the actual TOS at codegen time → `[generate_set]` panic.
-//!   Root cause: `scope_exit` for non-loop block scopes is approximated as
-//!   `max(last_use)+1`, which can be earlier than the actual `OpFreeStack` emission
-//!   at block end, causing `running_tos` to drop too soon.
+//! * **B-dir** (S17, CAVEATS.md C4): A `text` variable was pre-assigned a slot *below*
+//!   the actual TOS at codegen time → `[generate_set]` panic.  Fixed by two-zone design:
+//!   large variables are placed after the zone-1 frame is pre-claimed, so their slot
+//!   always matches the actual stack position.
 //!
-//! * **B-binary** (`binary`, `loft_suite` wrap tests): A `ref` variable's pre-assigned
-//!   slot is overridden *downward* by codegen (actual TOS < running_tos estimate).
-//!   A subsequent variable is then placed at that same slot by `assign_slots` (which
-//!   checked against the pre-assigned position, not the actual one), creating a
-//!   live-interval overlap → `validate_slots` panic.
+//! * **B-binary** (S18, CAVEATS.md C5): A `ref` variable's pre-assigned slot was
+//!   overridden downward by codegen, then reused by a subsequent variable, creating a
+//!   live-interval overlap → `validate_slots` panic.  Fixed by the same two-zone design.
 //!
-//! * **B-stress** (`stress` wrap test): After a fill-and-clear cycle loop, a vector
-//!   variable `sv` is pre-assigned a slot that is 4 bytes below the actual TOS.
-//!   Codegen moves `sv` (and its iteration copy `_vector_8`) upward by 4 bytes.
-//!   The adjacent `x#index` variable stays at its pre-assigned position, which
-//!   now falls *inside* the moved vector slot → `validate_slots` panic.
+//! * **B-stress**: A vector variable was pre-assigned 4 bytes below the actual TOS.
+//!   Codegen moved it upward, leaving the adjacent index variable inside the vector
+//!   slot → `validate_slots` panic.  Fixed by two-zone design.
 
 extern crate loft;
 
@@ -32,11 +27,10 @@ mod testing;
 
 /// Replicates the pattern in `t_6Parser_type_def` (lib/parser.loft):
 /// a `text` variable `f` is defined inside a `for field` loop that is nested inside
-/// an `if`-block inside a `for param` loop.  The `scope_exit` for the `if`-block
-/// scope fires earlier than the actual `OpFreeStack`, leaving `running_tos` below
-/// the real TOS when `f`'s scope starts.
+/// an `if`-block inside a `for param` loop.
 ///
-/// Expected failure: `[generate_set] Text variable 'f' … pre-assigned slot N < TOS M`
+/// Previously caused `[generate_set] Text variable 'f' … pre-assigned slot N < TOS M`.
+/// Fixed by the two-zone slot redesign (S17, 0.8.3).
 #[test]
 fn text_below_tos_nested_loops() {
     code!(
@@ -84,14 +78,10 @@ fn test() {
 
 /// Replicates the pattern in `tests/scripts/12-binary.loft`:
 /// many sequential `{f = file(…); …}` blocks, each creating a short-lived `File`
-/// reference.  After enough blocks, `running_tos` overestimates the TOS for one
-/// of the inner `f` variables.  Codegen moves that `f` downward to the actual TOS.
-/// A subsequent read variable is then placed at the same slot by `assign_slots`
-/// (which checked against the pre-assigned position), creating a live-interval
-/// overlap with the moved `f`.
+/// reference.
 ///
-/// Expected failure: `validate_slots` panic — `'_read_N'` and `'f'` share a slot
-/// while both live.
+/// Previously caused a `validate_slots` panic — `'_read_N'` and `'f'` sharing a slot.
+/// Fixed by the two-zone slot redesign (S18, 0.8.3).
 #[test]
 fn sequential_file_blocks_read_conflict() {
     code!(

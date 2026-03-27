@@ -77,8 +77,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism    | VH | ✓      | W1.13, W4    | WASM.md — Threading        |
-| S17       | Slot: text below TOS in nested scopes                | M  | —      |              | CAVEATS.md C4              |
-| S18       | Slot: sequential file blocks conflict                | M  | —      |              | CAVEATS.md C5              |
 | A12       | Lazy work-variable initialization                    | M  | ~      |              | PLANNING.md A12            |
 | O1        | Superinstruction peephole rewriting                  | M  | ~      |              | compile.rs                 |
 | O2        | Stack raw pointer cache                              | H  | ~      |              | PERFORMANCE.md P2          |

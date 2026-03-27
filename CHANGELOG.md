@@ -185,6 +185,16 @@ All notable changes to the loft language and interpreter.
 - **Format specifier warnings** — Compile-time warnings for format specifiers that
   have no effect: hex/binary/octal on text or boolean, zero-padding on text.
 
+- **Slot bug S17: text below TOS in nested scopes** — The two-zone slot redesign
+  (0.8.3) fixed the `[generate_set]` panic for text variables pre-assigned below
+  the actual TOS in deeply nested scopes.  `text_below_tos_nested_loops` passes;
+  `#[ignore]` removed.  CAVEATS.md C4 closed.
+
+- **Slot bug S18: sequential file blocks conflict** — Same two-zone redesign fixed
+  the `validate_slots` panic from ref-variable slot override in sequential file
+  blocks.  `sequential_file_blocks_read_conflict` passes; `#[ignore]` removed.
+  CAVEATS.md C5 closed.
+
 - **`while` loop** (L10) — `while cond { body }` is now a first-class keyword.
   Desugars to a loop with an `if !cond { break }` guard at the top, identical to
   the `for + break` workaround but with familiar syntax.  C11 closed.

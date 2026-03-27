@@ -69,27 +69,24 @@ numbers, time functions, and dynamic function references (`CallRef`).
 
 ---
 
-## C4 — Slot assignment: text below TOS in nested scopes
+## C4 — Slot assignment: text below TOS in nested scopes *(fixed in S17)*
 
-A text variable inside a nested if-block inside a loop can be pre-assigned a
-slot below the actual top-of-stack, causing a codegen panic.
+**Fixed.** The two-zone slot design (0.8.3) ensures large variables (text, ref, vector)
+are placed after the zone-1 frame is pre-claimed, so their stack position at codegen
+time always matches the pre-assigned slot.
 
-**Test:** `tests/slots.rs` — `text_below_tos_nested_loops` (`#[ignore]`, B-dir class)
-**Workaround:** restructure code to avoid deeply nested text assignments inside loops.
-**Planned fix:** S17 in [ROADMAP.md](ROADMAP.md) (1.1+).
-**Docs:** [SLOT_FAILURES.md](SLOT_FAILURES.md) § B-dir.
+**Test:** `tests/slots.rs` — `text_below_tos_nested_loops` (passes, ignore removed).
+**Fixed by:** S17 — two-zone slot redesign.
 
 ---
 
-## C5 — Slot assignment: sequential file blocks conflict
+## C5 — Slot assignment: sequential file blocks conflict *(fixed in S18)*
 
-Sequential `{ f = file(...); ... }` blocks can cause a ref-variable slot
-override that overlaps with a subsequent variable.
+**Fixed.** The same two-zone redesign eliminates the ref-variable override issue:
+zone-1 pre-claim prevents running_tos from overestimating across sequential blocks.
 
-**Test:** `tests/slots.rs` — `sequential_file_blocks_read_conflict` (`#[ignore]`, B-binary class)
-**Workaround:** reuse a single file variable across blocks instead of re-declaring.
-**Planned fix:** S18 in [ROADMAP.md](ROADMAP.md) (1.1+).
-**Docs:** [SLOT_FAILURES.md](SLOT_FAILURES.md) § B-binary.
+**Test:** `tests/slots.rs` — `sequential_file_blocks_read_conflict` (passes, ignore removed).
+**Fixed by:** S18 — two-zone slot redesign.
 
 ---
 
