@@ -107,6 +107,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             declared: HashSet::new(),
             reachable: HashSet::new(),
             loop_stack: Vec::new(),
+            next_format_count: 0,
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }

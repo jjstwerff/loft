@@ -6,6 +6,7 @@
 use crate::data::{Block, Context, Type, Value};
 use std::io::Write;
 
+use super::text::count_format_ops;
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
@@ -383,6 +384,29 @@ impl Output<'_> {
             if matches!(v, Value::Line(_)) {
                 continue;
             }
+            // O7: pre-compute format-segment count so that text assignments at the
+            // start of a format-string block (Set(var, Text)) and OpClearStackText/
+            // OpClearText can emit a with_capacity hint when ≥ 2 format/append ops follow.
+            self.next_format_count = match v {
+                Value::Set(var, boxed)
+                    if matches!(**boxed, Value::Text(_))
+                        && matches!(
+                            self.data.def(self.def_nr).variables.tp(*var),
+                            crate::data::Type::Text(_)
+                        ) =>
+                {
+                    count_format_ops(operators, vnr + 1, self.data)
+                }
+                Value::Call(d, _) => {
+                    let name = &self.data.def(*d).name;
+                    if name == "OpClearStackText" || name == "OpClearText" {
+                        count_format_ops(operators, vnr + 1, self.data)
+                    } else {
+                        0
+                    }
+                }
+                _ => 0,
+            };
             // Collect pre-evaluations needed for this operator (to avoid double
             // mutable borrow of stores when user-defined functions are nested).
             // NOTE: indent is incremented here to match the level used in

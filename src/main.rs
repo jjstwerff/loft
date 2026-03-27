@@ -391,6 +391,7 @@ fn main() {
                 declared: HashSet::new(),
                 reachable: HashSet::new(),
                 loop_stack: Vec::new(),
+                next_format_count: 0,
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -468,6 +469,7 @@ fn main() {
                 declared: HashSet::new(),
                 reachable: HashSet::new(),
                 loop_stack: Vec::new(),
+                next_format_count: 0,
             };
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
