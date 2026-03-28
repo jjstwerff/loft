@@ -283,27 +283,16 @@ loop variables; no additional IR restructuring was required.
 
 ## C22 — Parallel workers: silent wrong results in release builds
 
-`par(...)` workers that write to a `const` input silently discard the write in
-release builds (the write lands in a 256-byte thread-local dummy buffer) and
-continue with stale data.  The locked-store guard is `debug_assert!`-only, so
-only debug builds panic.
+**Fixed in 0.8.3 (S22).**
 
-**Reproducer:**
-```loft
-fn worker(const items: vector<integer>, idx: integer) -> integer {
-  items.push(0);  // writes to const arg — silently discarded in release
-  items[idx]
-}
-fn main() {
-  data = [1, 2, 3];
-  result = par(worker(data, 0..3));
-  // release: may return wrong values; debug: panics immediately
-}
-```
+`par(...)` workers that write to a `const` input previously silently discarded
+the write in release builds.  The `#[cfg(debug_assertions)]` guard on auto-lock
+insertion has been removed; `store.claim()` and `store.delete()` now use
+`assert!` (not `debug_assert!`) so the panic fires in both debug and release
+builds.
 
-**Test:** none (release-build behaviour only).
-**Workaround:** never write to `const` parameters; always test `par()` loops in debug mode.
-**Planned fix:** S22 in [ROADMAP.md](ROADMAP.md) — remove `#[cfg(debug_assertions)]` guard on auto-lock.
+**Test:** `claim_on_locked_store_panics` and `delete_on_locked_store_panics`
+in `tests/expressions.rs` — both pass.
 **Docs:** [SAFE.md](SAFE.md) § P1-R1.
 
 ---
@@ -381,68 +370,53 @@ fn main() {
 
 ## C26 — `e#remove` on a generator iterator: store corruption in release
 
-`e#remove` on a generator-typed loop variable is not rejected at compile time.
-At runtime `remove()` receives a DbRef with `store_nr == u16::MAX`.  Debug
-builds panic (out-of-bounds).  Release builds compute `u16::MAX % allocations.len()`
-as the store index and delete a real record, silently corrupting that store's
-free list.
+**Partially fixed in 0.8.3 (S24) — compiler rejection already in place; runtime guard added.**
 
-**Reproducer:**
-```loft
-fn gen_items() -> iterator<integer> { for i in 0..5 { yield i; } }
-fn main() {
-  for e in gen_items() {
-    e#remove;  // release: deletes an arbitrary record in a real store
-  }
-}
-```
+`e#remove` on a generator-typed loop variable is rejected at compile time
+(CO1.5c — `loop_value == Null` in `collections.rs`).  A defense-in-depth
+runtime guard was added to `remove()` (`state/io.rs`) and `OpRemove()`
+(`codegen_runtime.rs`): if `store_nr == u16::MAX`, a `debug_assert!` fires and
+the call returns early, preventing release-build store corruption even if the
+compiler check is somehow bypassed.
 
-**Test:** none (debug panics; release silently corrupts — unsafe to automate).
+**Test:** `generator_remove_rejected` in `tests/parse_errors.rs` — compile-time
+rejection passes.
 **Workaround:** only use `e#remove` with store-backed collection iterators.
-**Planned fix:** S24 in [ROADMAP.md](ROADMAP.md) — compiler rejection + runtime guard in `remove()`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R9, [COROUTINE.md](COROUTINE.md) § SC-CO-11.
 
 ---
 
 ## C29 — Native tests: `14-image.loft` PNG width returns 0 in CI (all platforms)
 
-The native binary compiled from `tests/docs/14-image.loft` panics in CI (Ubuntu,
-macOS, Windows) with `width=0` at the `assert(img.width == 256, ...)` check.  The
-test passes locally.  Root cause not yet traced.
+**Fixed in 0.8.3 (S33).**
 
-`n_file` calls `stores.get_file()` which sets the format byte to `1` (PNG); then
-`t_4File_png` calls `stores.get_png("tests/example/map.png", &result)` with the
-file path string.  If `get_png` silently fails to open the PNG (e.g. wrong working
-directory on CI, or a `get_png` return-value that is ignored in native code), it
-leaves width/height at 0.  The same code path works in the interpreter because the
-bytecode executor handles the return value differently.
+The root cause was cross-profile rlib selection: `find_loft_rlib()` compared
+modification times across `release/` and `debug/` deps directories and selected
+the wrong profile's rlib.  After fixing it to use only the current test binary's
+own `deps/` directory (`current_exe().parent()`), the correct profile rlib is
+always used and the PNG native test compiles and runs correctly.
 
-**Reproducer:** run `cargo test --test native native_dir` on any CI platform with
-`14-image.loft` not skipped.
+`14-image.loft` has been removed from `NATIVE_SKIP`.
 
-**Test:** `14-image.loft` is in `NATIVE_SKIP`.
-**Workaround:** test PNG functionality via the interpreter (`loft_suite` passes).
-**Planned fix:** S33 — add diagnostic logging to `get_png` native path; verify
-working directory and return-value handling; remove from skip list.
+**Test:** `14-image.loft` runs as part of `native_dir` — passes.
+**Docs:** [NATIVE.md](NATIVE.md) § S33.
 
 ---
 
 ## C27 — Native tests: `rand_core` unavailable in standalone rustc compilation
 
-`rand_core` and `rand_pcg` are optional feature dependencies of the loft crate
-(enabled by the `random` feature).  When the native test harness compiles generated
-`.rs` files by invoking `rustc` directly, it passes `--extern loft=libloft.rlib` but
-does not pass `--extern rand_core=...` for transitive optional deps.  Any native test
-that calls `rand`, `rand_seed`, or `rand_indices` therefore fails to compile with
-`error[E0433]: failed to resolve: use of undeclared crate or module 'rand_core'`.
+**Fixed in 0.8.3 (S31).**
 
-**Reproducer:** run `cargo test --test native` with `tests/scripts/15-random.loft` or
-`tests/docs/21-random.loft` included (not skipped).
+`collect_extra_externs()` was added to `tests/native.rs`: it scans all `.rlib`
+files in the current test binary's `deps/` directory and passes each as
+`--extern crate_name=path` to the standalone `rustc` invocation.  All versions
+of each crate are passed (no deduplication), allowing rustc's hash matching to
+select the one that `libloft` was compiled against.
 
-**Test:** `15-random.loft` and `21-random.loft` are in the native skip lists.
-**Workaround:** avoid random functions in native test scripts until the harness is fixed.
-**Planned fix:** extend `find_loft_rlib` / rustc invocation in `tests/native.rs` to
-collect and pass `--extern` flags for all transitive optional deps from the deps dir.
+`15-random.loft` and `21-random.loft` have been removed from their respective
+native skip lists.
+
+**Test:** `15-random.loft` and `21-random.loft` run as part of `native_dir` — pass.
 
 ---
 

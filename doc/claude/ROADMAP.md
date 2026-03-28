@@ -26,9 +26,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| S22       | Fix parallel worker auto-lock in release builds      | S  | ✓      |              | SAFE.md § P1-R1            |
 | S23       | Compiler + runtime: reject `yield` inside `par()`   | S  | ✓      |              | SAFE.md § P2-R6            |
-| S24       | Compiler + runtime: reject `e#remove` on generator  | XS | ✓      |              | SAFE.md § P2-R9            |
 | S25       | CO1.3d: coroutine text serialisation (atomic)        | L  | ✓      |              | SAFE.md § P2-R1/R2/R3      |
 | S25.1     | ↳ `serialise_text_slots` at create + yield           | M  | ✓      |              | COROUTINE.md § CO1.3d      |
 | S25.2     | ↳ Pointer-patch on resume + `String` drain on return | M  | ✓      | S25.1        | COROUTINE.md § CO1.3d      |
@@ -45,9 +43,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
 | N8c.1     | Native: audit generic instantiation failures         | S  | ✓      |              | NATIVE.md § N8c            |
 | N8c.2     | ↳ Fix failing monomorphised instantiations           | S  | ✓      | N8c.1        | NATIVE.md § N8c            |
-| S31       | Native harness: pass `--extern` for optional deps    | S  | ~      |              | CAVEATS.md C27             |
 | S32       | Fix slot conflict in `20-binary.loft` (`rv`/`_read_34`) | M | ~   |              | CAVEATS.md C28             |
-| S33       | Native: fix `14-image.loft` PNG width=0 in CI       | S  | ~      |              | CAVEATS.md C29             |
 
 ---
 

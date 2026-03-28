@@ -6,6 +6,42 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Safety fixes
+
+- **`const` parameter writes now panic in release builds** (S22) — The
+  `#[cfg(debug_assertions)]` guard on auto-lock insertion has been removed from
+  `src/parser/expressions.rs`.  `store.claim()` and `store.delete()` now use
+  `assert!` instead of `debug_assert!`, so writes to `const` Reference or Vector
+  parameters produce a panic in both debug and release builds.  Previously, release
+  builds silently discarded the write into a dummy buffer, causing `par()` workers
+  to continue with stale data.  Tests `claim_on_locked_store_panics` and
+  `delete_on_locked_store_panics` in `tests/expressions.rs` verify the runtime
+  enforcement.
+
+- **`e#remove` on a generator iterator: defense-in-depth runtime guard** (S24) —
+  Calling `e#remove` inside a generator `for` loop was already rejected at compile
+  time (CO1.5c).  A matching runtime guard has been added to `state/io.rs::remove()`
+  and `codegen_runtime.rs::OpRemove()`: if `store_nr == u16::MAX` (the coroutine
+  sentinel), a `debug_assert!` fires and the call returns early, preventing
+  release-build store corruption even if the compiler check is somehow bypassed.
+
+### Native test harness fixes
+
+- **Optional feature dependencies now passed to standalone `rustc`** (S31) — The
+  native test harness now calls `collect_extra_externs()`, which scans all `.rlib`
+  files in the current test binary's `deps/` directory and passes each as
+  `--extern crate_name=path`.  This unblocks scripts that use `rand`, `rand_seed`,
+  or `rand_indices`: `tests/scripts/15-random.loft` and `tests/docs/21-random.loft`
+  have been removed from the native skip lists.
+
+- **Native rlib lookup now uses the current test binary's profile** (S33) — The
+  previous `find_loft_rlib()` compared modification times across `release/` and
+  `debug/` deps directories and could select the wrong profile's rlib (e.g. a
+  newer no-features rlib from a `--no-default-features` CI step).  The function
+  now uses `current_exe().parent()` — always the current test binary's own `deps/`
+  directory — so the selected rlib always matches the features the test was compiled
+  with.  `tests/docs/14-image.loft` has been removed from `NATIVE_SKIP`.
+
 ### New features
 
 - **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now
