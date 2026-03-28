@@ -301,50 +301,18 @@ causes a dangling pointer.
 
 ## C24 — Coroutine text locals: memory leak on early `break`
 
-**Partially fixed (S25.1/S25.2, 0.8.3) — text args fully serialised; text local
-leak narrowed to one path.**
+**Fixed in 0.8.3 (S25.1/S25.2/S25.3).**
 
-**Precise remaining leak (2026-03-29):**
+Text locals (`word = "hello"` inside a generator) are `String` objects on the
+generator's live stack.  The early-break path (`for item in gen { break; }`)
+previously leaked every live text local in `frame.stack_bytes`.
 
-Text locals (`word = "hello"` inside a generator) are `String` objects (24 bytes)
-on the generator's live stack.  The bitwise-copy approach in `coroutine_yield` is
-safe for the yield/resume cycle and for exhaustion (C24 was misstated — at
-exhaustion, `OpFreeText` is emitted before `OpCoroutineReturn` by `scopes::check`,
-so the live-stack String IS freed).
+Fix (S25.3): `free_coroutine` now calls `drop_text_locals_in_bytes` for Suspended
+frames, which drops each text-local String whose slot is within the `stack_bytes`
+snapshot.  A prerequisite `generator_zone2_size` zeroing at first resume establishes
+the null-ptr invariant so unassigned slots are safely skipped.
 
-The only remaining leak is the **early-break path**:
-
-1. Generator suspends (yields at least once).
-2. Consumer breaks from `for item in gen { ... }`.
-3. `OpFreeCoroutine` → `free_coroutine(idx)` → `self.coroutines[idx] = None`.
-4. Dropping `Box<CoroutineFrame>` drops `frame.stack_bytes: Vec<u8>` as raw bytes
-   — the `String` heap allocations embedded in those bytes are not freed.
-
-**Reproducer (early-break path):**
-```loft
-fn gen_words() -> iterator<text> {
-  word = "hello";
-  yield word;         // frame.stack_bytes now holds String("hello")
-  word = "world";
-  yield word;
-}
-fn main() {
-  for w in gen_words() { break; }  // break → free_coroutine → "hello" leaks
-}
-```
-
-**Note:** iterating to exhaustion does NOT leak (fixed by S25.1/S25.2).
-
-**Complication:** Zone 2 variables (including text locals) are pre-claimed via
-`OpReserveFrame` but not zeroed.  Text locals that are assigned only after the
-yield point have garbage bytes in `frame.stack_bytes`; calling `drop_in_place` on
-those would be UB.  Fix must zero Zone 2 at generator startup first.
-
-**Test:** `coroutine_text_local_survives_yield` (passes, no leak at exhaustion).
-No test for the early-break path yet.
-**Planned fix:** PLANNING.md S25.3 (0.8.3) — zero Zone 2 at first resume + null-ptr-guarded
-drop in `free_coroutine`.  Two-step, must land atomically.
-**Workaround:** iterate generators to exhaustion rather than breaking.
+**Tests:** `coroutine_text_local_early_break`, `coroutine_text_local_declared_after_first_yield`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3, [PLANNING.md](PLANNING.md) § S25.3.
 
 ---
