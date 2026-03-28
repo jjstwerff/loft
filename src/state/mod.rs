@@ -386,8 +386,10 @@ impl State {
             if matches!(&attr.typedef, Type::Text(_)) {
                 // Read the Str from stack_bytes at byte_offset.
                 // SAFETY: byte_offset + size_of::<Str>() <= args_size <= stack_bytes.len().
+                // Str is stored unaligned in the byte-packed stack; read_unaligned is correct.
+                #[allow(clippy::cast_ptr_alignment)]
                 let str_val: Str = unsafe {
-                    let src = stack_bytes.as_ptr().add(byte_offset) as *const Str;
+                    let src = stack_bytes.as_ptr().add(byte_offset).cast::<Str>();
                     std::ptr::read_unaligned(src)
                 };
                 // Skip null sentinel and static text (pointer lives in text_code).
@@ -396,8 +398,9 @@ impl State {
                     let owned = str_val.str().to_owned();
                     let new_str = Str::new(owned.as_str());
                     // Patch stack_bytes to point to the owned buffer.
+                    #[allow(clippy::cast_ptr_alignment)]
                     unsafe {
-                        let dst = stack_bytes.as_mut_ptr().add(byte_offset) as *mut Str;
+                        let dst = stack_bytes.as_mut_ptr().add(byte_offset).cast::<Str>();
                         std::ptr::write_unaligned(dst, new_str);
                     }
                     text_owned.push((byte_offset as u32, owned));
@@ -554,9 +557,10 @@ impl State {
                     .iter()
                     .map(|(off, s)| (*off, Str::new(s.as_str())))
                     .collect();
+                #[allow(clippy::cast_ptr_alignment)]
                 for (offset, new_str) in &text_patches {
                     unsafe {
-                        let dst = bytes.as_mut_ptr().add(*offset as usize) as *mut Str;
+                        let dst = bytes.as_mut_ptr().add(*offset as usize).cast::<Str>();
                         std::ptr::write_unaligned(dst, *new_str);
                     }
                 }
