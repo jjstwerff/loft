@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! Memory/store allocation helpers and claim management.
 
-use crate::database::{Parts, Stores};
+use crate::database::{Parts, Stores, WorkerStores};
 use crate::keys::DbRef;
 use crate::store::Store;
 use crate::tree;
@@ -229,7 +229,7 @@ impl Stores {
     /// `State::new_worker → Stores::database` can safely re-initialise them without
     /// hitting the "Write to locked store" debug assert.
     #[must_use]
-    pub fn clone_for_worker(&self) -> Stores {
+    pub fn clone_for_worker(&self) -> WorkerStores {
         let allocations = self
             .allocations
             .iter()
@@ -242,7 +242,7 @@ impl Stores {
                 }
             })
             .collect();
-        Stores {
+        WorkerStores::new(Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations,
@@ -258,7 +258,7 @@ impl Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
-        }
+        })
     }
 
     #[must_use]

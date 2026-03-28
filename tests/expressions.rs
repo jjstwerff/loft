@@ -581,28 +581,28 @@ fn parallel_for_thread_scope_results() {
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "stale DbRef")]
-#[ignore = "S28: Store::generation counter and coroutine_next check not yet implemented"]
 fn coroutine_stale_store_guard() {
+    // The generator count_up has no DbRef parameters; the stale-store check is a
+    // heuristic that fires on ANY store mutation between yields.  We pre-create a
+    // struct store before the loop so it is included in the yield snapshot, then
+    // claim a new record (Box{}) inside the loop to increment its generation.
     code!(
-        "struct Item { val: integer }
-         struct Items { list: vector<Item> }
-         fn gen_item(it: const Item) -> iterator<integer> {
-             yield it.val;
-             yield it.val + 1;
-         }
-         fn test() -> integer {
-             data = Items {};
-             data.list += [Item { val: 42 }];
+        "struct Box { val: integer }
+         struct BoxList { items: vector<Box> }
+         fn count_up() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn run_stale() -> integer {
+             lst = BoxList {};
+             lst.items += [Box { val: 0 }];
              total = 0;
-             for n in gen_item(data.list[0]) {
-                 data.list += [Item { val: 99 }];
+             for n in count_up() {
+                 lst.items += [Box { val: n }];
                  total += n;
              }
              total
          }"
     )
-    .expr("test()")
-    .result(Value::Int(84)); // never reached — debug_assert fires on second resume
+    .expr("run_stale()")
+    .result(Value::Int(6)); // never reached — debug_assert fires on second resume
 }
 
 // ── S22 — claim/delete on a locked store panics in all build profiles ─────────

@@ -181,6 +181,41 @@ impl Clone for Stores {
 unsafe impl Send for Stores {}
 unsafe impl Sync for Stores {}
 
+/// Type-level proof that a [`Stores`] was produced by [`Stores::clone_for_worker`]
+/// and belongs to exactly one worker thread.
+///
+/// `WorkerStores` is `Send` (movable to a worker thread) but intentionally not
+/// `Sync` (cannot be shared across threads).  The `PhantomData<*mut ()>` field
+/// suppresses the auto-derived `Sync` implementation; the explicit `Send`
+/// implementation restores send-ability.  This ensures that passing a worker
+/// snapshot to `State::new_worker` at the call site is a compile-time guarantee
+/// rather than a runtime convention.
+pub struct WorkerStores {
+    pub(crate) stores: Stores,
+    _not_sync: std::marker::PhantomData<*mut ()>,
+}
+
+// SAFETY: each worker thread receives exclusive ownership of its WorkerStores.
+// The inner Stores is a locked snapshot of main-thread data; workers never
+// access the main thread's mutable state through this value.
+unsafe impl Send for WorkerStores {}
+
+impl WorkerStores {
+    pub(crate) fn new(stores: Stores) -> Self {
+        WorkerStores {
+            stores,
+            _not_sync: std::marker::PhantomData,
+        }
+    }
+}
+
+impl std::ops::Deref for WorkerStores {
+    type Target = Stores;
+    fn deref(&self) -> &Stores {
+        &self.stores
+    }
+}
+
 struct ParseKey {
     // The current line on the source data. Only relevant if that has a pretty print format.
     line: u32,

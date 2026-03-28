@@ -13,7 +13,7 @@ mod text;
 
 use crate::data::{Data, Type};
 pub use crate::database::Call;
-use crate::database::{ParallelCtx, Stores};
+use crate::database::{ParallelCtx, Stores, WorkerStores};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Str};
 use crate::log_config::LogConfig;
@@ -81,6 +81,12 @@ pub struct CoroutineFrame {
     /// double-free or missing-free bugs in the consumer while the frame is suspended.
     #[cfg(debug_assertions)]
     pub saved_text_positions: std::collections::BTreeSet<u32>,
+    /// S28 (debug-only): snapshot of `(store_nr, generation)` for all live stores at
+    /// the moment of `coroutine_yield`.  Checked at `coroutine_next`; a mismatch
+    /// means a store was mutated between yields and any `DbRef` locals held by the
+    /// generator may be stale.
+    #[cfg(debug_assertions)]
+    pub saved_store_generations: Vec<(u16, u32)>,
 }
 
 /// Internal State of the interpreter to run bytecode.
@@ -362,6 +368,8 @@ impl State {
             call_depth: 0,
             #[cfg(debug_assertions)]
             saved_text_positions: std::collections::BTreeSet::new(),
+            #[cfg(debug_assertions)]
+            saved_store_generations: Vec::new(),
         };
         let idx = self.allocate_coroutine(frame);
 
@@ -437,6 +445,31 @@ impl State {
                     let saved: std::collections::BTreeSet<u32> =
                         std::mem::take(&mut self.coroutine_frame_mut(idx).saved_text_positions);
                     self.text_positions.extend(saved);
+                }
+
+                // S28 (debug-only): detect store mutations between yield and resume.
+                // Any live store whose generation changed since the last yield may have
+                // invalidated DbRef locals held by the suspended generator.
+                #[cfg(debug_assertions)]
+                {
+                    let saved_gens: Vec<(u16, u32)> = self
+                        .coroutine_frame_mut(idx)
+                        .saved_store_generations
+                        .clone();
+                    for (store_nr, saved_gen) in saved_gens {
+                        let cur_gen = self
+                            .database
+                            .allocations
+                            .get(store_nr as usize)
+                            .map_or(0, |s| s.generation);
+                        debug_assert!(
+                            cur_gen == saved_gen,
+                            "stale DbRef: store {store_nr} was mutated between coroutine \
+                             yields (generation at yield: {saved_gen}, now: {cur_gen}). \
+                             DbRef locals held by the generator may point to freed or \
+                             reallocated records — see CAVEATS.md S28"
+                        );
+                    }
                 }
 
                 let dest = self
@@ -546,6 +579,23 @@ impl State {
                 self.text_positions.remove(p);
             }
             self.coroutine_frame_mut(idx).saved_text_positions = to_save;
+        }
+
+        // S28 (debug-only): snapshot all live, unlocked store generations at the
+        // yield point.  `coroutine_next` will compare these on resume and fire a
+        // debug_assert if any store was mutated while the generator was suspended.
+        // Locked stores are worker snapshots that can never change; skip them.
+        #[cfg(debug_assertions)]
+        {
+            let gens: Vec<(u16, u32)> = self
+                .database
+                .allocations
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| !s.free && !s.locked)
+                .map(|(i, s)| (i as u16, s.generation))
+                .collect();
+            self.coroutine_frame_mut(idx).saved_store_generations = gens;
         }
 
         self.active_coroutines.pop();
@@ -957,15 +1007,17 @@ impl State {
 
     /// Create a `State` for use in a parallel worker thread.
     ///
-    /// `db` should be built with `Stores::clone_for_worker()`; this call
-    /// allocates a fresh stack store at the next available index in `db`.
+    /// `worker` must be produced by [`Stores::clone_for_worker`]; the
+    /// `WorkerStores` newtype is the compile-time proof of that invariant (S30).
+    /// This call allocates a fresh stack store at the next available index.
     #[must_use]
     pub fn new_worker(
-        mut db: Stores,
+        worker: WorkerStores,
         bytecode: Arc<Vec<u8>>,
         text_code: Arc<Vec<u8>>,
         library: Arc<Vec<Call>>,
     ) -> State {
+        let mut db = worker.stores;
         State {
             stack_cur: db.database(1000),
             stack_pos: 4,

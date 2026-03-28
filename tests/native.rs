@@ -36,17 +36,12 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     "47-predicates.loft",
     // A10: native codegen for field iteration's match arms not yet supported.
     "45-field-iter.loft",
-    // P5: native codegen does not handle generic function instantiation.
-    "48-generics.loft",
     // T1: native codegen does not support tuple types (interpreter-only).
     "50-tuples.loft",
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
     // T1: caveats script uses tuple element assign — interpreter-only.
     "46-caveats.loft",
-    // C28: slot conflict in n_main between rv and _read_34 at [820, 832); pre-existing
-    // slot assignment regression — see CAVEATS.md C28.
-    "20-binary.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

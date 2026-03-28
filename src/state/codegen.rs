@@ -597,7 +597,33 @@ impl State {
     /// override only if no child-scope overlap (A13 guard).
     fn adjust_first_assignment_slot(stack: &mut Stack, v: u16, pos: u16) {
         if pos > stack.position {
-            stack.function.set_stack_pos(v, stack.position);
+            // S32: Before moving a variable down to TOS, check that no same-scope
+            // sibling with an overlapping live interval already occupies
+            // [stack.position, stack.position + v_size).  Without this guard,
+            // two same-size same-scope variables (e.g. rv and _read_34) can both
+            // land at the same slot — see CAVEATS.md C28.
+            let v_size = size(stack.function.tp(v), &Context::Variable);
+            let new_end = stack.position + v_size;
+            let v_scope = stack.function.scope(v);
+            let v_first = stack.function.first_def(v);
+            let v_last = stack.function.last_use(v);
+            let has_sibling_overlap = (0..stack.function.count()).any(|j| {
+                if j == v || stack.function.stack(j) == u16::MAX {
+                    return false;
+                }
+                if stack.function.scope(j) != v_scope {
+                    return false; // child-scope overlap is handled in the else-if branch
+                }
+                let js = stack.function.stack(j);
+                let je = js + size(stack.function.tp(j), &Context::Variable);
+                stack.position < je
+                    && new_end > js
+                    && v_first <= stack.function.last_use(j)
+                    && v_last >= stack.function.first_def(j)
+            });
+            if !has_sibling_overlap {
+                stack.function.set_stack_pos(v, stack.position);
+            }
         } else if pos < stack.position
             && matches!(
                 stack.function.tp(v),

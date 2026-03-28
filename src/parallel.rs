@@ -10,7 +10,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::database::{Call, Stores};
+use crate::database::{Call, Stores, WorkerStores};
 use crate::keys::DbRef;
 use crate::state::State;
 use crate::vector;
@@ -62,7 +62,7 @@ impl WorkerProgram {
     }
 
     /// Create a worker `State` from this program, with `stack_trace_lib_nr` propagated.
-    fn new_state(&self, worker_stores: crate::database::Stores) -> State {
+    fn new_state(&self, worker_stores: WorkerStores) -> State {
         let (bytecode, text_code, library) = self.clone_refs();
         let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
         state.stack_trace_lib_nr = self.stack_trace_lib_nr;
