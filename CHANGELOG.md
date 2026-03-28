@@ -122,16 +122,18 @@ All notable changes to the loft language and interpreter.
   to keep the text beyond one iteration must copy it (`stored = "{value}"`) or pass
   it to a function that calls `set_str`.  No runtime change; documentation only.
 
-- **`coroutine_yield` debug guard for text locals** (P2-R3 M8-b) — A
-  `debug_assert!` in `coroutine_yield` (`src/state/mod.rs`) now fires when any live
-  text `String` (tracked via `text_positions`) exists in the generator's locals range
-  at the moment of yield.  CO1.3d (`serialise_text_slots`) is not yet implemented;
-  the raw-bytes copy in the integer-only yield path saves heap pointers that would
-  dangle on resume — silent use-after-free.  The assert is debug-only, adds no
-  overhead in release builds, and uses the existing `text_positions` set.
-  Test `coroutine_text_local_survives_yield` in `tests/expressions.rs` remains
-  `#[ignore]` (CO1.3d pending); the guard fires first, preventing the dangling-pointer
-  path from being exercised silently.
+- **Text locals survive yield/resume in coroutines** (P2-R3 CO1.3d) — Text
+  variables in generator functions are `String` objects (24 B) on the live stack.
+  The bitwise copy of the locals region at yield is safe: `String` owns its heap
+  buffer and no external code can free that buffer while the generator is suspended.
+  The M8-b `debug_assert!` that fired for any text local at yield time has been
+  removed; the S27 `text_positions` save/restore is preserved for correctness.
+  Additionally, `coroutine_return` and `push_null_value` now push
+  `Str::new(STRING_NULL)` (not 16 zero bytes) when an exhausted `iterator<text>`
+  generator returns its null sentinel — the zero-pointer `Str` caused a panic in
+  `append_text` via `slice::from_raw_parts(0, 0)`.  Test
+  `coroutine_text_local_survives_yield` in `tests/expressions.rs` is now active and
+  passing.
 
 ### Native store safety
 
