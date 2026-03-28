@@ -360,21 +360,13 @@ fn closure_capture_text() {
 }
 
 #[test]
-#[ignore = "A5.6b.1: text_return() adds captured text vars as spurious RefVar(Text) \
-arguments on the lambda definition, shifting __closure DbRef to a garbage stack position. \
-Fix: skip captured_names in text_return(). See PLANNING.md § A5.6b.1."]
 fn closure_capture_text_integer_return() {
     // Same-scope text capture: lambda reads captured text, returns integer.
-    // Does NOT require A5.6b.2 (text work buffers) because no text is returned.
-    code!(
-        "fn test() -> integer {
-            prefix = \"hello\";
-            f = fn() -> integer { len(prefix) };
-            f()
-         }"
-    )
-    .expr("test()")
-    .result(Value::Int(5));
+    // A5.6b.1: zero-param fn-ref fast path now injects __closure arg; text_return
+    // no longer adds captured vars as spurious RefVar(Text) work-buffer arguments.
+    expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()")
+        .warning("closure record '__closure_0' created with 1 field: prefix(text([])) at closure_capture_text_integer_return:2:73")
+        .result(Value::Int(5));
 }
 
 #[test]
@@ -384,15 +376,9 @@ RefVar(Text) argument fix (A5.6b.1) and generate_call_ref text work buffer pre-a
 fn closure_capture_text_return() {
     // Same-scope text capture: lambda reads captured text, returns text.
     // Requires both A5.6b.1 (parser fix) and A5.6b.2 (codegen fix).
-    code!(
-        "fn test() -> text {
-            greeting = \"hello\";
-            f = fn(name: text) -> text { \"{greeting}, {name}!\" };
-            f(\"world\")
-         }"
-    )
-    .expr("test()")
-    .result(Value::str("hello, world!"));
+    expr!("greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")")
+        .warning("closure record '__closure_0' created with 1 field: greeting(text([])) at closure_capture_text_return:2:92")
+        .result(Value::str("hello, world!"));
 }
 
 // ── CO1.2 — OpCoroutineCreate + OpCoroutineNext ─────────────────────────────

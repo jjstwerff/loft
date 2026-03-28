@@ -1560,6 +1560,12 @@ impl Parser {
                     }
                     continue;
                 }
+                // A5.6b.1: captured text variables are read from the closure record at
+                // runtime — they must NOT be registered as hidden RefVar(Text) work-buffer
+                // arguments.  Adding them would shift __closure to a wrong stack position.
+                if self.captured_names.iter().any(|(name, _)| name == n) {
+                    continue;
+                }
                 if matches!(tp, Type::Text(_)) {
                     // create a new attribute with this name
                     let a = self.data.add_attribute(
@@ -1812,7 +1818,15 @@ impl Parser {
                 {
                     if !self.first_pass {
                         self.var_usages(v_nr, true);
-                        *val = Value::CallRef(v_nr, vec![]);
+                        let mut args = vec![];
+                        // A5.6b.1: zero-param closures still have a hidden __closure arg;
+                        // inject it the same way try_fn_ref_call does for non-zero-param calls.
+                        if let Some(closure_alloc) = self.last_closure_alloc.take() {
+                            args.push(*closure_alloc);
+                        } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
+                            args.push(Value::Var(closure_w));
+                        }
+                        *val = Value::CallRef(v_nr, args);
                     }
                     return *ret_type;
                 }
