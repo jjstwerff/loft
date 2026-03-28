@@ -706,49 +706,20 @@ Same-scope calls use `last_closure_alloc` correctly (consumed at the call site w
 the same definition) and do not require the returning-closure architecture.  The
 existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (1.1+).
 
-**A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (✓ implemented in `safe` branch):
-Text-returning lambdas called via `CallRef` fail even after the DbRef fix because
-`generate_call_ref` does not pre-allocate the text work variables (e.g. `__work_1`)
-that `text_return()` in `control.rs` adds to the lambda’s stack frame.  `generate_call`
-allocates these with `OpAllocText` before the call; `generate_call_ref` has no
-equivalent.  Result: the lambda reads garbage from uninitialized stack positions.
+**A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (✓ implemented):
+Text-returning lambdas called via `CallRef` now correctly push the hidden `__work_N`
+work-buffer DbRef argument that the callee expects.
 
-The debug assertion added in this session (codegen.rs:1170–1178) fires for this case
-in debug builds, making the problem immediately visible.
+**Fix** (`src/parser/control.rs`, `try_fn_ref_call` and zero-param closure path):
+- Both passes call `work_text()` for each dep in the return type’s deps list.
+- `work_text()` adds each variable to `work_texts`; `parse_code` (expressions.rs:79)
+  inserts `v_set(wv, Text(""))` so the Zone 2 slot allocator fires.
+- In pass 2, a `v_block([OpCreateStack(Var(wv))], Type::Reference(...))` is injected
+  between the visible args and the closure arg — producing the required 12-byte DbRef.
+- `generate_call_ref` simplified to a single `for arg in args { generate(...) }` loop;
+  the blocks produce the correct sizes automatically.
 
-**Fix path (concrete — `src/state/codegen.rs`, `generate_call_ref`):**
-
-The fn-type stored in the fn-ref variable is `Type::Function(param_types, ret_type)`
-where `ret_type = Type::Text(deps)` and `deps` is the list of hidden `__work_N`
-variables required.  `deps.len()` gives the count of text work buffers needed.
-
-After fixing A5.6b.1 (so the DbRef is valid), extend `generate_call_ref` to emit
-`OpAllocText` for each work buffer before `OpCallRef`:
-
-```rust
-// A5.6b.2: pre-allocate text work buffers required by text-returning lambdas.
-// `generate_call` does this via try_text_dest_pass; CallRef must do it manually.
-let work_count = if let Type::Text(deps) = &ret_type { deps.len() } else { 0 };
-for _ in 0..work_count {
-    stack.add_op("OpAllocText", self);
-    stack.position += size(&Type::Text(vec![]), &Context::Variable) as u16;
-}
-```
-
-This block is inserted after generating the declared args but before emitting the
-closure-arg generation (so the work buffers are below the closure DbRef on the stack,
-matching what `generate_call` produces).  The `total_arg_size` computation must also
-account for the added work-buffer bytes:
-
-```rust
-let work_size = work_count as u16
-    * size(&Type::Text(vec![]), &Context::Variable) as u16;
-let total_arg_size = declared_size + extra + work_size;
-```
-
-Verify that the lambda’s `def_code` assigns `__work_N` slots AFTER declared params
-and BEFORE `__closure`, so the stack layout matches what `generate_call` produces.
-Adjust the push order in `generate_call_ref` if needed.
+**Verified:** `closure_capture_text_return` passes; all other closure tests unaffected.
 
 **A5.6c — Mutable capture write-back: void-return lambdas** (✓ implemented in `safe` branch):
 A void-return capturing lambda (`fn(x: integer) { count += x; }`) updates the

@@ -47,7 +47,7 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 
 | Test | Why skipped | Fix |
 |------|-------------|-----|
-| `expressions::closure_capture_text` | Text capture: same-scope text-returning lambda still fails (Store write out of bounds); A5.6b.1/b.2 resolved the `closure_capture_text_integer_return` case | A5.6b follow-up |
+| `expressions::closure_capture_text` | Cross-scope closure (make_greeter pattern) deferred to A5.6 (1.1+) | A5.6 |
 | `wrap::parser_debug` | Intentionally slow (~100 s execution trace); run manually with `--ignored` | Not a bug |
 | `native_loader::load_one_registers_native_functions` | A7.2: `extensions::load_one` not yet implemented | A7.2 — deferred |
 | `wasm_entry::wasm_compile_and_run_smoke` | W1.9: requires `wasm-pack` + Node.js | W1.9 — deferred |

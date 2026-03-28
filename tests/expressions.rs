@@ -369,6 +369,7 @@ fn closure_capture_text_integer_return() {
         .result(Value::Int(5));
 }
 
+// A5.6b.2: re-enabled after generate_call_ref work-buffer push fix.
 #[test]
 fn closure_capture_text_return() {
     // Same-scope text capture: lambda reads captured text, returns text.
