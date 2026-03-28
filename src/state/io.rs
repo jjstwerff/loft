@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{State, new_ref, size_ref};
-#[cfg(not(feature = "wasm"))]
-use crate::database::Parts;
-use crate::database::ShowDb;
+use crate::database::{Parts, ShowDb};
 use crate::keys::{Content, DbRef, Key};
 use crate::{hash, tree, vector};
 #[cfg(not(feature = "wasm"))]
@@ -25,7 +23,20 @@ impl State {
             return;
         }
         #[cfg(feature = "wasm")]
-        return; // no filesystem access under WASM
+        {
+            // FS-B: read entire file via JS host bridge.
+            let file_path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
+            if let Some(text) = crate::wasm::host_fs_read_text(&file_path) {
+                *buf = text;
+            }
+            return;
+        }
         #[cfg(not(feature = "wasm"))]
         {
             let store = self.database.store(&file);
@@ -39,6 +50,44 @@ impl State {
         }
     }
 
+    /// Assemble the raw bytes to write for `val` of type `db_tp`.
+    /// Shared by the native and WASM write paths.
+    fn assemble_write_data(&self, val: DbRef, db_tp: u16, little_endian: bool) -> Vec<u8> {
+        let mut data = Vec::new();
+        if self.database.is_text_type(db_tp) {
+            let store = self.database.store(&val);
+            let s: &String = store.addr::<String>(val.rec, val.pos);
+            data.extend_from_slice(s.as_bytes());
+        } else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
+            let elem_tp = *elem_tp;
+            let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+            let (v_ptr, store_nr) = {
+                let store = self.database.store(&vec_ref);
+                (
+                    store.get_int(vec_ref.rec, vec_ref.pos) as u32,
+                    vec_ref.store_nr,
+                )
+            };
+            if v_ptr != 0 {
+                let length = self.database.allocations[store_nr as usize].get_int(v_ptr, 4) as u32;
+                let elem_size = u32::from(self.database.size(elem_tp));
+                for i in 0..length {
+                    let elem = DbRef {
+                        store_nr,
+                        rec: v_ptr,
+                        pos: 8 + elem_size * i,
+                    };
+                    self.database
+                        .read_data(&elem, elem_tp, little_endian, &mut data);
+                }
+            }
+        } else {
+            self.database
+                .read_data(&val, db_tp, little_endian, &mut data);
+        }
+        data
+    }
+
     pub fn write_file(&mut self) {
         let val = *self.get_stack::<DbRef>();
         let file = *self.get_stack::<DbRef>();
@@ -46,21 +95,39 @@ impl State {
         if file.rec == 0 {
             return;
         }
+        let format = self
+            .database
+            .store(&file)
+            .get_byte(file.rec, file.pos + 32, 0);
+        // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
+        if format != 1 && format != 5 && format != 2 && format != 3 {
+            return;
+        }
+        let little_endian = format == 2;
+        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
+        let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+        self.database
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 8, next_pos);
+        let data = self.assemble_write_data(val, db_tp, little_endian);
+        let written = data.len();
+        #[cfg(feature = "wasm")]
+        {
+            // FS-C: seek to position then write; VirtFS writeBytes handles extension.
+            let file_path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            crate::wasm::host_fs_seek(&file_path, next_pos);
+            crate::wasm::host_fs_write_bytes(&file_path, &data);
+        }
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.database.files.len() as i32;
-            let format = self
-                .database
-                .store(&file)
-                .get_byte(file.rec, file.pos + 32, 0);
-            // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
-            if format != 1 && format != 5 && format != 2 && format != 3 {
-                return;
-            }
-            let little_endian = format == 2;
             let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
             let file_ref = if file_ref == i32::MIN {
-                // Open the file for writing (creates or truncates), same for text and binary.
                 let file_name = {
                     let store = self.database.store(&file);
                     store
@@ -72,7 +139,6 @@ impl State {
                         self.database
                             .store_mut(&file)
                             .set_int(file.rec, file.pos + 28, f_nr);
-                        // If the file was marked NotExists, update format to TextFile now that it exists.
                         if format == 5 {
                             self.database
                                 .store_mut(&file)
@@ -89,61 +155,43 @@ impl State {
             } else {
                 file_ref
             };
-            // Track position: set #index = where this write starts, then advance #next after.
-            let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
-            let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
-            self.database
-                .store_mut(&file)
-                .set_long(file.rec, file.pos + 8, next_pos);
-            // Assemble the bytes to write.
-            let mut data = Vec::new();
-            if self.database.is_text_type(db_tp) {
-                // Text variables in the stack hold a Rust String (not a store record index).
-                let store = self.database.store(&val);
-                let s: &String = store.addr::<String>(val.rec, val.pos);
-                data.extend_from_slice(s.as_bytes());
-            } else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
-                let elem_tp = *elem_tp;
-                // Vector: `val` is a stack pointer holding a DbRef to the vector.
-                // Dereference to reach the actual vector data, then write each element.
-                let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
-                let (v_ptr, store_nr) = {
-                    let store = self.database.store(&vec_ref);
-                    (
-                        store.get_int(vec_ref.rec, vec_ref.pos) as u32,
-                        vec_ref.store_nr,
-                    )
-                };
-                if v_ptr != 0 {
-                    let length =
-                        self.database.allocations[store_nr as usize].get_int(v_ptr, 4) as u32;
-                    let elem_size = u32::from(self.database.size(elem_tp));
-                    for i in 0..length {
-                        let elem = DbRef {
-                            store_nr,
-                            rec: v_ptr,
-                            pos: 8 + elem_size * i,
-                        };
-                        self.database
-                            .read_data(&elem, elem_tp, little_endian, &mut data);
-                    }
-                }
-            } else {
-                self.database
-                    .read_data(&val, db_tp, little_endian, &mut data);
-            }
-            let written = data.len();
             if let Some(f) = &mut self.database.files[file_ref as usize]
                 && let Err(e) = f.write_all(&data)
             {
                 eprintln!("file write error: {e}");
             }
-            // Update #next to reflect the end of this write.
-            self.database.store_mut(&file).set_long(
-                file.rec,
-                file.pos + 16,
-                next_pos + written as i64,
-            );
+        }
+        self.database
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 16, next_pos + written as i64);
+    }
+
+    /// Dispatch read bytes into `val` of type `db_tp`.
+    /// Shared by the native and WASM read paths.
+    fn dispatch_read_data(
+        &mut self,
+        val: DbRef,
+        db_tp: u16,
+        little_endian: bool,
+        data: Vec<u8>,
+        n: usize,
+    ) {
+        let actual = data.len();
+        let is_text = self.database.is_text_type(db_tp);
+        if is_text {
+            let s = unsafe { String::from_utf8_unchecked(data) };
+            *self
+                .database
+                .store_mut(&val)
+                .addr_mut::<String>(val.rec, val.pos) = s;
+        } else if actual == n {
+            if let Parts::Vector(_) = &self.database.types[db_tp as usize].parts {
+                let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+                self.database
+                    .write_data(&vec_ref, db_tp, little_endian, &data);
+            } else {
+                self.database.write_data(&val, db_tp, little_endian, &data);
+            }
         }
     }
 
@@ -155,16 +203,46 @@ impl State {
         if file.rec == 0 {
             return;
         }
+        let format = self
+            .database
+            .store(&file)
+            .get_byte(file.rec, file.pos + 32, 0);
+        // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists.
+        if format != 1 && format != 5 && format != 2 && format != 3 {
+            return;
+        }
+        let little_endian = format == 2;
+        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
+        let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+        self.database
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 8, next_pos);
+        let n = bytes as usize;
+        #[cfg(feature = "wasm")]
+        {
+            // FS-D: seek JS cursor to position then read n bytes.
+            let file_path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            crate::wasm::host_fs_seek(&file_path, next_pos);
+            if let Some(data) = crate::wasm::host_fs_read_bytes(&file_path, n) {
+                let actual = data.len();
+                self.database.store_mut(&file).set_long(
+                    file.rec,
+                    file.pos + 16,
+                    next_pos + actual as i64,
+                );
+                self.dispatch_read_data(val, db_tp, little_endian, data, n);
+            }
+            return;
+        }
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.database.files.len() as i32;
             let store = self.database.store_mut(&file);
-            let format = store.get_byte(file.rec, file.pos + 32, 0);
-            // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
-            if format != 1 && format != 5 && format != 2 && format != 3 {
-                return;
-            }
-            let little_endian = format == 2;
             let mut file_ref = store.get_int(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
                 let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
@@ -174,15 +252,6 @@ impl State {
                 }
                 file_ref = f_nr;
             }
-            // Save the current position to the current field (file.current = old file.next)
-            // Treat null (i64::MIN) as 0 (start of the file).
-            let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
-            let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
-            self.database
-                .store_mut(&file)
-                .set_long(file.rec, file.pos + 8, next_pos);
-            // Read the bytes
-            let n = bytes as usize;
             let is_text = self.database.is_text_type(db_tp);
             let mut data = vec![0u8; n];
             let actual = if let Some(f) = &mut self.database.files[file_ref as usize] {
@@ -199,7 +268,6 @@ impl State {
             } else {
                 0
             };
-            // Update the next field with actual bytes read
             self.database.store_mut(&file).set_long(
                 file.rec,
                 file.pos + 16,
@@ -207,24 +275,8 @@ impl State {
             );
             if is_text {
                 data.truncate(actual);
-                // Text variables in the stack hold a Rust String; write directly into it.
-                let s = unsafe { String::from_utf8_unchecked(data) };
-                *self
-                    .database
-                    .store_mut(&val)
-                    .addr_mut::<String>(val.rec, val.pos) = s;
-            } else if actual == n {
-                if let Parts::Vector(_) = &self.database.types[db_tp as usize].parts {
-                    // Vector variables on the stack hold an inner DbRef; dereference it so
-                    // that write_data / vector_append gets the actual vector location.
-                    let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
-                    self.database
-                        .write_data(&vec_ref, db_tp, little_endian, &data);
-                } else {
-                    self.database.write_data(&val, db_tp, little_endian, &data);
-                }
             }
-            // For typed non-text reads with incomplete data: leave at null (already initialized)
+            self.dispatch_read_data(val, db_tp, little_endian, data, n);
         }
     }
 
@@ -232,6 +284,21 @@ impl State {
         let pos = *self.get_stack::<i64>();
         let file = *self.get_stack::<DbRef>();
         if file.rec == 0 {
+            return;
+        }
+        #[cfg(feature = "wasm")]
+        {
+            // FS-D: seek JS-side cursor and update store #next position.
+            let file_path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            crate::wasm::host_fs_seek(&file_path, pos);
+            self.database
+                .store_mut(&file)
+                .set_long(file.rec, file.pos + 16, pos);
             return;
         }
         #[cfg(not(feature = "wasm"))]
@@ -259,7 +326,15 @@ impl State {
         }
         #[cfg(feature = "wasm")]
         {
-            self.put_stack(i64::MIN);
+            // FS-D: get file size from JS host bridge.
+            let file_path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            let size = crate::wasm::host_fs_file_size(&file_path);
+            self.put_stack(if size < 0 { i64::MIN } else { size });
             return;
         }
         #[cfg(not(feature = "wasm"))]
@@ -286,7 +361,22 @@ impl State {
         }
         #[cfg(feature = "wasm")]
         {
-            self.put_stack(false);
+            // FS-D: truncate by reading current content, slicing, and rewriting.
+            let file_path = {
+                let store = self.database.store(&file);
+                store
+                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            let ok = if let Some(mut bytes) = crate::wasm::host_fs_read_binary(&file_path) {
+                let new_len = size.max(0) as usize;
+                bytes.truncate(new_len);
+                bytes.resize(new_len, 0);
+                crate::wasm::host_fs_write_binary(&file_path, &bytes) == 0
+            } else {
+                false
+            };
+            self.put_stack(ok);
             return;
         }
         #[cfg(not(feature = "wasm"))]

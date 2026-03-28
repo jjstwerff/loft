@@ -349,8 +349,33 @@ impl Stores {
     }
 
     #[cfg(feature = "wasm")]
-    pub fn get_file(&mut self, _file: &DbRef) -> bool {
-        false
+    pub fn get_file(&mut self, file: &DbRef) -> bool {
+        // FS-E: query file metadata from JS host bridge.
+        if file.rec == 0 {
+            return false;
+        }
+        let file_path = {
+            let store = self.store_mut(file);
+            store
+                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .to_owned()
+        };
+        let store = self.store_mut(file);
+        store.set_long(file.rec, file.pos + 8, i64::MIN);
+        store.set_long(file.rec, file.pos + 16, i64::MIN);
+        if crate::wasm::host_fs_is_dir(&file_path) {
+            store.set_long(file.rec, file.pos, i64::MIN);
+            store.set_byte(file.rec, file.pos + 32, 0, 4); // Directory
+            true
+        } else if crate::wasm::host_fs_is_file(&file_path) {
+            let sz = crate::wasm::host_fs_file_size(&file_path);
+            store.set_long(file.rec, file.pos, sz.max(0));
+            store.set_byte(file.rec, file.pos + 32, 0, 1); // TextFile
+            true
+        } else {
+            store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
+            false
+        }
     }
 
     #[cfg(not(feature = "wasm"))]
@@ -392,7 +417,40 @@ impl Stores {
     }
 
     #[cfg(feature = "wasm")]
-    pub fn get_dir(&mut self, _file_path: &str, _result: &DbRef) -> bool {
+    pub fn get_dir(&mut self, file_path: &str, result: &DbRef) -> bool {
+        // FS-E: list directory entries from JS host bridge.
+        let mut entries = crate::wasm::host_fs_list_dir(file_path);
+        entries.sort();
+        let vector = DbRef {
+            store_nr: result.store_nr,
+            rec: result.rec,
+            pos: result.pos,
+        };
+        for name in entries {
+            let full = format!("{file_path}/{name}");
+            let elm = vector::vector_append(&vector, 33, &mut self.allocations);
+            let store = self.store_mut(result);
+            let name_pos = store.set_str(&full) as i32;
+            store.set_int(elm.rec, elm.pos + 24, name_pos);
+            store.set_int(elm.rec, elm.pos + 28, i32::MIN);
+            store.set_long(elm.rec, elm.pos + 8, i64::MIN);
+            store.set_long(elm.rec, elm.pos + 16, i64::MIN);
+            // Fill metadata for this entry.
+            let is_dir = crate::wasm::host_fs_is_dir(&full);
+            let is_file = crate::wasm::host_fs_is_file(&full);
+            let store = self.store_mut(result);
+            if is_dir {
+                store.set_long(elm.rec, elm.pos, i64::MIN);
+                store.set_byte(elm.rec, elm.pos + 32, 0, 4); // Directory
+            } else if is_file {
+                let sz = crate::wasm::host_fs_file_size(&full);
+                store.set_long(elm.rec, elm.pos, sz.max(0));
+                store.set_byte(elm.rec, elm.pos + 32, 0, 1); // TextFile
+            } else {
+                store.set_byte(elm.rec, elm.pos + 32, 0, 5); // NotExists
+            }
+            vector::vector_finish(&vector, &mut self.allocations);
+        }
         true
     }
 
@@ -426,6 +484,16 @@ impl Stores {
     }
 
     pub fn write_file(&mut self, file: &DbRef, v: &str) {
+        #[cfg(feature = "wasm")]
+        {
+            // FS-E: write text content via JS host bridge.
+            let file_path = {
+                let s = self.store_mut(file);
+                s.get_str(s.get_int(file.rec, file.pos + 24) as u32)
+                    .to_owned()
+            };
+            crate::wasm::host_fs_write_text(&file_path, v);
+        }
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.files.len() as i32;
