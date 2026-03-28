@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// T1: Tuple types — literals, element access, assignment, parameters, ref-tuple, not null.
-// Blocked: tuple-returning functions (T1.4), text elements, LHS destructuring.
+// T1: Tuple types — literals, element access, assignment, parameters, ref-tuple, not null,
+// tuple-returning functions (N8a.3), LHS destructuring.
+// Blocked in native: text elements.
 
 // T1.5: reference-tuple parameter — swap elements in place.
 fn swap(pair: &(integer, integer)) {
@@ -24,6 +25,16 @@ fn read_pair(pair: &(integer, integer)) -> integer {
 // T1.7: integer not null annotation.
 fn double_nn(a: integer not null, b: integer not null) -> integer not null {
   a + b
+}
+
+// N8a.3: tuple-returning function — verified to work in both interpreter and --native.
+fn make_pair(a: integer, b: integer) -> (integer, integer) {
+  (a, b)
+}
+
+// N8a.3: tuple-returning function followed by destructuring.
+fn swap_pair(p: (integer, integer)) -> (integer, integer) {
+  (p.1, p.0)
 }
 
 fn main() {
@@ -60,6 +71,18 @@ fn main() {
 
   // --- T1.7: not null integers ---
   assert(double_nn(4, 5) == 9, "not null: {double_nn(4, 5)}");
+
+  // --- N8a.3: tuple-returning function ---
+  mp = make_pair(10, 20);
+  assert(mp.0 == 10 && mp.1 == 20, "make_pair: ({mp.0},{mp.1})");
+
+  // --- N8a.3: tuple return + element access ---
+  sp = swap_pair((3, 7));
+  assert(sp.0 == 7 && sp.1 == 3, "swap_pair: ({sp.0},{sp.1})");
+
+  // --- N8a.3: LHS destructuring ---
+  (da, db) = make_pair(5, 8);
+  assert(da == 5 && db == 8, "destruct: da={da} db={db}");
 
   println("T1: tuple types ok");
 }

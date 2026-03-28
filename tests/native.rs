@@ -36,12 +36,8 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     "47-predicates.loft",
     // A10: native codegen for field iteration's match arms not yet supported.
     "45-field-iter.loft",
-    // T1: native codegen does not support tuple types (interpreter-only).
-    "50-tuples.loft",
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
-    // T1: caveats script uses tuple element assign — interpreter-only.
-    "46-caveats.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
@@ -607,7 +603,6 @@ fn native_scripts() -> std::io::Result<()> {
 /// emit) are implemented.  When un-ignored, `50-tuples.loft` and `46-caveats.loft`
 /// are removed from `SCRIPTS_NATIVE_SKIP`.
 #[test]
-#[ignore = "N8a.1/N8a.2: native tuple codegen incomplete — Type::Tuple emits (), TupleGet uses var number, TuplePut is a stub"]
 fn native_tuple_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
@@ -623,7 +618,6 @@ fn native_tuple_script() -> std::io::Result<()> {
 /// N8a.3 is implemented.  This is a placeholder: un-ignored together with
 /// native_tuple_script when the updated script passes.
 #[test]
-#[ignore = "N8a.3: tuple function return not yet added to 50-tuples.loft"]
 fn native_tuple_return_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");

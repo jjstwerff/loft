@@ -457,7 +457,6 @@ fn label(r: const Num) -> text { "v{r.v}" }
 /// `database()` call rather than growing the allocations Vec.  The old LIFO cascade skipped
 /// non-top frees; the bitmap replacement (M4-b in SAFE.md P1-R4) reclaims them immediately.
 #[test]
-#[ignore = "S29: free-bitmap not yet implemented — database() grows instead of reusing freed non-top slots"]
 fn store_non_lifo_free_reclaims_slot() {
     // Compile minimal code to get a fresh State with a clean database.
     let (mut state, _) = compile("struct Box { val: integer }");
