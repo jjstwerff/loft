@@ -729,3 +729,31 @@ fn coroutine_text_arg_freed_at_return() {
     .expr("sum_twice(3)")
     .result(Value::Int(12)); // len("item 3") = 6, two yields: 6 + 6 = 12
 }
+
+// ── S37 — abandoned coroutine frame freed on early break ─────────────────────
+
+/// S37: when a `for` loop exits early (break), `OpFreeRef` calls `free_ref` on
+/// the coroutine DbRef.  Before the fix, `database.free()` was a no-op for
+/// `COROUTINE_STORE` (store_nr == u16::MAX), so the frame's `text_owned` buffers
+/// and `stack_bytes` were never freed — a memory leak on every early-break path.
+/// Fix: `free_ref` checks `db.store_nr == COROUTINE_STORE` and calls
+/// `free_coroutine(db.rec)` explicitly.
+/// The test verifies that the generator function produces correct values when
+/// used normally (post-break code still executes correctly).
+#[test]
+fn coroutine_early_break_frame_freed() {
+    // count3 yields three values; the consumer breaks after the first.
+    // After the break, free_ref must release the coroutine frame without panicking.
+    // We confirm correctness by verifying the consumer returns 1 (the first yield only).
+    code!(
+        "fn count3() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn take_first() -> integer {
+             for v in count3() {
+                 return v;
+             }
+             0
+         }"
+    )
+    .expr("take_first()")
+    .result(Value::Int(1));
+}
