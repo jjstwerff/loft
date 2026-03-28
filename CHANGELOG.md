@@ -104,6 +104,17 @@ All notable changes to the loft language and interpreter.
 
 ### Coroutine safety documentation
 
+- **Store-backed `Str` debug guard in `coroutine_yield`** (P2-R5 M10-a) — In
+  `#[cfg(debug_assertions)]` builds on 64-bit targets, `coroutine_yield` now
+  scans every tracked text local in the generator's `locals_bytes` and warns
+  (`eprintln!("[P2-R5] ...")`) if the first 8 bytes (the `Str.ptr` field) fall
+  within any live non-stack store allocation.  A store-backed Str in a suspended
+  generator dangles if the consumer frees or reuses the backing record before
+  the next resume.  The check is a heuristic (cannot cover full pointer
+  provenance) but catches the common case of a recently-read text field local.
+  No change to correct-program behaviour; the warning is diagnostic only.
+  See `COROUTINE.md` CL-2b and `SAFE.md` § P2-R5.
+
 - **Yielded `Str` ownership rule documented** (P2-R10) — `COROUTINE.md` CL-7 records
   the ownership invariant for `text` values produced by `yield`: the value is a
   zero-copy reference into the generator's frame (or `text_owned` buffer once CO1.3d

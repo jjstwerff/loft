@@ -609,6 +609,45 @@ impl State {
         }
     }
 
+    /// P2-R5 (debug-only, 64-bit): scan `locals_bytes` for text locals whose first
+    /// 8 bytes (the `Str.ptr` field) fall inside a live non-stack store allocation.
+    /// Emits a diagnostic warning; does not panic.  See COROUTINE.md CL-2b.
+    #[cfg(all(debug_assertions, target_pointer_width = "64"))]
+    fn warn_store_backed_text(&self, locals_bytes: &[u8], base_abs: u32, value_start_abs: u32) {
+        // Collect first to release the borrow on self.text_positions.
+        let positions: Vec<u32> = self
+            .text_positions
+            .range(base_abs..value_start_abs)
+            .copied()
+            .collect();
+        for p in positions {
+            let off = (p - base_abs) as usize;
+            if off + 8 > locals_bytes.len() {
+                continue;
+            }
+            let ptr_val = u64::from_ne_bytes(locals_bytes[off..off + 8].try_into().unwrap());
+            if ptr_val == 0 {
+                continue; // null / STRING_NULL — not store-backed
+            }
+            for (store_idx, store) in self.database.allocations.iter().enumerate() {
+                if store.free || store_idx as u16 == self.stack_cur.store_nr {
+                    continue;
+                }
+                let start = store.ptr as u64;
+                let end = start + store.byte_capacity();
+                if ptr_val >= start && ptr_val < end {
+                    eprintln!(
+                        "[P2-R5] coroutine_yield: text local at abs offset {p} holds \
+                         a store-backed Str (ptr={ptr_val:#x}, store {store_idx}). \
+                         If store {store_idx} or its backing record is freed before \
+                         the next resume this Str will dangle (COROUTINE.md CL-2b)."
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
     /// CO1.3b: suspend a running coroutine — serialise stack, return yielded value.
     /// # Panics
     /// Panics if no coroutine is currently active.
@@ -640,6 +679,15 @@ impl State {
         unsafe {
             std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
         }
+
+        // P2-R5 (debug-only, 64-bit only): warn if any text local is a store-backed Str.
+        // See COROUTINE.md CL-2b and SAFE.md § P2-R5.
+        #[cfg(all(debug_assertions, target_pointer_width = "64"))]
+        self.warn_store_backed_text(
+            &locals_bytes,
+            self.stack_cur.pos + base,
+            self.stack_cur.pos + value_start,
+        );
 
         // Extract frame fields before mutable borrow conflicts.
         let call_depth = self.coroutine_frame_mut(idx).call_depth;

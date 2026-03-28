@@ -1118,7 +1118,7 @@ initial coroutine implementation.
 | P2-R2 — `String` objects leaked at exhaustion | **high** | XS † | Drain `text_owned` before `stack_bytes.clear()` (M7-a) | CO1.3d complete makes M7-a sufficient; add leak test (M7-b) |
 | P2-R3 — Implicit "never freed" invariant | **high** | L † | Debug assert on text slots present (M8-b) | Implement CO1.3d atomically (M8-a) |
 | P2-R4 — `text_positions` inconsistency | **medium** | S | ✓ S27: save/restore entries on yield/resume in debug (M9-a) | Same |
-| P2-R5 — Store-backed `Str` dangles | **medium** | S / S | ✓ M10-a: documented as CL-2b in COROUTINE.md (P2-R5 docs done) | Deep-copy store-derived text in `serialise_text_slots` (M10-b, via CO1.3d P2-R3) |
+| P2-R5 — Store-backed `Str` dangles | **medium** | S / S | ✓ M10-a: CL-2b in COROUTINE.md + debug pointer-range guard in `coroutine_yield` | Deep-copy store-derived text in `serialise_text_slots` (M10-b, via CO1.3d P2-R3) |
 | P2-R6 — No compiler check for `yield` in `par()` | **medium** | S | ✓ S23: runtime out-of-bounds guard in `coroutine_next` (M11-b) | Compiler error in `parse_parallel_for` (M11-a) |
 | P2-R7 — Exhausted frames never freed | **low** | M | ✓ S26: `coroutines[idx] = None` on exhaustion (M12-a) | Reference counting for `COROUTINE_STORE` DbRefs (M12-c) |
 | P2-R8 — `DbRef` locals outlive store across suspension | **medium** | M / XL | ✓ S28: generation-counter guard in debug (M13-a/b) | Compiler flow-analysis warning (M13-c) |
