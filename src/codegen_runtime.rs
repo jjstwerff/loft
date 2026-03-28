@@ -1062,6 +1062,15 @@ impl IterState for i64 {
 ///
 /// Bytecode equivalent: `State::remove` in `src/state/io.rs`.
 pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
+    // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
+    // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
+    debug_assert!(
+        data.store_nr != u16::MAX,
+        "e#remove on coroutine DbRef — compiler check should have rejected this"
+    );
+    if data.store_nr == u16::MAX {
+        return;
+    }
     let cur = state.get_cur();
     let reverse = (on & 64) != 0;
     match on & 63 {

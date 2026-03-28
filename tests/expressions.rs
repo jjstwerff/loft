@@ -490,3 +490,28 @@ fn coroutine_yield_from() {
     .expr("sum_all()")
     .result(Value::Int(33));
 }
+
+// ── S22 — claim/delete on a locked store panics in all build profiles ─────────
+
+#[test]
+#[should_panic(expected = "Claim on locked store")]
+fn claim_on_locked_store_panics() {
+    // S22: store.claim() now panics when locked in all build profiles.
+    // Before the fix, release builds returned a silent dummy record 0 instead.
+    let mut stores = loft::database::Stores::new();
+    let db = stores.null();
+    stores.store_mut(&db).lock();
+    stores.claim(&db, 4); // must panic — locked store may not be extended
+}
+
+#[test]
+#[should_panic(expected = "Delete on locked store")]
+fn delete_on_locked_store_panics() {
+    // S22: store.delete() now panics when locked in all build profiles.
+    // Before the fix, release builds silently ignored the delete.
+    let mut stores = loft::database::Stores::new();
+    let db = stores.null();
+    let cr = stores.claim(&db, 2);
+    stores.store_mut(&db).lock();
+    stores.store_mut(&db).delete(cr.rec); // must panic
+}

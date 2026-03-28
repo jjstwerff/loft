@@ -165,10 +165,7 @@ impl Store {
     /// * `size` - The requested record size in 8 byte words
     pub fn claim(&mut self, size: u32) -> u32 {
         debug_assert!(!self.locked, "Claim on locked store (size={size})");
-        #[cfg(not(debug_assertions))]
-        if self.locked {
-            return 0;
-        }
+        assert!(!self.locked, "Claim on locked store (size={size})");
         assert!(size >= 1, "Incomplete record");
         #[cfg(debug_assertions)]
         self.fl_validate();
@@ -295,10 +292,7 @@ impl Store {
     /// Delete a record, this assumes that all links towards this record are already removed
     pub fn delete(&mut self, rec: u32) {
         debug_assert!(!self.locked, "Delete on locked store (rec={rec})");
-        #[cfg(not(debug_assertions))]
-        if self.locked {
-            return;
-        }
+        assert!(!self.locked, "Delete on locked store (rec={rec})");
         self.valid(rec, 4);
         let mut claim = *self.addr::<i32>(rec, 0);
         // Coalesce with any adjacent free blocks that follow.

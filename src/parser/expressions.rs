@@ -124,9 +124,10 @@ impl Parser {
                     ls.insert(pos, v_set(r, Value::Null));
                 }
             }
-            // In debug builds: auto-lock the stores for every const Reference/Vector argument
-            // at the very start of the function body (after work-variable initialisations).
-            #[cfg(debug_assertions)]
+            // Auto-lock the stores for every const Reference/Vector argument at the very
+            // start of the function body (after work-variable initialisations).
+            // Applies in all build profiles so that writes to const parameters panic in
+            // release builds too (S22 — previously guarded by #[cfg(debug_assertions)]).
             if !self.first_pass {
                 let n_vars = self.vars.next_var();
                 let lock_fn = self.data.def_nr("n_set_store_lock");
