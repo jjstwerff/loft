@@ -665,21 +665,26 @@ not merge a partial implementation that calls `free_dynamic_str` without also
 implementing the pointer-patch in `coroutine_next` (M6-b) and the `String` drain
 in `coroutine_return` (M7-a).
 
-**M8-b — Add a compile-time marker for CO1.3d incomplete state**
+**M8-b — Add a compile-time marker for CO1.3d incomplete state** (✓ implemented)
 
-While the integer-only path is in use, add a `debug_assert!` in `coroutine_yield`
-that fails if any text slot is detected in the current function's layout:
+`coroutine_yield` now contains a `debug_assert!` that fires when `text_positions`
+contains any live String slot in the generator's locals range `[base..value_start)`.
+The implementation uses `text_positions` (already maintained for S27) rather than
+a `text_slot_count` field, avoiding new struct fields:
 
 ```rust
+let text_local_count = self.text_positions.range(locals_range.clone()).count();
 debug_assert!(
-    def.text_slot_count == 0,
-    "coroutine_yield: text locals present but CO1.3d not yet implemented \
-     (function '{}' has {} text slots)",
-    def.name, def.text_slot_count
+    text_local_count == 0,
+    "P2-R3: coroutine_yield: {text_local_count} live text local(s) in stack \
+     range [{base}..{value_start}). CO1.3d (serialise_text_slots) is not yet \
+     implemented; the raw-bytes copy saves heap pointers that could dangle on \
+     resume.  See SAFE.md § P2-R3 and PLANNING.md § S25.",
 );
 ```
 
 This turns a silent mis-feature into a loud early failure during development.
+Test: `expressions::coroutine_text_local_survives_yield` (ignored until CO1.3d lands).
 
 ---
 

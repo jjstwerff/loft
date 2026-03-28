@@ -35,7 +35,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8b.1     | Native: coroutine state-machine transform design     | H  | ✓      | CO1          | NATIVE.md § N8b            |
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
-| P2-R3     | Coroutine: CO1.3d — serialise text locals at yield   | H  | ✓      | S25.1        | SAFE.md § P2-R3            |
+| P2-R3     | Coroutine: CO1.3d — serialise text locals at yield   | H  | ✓      | S25.1        | SAFE.md § P2-R3 (M8-b guard ✓, CO1.3d pending) |
 | W1.16     | WASM: file I/O ops                                   | M  | ✓      |              | WASM.md § File I/O, #74              |
 | W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
 
@@ -48,6 +48,7 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 | Test | Why skipped | Fix |
 |------|-------------|-----|
 | `expressions::closure_capture_text` | Cross-scope closure (make_greeter pattern) deferred to A5.6 (1.1+) | A5.6 |
+| `expressions::coroutine_text_local_survives_yield` | P2-R3: CO1.3d text-local serialisation at yield not yet implemented; M8-b guard now fires instead of silently dangling | S25 (CO1.3d) |
 | `wrap::parser_debug` | Intentionally slow (~100 s execution trace); run manually with `--ignored` | Not a bug |
 | `native_loader::load_one_registers_native_functions` | A7.2: `extensions::load_one` not yet implemented | A7.2 — deferred |
 | `wasm_entry::wasm_compile_and_run_smoke` | W1.9: requires `wasm-pack` + Node.js | W1.9 — deferred |
