@@ -156,6 +156,7 @@ give each item a traceable history.
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
+| [WASM_FS_STEPS.md](doc/claude/WASM_FS_STEPS.md) | WASM filesystem bridge — six separately testable implementation steps (FS-A … FS-F) |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [QUICK_START.md](doc/claude/QUICK_START.md) | Session-start orientation — commands, file map, naming conventions, key patterns |
 | [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) | Slot assignment design notes — P1/P2 proposals, resolved bugs, two-zone layout |
