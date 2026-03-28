@@ -1,7 +1,7 @@
 # Copyright (c) 2022-2025 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets
 
 all:
 	rustfmt src/*.rs --edition 2024
@@ -129,6 +129,9 @@ test-native:
 	else \
 		echo "All native tests passed."; \
 	fi
+
+wasm-assets:
+	node tests/wasm/gen-assets.mjs
 
 test-wasm:
 	@cargo build --release -q

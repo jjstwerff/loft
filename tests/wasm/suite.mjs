@@ -23,10 +23,11 @@
  * Exit code: 0 if all run tests pass, 1 if any fail.
  */
 
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { readFileSync } from 'fs';
 import { execSync } from 'child_process';
-import { join, basename } from 'path';
+import { basename } from 'path';
 import { createHost } from './host.mjs';
+import { buildDefaultTree, withFiles } from './default-tree.mjs';
 
 // ── Load WASM package ──────────────────────────────────────────────────────────
 
@@ -76,70 +77,25 @@ const SKIP_COMPARE = new Set([
 
 // ── VirtFS fixture builder ─────────────────────────────────────────────────────
 
-/**
- * Build a VirtFS tree from a directory on disk (recursively, text files only).
- * Binary files are silently skipped — add binary support if tests need it.
- *
- * @param {string} diskPath  Absolute or relative path on the real filesystem.
- * @param {object} node      The VirtFS directory node to populate.
- */
-function populateFromDisk(diskPath, node) {
-  if (!existsSync(diskPath)) return;
-  for (const entry of readdirSync(diskPath)) {
-    const full = join(diskPath, entry);
-    const st = statSync(full);
-    if (st.isDirectory()) {
-      node[entry] = {};
-      populateFromDisk(full, node[entry]);
-    } else if (st.isFile()) {
-      try {
-        const content = readFileSync(full, 'utf8');
-        node[entry] = { $type: 'text', $content: content };
-      } catch {
-        // Skip binary files (readFileSync throws on non-UTF8 with 'utf8' encoding)
-      }
-    }
-  }
-}
+// Shared default tree (docs + scripts + example); built once and cloned per test.
+const _defaultTree = buildDefaultTree();
 
 /**
- * Build the base VirtFS tree for a given loft test file.
+ * Build the VirtFS tree for a given loft test file.
  *
- * The WASM module may call loftHost.fs_* for any path the loft program accesses.
- * We pre-populate VirtFS with:
- *   - The source file itself under its original path
- *   - tests/scripts/ and tests/docs/ directories (needed by some tests)
- *   - tests/example/ (used by 19-files.loft and docs tests)
- *   - A working /tmp directory
+ * Starts from the shared default tree (docs, scripts, example) and overlays
+ * the specific source file at its natural path so that loft programs can
+ * reference `tests/example/...` and sibling script files unchanged.
  *
- * @param {string} relPath  Relative path to the .loft file (e.g. 'tests/scripts/01-integers.loft')
+ * @param {string} relPath  Relative path to the .loft file.
  * @param {string} content  Source code of the file.
- * @returns {object}        VirtFS tree object.
+ * @returns {object}        Deep-cloned VirtFS tree.
  */
 function buildTree(relPath, content) {
-  const tree = { '/': { tests: { scripts: {}, docs: {}, example: {} }, tmp: {} } };
-
-  // Place the source file at its natural path
-  const parts = relPath.split('/');
-  let node = tree['/'];
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (!node[parts[i]]) node[parts[i]] = {};
-    node = node[parts[i]];
-  }
-  node[parts[parts.length - 1]] = { $type: 'text', $content: content };
-
-  // Populate supporting directories from disk (text files only)
-  populateFromDisk('tests/example', tree['/'].tests.example);
-
-  // Provide wordlist and log fixtures used by some scripts tests
-  if (existsSync('tests/scripts/wordlist.txt')) {
-    tree['/'].tests.scripts['wordlist.txt'] = {
-      $type: 'text',
-      $content: readFileSync('tests/scripts/wordlist.txt', 'utf8')
-    };
-  }
-
-  return tree;
+  // Deep-clone so each test run starts from a clean state.
+  const tree = JSON.parse(JSON.stringify(_defaultTree));
+  tree['/'].tmp = {};  // scratch space for file-writing tests
+  return withFiles(tree, { [relPath]: content });
 }
 
 // ── Native reference runner ────────────────────────────────────────────────────
