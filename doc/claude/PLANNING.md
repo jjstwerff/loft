@@ -1408,11 +1408,23 @@ else {
 }
 ```
 
-Implement Option A first (minimal risk), then Option B as a follow-on if Option A reveals further cases.
+**Status:** Option A is implemented in `src/state/codegen.rs` (the `pos > stack.position`
+branch that resets to TOS). However, Option A alone does not make the binary test pass.
+The `validate_slots` check (debug-only, called after codegen) fires first because the zone-2
+slot allocator in `src/variables/slots.rs` assigns both `rv` and `_read_34` to slot 820 in
+the block-return pattern `rv = { _read_34 = null; read(_read_34); _read_34 }`. The child scope
+starts at `frame_base = v_slot = 820` (see `place_large_and_recurse`), giving `_read_34` the
+same slot as `rv`, while their live ranges overlap at the function level because `_read_34` is
+freed via `OpFreeRef` after all assertions (live until 1109) and `rv` is still live (until 1110).
+
+**Next step:** Fix zone-2 assignment in `place_large_and_recurse` (`slots.rs`) to check
+that the child-scope's first zone-2 variable does not produce a live-range conflict with the
+outer variable sharing `frame_base`.  Alternatively, end `_read_34`'s live range at the block
+boundary in `compute_intervals` so the overlap is not reported by `validate_slots`.
 
 **Tests:** `cargo test --test wrap binary` (currently `#[ignore]`); remove `#[ignore]` once fixed.
 Also remove `"20-binary.loft"` from `wrap::ignored_scripts()` to re-enable in the docs sweep.
-**Effort:** Medium (`src/state/codegen.rs`, possibly `src/variables/slots.rs`)
+**Effort:** Medium (`src/state/codegen.rs` done; `src/variables/slots.rs` or `src/variables/intervals.rs` next)
 **Target:** 0.8.3
 
 ---

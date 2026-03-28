@@ -18,7 +18,13 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions + safety gate
 
-W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2 completed in 0.8.3.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S23, S26, S27, S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2 completed in 0.8.3.
+
+Safety sub-items now confirmed complete: P1-R2 (S29: thread::scope + SAFETY comment in
+`run_parallel_direct`), P1-R3 (S29: `clone_locked_for_worker` omits `claims`), P1-R4 (S29:
+free-bitmap M4-b supersedes LIFO assert), P1-R5 (S30: `WorkerStores` newtype), P2-R4 (S27:
+`text_positions` save/restore on yield/resume), P2-R7 (S26: `coroutines[idx] = None` on
+exhaustion), P2-R8 (S28: generation-counter guard for stale `DbRef`).
 
 The following safety and stability issues were uncovered after the WASM work
 landed and must be resolved before the 0.8.3 tag is cut.  Releasing with
@@ -29,15 +35,8 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8b.1     | Native: coroutine state-machine transform design     | H  | ✓      | CO1          | NATIVE.md § N8b            |
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
-| P1-R2     | Parallel: `out_ptr` lifetime — SAFETY comment + assert | S | ✓    |              | SAFE.md § P1-R2            |
-| P1-R3     | Parallel: skip `claims` clone in locked worker stores | S  | ✓      |              | SAFE.md § P1-R3            |
-| P1-R4     | Parallel: LIFO assert + store-log trace on free order | S  | ✓      |              | SAFE.md § P1-R4            |
-| P1-R5     | Parallel: `WorkerStores` newtype (non-aliasing proof) | M  | ✓      |              | SAFE.md § P1-R5            |
 | P2-R3     | Coroutine: CO1.3d — serialise text locals at yield   | H  | ✓      | S25.1        | SAFE.md § P2-R3            |
-| P2-R4     | Coroutine: save/restore `text_positions` on yield/resume | S | ✓   |              | SAFE.md § P2-R4            |
-| P2-R5     | Coroutine: debug guard for store-backed `Str` at yield | S  | ✓     |              | SAFE.md § P2-R5            |
-| P2-R7     | Coroutine: free exhausted frames (`OpFreeCoroutine`) | M  | ✓      |              | SAFE.md § P2-R7            |
-| P2-R8     | Coroutine: generation-counter guard for stale `DbRef` | M  | ✓     |              | SAFE.md § P2-R8            |
+| P2-R5     | Coroutine: doc + debug guard — store-backed `Str` at yield | S | ✓  |              | SAFE.md § P2-R5            |
 | P2-R10    | Coroutine: document yielded `Str` ownership rule     | S  | ✓      |              | SAFE.md § P2-R10           |
 | S34       | Interpreter: `20-binary.loft` slot `pos >= TOS` panic | M  | ✓      |              | PLANNING.md § S34                    |
 | W1.15     | WASM: `CallRef` / function references                | S  | ✓      |              | WASM.md § W1.15, #77                 |
