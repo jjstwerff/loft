@@ -50,8 +50,6 @@ const SUITE_SKIP: &[&str] = &[
 const WASM_SKIP: &[&str] = &[
     "13-file.loft",      // #74: file I/O ops missing; also no WASM filesystem
     "19-threading.loft", // todo!(); WASM threading model differs
-    "21-random.loft",    // #79: external crate
-    "22-time.loft",      // todo!()
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
@@ -287,10 +285,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from([
-        // C28: slot conflict between rv and _read_34 in n_main — pre-existing slot regression.
-        "20-binary.loft",
-    ])
+    HashSet::from([])
 }
 
 macro_rules! script_test {
@@ -321,7 +316,6 @@ script_test!(min_max_clamp, "tests/scripts/17-min-max-clamp.loft");
 script_test!(math_functions, "tests/scripts/18-math-functions.loft");
 script_test!(files, "tests/scripts/19-files.loft");
 #[test]
-#[ignore = "C28: slot conflict between rv and _read_34 in n_main — pre-existing slot regression; see CAVEATS.md C28"]
 fn binary() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(PathBuf::from("tests/scripts/20-binary.loft"), false, false)

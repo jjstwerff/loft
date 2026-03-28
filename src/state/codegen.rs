@@ -79,8 +79,12 @@ impl State {
         self.source = stack.data.def(def_nr).source;
         self.generate(&stack.data.def(def_nr).code, &mut stack, true);
         let mut stack_pos = Vec::new();
+        let mut skip_free_vars = Vec::new();
         for v_nr in 0..stack.function.next_var() {
             stack_pos.push(stack.function.stack(v_nr));
+            if stack.function.is_skip_free(v_nr) {
+                skip_free_vars.push(v_nr);
+            }
         }
         data.definitions[def_nr as usize].code_position = start;
         data.definitions[def_nr as usize].code_length = self.code_pos - start;
@@ -97,6 +101,14 @@ impl State {
             data.definitions[def_nr as usize]
                 .variables
                 .set_stack(v_nr as u16, pos);
+        }
+        // Propagate skip_free flags set during codegen (e.g. S34 Option A) so that
+        // validate_slots can recognise intentional slot aliases and not report them
+        // as conflicts.
+        for v_nr in skip_free_vars {
+            data.definitions[def_nr as usize]
+                .variables
+                .set_skip_free(v_nr);
         }
         #[cfg(debug_assertions)]
         crate::variables::validate_slots(
@@ -656,6 +668,7 @@ impl State {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
         // Zero-sized variables (null-typed) have no stack storage.
@@ -699,8 +712,11 @@ impl State {
             // block has not yet been allocated (it occupies the same pre-assigned slot in
             // the slot allocator's plan), so placing this variable at current TOS is safe.
             // Reset pos to TOS; the sibling will advance TOS when it is allocated in turn.
+            // mark skip_free so the outer variable (already at TOS) emits OpFreeRef and
+            // this variable — aliased to the same slot — does not produce a double-free.
             let pos = if pos > stack.position {
                 stack.function.set_stack_pos(v, stack.position);
+                stack.function.set_skip_free(v);
                 stack.position
             } else {
                 pos
@@ -857,6 +873,15 @@ impl State {
             parameters.len(),
             stack.data.def(op).attributes.len(),
         );
+        // S34: suppress OpFreeRef for variables moved to a shared slot by Option A.
+        // The outer variable at the same slot emits its own OpFreeRef; emitting a
+        // second one would produce a double-free of the same database record.
+        if stack.data.def(op).name == "OpFreeRef"
+            && let Some(Value::Var(v)) = parameters.first()
+            && stack.function.is_skip_free(*v)
+        {
+            return Type::Void;
+        }
         // try destination-passing optimisation for text-producing natives.
         if self.try_text_dest_pass(stack, op, parameters) {
             return Type::Void;

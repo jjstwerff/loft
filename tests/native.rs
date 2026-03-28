@@ -34,6 +34,12 @@ const NATIVE_SKIP: &[&str] = &[
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
+    // S34: native codegen emits a malformed declaration for the Insert-return pattern
+    // (Set(rv, Insert([Set(_read_34, Null), Block]))).  Before S34, this was silently
+    // skipped because validate_slots panicked during def_code; after S34's interpreter
+    // fix the panic is gone and the native codegen bug is now visible.
+    // The interpreter test (wrap::binary) passes; this is a native-only regression.
+    "20-binary.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
