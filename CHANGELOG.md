@@ -102,6 +102,15 @@ All notable changes to the loft language and interpreter.
   Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
   freed non-top slot is reused by the next `database()` call and `max` does not grow.
 
+### Coroutine safety documentation
+
+- **Yielded `Str` ownership rule documented** (P2-R10) — `COROUTINE.md` CL-7 records
+  the ownership invariant for `text` values produced by `yield`: the value is a
+  zero-copy reference into the generator's frame (or `text_owned` buffer once CO1.3d
+  lands) and is valid only for the current loop-body iteration.  Consumers that need
+  to keep the text beyond one iteration must copy it (`stored = "{value}"`) or pass
+  it to a function that calls `set_str`.  No runtime change; documentation only.
+
 ### WASM / native codegen fixes
 
 - **WASM skip for lock functions removed** (W1.17) — `n_get_store_lock` and
