@@ -36,7 +36,6 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
 | P2-R3     | Coroutine: CO1.3d — serialise text locals at yield   | H  | ✓      | S25.1        | SAFE.md § P2-R3            |
-| S35       | Native: Insert-return pattern emits malformed Rust   | M  | ✓      |              | PLANNING.md § S35          |
 | W1.16     | WASM: file I/O ops                                   | M  | ✓      |              | WASM.md § File I/O, #74              |
 | W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
 | A5.6b.1   | Closure: fix `__closure` DbRef in `CallRef` stack frame | M | ✓   |              | PLANNING.md § A5.6b.1      |
@@ -62,7 +61,6 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 | Script | Why skipped | Fix |
 |--------|-------------|-----|
 | `51-coroutines.loft` | Native coroutine emission (state-machine transform) not yet built | N8b.1–N8b.3 |
-| `20-binary.loft` | Native codegen emits malformed Rust for `Set(rv, Insert([Set(_read_34, Null), Block]))` — pre-existing bug exposed when S34 removed the `validate_slots` panic that was previously hiding it | S35 |
 
 **WASM** (`cargo test --test wrap` — `WASM_SKIP`):
 

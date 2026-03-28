@@ -138,6 +138,17 @@ All notable changes to the loft language and interpreter.
 
 ### WASM / native codegen fixes
 
+- **Native codegen: Insert-return pattern fixed** (S35) — `output_set` in
+  `src/generation/dispatch.rs` now detects `Value::Insert` as the RHS of an
+  assignment and hoists all-but-last ops as standalone statements before the
+  declaration line, emitting only the final expression as the assignment value.
+  Previously the inner `Set` ops were emitted inline inside an expression context,
+  producing malformed Rust (`let mut var_rv: DbRef = let mut var__read_34: DbRef = …`).
+  The same function now also suppresses `OpFreeRef` for variables marked `skip_free`,
+  matching the bytecode interpreter fix (S34) and preventing a double-free in the
+  native binary.  `"20-binary.loft"` removed from `SCRIPTS_NATIVE_SKIP` in
+  `tests/native.rs`; `native_binary_script` test passes without `#[ignore]`.
+
 - **WASM random bridge wired; `rand_indices` shuffles via host bridge** (W1.19) —
   `codegen_runtime::n_rand` previously returned `i32::MIN` (null) when compiled
   without `feature = "random"`, making all `rand(lo, hi)` calls return null in WASM.
