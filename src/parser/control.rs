@@ -2027,13 +2027,16 @@ impl Parser {
                     let cap_name = self.data.attr_name(closure_rec_d, aid).clone();
                     let outer_v = self.vars.var(&cap_name);
                     if outer_v != u16::MAX {
-                        let field_val =
-                            self.get_field(closure_rec_d, aid, Value::Var(closure_w));
+                        let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));
                         block.push(v_set(outer_v, field_val));
                     }
                 }
                 if block.len() > 1 {
-                    *val = v_block(block, Type::Void, "closure writeback");
+                    // Use Insert rather than Block: we must NOT create a new scope
+                    // here because ___clos_1 (closure_w) is owned by the outer scope.
+                    // A Block would cause scopes.rs to emit OpFreeRef at the inner
+                    // scope exit, leaving a dangling ref for the next call.
+                    *val = Value::Insert(block);
                 }
             }
         }

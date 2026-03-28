@@ -1044,9 +1044,9 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-// P1.1: lambda with no return type (void).
+// P1.1: lambda with no return type (void).  A5.6c: write-backs make the
+// outer `count` reflect mutations performed inside the lambda body.
 #[test]
-#[ignore = "A5.6c: mutable capture write-back not yet implemented"]
 fn p1_1_lambda_void_body() {
     code!(
         "fn test() {
@@ -1056,6 +1056,10 @@ fn p1_1_lambda_void_body() {
     f(32);
     assert(count == 42, \"expected 42, got {count}\");
 }"
+    )
+    .warning(
+        "closure record '__closure_0' created with 1 field: count(integer) \
+         at p1_1_lambda_void_body:3:40",
     )
     .result(loft::data::Value::Null);
 }

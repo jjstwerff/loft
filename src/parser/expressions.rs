@@ -707,11 +707,14 @@ use a separate collection or add after the loop"
                     return Type::Void;
                 }
                 // A5.3: record closure association if the RHS was a capturing lambda.
+                // NOTE: must come AFTER parse_assign_op because that is where the RHS
+                // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
+                let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
                     self.last_closure_work_var = u16::MAX;
                 }
-                return self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
+                return result;
             }
         }
         *code = to;
