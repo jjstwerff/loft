@@ -48,9 +48,7 @@ const SUITE_SKIP: &[&str] = &[
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
-    "06-function.loft",  // #77: CallRef not implemented
     "13-file.loft",      // #74: file I/O ops missing; also no WASM filesystem
-    "18-locks.loft",     // todo!()
     "19-threading.loft", // todo!(); WASM threading model differs
     "21-random.loft",    // #79: external crate
     "22-time.loft",      // todo!()
