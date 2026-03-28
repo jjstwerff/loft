@@ -570,6 +570,41 @@ fn parallel_for_thread_scope_results() {
     .result(Value::Int(30));
 }
 
+// ── S28 — debug generation counter for stale DbRef across coroutine yield ─────
+
+/// S28: Mutating a struct store between coroutine next() calls should fire the
+/// debug-mode generation-counter assertion.  The generator holds a `const Item`
+/// reference (a DbRef into the `Items` store); between the two yields the
+/// consumer pushes a new element into the same store, incrementing its
+/// generation.  On the second resume, `coroutine_next` detects the mismatch and
+/// panics with "stale DbRef".
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "stale DbRef")]
+#[ignore = "S28: Store::generation counter and coroutine_next check not yet implemented"]
+fn coroutine_stale_store_guard() {
+    code!(
+        "struct Item { val: integer }
+         struct Items { list: vector<Item> }
+         fn gen_item(it: const Item) -> iterator<integer> {
+             yield it.val;
+             yield it.val + 1;
+         }
+         fn test() -> integer {
+             data = Items {};
+             data.list += [Item { val: 42 }];
+             total = 0;
+             for n in gen_item(data.list[0]) {
+                 data.list += [Item { val: 99 }];
+                 total += n;
+             }
+             total
+         }"
+    )
+    .expr("test()")
+    .result(Value::Int(84)); // never reached — debug_assert fires on second resume
+}
+
 // ── S22 — claim/delete on a locked store panics in all build profiles ─────────
 
 #[test]
