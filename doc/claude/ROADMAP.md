@@ -29,6 +29,16 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8b.1     | Native: coroutine state-machine transform design     | H  | ✓      | CO1          | NATIVE.md § N8b            |
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
+| P1-R2     | Parallel: `out_ptr` lifetime — SAFETY comment + assert | S | ✓    |              | SAFE.md § P1-R2            |
+| P1-R3     | Parallel: skip `claims` clone in locked worker stores | S  | ✓      |              | SAFE.md § P1-R3            |
+| P1-R4     | Parallel: LIFO assert + store-log trace on free order | S  | ✓      |              | SAFE.md § P1-R4            |
+| P1-R5     | Parallel: `WorkerStores` newtype (non-aliasing proof) | M  | ✓      |              | SAFE.md § P1-R5            |
+| P2-R3     | Coroutine: CO1.3d — serialise text locals at yield   | H  | ✓      | S25.1        | SAFE.md § P2-R3            |
+| P2-R4     | Coroutine: save/restore `text_positions` on yield/resume | S | ✓   |              | SAFE.md § P2-R4            |
+| P2-R5     | Coroutine: debug guard for store-backed `Str` at yield | S  | ✓     |              | SAFE.md § P2-R5            |
+| P2-R7     | Coroutine: free exhausted frames (`OpFreeCoroutine`) | M  | ✓      |              | SAFE.md § P2-R7            |
+| P2-R8     | Coroutine: generation-counter guard for stale `DbRef` | M  | ✓     |              | SAFE.md § P2-R8            |
+| P2-R10    | Coroutine: document yielded `Str` ownership rule     | S  | ✓      |              | SAFE.md § P2-R10           |
 
 ---
 
