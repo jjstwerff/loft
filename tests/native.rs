@@ -32,10 +32,6 @@ const NATIVE_SKIP: &[&str] = &[
 /// See PROBLEMS.md for issue numbers.
 /// Do NOT remove tests from this list by weakening the test — fix the native codegen instead.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // P3: native codegen does not generate loop variables for any/all/count_if.
-    "47-predicates.loft",
-    // P3: 46-caveats.loft uses any/all/count_if — same P3 scope bug as 47-predicates.loft.
-    "46-caveats.loft",
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
 ];

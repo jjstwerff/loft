@@ -85,6 +85,17 @@ All notable changes to the loft language and interpreter.
 
 ### Native test harness fixes
 
+- **`any`, `all`, `count_if` now work in native code generation; `47-predicates.loft` and `46-caveats.loft` unskipped** (N8a.4) —
+  `predicate_loop_scaffold` in `src/parser/collections.rs` previously wrapped
+  `[for_next, break_if_done]` in a `v_block`, which in native codegen became a
+  Rust `{ ... }` block.  The loop variable (`any_elm`, `all_elm`, `cntif_elm`) was
+  declared inside that block, making it invisible to the `short_circuit` or
+  `count_step` expression that followed outside the block.  The fix inlines
+  `for_next` and `break_if_done` directly in the loop body (the scaffold now returns
+  a 4-tuple instead of 3), eliminating the nested block.  Both `47-predicates.loft`
+  and `46-caveats.loft` (which uses `any`/`all` internally) removed from
+  `SCRIPTS_NATIVE_SKIP`.
+
 - **`45-field-iter.loft` stale skip removed from native test harness** (N8a.5) —
   The `// A10` skip entry for `45-field-iter.loft` in `SCRIPTS_NATIVE_SKIP` was
   stale: the field-iteration native backend already worked correctly after the A10
