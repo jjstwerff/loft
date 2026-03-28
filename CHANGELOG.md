@@ -122,7 +122,42 @@ All notable changes to the loft language and interpreter.
   to keep the text beyond one iteration must copy it (`stored = "{value}"`) or pass
   it to a function that calls `set_str`.  No runtime change; documentation only.
 
+### Interpreter fixes
+
+- **`20-binary.loft` double-free fixed** (S34) — When `adjust_first_assignment_slot`
+  cannot move a work variable downward (same-scope siblings block the move) and
+  Option A fires — forcing the variable to the current TOS, aliasing it with the
+  outer `rv` — the variable is now marked `skip_free` at that point.
+  `generate_call` suppresses the `OpFreeRef` bytecode for any `skip_free` variable,
+  preventing the "Double free store" panic caused by both `rv` and `_read_34` each
+  trying to free the same database record at slot 820.  `skip_free` flags set during
+  codegen are propagated back to `data.definitions[def_nr].variables` before
+  `validate_slots` runs, which now skips slot-overlap pairs where either variable is
+  `skip_free`.  The `binary` test (`tests/scripts/20-binary.loft`) no longer has
+  `#[ignore]`; `"20-binary.loft"` removed from `ignored_scripts()` in `tests/wrap.rs`.
+
 ### WASM / native codegen fixes
+
+- **WASM random bridge wired; `rand_indices` shuffles via host bridge** (W1.19) —
+  `codegen_runtime::n_rand` previously returned `i32::MIN` (null) when compiled
+  without `feature = "random"`, making all `rand(lo, hi)` calls return null in WASM.
+  It now delegates to `ops::rand_int`, which already had a WASM fallback calling
+  `host_random_int` from `src/wasm.rs`.  A matching WASM `shuffle_ints` fallback
+  (feature="wasm", not feature="random") was added to `src/ops.rs`, performing a
+  Fisher-Yates shuffle via repeated `host_random_int(0, i)` calls; `n_rand_indices`
+  in `codegen_runtime.rs` now enables the shuffle for both the PCG and WASM code
+  paths.  `"21-random.loft"` removed from `WASM_SKIP` in `tests/wrap.rs`; the WASM
+  compilation test now exercises `rand()`, `rand_seed()`, and `rand_indices()`.
+
+- **WASM time bridge wired to `std::time::SystemTime`** (W1.20) — `host_time_now()`
+  and `host_time_ticks()` in `src/wasm.rs` previously returned hard-coded `0`.
+  They now call `std::time::SystemTime::now()` via the WASI clock interface (available
+  in `wasm32-wasip2` through Rust's std).  `host_time_ticks()` delegates to
+  `host_time_now()` (millisecond wall-clock); `n_ticks` computes elapsed microseconds
+  as `(host_time_ticks() - start_time_ms) * 1000`, which is sufficient for benchmark
+  timing.  `"22-time.loft"` removed from `WASM_SKIP` in `tests/wrap.rs`; the WASM
+  compilation test now exercises `now()` and `ticks()` end-to-end.
+
 
 - **WASM skip for lock functions removed** (W1.17) — `n_get_store_lock` and
   `n_set_store_lock` are resolved from `loft::codegen_runtime` (listed in

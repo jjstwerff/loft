@@ -56,24 +56,30 @@ fn test() {
 
 ---
 
-## C3 — WASM backend: several features not implemented
+## C3 — WASM backend: file I/O and threading not implemented
 
-The `--native-wasm` backend lacks support for file I/O, threading, random
-numbers, time functions, and dynamic function references (`CallRef`).
+The `--native-wasm` backend currently lacks support for file I/O and threading.
+Random numbers, time functions, and dynamic function references (`CallRef`) are
+now implemented (W1.15, W1.17, W1.19, W1.20 — all 0.8.3).
 
 **Affected files:** `tests/wrap.rs` — `WASM_SKIP` array:
 
 | File | Reason |
 |------|--------|
-| `06-function.loft` | `CallRef` not implemented (#77) |
-| `13-file.loft` | File I/O missing (#74) |
-| `18-locks.loft` | `todo!()` |
-| `19-threading.loft` | `todo!()` |
-| `21-random.loft` | External crate unresolved (#79) |
-| `22-time.loft` | `todo!()` |
+| `13-file.loft` | File I/O ops missing; no WASM filesystem (#74) |
+| `19-threading.loft` | WASM threading model differs; W1.18 not yet landed |
+
+**Previously skipped — now passing:**
+
+| File | Fixed by |
+|------|----------|
+| `06-function.loft` | W1.15 — `output_call_ref` dispatch table |
+| `18-locks.loft` | W1.17 — lock functions in `CODEGEN_RUNTIME_FNS` |
+| `21-random.loft` | W1.19 — WASM `rand`/`rand_indices` bridge |
+| `22-time.loft` | W1.20 — `host_time_now()` via `std::time::SystemTime` |
 
 **Workaround:** use the interpreter (`cargo run --bin loft`) instead of `--native-wasm`.
-**Planned fix:** W1 in [ROADMAP.md](ROADMAP.md) (0.8.3) — interpreter-as-WASM entry point; full feature coverage targeted alongside W1 completion.
+**Remaining work:** W1.16 (file I/O), W1.18 (threading) in [ROADMAP.md](ROADMAP.md) (0.8.3).
 
 ---
 
@@ -410,15 +416,26 @@ native skip lists.
 
 ---
 
-## C28 — Native tests: slot conflict in `20-binary.loft` (`rv` vs `_read_34`) *(fixed in S32, 0.8.3)*
+## C28 — `20-binary.loft` slot conflict (`rv` vs `_read_34`) *(fully fixed in S32 + S34, 0.8.3)*
 
-**Fixed.**  `adjust_first_assignment_slot` now checks for same-scope sibling overlap
-(`has_sibling_overlap`) before moving a large variable down to TOS.  This mirrors
-the existing `has_child_overlap` check for child-scope variables and prevents `rv` and
-`_read_34` from being assigned the same slot range.
+**Fixed (native, S32).**  `adjust_first_assignment_slot` now checks for same-scope sibling
+overlap (`has_sibling_overlap`) before moving a large variable down to TOS.  This prevents
+`rv` and `_read_34` from being assigned the same slot range during native codegen.
 
-**Test:** `20-binary.loft` removed from `SCRIPTS_NATIVE_SKIP` — passes in `cargo test --test native`.
-**Fixed by:** S32 — `has_sibling_overlap` guard in `adjust_first_assignment_slot` (`src/state/codegen.rs`).
+**Fixed (interpreter, S34).**  When `adjust_first_assignment_slot` cannot move a variable
+(same-scope siblings block it) and Option A fires (moving the variable down to current TOS
+anyway), the moved variable is now marked `skip_free`.  This prevents `generate_call` from
+emitting an `OpFreeRef` for the aliased variable, eliminating the double-free that caused
+the "Double free store" panic in the bytecode interpreter.
+
+**Test (interpreter):** `20-binary.loft` passes in `cargo test --test wrap` (S34).
+**Test (native):** in `SCRIPTS_NATIVE_SKIP` — native codegen emits malformed Rust for the
+`Set(rv, Insert([Set(_read_34, Null), Block]))` pattern.  Before S34, `validate_slots`
+panicked during `byte_code()`, which `catch_unwind` caught and converted to a silent skip.
+After S34's bytecode fix the panic is gone, so the pre-existing native codegen bug for the
+Insert-return pattern is now visible.  Tracked in `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`.
+**Fixed by:** S32 — `has_sibling_overlap` (interpreter + native slot assignment); S34 —
+`skip_free` + suppressed `OpFreeRef` in `generate_call` (interpreter double-free only).
 
 ---
 

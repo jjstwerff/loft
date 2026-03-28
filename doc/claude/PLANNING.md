@@ -604,24 +604,243 @@ text captures become testable.
 **Phase 6 — Mutable capture + text capture** (C1 remaining, tracked as A5.6):
 Two remaining restrictions after A5.1–A5.5:
 
-**A5.6a — Mutable capture:** A captured variable used as the target of `+= / -=`
-causes `generate_set` to panic at "self-reference in SetRef target".  The closure
-record’s field must be treated as an `OpVarRef`-relative write target rather than a
-plain slot write.  Requires a new `SetClosureField(field_idx)` IR variant emitted
-by `parse_assign` when the LHS resolves to a captured variable.
+**A5.6a — Mutable capture** *(completed 0.8.3)*:
+`capture_detected` passes without source changes.  The mutable-capture path
+(`count += x`) routes through `call_to_set_op` → `OpSetInt`, which never hits the
+`generate_set` self-reference guard.  The earlier plan for a `SetClosureField` IR
+variant was not needed.  Test: `tests/parse_errors.rs::capture_detected`.
 
-**A5.6b — Text capture:** The per-field text cleanup note in Phase 5 is not yet
-implemented.  When a text variable is captured, the closure record holds a
-`Type::Text` field; `get_free_vars` must emit `OpFreeRef` for that field at the
-point where the closure record itself goes out of scope.  Without this, text memory
-leaks in debug mode (assertion fires) and is double-freed in release.
+**A5.6b.1 — Text capture: garbage DbRef in `CallRef` stack frame** (root cause confirmed):
+Text-capturing, text-returning lambdas (e.g. `fn(name: text) -> text { "{prefix} {name}" }`)
+produce a garbage `__closure` DbRef at runtime, causing panics such as "Unknown record
+49745" or "Store write out of bounds".  Integer-only captures work correctly.
 
-**Effort:** Medium  
+**Root cause — `text_return()` adds captured text variables as spurious work-buffer attributes:**
+
+When the lambda body `"{prefix} {name}"` is compiled, the format-string processor calls
+`text_return(ls)` (control.rs:1550) where `ls` contains the text variables referenced in
+the format string — including the captured variable `prefix`.
+
+`text_return` iterates over `ls` and for each text variable that is NOT already an
+attribute of the lambda, it adds it as a `RefVar(Text)` attribute (a hidden work-buffer
+argument) and calls `self.vars.become_argument(v)`.  The guard that skips already-registered
+attributes (line 1557: `attr_names.get(n)`) does NOT catch captured variables — at the point
+`text_return` runs, `prefix` is not yet registered as an attribute (the hidden `__closure`
+parameter is added later in `parse_lambda`).
+
+Result: `prefix` is added as a `RefVar(Text)` attribute of the lambda, giving the lambda
+an **extra 12-byte argument slot** that the caller knows nothing about.
+
+**Broken argument layout (with the bug):**
+
+The lambda’s `def_code` processes attributes in order:
+1. `name: text` → slot 0, 16 bytes (`size_of::<&str>()`)
+2. `prefix: RefVar(Text)` → slot 16, 12 bytes ← spurious, added by `text_return`
+3. `__closure: Reference` → slot 28, 12 bytes
+
+Total argument area = 40 bytes; `+4` for return addr → TOS at 44.
+Reading `__closure`: `var_pos = 44 - 28 = 16`.  At runtime `stack_pos - 16 = args_base + 16`.
+
+But the caller only pushes 28 bytes (`name` 16 + `__closure` DbRef 12):
+- `args_base + 0..16`: `name` ✓
+- `args_base + 16..28`: closure DbRef ← callee reads this as `prefix` slot
+- `args_base + 28..40`: **nothing** ← callee reads this as `__closure` slot → garbage
+
+**Fix (concrete — `src/parser/control.rs`, `text_return`):**
+
+Add a captured-variable guard immediately after the existing `attr_names` check:
+
+```rust
+pub(crate) fn text_return(&mut self, ls: &[u16]) {
+    if let Type::Text(cur) = &self.data.definitions[self.context as usize].returned {
+        let mut dep = cur.clone();
+        for v in ls {
+            let n = self.vars.name(*v);
+            let tp = self.vars.tp(*v);
+            // skip related variables that are already attributes
+            if let Some(a) = self.data.def(self.context).attr_names.get(n) {
+                if !dep.contains(&(*a as u16)) {
+                    dep.push(*a as u16);
+                }
+                continue;
+            }
+            // A5.6b.1: skip captured variables — they are read from the closure
+            // record at runtime, not passed as hidden work-buffer arguments.
+            // Adding them as RefVar(Text) attributes shifts __closure to the wrong
+            // argument slot, giving the lambda a garbage DbRef.
+            if self.captured_names.iter().any(|(name, _)| name == n) {
+                continue;
+            }
+            if matches!(tp, Type::Text(_)) {
+                // ... rest unchanged
+```
+
+After this fix, the lambda’s argument layout becomes:
+1. `name: text` → slot 0, 16 bytes
+2. `__closure: Reference` → slot 16, 12 bytes
+Total = 28 bytes, matching what the caller pushes. ✓
+
+**Why `name` is still handled correctly:**
+
+`name` IS already an attribute (it’s the declared parameter), so the `attr_names.get(n)`
+check catches it and just adds its attribute index to `dep`.  The format string’s text
+dependency tracking for `name` still works — only the spurious insertion of `prefix` as
+a work-buffer attribute is suppressed.
+
+**Scope of fix:** Only affects lambdas that (a) return text AND (b) capture text variables
+from an outer scope.  No other code path is changed.
+
+**Test scope note:** The existing `closure_capture_text` test (`make_greeter("Hello")("world")`)
+crosses function scope — the closure is returned from `make_greeter` and called from
+outside.  The `last_closure_alloc` block references variable slots in `make_greeter`'s
+frame; calling the returned fn-ref from a different scope would access those stale slots.
+This pattern requires A5.6 (1.1+) — returning a closure alongside its DbRef.
+
+After this fix, add a **same-scope** test that exercises A5.6b.1 directly:
+```
+prefix = "Hello";
+f = fn(name: text) -> text { "{prefix} {name}" };
+f("world")  // expected: "Hello world"
+```
+Same-scope calls use `last_closure_alloc` correctly (consumed at the call site within
+the same definition) and do not require the returning-closure architecture.  The
+existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (1.1+).
+
+**A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (blocked, depends on A5.6b.1):
+Text-returning lambdas called via `CallRef` fail even after the DbRef fix because
+`generate_call_ref` does not pre-allocate the text work variables (e.g. `__work_1`)
+that `text_return()` in `control.rs` adds to the lambda’s stack frame.  `generate_call`
+allocates these with `OpAllocText` before the call; `generate_call_ref` has no
+equivalent.  Result: the lambda reads garbage from uninitialized stack positions.
+
+The debug assertion added in this session (codegen.rs:1170–1178) fires for this case
+in debug builds, making the problem immediately visible.
+
+**Fix path (concrete — `src/state/codegen.rs`, `generate_call_ref`):**
+
+The fn-type stored in the fn-ref variable is `Type::Function(param_types, ret_type)`
+where `ret_type = Type::Text(deps)` and `deps` is the list of hidden `__work_N`
+variables required.  `deps.len()` gives the count of text work buffers needed.
+
+After fixing A5.6b.1 (so the DbRef is valid), extend `generate_call_ref` to emit
+`OpAllocText` for each work buffer before `OpCallRef`:
+
+```rust
+// A5.6b.2: pre-allocate text work buffers required by text-returning lambdas.
+// `generate_call` does this via try_text_dest_pass; CallRef must do it manually.
+let work_count = if let Type::Text(deps) = &ret_type { deps.len() } else { 0 };
+for _ in 0..work_count {
+    stack.add_op("OpAllocText", self);
+    stack.position += size(&Type::Text(vec![]), &Context::Variable) as u16;
+}
+```
+
+This block is inserted after generating the declared args but before emitting the
+closure-arg generation (so the work buffers are below the closure DbRef on the stack,
+matching what `generate_call` produces).  The `total_arg_size` computation must also
+account for the added work-buffer bytes:
+
+```rust
+let work_size = work_count as u16
+    * size(&Type::Text(vec![]), &Context::Variable) as u16;
+let total_arg_size = declared_size + extra + work_size;
+```
+
+Verify that the lambda’s `def_code` assigns `__work_N` slots AFTER declared params
+and BEFORE `__closure`, so the stack layout matches what `generate_call` produces.
+Adjust the push order in `generate_call_ref` if needed.
+
+**A5.6c — Mutable capture write-back: void-return lambdas** (not yet implemented):
+A void-return capturing lambda (`fn(x: integer) { count += x; }`) updates the
+`count` field inside the closure record, but the outer `count` variable (in the
+caller’s stack frame) is never updated.  After `f(10); f(32)`, the outer `count`
+remains 0.
+
+The lambda’s IR correctly modifies the closure record field (A5.6a is done — the
+`capture_detected` test proves mutable field writes work inside the lambda body).
+The missing step is the write-back from closure record to outer variable after each
+`CallRef` returns.
+
+**Fix path (concrete — parser `control.rs`, call site generation):**
+
+At the call site where `Value::CallRef(v_nr, args)` is built (control.rs:2000),
+after constructing `converted`, emit write-back IR for each mutable captured variable:
+
+```rust
+// A5.6c: after CallRef to a closure, write captured mutable fields back to
+// the outer variables so the caller sees the updated values.
+if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
+    // closure_vars maps fn-ref var → closure work var (the __clos DbRef in scope).
+    let closure_rec = self.data.def(d_nr).closure_record;
+    if closure_rec != u32::MAX {
+        for aid in 0..self.data.attributes(closure_rec) {
+            let cap_name = self.data.attr_name(closure_rec, aid);
+            let outer_v = self.vars.var(&cap_name);
+            if outer_v != u16::MAX {
+                // Emit: outer_var = get_field(__clos, aid)
+                write_back_ops.push(self.get_field(closure_rec, aid, 0,
+                    Value::Var(closure_w)));
+                write_back_ops.push(Value::Set(outer_v, /* get_field result */));
+            }
+        }
+    }
+}
+```
+
+The exact IR construction follows the existing `set_field_no_check` / `get_field`
+helpers.  The write-back IR is emitted as statements immediately after the
+`Value::CallRef(...)` expression in the enclosing block.
+
+**Prerequisite:** `closure_vars` must be populated for the fn-ref variable `v_nr`.
+Currently `closure_vars.insert` fires only when `last_closure_work_var != u16::MAX`,
+but `last_closure_work_var` is never set.  Fix: in `emit_lambda_code` (vectors.rs),
+after creating `w` (the `__clos` work var), set `self.last_closure_work_var = w`.
+Then in `parse_assign` (expressions.rs:710–712), `closure_vars.insert(var_nr, w)`
+fires correctly.
+
+**Test:** Remove `#[ignore]` from `tests/issues.rs::p1_1_lambda_void_body` and
+update the ignore reason from the old "A5, 1.1+" text to "A5.6c" once the fix is
+implemented.
+
+**Effort:** A5.6b.1 Medium · A5.6b.2 Small · A5.6c Medium
+**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c); A5.6 (capture-at-definition-time) in 1.1+
+
+**A5.6 — Full capture-at-definition-time semantics** (1.1+, depends on A5.6b.1–A5.6c):
+After A5.6b.1, A5.6b.2, and A5.6c are resolved, the remaining gaps in closure
+semantics are:
+
+1. **Lambdas as first-class values stored in collections or struct fields.**
+   Currently `closure_vars` only maps fn-ref variables created by direct assignment.
+   If a lambda is stored in a vector or struct field, the closure record association
+   is lost and the hidden `__closure` arg is never injected at call sites.
+   Fix: extend `closure_vars` to handle indirect storage, or store the closure DbRef
+   alongside the fn-ref `d_nr` value as a single `(d_nr, closure_dbref)` pair in a
+   16-byte fn-ref slot (requires opcode changes).
+
+2. **Lambda re-definition (reassignment of a fn-ref variable).**
+   If `f = fn(x) { count += x }` is followed by `f = fn(x) { count -= x }`, the
+   second assignment clears `closure_vars[f]` and sets a new closure record.  The
+   old closure record must be freed.  `get_free_vars` must emit `OpFreeRef` for the
+   OLD closure record at the reassignment point.
+
+3. **Returning a closure from a function.**
+   `fn make_adder(n: integer) -> fn(integer) -> integer { fn(x: integer) -> integer { n + x } }`
+   The closure record must outlive `make_adder`'s stack frame.  Currently the
+   `__clos` variable lives on `make_adder`'s stack and is freed when `make_adder`
+   returns — before the returned fn-ref can be called.  Fix: the closure record must
+   be heap-allocated (already the case via `OpDatabase`) and returned alongside the
+   fn-ref as a `(d_nr, closure_dbref)` pair; `make_greeter` in the failing test
+   exercises exactly this scenario.
+
+4. **Closure lifetime and sharing.**
+   When the same lambda is called multiple times, the closure record is shared across
+   all calls.  After A5.6c adds write-back, each call to `f(10)` reads the closure
+   record, modifies it, and writes back.  Concurrent use (via `par()`) would require
+   locking or per-call copies — deferred to the parallel safety audit.
+
+**Effort:** High (multiple sub-items, some requiring opcode-level changes)
+**Depends on:** A5.6b.1, A5.6b.2, A5.6c
 **Target:** 1.1+
-
-**Effort:** Very High (parser.rs, state.rs, scopes.rs, store.rs)
-**Depends on:** P1 (done)
-**Target:** 0.8.3
 
 ---
 
@@ -1408,23 +1627,87 @@ else {
 }
 ```
 
-**Status:** Option A is implemented in `src/state/codegen.rs` (the `pos > stack.position`
-branch that resets to TOS). However, Option A alone does not make the binary test pass.
-The `validate_slots` check (debug-only, called after codegen) fires first because the zone-2
-slot allocator in `src/variables/slots.rs` assigns both `rv` and `_read_34` to slot 820 in
-the block-return pattern `rv = { _read_34 = null; read(_read_34); _read_34 }`. The child scope
-starts at `frame_base = v_slot = 820` (see `place_large_and_recurse`), giving `_read_34` the
-same slot as `rv`, while their live ranges overlap at the function level because `_read_34` is
-freed via `OpFreeRef` after all assertions (live until 1109) and `rv` is still live (until 1110).
+**Status:** *(completed 0.8.3)* — `skip_free` mechanism added to `src/state/codegen.rs`
+and `src/variables/validate.rs`.  During `generate_set` Option A (pos > TOS → alias to TOS
+slot), the inner variable `_read_34` is marked `skip_free`.  `generate_call` suppresses
+`OpFreeRef` emission for `skip_free` variables, eliminating the double-free.
+`validate_slots` skips conflict checks where either variable is `skip_free`.  The
+`skip_free` flags are propagated from the codegen-time `stack.function` into
+`data.definitions[def_nr].variables` after all `Data` mutations complete.
 
-**Next step:** Fix zone-2 assignment in `place_large_and_recurse` (`slots.rs`) to check
-that the child-scope's first zone-2 variable does not produce a live-range conflict with the
-outer variable sharing `frame_base`.  Alternatively, end `_read_34`'s live range at the block
-boundary in `compute_intervals` so the overlap is not reported by `validate_slots`.
+`wrap::binary` now passes.  `"20-binary.loft"` removed from `ignored_scripts()`.
 
-**Tests:** `cargo test --test wrap binary` (currently `#[ignore]`); remove `#[ignore]` once fixed.
-Also remove `"20-binary.loft"` from `wrap::ignored_scripts()` to re-enable in the docs sweep.
-**Effort:** Medium (`src/state/codegen.rs` done; `src/variables/slots.rs` or `src/variables/intervals.rs` next)
+**Side effect:** Fixing S34's interpreter panic exposed a pre-existing native codegen
+bug for the same IR pattern (tracked as S35).  `"20-binary.loft"` added to
+`SCRIPTS_NATIVE_SKIP` as a result.
+
+**Tests:** `cargo test --test wrap binary` — passes.
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+### S35  Native: Insert-return pattern emits malformed Rust
+**Sources:** `tests/native.rs` `SCRIPTS_NATIVE_SKIP`, `tests/scripts/20-binary.loft`
+**Severity:** Medium — the native codegen path for `20-binary.loft` has been excluded
+since S34's interpreter fix exposed it.
+**Description:** The native code generator (`src/generation/`) emits malformed Rust for
+the IR pattern `Set(rv, Insert([Set(_read_34, Null), Block]))`.  This is a block-return
+pattern where the return value `rv` is assigned the result of an `Insert` that contains
+a nested `Set`.  The emitted Rust looks like:
+
+```rust
+let mut var_rv: DbRef =   let mut var__read_34: DbRef = DbRef::null();
+```
+
+The inner `Set(_read_34, Null)` is being emitted inline as a declaration rather than
+as a separate statement before the `Insert` call, producing a declaration in the middle
+of an expression context.
+
+**Root cause (confirmed):** `output_set` in `src/generation/dispatch.rs` handles
+`Value::Set(var, to)` by writing `let mut var_{name}: type = ` and then calling
+`output_code_inner(w, to)` for the RHS.  When `to` is `Value::Insert(ops)`, the
+`Value::Insert` arm in `output_code_inner` (emit.rs:52–63) iterates over `ops` and
+emits each one indented with a trailing semicolon — treating them as statements.
+This is correct at the top level but wrong inside an expression context.  The result
+is a Rust declaration nested inside another Rust expression, which is a syntax error.
+
+**Fix path (concrete — `src/generation/dispatch.rs`, `output_set`):**
+
+Add a branch for `to = Value::Insert(ops)` before the general `output_code_inner`
+call, handling it by hoisting all-but-last ops as statements then assigning the
+last op's result:
+
+```rust
+// S35: Set(var, Insert([stmt1, ..., last_expr])) — hoist all-but-last ops
+// as statements before the declaration, then assign from the final expression.
+if let Value::Insert(ops) = to {
+    // Emit prefix statements (all except the last op).
+    for op in &ops[..ops.len() - 1] {
+        self.indent(w)?;
+        self.output_code_inner(w, op)?;
+        writeln!(w, ";")?;
+    }
+    self.indent(w)?;
+    // Now emit the declaration/assignment with only the last op as the value.
+    if self.declared.contains(&var) {
+        write!(w, "var_{name} = ")?;
+    } else {
+        self.declared.insert(var);
+        let tp_str = rust_type(variables.tp(var), &Context::Variable);
+        write!(w, "let mut var_{name}: {tp_str} = ")?;
+    }
+    self.output_code_inner(w, &ops[ops.len() - 1])?;
+    return Ok(());
+}
+```
+
+This branch is added after the `Value::Block` pre-declaration handling (line ~73) and
+before the general `declared.contains` check (line ~85).
+
+**Tests:** Remove `"20-binary.loft"` from `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`
+once fixed.
+**Effort:** Medium
 **Target:** 0.8.3
 
 ---

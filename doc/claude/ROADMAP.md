@@ -36,11 +36,40 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
 | P2-R3     | Coroutine: CO1.3d — serialise text locals at yield   | H  | ✓      | S25.1        | SAFE.md § P2-R3            |
-| S34       | Interpreter: `20-binary.loft` slot `pos >= TOS` panic | M  | ✓      |              | PLANNING.md § S34                    |
+| S35       | Native: Insert-return pattern emits malformed Rust   | M  | ✓      |              | PLANNING.md § S35          |
 | W1.16     | WASM: file I/O ops                                   | M  | ✓      |              | WASM.md § File I/O, #74              |
 | W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
-| W1.19     | WASM: random numbers (external crate)                | S  | ✓      |              | WASM.md § Random bridge              |
-| W1.20     | WASM: time functions                                 | S  | ✓      |              | WASM.md § Time bridge                |
+| A5.6b.1   | Closure: fix `__closure` DbRef in `CallRef` stack frame | M | ✓   |              | PLANNING.md § A5.6b.1      |
+| A5.6b.2   | ↳ `generate_call_ref`: pre-allocate text work buffers | S | ✓    | A5.6b.1      | PLANNING.md § A5.6b.2      |
+| A5.6c     | Closure: mutable captures don't write back to outer scope | M | ✓ |              | PLANNING.md § A5.6c        |
+
+### Known test skips at current HEAD
+
+Every skip and its reason, so CI health is visible without grepping the sources.
+
+**Interpreter** (`cargo test --test wrap`, `cargo test --test expressions`, `cargo test --test issues`):
+
+| Test | Why skipped | Fix |
+|------|-------------|-----|
+| `expressions::closure_capture_text` | Text capture: garbage DbRef in `CallRef` stack frame (Bug 1); `generate_call_ref` missing text work buffer alloc (Bug 2) | A5.6b.1, A5.6b.2 |
+| `issues::p1_1_lambda_void_body` | Void-return lambda: `count += x` updates closure record copy but never writes back to outer `count` | A5.6c |
+| `wrap::parser_debug` | Intentionally slow (~100 s execution trace); run manually with `--ignored` | Not a bug |
+| `native_loader::load_one_registers_native_functions` | A7.2: `extensions::load_one` not yet implemented | A7.2 — deferred |
+| `wasm_entry::wasm_compile_and_run_smoke` | W1.9: requires `wasm-pack` + Node.js | W1.9 — deferred |
+
+**Native** (`cargo test --test native` — `SCRIPTS_NATIVE_SKIP`):
+
+| Script | Why skipped | Fix |
+|--------|-------------|-----|
+| `51-coroutines.loft` | Native coroutine emission (state-machine transform) not yet built | N8b.1–N8b.3 |
+| `20-binary.loft` | Native codegen emits malformed Rust for `Set(rv, Insert([Set(_read_34, Null), Block]))` — pre-existing bug exposed when S34 removed the `validate_slots` panic that was previously hiding it | S35 |
+
+**WASM** (`cargo test --test wrap` — `WASM_SKIP`):
+
+| Script | Why skipped | Fix |
+|--------|-------------|-----|
+| `13-file.loft` | File I/O ops not implemented in WASM bridge; no WASM filesystem | W1.16 |
+| `19-threading.loft` | `par()` / `thread::spawn` uses `thread::scope`; WASM threading model is different | W1.18 |
 
 ---
 
@@ -105,7 +134,7 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.4      | ↳ Full iteration                                     | S  | ✓      | A4.2, A4.3   | PLANNING.md § A4 Phase 4   |
 | O4        | Native: direct-emit local collections                | H  | ✓      |              | PLANNING.md § O4           |
 | O5        | Native: omit `stores` from pure functions            | H  | ✓      | O4           | PLANNING.md § O5           |
-| A5.6      | Closure: text capture (mutable done; 2 runtime bugs) | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
+| A5.6      | Closure: capture-at-definition-time semantics        | H  | ~      | A5.6b.1–A5.6c | PLANNING.md § A5.6        |
 
 ---
 
