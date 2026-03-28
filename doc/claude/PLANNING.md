@@ -487,7 +487,7 @@ the recompile overhead that caching was designed to address)
 
 **Effort:** Very High
 **Depends:** TR1
-**Target:** 1.1+
+**Target:** 0.8.3 (all CO1.x sub-items completed in 0.8.3; originally planned for 1.1+)
 
 ---
 
@@ -694,7 +694,7 @@ from an outer scope.  No other code path is changed.
 crosses function scope — the closure is returned from `make_greeter` and called from
 outside.  The `last_closure_alloc` block references variable slots in `make_greeter`'s
 frame; calling the returned fn-ref from a different scope would access those stale slots.
-This pattern requires A5.6 (1.1+) — returning a closure alongside its DbRef.
+This pattern requires A5.6 (0.8.3) — returning a closure alongside its DbRef.
 
 After this fix, add a **same-scope** test that exercises A5.6b.1 directly:
 ```
@@ -704,7 +704,7 @@ f("world")  // expected: "Hello world"
 ```
 Same-scope calls use `last_closure_alloc` correctly (consumed at the call site within
 the same definition) and do not require the returning-closure architecture.  The
-existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (1.1+).
+existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (0.8.3).
 
 **A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (✓ implemented):
 Text-returning lambdas called via `CallRef` now correctly push the hidden `__work_N`
@@ -774,7 +774,7 @@ update the ignore reason from the old "A5, 1.1+" text to "A5.6c" once the fix is
 implemented.
 
 **Effort:** A5.6b.1 Medium · A5.6b.2 Small · A5.6c Medium
-**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c); A5.6 (capture-at-definition-time) in 1.1+
+**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c completed; A5.6 capture-at-definition-time also 0.8.3)
 
 **A5.6 — Full capture-at-definition-time semantics** (1.1+, depends on A5.6b.1–A5.6c):
 After A5.6b.1, A5.6b.2, and A5.6c are resolved, the remaining gaps in closure
@@ -811,7 +811,7 @@ semantics are:
 
 **Effort:** High (multiple sub-items, some requiring opcode-level changes)
 **Depends on:** A5.6b.1, A5.6b.2, A5.6c
-**Target:** 1.1+
+**Target:** 0.8.3
 
 ---
 
@@ -1476,7 +1476,7 @@ Step 2, Zone 2 is zeroed but Strings are still leaked.  If Step 2 lands without
 Step 1, `drop_in_place` may fire on garbage bytes (UB).
 
 **Effort:** Small (1–2 hours)
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 

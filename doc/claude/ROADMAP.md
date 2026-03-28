@@ -32,7 +32,9 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
+| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading        |
+| S25.3     | Coroutine text locals: early-break leak fix          | S  | ✓      |              | PLANNING.md § S25.3        |
+| A5.6      | Closure: capture-at-definition-time semantics        | H  | ~      | A5.6b.1–c   | PLANNING.md § A5.6         |
 
 ### Known test skips at current HEAD
 
@@ -42,7 +44,7 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 
 | Test | Why skipped | Fix |
 |------|-------------|-----|
-| `expressions::closure_capture_text` | Cross-scope closure (make_greeter pattern) deferred to A5.6 (1.1+) | A5.6 |
+| `expressions::closure_capture_text` | Cross-scope closure (make_greeter pattern) — fix tracked as A5.6 (0.8.3) | A5.6 |
 | `wrap::parser_debug` | Intentionally slow (~100 s execution trace); run manually with `--ignored` | Not a bug |
 | `native_loader::load_one_registers_native_functions` | A7.2: `extensions::load_one` not yet implemented | A7.2 — deferred |
 
@@ -120,7 +122,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | A4.4      | ↳ Full iteration                                     | S  | ✓      | A4.2, A4.3   | PLANNING.md § A4 Phase 4   |
 | O4        | Native: direct-emit local collections                | H  | ✓      |              | PLANNING.md § O4           |
 | O5        | Native: omit `stores` from pure functions            | H  | ✓      | O4           | PLANNING.md § O5           |
-| A5.6      | Closure: capture-at-definition-time semantics        | H  | ~      | A5.6b.1–A5.6c | PLANNING.md § A5.6        |
 
 ---
 

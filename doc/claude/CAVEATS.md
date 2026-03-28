@@ -51,7 +51,7 @@ fn test() {
 
 **Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` (all pass); `closure_capture_text` (`#[ignore]`, restriction 1); `tests/parse_errors.rs` — `capture_detected` (passes, mutable capture)
 **Workaround:** pass captured text values as explicit function arguments.
-**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (1.1+); needs investigation of `OpCallRef` stack layout + `generate_call_ref` text buffer allocation.
+**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (0.8.3); needs investigation of `OpCallRef` stack layout + `generate_call_ref` text buffer allocation.
 **Docs:** [LOFT.md](LOFT.md) § Lambda expressions.
 
 ---
@@ -363,7 +363,7 @@ those would be UB.  Fix must zero Zone 2 at generator startup first.
 
 **Test:** `coroutine_text_local_survives_yield` (passes, no leak at exhaustion).
 No test for the early-break path yet.
-**Planned fix:** PLANNING.md S25.3 — zero Zone 2 at first resume + null-ptr-guarded
+**Planned fix:** PLANNING.md S25.3 (0.8.3) — zero Zone 2 at first resume + null-ptr-guarded
 drop in `free_coroutine`.  Two-step, must land atomically.
 **Workaround:** iterate generators to exhaustion rather than breaking.
 **Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3, [PLANNING.md](PLANNING.md) § S25.3.
