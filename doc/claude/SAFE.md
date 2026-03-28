@@ -1100,7 +1100,7 @@ initial coroutine implementation.
 | SC-CO-1 | Dynamic `Str` in `stack_bytes` dangles | **Not implemented** (CO1.3d, see P2-R1, P2-R3) |
 | SC-CO-2 | `DbRef` locals outlive store | See P2-R8 (S28 ✓); design in M13-a/b/c; CL-2b added for store-backed Str (P2-R5) |
 | SC-CO-3 | Re-entrant advance | ✓ Implemented |
-| SC-CO-4 | `yield` inside `par(...)` | **Not implemented** (see P2-R6) |
+| SC-CO-4 | `yield` inside `par(...)` | ✓ Compiler error + runtime guard (P2-R6 M11-a/b) |
 | SC-CO-5 | Serialisation cost O(depth) | Documented; accepted |
 | SC-CO-6 | Advancing exhausted generator | ✓ Null pushed; frames freed on exhaustion (S26 ✓, P2-R7 done) |
 | SC-CO-7 | Fixed `stack_base` clobbered | ✓ Implemented |
@@ -1119,7 +1119,7 @@ initial coroutine implementation.
 | P2-R3 — Implicit "never freed" invariant | **high** | L † | Debug assert on text slots present (M8-b) | Implement CO1.3d atomically (M8-a) |
 | P2-R4 — `text_positions` inconsistency | **medium** | S | ✓ S27: save/restore entries on yield/resume in debug (M9-a) | Same |
 | P2-R5 — Store-backed `Str` dangles | **medium** | S / S | ✓ M10-a: CL-2b in COROUTINE.md + debug pointer-range guard in `coroutine_yield` | Deep-copy store-derived text in `serialise_text_slots` (M10-b, via CO1.3d P2-R3) |
-| P2-R6 — No compiler check for `yield` in `par()` | **medium** | S | ✓ S23: runtime out-of-bounds guard in `coroutine_next` (M11-b) | Compiler error in `parse_parallel_for` (M11-a) |
+| P2-R6 — No compiler check for `yield` in `par()` | **medium** | S | ✓ M11-a + M11-b: `in_par_body` flag + compiler error + S23 runtime guard | Same |
 | P2-R7 — Exhausted frames never freed | **low** | M | ✓ S26: `coroutines[idx] = None` on exhaustion (M12-a) | Reference counting for `COROUTINE_STORE` DbRefs (M12-c) |
 | P2-R8 — `DbRef` locals outlive store across suspension | **medium** | M / XL | ✓ S28: generation-counter guard in debug (M13-a/b) | Compiler flow-analysis warning (M13-c) |
 | P2-R9 — `e#remove` on generator corrupts store | **medium** | XS | Runtime guard in `database::remove` (M14-b) | Compiler rejection at `e#remove` resolution (M14-a) |

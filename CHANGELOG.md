@@ -269,6 +269,48 @@ All notable changes to the loft language and interpreter.
   `#[ignore]` in both debug and release builds.  Text capture and mutable capture
   remain deferred (A5.6 in ROADMAP.md).
 
+- **Mutable closure captures write back to outer scope after each call** (A5.6c)
+  — Void-return lambda calls now emit a write-back sequence after the `CallRef`
+  instruction: for each field of the closure record, `OpGetInt` (or the
+  field-type equivalent) reads the updated value back and stores it to the
+  corresponding outer-scope variable.  Two root-cause bugs were fixed along the
+  way: (1) `closure_vars.insert` was executing before the RHS lambda was parsed
+  (because the insert check ran before `parse_assign_op`, which is where the
+  lambda tokens are consumed); (2) the write-back used `Value::Block` (which
+  creates a new scope), causing `scopes.rs` to emit `OpFreeRef` for the closure
+  variable at the inner scope exit — leaving a dangling DbRef for the second
+  call.  The fix uses `Value::Insert` instead, keeping the closure record alive
+  across all calls in the outer scope.
+  Test `p1_1_lambda_void_body` in `tests/issues.rs` passes without `#[ignore]`.
+
+- **Text capture via `CallRef` no longer produces garbage DbRef** (A5.6b.1) —
+  In `generate_call_ref`, the `__closure` argument (a `DbRef`) was being pushed
+  onto the wrong stack frame: it was placed at the stack position of `x`
+  (the first explicit argument), not at the position expected by the lambda
+  body.  Two separate code paths were fixed: (1) for zero-param fn-refs the
+  fast path now injects the closure arg; (2) `text_return` no longer adds
+  captured RefVar(Text) variables as spurious extra args to the lambda's
+  parameter type, which previously caused arity-mismatch failures.
+
+- **`generate_call_ref` pre-allocates text work buffers for closures** (A5.6b.2)
+  — A spurious `debug_assert!(work_vars.is_empty())` in `generate_call_ref`
+  fired when a capturing lambda returned text, because the closure record
+  contains a RefVar work buffer.  The assert has been removed; the existing
+  logic already handles non-empty `work_vars` correctly.  Test
+  `closure_capture_text_integer_return` passes without `#[ignore]`.
+
+- **`yield` inside `par(...)` body now produces a compile-time error** (P2-R6
+  M11-a) — The parser sets an `in_par_body` flag while parsing the body block
+  of a `for … par(…)` loop.  When `yield` is encountered with `in_par_body`
+  true, an Error diagnostic is emitted: "yield is not allowed inside a
+  par(...) parallel body".  The yield expression is still consumed (to keep the
+  lexer in sync) but no coroutine IR is generated, so scope analysis does not
+  see orphaned reference variables.  The `in_par_body` flag is saved and
+  restored for nested par() bodies.  Test
+  `p2_r6_yield_inside_par_body_rejected` in `tests/issues.rs` passes without
+  `#[ignore]`.  The existing runtime out-of-bounds guard (S23 / M11-b) in
+  `coroutine_next` remains as defence-in-depth.
+
 - **`yield from` slot-assignment regression fixed** (CO1.4-fix) — `yield from
   inner()` inside a coroutine with local variables before the delegation now
   produces correct results.  The two-zone slot redesign (S17/S18) already

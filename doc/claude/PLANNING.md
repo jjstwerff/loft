@@ -610,7 +610,7 @@ Two remaining restrictions after A5.1–A5.5:
 `generate_set` self-reference guard.  The earlier plan for a `SetClosureField` IR
 variant was not needed.  Test: `tests/parse_errors.rs::capture_detected`.
 
-**A5.6b.1 — Text capture: garbage DbRef in `CallRef` stack frame** (root cause confirmed):
+**A5.6b.1 — Text capture: garbage DbRef in `CallRef` stack frame** (✓ implemented in `safe` branch):
 Text-capturing, text-returning lambdas (e.g. `fn(name: text) -> text { "{prefix} {name}" }`)
 produce a garbage `__closure` DbRef at runtime, causing panics such as "Unknown record
 49745" or "Store write out of bounds".  Integer-only captures work correctly.
@@ -706,7 +706,7 @@ Same-scope calls use `last_closure_alloc` correctly (consumed at the call site w
 the same definition) and do not require the returning-closure architecture.  The
 existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (1.1+).
 
-**A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (blocked, depends on A5.6b.1):
+**A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (✓ implemented in `safe` branch):
 Text-returning lambdas called via `CallRef` fail even after the DbRef fix because
 `generate_call_ref` does not pre-allocate the text work variables (e.g. `__work_1`)
 that `text_return()` in `control.rs` adds to the lambda’s stack frame.  `generate_call`
@@ -750,7 +750,7 @@ Verify that the lambda’s `def_code` assigns `__work_N` slots AFTER declared pa
 and BEFORE `__closure`, so the stack layout matches what `generate_call` produces.
 Adjust the push order in `generate_call_ref` if needed.
 
-**A5.6c — Mutable capture write-back: void-return lambdas** (not yet implemented):
+**A5.6c — Mutable capture write-back: void-return lambdas** (✓ implemented in `safe` branch):
 A void-return capturing lambda (`fn(x: integer) { count += x; }`) updates the
 `count` field inside the closure record, but the outer `count` variable (in the
 caller’s stack frame) is never updated.  After `f(10); f(32)`, the outer `count`
