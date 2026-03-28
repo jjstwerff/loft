@@ -82,6 +82,29 @@ impl Output<'_> {
                 return Ok(());
             }
         }
+        // S35: Set(var, Insert([stmt1, ..., last_expr])) — hoist all-but-last ops as
+        // statements before the declaration, then assign only from the final expression.
+        // Without this, the inner Set ops are emitted inline inside an expression context,
+        // producing malformed Rust like `let mut var_rv: DbRef = let mut var__read: DbRef = …`.
+        if let Value::Insert(ops) = to
+            && !ops.is_empty()
+        {
+            for op in &ops[..ops.len() - 1] {
+                self.indent(w)?;
+                self.output_code_inner(w, op)?;
+                writeln!(w, ";")?;
+            }
+            self.indent(w)?;
+            if self.declared.contains(&var) {
+                write!(w, "var_{name} = ")?;
+            } else {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                write!(w, "let mut var_{name}: {tp_str} = ")?;
+            }
+            self.output_code_inner(w, &ops[ops.len() - 1])?;
+            return Ok(());
+        }
         if self.declared.contains(&var) {
             write!(w, "var_{name} = ")?;
         } else {
@@ -251,6 +274,14 @@ impl Output<'_> {
                 // After freeing, reset the variable to null so a subsequent OpDatabase
                 // knows to allocate a fresh store rather than reusing the freed one.
                 if let [ref db_val] = vals[..] {
+                    // S34/S35: skip_free variables share a slot with an outer variable that
+                    // already owns the record; suppressing their OpFreeRef prevents a double-free.
+                    if let Value::Var(v) = db_val
+                        && self.data.def(self.def_nr).variables.is_skip_free(*v)
+                    {
+                        write!(w, "()")?;
+                        return Ok(());
+                    }
                     let var_name = if let Value::Var(v) = db_val {
                         format!(
                             "var_{}",

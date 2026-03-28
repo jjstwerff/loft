@@ -34,12 +34,6 @@ const NATIVE_SKIP: &[&str] = &[
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
-    // S34: native codegen emits a malformed declaration for the Insert-return pattern
-    // (Set(rv, Insert([Set(_read_34, Null), Block]))).  Before S34, this was silently
-    // skipped because validate_slots panicked during def_code; after S34's interpreter
-    // fix the panic is gone and the native codegen bug is now visible.
-    // The interpreter test (wrap::binary) passes; this is a native-only regression.
-    "20-binary.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
@@ -617,11 +611,9 @@ fn native_tuple_script() -> std::io::Result<()> {
 /// S35: native binary I/O script.
 ///
 /// Runs `tests/scripts/20-binary.loft` through the native Rust backend end-to-end.
-/// Ignored until S35 fixes `output_set` in `dispatch.rs` to hoist inner statements
-/// from `Value::Insert` before the assignment declaration.
-/// When un-ignored, `20-binary.loft` is removed from `SCRIPTS_NATIVE_SKIP`.
+/// Exercises the Insert-return pattern (Set(rv, Insert([Set(_read_34, Null), Block])))
+/// fixed in S35: output_set now hoists inner ops as statements before the assignment.
 #[test]
-#[ignore = "S35: output_set emits malformed Rust for Set(rv, Insert([Set(_read_34, Null), Block])) — inner Set is emitted inline in expression context; see PLANNING.md § S35"]
 fn native_binary_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/20-binary.loft");
