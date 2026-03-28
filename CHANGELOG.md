@@ -230,6 +230,7 @@ All notable changes to the loft language and interpreter.
   is fully resolved.
 
 
+
 - **WASM file I/O wired to VirtFS host bridge** (W1.16) — All file operations
   (`read_text`, `write_text`, `read_bytes`, `write_bytes`, `seek`, `file_size`,
   `truncate`, `is_file`, `is_dir`, `list_dir`, `delete`, `move`, `mkdir`,
