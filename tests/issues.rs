@@ -1301,6 +1301,28 @@ fn test() { }"
     .error("Struct 'Item' has a field named 'key' which is reserved for hash iteration — rename the field at s8_hash_value_struct_key_field_rejected:1:14");
 }
 
+// ── P2-R6 — Compiler check: yield inside par() body ──────────────────────────
+// A coroutine generator cannot yield inside a par() parallel body because the
+// worker executes in a separate thread with its own store — there is no safe
+// way to resume the parent coroutine from within a worker.
+// Fix: `in_par_body` flag in Parser; error emitted when `yield` is encountered
+// inside a parallel-for worker function body.
+
+#[test]
+#[ignore = "P2-R6 M11-a: compiler check for yield inside par() not yet implemented"]
+fn p2_r6_yield_inside_par_body_rejected() {
+    code!(
+        "fn gen() -> iterator<integer> {
+    items = [1, 2, 3];
+    for a in items par(b = double(a), 1) {
+        yield b;
+    }
+}
+fn double(x: integer) -> integer { x * 2 }"
+    )
+    .error("yield is not allowed inside a par(...) parallel body at p2_r6_yield_inside_par_body_rejected:4:9");
+}
+
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
 // Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
 
