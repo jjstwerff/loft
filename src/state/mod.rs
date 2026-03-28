@@ -11,12 +11,13 @@ mod debug;
 mod io;
 mod text;
 
-use crate::data::{Data, Type};
+use crate::data::{Context, Data, Type};
 pub use crate::database::Call;
 use crate::database::{ParallelCtx, Stores, WorkerStores};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Str};
 use crate::log_config::LogConfig;
+use crate::variables::size as var_size;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Error, Write};
 use std::sync::Arc;
@@ -340,6 +341,73 @@ impl State {
             .expect("coroutine_frame_mut: empty slot")
     }
 
+    /// S25.1 (CO1.3d): check whether a raw text pointer is inside the static text pool.
+    /// Static Str values (from string literals compiled into `text_code`) are permanently
+    /// live and need no ownership transfer.
+    fn is_in_text_code(&self, ptr: *const u8) -> bool {
+        let base = self.text_code.as_ptr();
+        // SAFETY: offset by known length stays within the same allocation.
+        let end = unsafe { base.add(self.text_code.len()) };
+        ptr >= base && ptr < end
+    }
+
+    /// S25.1 (CO1.3d / P2-R1): scan the first `args_size` bytes of `stack_bytes` for
+    /// text (`Str`) arguments.  For each non-null, non-static `Str`, clone the backing
+    /// data into an owned `String`, update `stack_bytes` to point to the owned buffer,
+    /// and record `(byte_offset, owned_string)` in the returned vec.
+    ///
+    /// After this call, the `Str` pointers in `stack_bytes` are independent of the
+    /// caller's `String` allocations, so `OpFreeText` on the caller's side cannot
+    /// dangle the coroutine's copy.
+    fn serialise_text_args(
+        &self,
+        d_nr: u32,
+        stack_bytes: &mut Vec<u8>,
+        args_size: u32,
+    ) -> Vec<(u32, String)> {
+        if self.data_ptr.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: data_ptr is set in execute_argv and remains valid for the duration
+        // of execution.  coroutine_create is only called from fill.rs during execution.
+        let data = unsafe { &*self.data_ptr };
+        if d_nr as usize >= data.definitions.len() {
+            return Vec::new();
+        }
+        let def = &data.definitions[d_nr as usize];
+        let mut text_owned: Vec<(u32, String)> = Vec::new();
+        let mut byte_offset: usize = 0;
+
+        for attr in &def.attributes {
+            if byte_offset >= args_size as usize {
+                break; // only scan the arg region
+            }
+            let attr_size = var_size(&attr.typedef, &Context::Argument) as usize;
+            if matches!(&attr.typedef, Type::Text(_)) {
+                // Read the Str from stack_bytes at byte_offset.
+                // SAFETY: byte_offset + size_of::<Str>() <= args_size <= stack_bytes.len().
+                let str_val: Str = unsafe {
+                    let src = stack_bytes.as_ptr().add(byte_offset) as *const Str;
+                    std::ptr::read_unaligned(src)
+                };
+                // Skip null sentinel and static text (pointer lives in text_code).
+                let is_null = str_val.ptr == STRING_NULL.as_ptr() || str_val.len == 0;
+                if !is_null && !self.is_in_text_code(str_val.ptr) {
+                    let owned = str_val.str().to_owned();
+                    let new_str = Str::new(owned.as_str());
+                    // Patch stack_bytes to point to the owned buffer.
+                    unsafe {
+                        let dst = stack_bytes.as_mut_ptr().add(byte_offset) as *mut Str;
+                        std::ptr::write_unaligned(dst, new_str);
+                    }
+                    text_owned.push((byte_offset as u32, owned));
+                }
+            }
+            byte_offset += attr_size;
+        }
+        text_owned
+    }
+
     // CO1.2: Create a coroutine frame — copy arguments into the frame without
     // entering the function body.
     pub fn coroutine_create(&mut self, d_nr: u32, args_size: u32, entry_pos: u32) {
@@ -350,6 +418,9 @@ impl State {
         unsafe {
             std::ptr::copy_nonoverlapping(src, stack_bytes.as_mut_ptr(), args_size as usize);
         }
+        // S25.1 (CO1.3d / P2-R1): serialise text args to owned Strings before the
+        // caller's OpFreeText can free the backing allocations.
+        let text_owned = self.serialise_text_args(d_nr, &mut stack_bytes, args_size);
         // CO1.3d: append the 4-byte return-address slot expected by the function body.
         // fn_call pushes this slot for regular calls; coroutines must include it so that
         // get_var offsets computed at codegen time remain valid after resume.
@@ -363,7 +434,7 @@ impl State {
             stack_base: 0,
             caller_return_pos: 0,
             stack_bytes,
-            text_owned: Vec::new(),
+            text_owned, // S25.1: populated by serialise_text_args above
             call_frames: Vec::new(),
             call_depth: 0,
             #[cfg(debug_assertions)]
@@ -429,7 +500,7 @@ impl State {
                     f.status = CoroutineStatus::Running;
                 }
 
-                let bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
+                let mut bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
                 let code_pos = self.coroutine_frame_mut(idx).code_pos;
                 let saved_frames: Vec<_> = self
                     .coroutine_frame_mut(idx)
@@ -469,6 +540,24 @@ impl State {
                              DbRef locals held by the generator may point to freed or \
                              reallocated records — see CAVEATS.md S28"
                         );
+                    }
+                }
+
+                // S25.1 (CO1.3d / M6-b): patch Str pointers in the cloned bytes to
+                // reflect the current buffer addresses of the owned Strings.  Collect
+                // (offset, Str) pairs while the frame borrow is live, then apply them
+                // to the local `bytes` clone.  String heap buffers are stable: they are
+                // not pushed, reallocated, or dropped between here and the copy below.
+                let text_patches: Vec<(u32, Str)> = self
+                    .coroutine_frame_mut(idx)
+                    .text_owned
+                    .iter()
+                    .map(|(off, s)| (*off, Str::new(s.as_str())))
+                    .collect();
+                for (offset, new_str) in &text_patches {
+                    unsafe {
+                        let dst = bytes.as_mut_ptr().add(*offset as usize) as *mut Str;
+                        std::ptr::write_unaligned(dst, *new_str);
                     }
                 }
 

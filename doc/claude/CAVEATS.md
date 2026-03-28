@@ -300,48 +300,48 @@ in `tests/expressions.rs` — both pass.
 
 ## C23 — Coroutine with `text` argument: use-after-free on first resume
 
-A generator that takes a `text` parameter stores the `Str` pointer verbatim in
-`stack_bytes` at creation time.  If the caller's string goes out of scope before
-the first `next()` call, the generator resumes with a dangling pointer and
-silently reads freed memory.  No panic is emitted in debug or release builds.
+**Fixed (S25.1, 0.8.3)**
 
-**Reproducer:**
-```loft
-fn words(sentence: text) -> iterator<text> { yield sentence; }
-fn main() {
-  gen = words("hello world");
-  // if the literal String is freed before next(), first resume reads garbage
-  w = next(gen);
-}
-```
+`State::serialise_text_args` is now called in `coroutine_create` for every text
+(`Str`) argument slot.  Each dynamic text arg is cloned into an owned `String` in
+`frame.text_owned`; the `Str` in `stack_bytes` is updated to point to the owned
+buffer.  On resume, the owned buffer address is re-patched into the cloned bytes
+before they are copied to the live stack.  The caller's `OpFreeText` no longer
+causes a dangling pointer.
 
-**Test:** none (requires memory sanitizer; no loft-level reproducer triggers a clear failure).
-**Workaround:** keep text arguments live for the generator's entire lifetime.
-**Planned fix:** S25 in [ROADMAP.md](ROADMAP.md) — CO1.3d `serialise_text_slots` at coroutine create.
+**Test:** `coroutine_text_arg_dynamic_serialised` in `tests/expressions.rs`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R1, [COROUTINE.md](COROUTINE.md) § SC-CO-1.
 
 ---
 
 ## C24 — Coroutine with `text` locals: memory leak on exhaustion
 
-Generators that have `text` local variables and yield at least once leak those
-`String` allocations when exhausted.  `stack_bytes.clear()` treats its payload
-as plain bytes — no `String` destructors are called.  The `text_owned`
-serialisation path (CO1.3d) that would own these allocations is not yet
-implemented.
+**Partially fixed (S25.2, 0.8.3) — text args now freed; text locals still leak**
 
-**Reproducer:**
+Text args held in `frame.text_owned` are now properly freed at exhaustion:
+`coroutine_return` calls `frame.text_owned.clear()`, which drops the owned
+Strings via RAII.  Before S25.1 landed, `text_owned` was always empty; now it
+contains the serialised text args, so the drain is effective.
+
+Text LOCAL variables (e.g. `greeting = "hello, " ++ name`) are `String` objects
+stored inline on the generator's live stack.  The `coroutine_yield` path does not
+yet serialise them into `text_owned` (CO1.3d yield path not implemented).  At
+`coroutine_return`, these live-stack Strings are abandoned — their heap allocations
+are leaked.  This affects every generator that has at least one text local and
+yields at least once.
+
+**Reproducer (still open):**
 ```loft
 fn gen_texts() -> iterator<integer> {
   greeting = "hello";  // text local on the generator stack
   yield 1;
-  // exhaustion: greeting's String heap allocation is leaked
+  // exhaustion: greeting's String heap allocation still leaks
 }
 ```
 
-**Test:** none (requires allocator leak detection).
-**Workaround:** none; avoid text locals in generators where memory pressure matters.
-**Planned fix:** S25 in [ROADMAP.md](ROADMAP.md) — CO1.3d (must land atomically with C23 fix).
+**Test:** none for the remaining leak (requires allocator leak detection).
+**Workaround:** avoid text locals in generators where memory pressure matters.
+**Remaining fix:** CO1.3d yield path — `serialise_text_slots` at `coroutine_yield`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3.
 
 ---

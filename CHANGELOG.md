@@ -8,6 +8,25 @@ All notable changes to the loft language and interpreter.
 
 ### Safety fixes
 
+- **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
+  `State::coroutine_create` now calls `serialise_text_args` after copying the raw
+  argument bytes.  For each text (`Str`) argument that points into a dynamic heap
+  allocation (not a static literal in `text_code`), the function clones the string
+  data into an owned `String` stored in `frame.text_owned`, then overwrites the
+  `Str` bytes in `stack_bytes` to point to the owned buffer.  The owned `String`
+  outlives any `OpFreeText` the caller may emit after the create; the `Str` pointer
+  is therefore never dangling on the first or any subsequent resume (P2-R1, critical
+  use-after-free).
+  At `coroutine_next`, each owned String's current buffer address is patched back
+  into the cloned `stack_bytes` before the bytes are copied to the live stack
+  (M6-b pointer-patch step).
+  At `coroutine_return`, the existing `frame.text_owned.clear()` now properly drains
+  the owned Strings that were populated by S25.1, freeing their heap allocations via
+  Rust RAII instead of leaking them (P2-R2, high memory leak).
+  Two new tests `coroutine_text_arg_dynamic_serialised` and
+  `coroutine_text_arg_freed_at_return` in `tests/expressions.rs` exercise the create
+  → resume → exhaust cycle with a dynamically formatted text argument.
+
 - **`const` parameter writes now panic in release builds** (S22) — The
   `#[cfg(debug_assertions)]` guard on auto-lock insertion has been removed from
   `src/parser/expressions.rs`.  `store.claim()` and `store.delete()` now use

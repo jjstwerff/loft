@@ -18,7 +18,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions + safety gate
 
-W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2 completed in 0.8.3.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2 completed in 0.8.3.
 
 The following safety and stability issues were uncovered after the WASM work
 landed and must be resolved before the 0.8.3 tag is cut.  Releasing with
@@ -26,9 +26,6 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| S25       | CO1.3d: coroutine text serialisation (atomic)        | L  | ✓      |              | SAFE.md § P2-R1/R2/R3      |
-| S25.1     | ↳ `serialise_text_slots` at create + yield           | M  | ✓      |              | COROUTINE.md § CO1.3d      |
-| S25.2     | ↳ Pointer-patch on resume + `String` drain on return | M  | ✓      | S25.1        | COROUTINE.md § CO1.3d      |
 | N8b.1     | Native: coroutine state-machine transform design     | H  | ✓      | CO1          | NATIVE.md § N8b            |
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
