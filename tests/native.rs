@@ -36,8 +36,6 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     "47-predicates.loft",
     // P3: 46-caveats.loft uses any/all/count_if — same P3 scope bug as 47-predicates.loft.
     "46-caveats.loft",
-    // A10: native codegen for field iteration's match arms not yet supported.
-    "45-field-iter.loft",
     // CO1: native codegen does not support coroutines/yield (interpreter-only).
     "51-coroutines.loft",
 ];

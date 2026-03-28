@@ -85,6 +85,12 @@ All notable changes to the loft language and interpreter.
 
 ### Native test harness fixes
 
+- **`45-field-iter.loft` stale skip removed from native test harness** (N8a.5) —
+  The `// A10` skip entry for `45-field-iter.loft` in `SCRIPTS_NATIVE_SKIP` was
+  stale: the field-iteration native backend already worked correctly after the A10
+  implementation.  The entry has been removed; `45-field-iter.loft` now runs in the
+  `native_scripts` test alongside all other unblocked scripts.
+
 - **Tuple types now supported in native code generation; `50-tuples.loft` unskipped** (N8a) —
   Three complementary fixes enable tuple types in the `--native` backend:
   (N8a.1) `rust_type(Type::Tuple)` now emits the correct Rust type `(T0, T1, …)`

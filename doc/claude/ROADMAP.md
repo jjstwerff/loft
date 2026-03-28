@@ -18,7 +18,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions + safety gate
 
-W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8c.1, N8c.2 completed in 0.8.3.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.5, N8c.1, N8c.2 completed in 0.8.3.
 
 The following safety and stability issues were uncovered after the WASM work
 landed and must be resolved before the 0.8.3 tag is cut.  Releasing with
