@@ -32,7 +32,7 @@ pub fn read(file_path: &str, store: &mut Store) -> std::io::Result<(u32, u32, u3
 /// Read a PNG via the WASM host bridge (wasm path).
 #[cfg(feature = "wasm")]
 pub fn read(file_path: &str, store: &mut Store) -> std::io::Result<(u32, u32, u32)> {
-    let bytes = crate::wasm::host_fs_read_binary(file_path);
+    let bytes = crate::wasm::host_fs_read_binary(file_path).unwrap_or_default();
     decode_into_store(std::io::Cursor::new(bytes), store)
 }
 

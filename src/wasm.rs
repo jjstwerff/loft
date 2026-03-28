@@ -6,143 +6,459 @@
 //! Compiled only when `--features wasm` is active.  Each host-bridge function
 //! corresponds to a JS-side counterpart on `globalThis.loftHost`.
 //!
-//! Steps: W1.1 (this stub) → W1.2 (output capture) → W1.3–W1.8 (bridges) → W1.9 (entry point).
+//! Steps: W1.1 (this stub) → W1.2 (output capture) → W1.3–W1.8 (bridges) →
+//!        W1.9 (entry point) → W1.16 (file I/O, FS-A … FS-F).
+//!
+//! FS-A (this file): every stub calls `globalThis.loftHost.*` via `js_sys::Reflect`
+//! when compiled under `--features wasm`.  Under the default feature set the stubs
+//! continue to return the same harmless defaults as before, so native tests are
+//! unaffected.
 
-// ── W1.7  File I/O host bridge stubs ─────────────────────────────────────────
+// ── FS-A  js_sys call helpers (wasm only) ────────────────────────────────────
+
+/// Return the `globalThis.loftHost` object.
+#[cfg(feature = "wasm")]
+fn loft_host() -> wasm_bindgen::JsValue {
+    js_sys::Reflect::get(&js_sys::global(), &"loftHost".into())
+        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED)
+}
+
+/// Call `globalThis.loftHost[method](args…)`.  Returns `JsValue::UNDEFINED` on error.
+#[cfg(feature = "wasm")]
+fn host_call(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
+    let host = loft_host();
+    let func: wasm_bindgen::JsValue =
+        js_sys::Reflect::get(&host, &method.into()).unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+    js_sys::Function::from(func)
+        .apply(&host, args)
+        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED)
+}
+
+// ── W1.7 / FS-A  File I/O host bridge ────────────────────────────────────────
 
 /// Check whether a path exists in the virtual filesystem.
-pub fn host_fs_exists(_path: &str) -> bool {
-    // TODO W1.9: call extern "C" { fn fs_exists(ptr, len) -> bool; }
-    false
+pub fn host_fs_exists(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_exists", &args).as_bool().unwrap_or(false)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
-/// Read an entire text file.  Returns empty string if absent.
-pub fn host_fs_read_text(_path: &str) -> String {
-    // TODO W1.9
-    String::new()
+/// Read an entire text file.  Returns `None` if absent.
+pub fn host_fs_read_text(path: &str) -> Option<String> {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        let v = host_call("fs_read_text", &args);
+        if v.is_null() || v.is_undefined() {
+            None
+        } else {
+            v.as_string()
+        }
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        None
+    }
 }
 
-/// Write `data` as text to `path`, creating or truncating.
-pub fn host_fs_write_text(_path: &str, _data: &str) {}
-
-/// Read raw bytes from `path`.  Returns empty Vec if absent.
-pub fn host_fs_read_binary(_path: &str) -> Vec<u8> {
-    // TODO W1.9
-    Vec::new()
+/// Write `data` as text to `path`, creating or truncating.  Returns 0 on success.
+pub fn host_fs_write_text(path: &str, data: &str) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of2(&path.into(), &data.into());
+        host_call("fs_write_text", &args)
+            .as_f64()
+            .map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, data);
+        0
+    }
 }
 
-/// Write raw bytes to `path`, creating or truncating.
-pub fn host_fs_write_binary(_path: &str, _data: &[u8]) {}
-
-/// Delete `path`.  Returns true on success.
-pub fn host_fs_delete(_path: &str) -> bool {
-    false
+/// Read raw bytes from `path`.  Returns `None` if absent.
+pub fn host_fs_read_binary(path: &str) -> Option<Vec<u8>> {
+    #[cfg(feature = "wasm")]
+    {
+        use wasm_bindgen::JsCast;
+        let args = js_sys::Array::of3(&path.into(), &0.into(), &i32::MAX.into());
+        let v = host_call("fs_read_binary", &args);
+        if v.is_null() || v.is_undefined() {
+            None
+        } else if let Ok(arr) = v.dyn_into::<js_sys::Uint8Array>() {
+            Some(arr.to_vec())
+        } else {
+            None
+        }
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        None
+    }
 }
 
-/// Move / rename `from` to `to`.  Returns true on success.
-pub fn host_fs_move(_from: &str, _to: &str) -> bool {
-    false
+/// Write raw bytes to `path`, creating or truncating.  Returns 0 on success.
+pub fn host_fs_write_binary(path: &str, data: &[u8]) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let arr = js_sys::Uint8Array::from(data);
+        let args = js_sys::Array::of2(&path.into(), &arr.into());
+        host_call("fs_write_binary", &args)
+            .as_f64()
+            .map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, data);
+        0
+    }
 }
 
-/// Create a directory.  Returns true on success.
-pub fn host_fs_mkdir(_path: &str) -> bool {
-    false
+/// Delete `path`.  Returns 0 on success, non-zero on error.
+pub fn host_fs_delete(path: &str) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_delete", &args)
+            .as_f64()
+            .map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        1
+    }
 }
 
-/// Create a directory and all parents.  Returns true on success.
-pub fn host_fs_mkdir_all(_path: &str) -> bool {
-    false
+/// Move / rename `from` to `to`.  Returns 0 on success.
+pub fn host_fs_move(from: &str, to: &str) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of2(&from.into(), &to.into());
+        host_call("fs_move", &args).as_f64().map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (from, to);
+        1
+    }
+}
+
+/// Create a directory.  Returns 0 on success.
+pub fn host_fs_mkdir(path: &str) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_mkdir", &args)
+            .as_f64()
+            .map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        1
+    }
+}
+
+/// Create a directory and all parents.  Returns 0 on success.
+pub fn host_fs_mkdir_all(path: &str) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_mkdir_all", &args)
+            .as_f64()
+            .map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        1
+    }
 }
 
 /// Return a list of names inside `path` (directory listing).
-pub fn host_fs_list_dir(_path: &str) -> Vec<String> {
-    Vec::new()
+pub fn host_fs_list_dir(path: &str) -> Vec<String> {
+    #[cfg(feature = "wasm")]
+    {
+        use wasm_bindgen::JsCast;
+        let args = js_sys::Array::of1(&path.into());
+        let v = host_call("fs_list_dir", &args);
+        if let Ok(arr) = v.dyn_into::<js_sys::Array>() {
+            arr.iter().filter_map(|x| x.as_string()).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        Vec::new()
+    }
 }
 
 /// Return `true` if `path` is a directory.
-pub fn host_fs_is_dir(_path: &str) -> bool {
-    false
+pub fn host_fs_is_dir(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_is_dir", &args).as_bool().unwrap_or(false)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// Return `true` if `path` is a regular file.
-pub fn host_fs_is_file(_path: &str) -> bool {
-    false
+pub fn host_fs_is_file(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_is_file", &args).as_bool().unwrap_or(false)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// Return the byte size of `path`, or -1 if absent.
-pub fn host_fs_file_size(_path: &str) -> i64 {
-    -1
+pub fn host_fs_file_size(path: &str) -> i64 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_file_size", &args)
+            .as_f64()
+            .map_or(-1, |v| v as i64)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        -1
+    }
+}
+
+/// Seek the JS-side binary cursor for `path` to `pos`.
+pub fn host_fs_seek(path: &str, pos: i64) {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of2(&path.into(), &(pos as f64).into());
+        host_call("fs_seek", &args);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, pos);
+    }
+}
+
+/// Read `n` bytes from the JS-side cursor position for `path`.  Advances the cursor.
+pub fn host_fs_read_bytes(path: &str, n: usize) -> Option<Vec<u8>> {
+    #[cfg(feature = "wasm")]
+    {
+        use wasm_bindgen::JsCast;
+        let args = js_sys::Array::of2(&path.into(), &(n as f64).into());
+        let v = host_call("fs_read_bytes", &args);
+        if v.is_null() || v.is_undefined() {
+            None
+        } else if let Ok(arr) = v.dyn_into::<js_sys::Uint8Array>() {
+            Some(arr.to_vec())
+        } else {
+            None
+        }
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, n);
+        None
+    }
+}
+
+/// Write `bytes` at the JS-side cursor position for `path`.  Advances the cursor.
+pub fn host_fs_write_bytes(path: &str, bytes: &[u8]) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let arr = js_sys::Uint8Array::from(bytes);
+        let args = js_sys::Array::of2(&path.into(), &arr.into());
+        host_call("fs_write_bytes", &args)
+            .as_f64()
+            .map_or(5, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, bytes);
+        0
+    }
+}
+
+/// Return the current JS-side cursor position for `path`.
+pub fn host_fs_get_cursor(path: &str) -> i64 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.into());
+        host_call("fs_get_cursor", &args)
+            .as_f64()
+            .map_or(0, |v| v as i64)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        0
+    }
 }
 
 // ── W1.6  Time and environment host bridges ──────────────────────────────────
 
 /// Return the current time as milliseconds since the Unix epoch.
-/// `wasm32-wasip2` supports `std::time::SystemTime` via the WASI clock API.
 pub fn host_time_now() -> i64 {
+    #[cfg(feature = "wasm")]
+    {
+        host_call("time_now", &js_sys::Array::new())
+            .as_f64()
+            .map_or(0, |v| v as i64)
+    }
+    #[cfg(not(feature = "wasm"))]
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Return the current time as milliseconds since the Unix epoch (monotonic approximation).
-/// `n_ticks` computes elapsed time as `(host_time_ticks() - start_time_ms) * 1000`
-/// microseconds; using wall-clock milliseconds is accurate enough for benchmarks.
 pub fn host_time_ticks() -> i64 {
+    #[cfg(feature = "wasm")]
+    {
+        host_call("time_ticks", &js_sys::Array::new())
+            .as_f64()
+            .map_or(0, |v| v as i64)
+    }
+    #[cfg(not(feature = "wasm"))]
     host_time_now()
 }
 
 /// Return the value of environment variable `name`, or empty string if absent.
-pub fn host_env_variable(_name: &str) -> String {
-    // TODO W1.9: call extern "C" { fn env_variable(ptr, len) -> ... }
-    String::new()
+pub fn host_env_variable(name: &str) -> String {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&name.into());
+        host_call("env_variable", &args)
+            .as_string()
+            .unwrap_or_default()
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = name;
+        String::new()
+    }
 }
 
 /// Return the command-line arguments (always empty under WASM).
 pub fn host_arguments() -> Vec<String> {
-    // TODO W1.9
+    #[cfg(feature = "wasm")]
+    {
+        use wasm_bindgen::JsCast;
+        let v = host_call("arguments", &js_sys::Array::new());
+        if let Ok(arr) = v.dyn_into::<js_sys::Array>() {
+            arr.iter().filter_map(|x| x.as_string()).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    }
+    #[cfg(not(feature = "wasm"))]
     Vec::new()
 }
 
-/// Return the current working directory (empty under WASM).
+/// Return the current working directory.
 pub fn host_fs_cwd() -> String {
-    // TODO W1.9: call extern "C" { fn fs_cwd() -> ... }
+    #[cfg(feature = "wasm")]
+    {
+        host_call("fs_cwd", &js_sys::Array::new())
+            .as_string()
+            .unwrap_or_default()
+    }
+    #[cfg(not(feature = "wasm"))]
     String::new()
 }
 
-/// Return the user home directory (empty under WASM).
+/// Return the user home directory.
 pub fn host_fs_user_dir() -> String {
-    // TODO W1.9: call extern "C" { fn fs_user_dir() -> ... }
+    #[cfg(feature = "wasm")]
+    {
+        host_call("fs_user_dir", &js_sys::Array::new())
+            .as_string()
+            .unwrap_or_default()
+    }
+    #[cfg(not(feature = "wasm"))]
     String::new()
 }
 
-/// Return the program executable directory (empty under WASM).
+/// Return the program executable directory.
 pub fn host_fs_program_dir() -> String {
-    // TODO W1.9: call extern "C" { fn fs_program_dir() -> ... }
+    #[cfg(feature = "wasm")]
+    {
+        host_call("fs_program_dir", &js_sys::Array::new())
+            .as_string()
+            .unwrap_or_default()
+    }
+    #[cfg(not(feature = "wasm"))]
     String::new()
 }
 
 // ── W1.5  Random host bridge ─────────────────────────────────────────────────
 
-/// Return a random integer in `[lo, hi]` inclusive.  Called when `wasm` is
-/// enabled and `random` is not — the host provides the RNG.
+/// Return a random integer in `[lo, hi]` inclusive.
 pub fn host_random_int(lo: i32, hi: i32) -> i32 {
-    // TODO W1.9: call extern "C" { fn random_int(lo: i32, hi: i32) -> i32; }
-    // Placeholder: return lo so the interpreter does not panic.
-    lo.max(hi)
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of2(&lo.into(), &hi.into());
+        host_call("random_int", &args)
+            .as_f64()
+            .map_or(lo, |v| v as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        lo.max(hi)
+    }
 }
 
-/// Reseed the host-side RNG.  Called when `wasm` is enabled and `random` is not.
-pub fn host_random_seed(_seed: i64) {
-    // TODO W1.9: call extern "C" { fn random_seed(seed: i64); }
+/// Reseed the host-side RNG.
+pub fn host_random_seed(seed: i64) {
+    #[cfg(feature = "wasm")]
+    {
+        let hi = ((seed >> 32) as i32).into();
+        let lo = (seed as i32).into();
+        let args = js_sys::Array::of2(&hi, &lo);
+        host_call("random_seed", &args);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = seed;
+    }
 }
 
 // ── W1.4  Logger host bridge ─────────────────────────────────────────────────
 
-/// Write a log line to the host console.  Under WASM the real filesystem is
-/// unavailable; this stub forwards the message to `globalThis.loftHost.log_write`
-/// (wired up in W1.9) or does nothing when the host bridge is not yet set up.
-pub fn host_log_write(_line: &str) {
-    // TODO W1.9: call extern "C" { fn host_log_write(ptr: *const u8, len: usize); }
+/// Write a log line to the host console.
+pub fn host_log_write(line: &str) {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&line.into());
+        host_call("log_write", &args);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = line;
+    }
 }
 
 // ── W1.9  Virtual filesystem (VIRT_FS) ───────────────────────────────────────
