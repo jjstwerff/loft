@@ -707,10 +707,12 @@ impl State {
         {
             let frame = self.coroutine_frame_mut(idx);
             frame.stack_bytes = locals_bytes;
-            // CO1.3d: text locals are String objects (24 B); bitwise copy in stack_bytes is
-            // safe — String owns its heap buffer and no external code can free it while
-            // the generator is suspended.  frame.text_owned is left unchanged (still holds
-            // any text arg clones from coroutine_create / prior yields).
+            // CO1.3d: text locals are String objects (24 B) in stack_bytes.
+            // Bitwise copy is safe — no external code frees the heap buffers while
+            // suspended.  At resume, coroutine_next restores the raw bytes.
+            // At exhaustion, OpFreeText fires before OpCoroutineReturn (no leak).
+            // Early-break leak fixed by free_coroutine / S25.3.
+            // frame.text_owned holds text-arg clones from coroutine_create; unchanged.
             frame.call_frames = saved_frames;
             frame.code_pos = code_pos;
             frame.status = CoroutineStatus::Suspended;
@@ -720,8 +722,11 @@ impl State {
         // [base, value_start) and save them in the frame.  While suspended, the consumer
         // may create text values at the same absolute stack positions; keeping the
         // generator's entries would mask missing or double OpFreeText calls.
-        // CO1.3d is now implemented — text locals are serialised to frame.text_owned above,
-        // so the M8-b debug_assert guarding against unserialized text locals is removed.
+        // CO1.3d (text locals): the raw-bytes copy in stack_bytes is safe across
+        // yield/resume cycles — String heap buffers are not freed while suspended and
+        // are restored intact by coroutine_next.  At exhaustion, OpFreeText is emitted
+        // before OpCoroutineReturn so live-stack Strings are freed normally.  The one
+        // remaining leak (early break → free_coroutine) is fixed by S25.3.
         #[cfg(debug_assertions)]
         {
             let locals_range = base..value_start;

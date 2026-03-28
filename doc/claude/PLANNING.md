@@ -1317,28 +1317,166 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
-### S25  CO1.3d — coroutine text serialisation (must land atomically)
+### S25  CO1.3d — coroutine text serialisation
 **Sources:** SAFE.md § P2-R1/R2/R3, CAVEATS.md C23/C24, COROUTINE.md § CO1.3d/SC-CO-1/SC-CO-8/SC-CO-10
-**Severity:** Critical (P2-R1 use-after-free) / High (P2-R2 memory leak) — both caused by `text_owned` being permanently empty.
-**Description:** `CoroutineFrame.text_owned` is designed to hold owned copies of all dynamic-text locals across suspension.  The serialisation path (`serialise_text_slots`) is specified in COROUTINE.md but not implemented.  Until it lands, text arguments dangle (C23) and text locals leak (C24).  **Must land atomically** — implementing `free_dynamic_str` at yield without simultaneously implementing the pointer-patch at resume and the String drain at exhaustion introduces an explicit use-after-free.
-**Fix path:**
 
-#### S25.1 — `serialise_text_slots` at coroutine create + yield
-1. Implement `serialise_text_slots(stack_bytes, text_slot_layout, stores) -> Vec<(u32, String)>` per COROUTINE.md spec:
-   - Walk each text slot in `stack_bytes` by (offset, Type) from the function definition.
-   - Skip null Str and static Str (ptr inside `text_code`).
-   - Call `s.str().to_owned()` to make an owned `String`; call `free_dynamic_str` on the original.
-   - Patch `stack_bytes` with a Str pointing to the owned buffer; record `(offset, String)` in `text_owned`.
-2. Call `serialise_text_slots` from `coroutine_create` (text arg slots) and `coroutine_yield` (all text locals).
-3. Add `debug_assert!(def.text_slot_count == 0, …)` to `coroutine_yield` until S25.1 is complete (M8-b from SAFE.md).
+#### S25.1 — Text arg serialisation at coroutine create *(completed 0.8.3)*
 
-#### S25.2 — Pointer-patch on resume + String drain on exhaustion
-1. In `coroutine_next`: before copying `stack_bytes` to live stack, write updated `Str` pointers from `text_owned` buffers into the bytes (M6-b from SAFE.md).
-2. In `coroutine_return`: drain `text_owned` with `for (_, s) in frame.text_owned.drain(..) { drop(s); }` before `stack_bytes.clear()` (M7-a from SAFE.md).
-3. Add a leak-detection test: generator with text local, yields once, loop broken — verify no allocation escapes under Miri or similar.
+`serialise_text_args` in `State` walks each attribute slot in `stack_bytes`
+(only arg-sized `Str` slots, 16 bytes each), clones dynamic strings into
+owned `String` objects stored in `text_owned`, and patches the `Str` pointer
+in `stack_bytes` to point to the owned buffer.  Called from `coroutine_create`.
+This fixed C23 (use-after-free on first resume for generators with `text` args).
 
-**Effort:** Large (S25.1 + S25.2 combined; must not be split across releases)
-**Target:** 0.8.3
+#### S25.2 — Pointer-patch on resume + String drain on exhaustion *(completed 0.8.3)*
+
+`coroutine_next` re-patches text-arg `Str` pointers from `text_owned` into the
+cloned `bytes` before copying them to the live stack (M6-b).
+`coroutine_return` calls `frame.text_owned.clear()` before `stack_bytes.clear()`,
+which drops the owned String objects via RAII (M7-a).
+
+#### S25.3 — Text local leak on early `break` from a generator loop *(open — C24)*
+
+**Severity:** High — memory leak affects every generator with at least one text
+local variable that is consumed via `break` (not iterated to exhaustion).
+
+**Precise diagnosis (2026-03-29):**
+
+Text local variables (e.g. `word = "hello"` inside a generator body) are `String`
+objects (24 bytes: ptr+len+cap) held on the generator's live stack.  At
+`coroutine_yield`, the raw bytes `[base..value_start]` are bitwise-copied to
+`frame.stack_bytes`.  The copy is safe across yield/resume cycles because:
+
+- String heap buffers are not freed while the generator is suspended (no Rust
+  destructor runs on the abandoned live-stack copy).
+- On resume, `coroutine_next` raw-copies `frame.stack_bytes` back to the live
+  stack — the same heap pointer is restored and remains valid.
+- At exhaustion via `coroutine_return`, `OpFreeText` has already been emitted
+  before `OpCoroutineReturn` by `scopes::check`.  The live-stack String is freed
+  by `OpFreeText`; `frame.stack_bytes` then contains stale bytes pointing to an
+  already-freed allocation, which `frame.stack_bytes.clear()` discards safely.
+
+**The single remaining leak path** — generator is `Suspended` (has yielded), then
+the consumer breaks from the for-loop before exhaustion:
+
+1. `OpFreeCoroutine` fires → `free_coroutine(idx)`
+2. `free_coroutine` sets `self.coroutines[idx] = None`
+3. This drops `Box<CoroutineFrame>`, which drops `stack_bytes: Vec<u8>`
+4. `Vec<u8>::drop` frees the raw byte buffer but does NOT call `String::drop` on
+   embedded String structs — their heap allocations (`"hello"`, etc.) are leaked.
+
+**Complication — uninitialized text local slots:**
+
+Zone 2 variables (including text locals) are pre-claimed at function entry via
+`OpReserveFrame` (which only bumps `stack_pos`, does not zero memory).  If a
+text local is assigned AFTER the yield point, its slot in `frame.stack_bytes`
+contains garbage bytes from the store.  Calling `drop_in_place::<String>` on
+garbage bytes is undefined behaviour.
+
+**Fix design (S25.3):**
+
+Step 1 — **Zero Zone 2 at generator startup** (in `coroutine_next`, `Created` status only).
+After copying `frame.stack_bytes` (args+return-slot only) to the live stack,
+compute the Zone 2 region extent from `def.variables` and zero those store bytes:
+
+```rust
+// After: std::ptr::copy_nonoverlapping(bytes, dst, bytes.len())
+// New:   zero the Zone-2 region so uninitialised text locals start with null ptr.
+let zone2_abs = self.stack_cur.pos + stack_base + bytes.len() as u32;
+let zone2_size = Self::generator_zone2_size(d_nr, self.data_ptr);
+if zone2_size > 0 {
+    let store = self.database.store_mut(&self.stack_cur);
+    let ptr = store.addr_mut::<u8>(self.stack_cur.rec, zone2_abs);
+    unsafe { std::ptr::write_bytes(ptr, 0, zone2_size); }
+}
+```
+
+```rust
+/// Compute the total Zone-2 variable extent for generator function `d_nr`.
+/// Returns bytes above the args+return-slot region (= `args_size + 4`).
+fn generator_zone2_size(d_nr: u32, data_ptr: *const Data) -> usize {
+    if data_ptr.is_null() { return 0; }
+    let data = unsafe { &*data_ptr };
+    let def = data.definitions.get(d_nr as usize)?;
+    let vars = &def.variables;
+    let mut top: u16 = 0;
+    for v in 0..vars.count() {
+        if vars.is_argument(v) { continue; }
+        let slot = vars.stack(v);
+        if slot == u16::MAX { continue; }
+        let sz = vars.size(v, &Context::Variable);
+        top = top.max(slot.saturating_add(sz));
+    }
+    top as usize
+}
+```
+
+Step 2 — **Drop text locals in `free_coroutine`** before setting the slot to `None`:
+
+```rust
+pub fn free_coroutine(&mut self, idx: usize) {
+    if idx > 0 && idx < self.coroutines.len() {
+        // C24 / S25.3: drop text-local String objects from a suspended frame.
+        if let Some(frame) = self.coroutines[idx].as_mut() {
+            if frame.status == CoroutineStatus::Suspended {
+                let d_nr = frame.d_nr;
+                let data_ptr = self.data_ptr; // raw ptr — no borrow conflict
+                Self::drop_text_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
+            }
+        }
+        self.coroutines[idx] = None;
+    }
+}
+
+/// Drop String objects embedded at text-local slots in `bytes`.
+/// Guards against uninitialized slots via null-ptr check (Step 1 zeroed them).
+fn drop_text_locals_in_bytes(d_nr: u32, bytes: &mut Vec<u8>, data_ptr: *const Data) {
+    if data_ptr.is_null() { return; }
+    let data = unsafe { &*data_ptr };
+    let Some(def) = data.definitions.get(d_nr as usize) else { return };
+    let vars = &def.variables;
+    for v in 0..vars.count() {
+        if vars.is_argument(v) { continue; }
+        if !matches!(vars.tp(v), Type::Text(_)) { continue; }
+        let slot = vars.stack(v);
+        if slot == u16::MAX { continue; }
+        let off = slot as usize;
+        if off + std::mem::size_of::<String>() > bytes.len() { continue; }
+        // Check the String's ptr field (first word on 64-bit).
+        // Null means uninitialized (zeroed in Step 1); skip.
+        let ptr_val: usize = unsafe {
+            std::ptr::read_unaligned(bytes.as_ptr().add(off).cast::<usize>())
+        };
+        if ptr_val == 0 { continue; }
+        // Drop in place and zero to prevent any future double-drop.
+        unsafe { std::ptr::drop_in_place(bytes.as_mut_ptr().add(off).cast::<String>()); }
+        unsafe { std::ptr::write_bytes(bytes.as_mut_ptr().add(off), 0, std::mem::size_of::<String>()); }
+    }
+}
+```
+
+Step 3 — **Fix misleading comment** in `coroutine_yield` (line ~723):
+Remove the sentence "CO1.3d is now implemented — text locals are serialised to
+frame.text_owned above".  Replace with accurate text: "The raw-bytes copy of text
+locals in `stack_bytes` is safe across yield/resume cycles because no external code
+frees the String heap buffers while suspended.  The early-break leak is fixed by
+`free_coroutine` (S25.3)."
+
+**Files changed:** `src/state/mod.rs` (3 locations: `free_coroutine`, `coroutine_next`,
+new `generator_zone2_size` + `drop_text_locals_in_bytes` helpers)
+
+**Tests to add** (`tests/expressions.rs`):
+- `coroutine_text_local_early_break` — generator has text local, loop breaks after
+  first yield.  Run under Miri to verify no leak.
+- `coroutine_text_local_declared_after_first_yield` — text local declared after
+  the first yield; no panic at break.  Verifies the null-ptr guard.
+
+**Atomicity:** Steps 1 and 2 must land in the same commit.  If Step 1 lands without
+Step 2, Zone 2 is zeroed but Strings are still leaked.  If Step 2 lands without
+Step 1, `drop_in_place` may fire on garbage bytes (UB).
+
+**Effort:** Small (1–2 hours)
+**Target:** 0.9.0
 
 ---
 
