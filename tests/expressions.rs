@@ -480,9 +480,8 @@ fn coroutine_text_param_survives_yield() {
     .result(Value::Int(10));
 }
 
-// P2-R3: text LOCAL survives yield — requires CO1.3d serialise_text_slots
+// P2-R3: text LOCAL survives yield — CO1.3d serialise_text_slots implemented
 #[test]
-#[ignore = "P2-R3: CO1.3d text-local serialisation at yield not yet implemented; M8-b debug_assert fires until serialise_text_slots lands — see SAFE.md § P2-R3 and PLANNING.md § S25"]
 fn coroutine_text_local_survives_yield() {
     // P2-R3: a generator that builds a text LOCAL (not a parameter) and yields.
     // CO1.3d must serialise the local String to text_owned at yield and restore
