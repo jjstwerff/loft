@@ -48,14 +48,14 @@ fn wasm_compile_and_run_smoke() {
     // Skip if the WASM package is not built.
     if !std::path::Path::new("tests/wasm/pkg/loft.js").exists() {
         println!("SKIP wasm_compile_and_run_smoke — WASM package not built");
-        println!("     Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm");
+        println!(
+            "     Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm"
+        );
         return;
     }
 
     // Skip if Node.js is not in PATH.
-    let node_check = std::process::Command::new("node")
-        .arg("--version")
-        .output();
+    let node_check = std::process::Command::new("node").arg("--version").output();
     if node_check.is_err() {
         println!("SKIP wasm_compile_and_run_smoke — node not in PATH");
         return;

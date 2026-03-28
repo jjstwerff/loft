@@ -757,3 +757,65 @@ fn coroutine_early_break_frame_freed() {
     .expr("take_first()")
     .result(Value::Int(1));
 }
+
+// ── S25.3 — text local `String` dropped on early break ───────────────────────
+
+/// S25.3 (C24 / Step 2): when a generator with a text LOCAL is abandoned via an
+/// early `break`, `free_coroutine` must drop the `String` objects embedded in
+/// `frame.stack_bytes`.  Without the fix, every early break from such a generator
+/// leaks a String heap allocation per live text local at the last yield point.
+///
+/// The test verifies correct values; run under Miri or Valgrind to confirm that
+/// no String heap buffer is leaked.
+#[test]
+fn coroutine_text_local_early_break() {
+    // gen_greet yields one greeting then another; the consumer breaks after the first.
+    // At break, the text local `greeting` is live in frame.stack_bytes and its String
+    // heap buffer must be freed by drop_text_locals_in_bytes in free_coroutine.
+    code!(
+        "fn gen_greet() -> iterator<text> {
+             greeting = \"hello\";
+             yield greeting;
+             greeting = \"world\";
+             yield greeting;
+         }
+         fn take_first_len() -> integer {
+             for g in gen_greet() {
+                 return len(g);
+             }
+             0
+         }"
+    )
+    .expr("take_first_len()")
+    .result(Value::Int(5)); // len("hello") = 5
+}
+
+/// S25.3 (C24 / Step 1): when a generator has a text local declared AFTER the
+/// first yield point, its slot is uninitialised at first yield.  The Zone-2
+/// zeroing at first resume establishes the null-ptr invariant so that
+/// `drop_text_locals_in_bytes` safely skips the uninitialised slot.
+///
+/// Without Step 1, the raw store garbage in the slot would appear as a non-null
+/// pointer and `drop_in_place` would dereference garbage → UB / crash.
+#[test]
+fn coroutine_text_local_declared_after_first_yield() {
+    // gen_late_text yields an integer, then creates a text local and yields it.
+    // The consumer breaks after the first (integer converted to text) yield.
+    // At break, the text local `label` slot is uninitialised (null-zeroed by
+    // Step 1) and must be skipped by drop_text_locals_in_bytes.
+    code!(
+        "fn gen_late_text() -> iterator<integer> {
+             yield 1;
+             label = \"ignored\";
+             yield len(label);
+         }
+         fn take_first_int() -> integer {
+             for n in gen_late_text() {
+                 return n;
+             }
+             0
+         }"
+    )
+    .expr("take_first_int()")
+    .result(Value::Int(1));
+}

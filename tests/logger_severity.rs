@@ -94,7 +94,12 @@ fn logger_level_filter_suppresses_info_at_warn_level() {
 #[test]
 fn logger_warn_suppressed_at_error_level() {
     let (mut lg, path) = logger_with_tmpfile(Severity::Error);
-    lg.log(Severity::Warn, "test.loft", 2, "this warn should not appear");
+    lg.log(
+        Severity::Warn,
+        "test.loft",
+        2,
+        "this warn should not appear",
+    );
     drop(lg);
     let out = read_log(&path);
     cleanup(&path);
@@ -130,8 +135,14 @@ fn logger_rate_limiting_suppresses_excess() {
     drop(lg);
     let out = read_log(&path);
     cleanup(&path);
-    assert!(out.contains("msg 1"), "first message must appear; got: {out:?}");
-    assert!(out.contains("msg 2"), "second message must appear; got: {out:?}");
+    assert!(
+        out.contains("msg 1"),
+        "first message must appear; got: {out:?}"
+    );
+    assert!(
+        out.contains("msg 2"),
+        "second message must appear; got: {out:?}"
+    );
     assert!(
         !out.contains("msg 3 suppressed"),
         "third message must be suppressed; got: {out:?}"

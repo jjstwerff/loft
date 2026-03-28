@@ -324,9 +324,118 @@ impl State {
     }
 
     /// Free a coroutine frame, making the slot available for reuse.
+    ///
+    /// S25.3 (C24): for `Suspended` frames, drop any text-local `String` objects
+    /// embedded in `stack_bytes` before the `Vec<u8>` backing is freed.  Without
+    /// this, an early `break` from a generator loop leaks every text local that was
+    /// live at the last yield point.
     pub fn free_coroutine(&mut self, idx: usize) {
         if idx > 0 && idx < self.coroutines.len() {
+            if let Some(frame) = self.coroutines[idx].as_mut() {
+                if frame.status == CoroutineStatus::Suspended {
+                    let d_nr = frame.d_nr;
+                    let data_ptr = self.data_ptr; // raw ptr — no borrow conflict with frame
+                    Self::drop_text_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
+                }
+            }
             self.coroutines[idx] = None;
+        }
+    }
+
+    /// S25.3 (C24): compute the size of the local-variable region above the
+    /// args+return-slot area for generator function `d_nr`.
+    ///
+    /// Zone 1 and Zone 2 local slots start at `local_start = arg_size + 4`.
+    /// Returns the number of bytes in `[local_start, max(slot+size))` for all
+    /// non-argument variables.  This region is zeroed at first resume so that
+    /// uninitialised text-local slots carry a null ptr, enabling safe
+    /// `drop_text_locals_in_bytes` in `free_coroutine`.
+    fn generator_zone2_size(d_nr: u32, data_ptr: *const Data) -> usize {
+        if data_ptr.is_null() {
+            return 0;
+        }
+        // SAFETY: data_ptr is set in execute_argv and valid throughout execution.
+        let data = unsafe { &*data_ptr };
+        let Some(def) = data.definitions.get(d_nr as usize) else {
+            return 0;
+        };
+        let vars = &def.variables;
+        // local_start = total argument bytes + 4-byte return-address slot.
+        let local_start: u16 = vars
+            .arguments()
+            .iter()
+            .map(|&a| var_size(vars.tp(a), &Context::Argument))
+            .sum::<u16>()
+            .saturating_add(4);
+        // top = absolute end of the last local variable (from frame base 0).
+        let mut top: u16 = local_start;
+        for v in 0..vars.count() {
+            if vars.is_argument(v) {
+                continue;
+            }
+            let slot = vars.stack(v);
+            if slot == u16::MAX {
+                continue;
+            }
+            let sz = vars.size(v, &Context::Variable);
+            top = top.max(slot.saturating_add(sz));
+        }
+        // Return the SIZE of the local region (subtract the args+return-slot prefix).
+        top.saturating_sub(local_start) as usize
+    }
+
+    /// S25.3 (C24): drop `String` objects embedded at text-local slots in a
+    /// suspended generator's `stack_bytes`.
+    ///
+    /// Guards against uninitialised slots via null-ptr check: `generator_zone2_size`
+    /// zeros the local region at first resume, so every text-local slot that was
+    /// never written holds a zero ptr and is skipped here.
+    ///
+    /// # Safety
+    /// Must only be called for `Suspended` frames whose local region was zeroed at
+    /// first resume (Step 1 of S25.3).  Double-drop is prevented by zeroing each
+    /// slot after `drop_in_place`.
+    fn drop_text_locals_in_bytes(d_nr: u32, bytes: &mut Vec<u8>, data_ptr: *const Data) {
+        if data_ptr.is_null() {
+            return;
+        }
+        // SAFETY: data_ptr is set in execute_argv and valid throughout execution.
+        let data = unsafe { &*data_ptr };
+        let Some(def) = data.definitions.get(d_nr as usize) else {
+            return;
+        };
+        let vars = &def.variables;
+        for v in 0..vars.count() {
+            if vars.is_argument(v) {
+                continue;
+            }
+            if !matches!(vars.tp(v), Type::Text(_)) {
+                continue;
+            }
+            let slot = vars.stack(v);
+            if slot == u16::MAX {
+                continue;
+            }
+            let off = slot as usize;
+            if off + std::mem::size_of::<String>() > bytes.len() {
+                continue; // text local beyond yield snapshot — never assigned
+            }
+            // Read the String's ptr field (first word on any platform).
+            // Null means uninitialised (zeroed at first resume); skip safely.
+            let ptr_val: usize =
+                unsafe { std::ptr::read_unaligned(bytes.as_ptr().add(off).cast::<usize>()) };
+            if ptr_val == 0 {
+                continue;
+            }
+            // Drop the String heap buffer and zero the slot to prevent double-drop.
+            unsafe {
+                std::ptr::drop_in_place(bytes.as_mut_ptr().add(off).cast::<String>());
+                std::ptr::write_bytes(
+                    bytes.as_mut_ptr().add(off),
+                    0,
+                    std::mem::size_of::<String>(),
+                );
+            }
         }
     }
 
@@ -503,6 +612,7 @@ impl State {
                     f.status = CoroutineStatus::Running;
                 }
 
+                let d_nr = self.coroutine_frame_mut(idx).d_nr;
                 let mut bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
                 let code_pos = self.coroutine_frame_mut(idx).code_pos;
                 let saved_frames: Vec<_> = self
@@ -573,6 +683,28 @@ impl State {
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
                 }
                 self.stack_pos += bytes.len() as u32;
+
+                // S25.3 (C24 / Step 1): on first resume, zero the local-variable
+                // region so that uninitialised text-local slots carry a null ptr.
+                // This is the prerequisite for safe `drop_text_locals_in_bytes` in
+                // `free_coroutine` (Step 2): a null ptr means "not yet assigned;
+                // skip drop".  Only needed for `Created` — `Suspended` frames have
+                // already been through this path and their locals were live-assigned
+                // before the preceding yield.
+                if status == CoroutineStatus::Created {
+                    let zone_size = Self::generator_zone2_size(d_nr, self.data_ptr);
+                    if zone_size > 0 {
+                        let zone_abs = self.stack_cur.pos + stack_base + bytes.len() as u32;
+                        let store = self.database.store_mut(&self.stack_cur);
+                        let ptr = store.addr_mut::<u8>(self.stack_cur.rec, zone_abs);
+                        // SAFETY: zone_abs points inside the stack store; zone_size
+                        // bytes there are within the pre-reserved frame region.
+                        unsafe {
+                            std::ptr::write_bytes(ptr, 0, zone_size);
+                        }
+                    }
+                }
+
                 self.call_stack.extend(saved_frames);
                 self.active_coroutines.push(idx);
                 self.code_pos = code_pos;

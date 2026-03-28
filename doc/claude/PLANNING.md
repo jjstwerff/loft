@@ -1335,7 +1335,7 @@ cloned `bytes` before copying them to the live stack (M6-b).
 `coroutine_return` calls `frame.text_owned.clear()` before `stack_bytes.clear()`,
 which drops the owned String objects via RAII (M7-a).
 
-#### S25.3 — Text local leak on early `break` from a generator loop *(open — C24)*
+#### S25.3 — Text local leak on early `break` from a generator loop *(completed 0.8.3 — C24)*
 
 **Severity:** High — memory leak affects every generator with at least one text
 local variable that is consumed via `break` (not iterated to exhaustion).
