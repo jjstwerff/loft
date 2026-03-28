@@ -30,6 +30,29 @@ scene management, and multi-backend rendering (desktop OpenGL, browser WebGL, GL
 
 ## Philosophy
 
+### Real-world optimization target
+
+This library is also a **benchmark suite for the loft interpreter**.  The graphics
+workloads — iterating over millions of pixels, tight Bezier subdivision loops, scanline
+fill over large canvases, matrix math per frame — are exactly the kind of real-world,
+compute-intensive scenarios that expose interpreter bottlenecks that microbenchmarks
+miss.
+
+The deliberate choice to implement the rasterizer, matrix math, and GLB writer in loft
+(rather than hiding them in Rust) makes this a continuous performance contract:
+
+> *If `wu_line` on a 1024×1024 canvas is acceptably fast in loft, the interpreter is
+> ready for production compute workloads.  If it is not, the bottleneck is visible and
+> measurable, and the fix goes into the interpreter.*
+
+Each phase of [OPENGL_IMPL.md](OPENGL_IMPL.md) therefore doubles as a performance
+regression test.  Benchmark numbers should be recorded in [PERFORMANCE.md](PERFORMANCE.md)
+as each phase is completed.
+
+---
+
+### Implementation split
+
 Almost all library logic is implemented in loft.  Rust provides only operations that
 loft structurally cannot express:
 

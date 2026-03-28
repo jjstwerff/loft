@@ -6,6 +6,25 @@ Priority: **2D canvas → GLB file export → OpenGL desktop → WebGL browser**
 GLB is tackled first because it needs no GPU, no window, and no platform SDK — just
 file I/O, which makes every step scriptable and diff-able.
 
+### Why this project matters for loft optimization
+
+This library is a **real-world performance target** for the loft interpreter.  The
+workloads are chosen specifically because they stress areas where interpreters struggle:
+
+| Workload | Stress pattern |
+|---|---|
+| `wu_line` on 1024×1024 canvas | Inner loop over ~2M pixel blends; integer arithmetic at high frequency |
+| Bezier subdivision | Recursive float calls; many small struct allocations |
+| `scanline_fill` | Per-row vector append + sort + fill; tests collection performance |
+| GLB BIN assembly | Large `vector<u8>` append in a tight loop; tests vector growth |
+| Matrix math per frame | Dense float arithmetic; tests `single` operation throughput |
+| `draw_text_box` wrapping | String iteration + repeated `measure_text` calls |
+
+Each phase should be **timed and recorded in [PERFORMANCE.md](PERFORMANCE.md)** when
+completed.  If a phase is unacceptably slow, the bottleneck is identified and fixed in
+the interpreter before the next phase begins — this is the primary mechanism for
+ensuring loft is fast enough for real compute workloads.
+
 ---
 
 ## Phase 0 — Project scaffolding
