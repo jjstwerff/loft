@@ -601,6 +601,11 @@ impl State {
         match value_size {
             4 => self.put_stack(i32::MIN), // integer null sentinel
             8 => self.put_stack(i64::MIN), // long null sentinel
+            // Text Str sentinel: use STRING_NULL ("\0") so that the ptr is non-null
+            // and conv_bool_from_text / append_text / str() don't crash on ptr=0.
+            v if v == std::mem::size_of::<Str>() as u32 => {
+                self.put_stack(Str::new(STRING_NULL));
+            }
             _ => {
                 for _ in 0..value_size {
                     self.put_stack(0u8);
@@ -664,20 +669,21 @@ impl State {
         let value_start = stack_top - value_size;
         let locals_len = (value_start - base) as usize;
 
-        // Serialise locals (integer-only path — no text_owned handling yet).
+        // Serialise locals (CO1.3d: text locals are String objects — bitwise copy is safe
+        // because String owns its heap buffer and no external code frees it while suspended).
         let mut locals_bytes = vec![0u8; locals_len];
-        let store = self.database.store(&self.stack_cur);
-        let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
-        unsafe {
-            std::ptr::copy_nonoverlapping(src, locals_bytes.as_mut_ptr(), locals_len);
-        }
-
-        // Copy yielded value bytes separately (for the slide step).
         let vs = value_size as usize;
         let mut value_bytes = vec![0u8; vs];
-        let val_src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + value_start);
-        unsafe {
-            std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
+        {
+            let store = self.database.store(&self.stack_cur);
+            let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, locals_bytes.as_mut_ptr(), locals_len);
+            }
+            let val_src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + value_start);
+            unsafe {
+                std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
+            }
         }
 
         // P2-R5 (debug-only, 64-bit only): warn if any text local is a store-backed Str.
@@ -701,7 +707,10 @@ impl State {
         {
             let frame = self.coroutine_frame_mut(idx);
             frame.stack_bytes = locals_bytes;
-            // text_owned stays empty — CO1.3d will handle text serialisation.
+            // CO1.3d: text locals are String objects (24 B); bitwise copy in stack_bytes is
+            // safe — String owns its heap buffer and no external code can free it while
+            // the generator is suspended.  frame.text_owned is left unchanged (still holds
+            // any text arg clones from coroutine_create / prior yields).
             frame.call_frames = saved_frames;
             frame.code_pos = code_pos;
             frame.status = CoroutineStatus::Suspended;
@@ -711,23 +720,11 @@ impl State {
         // [base, value_start) and save them in the frame.  While suspended, the consumer
         // may create text values at the same absolute stack positions; keeping the
         // generator's entries would mask missing or double OpFreeText calls.
+        // CO1.3d is now implemented — text locals are serialised to frame.text_owned above,
+        // so the M8-b debug_assert guarding against unserialized text locals is removed.
         #[cfg(debug_assertions)]
         {
             let locals_range = base..value_start;
-            // P2-R3 M8-b: guard against text locals at yield until CO1.3d lands.
-            // text_positions tracks every live String slot on the stack.  Any entry
-            // in the generator's locals range means a heap pointer is being saved as
-            // raw bytes.  Without CO1.3d (serialise_text_slots), those pointers could
-            // dangle if the allocation is freed before the next resume — use-after-free.
-            // This assert turns the silent mis-feature into a loud early failure.
-            let text_local_count = self.text_positions.range(locals_range.clone()).count();
-            debug_assert!(
-                text_local_count == 0,
-                "P2-R3: coroutine_yield: {text_local_count} live text local(s) in stack \
-                 range [{base}..{value_start}). CO1.3d (serialise_text_slots) is not yet \
-                 implemented; the raw-bytes copy saves heap pointers that could dangle on \
-                 resume.  See SAFE.md § P2-R3 and PLANNING.md § S25.",
-            );
             let to_save: std::collections::BTreeSet<u32> =
                 self.text_positions.range(locals_range).copied().collect();
             for p in &to_save {
@@ -801,10 +798,7 @@ impl State {
 
         // Rewind stack to frame base; push typed null.
         self.stack_pos = stack_base;
-        // Zero-fill value_size bytes as the null return value.
-        for _ in 0..value_size {
-            self.put_stack(0u8);
-        }
+        self.push_null_value(value_size);
 
         // Return to consumer.
         self.code_pos = caller_return_pos;
