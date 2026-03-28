@@ -141,6 +141,71 @@ test('compile error is reported', () => {
   assert(typeof r.diagnostics === 'string' && r.diagnostics.length > 0);
 });
 
+// W1.16 — binary file I/O end-to-end
+test('binary write and read back (BigEndian)', () => {
+  const r = runCode(`
+    fn main() {
+      {f = file("/project/data.bin")
+       f#format = BigEndian
+       f += 0x01020304
+      }
+      {f = file("/project/data.bin")
+       f#format = BigEndian
+       v = f#read(4) as i32
+       println(v)
+      }
+    }
+  `);
+  assert(r.success, `Expected success; diagnostics: ${r.diagnostics}`);
+  // BigEndian 0x01020304 read back as BigEndian i32 = 16909060
+  assert(r.output.trim() === '16909060', `Got: ${r.output.trim()}`);
+});
+
+test('binary seek and partial read', () => {
+  const r = runCode(`
+    fn main() {
+      {f = file("/project/seek.bin")
+       f#format = LittleEndian
+       f += 10
+       f += 20
+       f += 30
+      }
+      {f = file("/project/seek.bin")
+       f#format = LittleEndian
+       f#next = 4l
+       v = f#read(4) as i32
+       println(v)
+       println(f#next)
+      }
+    }
+  `);
+  assert(r.success, `Expected success; diagnostics: ${r.diagnostics}`);
+  const lines = r.output.trim().split('\n');
+  assert(lines[0] === '20', `Expected 20, got ${lines[0]}`);
+  assert(lines[1] === '8', `Expected next=8, got ${lines[1]}`);
+});
+
+test('truncate file with f#size', () => {
+  const r = runCode(`
+    fn main() {
+      {f = file("/project/trunc.bin")
+       f#format = LittleEndian
+       f += 1
+       f += 2
+       f += 3
+       f += 4
+      }
+      {f = file("/project/trunc.bin")
+       f#format = LittleEndian
+       f#size = 8l
+       println(f#size)
+      }
+    }
+  `);
+  assert(r.success, `Expected success; diagnostics: ${r.diagnostics}`);
+  assert(r.output.trim() === '8', `Got: ${r.output.trim()}`);
+});
+
 // ── Run ────────────────────────────────────────────────────────────────────────
 
 const failed = await run();

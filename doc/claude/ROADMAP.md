@@ -32,7 +32,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| W1.16     | WASM: file I/O ops                                   | M  | ✓      |              | WASM.md § File I/O, #74              |
+| W1.16     | WASM: file I/O ops                                   | M  | ✓      | ✓ done       | WASM.md § File I/O, #74             |
 | W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
 
 ### Known test skips at current HEAD
@@ -57,7 +57,7 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 
 | Script | Why skipped | Fix |
 |--------|-------------|-----|
-| `13-file.loft` | File I/O ops not implemented in WASM bridge; no WASM filesystem | W1.16 |
+| `13-file.loft` | References real filesystem paths (`tests/example/config/terrain.txt`) unavailable in VirtFS; binary I/O covered by `bridge.test.mjs` W1.16 tests | W1.16 ✓ done |
 | `19-threading.loft` | `par()` / `thread::spawn` uses `thread::scope`; WASM threading model is different | W1.18 |
 
 ---

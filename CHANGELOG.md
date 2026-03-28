@@ -208,6 +208,16 @@ All notable changes to the loft language and interpreter.
   compilation test now exercises `now()` and `ticks()` end-to-end.
 
 
+- **WASM file I/O wired to VirtFS host bridge** (W1.16) — All file operations
+  (`read_text`, `write_text`, `read_bytes`, `write_bytes`, `seek`, `file_size`,
+  `truncate`, `is_file`, `is_dir`, `list_dir`, `delete`, `move`, `mkdir`,
+  `mkdir_all`) now call `globalThis.loftHost.*` via `js_sys::Reflect` under the
+  `wasm` feature.  Helpers `assemble_write_data` and `dispatch_read_data` extracted
+  from `state/io.rs` to share assembly logic between WASM and native paths and
+  satisfy clippy `too_many_lines`.  `tests/wasm/bridge.test.mjs` gains three binary
+  I/O tests (BigEndian write/read, seek + partial read, truncate); `doc/claude/ROADMAP.md`
+  updated to mark W1.16 as done.
+
 - **WASM skip for lock functions removed** (W1.17) — `n_get_store_lock` and
   `n_set_store_lock` are resolved from `loft::codegen_runtime` (listed in
   `CODEGEN_RUNTIME_FNS` in `generation/mod.rs`), so no `todo!()` stub is emitted.
