@@ -208,6 +208,27 @@ All notable changes to the loft language and interpreter.
   compilation test now exercises `now()` and `ticks()` end-to-end.
 
 
+- **WASM suite subprocess isolation; run-one.mjs helper** (W1.13) — Each test in
+  `tests/wasm/suite.mjs` now runs in its own Node.js subprocess via `spawnSync` +
+  `tests/wasm/run-one.mjs`.  Previously, a WASM crash (`RuntimeError: unreachable`
+  or `memory access out of bounds`) in one test corrupted the shared module's linear
+  memory, causing all subsequent tests in the same process to also fail.  `run-one.mjs`
+  loads a fresh `pkg/loft.js` module and VirtFS default tree per invocation and writes
+  the JSON result to stdout.  `suite.mjs` no longer imports `createHost` /
+  `buildDefaultTree` / `withFiles`; the subprocess helper owns that setup.
+
+- **`wasm_compile_and_run_smoke` converted to real integration test** (W1.9) — The
+  hollow `#[ignore]` placeholder in `tests/wasm_entry.rs` has been replaced by an
+  integration test that runs `node tests/wasm/bridge.test.mjs` as a subprocess.
+  The test skips gracefully when the WASM package is not built or Node.js is absent,
+  and fails with a clear message when the bridge tests report a non-zero exit code.
+
+- **`13-file.loft` removed from `WASM_SKIP`** — File I/O operations (`OpDelete`,
+  `OpMoveFile`, `OpMkdir`, `OpMkdirAll`) now route through `codegen_runtime::fs_*`
+  functions that compile cleanly for the `wasm32-wasip2` target.  The wasm32-wasip2
+  compilation test (`wasm_dir`) no longer skips `tests/docs/13-file.loft`; `#74`
+  is fully resolved.
+
 - **WASM file I/O wired to VirtFS host bridge** (W1.16) — All file operations
   (`read_text`, `write_text`, `read_bytes`, `write_bytes`, `seek`, `file_size`,
   `truncate`, `is_file`, `is_dir`, `list_dir`, `delete`, `move`, `mkdir`,

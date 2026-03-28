@@ -18,7 +18,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions + safety gate
 
-W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S23, S26, S27, S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2, W1.15, W1.17, P2-R5, P2-R10, S34, S35, A5.6b.1, A5.6b.2, A5.6c, P2-R6, W1.19, W1.20, P2-R3, N8b.1, N8b.2, S36, N8b.3 completed in 0.8.3.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S23, S26, S27, S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2, W1.15, W1.16, W1.17, P2-R5, P2-R10, S34, S35, A5.6b.1, A5.6b.2, A5.6c, P2-R6, W1.19, W1.20, P2-R3, N8b.1, N8b.2, S36, N8b.3 completed in 0.8.3.
 
 Safety sub-items now confirmed complete: P1-R2 (S29: thread::scope + SAFETY comment in
 `run_parallel_direct`), P1-R3 (S29: `clone_locked_for_worker` omits `claims`), P1-R4 (S29:
@@ -46,7 +46,6 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 | `expressions::closure_capture_text` | Cross-scope closure (make_greeter pattern) deferred to A5.6 (1.1+) | A5.6 |
 | `wrap::parser_debug` | Intentionally slow (~100 s execution trace); run manually with `--ignored` | Not a bug |
 | `native_loader::load_one_registers_native_functions` | A7.2: `extensions::load_one` not yet implemented | A7.2 — deferred |
-| `wasm_entry::wasm_compile_and_run_smoke` | W1.9: requires `wasm-pack` + Node.js | W1.9 — deferred |
 
 **Native** (`cargo test --test native` — `SCRIPTS_NATIVE_SKIP`):
 
@@ -57,7 +56,6 @@ Every skip and its reason, so CI health is visible without grepping the sources.
 
 | Script | Why skipped | Fix |
 |--------|-------------|-----|
-| `13-file.loft` | References real filesystem paths (`tests/example/config/terrain.txt`) unavailable in VirtFS; binary I/O covered by `bridge.test.mjs` W1.16 tests | W1.16 ✓ done |
 | `19-threading.loft` | `par()` / `thread::spawn` uses `thread::scope`; WASM threading model is different | W1.18 |
 
 ---

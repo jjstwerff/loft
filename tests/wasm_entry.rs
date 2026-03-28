@@ -35,25 +35,41 @@ fn virt_fs_roundtrip() {
     assert!(virt_fs_get("main.loft").is_none());
 }
 
-/// W1.9 (Node.js smoke test — requires wasm-pack + Node.js):
+/// W1.9 (Node.js integration test): runs the full WASM bridge test suite.
 ///
-/// ```sh
-/// wasm-pack build --target nodejs --out-dir tests/wasm/pkg \
-///     -- --features wasm --no-default-features
-/// node -e "
-///   const loft = require('./tests/wasm/pkg/loft_wasm.js');
-///   const r = loft.compile_and_run(JSON.stringify([
-///       {name:'main.loft',content:'fn main(){println(\"hi\")}'}
-///   ]));
-///   const out = JSON.parse(r);
-///   console.assert(out.success, 'success');
-///   console.assert(out.output === 'hi\n', 'output');
-///   console.log('W1.9 ok:', out.output.trim());
-/// "
-/// ```
+/// Requires:
+///   1. `wasm-pack build --target nodejs --out-dir tests/wasm/pkg \
+///          -- --no-default-features --features wasm`
+///   2. Node.js in PATH.
+///
+/// Skips gracefully when either prerequisite is absent.
 #[test]
-#[ignore = "W1.9: Node.js smoke test — requires wasm-pack + Node.js"]
 fn wasm_compile_and_run_smoke() {
-    // This test documents the expected Node.js invocation but cannot run here.
-    // See the doc comment above for the manual test procedure.
+    // Skip if the WASM package is not built.
+    if !std::path::Path::new("tests/wasm/pkg/loft.js").exists() {
+        println!("SKIP wasm_compile_and_run_smoke — WASM package not built");
+        println!("     Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm");
+        return;
+    }
+
+    // Skip if Node.js is not in PATH.
+    let node_check = std::process::Command::new("node")
+        .arg("--version")
+        .output();
+    if node_check.is_err() {
+        println!("SKIP wasm_compile_and_run_smoke — node not in PATH");
+        return;
+    }
+
+    // Run the bridge test suite.
+    let result = std::process::Command::new("node")
+        .arg("tests/wasm/bridge.test.mjs")
+        .status()
+        .expect("failed to launch node");
+
+    assert!(
+        result.success(),
+        "WASM bridge tests failed (exit {:?}) — run `node tests/wasm/bridge.test.mjs` for details",
+        result.code()
+    );
 }
