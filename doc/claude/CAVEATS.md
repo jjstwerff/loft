@@ -241,23 +241,21 @@ are tracked via `init_field_tracking`/`init_field_deps` on the parser, and
 
 ---
 
-## C19 — Native codegen: coroutines interpreter-only
+## C19 — Native codegen: all language features now supported *(fixed in 0.8.3)*
 
-The `--native` backend does not support all language features:
+The `--native` backend now supports all previously-missing language features:
 
 | Feature | Interpreter | `--native` |
 |---------|-------------|-----------|
 | Tuple types (`(integer, float)`) | Yes | **Fixed** (N8a, 0.8.3) |
-| Coroutines (`yield`, `iterator<T>`) | Yes | No |
+| Coroutines (`yield`, `iterator<T>`) | Yes | **Fixed** (N8b, 0.8.3) |
 | Generic functions (`fn f<T>`) | Yes | **Fixed** (N8c, 0.8.3) |
 
-Coroutine scripts remain skipped from the native test suite
-(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Tuples and generics now pass.
+`SCRIPTS_NATIVE_SKIP` and `NATIVE_SKIP` in `tests/native.rs` are both empty.
 
-**Test:** `tests/scripts/51-coroutines.loft` — passes in interpreter, skipped in native.
-`50-tuples.loft` — removed from skip list (N8a, 0.8.3).  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
-**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use coroutines.
-**Planned fix:** N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
+**Tests:** `51-coroutines.loft` — passes in both interpreter and native.
+`50-tuples.loft`, `48-generics.loft` — pass in both.
+**Fixed by:** N8a (tuples), N8b (coroutines: state-machine transform), N8c (generics).
 
 ---
 
@@ -414,11 +412,8 @@ emitting an `OpFreeRef` for the aliased variable, eliminating the double-free th
 the "Double free store" panic in the bytecode interpreter.
 
 **Test (interpreter):** `20-binary.loft` passes in `cargo test --test wrap` (S34).
-**Test (native):** in `SCRIPTS_NATIVE_SKIP` — native codegen emits malformed Rust for the
-`Set(rv, Insert([Set(_read_34, Null), Block]))` pattern.  Before S34, `validate_slots`
-panicked during `byte_code()`, which `catch_unwind` caught and converted to a silent skip.
-After S34's bytecode fix the panic is gone, so the pre-existing native codegen bug for the
-Insert-return pattern is now visible.  Tracked in `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`.
+**Test (native):** `native_binary_script` in `tests/native.rs` — passes.
+`SCRIPTS_NATIVE_SKIP` is now empty; the Insert-return native codegen issue was resolved.
 **Fixed by:** S32 — `has_sibling_overlap` (interpreter + native slot assignment); S34 —
 `skip_free` + suppressed `OpFreeRef` in `generate_call` (interpreter double-free only).
 
