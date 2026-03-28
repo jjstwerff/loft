@@ -39,13 +39,13 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | P2-R7     | Coroutine: free exhausted frames (`OpFreeCoroutine`) | M  | ✓      |              | SAFE.md § P2-R7            |
 | P2-R8     | Coroutine: generation-counter guard for stale `DbRef` | M  | ✓     |              | SAFE.md § P2-R8            |
 | P2-R10    | Coroutine: document yielded `Str` ownership rule     | S  | ✓      |              | SAFE.md § P2-R10           |
-| S34       | Interpreter: `20-binary.loft` slot `pos >= TOS` panic | M  | ~      |              | tests/scripts/20-binary.loft (wrap::binary #[ignore]) |
-| W1.15     | WASM: `CallRef` / function references                | M  | ~      |              | CAVEATS.md C3, #77, 06-function.loft |
-| W1.16     | WASM: file I/O ops                                   | M  | ~      |              | CAVEATS.md C3, #74, 13-file.loft     |
-| W1.17     | WASM: locks (`set_store_lock`)                       | S  | ~      |              | CAVEATS.md C3, 18-locks.loft         |
-| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ~      |              | CAVEATS.md C3, 19-threading.loft     |
-| W1.19     | WASM: random numbers (external crate)                | S  | ~      |              | CAVEATS.md C3, #79, 21-random.loft   |
-| W1.20     | WASM: time functions                                 | S  | ~      |              | CAVEATS.md C3, 22-time.loft          |
+| S34       | Interpreter: `20-binary.loft` slot `pos >= TOS` panic | M  | ✓      |              | PLANNING.md § S34                    |
+| W1.15     | WASM: `CallRef` / function references                | S  | ✓      |              | WASM.md § W1.15, #77                 |
+| W1.16     | WASM: file I/O ops                                   | M  | ✓      |              | WASM.md § File I/O, #74              |
+| W1.17     | WASM: locks (`set_store_lock`)                       | S  | ✓      |              | WASM.md § W1.17                      |
+| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
+| W1.19     | WASM: random numbers (external crate)                | S  | ✓      |              | WASM.md § Random bridge              |
+| W1.20     | WASM: time functions                                 | S  | ✓      |              | WASM.md § Time bridge                |
 
 ---
 
@@ -68,7 +68,7 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| L1        | Error recovery after token failures                  | M  | ~      |              | DEVELOPERS.md              |
+| L1        | Error recovery after token failures                  | M  | ✓      |              | PLANNING.md § L1           |
 | A2        | Logger: hot-reload, run-mode, release + debug        | M  | ✓      |              | LOGGER.md                  |
 | A2.1      | ↳ Wire hot-reload in log functions                   | S  | ✓      |              | native.rs                  |
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`       | S  | ✓      |              | 01_code.loft               |
@@ -101,15 +101,15 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism    | VH | ✓      | W1.13, W4    | WASM.md — Threading        |
-| A12       | Lazy work-variable initialization                    | M  | ~      |              | PLANNING.md A12            |
-| O2        | Stack raw pointer cache                              | H  | ~      |              | PERFORMANCE.md P2          |
-| A4        | Spatial index operations                             | H  | ~      |              | PROBLEMS.md #22            |
-| A4.1      | ↳ Insert + exact lookup                              | M  | ~      |              | database.rs                |
-| A4.2      | ↳ Bounding-box range query                           | M  | ~      | A4.1         | database.rs                |
-| A4.3      | ↳ Removal                                            | S  | ~      | A4.1         | database.rs                |
-| A4.4      | ↳ Full iteration                                     | S  | ~      | A4.2, A4.3   | database.rs                |
-| O4        | Native: direct-emit local collections                | H  | ~      |              | PERFORMANCE.md N1          |
-| O5        | Native: omit `stores` from pure functions            | H  | ~      | O4           | PERFORMANCE.md N2          |
+| A12       | Lazy work-variable initialization                    | M  | ✓      |              | PLANNING.md § A12          |
+| O2        | Stack raw pointer cache                              | H  | ✓      |              | PLANNING.md § O2           |
+| A4        | Spatial index operations                             | H  | ✓      |              | PLANNING.md § A4           |
+| A4.1      | ↳ Insert + exact lookup                              | M  | ✓      |              | PLANNING.md § A4 Phase 1   |
+| A4.2      | ↳ Bounding-box range query                           | M  | ✓      | A4.1         | PLANNING.md § A4 Phase 2   |
+| A4.3      | ↳ Removal                                            | S  | ✓      | A4.1         | PLANNING.md § A4 Phase 3   |
+| A4.4      | ↳ Full iteration                                     | S  | ✓      | A4.2, A4.3   | PLANNING.md § A4 Phase 4   |
+| O4        | Native: direct-emit local collections                | H  | ✓      |              | PLANNING.md § O4           |
+| O5        | Native: omit `stores` from pure functions            | H  | ✓      | O4           | PLANNING.md § O5           |
 | A5.6      | Closure: text capture (mutable done; 2 runtime bugs) | M  | ✓      | A5.1–5       | CAVEATS.md C1              |
 
 ---

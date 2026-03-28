@@ -1353,6 +1353,70 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ---
 
+### S34  Interpreter: `20-binary.loft` `pos >= TOS` assertion at codegen.rs:751
+**Sources:** `tests/scripts/20-binary.loft`, `wrap::binary` `#[ignore]`, `src/state/codegen.rs:751`
+**Severity:** Medium — the interpreter test for `20-binary.loft` has been excluded since S32 only fixed the native path.
+**Description:** `generate_set` (codegen.rs) has two branches for first variable allocation:
+- `pos == stack.position` → slot is at TOS; place directly.
+- `else` → slot is below TOS; reuse dead slot via `OpPutX`. The `debug_assert!(pos < stack.position)` guards this path.
+
+S32 added `has_sibling_overlap` to `adjust_first_assignment_slot`: when a same-scope sibling overlaps the range `[stack.position, stack.position + v_size)`, the downward adjustment is skipped and `pos` retains its pre-assigned value (which is **above** TOS, i.e. `pos > stack.position`). When `generate_set` then evaluates `pos == stack.position` → false, it falls into the `else` branch and the `debug_assert!(pos < stack.position)` fires because `pos > stack.position`.
+
+**Root cause:** The `has_sibling_overlap` check in `adjust_first_assignment_slot` is too conservative for the `pos > stack.position` case. Siblings detected at `[stack.position, ...)` are at TOS or above TOS — exactly where the new variable should go. Blocking the assignment leaves `pos` in an invalid state (`pos > stack.position`) that no branch in `generate_set` handles.
+
+**Fix path:**
+
+*Option A — Short-term: handle `pos > stack.position` in `generate_set`.*
+
+Add a third case between the two existing branches:
+```rust
+if pos == stack.position {
+    // ... existing at-TOS path ...
+} else if pos > stack.position {
+    // Slot was pre-assigned above TOS but adjust_first_assignment_slot
+    // could not move it down due to sibling overlap.
+    // Treat as at-TOS: reset the slot to current TOS and place directly.
+    stack.function.set_stack_pos(v, stack.position);
+    // fall through to at-TOS placement
+    self.gen_set_first_at_tos(stack, v, value);
+} else {
+    debug_assert!(pos < stack.position);
+    // ... existing below-TOS reuse path ...
+}
+```
+
+*Option B — Proper fix: correct `adjust_first_assignment_slot`.*
+
+In the `pos > stack.position` branch of `adjust_first_assignment_slot`, the sibling overlap check should only block the move when siblings occupy slots **below** current TOS (i.e. `js < stack.position`). Siblings at or above TOS do not have existing data to protect. Revise the predicate:
+```rust
+let has_sibling_overlap = (0..stack.function.count()).any(|j| {
+    // Only block if sibling is already allocated BELOW current TOS.
+    // Siblings at TOS or above also need space; don't block on them.
+    let js = stack.function.stack(j);
+    js < stack.position   // sibling is below TOS — real data exists there
+    && js + size(...) > stack.position  // its range overlaps TOS
+    && /* live range overlap check */ ...
+});
+if !has_sibling_overlap {
+    stack.function.set_stack_pos(v, stack.position);
+}
+// If has_sibling_overlap: both the new variable and the sibling need TOS;
+// assign new variable to TOS + sibling_size (bump past the sibling).
+else {
+    let next_free = /* find first slot >= stack.position not occupied by a sibling */;
+    stack.function.set_stack_pos(v, next_free);
+}
+```
+
+Implement Option A first (minimal risk), then Option B as a follow-on if Option A reveals further cases.
+
+**Tests:** `cargo test --test wrap binary` (currently `#[ignore]`); remove `#[ignore]` once fixed.
+Also remove `"20-binary.loft"` from `wrap::ignored_scripts()` to re-enable in the docs sweep.
+**Effort:** Medium (`src/state/codegen.rs`, possibly `src/variables/slots.rs`)
+**Target:** 0.8.3
+
+---
+
 ### O1  Superinstruction merging
 **Status: deferred indefinitely — opcode table is full (254/256 used)**
 **Sources:** PERFORMANCE.md § P1
@@ -1365,9 +1429,43 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ### O2  Stack raw pointer cache
 **Sources:** PERFORMANCE.md § P2
-**Description:** Add `stack_base: *mut u8` to `State`; refresh once per function call/return; eliminate the `database.store()` lookup on every push/pop. A `stack_dirty` flag, set by allocation ops, triggers a refresh at the top of the dispatch loop.
+**Description:** Every `get_stack`/`put_stack` call resolves `database.store(&stack_cur)` then computes a raw pointer from `rec + pos`. Adding `stack_base: *mut u8` to `State` that is refreshed once per function call/return eliminates this lookup on every arithmetic push/pop, reducing the hot path to a single pointer add.
 **Expected gain:** 20–50% across all interpreter benchmarks.
-**Effort:** High
+
+**Fix path:**
+
+*Step 1 — Add `stack_base: *mut u8` and `stack_dirty: bool` to `State`.*
+
+*Step 2 — Add `refresh_stack_ptr()`:*
+```rust
+fn refresh_stack_ptr(&mut self) {
+    self.stack_base = self.database
+        .store_mut(&self.stack_cur)
+        .record_ptr_mut(self.stack_cur.rec, self.stack_cur.pos);
+}
+```
+Call after `fn_call`, `op_return`, and any op that sets `stack_dirty = true`.
+
+*Step 3 — Rewrite `get_stack` / `put_stack` as pointer arithmetic:*
+```rust
+pub fn get_stack<T: Copy>(&mut self) -> T {
+    self.stack_pos -= size_of::<T>() as u32;
+    unsafe { *(self.stack_base.add(self.stack_pos as usize) as *const T) }
+}
+pub fn put_stack<T>(&mut self, val: T) {
+    unsafe { *(self.stack_base.add(self.stack_pos as usize) as *mut T) = val; }
+    self.stack_pos += size_of::<T>() as u32;
+}
+```
+
+*Step 4 — Mark allocation ops as dirty.*
+In `fill.rs`, ops that allocate new records (`OpDatabase`, `OpNewRecord`, `OpInsertVector`, `OpAppendCopy`) set `self.stack_dirty = true`. The dispatch loop checks `stack_dirty` once per iteration and calls `refresh_stack_ptr()`.
+
+*Step 5 — Benchmark and verify.* Run `bench/run_bench.sh` before/after. Target: ≥20% gain on benchmark 01.
+
+**Safety invariant:** `stack_base` is valid only while no allocation modifies `stack_cur`'s backing store. Collection ops use separate stores, so the invariant holds between `refresh_stack_ptr` calls as long as `stack_dirty` is set by any store-mutating op.
+
+**Effort:** High (`src/state/mod.rs`, `src/fill.rs`)
 **Target:** 1.1+
 
 ---
@@ -1378,19 +1476,70 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ### O4  Native: direct-emit local collections
 **Sources:** PERFORMANCE.md § N1
-**Description:** Escape analysis pass marks collection variables as `Local` when they never leave the function (not ref-passed, not stored in a struct field). For `Local` variables, emit `Vec<T>` / `HashMap` directly, bypassing `codegen_runtime` helpers and `DbRef` indirection entirely.
+**Description:** All vector/hash access in generated Rust currently goes through `codegen_runtime` helpers that take `stores: &mut Stores` and decode `DbRef` pointers. For a local `vector<integer>` used only within one function, the correct Rust type is `Vec<i32>` — no stores, no DbRef, no bounds-check overhead.
 **Expected gain:** 5–15× on data-structure benchmarks (word frequency 16×, dot product 12×, insertion sort 7×).
-**Effort:** High
+
+**Fix path:**
+
+*Step 1 — Escape analysis pass (`src/generation/escape.rs`, new).*
+Before native codegen runs per function, classify each local variable:
+- `Local` — declared in this function, never passed by `&ref` to another function, never assigned to a struct field.
+- `Escaping` — passed by reference, stored in a field, or returned.
+Conservative: any uncertain case is `Escaping`.
+
+*Step 2 — Direct-emit type mapping.*
+For `Local` variables of collection type, emit Rust native types:
+`vector<integer>` → `Vec<i32>`, `vector<float>` → `Vec<f64>`, `index<text, T>` → `HashMap<String, T>`.
+Declaration site: `let mut var_counts: Vec<i32> = Vec::new();` instead of `let mut var_counts: DbRef = stores.null();`.
+
+*Step 3 — Direct-emit operation mapping.*
+In `output_code_inner`, when the target variable is `Local`, bypass `codegen_runtime`:
+`v[i]` → `v[i as usize]`, `v.length` → `v.len() as i32`, `v.append(x)` → `v.push(x)`, `v.sort()` → `v.sort()`.
+For `Escaping` variables, the existing `codegen_runtime` path is unchanged.
+
+*Step 4 — Drop is automatic.*
+`Local` `Vec`/`HashMap` values drop at end of scope via RAII — no `OpFreeRef` emission needed.
+
+*Step 5 — Verify.*
+All 10 native benchmarks pass; `native_dir` and `native_scripts` test suites pass. New assertion: generated Rust for a known `Local` vector contains `Vec<` not `DbRef`.
+
+**Effort:** High (`src/generation/escape.rs` new, `src/generation/emit.rs`, `src/generation/mod.rs`)
 **Target:** 1.1+
 
 ---
 
 ### O5  Native: omit `stores` param from pure functions
 **Sources:** PERFORMANCE.md § N2
-**Description:** Purity analysis identifies functions whose IR contains no store reads or writes, no IO, no format ops. These emit a `_pure` variant without the `stores: &mut Stores` parameter; the outer wrapper with `stores` delegates to `_pure`. Enables `rustc -O` to inline across recursive calls.
+**Description:** Every generated function currently receives `stores: &mut Stores` even when it never touches a store. For recursive functions like Fibonacci, `rustc -O` cannot eliminate this parameter across recursive calls, adding a register save/restore pair per call (measured: 1.84× slower than hand-written Rust). Purity analysis emits a `_pure` variant without `stores`; the wrapper delegates to it.
 **Expected gain:** 10–30% on recursive compute benchmarks.
-**Effort:** High
 **Depends:** O4
+
+**Fix path:**
+
+*Step 1 — Purity analysis (`src/generation/purity.rs`, new).*
+Recursively scan `def.code: Value`. A function is **pure** if its IR contains none of:
+`Value::Ref`, `Value::Store`, `Value::Format`, `Value::Call` to any op with `stores` in its `#rust` body.
+Memoize per `def_nr` to avoid exponential recursion on call graphs.
+
+*Step 2 — Emit `_pure` variant.*
+For each pure function, emit two Rust functions:
+```rust
+fn n_fibonacci_pure(n: i32) -> i32 {   // no stores parameter
+    if n <= 1 { return n; }
+    n_fibonacci_pure(n - 1) + n_fibonacci_pure(n - 2)
+}
+fn n_fibonacci(stores: &mut Stores, n: i32) -> i32 {  // wrapper for uniform call interface
+    n_fibonacci_pure(n)
+}
+```
+
+*Step 3 — Call-site dispatch.*
+In `output_call`, when emitting a call from a pure context to a pure callee, emit `n_foo_pure(…)` directly, omitting `stores`. This allows `rustc` to inline and tail-call-optimise freely.
+
+*Step 4 — Verify.*
+`n_fibonacci_pure` appears in generated Rust for any recursive integer function. All native benchmarks pass.
+
+**Effort:** High (`src/generation/purity.rs` new, `src/generation/emit.rs`, `src/generation/mod.rs`)
 **Target:** 1.1+
 
 ---
