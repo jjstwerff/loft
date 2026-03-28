@@ -614,6 +614,23 @@ fn native_tuple_script() -> std::io::Result<()> {
     run_native_job(&job)
 }
 
+/// S35: native binary I/O script.
+///
+/// Runs `tests/scripts/20-binary.loft` through the native Rust backend end-to-end.
+/// Ignored until S35 fixes `output_set` in `dispatch.rs` to hoist inner statements
+/// from `Value::Insert` before the assignment declaration.
+/// When un-ignored, `20-binary.loft` is removed from `SCRIPTS_NATIVE_SKIP`.
+#[test]
+#[ignore = "S35: output_set emits malformed Rust for Set(rv, Insert([Set(_read_34, Null), Block])) — inner Set is emitted inline in expression context; see PLANNING.md § S35"]
+fn native_binary_script() -> std::io::Result<()> {
+    let rlib_info = find_loft_rlib();
+    let entry = std::path::Path::new("tests/scripts/20-binary.loft");
+    let job = prepare_native_test(entry)?;
+    let compiled = compile_native_job(&job, &rlib_info)?;
+    assert!(compiled, "20-binary.loft failed to compile under --native");
+    run_native_job(&job)
+}
+
 /// N8a.3: native tuple-returning functions.
 ///
 /// The same 50-tuples.loft script will include a tuple-returning function once
