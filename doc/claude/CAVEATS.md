@@ -243,14 +243,14 @@ The `--native` backend does not support three language features:
 |---------|-------------|-----------|
 | Tuple types (`(integer, float)`) | Yes | No |
 | Coroutines (`yield`, `iterator<T>`) | Yes | No |
-| Generic functions (`fn f<T>`) | Yes | No |
+| Generic functions (`fn f<T>`) | Yes | **Fixed** (N8c, 0.8.3) |
 
-Scripts using these features are skipped from the native test suite
-(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).
+Scripts using tuples or coroutines are skipped from the native test suite
+(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Generic functions now pass.
 
-**Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft`, `48-generics.loft` — all pass in interpreter, all skipped in native.
-**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use these features.
-**Planned fix:** N8a.1–N8a.3 (tuples), N8b.1–N8b.3 (coroutines), N8c.1–N8c.2 (generics) in [ROADMAP.md](ROADMAP.md) (0.8.3); design in [PLANNING.md](PLANNING.md) § N8.
+**Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft` — pass in interpreter, skipped in native.  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
+**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use tuples or coroutines.
+**Planned fix:** N8a.1–N8a.3 (tuples), N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
 
 ---
 
@@ -409,27 +409,15 @@ native skip lists.
 
 ---
 
-## C28 — Native tests: slot conflict in `20-binary.loft` (`rv` vs `_read_34`)
+## C28 — Native tests: slot conflict in `20-binary.loft` (`rv` vs `_read_34`) *(fixed in S32, 0.8.3)*
 
-The slot allocator assigns overlapping slots to `rv` and `_read_34` in `n_main`
-within `tests/scripts/20-binary.loft`:
+**Fixed.**  `adjust_first_assignment_slot` now checks for same-scope sibling overlap
+(`has_sibling_overlap`) before moving a large variable down to TOS.  This mirrors
+the existing `has_child_overlap` check for child-scope variables and prevents `rv` and
+`_read_34` from being assigned the same slot range.
 
-```
-=== Slot conflict in function 'n_main' ===
-* 'rv'       slot [820, 832)  live [1016, 1110]
-* '_read_34' slot [820, 832)  live [1008, 1109]
-```
-
-Both variables have overlapping live ranges and are assigned the same slot range.
-This is a pre-existing slot assignment regression (category A/B from SLOT_FAILURES.md)
-that the native codegen exposes as a compile or runtime error.
-
-**Reproducer:** run `cargo test --test native` with `20-binary.loft` included.
-
-**Test:** `20-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
-**Workaround:** keep `20-binary.loft` skipped in native tests.
-**Planned fix:** root-cause the slot conflict in the two-zone allocator (see SLOT_FAILURES.md);
-fix and remove from skip list.
+**Test:** `20-binary.loft` removed from `SCRIPTS_NATIVE_SKIP` — passes in `cargo test --test native`.
+**Fixed by:** S32 — `has_sibling_overlap` guard in `adjust_first_assignment_slot` (`src/state/codegen.rs`).
 
 ---
 

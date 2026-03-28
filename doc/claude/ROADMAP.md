@@ -18,7 +18,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions + safety gate
 
-W1.1–W1.9 (Rust), A7.1–A7.3, and W1.10–W1.13 (JS) completed in 0.8.3.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S28, S30, S32, N8c.1, N8c.2 completed in 0.8.3.
 
 The following safety and stability issues were uncovered after the WASM work
 landed and must be resolved before the 0.8.3 tag is cut.  Releasing with
@@ -29,18 +29,13 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | S25       | CO1.3d: coroutine text serialisation (atomic)        | L  | ✓      |              | SAFE.md § P2-R1/R2/R3      |
 | S25.1     | ↳ `serialise_text_slots` at create + yield           | M  | ✓      |              | COROUTINE.md § CO1.3d      |
 | S25.2     | ↳ Pointer-patch on resume + `String` drain on return | M  | ✓      | S25.1        | COROUTINE.md § CO1.3d      |
-| S28       | Debug generation-counter for stale DbRef in coroutines | M | ✓    |              | SAFE.md § P2-R8            |
 | S29       | Parallel store: LIFO free-order assert (P1-R4)       | M  | ✓      |              | SAFE.md § P1-R4            |
-| S30       | `WorkerStores` newtype for type-level non-aliasing   | M  | ✓      | S29          | SAFE.md § P1-R5            |
 | N8a.1     | Native: `Type::Tuple` dispatch in code generator     | S  | ✓      | T1           | NATIVE.md § N8a            |
 | N8a.2     | ↳ Tuple construction and element access              | S  | ✓      | N8a.1        | NATIVE.md § N8a            |
 | N8a.3     | ↳ Tuple function return (multi-value Rust struct)    | M  | ✓      | N8a.2        | NATIVE.md § N8a            |
 | N8b.1     | Native: coroutine state-machine transform design     | H  | ✓      | CO1          | NATIVE.md § N8b            |
 | N8b.2     | ↳ Basic coroutine emission (yield/resume cycle)      | H  | ✓      | N8b.1        | NATIVE.md § N8b            |
 | N8b.3     | ↳ `yield from` delegation in native coroutine        | M  | ✓      | N8b.2        | NATIVE.md § N8b            |
-| N8c.1     | Native: audit generic instantiation failures         | S  | ✓      |              | NATIVE.md § N8c            |
-| N8c.2     | ↳ Fix failing monomorphised instantiations           | S  | ✓      | N8c.1        | NATIVE.md § N8c            |
-| S32       | Fix slot conflict in `20-binary.loft` (`rv`/`_read_34`) | M | ~   |              | CAVEATS.md C28             |
 
 ---
 

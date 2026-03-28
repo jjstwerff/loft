@@ -49,6 +49,22 @@ All notable changes to the loft language and interpreter.
   interleaved with text operations in the caller.  Test
   `coroutine_text_positions_save_restore` in `tests/expressions.rs`.
 
+- **`WorkerStores` newtype for compile-time worker-store isolation** (S30) —
+  `clone_for_worker` now returns `WorkerStores` instead of plain `Stores`.
+  `WorkerStores` is `Send` but not `Sync` (via `PhantomData<*mut ()>`), giving a
+  compile-time guarantee that worker-thread store snapshots are passed exclusively to
+  `State::new_worker` and cannot be aliased across threads.  A `Deref<Target = Stores>`
+  impl allows existing test code to inspect fields without change.
+
+- **Debug generation counter for stale-DbRef detection in coroutines** (S28) —
+  `Store` now carries a `generation: u32` field (debug builds only), incremented on
+  every `claim`, `delete`, and `resize` call.  `coroutine_yield` snapshots the
+  generation of every live, unlocked store; `coroutine_next` asserts that no snapshot
+  store changed between yield and resume.  This catches the stale-DbRef hazard — where
+  a struct record held by a suspended generator is freed or reallocated by the caller —
+  as an early `debug_assert!` panic rather than silent corruption.  Test
+  `coroutine_stale_store_guard` in `tests/expressions.rs`.
+
 - **Parallel worker stores use `thread::scope` and skip `claims` clone** (S29) —
   `run_parallel_direct` in `src/parallel.rs` now uses `thread::scope` instead of
   `thread::spawn` + manual join loop, giving lifetime-bounded joining with no `Vec`
@@ -58,6 +74,17 @@ All notable changes to the loft language and interpreter.
   builds when workers accessed struct fields.
 
 ### Native test harness fixes
+
+- **Slot conflict in `20-binary.loft` fixed; removed from native skip list** (S32) —
+  `adjust_first_assignment_slot` in `src/state/codegen.rs` now checks for same-scope
+  sibling overlap (`has_sibling_overlap`) before moving a variable down to TOS, mirroring
+  the existing `has_child_overlap` guard for child-scope variables.  This prevented `rv`
+  and `_read_34` in `n_main` from being assigned the same slot range `[820, 832)` despite
+  overlapping live intervals.  `20-binary.loft` removed from `SCRIPTS_NATIVE_SKIP`.
+
+- **Generic instantiation confirmed working in native backend; `48-generics.loft` unskipped** (N8c) —
+  Audit (N8c.1) showed that monomorphised generic functions already emit correct native
+  code.  `48-generics.loft` removed from `SCRIPTS_NATIVE_SKIP`.
 
 - **Optional feature dependencies now passed to standalone `rustc`** (S31) — The
   native test harness now calls `collect_extra_externs()`, which scans all `.rlib`
