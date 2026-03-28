@@ -235,22 +235,23 @@ are tracked via `init_field_tracking`/`init_field_deps` on the parser, and
 
 ---
 
-## C19 — Native codegen: tuples, coroutines, and generics interpreter-only
+## C19 — Native codegen: coroutines interpreter-only
 
-The `--native` backend does not support three language features:
+The `--native` backend does not support all language features:
 
 | Feature | Interpreter | `--native` |
 |---------|-------------|-----------|
-| Tuple types (`(integer, float)`) | Yes | No |
+| Tuple types (`(integer, float)`) | Yes | **Fixed** (N8a, 0.8.3) |
 | Coroutines (`yield`, `iterator<T>`) | Yes | No |
 | Generic functions (`fn f<T>`) | Yes | **Fixed** (N8c, 0.8.3) |
 
-Scripts using tuples or coroutines are skipped from the native test suite
-(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Generic functions now pass.
+Coroutine scripts remain skipped from the native test suite
+(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Tuples and generics now pass.
 
-**Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft` — pass in interpreter, skipped in native.  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
-**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use tuples or coroutines.
-**Planned fix:** N8a.1–N8a.3 (tuples), N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
+**Test:** `tests/scripts/51-coroutines.loft` — passes in interpreter, skipped in native.
+`50-tuples.loft` — removed from skip list (N8a, 0.8.3).  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
+**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use coroutines.
+**Planned fix:** N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
 
 ---
 

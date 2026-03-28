@@ -73,7 +73,30 @@ All notable changes to the loft language and interpreter.
   locked stores, removing a spurious "Unknown record" panic that appeared in debug
   builds when workers accessed struct fields.
 
+- **Store allocator uses free-bitmap; non-LIFO slot reuse now correct** (S29 P1-R4) —
+  `database_named` previously always allocated from `self.max` and only reclaimed the
+  top slot on `free_named`.  Native `OpFreeRef` legitimately frees slots in non-LIFO
+  order, leaving freed slots permanently wasted and `max` growing without bound.  A
+  `free_bits: Vec<u64>` bitmap was added to `Stores`; `set_free_bit`/`clear_free_bit`
+  helpers update it on every free/alloc, and `find_free_slot` scans for the lowest set
+  bit below `max`.  `clone_for_worker` propagates the bitmap to worker stores.
+  Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
+  freed non-top slot is reused by the next `database()` call and `max` does not grow.
+
 ### Native test harness fixes
+
+- **Tuple types now supported in native code generation; `50-tuples.loft` unskipped** (N8a) —
+  Three complementary fixes enable tuple types in the `--native` backend:
+  (N8a.1) `rust_type(Type::Tuple)` now emits the correct Rust type `(T0, T1, …)`
+  instead of `()`, and `default_native_value` returns `String` so tuple zero-values
+  `(0, 0)` are built dynamically.
+  (N8a.2) `Value::TupleGet` in `emit.rs` now uses the variable's declared name instead
+  of its internal index number; `Value::TuplePut` emits the actual element assignment
+  `var_x.i = …` rather than a stub.  `TuplePut` added to `is_void_value` in
+  `pre_eval.rs` so the block emitter treats it as a statement, not a return expression.
+  (N8a.3) Tuple-returning functions `make_pair`/`swap_pair` added to
+  `tests/scripts/50-tuples.loft` (with LHS destructuring); the script removed from
+  `SCRIPTS_NATIVE_SKIP`.  Both interpreter and native backends pass all tuple assertions.
 
 - **Slot conflict in `20-binary.loft` fixed; removed from native skip list** (S32) —
   `adjust_first_assignment_slot` in `src/state/codegen.rs` now checks for same-scope
