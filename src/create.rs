@@ -147,6 +147,7 @@ pub fn generate_code_into(data: &Data, into: &mut dyn Write) -> std::io::Result<
 #![allow(clippy::cast_possible_truncation)]
 #![allow(unused_parens)]
 
+use crate::codegen_runtime;
 use crate::keys::{{DbRef, Str}};
 use crate::ops;
 use crate::state::State;

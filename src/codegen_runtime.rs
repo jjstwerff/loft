@@ -1616,3 +1616,62 @@ pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
         coroutines.get(idx).is_none_or(Option::is_none)
     })
 }
+
+// ── FS-B  File-system dispatch helpers ───────────────────────────────────────
+// Called from fill.rs (interpreter) and generated native code alike.
+// Paths: interpreter uses `crate::codegen_runtime::*`; native uses
+// `use loft::codegen_runtime::*` so these names resolve in both contexts.
+// Under `--features wasm` each function calls the host bridge; otherwise it
+// calls the real filesystem.
+
+/// Delete `path`.  Returns `true` on success.
+#[must_use]
+pub fn fs_delete(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_delete(path) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::remove_file(path).is_ok()
+    }
+}
+
+/// Rename / move `from` to `to`.  Returns `true` on success.
+#[must_use]
+pub fn fs_move(from: &str, to: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_move(from, to) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::rename(from, to).is_ok()
+    }
+}
+
+/// Create directory `path`.  Returns `true` on success.
+#[must_use]
+pub fn fs_mkdir(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_mkdir(path) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::create_dir(path).is_ok()
+    }
+}
+
+/// Create directory `path` and all parents.  Returns `true` on success.
+#[must_use]
+pub fn fs_mkdir_all(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_mkdir_all(path) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::create_dir_all(path).is_ok()
+    }
+}

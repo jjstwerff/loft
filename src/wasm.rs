@@ -543,8 +543,8 @@ pub fn compile_and_run(files_json: &str) -> String {
         Ok(f) => f,
         Err(e) => {
             return format!(
-                "{{\"output\":\"\",\"diagnostics\":[{{\"level\":\"error\",\"message\":{:?}}}],\"success\":false}}",
-                e
+                "{{\"output\":\"\",\"diagnostics\":{},\"success\":false}}",
+                json_str(&e)
             );
         }
     };
@@ -562,23 +562,18 @@ pub fn compile_and_run(files_json: &str) -> String {
     let _ = output_take();
 
     // Build and run.
-    let success = run_pipeline();
+    let (diag, had_error) = run_pipeline();
 
     // Collect results.
     let output = output_take();
     virt_fs_clear();
 
-    if success {
-        format!(
-            "{{\"output\":{},\"diagnostics\":[],\"success\":true}}",
-            json_str(&output)
-        )
-    } else {
-        format!(
-            "{{\"output\":{},\"diagnostics\":[{{\"level\":\"error\",\"message\":\"compile or runtime error\"}}],\"success\":false}}",
-            json_str(&output)
-        )
-    }
+    format!(
+        "{{\"output\":{},\"diagnostics\":{},\"success\":{}}}",
+        json_str(&output),
+        json_str(&diag),
+        !had_error,
+    )
 }
 
 /// Parse `[{name: string, content: string}]` JSON into a Vec of pairs.
@@ -595,7 +590,7 @@ fn parse_files_json(json: &str) -> Result<Vec<(String, String)>, String> {
     let len = bytes.len();
     while i < len {
         // Skip whitespace and commas.
-        while i < len && (bytes[i] == b' ' || bytes[i] == b',' || bytes[i] == b'\n') {
+        while i < len && matches!(bytes[i], b' ' | b',' | b'\n' | b'\r' | b'\t') {
             i += 1;
         }
         if i >= len || bytes[i] == b']' {
@@ -604,57 +599,68 @@ fn parse_files_json(json: &str) -> Result<Vec<(String, String)>, String> {
         if bytes[i] != b'{' {
             return Err(format!("unexpected char at {i}"));
         }
+        i += 1; // consume '{'
         let name = extract_json_field(json, &mut i, "name")?;
         let content = extract_json_field(json, &mut i, "content")?;
         result.push((name, content));
-        // Skip closing '}'.
+        // Advance past any remaining fields to the closing '}'.
         while i < len && bytes[i] != b'}' {
             i += 1;
         }
-        i += 1; // consume '}'
+        if i < len {
+            i += 1; // consume '}'
+        }
     }
     Ok(result)
 }
 
 /// Extract a `"key": "value"` pair from a JSON object string starting at `*pos`.
+/// Advances `*pos` to just past the closing `"` of the value.
 fn extract_json_field(json: &str, pos: &mut usize, key: &str) -> Result<String, String> {
     let key_pat = format!("\"{}\"", key);
     if let Some(k) = json[*pos..].find(&key_pat) {
         let after_key = *pos + k + key_pat.len();
         if let Some(colon) = json[after_key..].find(':') {
             let after_colon = after_key + colon + 1;
-            return extract_json_string(json, after_colon);
+            let (value, end) = extract_json_string(json, after_colon)?;
+            *pos = end;
+            return Ok(value);
         }
     }
     Err(format!("field '{key}' not found"))
 }
 
-/// Extract a JSON string value starting near `start`, returning the unescaped content.
-fn extract_json_string(json: &str, start: usize) -> Result<String, String> {
-    let s = json[start..].trim_start();
-    let offset = start + (json[start..].len() - s.len());
-    if !s.starts_with('"') {
+/// Extract a JSON string value starting near `start`.
+/// Returns `(unescaped_content, byte_position_after_closing_quote)`.
+fn extract_json_string(json: &str, start: usize) -> Result<(String, usize), String> {
+    let slice = &json[start..];
+    let trimmed = slice.trim_start();
+    let offset = start + (slice.len() - trimmed.len()); // absolute position of opening '"'
+    if !trimmed.starts_with('"') {
         return Err("expected string".to_string());
     }
+    let inner = &trimmed[1..]; // skip opening '"'
     let mut out = String::new();
-    let mut chars = s[1..].chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut chars = inner.char_indices();
+    while let Some((byte_off, c)) = chars.next() {
         match c {
-            '"' => return Ok(out),
+            '"' => {
+                // byte_off is relative to inner; +1 for opening '"', +1 past closing '"'
+                return Ok((out, offset + 1 + byte_off + 1));
+            }
             '\\' => match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some('/') => out.push('/'),
-                Some(c) => out.push(c),
+                Some((_, 'n')) => out.push('\n'),
+                Some((_, 't')) => out.push('\t'),
+                Some((_, 'r')) => out.push('\r'),
+                Some((_, '"')) => out.push('"'),
+                Some((_, '\\')) => out.push('\\'),
+                Some((_, '/')) => out.push('/'),
+                Some((_, c)) => out.push(c),
                 None => return Err("unterminated escape".to_string()),
             },
             c => out.push(c),
         }
     }
-    let _ = offset; // suppress unused warning
     Err("unterminated string".to_string())
 }
 
@@ -677,9 +683,11 @@ fn json_str(s: &str) -> String {
 }
 
 /// Execute the full pipeline using files in VIRT_FS.
-/// Returns `true` on success.
-fn run_pipeline() -> bool {
+/// Returns `(diagnostic_string, had_error)`.  Warnings produce a non-empty
+/// diagnostic string but `had_error = false`; errors set `had_error = true`.
+fn run_pipeline() -> (String, bool) {
     use crate::compile::byte_code;
+    use crate::diagnostics::Level;
     use crate::parser::Parser;
     use crate::scopes;
     use crate::state::State;
@@ -688,8 +696,9 @@ fn run_pipeline() -> bool {
     // Parse default standard library (embedded in VIRT_FS under "default/").
     for (name, _) in DEFAULT_FILES {
         p.parse(name, true);
-        if !p.diagnostics.is_empty() {
-            return false;
+        let lvl = p.diagnostics.level();
+        if lvl == Level::Error || lvl == Level::Fatal {
+            return (p.diagnostics.to_string(), true);
         }
     }
     // Find the user's main file (first file not in default/).
@@ -701,19 +710,23 @@ fn run_pipeline() -> bool {
             .cloned()
     });
     let Some(main_name) = main_name else {
-        return false;
+        return ("no user file found".to_string(), true);
     };
-    if !p.parse(&main_name, false) {
-        return false;
+    p.parse(&main_name, false);
+    let lvl = p.diagnostics.level();
+    if lvl == Level::Error || lvl == Level::Fatal {
+        return (p.diagnostics.to_string(), true);
     }
     scopes::check(&mut p.data);
-    if !p.diagnostics.is_empty() {
-        return false;
+    let lvl = p.diagnostics.level();
+    if lvl == Level::Error || lvl == Level::Fatal {
+        return (p.diagnostics.to_string(), true);
     }
+    let diag = p.diagnostics.to_string();
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute_argv("main", &p.data, &[]);
-    true
+    (diag, false)
 }
 
 // ── W1.2  Output capture ─────────────────────────────────────────────────────

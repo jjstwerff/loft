@@ -85,9 +85,9 @@ fn OpReadFile(file: File, val: reference, bytes: i32, db_tp: const u16);
 fn OpSeekFile(file: File, pos: long);
 fn OpSizeFile(file: File) -> long;
 fn OpDelete(path: text) -> boolean;
-#rust"std::fs::remove_file(@path).is_ok()"
+#rust"codegen_runtime::fs_delete(@path)"
 fn OpMoveFile(from: text, to: text) -> boolean;
-#rust"std::fs::rename(@from, @to).is_ok()"
+#rust"codegen_runtime::fs_move(@from, @to)"
 fn OpTruncateFile(self: File, size: long) -> boolean;
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
 // Placed here — after all file-I/O operators — so that it receives op_code 252 without
@@ -98,9 +98,9 @@ fn OpTruncateFile(self: File, size: long) -> boolean;
 fn OpCallRef(fn_var: const u16, arg_size: const u16);
 #rust"s.fn_call_ref(@fn_var, @arg_size);"
 fn OpMkdir(path: text) -> boolean;
-#rust"std::fs::create_dir(@path).is_ok()"
+#rust"codegen_runtime::fs_mkdir(@path)"
 fn OpMkdirAll(path: text) -> boolean;
-#rust"std::fs::create_dir_all(@path).is_ok()"
+#rust"codegen_runtime::fs_mkdir_all(@path)"
 // Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
 // Use for fast colour comparison or storage.
 pub fn value(self: Pixel) -> integer {

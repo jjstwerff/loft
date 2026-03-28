@@ -74,10 +74,10 @@ test('random_int(n, n) always returns n', () => {
 
 let compileAndRun;
 try {
-  ({ compile_and_run: compileAndRun } = await import('./pkg/loft_wasm.js'));
+  ({ compile_and_run: compileAndRun } = await import('./pkg/loft.js'));
 } catch {
   console.log('NOTE  WASM-level random tests skipped — package not built');
-  console.log('      Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --features wasm');
+  console.log('      Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm');
 }
 
 if (compileAndRun) {

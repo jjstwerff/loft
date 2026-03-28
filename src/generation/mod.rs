@@ -368,6 +368,7 @@ extern crate loft;"
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
         writeln!(w, "use loft::ops;")?;
         writeln!(w, "use loft::vector;")?;
+        writeln!(w, "use loft::codegen_runtime;")?;
         writeln!(w, "use loft::codegen_runtime::*;")?;
         // The `external::` namespace is used by stdlib #rust templates for rand/random ops.
         // Use codegen_runtime wrappers so no cfg(feature) is needed in generated files.

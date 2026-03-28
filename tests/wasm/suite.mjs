@@ -9,7 +9,7 @@
  *
  * Prerequisites:
  *   1. Build the WASM package:
- *        wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --features wasm
+ *        wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm
  *   2. Run:
  *        node tests/wasm/suite.mjs
  *
@@ -33,10 +33,10 @@ import { buildDefaultTree, withFiles } from './default-tree.mjs';
 
 let compileAndRun;
 try {
-  ({ compile_and_run: compileAndRun } = await import('./pkg/loft_wasm.js'));
+  ({ compile_and_run: compileAndRun } = await import('./pkg/loft.js'));
 } catch {
   console.log('SKIP  suite — WASM package not built');
-  console.log('      wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --features wasm');
+  console.log('      wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm');
   process.exit(0);
 }
 
