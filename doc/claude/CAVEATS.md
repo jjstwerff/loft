@@ -342,7 +342,7 @@ those would be UB.  Fix must zero Zone 2 at generator startup first.
 
 **Test:** `coroutine_text_local_survives_yield` (passes, no leak at exhaustion).
 No test for the early-break path yet.
-**Planned fix:** PLANNING.md S25.3 — zero Zone 2 at first resume + null-ptr-guarded
+**Planned fix:** PLANNING.md S25.3 (0.8.3) — zero Zone 2 at first resume + null-ptr-guarded
 drop in `free_coroutine`.  Two-step, must land atomically.
 **Workaround:** iterate generators to exhaustion rather than breaking.
 **Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3, [PLANNING.md](PLANNING.md) § S25.3.
