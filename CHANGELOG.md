@@ -53,6 +53,16 @@ All notable changes to the loft language and interpreter.
   defence-in-depth.  Test `par_worker_returns_generator` in `tests/parse_errors.rs`
   covers the compile-time path.
 
+- **Abandoned coroutine frame freed on early `for` loop exit** (S37) — When a `for`
+  loop breaks before a generator exhausts, `OpFreeRef` calls `free_ref` on the
+  coroutine DbRef.  `database.free()` is a no-op for `COROUTINE_STORE`
+  (store_nr == u16::MAX), so `text_owned` buffers, `stack_bytes`, and `call_frames`
+  in the `CoroutineFrame` were silently leaked on every early-break path.
+  Fix: `free_ref` now checks `db.store_nr == COROUTINE_STORE` and calls
+  `free_coroutine(db.rec)` explicitly before returning.  Test
+  `coroutine_early_break_frame_freed` in `tests/expressions.rs` exercises the
+  early-break path and verifies the correct first-yield value is returned.
+
 - **Exhausted coroutine slots freed immediately** (S26) — `coroutine_return` now sets
   the slot to `None` after marking it `Exhausted`, so the `State::coroutines` Vec does
   not grow without bound across repeated `for n in gen() { }` loops.  A guard in
