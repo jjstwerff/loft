@@ -93,6 +93,14 @@ impl Stores {
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         debug_assert!(!self.allocations[al as usize].free, "Double free store");
+        // S36: clear the lock before marking free.  When a function with a `const`
+        // reference parameter auto-locks the store at entry, it may not unlock before
+        // returning (the auto-lock is inserted by the parser but no matching unlock is
+        // emitted).  If the store is then freed while still locked, `find_free_slot`
+        // will select the slot for reuse and `database_named` will call `init()` on it,
+        // which panics: "Write to locked store".  Freeing a store implicitly ends its
+        // ownership, so the lock is moot and must be cleared here.
+        self.allocations[al as usize].unlock();
         self.allocations[al as usize].free = true;
         // S29 (P1-R4 M4-b): mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
