@@ -323,6 +323,7 @@ fn binary() -> std::io::Result<()> {
 script_test!(binary_ops, "tests/scripts/21-binary-ops.loft");
 script_test!(script_threading, "tests/scripts/22-threading.loft");
 script_test!(stress, "tests/scripts/37-stress.loft");
+script_test!(single_type, "tests/scripts/52-single.loft");
 
 /// Quick iteration test: run only the final suite file (`16-parser.loft`) without
 /// regenerating documentation.  Use this during active development on the parser

@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// single (f32) type: arithmetic, comparisons, conversions, null, formatting.
+fn main() {
+  // --- Arithmetic ---
+  assert(3.0f - 1.0f == 2.0f, "single sub");
+  assert(2.0f * 3.0f == 6.0f, "single mul");
+  assert(6.0f / 2.0f == 3.0f, "single div");
+  assert(7.0f % 3.0f == 1.0f, "single rem");
+  assert(-1.5f + 1.5f == 0.0f, "single add negative");
+  // --- Comparisons (all six operators) ---
+  assert(1.0f < 2.0f, "single lt");
+  assert(2.0f <= 2.0f, "single le exact");
+  assert(1.5f <= 2.0f, "single le less");
+  assert(3.0f > 2.0f, "single gt");
+  assert(3.0f >= 3.0f, "single ge exact");
+  assert(4.0f >= 3.0f, "single ge greater");
+  assert(1.0f == 1.0f, "single eq");
+  assert(1.0f != 2.0f, "single ne");
+  // --- Null (NaN): produced by 0.0f / 0.0f ---
+  zero = 0.0f;
+  bad = zero / zero;
+  assert(!bad, "single nan is null");
+  assert(!(bad == bad), "single null == null is false");
+  assert(bad != bad, "single null != null is true");
+  assert(!(bad < 0.0f), "single null < 0 is false");
+  assert(!(bad > 0.0f), "single null > 0 is false");
+  assert(!(bad == 0.0f), "single null == 0 is false");
+  // --- Null propagation ---
+  assert(!(bad + 1.0f), "single null + 1 is null");
+  assert(!(bad * 2.0f), "single null * 2 is null");
+  assert(!(1.0f + bad), "single 1 + null is null");
+  // --- Null coalescing ---
+  assert((bad ?? 5.0f) == 5.0f, "single null ?? default");
+  assert((1.0f ?? 5.0f) == 1.0f, "single non-null ?? passes through");
+  // --- Infinity (not null) ---
+  pos_inf = 1.0f / 0.0f;
+  assert(pos_inf > 1000000.0f, "single positive infinity");
+  assert(!!pos_inf, "single positive infinity is not null");
+  neg_inf = -1.0f / 0.0f;
+  assert(neg_inf < -1000000.0f, "single negative infinity");
+  // --- Conversions ---
+  assert(3 as single == 3.0f, "integer as single");
+  assert(3.0 as single == 3.0f, "float as single");
+  assert(2.0f as float == 2.0, "single as float");
+  assert(3.7f as integer == 3, "single as integer truncates toward zero");
+  assert(-3.7f as integer == -3, "single as integer negative truncates toward zero");
+  assert(3.7f as long == 3l, "single as long truncates toward zero");
+  assert("2.5" as single == 2.5f, "text as single");
+  assert("{2.5f}" == "2.5", "single to text format");
+  // --- Formatting specifiers ---
+  assert("{3.14159f:.2}" == "3.14", "single format 2 decimal places");
+  // --- Null single from conversion ---
+  bad_text = "not_a_number" as single;
+  assert(!bad_text, "invalid text as single is null");
+  // --- Null cast results ---
+  nan_s = zero / zero;
+  assert(!(nan_s as integer), "single NaN as integer is null");
+  assert(!(nan_s as long), "single NaN as long is null");
+}
