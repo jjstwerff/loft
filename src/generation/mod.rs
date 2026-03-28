@@ -280,7 +280,12 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Unknown(_) => "??",
         Type::Iterator(_, _) => "Iterator",
         Type::Keys => "&[Key]",
-        Type::Tuple(_) | Type::Void => "()",
+        Type::Void => "()",
+        // N8a.1: emit the correct Rust tuple type, e.g. (i32, i64) for (integer, long).
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(|e| rust_type(e, context)).collect();
+            return format!("({})", parts.join(", "));
+        }
         Type::Rewritten(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
     }
@@ -289,21 +294,26 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
 
 /// Return the Rust literal for the "null" default of a loft type, used when a function
 /// body is empty (an explicit stub) but the declared return type is non-void.
-fn default_native_value(tp: &Type) -> &'static str {
+fn default_native_value(tp: &Type) -> String {
     match tp {
-        Type::Float => "0.0_f64",
-        Type::Single => "0.0_f32",
-        Type::Long => "0_i64",
-        Type::Boolean => "false",
-        Type::Text(_) => "Str::new(loft::state::STRING_NULL)",
-        Type::Routine(_) | Type::Function(_, _) => "0_u32",
+        Type::Float => "0.0_f64".into(),
+        Type::Single => "0.0_f32".into(),
+        Type::Long => "0_i64".into(),
+        Type::Boolean => "false".into(),
+        Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
+        Type::Routine(_) | Type::Function(_, _) => "0_u32".into(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
-        | Type::Index(_, _, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }",
-        _ => "0", // Integer, Character, Enum(u8), etc.
+        | Type::Index(_, _, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
+        // N8a.1: a tuple null is the zero-default for each element type.
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(default_native_value).collect();
+            format!("({})", parts.join(", "))
+        }
+        _ => "0".into(), // Integer, Character, Enum(u8), etc.
     }
 }
 

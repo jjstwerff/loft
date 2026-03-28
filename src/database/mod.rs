@@ -112,6 +112,11 @@ pub struct Stores {
     #[cfg(feature = "wasm")]
     pub files: Vec<()>,
     pub max: u16,
+    /// S29 (P1-R4 M4-b): bitmap of free store slots — bit `i` is set when `allocations[i]`
+    /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
+    /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
+    /// requirement on `free()` that the old cascade-based scan imposed.
+    pub free_bits: Vec<u64>,
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.
     pub scratch: Vec<String>,
@@ -158,6 +163,7 @@ impl Clone for Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: self.max,
+            free_bits: Vec::new(),
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
             parallel_ctx: None,
@@ -409,6 +415,7 @@ impl Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: 0,
+            free_bits: Vec::new(),
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
             parallel_ctx: None,

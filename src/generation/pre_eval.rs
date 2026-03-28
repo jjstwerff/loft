@@ -585,7 +585,12 @@ impl Output<'_> {
     /// block's return value.
     pub(super) fn is_void_value(&self, v: &Value) -> bool {
         match v {
-            Value::Null | Value::Drop(_) | Value::Set(_, _) | Value::Line(_) => true,
+            // N8a.2: TuplePut is an assignment statement (void), not a return expression.
+            Value::Null
+            | Value::Drop(_)
+            | Value::Set(_, _)
+            | Value::Line(_)
+            | Value::TuplePut(_, _, _) => true,
             Value::If(_, _, false_v) => matches!(**false_v, Value::Null),
             Value::Call(d_nr, _) => {
                 let def = self.data.def(*d_nr);
