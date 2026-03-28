@@ -32,7 +32,6 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| W1.16     | WASM: file I/O ops                                   | M  | ✓      | ✓ done       | WASM.md § File I/O, #74             |
 | W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
 
 ### Known test skips at current HEAD
