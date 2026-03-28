@@ -370,12 +370,8 @@ fn closure_capture_text_integer_return() {
 }
 
 #[test]
-#[ignore = "A5.6b.1 + A5.6b.2: text capture with text return requires both the spurious \
-RefVar(Text) argument fix (A5.6b.1) and generate_call_ref text work buffer pre-allocation \
-(A5.6b.2). See PLANNING.md § A5.6b.1 and § A5.6b.2."]
 fn closure_capture_text_return() {
     // Same-scope text capture: lambda reads captured text, returns text.
-    // Requires both A5.6b.1 (parser fix) and A5.6b.2 (codegen fix).
     expr!("greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")")
         .warning("closure record '__closure_0' created with 1 field: greeting(text([])) at closure_capture_text_return:2:92")
         .result(Value::str("hello, world!"));
