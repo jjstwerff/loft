@@ -1564,18 +1564,27 @@ std::thread_local! {
 }
 
 /// Store a native coroutine generator and return a `DbRef` that identifies it.
+#[must_use]
 pub fn alloc_coroutine(coro: Box<dyn LoftCoroutine>) -> DbRef {
     NATIVE_COROUTINES.with(|c| {
         let mut coroutines = c.borrow_mut();
         for (i, slot) in coroutines.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
                 *slot = Some(coro);
-                return DbRef { store_nr: NATIVE_COROUTINE_STORE, rec: i as u32, pos: 0 };
+                return DbRef {
+                    store_nr: NATIVE_COROUTINE_STORE,
+                    rec: i as u32,
+                    pos: 0,
+                };
             }
         }
         let idx = coroutines.len();
         coroutines.push(Some(coro));
-        DbRef { store_nr: NATIVE_COROUTINE_STORE, rec: idx as u32, pos: 0 }
+        DbRef {
+            store_nr: NATIVE_COROUTINE_STORE,
+            rec: idx as u32,
+            pos: 0,
+        }
     })
 }
 
@@ -1600,10 +1609,11 @@ pub fn coroutine_next_i64(gen_ref: DbRef, stores: &mut Stores) -> i64 {
 }
 
 /// Test whether a native coroutine has been exhausted (its slot freed).
+#[must_use]
 pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
     NATIVE_COROUTINES.with(|c| {
         let coroutines = c.borrow();
         let idx = gen_ref.rec as usize;
-        coroutines.get(idx).map_or(true, Option::is_none)
+        coroutines.get(idx).is_none_or(Option::is_none)
     })
 }

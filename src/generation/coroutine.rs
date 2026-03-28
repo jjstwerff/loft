@@ -8,7 +8,7 @@
 //! Scope:
 //! - N8b.1/N8b.2: sequential top-level yields.
 //! - N8b.3: `yield from` delegation — the sub-generator is stored directly in
-//!   the outer struct as `Option<Box<dyn LoftCoroutine>>` to avoid a RefCell
+//!   the outer struct as `Option<Box<dyn LoftCoroutine>>` to avoid a `RefCell`
 //!   double-borrow when advancing the sub-generator from within the outer
 //!   generator's `next_i64` call.
 
@@ -109,6 +109,70 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
     segments
 }
 
+/// Emit the struct definition for a coroutine state machine.
+fn emit_struct_def(
+    w: &mut dyn Write,
+    struct_name: &str,
+    attrs: &[crate::data::Attribute],
+    segments: &[YieldSegment],
+) -> std::io::Result<()> {
+    writeln!(w, "struct {struct_name} {{")?;
+    writeln!(w, "    state: u32,")?;
+    for attr in attrs {
+        let field_tp = match &attr.typedef {
+            Type::Text(_) => "String".to_string(),
+            other => rust_type(other, &Context::Variable),
+        };
+        writeln!(w, "    var_{}: {field_tp},", sanitize(&attr.name))?;
+    }
+    // N8b.3: one inline sub-generator field per yield-from segment.
+    // Stored as `Option<Box<dyn LoftCoroutine>>` to avoid `RefCell` double-borrow
+    // when advancing the sub-generator from inside the outer generator's `next_i64`.
+    for (idx, seg) in segments.iter().enumerate() {
+        if matches!(seg, YieldSegment::YieldFrom { .. }) {
+            writeln!(
+                w,
+                "    sub_{idx}: Option<Box<dyn loft::codegen_runtime::LoftCoroutine>>,"
+            )?;
+        }
+    }
+    writeln!(w, "}}\n")
+}
+
+/// Emit the factory function that allocates and returns a boxed coroutine.
+fn emit_factory_fn(
+    w: &mut dyn Write,
+    fn_name: &str,
+    struct_name: &str,
+    attrs: &[crate::data::Attribute],
+    segments: &[YieldSegment],
+) -> std::io::Result<()> {
+    write!(w, "fn {fn_name}(stores: &mut Stores")?;
+    for attr in attrs {
+        let arg_tp = rust_type(&attr.typedef, &Context::Argument);
+        write!(w, ", var_{}: {arg_tp}", sanitize(&attr.name))?;
+    }
+    writeln!(w, ") -> Box<dyn loft::codegen_runtime::LoftCoroutine> {{")?;
+    writeln!(w, "    let _ = stores;")?;
+    writeln!(w, "    Box::new({struct_name} {{")?;
+    writeln!(w, "        state: 0,")?;
+    for attr in attrs {
+        let aname = sanitize(&attr.name);
+        match &attr.typedef {
+            Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
+            _ => writeln!(w, "        var_{aname},")?,
+        }
+    }
+    // N8b.3: initialise sub-generator fields to None.
+    for (idx, seg) in segments.iter().enumerate() {
+        if matches!(seg, YieldSegment::YieldFrom { .. }) {
+            writeln!(w, "        sub_{idx}: None,")?;
+        }
+    }
+    writeln!(w, "    }})")?;
+    writeln!(w, "}}\n")
+}
+
 impl Output<'_> {
     /// Generate the factory call for a sub-generator, WITHOUT the `alloc_coroutine`
     /// wrapper.  The `init` expression is always `Value::Call(inner_fn, args)` for a
@@ -130,71 +194,14 @@ impl Output<'_> {
         }
     }
 
-    /// Emit a loft generator function as a Rust state-machine struct.
-    pub(super) fn output_coroutine(
+    /// Emit the `next_i64` method body for a coroutine state machine.
+    fn emit_next_i64(
         &mut self,
         w: &mut dyn Write,
-        def_nr: u32,
+        attrs: &[crate::data::Attribute],
+        segments: &[YieldSegment],
+        has_yf: bool,
     ) -> std::io::Result<()> {
-        self.start_fn(def_nr);
-        let def = self.data.def(def_nr);
-        let fn_name = def.name.clone();
-        let struct_name = gen_struct_name(&fn_name);
-
-        // Collect segments only when a body is present.
-        let body_block = match &def.code {
-            Value::Block(bl) => bl.clone(),
-            _ => {
-                writeln!(w, "struct {struct_name} {{}}")?;
-                writeln!(w, "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{")?;
-                writeln!(
-                    w,
-                    "    fn next_i64(&mut self, _stores: &mut Stores) -> i64 \
-                     {{ loft::codegen_runtime::COROUTINE_EXHAUSTED }}"
-                )?;
-                writeln!(w, "}}")?;
-                write!(
-                    w,
-                    "fn {fn_name}(_stores: &mut Stores) -> Box<dyn loft::codegen_runtime::LoftCoroutine>"
-                )?;
-                writeln!(w, " {{ Box::new({struct_name} {{}}) }}\n")?;
-                return Ok(());
-            }
-        };
-
-        let segments = collect_segments(&body_block.operators);
-        let has_yf = segments
-            .iter()
-            .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
-
-        // ── 1. Struct definition ─────────────────────────────────────────────
-        writeln!(w, "struct {struct_name} {{")?;
-        writeln!(w, "    state: u32,")?;
-        for attr in &def.attributes {
-            let field_tp = match &attr.typedef {
-                Type::Text(_) => "String".to_string(),
-                other => rust_type(other, &Context::Variable),
-            };
-            writeln!(w, "    var_{}: {field_tp},", sanitize(&attr.name))?;
-        }
-        // N8b.3: one inline sub-generator field per yield-from segment.
-        // Stored as Option<Box<dyn LoftCoroutine>> to avoid RefCell double-borrow
-        // when advancing the sub-generator from inside the outer generator's next_i64.
-        for (idx, seg) in segments.iter().enumerate() {
-            if matches!(seg, YieldSegment::YieldFrom { .. }) {
-                writeln!(
-                    w,
-                    "    sub_{idx}: Option<Box<dyn loft::codegen_runtime::LoftCoroutine>>,"
-                )?;
-            }
-        }
-        writeln!(w, "}}\n")?;
-
-        // ── 2. impl LoftCoroutine ────────────────────────────────────────────
-        writeln!(
-            w,
-            "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
-        )?;
         writeln!(
             w,
             "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {{"
@@ -205,13 +212,10 @@ impl Output<'_> {
             writeln!(w, "        loop {{")?;
         }
         writeln!(w, "        match self.state {{")?;
-
-        let attrs: Vec<_> = def.attributes.clone();
         for (state_idx, segment) in segments.iter().enumerate() {
             writeln!(w, "            {state_idx} => {{")?;
-
             // Shadow-bind parameters.
-            for attr in &attrs {
+            for attr in attrs {
                 let aname = sanitize(&attr.name);
                 match &attr.typedef {
                     Type::Text(_) => writeln!(
@@ -221,7 +225,6 @@ impl Output<'_> {
                     _ => writeln!(w, "                let var_{aname} = self.var_{aname};")?,
                 }
             }
-
             match segment {
                 YieldSegment::Simple { pre, val } => {
                     for stmt in pre {
@@ -237,12 +240,13 @@ impl Output<'_> {
                         let stmt_code = self.generate_expr_buf(stmt)?;
                         writeln!(w, "                {stmt_code};")?;
                     }
-                    // Initialise sub-generator inline on first entry.
                     writeln!(w, "                if self.sub_{state_idx}.is_none() {{")?;
                     let factory = self.gen_inner_factory(init)?;
-                    writeln!(w, "                    self.sub_{state_idx} = Some({factory});")?;
+                    writeln!(
+                        w,
+                        "                    self.sub_{state_idx} = Some({factory});"
+                    )?;
                     writeln!(w, "                }}")?;
-                    // Advance sub-generator directly — no RefCell involved.
                     writeln!(
                         w,
                         "                let val = self.sub_{state_idx}.as_mut().unwrap().next_i64(stores);"
@@ -260,7 +264,6 @@ impl Output<'_> {
             }
             writeln!(w, "            }}")?;
         }
-
         // Exhausted arm.
         if has_yf {
             writeln!(
@@ -277,37 +280,61 @@ impl Output<'_> {
         if has_yf {
             writeln!(w, "        }}")?; // close loop
         }
-        writeln!(w, "    }}")?;
+        writeln!(w, "    }}")
+    }
+
+    /// Emit a loft generator function as a Rust state-machine struct.
+    pub(super) fn output_coroutine(
+        &mut self,
+        w: &mut dyn Write,
+        def_nr: u32,
+    ) -> std::io::Result<()> {
+        self.start_fn(def_nr);
+        let def = self.data.def(def_nr);
+        let fn_name = def.name.clone();
+        let struct_name = gen_struct_name(&fn_name);
+
+        // Emit a minimal stub for bodyless functions and return early.
+        let Value::Block(body_block) = &def.code.clone() else {
+            writeln!(w, "struct {struct_name} {{}}")?;
+            writeln!(
+                w,
+                "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
+            )?;
+            writeln!(
+                w,
+                "    fn next_i64(&mut self, _stores: &mut Stores) -> i64 \
+                 {{ loft::codegen_runtime::COROUTINE_EXHAUSTED }}"
+            )?;
+            writeln!(w, "}}")?;
+            writeln!(
+                w,
+                "fn {fn_name}(_stores: &mut Stores) -> Box<dyn loft::codegen_runtime::LoftCoroutine> \
+                 {{ Box::new({struct_name} {{}}) }}\n"
+            )?;
+            return Ok(());
+        };
+
+        let segments = collect_segments(&body_block.operators);
+        let has_yf = segments
+            .iter()
+            .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
+        let attrs: Vec<_> = def.attributes.clone();
+
+        // ── 1. Struct definition ─────────────────────────────────────────────
+        emit_struct_def(w, &struct_name, &attrs, &segments)?;
+
+        // ── 2. impl LoftCoroutine ────────────────────────────────────────────
+        writeln!(
+            w,
+            "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
+        )?;
+        self.emit_next_i64(w, &attrs, &segments, has_yf)?;
         writeln!(w, "}}\n")?;
 
         // ── 3. Factory function ──────────────────────────────────────────────
         let def = self.data.def(def_nr);
-        write!(w, "fn {fn_name}(stores: &mut Stores")?;
-        for attr in &def.attributes {
-            let arg_tp = rust_type(&attr.typedef, &Context::Argument);
-            write!(w, ", var_{}: {arg_tp}", sanitize(&attr.name))?;
-        }
-        writeln!(
-            w,
-            ") -> Box<dyn loft::codegen_runtime::LoftCoroutine> {{"
-        )?;
-        writeln!(w, "    let _ = stores;")?;
-        writeln!(w, "    Box::new({struct_name} {{")?;
-        writeln!(w, "        state: 0,")?;
-        for attr in &def.attributes {
-            let aname = sanitize(&attr.name);
-            match &attr.typedef {
-                Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
-                _ => writeln!(w, "        var_{aname},")?,
-            }
-        }
-        // N8b.3: initialise sub-generator fields to None.
-        for (idx, seg) in segments.iter().enumerate() {
-            if matches!(seg, YieldSegment::YieldFrom { .. }) {
-                writeln!(w, "        sub_{idx}: None,")?;
-            }
-        }
-        writeln!(w, "    }})")?;
-        writeln!(w, "}}\n")
+        let attrs: Vec<_> = def.attributes.clone();
+        emit_factory_fn(w, &fn_name, &struct_name, &attrs, &segments)
     }
 }

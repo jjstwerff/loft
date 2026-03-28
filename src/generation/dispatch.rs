@@ -252,9 +252,18 @@ impl Output<'_> {
                         4 // fallback: i32
                     };
                     match value_size {
-                        8 => write!(w, "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores)")?,
-                        1 => write!(w, "(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) != 0)")?,
-                        _ => write!(w, "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as i32")?,
+                        8 => write!(
+                            w,
+                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores)"
+                        )?,
+                        1 => write!(
+                            w,
+                            "(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) != 0)"
+                        )?,
+                        _ => write!(
+                            w,
+                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as i32"
+                        )?,
                     }
                 }
                 return Ok(());
@@ -264,7 +273,10 @@ impl Output<'_> {
             "OpCoroutineExhausted" => {
                 if let Some(gen_val) = vals.first() {
                     let gen_code = self.generate_expr_buf(gen_val)?;
-                    write!(w, "loft::codegen_runtime::coroutine_is_exhausted({gen_code})")?;
+                    write!(
+                        w,
+                        "loft::codegen_runtime::coroutine_is_exhausted({gen_code})"
+                    )?;
                 }
                 return Ok(());
             }

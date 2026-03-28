@@ -279,11 +279,11 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
-        | Type::Index(_, _, _) => "DbRef",
+        | Type::Index(_, _, _)
+        // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
+        | Type::Iterator(_, _) => "DbRef",
         Type::Routine(_) | Type::Function(_, _) => "u32",
         Type::Unknown(_) => "??",
-        // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
-        Type::Iterator(_, _) => "DbRef",
         Type::Keys => "&[Key]",
         Type::Void => "()",
         // N8a.1: emit the correct Rust tuple type, e.g. (i32, i64) for (integer, long).
@@ -312,9 +312,9 @@ fn default_native_value(tp: &Type) -> String {
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
-        | Type::Index(_, _, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
+        | Type::Index(_, _, _)
         // N8b.1: exhausted / uninitialized generator variable.
-        Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
+        | Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
         // N8a.1: a tuple null is the zero-default for each element type.
         Type::Tuple(elems) => {
             let parts: Vec<String> = elems.iter().map(default_native_value).collect();
