@@ -56,17 +56,16 @@ fn test() {
 
 ---
 
-## C3 — WASM backend: file I/O and threading not implemented
+## C3 — WASM backend: threading not implemented
 
-The `--native-wasm` backend currently lacks support for file I/O and threading.
-Random numbers, time functions, and dynamic function references (`CallRef`) are
-now implemented (W1.15, W1.17, W1.19, W1.20 — all 0.8.3).
+The `--native-wasm` backend currently lacks support for threading.
+File I/O, random numbers, time functions, and dynamic function references (`CallRef`) are
+now all implemented (W1.15, W1.16, W1.17, W1.19, W1.20 — all 0.8.3).
 
 **Affected files:** `tests/wrap.rs` — `WASM_SKIP` array:
 
 | File | Reason |
 |------|--------|
-| `13-file.loft` | File I/O ops missing; no WASM filesystem (#74) |
 | `19-threading.loft` | WASM threading model differs; W1.18 not yet landed |
 
 **Previously skipped — now passing:**
@@ -74,12 +73,13 @@ now implemented (W1.15, W1.17, W1.19, W1.20 — all 0.8.3).
 | File | Fixed by |
 |------|----------|
 | `06-function.loft` | W1.15 — `output_call_ref` dispatch table |
+| `13-file.loft` | W1.16 — `OpDelete`/`OpMoveFile`/`OpMkdir`/`OpMkdirAll` in `codegen_runtime` |
 | `18-locks.loft` | W1.17 — lock functions in `CODEGEN_RUNTIME_FNS` |
 | `21-random.loft` | W1.19 — WASM `rand`/`rand_indices` bridge |
 | `22-time.loft` | W1.20 — `host_time_now()` via `std::time::SystemTime` |
 
 **Workaround:** use the interpreter (`cargo run --bin loft`) instead of `--native-wasm`.
-**Remaining work:** W1.16 (file I/O), W1.18 (threading) in [ROADMAP.md](ROADMAP.md) (0.8.3).
+**Remaining work:** W1.18 (threading) in [ROADMAP.md](ROADMAP.md) (0.8.3).
 
 ---
 
@@ -104,19 +104,19 @@ zone-1 pre-claim prevents running_tos from overestimating across sequential bloc
 
 ---
 
-## C6 — Exit code always 0
+## C6 — Exit code always 0 *(fixed)*
 
-`loft` exits with code 0 even on parse errors.  Shell scripts that check
-`$?` will miss failures.
+**Fixed.** `main.rs` already calls `std::process::exit(1)` whenever
+`p.diagnostics.level() >= Level::Error`.  A missing file produces a
+`Level::Fatal` diagnostic (`lexer.switch` → `"Unknown file:{filename}"`),
+which is greater than `Level::Error`, so the process exits with code 1.
 
-**Reproducer:**
+**Reproducer (now works correctly):**
 ```sh
-loft nonexistent.loft; echo $?   # prints 0
+loft nonexistent.loft; echo $?   # prints 1
 ```
 
-**Test:** none (shell-level behaviour).
-**Workaround:** capture output and grep for `Error:` or `panicked`.
-**Planned fix:** L7 in [ROADMAP.md](ROADMAP.md) (0.8.3) — emit non-zero exit code on parse/runtime errors.
+**Test:** none (shell-level behaviour; verified by code inspection of `main.rs` lines 348–354 and `lexer.rs` `switch()`).
 **Docs:** [LOFT.md](LOFT.md) § Known Limitations.
 
 ---
@@ -364,20 +364,19 @@ DbRef is encountered (defence-in-depth for indirect paths).
 
 ---
 
-## C26 — `e#remove` on a generator iterator: store corruption in release
+## C26 — `e#remove` on a generator iterator: store corruption in release *(fully fixed)*
 
-**Partially fixed in 0.8.3 (S24) — compiler rejection already in place; runtime guard added.**
+**Fixed in 0.8.3 (S24 + assert! upgrade).**
 
 `e#remove` on a generator-typed loop variable is rejected at compile time
 (CO1.5c — `loop_value == Null` in `collections.rs`).  A defense-in-depth
-runtime guard was added to `remove()` (`state/io.rs`) and `OpRemove()`
-(`codegen_runtime.rs`): if `store_nr == u16::MAX`, a `debug_assert!` fires and
-the call returns early, preventing release-build store corruption even if the
-compiler check is somehow bypassed.
+runtime guard in `remove()` (`state/io.rs`) and `OpRemove()`
+(`codegen_runtime.rs`) checks `store_nr == u16::MAX` and panics if somehow
+reached.  The guard has been upgraded from `debug_assert!` to `assert!` so
+it fires in both debug and release builds.
 
 **Test:** `generator_remove_rejected` in `tests/parse_errors.rs` — compile-time
 rejection passes.
-**Workaround:** only use `e#remove` with store-backed collection iterators.
 **Docs:** [SAFE.md](SAFE.md) § P2-R9, [COROUTINE.md](COROUTINE.md) § SC-CO-11.
 
 ---

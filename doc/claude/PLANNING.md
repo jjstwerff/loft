@@ -1044,9 +1044,14 @@ A10 field iteration test now passes.
 
 ---
 
-### L7  Non-zero exit code on parse/runtime errors
+### L7  Non-zero exit code on parse/runtime errors *(completed 0.8.3)*
+
+**Implemented.** `src/main.rs` now checks `p.diagnostics.level() >= Level::Error` before calling
+`std::process::exit(1)`; warning-only programs execute and exit 0.  A missing file produces
+`Level::Fatal` in the lexer, which is `>= Level::Error`, so `loft nonexistent.loft` exits 1.
+
 **Sources:** CAVEATS.md C6, `src/main.rs`, `src/diagnostics.rs`
-**Severity:** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
+**Severity (original):** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
 **Description:** Two issues in `src/main.rs`:
 
 1. **Parse/compile error path (line 343):** The diagnostic check `if !p.diagnostics.is_empty()` exits with code 1 whenever any diagnostic is present, including warnings-only programs. This is too aggressive: a program with only warnings should execute and exit 0.

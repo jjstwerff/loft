@@ -731,7 +731,7 @@ impl State {
         // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
         // The compiler already rejects e#remove on generator iterators (CO1.5c / S24), so this
         // guard only fires if that check is somehow bypassed — preventing release-build corruption.
-        debug_assert!(
+        assert!(
             data.store_nr != u16::MAX,
             "e#remove on coroutine DbRef — compiler check should have rejected this"
         );
