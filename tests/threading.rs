@@ -453,6 +453,39 @@ fn label(r: const Num) -> text { "v{r.v}" }
     );
 }
 
+/// S29: A freed slot that is NOT the top slot (non-LIFO) must be reused by the next
+/// `database()` call rather than growing the allocations Vec.  The old LIFO cascade skipped
+/// non-top frees; the bitmap replacement (M4-b in SAFE.md P1-R4) reclaims them immediately.
+#[test]
+#[ignore = "S29: free-bitmap not yet implemented — database() grows instead of reusing freed non-top slots"]
+fn store_non_lifo_free_reclaims_slot() {
+    // Compile minimal code to get a fresh State with a clean database.
+    let (mut state, _) = compile("struct Box { val: integer }");
+    let db = &mut state.database;
+    // Allocate two stores on top of any background allocations.
+    let a = db.database(100);
+    let b = db.database(100);
+    let max_after_two = db.max;
+    // Free 'a' first — non-LIFO order (b is the newer/top slot; a is below it).
+    // With bitmap: the freed slot is tracked; next database() reuses it.
+    // Without bitmap: cascade skips a (not top) and max stays the same; next
+    // database() pushes a new slot and max grows beyond max_after_two.
+    db.free(&a);
+    let c = db.database(100);
+    assert_eq!(
+        c.store_nr, a.store_nr,
+        "S29: free-bitmap must reuse freed slot {} (got {})",
+        a.store_nr, c.store_nr
+    );
+    assert!(
+        db.max <= max_after_two,
+        "S29: max must not grow past {max_after_two} (got {})",
+        db.max
+    );
+    db.free(&b);
+    db.free(&c);
+}
+
 /// Fix #92 (S21): stack_trace() inside a parallel worker must return a non-empty
 /// frame vector.  Before the fix, data_ptr was null and call_stack was empty in
 /// worker threads, so stack_trace() always returned 0 frames.

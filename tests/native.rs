@@ -599,3 +599,39 @@ fn native_scripts() -> std::io::Result<()> {
     }
     run_native_jobs(jobs, rlib_info)
 }
+
+/// N8a: native code generation for tuple types.
+///
+/// Runs `tests/scripts/50-tuples.loft` through the native Rust backend end-to-end.
+/// Ignored until N8a.1 (`rust_type(Type::Tuple)` fix) and N8a.2 (`TupleGet`/`TuplePut`
+/// emit) are implemented.  When un-ignored, `50-tuples.loft` and `46-caveats.loft`
+/// are removed from `SCRIPTS_NATIVE_SKIP`.
+#[test]
+#[ignore = "N8a.1/N8a.2: native tuple codegen incomplete — Type::Tuple emits (), TupleGet uses var number, TuplePut is a stub"]
+fn native_tuple_script() -> std::io::Result<()> {
+    let rlib_info = find_loft_rlib();
+    let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
+    let job = prepare_native_test(entry)?;
+    let compiled = compile_native_job(&job, &rlib_info)?;
+    assert!(compiled, "50-tuples.loft failed to compile under --native");
+    run_native_job(&job)
+}
+
+/// N8a.3: native tuple-returning functions.
+///
+/// The same 50-tuples.loft script will include a tuple-returning function once
+/// N8a.3 is implemented.  This is a placeholder: un-ignored together with
+/// native_tuple_script when the updated script passes.
+#[test]
+#[ignore = "N8a.3: tuple function return not yet added to 50-tuples.loft"]
+fn native_tuple_return_script() -> std::io::Result<()> {
+    let rlib_info = find_loft_rlib();
+    let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
+    let job = prepare_native_test(entry)?;
+    let compiled = compile_native_job(&job, &rlib_info)?;
+    assert!(
+        compiled,
+        "50-tuples.loft (with tuple return) failed to compile under --native"
+    );
+    run_native_job(&job)
+}
