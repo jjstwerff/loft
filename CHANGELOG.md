@@ -307,6 +307,15 @@ All notable changes to the loft language and interpreter.
   directory — so the selected rlib always matches the features the test was compiled
   with.  `tests/docs/14-image.loft` has been removed from `NATIVE_SKIP`.
 
+### Test coverage
+
+- **`single` (f32) type fully covered** — New `tests/scripts/52-single.loft` covers
+  all previously zero-coverage `single` operations: arithmetic (sub, mul, div, rem),
+  all six comparison operators, NaN null semantics and propagation, null coalescing,
+  positive/negative infinity (non-null), conversions (`as single` from integer/float/text;
+  `single as` float/integer/long/text), format specifiers, and NaN-producing casts.
+  The test is registered in `tests/wrap.rs` as `single_type`.
+
 ### New features
 
 - **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now
