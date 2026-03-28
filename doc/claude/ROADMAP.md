@@ -18,7 +18,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — WASM runtime + native extensions + safety gate
 
-W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S23, S26, S27, S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2 completed in 0.8.3.
+W1.1–W1.9 (Rust), A7.1–A7.3, W1.10–W1.13 (JS), S23, S26, S27, S28, S29, S30, S32, N8a.1, N8a.2, N8a.3, N8a.4, N8a.5, N8c.1, N8c.2, S25.1, S25.2, W1.15, W1.17 completed in 0.8.3.
 
 Safety sub-items now confirmed complete: P1-R2 (S29: thread::scope + SAFETY comment in
 `run_parallel_direct`), P1-R3 (S29: `clone_locked_for_worker` omits `claims`), P1-R4 (S29:
@@ -39,9 +39,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | P2-R5     | Coroutine: doc + debug guard — store-backed `Str` at yield | S | ✓  |              | SAFE.md § P2-R5            |
 | P2-R10    | Coroutine: document yielded `Str` ownership rule     | S  | ✓      |              | SAFE.md § P2-R10           |
 | S34       | Interpreter: `20-binary.loft` slot `pos >= TOS` panic | M  | ✓      |              | PLANNING.md § S34                    |
-| W1.15     | WASM: `CallRef` / function references                | S  | ✓      |              | WASM.md § W1.15, #77                 |
 | W1.16     | WASM: file I/O ops                                   | M  | ✓      |              | WASM.md § File I/O, #74              |
-| W1.17     | WASM: locks (`set_store_lock`)                       | S  | ✓      |              | WASM.md § W1.17                      |
 | W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading                  |
 | W1.19     | WASM: random numbers (external crate)                | S  | ✓      |              | WASM.md § Random bridge              |
 | W1.20     | WASM: time functions                                 | S  | ✓      |              | WASM.md § Time bridge                |

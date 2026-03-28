@@ -102,6 +102,21 @@ All notable changes to the loft language and interpreter.
   Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
   freed non-top slot is reused by the next `database()` call and `max` does not grow.
 
+### WASM / native codegen fixes
+
+- **WASM skip for lock functions removed** (W1.17) — `n_get_store_lock` and
+  `n_set_store_lock` are resolved from `loft::codegen_runtime` (listed in
+  `CODEGEN_RUNTIME_FNS` in `generation/mod.rs`), so no `todo!()` stub is emitted.
+  `18-locks.loft` removed from `WASM_SKIP`; the WASM compilation test now exercises
+  `#lock` attribute syntax and `get_store_lock()` / `set_store_lock()`.
+
+- **WASM skip for function references removed** (W1.15) — `output_call_ref` in
+  `emit.rs` generates a `match` dispatch over all reachable definitions with a
+  matching signature, implementing fn-ref calls (`f(args)` where `f: fn(T) -> R`)
+  in native/WASM output.  `06-function.loft` removed from `WASM_SKIP`; the WASM
+  compilation test now exercises function references, lambdas, and higher-order
+  functions (`map`, `filter`, `reduce`).
+
 ### Native test harness fixes
 
 - **`any`, `all`, `count_if` now work in native code generation; `47-predicates.loft` and `46-caveats.loft` unskipped** (N8a.4) —
