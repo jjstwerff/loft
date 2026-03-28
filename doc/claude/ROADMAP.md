@@ -26,14 +26,11 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| S23       | Compiler + runtime: reject `yield` inside `par()`   | S  | ✓      |              | SAFE.md § P2-R6            |
 | S25       | CO1.3d: coroutine text serialisation (atomic)        | L  | ✓      |              | SAFE.md § P2-R1/R2/R3      |
 | S25.1     | ↳ `serialise_text_slots` at create + yield           | M  | ✓      |              | COROUTINE.md § CO1.3d      |
 | S25.2     | ↳ Pointer-patch on resume + `String` drain on return | M  | ✓      | S25.1        | COROUTINE.md § CO1.3d      |
-| S26       | `OpFreeCoroutine` at for-loop exit                   | M  | ✓      |              | SAFE.md § P2-R7            |
-| S27       | Coroutine `text_positions` save/restore on yield     | S  | ✓      |              | SAFE.md § P2-R4            |
 | S28       | Debug generation-counter for stale DbRef in coroutines | M | ✓    |              | SAFE.md § P2-R8            |
-| S29       | Parallel store: `thread::scope` + LIFO assert + skip claims | S | ✓ |             | SAFE.md § P1-R2/R3/R4      |
+| S29       | Parallel store: LIFO free-order assert (P1-R4)       | M  | ✓      |              | SAFE.md § P1-R4            |
 | S30       | `WorkerStores` newtype for type-level non-aliasing   | M  | ✓      | S29          | SAFE.md § P1-R5            |
 | N8a.1     | Native: `Type::Tuple` dispatch in code generator     | S  | ✓      | T1           | NATIVE.md § N8a            |
 | N8a.2     | ↳ Tuple construction and element access              | S  | ✓      | N8a.1        | NATIVE.md § N8a            |

@@ -345,25 +345,14 @@ fn gen_texts() -> iterator<integer> {
 
 ---
 
-## C25 — `yield` inside `par()` body: panic or wrong results
+## C25 — generator functions as `par()` workers: fixed in 0.8.3 (S23)
 
-The compiler does not reject `yield` expressions or generator calls inside a
-`par(...)` body.  At runtime a worker indexes its own (nearly empty) `coroutines`
-table with a `rec` from the main thread.  Out-of-bounds `rec` → Rust panic;
-in-bounds collision → worker silently advances the wrong generator.
+**Fixed in 0.8.3 (S23):** The compiler now rejects iterator-returning functions as
+`par()` workers at parse time with a clear diagnostic. A runtime bounds guard in
+`coroutine_next` panics with an actionable message if an out-of-range coroutine
+DbRef is encountered (defence-in-depth for indirect paths).
 
-**Reproducer:**
-```loft
-fn gen() -> iterator<integer> { yield 1; }
-fn main() {
-  result = par(fn(i: integer) -> integer { next(gen()) }(0..4));
-  // panics or returns wrong values depending on worker coroutine table state
-}
-```
-
-**Test:** none (unsafe to run as a test).
-**Workaround:** never use `yield` or generator calls inside `par(...)` bodies.
-**Planned fix:** S23 in [ROADMAP.md](ROADMAP.md) — `inside_par_body` compiler flag + runtime bounds guard.
+**Test:** `par_worker_returns_generator` in `tests/parse_errors.rs`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R6, [COROUTINE.md](COROUTINE.md) § SC-CO-4.
 
 ---

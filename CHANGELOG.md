@@ -25,6 +25,38 @@ All notable changes to the loft language and interpreter.
   sentinel), a `debug_assert!` fires and the call returns early, preventing
   release-build store corruption even if the compiler check is somehow bypassed.
 
+- **Generator functions rejected as `par()` workers at compile time** (S23) — The
+  parser now detects when a `par()` worker function has return type `iterator<T>` and
+  emits a clear diagnostic instead of allowing the call to proceed.  At runtime,
+  worker threads have their own (empty) coroutine table; passing a generator DbRef
+  across thread boundaries would either panic with an out-of-bounds index or silently
+  advance the wrong generator.  A runtime bounds guard in `coroutine_next` provides
+  defence-in-depth.  Test `par_worker_returns_generator` in `tests/parse_errors.rs`
+  covers the compile-time path.
+
+- **Exhausted coroutine slots freed immediately** (S26) — `coroutine_return` now sets
+  the slot to `None` after marking it `Exhausted`, so the `State::coroutines` Vec does
+  not grow without bound across repeated `for n in gen() { }` loops.  A guard in
+  `coroutine_next` handles the `None` case (push null, return) so existing code that
+  re-iterates is unaffected.  Test `coroutine_frame_freed_after_exhaustion` in
+  `tests/expressions.rs` runs 1 000 loops to confirm no slot leak.
+
+- **Coroutine `text_positions` save/restore across yield (debug builds)** (S27) —
+  In debug builds, `coroutine_yield` now saves the suspended frame's
+  `text_positions` entries and removes them from the live set; `coroutine_next`
+  restores them on resume.  This prevents false double-free warnings and
+  mask-missing-free bugs in `TextStore` ownership tracking when a generator is
+  interleaved with text operations in the caller.  Test
+  `coroutine_text_positions_save_restore` in `tests/expressions.rs`.
+
+- **Parallel worker stores use `thread::scope` and skip `claims` clone** (S29) —
+  `run_parallel_direct` in `src/parallel.rs` now uses `thread::scope` instead of
+  `thread::spawn` + manual join loop, giving lifetime-bounded joining with no `Vec`
+  of handles.  `Store::clone_locked_for_worker` skips cloning the `claims` `HashSet`
+  (workers never call `validate()`) and `store.valid()` skips the claims check for
+  locked stores, removing a spurious "Unknown record" panic that appeared in debug
+  builds when workers accessed struct fields.
+
 ### Native test harness fixes
 
 - **Optional feature dependencies now passed to standalone `rustc`** (S31) — The
