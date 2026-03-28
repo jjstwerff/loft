@@ -1537,8 +1537,15 @@ pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
 pub const NATIVE_COROUTINE_STORE: u16 = 0xFFFD;
 
 /// Return value from `LoftCoroutine::next_i64` when the generator is exhausted.
-/// Chosen as `i64::MIN` because it is outside any representable loft integer.
-pub const COROUTINE_EXHAUSTED: i64 = i64::MIN;
+///
+/// For integer-yielding generators (`iterator<integer>`), the for-loop termination
+/// uses `op_conv_bool_from_int(val as i32)`, which returns `false` only when
+/// `val as i32 == i32::MIN`.  Using `i32::MIN as i64` ensures the cast lands on
+/// the integer null sentinel so the loop breaks correctly.
+///
+/// (Long-yielding generators need `i64::MIN` instead; deferred to N8b.3 — only
+/// integer generators are tested by N8b.1/N8b.2.)
+pub const COROUTINE_EXHAUSTED: i64 = i32::MIN as i64;
 
 /// Trait implemented by every native generator (state-machine struct).
 /// The generated `fn {name}(stores, args) -> Box<dyn LoftCoroutine>` factory

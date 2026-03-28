@@ -122,6 +122,17 @@ All notable changes to the loft language and interpreter.
   to keep the text beyond one iteration must copy it (`stored = "{value}"`) or pass
   it to a function that calls `set_str`.  No runtime change; documentation only.
 
+- **`coroutine_yield` debug guard for text locals** (P2-R3 M8-b) — A
+  `debug_assert!` in `coroutine_yield` (`src/state/mod.rs`) now fires when any live
+  text `String` (tracked via `text_positions`) exists in the generator's locals range
+  at the moment of yield.  CO1.3d (`serialise_text_slots`) is not yet implemented;
+  the raw-bytes copy in the integer-only yield path saves heap pointers that would
+  dangle on resume — silent use-after-free.  The assert is debug-only, adds no
+  overhead in release builds, and uses the existing `text_positions` set.
+  Test `coroutine_text_local_survives_yield` in `tests/expressions.rs` remains
+  `#[ignore]` (CO1.3d pending); the guard fires first, preventing the dangling-pointer
+  path from being exercised silently.
+
 ### Interpreter fixes
 
 - **`20-binary.loft` double-free fixed** (S34) — When `adjust_first_assignment_slot`
@@ -195,6 +206,23 @@ All notable changes to the loft language and interpreter.
   a 4-tuple instead of 3), eliminating the nested block.  Both `47-predicates.loft`
   and `46-caveats.loft` (which uses `any`/`all` internally) removed from
   `SCRIPTS_NATIVE_SKIP`.
+
+- **Native coroutine state-machine code generation** (N8b.1, N8b.2) — Generator
+  functions (`fn foo() -> iterator<integer>`) are now supported by the `--native`
+  Rust backend.  Each generator is translated into a hand-written Rust state-machine
+  struct (e.g. `NCountGen { state: u32, … }`) implementing the new `LoftCoroutine`
+  trait (`fn next_i64(&mut self, stores: &mut Stores) -> i64`).  The coroutine body
+  is split at `yield` nodes into match arms; a catch-all `_ =>` arm returns
+  `COROUTINE_EXHAUSTED` (= `i32::MIN as i64`).  Three new pieces land in
+  `src/codegen_runtime.rs`: the `LoftCoroutine` trait, a thread-local
+  `NATIVE_COROUTINES` table (avoiding changes to `Stores`), `alloc_coroutine`,
+  `coroutine_next_i64`, and `coroutine_is_exhausted`.  Call sites emit
+  `loft::codegen_runtime::alloc_coroutine(foo(stores, args))` via a new
+  `src/generation/coroutine.rs` module.  `OpCoroutineNext` and `OpCoroutineExhausted`
+  are dispatched in `src/generation/dispatch.rs`.  `collect_calls` in
+  `src/generation/mod.rs` now walks `Value::Yield` nodes so helper functions called
+  from yield expressions are included in the reachable set.  `51-coroutines.loft`
+  removed from `SCRIPTS_NATIVE_SKIP`; `native_scripts` passes all 4 generator tests.
 
 - **`45-field-iter.loft` stale skip removed from native test harness** (N8a.5) —
   The `// A10` skip entry for `45-field-iter.loft` in `SCRIPTS_NATIVE_SKIP` was
