@@ -714,6 +714,20 @@ impl State {
         #[cfg(debug_assertions)]
         {
             let locals_range = base..value_start;
+            // P2-R3 M8-b: guard against text locals at yield until CO1.3d lands.
+            // text_positions tracks every live String slot on the stack.  Any entry
+            // in the generator's locals range means a heap pointer is being saved as
+            // raw bytes.  Without CO1.3d (serialise_text_slots), those pointers could
+            // dangle if the allocation is freed before the next resume — use-after-free.
+            // This assert turns the silent mis-feature into a loud early failure.
+            let text_local_count = self.text_positions.range(locals_range.clone()).count();
+            debug_assert!(
+                text_local_count == 0,
+                "P2-R3: coroutine_yield: {text_local_count} live text local(s) in stack \
+                 range [{base}..{value_start}). CO1.3d (serialise_text_slots) is not yet \
+                 implemented; the raw-bytes copy saves heap pointers that could dangle on \
+                 resume.  See SAFE.md § P2-R3 and PLANNING.md § S25.",
+            );
             let to_save: std::collections::BTreeSet<u32> =
                 self.text_positions.range(locals_range).copied().collect();
             for p in &to_save {
