@@ -694,6 +694,17 @@ impl State {
             // adjust_first_assignment_slot handles this by moving the slot down to TOS.
             Self::adjust_first_assignment_slot(stack, v, pos);
             let pos = stack.function.stack(v);
+            // S34 Option A: adjust_first_assignment_slot may leave pos > stack.position
+            // when has_sibling_overlap blocks the downward move.  The sibling causing the
+            // block has not yet been allocated (it occupies the same pre-assigned slot in
+            // the slot allocator's plan), so placing this variable at current TOS is safe.
+            // Reset pos to TOS; the sibling will advance TOS when it is allocated in turn.
+            let pos = if pos > stack.position {
+                stack.function.set_stack_pos(v, stack.position);
+                stack.position
+            } else {
+                pos
+            };
             if pos == stack.position {
                 // Slot is at current TOS — use direct placement (same as old claim() path).
                 // Large types (text, refs, vectors) always land here; non-reusing primitives too.
