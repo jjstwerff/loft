@@ -491,6 +491,86 @@ fn coroutine_yield_from() {
     .result(Value::Int(33));
 }
 
+// ── S23 — runtime guard in coroutine_next ─────────────────────────────────────
+
+/// S23/P1-R2 runtime guard: coroutine_next must bounds-check idx before indexing
+/// self.coroutines.  When a COROUTINE_STORE DbRef escapes into a worker thread its
+/// rec value indexes the WORKER's (empty) coroutines table → out-of-bounds panic.
+/// After the fix a clear attributed message fires instead of a bare index panic.
+#[test]
+#[ignore = "S23: runtime bounds guard in coroutine_next not yet implemented"]
+fn coroutine_next_bounds_guard() {
+    // The guard is a defense-in-depth measure: the compiler check (once S23 is
+    // fully done) should prevent this from happening.  Here we verify the message
+    // is clear if it ever does occur.  Tested via should_panic on a synthetic path.
+    // Until the check is implemented this test is left ignored.
+}
+
+// ── S26 — exhausted coroutine frames freed on return ──────────────────────────
+
+/// S26: after a for-loop exhausts a generator, coroutine_return should call
+/// free_coroutine(idx) so the slot is set to None.  Running many generators in
+/// succession must not grow State::coroutines unboundedly.
+#[test]
+#[ignore = "S26: coroutine_return does not yet free the frame slot — memory grows unboundedly with many generators"]
+fn coroutine_frame_freed_after_exhaustion() {
+    code!(
+        "fn up_to_two() -> iterator<integer> { yield 1; yield 2; }
+         fn sum_many() -> integer {
+             total = 0;
+             for _ in 0..1000 { for n in up_to_two() { total += n; } }
+             total
+         }"
+    )
+    .expr("sum_many()")
+    .result(Value::Int(3000));
+}
+
+// ── S27 — text_positions save/restore across yield/resume ─────────────────────
+
+/// S27: text_positions entries for suspended generator locals must be removed
+/// at yield and re-inserted at resume.  Without the fix, stale entries after
+/// yield mask missing OpFreeText calls in the consumer (false-clean), and can
+/// cause false double-free panics in debug builds when consumer text locals land
+/// at the same absolute stack positions as the generator's locals.
+#[test]
+#[ignore = "S27: text_positions not yet saved/restored across yield — may cause false double-free in debug builds"]
+fn coroutine_text_positions_save_restore() {
+    // Consumer builds a text result while iterating a generator that yields
+    // between text operations.  The text is produced in the consumer, not the
+    // generator, so the test is valid before S25 (text serialisation) is done.
+    code!(
+        "fn gen_ints() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn build_text() -> text {
+             result = '';
+             for n in gen_ints() { result = result + '{n}'; }
+             result
+         }"
+    )
+    .expr("build_text()")
+    .result(Value::Text("123".into()));
+}
+
+// ── S29 — parallel store: thread::scope + skip claims ─────────────────────────
+
+/// S29/P1-R2+P1-R3: run_parallel_direct with thread::scope and claims-free
+/// worker clones must produce the same results as the old thread::spawn path.
+#[test]
+#[ignore = "S29: thread::scope and clone_locked_for_worker not yet implemented"]
+fn parallel_for_thread_scope_results() {
+    code!(
+        "fn double(x: integer) -> integer { x * 2 }
+         fn run_par() -> integer {
+             items = [1, 2, 3, 4, 5];
+             total = 0;
+             for a in items par(b = double(a), 2) { total += b; }
+             total
+         }"
+    )
+    .expr("run_par()")
+    .result(Value::Int(30));
+}
+
 // ── S22 — claim/delete on a locked store panics in all build profiles ─────────
 
 #[test]
