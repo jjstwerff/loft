@@ -480,6 +480,30 @@ fn coroutine_text_param_survives_yield() {
     .result(Value::Int(10));
 }
 
+// P2-R3: text LOCAL survives yield — requires CO1.3d serialise_text_slots
+#[test]
+#[ignore = "P2-R3: CO1.3d text-local serialisation at yield not yet implemented; M8-b debug_assert fires until serialise_text_slots lands — see SAFE.md § P2-R3 and PLANNING.md § S25"]
+fn coroutine_text_local_survives_yield() {
+    // P2-R3: a generator that builds a text LOCAL (not a parameter) and yields.
+    // CO1.3d must serialise the local String to text_owned at yield and restore
+    // the pointer on resume; until then the raw bytes path leaves a dangling ptr.
+    code!(
+        "fn gen_words() -> iterator<text> {
+            word = \"hello\";
+            yield word;
+            word = \"world\";
+            yield word;
+         }
+         fn joined() -> text {
+            result = \"\";
+            for w in gen_words() { result += w; result += \" \"; }
+            result
+         }"
+    )
+    .expr("joined()")
+    .result(Value::str("hello world "));
+}
+
 // ── CO1.4 — yield from delegation ───────────────────────────────────────────
 
 // ── T1.7 — `integer not null` annotation for tuple elements ─────────────────
