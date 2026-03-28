@@ -222,6 +222,17 @@ All notable changes to the loft language and interpreter.
   and `46-caveats.loft` (which uses `any`/`all` internally) removed from
   `SCRIPTS_NATIVE_SKIP`.
 
+- **Native coroutine `yield from` delegation** (N8b.3) — `yield from sub_gen()`
+  now works in native-compiled generators.  The sub-generator is stored as
+  `Option<Box<dyn LoftCoroutine>>` directly in the outer struct, avoiding the
+  `NATIVE_COROUTINES` `RefCell` that would cause a "RefCell already borrowed" panic
+  when the outer `next_i64` tries to advance the inner generator.  The outer
+  `next_i64` body is wrapped in a `loop {}` when yield-from segments are present;
+  exhausted sub-generators set the next state and `continue` immediately.  Factory
+  functions for sub-generators are called directly (not via `alloc_coroutine`) so
+  sub-generators are never registered in the shared table.  CO1.4 test in
+  `51-coroutines.loft` (`outer_with_from` producing 1+10+20+2 = 33) now passes.
+
 - **Native coroutine state-machine code generation** (N8b.1, N8b.2) — Generator
   functions (`fn foo() -> iterator<integer>`) are now supported by the `--native`
   Rust backend.  Each generator is translated into a hand-written Rust state-machine
