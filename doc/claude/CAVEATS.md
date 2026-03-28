@@ -220,21 +220,23 @@ are tracked via `init_field_tracking`/`init_field_deps` on the parser, and
 
 ---
 
-## C19 — Native codegen: all language features now supported *(fixed in 0.8.3)*
+## C19 — Native codegen: coroutines interpreter-only
 
-The `--native` backend now supports all previously-missing language features:
+The `--native` backend does not support all language features:
 
 | Feature | Interpreter | `--native` |
 |---------|-------------|-----------|
 | Tuple types (`(integer, float)`) | Yes | **Fixed** (N8a, 0.8.3) |
-| Coroutines (`yield`, `iterator<T>`) | Yes | **Fixed** (N8b, 0.8.3) |
+| Coroutines (`yield`, `iterator<T>`) | Yes | No |
 | Generic functions (`fn f<T>`) | Yes | **Fixed** (N8c, 0.8.3) |
 
-`SCRIPTS_NATIVE_SKIP` and `NATIVE_SKIP` in `tests/native.rs` are both empty.
+Coroutine scripts remain skipped from the native test suite
+(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Tuples and generics now pass.
 
-**Tests:** `51-coroutines.loft` — passes in both interpreter and native.
-`50-tuples.loft`, `48-generics.loft` — pass in both.
-**Fixed by:** N8a (tuples), N8b (coroutines: state-machine transform), N8c (generics).
+**Test:** `tests/scripts/51-coroutines.loft` — passes in interpreter, skipped in native.
+`50-tuples.loft` — removed from skip list (N8a, 0.8.3).  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
+**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use coroutines.
+**Planned fix:** N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
 
 ---
 
@@ -297,21 +299,35 @@ causes a dangling pointer.
 
 ---
 
-## C24 — Coroutine text locals: memory leak on early `break`
+## C24 — Coroutine with `text` locals: memory leak on exhaustion
 
-**Fixed in 0.8.3 (S25.1/S25.2/S25.3).**
+**Partially fixed (S25.2, 0.8.3) — text args now freed; text locals still leak**
 
-Text locals (`word = "hello"` inside a generator) are `String` objects on the
-generator's live stack.  The early-break path (`for item in gen { break; }`)
-previously leaked every live text local in `frame.stack_bytes`.
+Text args held in `frame.text_owned` are now properly freed at exhaustion:
+`coroutine_return` calls `frame.text_owned.clear()`, which drops the owned
+Strings via RAII.  Before S25.1 landed, `text_owned` was always empty; now it
+contains the serialised text args, so the drain is effective.
 
-Fix (S25.3): `free_coroutine` now calls `drop_text_locals_in_bytes` for Suspended
-frames, which drops each text-local String whose slot is within the `stack_bytes`
-snapshot.  A prerequisite `generator_zone2_size` zeroing at first resume establishes
-the null-ptr invariant so unassigned slots are safely skipped.
+Text LOCAL variables (e.g. `greeting = "hello, " ++ name`) are `String` objects
+stored inline on the generator's live stack.  The `coroutine_yield` path does not
+yet serialise them into `text_owned` (CO1.3d yield path not implemented).  At
+`coroutine_return`, these live-stack Strings are abandoned — their heap allocations
+are leaked.  This affects every generator that has at least one text local and
+yields at least once.
 
-**Tests:** `coroutine_text_local_early_break`, `coroutine_text_local_declared_after_first_yield`.
-**Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3, [PLANNING.md](PLANNING.md) § S25.3.
+**Reproducer (still open):**
+```loft
+fn gen_texts() -> iterator<integer> {
+  greeting = "hello";  // text local on the generator stack
+  yield 1;
+  // exhaustion: greeting's String heap allocation still leaks
+}
+```
+
+**Test:** none for the remaining leak (requires allocator leak detection).
+**Workaround:** avoid text locals in generators where memory pressure matters.
+**Remaining fix:** CO1.3d yield path — `serialise_text_slots` at `coroutine_yield`.
+**Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3.
 
 ---
 
@@ -391,8 +407,11 @@ emitting an `OpFreeRef` for the aliased variable, eliminating the double-free th
 the "Double free store" panic in the bytecode interpreter.
 
 **Test (interpreter):** `20-binary.loft` passes in `cargo test --test wrap` (S34).
-**Test (native):** `native_binary_script` in `tests/native.rs` — passes.
-`SCRIPTS_NATIVE_SKIP` is now empty; the Insert-return native codegen issue was resolved.
+**Test (native):** in `SCRIPTS_NATIVE_SKIP` — native codegen emits malformed Rust for the
+`Set(rv, Insert([Set(_read_34, Null), Block]))` pattern.  Before S34, `validate_slots`
+panicked during `byte_code()`, which `catch_unwind` caught and converted to a silent skip.
+After S34's bytecode fix the panic is gone, so the pre-existing native codegen bug for the
+Insert-return pattern is now visible.  Tracked in `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`.
 **Fixed by:** S32 — `has_sibling_overlap` (interpreter + native slot assignment); S34 —
 `skip_free` + suppressed `OpFreeRef` in `generate_call` (interpreter double-free only).
 
