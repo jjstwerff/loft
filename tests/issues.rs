@@ -1044,9 +1044,9 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
-// P1.1: lambda with no return type (void).
+// P1.1: lambda with no return type (void).  A5.6c: write-backs make the
+// outer `count` reflect mutations performed inside the lambda body.
 #[test]
-#[ignore = "A5: lambda captures outer variable 'count' — requires closure capture (A5, 1.1+)"]
 fn p1_1_lambda_void_body() {
     code!(
         "fn test() {
@@ -1056,6 +1056,10 @@ fn p1_1_lambda_void_body() {
     f(32);
     assert(count == 42, \"expected 42, got {count}\");
 }"
+    )
+    .warning(
+        "closure record '__closure_0' created with 1 field: count(integer) \
+         at p1_1_lambda_void_body:3:40",
     )
     .result(loft::data::Value::Null);
 }
@@ -1295,6 +1299,26 @@ struct Container { data: hash<Item[key]> }
 fn test() { }"
     )
     .error("Struct 'Item' has a field named 'key' which is reserved for hash iteration — rename the field at s8_hash_value_struct_key_field_rejected:1:14");
+}
+
+// ── P2-R6 — Compiler check: yield inside par() body ──────────────────────────
+// A coroutine generator cannot yield inside a par() parallel body because the
+// worker executes in a separate thread with its own store — there is no safe
+// way to resume the parent coroutine from within a worker.
+// Fix: `in_par_body` flag in Parser; error emitted when `yield` is encountered
+// inside a parallel-for worker function body.
+
+#[test]
+fn p2_r6_yield_inside_par_body_rejected() {
+    code!(
+        "fn gen(items: vector<integer>) -> iterator<integer> {
+    for a in items par(b = double(a), 1) {
+        yield b;
+    }
+}
+fn double(x: integer) -> integer { x * 2 }"
+    )
+    .error("yield is not allowed inside a par(...) parallel body at p2_r6_yield_inside_par_body_rejected:3:16");
 }
 
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────

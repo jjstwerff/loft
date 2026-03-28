@@ -659,7 +659,6 @@ fn local_not_captured() {
 
 /// A5.2: closure record is synthesized with the correct captured variable.
 #[test]
-#[ignore = "A5.4: mutable capture (count += x) not yet supported — codegen panics on self-reference"]
 fn closure_record_single_capture() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
@@ -670,7 +669,6 @@ fn closure_record_single_capture() {
 
 /// A5.2: multiple captures produce a record with multiple fields.
 #[test]
-#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
 fn closure_record_multi_capture() {
     // A5.3: multi-capture — captured reads redirect to closure record fields.
     // No more "Unknown variable" errors thanks to the pre-has_var redirect.
@@ -691,6 +689,25 @@ fn generator_remove_rejected() {
          fn test() { for n in gen() { n#remove; } }"
     )
     .error("'n#remove' is only valid on a loop iteration variable (e.g. 'for n in collection { n#remove }') at generator_remove_rejected:2:48");
+}
+
+// ── Fix #91 — Circular init detection ────────────────────────────────────────
+
+// ── S23 — reject generator functions as par() workers ────────────────────────
+
+/// S23: a worker function whose return type is iterator<T> must be rejected at
+/// compile time.  Worker threads run inside par() and cannot advance coroutines
+/// from the main thread — calling coroutine_next on an out-of-range index panics.
+#[test]
+fn par_worker_returns_generator() {
+    code!(
+        "fn gen_worker(x: integer) -> iterator<integer> { yield x; }
+         fn test() {
+             items = [1, 2, 3];
+             for a in items par(b = gen_worker(a), 1) { assert(b > 0); }
+         }"
+    )
+    .error("parallel worker 'gen_worker' returns iterator(integer(-2147483647, 2147483647, false), null) — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────

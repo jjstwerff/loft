@@ -1062,6 +1062,15 @@ impl IterState for i64 {
 ///
 /// Bytecode equivalent: `State::remove` in `src/state/io.rs`.
 pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
+    // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
+    // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
+    debug_assert!(
+        data.store_nr != u16::MAX,
+        "e#remove on coroutine DbRef — compiler check should have rejected this"
+    );
+    if data.store_nr == u16::MAX {
+        return;
+    }
     let cur = state.get_cur();
     let reverse = (on & 64) != 0;
     match on & 63 {
@@ -1181,6 +1190,7 @@ pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
     }
     #[cfg(not(feature = "random"))]
     {
+        let _ = (lo, hi);
         i32::MIN
     }
 }
@@ -1239,18 +1249,10 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 }
 
 /// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i32::MIN` (null) when `lo > hi` or when the `random` feature is disabled.
+/// Returns `i32::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
 pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
-    #[cfg(feature = "random")]
-    {
-        crate::ops::rand_int(lo, hi)
-    }
-    #[cfg(not(feature = "random"))]
-    {
-        let _ = (lo, hi);
-        i32::MIN
-    }
+    cr_rand_int(lo, hi)
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
@@ -1263,9 +1265,12 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
     } else {
         n as usize
     };
-    // Build shuffled index list.
+    // Build shuffled index list.  shuffle_ints is available under feature="random"
+    // (PCG64 RNG) and feature="wasm" (host_random_int bridge); without either the
+    // indices are returned in ascending order.
+    #[allow(unused_mut)]
     let mut indices: Vec<i32> = (0..count as i32).collect();
-    #[cfg(feature = "random")]
+    #[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
     crate::ops::shuffle_ints(&mut indices);
     // Allocate: vec_rec holds size + data, header_rec holds pointer to vec_rec.
     let base = stores.null();
@@ -1522,4 +1527,92 @@ pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
         })
         .get_byte(v_rec, 8 + idx as u32, 0)
         != 0
+}
+
+// ── N8b.1: Native coroutine runtime ─────────────────────────────────────────
+
+/// Sentinel `store_nr` for `DbRef`s that point to native coroutine generators.
+/// Must not clash with any real `Stores` allocation (stores use 0..`Stores::max`).
+pub const NATIVE_COROUTINE_STORE: u16 = 0xFFFD;
+
+/// Return value from `LoftCoroutine::next_i64` when the generator is exhausted.
+///
+/// For integer-yielding generators (`iterator<integer>`), the for-loop termination
+/// uses `op_conv_bool_from_int(val as i32)`, which returns `false` only when
+/// `val as i32 == i32::MIN`.  Using `i32::MIN as i64` ensures the cast lands on
+/// the integer null sentinel so the loop breaks correctly.
+///
+/// (Long-yielding generators need `i64::MIN` instead; deferred to N8b.3 — only
+/// integer generators are tested by N8b.1/N8b.2.)
+pub const COROUTINE_EXHAUSTED: i64 = i32::MIN as i64;
+
+/// Trait implemented by every native generator (state-machine struct).
+/// The generated `fn {name}(stores, args) -> Box<dyn LoftCoroutine>` factory
+/// constructs an instance; `alloc_coroutine` stores it and returns a `DbRef`.
+pub trait LoftCoroutine {
+    /// Advance the generator one step.  Returns the yielded value as `i64`,
+    /// or `COROUTINE_EXHAUSTED` when no further values are available.
+    fn next_i64(&mut self, stores: &mut Stores) -> i64;
+}
+
+std::thread_local! {
+    /// Per-thread storage for native coroutine instances.
+    /// Slot 0 is always `None` and acts as the null sentinel.
+    static NATIVE_COROUTINES: std::cell::RefCell<Vec<Option<Box<dyn LoftCoroutine>>>> =
+        std::cell::RefCell::new(vec![None]);
+}
+
+/// Store a native coroutine generator and return a `DbRef` that identifies it.
+#[must_use]
+pub fn alloc_coroutine(coro: Box<dyn LoftCoroutine>) -> DbRef {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        for (i, slot) in coroutines.iter_mut().enumerate().skip(1) {
+            if slot.is_none() {
+                *slot = Some(coro);
+                return DbRef {
+                    store_nr: NATIVE_COROUTINE_STORE,
+                    rec: i as u32,
+                    pos: 0,
+                };
+            }
+        }
+        let idx = coroutines.len();
+        coroutines.push(Some(coro));
+        DbRef {
+            store_nr: NATIVE_COROUTINE_STORE,
+            rec: idx as u32,
+            pos: 0,
+        }
+    })
+}
+
+/// Advance a native coroutine and return the yielded value as `i64`.
+/// Frees the coroutine slot automatically when it is exhausted.
+pub fn coroutine_next_i64(gen_ref: DbRef, stores: &mut Stores) -> i64 {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        let idx = gen_ref.rec as usize;
+        if let Some(slot) = coroutines.get_mut(idx)
+            && let Some(coro) = slot.as_mut()
+        {
+            let val = coro.next_i64(stores);
+            if val == COROUTINE_EXHAUSTED {
+                coroutines[idx] = None; // free on exhaustion (P2-R7 parity)
+            }
+            val
+        } else {
+            COROUTINE_EXHAUSTED
+        }
+    })
+}
+
+/// Test whether a native coroutine has been exhausted (its slot freed).
+#[must_use]
+pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
+    NATIVE_COROUTINES.with(|c| {
+        let coroutines = c.borrow();
+        let idx = gen_ref.rec as usize;
+        coroutines.get(idx).is_none_or(Option::is_none)
+    })
 }

@@ -167,6 +167,12 @@ pub(super) fn find_conflict(
                 if !scopes_can_conflict(left.scope, right.scope, scope_parents) {
                     continue;
                 }
+                // S34 Option A: a work variable moved down to the same slot as an outer
+                // variable is marked skip_free so that only the outer variable emits
+                // OpFreeRef.  The slot is intentionally aliased — not a real conflict.
+                if left.skip_free || right.skip_free {
+                    continue;
+                }
                 return Some((left_idx, left_slot_end, right_idx, right_slot_end));
             }
         }

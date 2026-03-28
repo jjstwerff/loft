@@ -748,6 +748,34 @@ suspended frame holds stale coordinates.
 (CL-2); the caller must not free records that a suspended generator still
 references.
 
+**P2-R5 — Text-specific variant: store-backed `Str` at yield**
+
+When a generator reads a text field from a store record, the resulting `Str`
+value is a zero-copy pointer directly into the store's raw allocation
+(`{ ptr: store.ptr + rec*8 + 8, len }`).  If this `Str` is live in a local at
+a `yield` point, `stack_bytes` encodes the raw pointer.
+
+If the consumer:
+1. Deletes the record (`database.free(r)` / `store.delete(rec)`), OR
+2. Frees the entire store (`database.free(db_ref)`)
+
+…between the yield and the next resume, and the store word is subsequently
+reused for different data, the `Str.ptr` in `stack_bytes` points to unrelated
+bytes — **silent data corruption** on resume.
+
+**Invariant (CL-2b):** Any `Str` value derived from a store record field (via
+`store.get_str()` or equivalent) must be treated as a borrow of the store's
+memory.  If such a `Str` is live at a `yield` point, the caller must not delete
+the backing record or free the store before the generator is exhausted or the
+local is overwritten.
+
+This is more dangerous than the `DbRef` case (SC-CO-2) because a `Str` looks
+like a plain value, not an obvious reference.
+
+**Long-term fix:** CO1.3d's `serialise_text_slots` (P2-R3) will deep-copy
+store-derived `Str` values into owned `String` objects at yield time, eliminating
+this class entirely.
+
 ---
 
 ### SC-CO-3 — Re-entrant advance corrupts the live stack
@@ -1099,6 +1127,8 @@ Implement the suspend/resume cycle.
 |---|---|---|
 | CL-1 | `next()` returns null for both exhaustion and a yielded null value — indistinguishable | Use the `for` loop (which tracks exhaustion separately), or wrap `T` in a struct with an `is_null: boolean` field |
 | CL-2 | DbRef locals held across a yield dangle if the caller frees or reallocates the referenced record | Do not free records that a suspended generator still holds; advance the generator to exhaustion first |
+| CL-2b | A `text` value derived from a store record field (store-backed `Str`) that is live at a `yield` point will dangle if the consumer frees or reuses the backing store record before the next resume | Do not delete the backing record or free the store while the generator is suspended with a store-derived text local; CO1.3d will deep-copy these at yield time once implemented (P2-R3) |
+| CL-7 | A `text` value produced by `yield` is a zero-copy reference into the generator's frame (or into a `text_owned` buffer once CO1.3d lands); it is valid only for the current loop body iteration (or until the next `next()` call for explicit-advance code) | To keep the text beyond one iteration, copy it: `stored = "{value}"` or pass it to a function that calls `set_str` |
 | CL-3 | Exhausted frames are not freed until the `iterator<T>` DbRef goes out of scope; without GC, frames are leaked if the variable is abandoned | Ensure every generator is run to exhaustion, or call `drop(gen)` once implemented |
 | CL-4 | Generator `iterator<T>` values must not cross `par(...)` boundaries | Accumulate parallel results in a collection, then iterate the collection outside `par(...)` |
 | CL-5 | Serialisation cost per yield is O(frame depth); deeply recursive `yield from` chains are slow | Flatten recursive generators iteratively using an explicit `vector` stack local |

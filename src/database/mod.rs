@@ -112,6 +112,11 @@ pub struct Stores {
     #[cfg(feature = "wasm")]
     pub files: Vec<()>,
     pub max: u16,
+    /// S29 (P1-R4 M4-b): bitmap of free store slots — bit `i` is set when `allocations[i]`
+    /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
+    /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
+    /// requirement on `free()` that the old cascade-based scan imposed.
+    pub free_bits: Vec<u64>,
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.
     pub scratch: Vec<String>,
@@ -158,6 +163,7 @@ impl Clone for Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: self.max,
+            free_bits: Vec::new(),
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
             parallel_ctx: None,
@@ -180,6 +186,41 @@ impl Clone for Stores {
 // makes concurrent shared access safe.
 unsafe impl Send for Stores {}
 unsafe impl Sync for Stores {}
+
+/// Type-level proof that a [`Stores`] was produced by [`Stores::clone_for_worker`]
+/// and belongs to exactly one worker thread.
+///
+/// `WorkerStores` is `Send` (movable to a worker thread) but intentionally not
+/// `Sync` (cannot be shared across threads).  The `PhantomData<*mut ()>` field
+/// suppresses the auto-derived `Sync` implementation; the explicit `Send`
+/// implementation restores send-ability.  This ensures that passing a worker
+/// snapshot to `State::new_worker` at the call site is a compile-time guarantee
+/// rather than a runtime convention.
+pub struct WorkerStores {
+    pub(crate) stores: Stores,
+    _not_sync: std::marker::PhantomData<*mut ()>,
+}
+
+// SAFETY: each worker thread receives exclusive ownership of its WorkerStores.
+// The inner Stores is a locked snapshot of main-thread data; workers never
+// access the main thread's mutable state through this value.
+unsafe impl Send for WorkerStores {}
+
+impl WorkerStores {
+    pub(crate) fn new(stores: Stores) -> Self {
+        WorkerStores {
+            stores,
+            _not_sync: std::marker::PhantomData,
+        }
+    }
+}
+
+impl std::ops::Deref for WorkerStores {
+    type Target = Stores;
+    fn deref(&self) -> &Stores {
+        &self.stores
+    }
+}
 
 struct ParseKey {
     // The current line on the source data. Only relevant if that has a pretty print format.
@@ -374,6 +415,7 @@ impl Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: 0,
+            free_bits: Vec::new(),
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
             parallel_ctx: None,

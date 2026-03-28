@@ -43,11 +43,6 @@ The native registry has 57 functions; only 18 are exercised. Uncovered groups:
 - Trig on very large angles (precision loss)
 - `pow(0, 0)` → `1`; `pow(-1, 0.5)` → `NaN`
 
-**`single` (f32) arithmetic** — no test uses `single` type at all:
-- `add_single`, `mul_single`, `div_single`, `rem_single`
-- NaN / Infinity propagation for f32 (different precision than f64)
-- Comparison epsilon: `0.000001` for single vs `0.000000001` for float
-
 **Text-to-number parsing**:
 - `"abc" as integer` — what is returned?
 - `"123abc" as integer` — partial parse result?
@@ -247,10 +242,9 @@ Add to `tests/log_config.rs`:
 4. **Type conversion edge cases** — `expressions_auto_convert.rs` additions; no new infrastructure.
 5. **Database store boundaries** — `limits.rs` or `issues.rs`; important for correctness under real workloads.
 6. **Float comparison epsilon** — 4 targeted assertions; very low effort.
-7. **`single` (f32) arithmetic** — requires adding `single` type tests; medium effort.
-8. **Parser stress / error recovery** — new `parser_stress.rs`; medium effort, high value for robustness.
-9. **Logger paths** — low risk; add to existing `log_config.rs`.
-10. **`codegen_runtime.rs`** — large effort (requires generation pipeline harness); defer until generation is more stable.
+7. **Parser stress / error recovery** — new `parser_stress.rs`; medium effort, high value for robustness.
+8. **Logger paths** — low risk; add to existing `log_config.rs`.
+9. **`codegen_runtime.rs`** — large effort (requires generation pipeline harness); defer until generation is more stable.
 
 ---
 

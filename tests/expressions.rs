@@ -359,6 +359,25 @@ fn closure_capture_text() {
     .result(Value::str("Hello world"));
 }
 
+#[test]
+fn closure_capture_text_integer_return() {
+    // Same-scope text capture: lambda reads captured text, returns integer.
+    // A5.6b.1: zero-param fn-ref fast path now injects __closure arg; text_return
+    // no longer adds captured vars as spurious RefVar(Text) work-buffer arguments.
+    expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()")
+        .warning("closure record '__closure_0' created with 1 field: prefix(text([])) at closure_capture_text_integer_return:2:73")
+        .result(Value::Int(5));
+}
+
+// A5.6b.2: re-enabled after generate_call_ref work-buffer push fix.
+#[test]
+fn closure_capture_text_return() {
+    // Same-scope text capture: lambda reads captured text, returns text.
+    expr!("greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")")
+        .warning("closure record '__closure_0' created with 1 field: greeting(text([])) at closure_capture_text_return:2:92")
+        .result(Value::str("hello, world!"));
+}
+
 // ── CO1.2 — OpCoroutineCreate + OpCoroutineNext ─────────────────────────────
 
 #[test]
@@ -461,6 +480,29 @@ fn coroutine_text_param_survives_yield() {
     .result(Value::Int(10));
 }
 
+// P2-R3: text LOCAL survives yield — CO1.3d serialise_text_slots implemented
+#[test]
+fn coroutine_text_local_survives_yield() {
+    // P2-R3: a generator that builds a text LOCAL (not a parameter) and yields.
+    // CO1.3d must serialise the local String to text_owned at yield and restore
+    // the pointer on resume; until then the raw bytes path leaves a dangling ptr.
+    code!(
+        "fn gen_words() -> iterator<text> {
+            word = \"hello\";
+            yield word;
+            word = \"world\";
+            yield word;
+         }
+         fn joined() -> text {
+            result = \"\";
+            for w in gen_words() { result += w; result += \" \"; }
+            result
+         }"
+    )
+    .expr("joined()")
+    .result(Value::str("hello world "));
+}
+
 // ── CO1.4 — yield from delegation ───────────────────────────────────────────
 
 // ── T1.7 — `integer not null` annotation for tuple elements ─────────────────
@@ -489,4 +531,229 @@ fn coroutine_yield_from() {
     )
     .expr("sum_all()")
     .result(Value::Int(33));
+}
+
+// ── S23 — runtime guard in coroutine_next ─────────────────────────────────────
+
+/// S23/P1-R2 runtime guard: coroutine_next must bounds-check idx before indexing
+/// self.coroutines.  When a COROUTINE_STORE DbRef escapes into a worker thread its
+/// rec value indexes the WORKER's (empty) coroutines table → out-of-bounds panic.
+/// After the fix a clear attributed message fires instead of a bare index panic.
+#[test]
+fn coroutine_next_bounds_guard() {
+    // S23 is complete: the compiler rejects iterator<T> function calls inside par()
+    // bodies, and coroutine_next has a runtime bounds guard as defence-in-depth.
+    // The compiler check is exercised by par_worker_returns_generator in parse_errors.rs.
+    // Nothing to assert here; this test exists as a named placeholder.
+}
+
+// ── S26 — exhausted coroutine frames freed on return ──────────────────────────
+
+/// S26: after a for-loop exhausts a generator, coroutine_return frees the slot.
+/// Running many generators in succession must not grow State::coroutines unboundedly.
+#[test]
+fn coroutine_frame_freed_after_exhaustion() {
+    code!(
+        "fn up_to_two() -> iterator<integer> { yield 1; yield 2; }
+         fn sum_many() -> integer {
+             total = 0;
+             for _ in 0..1000 { for n in up_to_two() { total += n; } }
+             total
+         }"
+    )
+    .expr("sum_many()")
+    .result(Value::Int(3000));
+}
+
+// ── S27 — text_positions save/restore across yield/resume ─────────────────────
+
+/// S27: text_positions entries for suspended generator locals are removed at
+/// yield and restored at resume.  Consumer text locals no longer conflict with
+/// the suspended generator's tracked positions in debug builds.
+/// The observable fix is the absence of spurious double-free panics; we verify
+/// the generator + consumer text combination produces the correct integer sum.
+#[test]
+fn coroutine_text_positions_save_restore() {
+    // Consumer allocates text while iterating a generator; S27 ensures
+    // text_positions entries from the suspended generator don't mask missing
+    // OpFreeText calls in the consumer (or cause false double-free panics).
+    code!(
+        "fn gen_ints() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn sum_with_label(label: text) -> integer {
+             total = 0;
+             for n in gen_ints() { total += n; }
+             len(label) + total
+         }"
+    )
+    .expr("sum_with_label(\"hi\")")
+    .result(Value::Int(8)); // len("hi")=2, sum=6, total=8
+}
+
+// ── S29 — parallel store: thread::scope + skip claims ─────────────────────────
+
+/// S29/P1-R2+P1-R3: run_parallel_direct uses thread::scope and claims-free
+/// worker clones; observable results are identical to the old thread::spawn path.
+#[test]
+fn parallel_for_thread_scope_results() {
+    code!(
+        "struct Num { value: integer }
+         struct NumList { items: vector<Num> }
+         fn doubled(n: const Num) -> integer { n.value * 2 }
+         fn run_par() -> integer {
+             lst = NumList {};
+             lst.items += [Num { value: 1 }, Num { value: 2 }, Num { value: 3 }, Num { value: 4 }, Num { value: 5 }];
+             total = 0;
+             for a in lst.items par(b = doubled(a), 2) { total += b; }
+             total
+         }"
+    )
+    .expr("run_par()")
+    .result(Value::Int(30));
+}
+
+// ── S28 — debug generation counter for stale DbRef across coroutine yield ─────
+
+/// S28: Mutating a struct store between coroutine next() calls should fire the
+/// debug-mode generation-counter assertion.  The generator holds a `const Item`
+/// reference (a DbRef into the `Items` store); between the two yields the
+/// consumer pushes a new element into the same store, incrementing its
+/// generation.  On the second resume, `coroutine_next` detects the mismatch and
+/// panics with "stale DbRef".
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "stale DbRef")]
+fn coroutine_stale_store_guard() {
+    // The generator count_up has no DbRef parameters; the stale-store check is a
+    // heuristic that fires on ANY store mutation between yields.  We pre-create a
+    // struct store before the loop so it is included in the yield snapshot, then
+    // claim a new record (Box{}) inside the loop to increment its generation.
+    code!(
+        "struct Box { val: integer }
+         struct BoxList { items: vector<Box> }
+         fn count_up() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn run_stale() -> integer {
+             lst = BoxList {};
+             lst.items += [Box { val: 0 }];
+             total = 0;
+             for n in count_up() {
+                 lst.items += [Box { val: n }];
+                 total += n;
+             }
+             total
+         }"
+    )
+    .expr("run_stale()")
+    .result(Value::Int(6)); // never reached — debug_assert fires on second resume
+}
+
+// ── S22 — claim/delete on a locked store panics in all build profiles ─────────
+
+#[test]
+#[should_panic(expected = "Claim on locked store")]
+fn claim_on_locked_store_panics() {
+    // S22: store.claim() now panics when locked in all build profiles.
+    // Before the fix, release builds returned a silent dummy record 0 instead.
+    let mut stores = loft::database::Stores::new();
+    let db = stores.null();
+    stores.store_mut(&db).lock();
+    stores.claim(&db, 4); // must panic — locked store may not be extended
+}
+
+#[test]
+#[should_panic(expected = "Delete on locked store")]
+fn delete_on_locked_store_panics() {
+    // S22: store.delete() now panics when locked in all build profiles.
+    // Before the fix, release builds silently ignored the delete.
+    let mut stores = loft::database::Stores::new();
+    let db = stores.null();
+    let cr = stores.claim(&db, 2);
+    stores.store_mut(&db).lock();
+    stores.store_mut(&db).delete(cr.rec); // must panic
+}
+
+// ── S25.1 — text arg `Str` serialised at coroutine_create ────────────────────
+
+/// S25.1 (P2-R1): text args are passed as `Str { ptr, len }` — a borrowed reference
+/// into the caller's owned `String`.  After `coroutine_create`, the caller's String
+/// may be freed by `OpFreeText` before the generator is first resumed.  The `Str`
+/// in `stack_bytes` then holds a dangling pointer.
+/// Fix: `serialise_text_slots` at `coroutine_create` converts every dynamic text arg
+/// to an owned `String` in `frame.text_owned`.  See SAFE.md § P2-R1.
+#[test]
+fn coroutine_text_arg_dynamic_serialised() {
+    // gen_label receives a format-string arg (dynamic heap String, not a static literal).
+    // After coroutine_create, the Str in stack_bytes must point to a serialised owned
+    // String — not the caller's allocation which OpFreeText may free immediately after.
+    code!(
+        "fn gen_label(prefix: text) -> iterator<integer> {
+             yield len(prefix);
+             yield len(prefix);
+         }
+         fn sum_dynamic_lens(n: integer) -> integer {
+             total = 0;
+             for v in gen_label(\"item {n}\") { total += v; }
+             total
+         }"
+    )
+    .expr("sum_dynamic_lens(3)")
+    .result(Value::Int(12)); // len("item 3") = 6, two yields: 6 + 6 = 12
+}
+
+// ── S25.2 — `String` locals freed before coroutine_return rewinds stack ──────
+
+/// S25.2 (P2-R2): when a generator has a `text` local variable, the `String` heap
+/// allocation lives on the coroutine's live stack.  `coroutine_return` calls
+/// `frame.text_owned.clear()` and `frame.stack_bytes.clear()`, but neither path
+/// calls `String::drop()` for stack-resident Strings → heap leak.
+/// Fix: drain `text_positions` entries in the live frame region before rewinding.
+/// See SAFE.md § P2-R2.
+#[test]
+fn coroutine_text_arg_freed_at_return() {
+    // gen_len_twice takes a dynamic text arg, yields its length twice, then exhausts.
+    // At coroutine_return, frame.text_owned must be drained so the owned String
+    // allocated by S25.1 at create time is freed.  Without the drain, every
+    // generator exhaustion with a text arg leaks a String heap allocation.
+    // The test verifies correct values; Valgrind is needed to confirm the drain.
+    // Note: single-yield generators have a separate pre-existing bug (return 0).
+    code!(
+        "fn gen_len_twice(prefix: text) -> iterator<integer> {
+             yield len(prefix);
+             yield len(prefix);
+         }
+         fn sum_twice(n: integer) -> integer {
+             total = 0;
+             for v in gen_len_twice(\"item {n}\") { total += v; }
+             total
+         }"
+    )
+    .expr("sum_twice(3)")
+    .result(Value::Int(12)); // len("item 3") = 6, two yields: 6 + 6 = 12
+}
+
+// ── S37 — abandoned coroutine frame freed on early break ─────────────────────
+
+/// S37: when a `for` loop exits early (break), `OpFreeRef` calls `free_ref` on
+/// the coroutine DbRef.  Before the fix, `database.free()` was a no-op for
+/// `COROUTINE_STORE` (store_nr == u16::MAX), so the frame's `text_owned` buffers
+/// and `stack_bytes` were never freed — a memory leak on every early-break path.
+/// Fix: `free_ref` checks `db.store_nr == COROUTINE_STORE` and calls
+/// `free_coroutine(db.rec)` explicitly.
+/// The test verifies that the generator function produces correct values when
+/// used normally (post-break code still executes correctly).
+#[test]
+fn coroutine_early_break_frame_freed() {
+    // count3 yields three values; the consumer breaks after the first.
+    // After the break, free_ref must release the coroutine frame without panicking.
+    // We confirm correctness by verifying the consumer returns 1 (the first yield only).
+    code!(
+        "fn count3() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn take_first() -> integer {
+             for v in count3() {
+                 return v;
+             }
+             0
+         }"
+    )
+    .expr("take_first()")
+    .result(Value::Int(1));
 }

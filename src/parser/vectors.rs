@@ -657,6 +657,9 @@ impl Parser {
             let closure_alloc = crate::data::v_block(alloc_steps, rec_tp.clone(), "closure alloc");
             // Store the closure allocation expression for injection at call site.
             self.last_closure_alloc = Some(Box::new(closure_alloc));
+            // A5.6c: record the work var so parse_assign can populate closure_vars
+            // and try_fn_ref_call can emit write-backs after each call.
+            self.last_closure_work_var = w;
             // The lambda value is just the d_nr.
             *code = Value::Int(d_nr as i32);
         } else {

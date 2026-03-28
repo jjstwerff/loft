@@ -1560,6 +1560,12 @@ impl Parser {
                     }
                     continue;
                 }
+                // A5.6b.1: captured text variables are read from the closure record at
+                // runtime — they must NOT be registered as hidden RefVar(Text) work-buffer
+                // arguments.  Adding them would shift __closure to a wrong stack position.
+                if self.captured_names.iter().any(|(name, _)| name == n) {
+                    continue;
+                }
                 if matches!(tp, Type::Text(_)) {
                     // create a new attribute with this name
                     let a = self.data.add_attribute(
@@ -1799,6 +1805,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // pre-existing length; A5.6b.2 added ~9 lines
     pub(crate) fn parse_call(&mut self, val: &mut Value, source: u16, name: &str) -> Type {
         let call_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
@@ -1810,9 +1817,36 @@ impl Parser {
                 if let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
+                    // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
+                    // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
+                    // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
+                    let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
+                        (0..deps.len())
+                            .map(|_| self.vars.work_text(&mut self.lexer))
+                            .collect()
+                    } else {
+                        vec![]
+                    };
                     if !self.first_pass {
                         self.var_usages(v_nr, true);
-                        *val = Value::CallRef(v_nr, vec![]);
+                        let mut args = vec![];
+                        // A5.6b.2: inject work-buffer DbRef blocks before __closure (zero-param case).
+                        let ref_def = self.data.def_nr("reference");
+                        for &wv in &work_vars {
+                            args.push(v_block(
+                                vec![self.cl("OpCreateStack", &[Value::Var(wv)])],
+                                Type::Reference(ref_def, vec![wv]),
+                                "cref_work_buf",
+                            ));
+                        }
+                        // A5.6b.1: zero-param closures still have a hidden __closure arg;
+                        // inject it the same way try_fn_ref_call does for non-zero-param calls.
+                        if let Some(closure_alloc) = self.last_closure_alloc.take() {
+                            args.push(*closure_alloc);
+                        } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
+                            args.push(Value::Var(closure_w));
+                        }
+                        *val = Value::CallRef(v_nr, args);
                     }
                     return *ret_type;
                 }
@@ -1973,6 +2007,16 @@ impl Parser {
         let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone() else {
             return None;
         };
+        // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
+        // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
+        // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
+        let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
+            (0..deps.len())
+                .map(|_| self.vars.work_text(&mut self.lexer))
+                .collect()
+        } else {
+            vec![]
+        };
         if !self.first_pass {
             if list.len() != param_types.len() {
                 diagnostic!(
@@ -1988,6 +2032,17 @@ impl Parser {
             for (i, expected) in param_types.iter().enumerate() {
                 self.convert(&mut converted[i], &types[i], expected);
             }
+            // A5.6b.2: inject hidden work-buffer DbRef args for text-returning lambdas.
+            // Each block emits OpCreateStack → 12-byte DbRef, matching callee's &text param.
+            // Order: visible params → work bufs → __closure (must match callee slot layout).
+            let ref_def = self.data.def_nr("reference");
+            for &wv in &work_vars {
+                converted.push(v_block(
+                    vec![self.cl("OpCreateStack", &[Value::Var(wv)])],
+                    Type::Reference(ref_def, vec![wv]),
+                    "cref_work_buf",
+                ));
+            }
             // A5.3: inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding
             // the slot-position issue with pre-allocated work variables.
@@ -1998,6 +2053,33 @@ impl Parser {
             }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);
+            // A5.6c: for void-return capturing lambdas, write updated closure
+            // record fields back to the corresponding outer variables so the caller
+            // observes mutations made inside the lambda body (e.g. `count += x`).
+            // Non-void returns are not handled here — they require a temp to hold
+            // the return value while writing back, which is left for A5.6 (1.1+).
+            if matches!(*ret_type, Type::Void)
+                && let Some(&closure_w) = self.closure_vars.get(&v_nr)
+                && let Type::Reference(closure_rec_d, _) = self.vars.tp(closure_w).clone()
+            {
+                let n_attrs = self.data.attributes(closure_rec_d);
+                let mut block: Vec<Value> = vec![val.clone()];
+                for aid in 0..n_attrs {
+                    let cap_name = self.data.attr_name(closure_rec_d, aid).clone();
+                    let outer_v = self.vars.var(&cap_name);
+                    if outer_v != u16::MAX {
+                        let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));
+                        block.push(v_set(outer_v, field_val));
+                    }
+                }
+                if block.len() > 1 {
+                    // Use Insert rather than Block: we must NOT create a new scope
+                    // here because ___clos_1 (closure_w) is owned by the outer scope.
+                    // A Block would cause scopes.rs to emit OpFreeRef at the inner
+                    // scope exit, leaving a dangling ref for the next call.
+                    *val = Value::Insert(block);
+                }
+            }
         }
         Some(*ret_type)
     }

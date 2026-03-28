@@ -124,9 +124,10 @@ impl Parser {
                     ls.insert(pos, v_set(r, Value::Null));
                 }
             }
-            // In debug builds: auto-lock the stores for every const Reference/Vector argument
-            // at the very start of the function body (after work-variable initialisations).
-            #[cfg(debug_assertions)]
+            // Auto-lock the stores for every const Reference/Vector argument at the very
+            // start of the function body (after work-variable initialisations).
+            // Applies in all build profiles so that writes to const parameters panic in
+            // release builds too (S22 — previously guarded by #[cfg(debug_assertions)]).
             if !self.first_pass {
                 let n_vars = self.vars.next_var();
                 let lock_fn = self.data.def_nr("n_set_store_lock");
@@ -186,6 +187,24 @@ impl Parser {
             Type::Void
         } else if self.lexer.has_token("yield") {
             // CO1.3c: yield expr — only valid inside generator functions.
+            // P2-R6 M11-a: also forbidden inside a par() body (worker runs in a
+            // separate thread; there is no safe coroutine resumption path).
+            if self.in_par_body && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "yield is not allowed inside a par(...) parallel body"
+                );
+                // Consume the expression tokens to keep the lexer in sync, but
+                // emit Value::Null so no coroutine IR is generated — generating
+                // yield state-machine code outside a coroutine context confuses
+                // scope analysis (ref variables without matching OpFreeRef).
+                if !self.lexer.has_keyword("from") {
+                    let mut discarded = Value::Null;
+                    self.expression(&mut discarded);
+                }
+                return Type::Void;
+            }
             let r_type = self.data.def(self.context).returned.clone();
             if !matches!(r_type, Type::Iterator(_, _)) && !self.first_pass {
                 diagnostic!(
@@ -706,11 +725,14 @@ use a separate collection or add after the loop"
                     return Type::Void;
                 }
                 // A5.3: record closure association if the RHS was a capturing lambda.
+                // NOTE: must come AFTER parse_assign_op because that is where the RHS
+                // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
+                let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
                     self.last_closure_work_var = u16::MAX;
                 }
-                return self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
+                return result;
             }
         }
         *code = to;

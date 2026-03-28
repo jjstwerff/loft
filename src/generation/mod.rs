@@ -6,6 +6,7 @@ use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 mod calls;
+mod coroutine;
 mod dispatch;
 mod emit;
 mod pre_eval;
@@ -55,6 +56,9 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             collect_calls(next, data, calls);
             collect_calls(extra, data, calls);
         }
+        // N8b.1: walk into yield expressions so helper functions are included in the
+        // reachable set and emitted before the coroutine state-machine struct.
+        Value::Yield(inner) => collect_calls(inner, data, calls),
         _ => {}
     }
 }
@@ -275,12 +279,18 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
-        | Type::Index(_, _, _) => "DbRef",
+        | Type::Index(_, _, _)
+        // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
+        | Type::Iterator(_, _) => "DbRef",
         Type::Routine(_) | Type::Function(_, _) => "u32",
         Type::Unknown(_) => "??",
-        Type::Iterator(_, _) => "Iterator",
         Type::Keys => "&[Key]",
-        Type::Tuple(_) | Type::Void => "()",
+        Type::Void => "()",
+        // N8a.1: emit the correct Rust tuple type, e.g. (i32, i64) for (integer, long).
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(|e| rust_type(e, context)).collect();
+            return format!("({})", parts.join(", "));
+        }
         Type::Rewritten(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
     }
@@ -289,21 +299,28 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
 
 /// Return the Rust literal for the "null" default of a loft type, used when a function
 /// body is empty (an explicit stub) but the declared return type is non-void.
-fn default_native_value(tp: &Type) -> &'static str {
+fn default_native_value(tp: &Type) -> String {
     match tp {
-        Type::Float => "0.0_f64",
-        Type::Single => "0.0_f32",
-        Type::Long => "0_i64",
-        Type::Boolean => "false",
-        Type::Text(_) => "Str::new(loft::state::STRING_NULL)",
-        Type::Routine(_) | Type::Function(_, _) => "0_u32",
+        Type::Float => "0.0_f64".into(),
+        Type::Single => "0.0_f32".into(),
+        Type::Long => "0_i64".into(),
+        Type::Boolean => "false".into(),
+        Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
+        Type::Routine(_) | Type::Function(_, _) => "0_u32".into(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
-        | Type::Index(_, _, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }",
-        _ => "0", // Integer, Character, Enum(u8), etc.
+        | Type::Index(_, _, _)
+        // N8b.1: exhausted / uninitialized generator variable.
+        | Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
+        // N8a.1: a tuple null is the zero-default for each element type.
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(default_native_value).collect();
+            format!("({})", parts.join(", "))
+        }
+        _ => "0".into(), // Integer, Character, Enum(u8), etc.
     }
 }
 
@@ -777,6 +794,10 @@ extern crate loft;"
         // Skip functions implemented in codegen_runtime.
         if def.code == Value::Null && CODEGEN_RUNTIME_FNS.contains(&def.name.as_str()) {
             return Ok(());
+        }
+        // N8b.1: generator functions (returning iterator<T>) are emitted as state machines.
+        if matches!(def.returned, Type::Iterator(_, _)) {
+            return self.output_coroutine(w, def_nr);
         }
         // n_assert needs generic Display parameters to accept both Str and &str.
         if def.name == "n_assert" && def.code == Value::Null {

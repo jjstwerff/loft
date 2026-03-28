@@ -404,10 +404,10 @@ will be merged back, bypassing the `copy_from_worker` deep-copy path.
 | Risk | Severity | Effort | Short-term fix | Long-term design |
 |---|---|---|---|---|
 | P1-R1 — Silent write-discard in release | **medium** | S | Remove `#[cfg(debug_assertions)]` guard on auto-lock | Promote dummy-buffer path to panic (M1-b), add release integration test (M1-c) |
-| P1-R2 — `out_ptr` lifetime not type-enforced | **low/medium** | XS / S | Add `// SAFETY:` + debug assert (M2-b) | Replace `thread::spawn` + manual join with `thread::scope` (M2-a) |
-| P1-R3 — `claims` cloned into locked workers | **low** | XS | — | `clone_locked_for_worker` omitting `claims` (M3-a) |
-| P1-R4 — LIFO violation stalls `max` / panic | **medium** | XS / M | Assert LIFO in debug + store-log trace (M4-a, M4-c) | Free-bitmap replacing LIFO cascade (M4-b) |
-| P1-R5 — No type-level non-aliasing proof | **low** | M / L | Document invariant in `parallel.rs` | `WorkerStores` newtype + `DbRef` origin tagging (M5-a, M5-b) |
+| P1-R2 — `out_ptr` lifetime not type-enforced | **low/medium** | XS / S | ✓ S29: `thread::scope` (M2-a) + `// SAFETY:` comment (M2-b) in `run_parallel_direct` | Done |
+| P1-R3 — `claims` cloned into locked workers | **low** | XS | ✓ S29: `clone_locked_for_worker` omits `claims` (M3-a) | Done |
+| P1-R4 — LIFO violation stalls `max` / panic | **medium** | XS / M | ✓ S29: free-bitmap M4-b supersedes LIFO assert; non-LIFO frees now safe | Done |
+| P1-R5 — No type-level non-aliasing proof | **low** | M / L | ✓ S30: `WorkerStores` newtype (M5-a) | `DbRef` origin tagging (M5-b) remains long-term |
 
 ---
 
@@ -665,21 +665,26 @@ not merge a partial implementation that calls `free_dynamic_str` without also
 implementing the pointer-patch in `coroutine_next` (M6-b) and the `String` drain
 in `coroutine_return` (M7-a).
 
-**M8-b — Add a compile-time marker for CO1.3d incomplete state**
+**M8-b — Add a compile-time marker for CO1.3d incomplete state** (✓ implemented)
 
-While the integer-only path is in use, add a `debug_assert!` in `coroutine_yield`
-that fails if any text slot is detected in the current function's layout:
+`coroutine_yield` now contains a `debug_assert!` that fires when `text_positions`
+contains any live String slot in the generator's locals range `[base..value_start)`.
+The implementation uses `text_positions` (already maintained for S27) rather than
+a `text_slot_count` field, avoiding new struct fields:
 
 ```rust
+let text_local_count = self.text_positions.range(locals_range.clone()).count();
 debug_assert!(
-    def.text_slot_count == 0,
-    "coroutine_yield: text locals present but CO1.3d not yet implemented \
-     (function '{}' has {} text slots)",
-    def.name, def.text_slot_count
+    text_local_count == 0,
+    "P2-R3: coroutine_yield: {text_local_count} live text local(s) in stack \
+     range [{base}..{value_start}). CO1.3d (serialise_text_slots) is not yet \
+     implemented; the raw-bytes copy saves heap pointers that could dangle on \
+     resume.  See SAFE.md § P2-R3 and PLANNING.md § S25.",
 );
 ```
 
 This turns a silent mis-feature into a loud early failure during development.
+Test: `expressions::coroutine_text_local_survives_yield` (ignored until CO1.3d lands).
 
 ---
 
@@ -1055,9 +1060,9 @@ variable (a value), but it actually references the generator's internal storage.
 
 ### Mitigation design
 
-**M15-a — Document the yielded-value ownership rule in LOFT.md and STDLIB.md**
+**M15-a — Document the yielded-value ownership rule** *(done — COROUTINE.md CL-7)*
 
-Add a note to the generator documentation:
+The ownership rule is documented as Known Limitation CL-7 in `COROUTINE.md`:
 
 > A `text` value produced by `yield` is a zero-copy reference into the
 > generator's frame.  It is valid only for the duration of the current loop
@@ -1098,11 +1103,11 @@ initial coroutine implementation.
 | SC-CO | Description | Resolution status |
 |---|---|---|
 | SC-CO-1 | Dynamic `Str` in `stack_bytes` dangles | **Not implemented** (CO1.3d, see P2-R1, P2-R3) |
-| SC-CO-2 | `DbRef` locals outlive store | See P2-R8; design added (M13-a/b/c) |
+| SC-CO-2 | `DbRef` locals outlive store | See P2-R8 (S28 ✓); design in M13-a/b/c; CL-2b added for store-backed Str (P2-R5) |
 | SC-CO-3 | Re-entrant advance | ✓ Implemented |
-| SC-CO-4 | `yield` inside `par(...)` | **Not implemented** (see P2-R6) |
+| SC-CO-4 | `yield` inside `par(...)` | ✓ Compiler error + runtime guard (P2-R6 M11-a/b) |
 | SC-CO-5 | Serialisation cost O(depth) | Documented; accepted |
-| SC-CO-6 | Advancing exhausted generator | ✓ Null pushed; frames not freed (see P2-R7) |
+| SC-CO-6 | Advancing exhausted generator | ✓ Null pushed; frames freed on exhaustion (S26 ✓, P2-R7 done) |
 | SC-CO-7 | Fixed `stack_base` clobbered | ✓ Implemented |
 | SC-CO-8 | Original dynamic `String` leaked after `to_owned()` | **Not implemented** (CO1.3d, see P2-R2) |
 | SC-CO-9 | Scalar active-coroutine tracker wrong for `yield from` | ✓ Implemented |
@@ -1117,13 +1122,13 @@ initial coroutine implementation.
 | P2-R1 — Text arg `Str` dangles | **critical** | L † | Debug assert if any text arg at create (M8-b) | Implement `serialise_text_slots` at create (M6-a, M6-b, M6-c) |
 | P2-R2 — `String` objects leaked at exhaustion | **high** | XS † | Drain `text_owned` before `stack_bytes.clear()` (M7-a) | CO1.3d complete makes M7-a sufficient; add leak test (M7-b) |
 | P2-R3 — Implicit "never freed" invariant | **high** | L † | Debug assert on text slots present (M8-b) | Implement CO1.3d atomically (M8-a) |
-| P2-R4 — `text_positions` inconsistency | **medium** | S | Save/restore entries on yield/resume in debug (M9-a) | Same |
-| P2-R5 — Store-backed `Str` dangles | **medium** | S / S | Document invariant; debug pointer-range check (M10-a) | Deep-copy store-derived text in `serialise_text_slots` (M10-b) |
-| P2-R6 — No compiler check for `yield` in `par()` | **medium** | S | Runtime out-of-bounds guard in `coroutine_next` (M11-b) | Compiler error in `parse_parallel_for` (M11-a) |
-| P2-R7 — Exhausted frames never freed | **low** | M | `OpFreeCoroutine` at for-loop exit (M12-a) | Reference counting for `COROUTINE_STORE` DbRefs (M12-c) |
-| P2-R8 — `DbRef` locals outlive store across suspension | **medium** | M / XL | Document rule; generation-counter guard in debug (M13-a/b) | Compiler flow-analysis warning (M13-c) |
+| P2-R4 — `text_positions` inconsistency | **medium** | S | ✓ S27: save/restore entries on yield/resume in debug (M9-a) | Same |
+| P2-R5 — Store-backed `Str` dangles | **medium** | S / S | ✓ M10-a: CL-2b in COROUTINE.md + debug pointer-range guard in `coroutine_yield` | Deep-copy store-derived text in `serialise_text_slots` (M10-b, via CO1.3d P2-R3) |
+| P2-R6 — No compiler check for `yield` in `par()` | **medium** | S | ✓ M11-a + M11-b: `in_par_body` flag + compiler error + S23 runtime guard | Same |
+| P2-R7 — Exhausted frames never freed | **low** | M | ✓ S26: `coroutines[idx] = None` on exhaustion (M12-a) | Reference counting for `COROUTINE_STORE` DbRefs (M12-c) |
+| P2-R8 — `DbRef` locals outlive store across suspension | **medium** | M / XL | ✓ S28: generation-counter guard in debug (M13-a/b) | Compiler flow-analysis warning (M13-c) |
 | P2-R9 — `e#remove` on generator corrupts store | **medium** | XS | Runtime guard in `database::remove` (M14-b) | Compiler rejection at `e#remove` resolution (M14-a) |
-| P2-R10 — Yielded `Str` lifetime not enforced at consumer | **low** | XS / XL | Document ownership rule (M15-a) | Poison old buffer in debug after CO1.3d (M15-b) |
+| P2-R10 — Yielded `Str` lifetime not enforced at consumer | **low** | XS / XL | ✓ M15-a done: CL-7 added to COROUTINE.md | Poison old buffer in debug after CO1.3d (M15-b) |
 
 **Implementation dependency:** P2-R1, P2-R2, and P2-R3 all resolve together when
 CO1.3d (`serialise_text_slots`) is implemented.  That work must land atomically

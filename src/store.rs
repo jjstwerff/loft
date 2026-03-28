@@ -50,6 +50,11 @@ pub struct Store {
     /// Populated lazily: `open()` calls `fl_rebuild()`; `new()` starts empty
     /// and the tree fills as blocks are freed.
     free_root: u32,
+    /// S28: monotonic counter incremented on every `claim` and `delete` in debug
+    /// builds.  Saved into `CoroutineFrame` at yield; compared at resume to detect
+    /// store mutations that may have invalidated `DbRef` locals held by the generator.
+    #[cfg(debug_assertions)]
+    pub generation: u32,
 }
 
 impl Debug for Store {
@@ -95,6 +100,8 @@ impl Store {
             free: true,
             locked: false,
             free_root: 0,
+            #[cfg(debug_assertions)]
+            generation: 0,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
         store
@@ -126,6 +133,8 @@ impl Store {
             free: true,
             locked: false,
             free_root: 0,
+            #[cfg(debug_assertions)]
+            generation: 0,
         };
         if init {
             store.init();
@@ -165,11 +174,14 @@ impl Store {
     /// * `size` - The requested record size in 8 byte words
     pub fn claim(&mut self, size: u32) -> u32 {
         debug_assert!(!self.locked, "Claim on locked store (size={size})");
-        #[cfg(not(debug_assertions))]
-        if self.locked {
-            return 0;
-        }
+        assert!(!self.locked, "Claim on locked store (size={size})");
         assert!(size >= 1, "Incomplete record");
+        // S28: increment generation so coroutine_next can detect store mutations
+        // that may invalidate DbRef locals held by suspended generators.
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
         #[cfg(debug_assertions)]
         self.fl_validate();
         // Fast path: find the smallest tracked free block that fits.
@@ -262,6 +274,12 @@ impl Store {
 
     /// Mutate the claimed size of a record
     pub fn resize(&mut self, rec: u32, size: u32) -> u32 {
+        // S28: increment generation so coroutine_next can detect resize operations
+        // that may invalidate DbRef locals (record relocation) held by suspended generators.
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
         let req_size = size as i32;
         let claim = *self.addr::<i32>(rec, 0);
         if claim >= req_size {
@@ -295,9 +313,12 @@ impl Store {
     /// Delete a record, this assumes that all links towards this record are already removed
     pub fn delete(&mut self, rec: u32) {
         debug_assert!(!self.locked, "Delete on locked store (rec={rec})");
-        #[cfg(not(debug_assertions))]
-        if self.locked {
-            return;
+        assert!(!self.locked, "Delete on locked store (rec={rec})");
+        // S28: increment generation so coroutine_next can detect deletions that
+        // may free a record still referenced by a suspended generator.
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
         }
         self.valid(rec, 4);
         let mut claim = *self.addr::<i32>(rec, 0);
@@ -415,6 +436,29 @@ impl Store {
             free: self.free,
             locked: true,
             free_root: 0, // workers never claim/delete; no free tree needed
+            #[cfg(debug_assertions)]
+            generation: self.generation,
+        }
+    }
+
+    /// Like [`clone_locked`] but omits the `claims` clone (S29/P1-R3).
+    /// Worker stores are always locked and never call `validate()`, so the claims
+    /// `HashSet` is wasted memory — O(records) allocation per worker per `par()` call.
+    pub fn clone_locked_for_worker(&self) -> Store {
+        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+        let ptr = unsafe { A.alloc(l) };
+        unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
+        Store {
+            ptr,
+            size: self.size,
+            claims: HashSet::new(), // S29/P1-R3: workers never validate(); skip clone
+            #[cfg(feature = "mmap")]
+            file: None,
+            free: self.free,
+            locked: true,
+            free_root: 0,
+            #[cfg(debug_assertions)]
+            generation: self.generation,
         }
     }
 
@@ -799,7 +843,12 @@ impl Store {
     /// Try to validate a record reference as much as possible.
     /// Complete validations are only done in 'test' mode.
     pub fn valid(&self, rec: u32, fld: u32) -> bool {
-        debug_assert!(self.claims.contains(&rec), "Unknown record {rec}");
+        // S29/P1-R3: locked (worker) stores have empty claims by design — skip the
+        // claims check.  Records in worker stores are valid copies of the originals.
+        debug_assert!(
+            self.locked || self.claims.contains(&rec),
+            "Unknown record {rec}"
+        );
         // Read size before any multiplication to avoid overflow when fld 0 is negative
         // (a negative header means the block was freed — a bug if still in claims).
         let size: i32 = *self.addr(rec, 0);

@@ -25,80 +25,78 @@ use common::cached_default;
 /// Docs files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for details on each issue number.
 const NATIVE_SKIP: &[&str] = &[
-    // C27: rand_core is an optional feature dep; standalone rustc cannot resolve it without
-    // explicit --extern flags that the native test harness does not yet pass.
-    "21-random.loft",
-    // C29: PNG width returns 0 in native mode on macOS — platform-specific PNG decode issue;
-    // passes on Linux. See CAVEATS.md C29.
-    "14-image.loft",
+    // Add entries here only for confirmed native-mode failures with a CAVEATS.md reference.
 ];
 
 /// Script files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for issue numbers.
 /// Do NOT remove tests from this list by weakening the test — fix the native codegen instead.
-const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // P3: native codegen does not generate loop variables for any/all/count_if.
-    "47-predicates.loft",
-    // A10: native codegen for field iteration's match arms not yet supported.
-    "45-field-iter.loft",
-    // P5: native codegen does not handle generic function instantiation.
-    "48-generics.loft",
-    // T1: native codegen does not support tuple types (interpreter-only).
-    "50-tuples.loft",
-    // CO1: native codegen does not support coroutines/yield (interpreter-only).
-    "51-coroutines.loft",
-    // T1: caveats script uses tuple element assign — interpreter-only.
-    "46-caveats.loft",
-    // C27: rand_core is an optional feature dep; standalone rustc cannot resolve it without
-    // explicit --extern flags that the native test harness does not yet pass.
-    "15-random.loft",
-    // C28: slot conflict in n_main between rv and _read_34 at [820, 832); pre-existing
-    // slot assignment regression — see CAVEATS.md C28.
-    "20-binary.loft",
-];
+const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
 ///
-/// Prefers `target/release/libloft.rlib` (clean single-version deps) over the debug
-/// test binary's `deps/` directory (which may have multiple versions of the same crate,
-/// Prefer the most recently modified libloft rlib so that stale release builds
-/// never shadow a fresher debug build (or vice versa).
+/// Searches only the deps directory of the currently running test binary so that
+/// the rlib always matches the features compiled into this test.  The old approach
+/// of scanning both profiles and picking by mtime caused S33 in CI: a later
+/// `cargo build --no-default-features` produced a newer no-features rlib in the
+/// other profile's deps/, shadowing the full-features rlib and leaving png/random
+/// functions as stubs that silently return wrong values.
 fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
-    let target_dir = std::env::current_exe()
+    // The test binary lives at target/{profile}/deps/{test_binary}.
+    // Its parent is the deps/ directory that holds the rlib built with the same features.
+    let deps = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent()?.parent()?.parent().map(|d| d.to_path_buf()))?;
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))?;
 
-    // Collect candidate (rlib, deps_dir) pairs from both profiles.
-    let mut candidates: Vec<(std::time::SystemTime, PathBuf, PathBuf)> = Vec::new();
+    // Find the most recently modified loft rlib in this profile's deps/.
+    // Accept both "libloft-HASH.rlib" (cargo test profile) and "libloft.rlib"
+    // (produced when building lib+test together).  Both live in the same
+    // profile-specific deps/ directory, so there is no cross-profile shadowing
+    // (the S33 risk only arose when scanning multiple profile directories).
+    let rlib = std::fs::read_dir(&deps)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            (n.starts_with("libloft-") || n == "libloft.rlib") && n.ends_with(".rlib")
+        })
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?
+        .path();
 
-    for profile in &["release", "debug"] {
-        let deps = target_dir.join(profile).join("deps");
-        // Named libloft.rlib (symlink / copy placed by cargo at the profile root).
-        let top = target_dir.join(profile).join("libloft.rlib");
-        if top.exists()
-            && let Ok(mtime) = top.metadata().and_then(|m| m.modified())
-        {
-            candidates.push((mtime, top, deps.clone()));
+    Some((rlib, deps))
+}
+
+/// Collect additional `--extern name=path` arguments for optional feature dependencies.
+///
+/// Collect additional `--extern name=path` arguments for optional feature dependencies.
+///
+/// When `rustc` compiles generated `.rs` files standalone, it only knows about crates
+/// explicitly declared via `--extern`.  Optional deps like `rand_core` and `rand_pcg`
+/// are available in the same deps/ directory as `libloft.rlib` but must be declared
+/// explicitly (S31).  This function scans deps/ and returns ALL non-loft rlibs as
+/// `(crate_name, rlib_path)` pairs.  All versions of each crate are included so that
+/// rustc can select the hash that matches what `libloft` was compiled against.
+fn collect_extra_externs(deps_dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(deps_dir) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("lib") || !name.ends_with(".rlib") || name.starts_with("libloft") {
+            continue;
         }
-        // Hashed libloft-<hash>.rlib files in deps/.
-        if let Ok(entries) = std::fs::read_dir(&deps) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("libloft-")
-                    && name.ends_with(".rlib")
-                    && let Ok(mtime) = entry.metadata().and_then(|m| m.modified())
-                {
-                    candidates.push((mtime, entry.path(), deps.clone()));
-                }
-            }
-        }
+        // libFOO-HASH.rlib → crate name FOO (hyphens → underscores)
+        let without_lib = &name[3..];
+        let without_rlib = without_lib.trim_end_matches(".rlib");
+        let crate_name = if let Some(pos) = without_rlib.rfind('-') {
+            without_rlib[..pos].replace('-', "_")
+        } else {
+            without_rlib.replace('-', "_")
+        };
+        result.push((crate_name, entry.path()));
     }
-
-    // Pick the most recently modified rlib — that is always the current build.
-    candidates
-        .into_iter()
-        .max_by_key(|(mtime, _, _)| *mtime)
-        .map(|(_, rlib, deps)| (rlib, deps))
+    result
 }
 
 /// On Windows MSVC, locate build-script output directories for native import libraries.
@@ -391,6 +389,12 @@ fn compile_native_job(
             .arg(format!("loft={}", rlib.display()))
             .arg("-L")
             .arg(deps_dir);
+        // S31: pass --extern for optional feature deps (rand_core, rand_pcg, etc.) so that
+        // generated code using `random` or `png` features compiles without E0433 errors.
+        for (crate_name, rlib_path) in collect_extra_externs(deps_dir) {
+            cmd.arg("--extern")
+                .arg(format!("{crate_name}={}", rlib_path.display()));
+        }
     }
     // On Windows MSVC, build-script output dirs holding native import libs (e.g.
     // `windows.0.48.5.lib` from `windows-sys`) must be passed explicitly to standalone
@@ -587,4 +591,53 @@ fn native_scripts() -> std::io::Result<()> {
         }
     }
     run_native_jobs(jobs, rlib_info)
+}
+
+/// N8a: native code generation for tuple types.
+///
+/// Runs `tests/scripts/50-tuples.loft` through the native Rust backend end-to-end.
+/// Ignored until N8a.1 (`rust_type(Type::Tuple)` fix) and N8a.2 (`TupleGet`/`TuplePut`
+/// emit) are implemented.  When un-ignored, `50-tuples.loft` and `46-caveats.loft`
+/// are removed from `SCRIPTS_NATIVE_SKIP`.
+#[test]
+fn native_tuple_script() -> std::io::Result<()> {
+    let rlib_info = find_loft_rlib();
+    let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
+    let job = prepare_native_test(entry)?;
+    let compiled = compile_native_job(&job, &rlib_info)?;
+    assert!(compiled, "50-tuples.loft failed to compile under --native");
+    run_native_job(&job)
+}
+
+/// S35: native binary I/O script.
+///
+/// Runs `tests/scripts/20-binary.loft` through the native Rust backend end-to-end.
+/// Exercises the Insert-return pattern (Set(rv, Insert([Set(_read_34, Null), Block])))
+/// fixed in S35: output_set now hoists inner ops as statements before the assignment.
+#[test]
+fn native_binary_script() -> std::io::Result<()> {
+    let rlib_info = find_loft_rlib();
+    let entry = std::path::Path::new("tests/scripts/20-binary.loft");
+    let job = prepare_native_test(entry)?;
+    let compiled = compile_native_job(&job, &rlib_info)?;
+    assert!(compiled, "20-binary.loft failed to compile under --native");
+    run_native_job(&job)
+}
+
+/// N8a.3: native tuple-returning functions.
+///
+/// The same 50-tuples.loft script will include a tuple-returning function once
+/// N8a.3 is implemented.  This is a placeholder: un-ignored together with
+/// native_tuple_script when the updated script passes.
+#[test]
+fn native_tuple_return_script() -> std::io::Result<()> {
+    let rlib_info = find_loft_rlib();
+    let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
+    let job = prepare_native_test(entry)?;
+    let compiled = compile_native_job(&job, &rlib_info)?;
+    assert!(
+        compiled,
+        "50-tuples.loft (with tuple return) failed to compile under --native"
+    );
+    run_native_job(&job)
 }

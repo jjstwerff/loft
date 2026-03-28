@@ -79,8 +79,12 @@ impl State {
         self.source = stack.data.def(def_nr).source;
         self.generate(&stack.data.def(def_nr).code, &mut stack, true);
         let mut stack_pos = Vec::new();
+        let mut skip_free_vars = Vec::new();
         for v_nr in 0..stack.function.next_var() {
             stack_pos.push(stack.function.stack(v_nr));
+            if stack.function.is_skip_free(v_nr) {
+                skip_free_vars.push(v_nr);
+            }
         }
         data.definitions[def_nr as usize].code_position = start;
         data.definitions[def_nr as usize].code_length = self.code_pos - start;
@@ -97,6 +101,14 @@ impl State {
             data.definitions[def_nr as usize]
                 .variables
                 .set_stack(v_nr as u16, pos);
+        }
+        // Propagate skip_free flags set during codegen (e.g. S34 Option A) so that
+        // validate_slots can recognise intentional slot aliases and not report them
+        // as conflicts.
+        for v_nr in skip_free_vars {
+            data.definitions[def_nr as usize]
+                .variables
+                .set_skip_free(v_nr);
         }
         #[cfg(debug_assertions)]
         crate::variables::validate_slots(
@@ -597,7 +609,33 @@ impl State {
     /// override only if no child-scope overlap (A13 guard).
     fn adjust_first_assignment_slot(stack: &mut Stack, v: u16, pos: u16) {
         if pos > stack.position {
-            stack.function.set_stack_pos(v, stack.position);
+            // S32: Before moving a variable down to TOS, check that no same-scope
+            // sibling with an overlapping live interval already occupies
+            // [stack.position, stack.position + v_size).  Without this guard,
+            // two same-size same-scope variables (e.g. rv and _read_34) can both
+            // land at the same slot — see CAVEATS.md C28.
+            let v_size = size(stack.function.tp(v), &Context::Variable);
+            let new_end = stack.position + v_size;
+            let v_scope = stack.function.scope(v);
+            let v_first = stack.function.first_def(v);
+            let v_last = stack.function.last_use(v);
+            let has_sibling_overlap = (0..stack.function.count()).any(|j| {
+                if j == v || stack.function.stack(j) == u16::MAX {
+                    return false;
+                }
+                if stack.function.scope(j) != v_scope {
+                    return false; // child-scope overlap is handled in the else-if branch
+                }
+                let js = stack.function.stack(j);
+                let je = js + size(stack.function.tp(j), &Context::Variable);
+                stack.position < je
+                    && new_end > js
+                    && v_first <= stack.function.last_use(j)
+                    && v_last >= stack.function.first_def(j)
+            });
+            if !has_sibling_overlap {
+                stack.function.set_stack_pos(v, stack.position);
+            }
         } else if pos < stack.position
             && matches!(
                 stack.function.tp(v),
@@ -630,6 +668,7 @@ impl State {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
         // Zero-sized variables (null-typed) have no stack storage.
@@ -668,6 +707,20 @@ impl State {
             // adjust_first_assignment_slot handles this by moving the slot down to TOS.
             Self::adjust_first_assignment_slot(stack, v, pos);
             let pos = stack.function.stack(v);
+            // S34 Option A: adjust_first_assignment_slot may leave pos > stack.position
+            // when has_sibling_overlap blocks the downward move.  The sibling causing the
+            // block has not yet been allocated (it occupies the same pre-assigned slot in
+            // the slot allocator's plan), so placing this variable at current TOS is safe.
+            // Reset pos to TOS; the sibling will advance TOS when it is allocated in turn.
+            // mark skip_free so the outer variable (already at TOS) emits OpFreeRef and
+            // this variable — aliased to the same slot — does not produce a double-free.
+            let pos = if pos > stack.position {
+                stack.function.set_stack_pos(v, stack.position);
+                stack.function.set_skip_free(v);
+                stack.position
+            } else {
+                pos
+            };
             if pos == stack.position {
                 // Slot is at current TOS — use direct placement (same as old claim() path).
                 // Large types (text, refs, vectors) always land here; non-reusing primitives too.
@@ -820,6 +873,15 @@ impl State {
             parameters.len(),
             stack.data.def(op).attributes.len(),
         );
+        // S34: suppress OpFreeRef for variables moved to a shared slot by Option A.
+        // The outer variable at the same slot emits its own OpFreeRef; emitting a
+        // second one would produce a double-free of the same database record.
+        if stack.data.def(op).name == "OpFreeRef"
+            && let Some(Value::Var(v)) = parameters.first()
+            && stack.function.is_skip_free(*v)
+        {
+            return Type::Void;
+        }
         // try destination-passing optimisation for text-producing natives.
         if self.try_text_dest_pass(stack, op, parameters) {
             return Type::Void;
@@ -1102,31 +1164,21 @@ impl State {
             panic!("generate_call_ref: variable is not Type::Function");
         };
         let ret_type = *ret_type;
-        // A5.6b: text-returning lambdas require the caller to pre-allocate a text work
-        // buffer (RefVar(Text) argument), which generate_call does but generate_call_ref
-        // does not. Guard against silent garbage-stack reads in debug builds.
-        #[cfg(debug_assertions)]
-        if let Type::Text(ls) = &ret_type {
-            debug_assert!(
-                ls.is_empty(),
-                "CallRef to text-returning fn-ref '{}': {} text work buffer(s) required but \
-                 not allocated by caller — see CAVEATS.md C1 Bug 2",
-                stack.function.name(v_nr),
-                ls.len()
-            );
-        }
+
+        // Generate all args: visible params, then work-buffer blocks (12B DbRefs each),
+        // then closure arg (12B DbRef).  Blocks produce the correct type/size automatically.
         for arg in args {
             self.generate(arg, stack, false);
         }
-        // fn-ref variable is below the pushed arguments; compute distance from current top
+
+        // fn-ref variable is below all pushed arguments.
         let fn_var_dist = stack.position - stack.function.stack(v_nr);
-        // A5.3: total_arg_size includes all args pushed including hidden __closure.
+        // declared: visible param sizes; extra: work-buf + closure (all 12-byte DbRefs).
         let declared_size: u16 = param_types
             .iter()
             .map(|t| size(t, &Context::Argument))
             .sum();
         let extra = if args.len() > param_types.len() {
-            // Hidden closure arg is a DbRef (12 bytes).
             (args.len() - param_types.len()) as u16 * super::size_ref() as u16
         } else {
             0

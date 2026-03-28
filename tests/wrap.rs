@@ -48,12 +48,8 @@ const SUITE_SKIP: &[&str] = &[
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
-    "06-function.loft",  // #77: CallRef not implemented
     "13-file.loft",      // #74: file I/O ops missing; also no WASM filesystem
-    "18-locks.loft",     // todo!()
     "19-threading.loft", // todo!(); WASM threading model differs
-    "21-random.loft",    // #79: external crate
-    "22-time.loft",      // todo!()
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
@@ -289,10 +285,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from([
-        // C28: slot conflict between rv and _read_34 in n_main — pre-existing slot regression.
-        "20-binary.loft",
-    ])
+    HashSet::from([])
 }
 
 macro_rules! script_test {
@@ -323,7 +316,6 @@ script_test!(min_max_clamp, "tests/scripts/17-min-max-clamp.loft");
 script_test!(math_functions, "tests/scripts/18-math-functions.loft");
 script_test!(files, "tests/scripts/19-files.loft");
 #[test]
-#[ignore = "C28: slot conflict between rv and _read_34 in n_main — pre-existing slot regression; see CAVEATS.md C28"]
 fn binary() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(PathBuf::from("tests/scripts/20-binary.loft"), false, false)
@@ -331,6 +323,7 @@ fn binary() -> std::io::Result<()> {
 script_test!(binary_ops, "tests/scripts/21-binary-ops.loft");
 script_test!(script_threading, "tests/scripts/22-threading.loft");
 script_test!(stress, "tests/scripts/37-stress.loft");
+script_test!(single_type, "tests/scripts/52-single.loft");
 
 /// Quick iteration test: run only the final suite file (`16-parser.loft`) without
 /// regenerating documentation.  Use this during active development on the parser

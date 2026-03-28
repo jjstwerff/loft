@@ -323,6 +323,14 @@ impl State {
 
     pub fn free_ref(&mut self) {
         let db = *self.get_stack::<DbRef>();
+        // S37: coroutine DbRefs use store_nr == COROUTINE_STORE (u16::MAX).
+        // database.free() is a no-op for this sentinel.  Free the coroutine frame
+        // explicitly so that text_owned, stack_bytes, and call_frames are released
+        // when a `for` loop exits early (before the generator exhausts).
+        if db.store_nr == super::COROUTINE_STORE {
+            self.free_coroutine(db.rec as usize);
+            return;
+        }
         #[cfg(not(feature = "wasm"))]
         if db.rec != 0
             && let Some(&file_type) = self.database.names.get("File")
@@ -630,6 +638,16 @@ impl State {
         let reverse = on & 64 != 0;
         let cur = *self.get_var::<i32>(state_var);
         let data = *self.get_stack::<DbRef>();
+        // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
+        // The compiler already rejects e#remove on generator iterators (CO1.5c / S24), so this
+        // guard only fires if that check is somehow bypassed — preventing release-build corruption.
+        debug_assert!(
+            data.store_nr != u16::MAX,
+            "e#remove on coroutine DbRef — compiler check should have rejected this"
+        );
+        if data.store_nr == u16::MAX {
+            return;
+        }
         match on & 63 {
             0 => {
                 // vector

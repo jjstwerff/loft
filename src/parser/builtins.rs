@@ -119,6 +119,22 @@ impl Parser {
         }
         self.data.def_used(d_nr);
         let ret_type = self.data.def(d_nr).returned.clone();
+        // S23: generator functions (return type iterator<T>) cannot be par() workers.
+        // Worker threads do not have access to the main thread's coroutines table.
+        // Return u32::MAX + Unknown in both passes so build_parallel_for_ir doesn't
+        // type `b` as iterator<T> and downstream body code doesn't produce cascaded errors.
+        if matches!(ret_type, Type::Iterator(_, _)) {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "parallel worker '{method_name}' returns {} — \
+                     generator functions cannot be used as parallel workers",
+                    ret_type.name(&self.data)
+                );
+            }
+            return (u32::MAX, Type::Unknown(0));
+        }
         (d_nr, ret_type)
     }
 
@@ -194,6 +210,22 @@ impl Parser {
         }
         self.data.def_used(d_nr);
         let ret_type = self.data.def(d_nr).returned.clone();
+        // S23: generator functions (return type iterator<T>) cannot be par() workers.
+        // Worker threads do not have access to the main thread's coroutines table.
+        // Return u32::MAX + Unknown in both passes so build_parallel_for_ir doesn't
+        // type `b` as iterator<T> and downstream body code doesn't produce cascaded errors.
+        if matches!(ret_type, Type::Iterator(_, _)) {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "parallel worker '{first_id}' returns {} — \
+                     generator functions cannot be used as parallel workers",
+                    ret_type.name(&self.data)
+                );
+            }
+            return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
+        }
         (d_nr, ret_type, extra_vals, extra_types)
     }
 

@@ -56,24 +56,30 @@ fn test() {
 
 ---
 
-## C3 — WASM backend: several features not implemented
+## C3 — WASM backend: file I/O and threading not implemented
 
-The `--native-wasm` backend lacks support for file I/O, threading, random
-numbers, time functions, and dynamic function references (`CallRef`).
+The `--native-wasm` backend currently lacks support for file I/O and threading.
+Random numbers, time functions, and dynamic function references (`CallRef`) are
+now implemented (W1.15, W1.17, W1.19, W1.20 — all 0.8.3).
 
 **Affected files:** `tests/wrap.rs` — `WASM_SKIP` array:
 
 | File | Reason |
 |------|--------|
-| `06-function.loft` | `CallRef` not implemented (#77) |
-| `13-file.loft` | File I/O missing (#74) |
-| `18-locks.loft` | `todo!()` |
-| `19-threading.loft` | `todo!()` |
-| `21-random.loft` | External crate unresolved (#79) |
-| `22-time.loft` | `todo!()` |
+| `13-file.loft` | File I/O ops missing; no WASM filesystem (#74) |
+| `19-threading.loft` | WASM threading model differs; W1.18 not yet landed |
+
+**Previously skipped — now passing:**
+
+| File | Fixed by |
+|------|----------|
+| `06-function.loft` | W1.15 — `output_call_ref` dispatch table |
+| `18-locks.loft` | W1.17 — lock functions in `CODEGEN_RUNTIME_FNS` |
+| `21-random.loft` | W1.19 — WASM `rand`/`rand_indices` bridge |
+| `22-time.loft` | W1.20 — `host_time_now()` via `std::time::SystemTime` |
 
 **Workaround:** use the interpreter (`cargo run --bin loft`) instead of `--native-wasm`.
-**Planned fix:** W1 in [ROADMAP.md](ROADMAP.md) (0.8.3) — interpreter-as-WASM entry point; full feature coverage targeted alongside W1 completion.
+**Remaining work:** W1.16 (file I/O), W1.18 (threading) in [ROADMAP.md](ROADMAP.md) (0.8.3).
 
 ---
 
@@ -235,22 +241,23 @@ are tracked via `init_field_tracking`/`init_field_deps` on the parser, and
 
 ---
 
-## C19 — Native codegen: tuples, coroutines, and generics interpreter-only
+## C19 — Native codegen: coroutines interpreter-only
 
-The `--native` backend does not support three language features:
+The `--native` backend does not support all language features:
 
 | Feature | Interpreter | `--native` |
 |---------|-------------|-----------|
-| Tuple types (`(integer, float)`) | Yes | No |
+| Tuple types (`(integer, float)`) | Yes | **Fixed** (N8a, 0.8.3) |
 | Coroutines (`yield`, `iterator<T>`) | Yes | No |
-| Generic functions (`fn f<T>`) | Yes | No |
+| Generic functions (`fn f<T>`) | Yes | **Fixed** (N8c, 0.8.3) |
 
-Scripts using these features are skipped from the native test suite
-(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).
+Coroutine scripts remain skipped from the native test suite
+(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Tuples and generics now pass.
 
-**Test:** `tests/scripts/50-tuples.loft`, `51-coroutines.loft`, `48-generics.loft` — all pass in interpreter, all skipped in native.
-**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use these features.
-**Planned fix:** N8a.1–N8a.3 (tuples), N8b.1–N8b.3 (coroutines), N8c.1–N8c.2 (generics) in [ROADMAP.md](ROADMAP.md) (0.8.3); design in [PLANNING.md](PLANNING.md) § N8.
+**Test:** `tests/scripts/51-coroutines.loft` — passes in interpreter, skipped in native.
+`50-tuples.loft` — removed from skip list (N8a, 0.8.3).  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
+**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use coroutines.
+**Planned fix:** N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
 
 ---
 
@@ -283,190 +290,152 @@ loop variables; no additional IR restructuring was required.
 
 ## C22 — Parallel workers: silent wrong results in release builds
 
-`par(...)` workers that write to a `const` input silently discard the write in
-release builds (the write lands in a 256-byte thread-local dummy buffer) and
-continue with stale data.  The locked-store guard is `debug_assert!`-only, so
-only debug builds panic.
+**Fixed in 0.8.3 (S22).**
 
-**Reproducer:**
-```loft
-fn worker(const items: vector<integer>, idx: integer) -> integer {
-  items.push(0);  // writes to const arg — silently discarded in release
-  items[idx]
-}
-fn main() {
-  data = [1, 2, 3];
-  result = par(worker(data, 0..3));
-  // release: may return wrong values; debug: panics immediately
-}
-```
+`par(...)` workers that write to a `const` input previously silently discarded
+the write in release builds.  The `#[cfg(debug_assertions)]` guard on auto-lock
+insertion has been removed; `store.claim()` and `store.delete()` now use
+`assert!` (not `debug_assert!`) so the panic fires in both debug and release
+builds.
 
-**Test:** none (release-build behaviour only).
-**Workaround:** never write to `const` parameters; always test `par()` loops in debug mode.
-**Planned fix:** S22 in [ROADMAP.md](ROADMAP.md) — remove `#[cfg(debug_assertions)]` guard on auto-lock.
+**Test:** `claim_on_locked_store_panics` and `delete_on_locked_store_panics`
+in `tests/expressions.rs` — both pass.
 **Docs:** [SAFE.md](SAFE.md) § P1-R1.
 
 ---
 
 ## C23 — Coroutine with `text` argument: use-after-free on first resume
 
-A generator that takes a `text` parameter stores the `Str` pointer verbatim in
-`stack_bytes` at creation time.  If the caller's string goes out of scope before
-the first `next()` call, the generator resumes with a dangling pointer and
-silently reads freed memory.  No panic is emitted in debug or release builds.
+**Fixed (S25.1, 0.8.3)**
 
-**Reproducer:**
-```loft
-fn words(sentence: text) -> iterator<text> { yield sentence; }
-fn main() {
-  gen = words("hello world");
-  // if the literal String is freed before next(), first resume reads garbage
-  w = next(gen);
-}
-```
+`State::serialise_text_args` is now called in `coroutine_create` for every text
+(`Str`) argument slot.  Each dynamic text arg is cloned into an owned `String` in
+`frame.text_owned`; the `Str` in `stack_bytes` is updated to point to the owned
+buffer.  On resume, the owned buffer address is re-patched into the cloned bytes
+before they are copied to the live stack.  The caller's `OpFreeText` no longer
+causes a dangling pointer.
 
-**Test:** none (requires memory sanitizer; no loft-level reproducer triggers a clear failure).
-**Workaround:** keep text arguments live for the generator's entire lifetime.
-**Planned fix:** S25 in [ROADMAP.md](ROADMAP.md) — CO1.3d `serialise_text_slots` at coroutine create.
+**Test:** `coroutine_text_arg_dynamic_serialised` in `tests/expressions.rs`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R1, [COROUTINE.md](COROUTINE.md) § SC-CO-1.
 
 ---
 
 ## C24 — Coroutine with `text` locals: memory leak on exhaustion
 
-Generators that have `text` local variables and yield at least once leak those
-`String` allocations when exhausted.  `stack_bytes.clear()` treats its payload
-as plain bytes — no `String` destructors are called.  The `text_owned`
-serialisation path (CO1.3d) that would own these allocations is not yet
-implemented.
+**Partially fixed (S25.2, 0.8.3) — text args now freed; text locals still leak**
 
-**Reproducer:**
+Text args held in `frame.text_owned` are now properly freed at exhaustion:
+`coroutine_return` calls `frame.text_owned.clear()`, which drops the owned
+Strings via RAII.  Before S25.1 landed, `text_owned` was always empty; now it
+contains the serialised text args, so the drain is effective.
+
+Text LOCAL variables (e.g. `greeting = "hello, " ++ name`) are `String` objects
+stored inline on the generator's live stack.  The `coroutine_yield` path does not
+yet serialise them into `text_owned` (CO1.3d yield path not implemented).  At
+`coroutine_return`, these live-stack Strings are abandoned — their heap allocations
+are leaked.  This affects every generator that has at least one text local and
+yields at least once.
+
+**Reproducer (still open):**
 ```loft
 fn gen_texts() -> iterator<integer> {
   greeting = "hello";  // text local on the generator stack
   yield 1;
-  // exhaustion: greeting's String heap allocation is leaked
+  // exhaustion: greeting's String heap allocation still leaks
 }
 ```
 
-**Test:** none (requires allocator leak detection).
-**Workaround:** none; avoid text locals in generators where memory pressure matters.
-**Planned fix:** S25 in [ROADMAP.md](ROADMAP.md) — CO1.3d (must land atomically with C23 fix).
+**Test:** none for the remaining leak (requires allocator leak detection).
+**Workaround:** avoid text locals in generators where memory pressure matters.
+**Remaining fix:** CO1.3d yield path — `serialise_text_slots` at `coroutine_yield`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3.
 
 ---
 
-## C25 — `yield` inside `par()` body: panic or wrong results
+## C25 — generator functions as `par()` workers: fixed in 0.8.3 (S23)
 
-The compiler does not reject `yield` expressions or generator calls inside a
-`par(...)` body.  At runtime a worker indexes its own (nearly empty) `coroutines`
-table with a `rec` from the main thread.  Out-of-bounds `rec` → Rust panic;
-in-bounds collision → worker silently advances the wrong generator.
+**Fixed in 0.8.3 (S23):** The compiler now rejects iterator-returning functions as
+`par()` workers at parse time with a clear diagnostic. A runtime bounds guard in
+`coroutine_next` panics with an actionable message if an out-of-range coroutine
+DbRef is encountered (defence-in-depth for indirect paths).
 
-**Reproducer:**
-```loft
-fn gen() -> iterator<integer> { yield 1; }
-fn main() {
-  result = par(fn(i: integer) -> integer { next(gen()) }(0..4));
-  // panics or returns wrong values depending on worker coroutine table state
-}
-```
-
-**Test:** none (unsafe to run as a test).
-**Workaround:** never use `yield` or generator calls inside `par(...)` bodies.
-**Planned fix:** S23 in [ROADMAP.md](ROADMAP.md) — `inside_par_body` compiler flag + runtime bounds guard.
+**Test:** `par_worker_returns_generator` in `tests/parse_errors.rs`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R6, [COROUTINE.md](COROUTINE.md) § SC-CO-4.
 
 ---
 
 ## C26 — `e#remove` on a generator iterator: store corruption in release
 
-`e#remove` on a generator-typed loop variable is not rejected at compile time.
-At runtime `remove()` receives a DbRef with `store_nr == u16::MAX`.  Debug
-builds panic (out-of-bounds).  Release builds compute `u16::MAX % allocations.len()`
-as the store index and delete a real record, silently corrupting that store's
-free list.
+**Partially fixed in 0.8.3 (S24) — compiler rejection already in place; runtime guard added.**
 
-**Reproducer:**
-```loft
-fn gen_items() -> iterator<integer> { for i in 0..5 { yield i; } }
-fn main() {
-  for e in gen_items() {
-    e#remove;  // release: deletes an arbitrary record in a real store
-  }
-}
-```
+`e#remove` on a generator-typed loop variable is rejected at compile time
+(CO1.5c — `loop_value == Null` in `collections.rs`).  A defense-in-depth
+runtime guard was added to `remove()` (`state/io.rs`) and `OpRemove()`
+(`codegen_runtime.rs`): if `store_nr == u16::MAX`, a `debug_assert!` fires and
+the call returns early, preventing release-build store corruption even if the
+compiler check is somehow bypassed.
 
-**Test:** none (debug panics; release silently corrupts — unsafe to automate).
+**Test:** `generator_remove_rejected` in `tests/parse_errors.rs` — compile-time
+rejection passes.
 **Workaround:** only use `e#remove` with store-backed collection iterators.
-**Planned fix:** S24 in [ROADMAP.md](ROADMAP.md) — compiler rejection + runtime guard in `remove()`.
 **Docs:** [SAFE.md](SAFE.md) § P2-R9, [COROUTINE.md](COROUTINE.md) § SC-CO-11.
 
 ---
 
 ## C29 — Native tests: `14-image.loft` PNG width returns 0 in CI (all platforms)
 
-The native binary compiled from `tests/docs/14-image.loft` panics in CI (Ubuntu,
-macOS, Windows) with `width=0` at the `assert(img.width == 256, ...)` check.  The
-test passes locally.  Root cause not yet traced.
+**Fixed in 0.8.3 (S33).**
 
-`n_file` calls `stores.get_file()` which sets the format byte to `1` (PNG); then
-`t_4File_png` calls `stores.get_png("tests/example/map.png", &result)` with the
-file path string.  If `get_png` silently fails to open the PNG (e.g. wrong working
-directory on CI, or a `get_png` return-value that is ignored in native code), it
-leaves width/height at 0.  The same code path works in the interpreter because the
-bytecode executor handles the return value differently.
+The root cause was cross-profile rlib selection: `find_loft_rlib()` compared
+modification times across `release/` and `debug/` deps directories and selected
+the wrong profile's rlib.  After fixing it to use only the current test binary's
+own `deps/` directory (`current_exe().parent()`), the correct profile rlib is
+always used and the PNG native test compiles and runs correctly.
 
-**Reproducer:** run `cargo test --test native native_dir` on any CI platform with
-`14-image.loft` not skipped.
+`14-image.loft` has been removed from `NATIVE_SKIP`.
 
-**Test:** `14-image.loft` is in `NATIVE_SKIP`.
-**Workaround:** test PNG functionality via the interpreter (`loft_suite` passes).
-**Planned fix:** S33 — add diagnostic logging to `get_png` native path; verify
-working directory and return-value handling; remove from skip list.
+**Test:** `14-image.loft` runs as part of `native_dir` — passes.
+**Docs:** [NATIVE.md](NATIVE.md) § S33.
 
 ---
 
 ## C27 — Native tests: `rand_core` unavailable in standalone rustc compilation
 
-`rand_core` and `rand_pcg` are optional feature dependencies of the loft crate
-(enabled by the `random` feature).  When the native test harness compiles generated
-`.rs` files by invoking `rustc` directly, it passes `--extern loft=libloft.rlib` but
-does not pass `--extern rand_core=...` for transitive optional deps.  Any native test
-that calls `rand`, `rand_seed`, or `rand_indices` therefore fails to compile with
-`error[E0433]: failed to resolve: use of undeclared crate or module 'rand_core'`.
+**Fixed in 0.8.3 (S31).**
 
-**Reproducer:** run `cargo test --test native` with `tests/scripts/15-random.loft` or
-`tests/docs/21-random.loft` included (not skipped).
+`collect_extra_externs()` was added to `tests/native.rs`: it scans all `.rlib`
+files in the current test binary's `deps/` directory and passes each as
+`--extern crate_name=path` to the standalone `rustc` invocation.  All versions
+of each crate are passed (no deduplication), allowing rustc's hash matching to
+select the one that `libloft` was compiled against.
 
-**Test:** `15-random.loft` and `21-random.loft` are in the native skip lists.
-**Workaround:** avoid random functions in native test scripts until the harness is fixed.
-**Planned fix:** extend `find_loft_rlib` / rustc invocation in `tests/native.rs` to
-collect and pass `--extern` flags for all transitive optional deps from the deps dir.
+`15-random.loft` and `21-random.loft` have been removed from their respective
+native skip lists.
+
+**Test:** `15-random.loft` and `21-random.loft` run as part of `native_dir` — pass.
 
 ---
 
-## C28 — Native tests: slot conflict in `20-binary.loft` (`rv` vs `_read_34`)
+## C28 — `20-binary.loft` slot conflict (`rv` vs `_read_34`) *(fully fixed in S32 + S34, 0.8.3)*
 
-The slot allocator assigns overlapping slots to `rv` and `_read_34` in `n_main`
-within `tests/scripts/20-binary.loft`:
+**Fixed (native, S32).**  `adjust_first_assignment_slot` now checks for same-scope sibling
+overlap (`has_sibling_overlap`) before moving a large variable down to TOS.  This prevents
+`rv` and `_read_34` from being assigned the same slot range during native codegen.
 
-```
-=== Slot conflict in function 'n_main' ===
-* 'rv'       slot [820, 832)  live [1016, 1110]
-* '_read_34' slot [820, 832)  live [1008, 1109]
-```
+**Fixed (interpreter, S34).**  When `adjust_first_assignment_slot` cannot move a variable
+(same-scope siblings block it) and Option A fires (moving the variable down to current TOS
+anyway), the moved variable is now marked `skip_free`.  This prevents `generate_call` from
+emitting an `OpFreeRef` for the aliased variable, eliminating the double-free that caused
+the "Double free store" panic in the bytecode interpreter.
 
-Both variables have overlapping live ranges and are assigned the same slot range.
-This is a pre-existing slot assignment regression (category A/B from SLOT_FAILURES.md)
-that the native codegen exposes as a compile or runtime error.
-
-**Reproducer:** run `cargo test --test native` with `20-binary.loft` included.
-
-**Test:** `20-binary.loft` is in `SCRIPTS_NATIVE_SKIP`.
-**Workaround:** keep `20-binary.loft` skipped in native tests.
-**Planned fix:** root-cause the slot conflict in the two-zone allocator (see SLOT_FAILURES.md);
-fix and remove from skip list.
+**Test (interpreter):** `20-binary.loft` passes in `cargo test --test wrap` (S34).
+**Test (native):** in `SCRIPTS_NATIVE_SKIP` — native codegen emits malformed Rust for the
+`Set(rv, Insert([Set(_read_34, Null), Block]))` pattern.  Before S34, `validate_slots`
+panicked during `byte_code()`, which `catch_unwind` caught and converted to a silent skip.
+After S34's bytecode fix the panic is gone, so the pre-existing native codegen bug for the
+Insert-return pattern is now visible.  Tracked in `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`.
+**Fixed by:** S32 — `has_sibling_overlap` (interpreter + native slot assignment); S34 —
+`skip_free` + suppressed `OpFreeRef` in `generate_call` (interpreter double-free only).
 
 ---
 

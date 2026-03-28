@@ -15,6 +15,11 @@ impl Output<'_> {
         def_fn: &Definition,
         vals: &[Value],
     ) -> std::io::Result<()> {
+        // N8b.2: generator function calls produce a DbRef via the coroutine table.
+        let is_generator = matches!(def_fn.returned, Type::Iterator(_, _));
+        if is_generator {
+            write!(w, "loft::codegen_runtime::alloc_coroutine(")?;
+        }
         write!(w, "{}(stores", def_fn.name)?;
         for (idx, v) in vals.iter().enumerate() {
             write!(w, ", ")?;
@@ -39,9 +44,11 @@ impl Output<'_> {
             }
         }
         write!(w, ")")?;
-        // Narrow integer return types (u8/u16/i8/i16) must be widened to i32 so that
-        // assignments and comparisons with i32 expressions type-check in Rust.
-        if narrow_int_cast(&def_fn.returned).is_some() {
+        if is_generator {
+            write!(w, ")")?; // close alloc_coroutine(...)
+        } else if narrow_int_cast(&def_fn.returned).is_some() {
+            // Narrow integer return types (u8/u16/i8/i16) must be widened to i32 so that
+            // assignments and comparisons with i32 expressions type-check in Rust.
             write!(w, " as i32")?;
         }
         Ok(())

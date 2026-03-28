@@ -1109,9 +1109,14 @@ use #count instead"
         self.vars.loop_var(b_var);
         let in_loop = self.in_loop;
         self.in_loop = true;
+        // P2-R6 M11-a: flag that we are inside a par() body so that any `yield`
+        // encountered during parsing can emit a compile-time error.
+        let outer_par = self.in_par_body;
+        self.in_par_body = true;
         let mut block = Value::Null;
         self.parse_block("parallel for", &mut block, &Type::Void);
         let count = self.vars.loop_counter();
+        self.in_par_body = outer_par;
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
 
@@ -1167,11 +1172,19 @@ use #count instead"
                 Value::Var(idx_var),
             ],
         );
-        let get_call = if matches!(ret_type, Type::Reference(_, _)) {
+        let get_call = if matches!(ret_type, Type::Reference(_, _)) || fn_d_nr == u32::MAX {
+            // fn_d_nr == u32::MAX: worker was rejected (e.g. S23 generator check);
+            // skip the type-based field access to avoid crashing on Unknown type.
             get_vec
         } else {
             let vec_tp = self.data.type_def_nr(ret_type);
-            self.get_field(vec_tp, usize::MAX, get_vec)
+            if vec_tp == u32::MAX {
+                // Unsupported return type (e.g. iterator<T> in first pass before S23
+                // diagnostic fires): fall back to raw vector access to prevent crash.
+                get_vec
+            } else {
+                self.get_field(vec_tp, usize::MAX, get_vec)
+            }
         };
         let b_assign = v_set(b_var, get_call);
         let idx_inc = v_set(
@@ -1754,7 +1767,7 @@ use #count instead"
         name: &str,
         list: &[Value],
         types: &[Type],
-    ) -> (Vec<Value>, u16, Value) {
+    ) -> (Vec<Value>, u16, Value, Value) {
         let mut in_type = types[0].clone();
         let vec_var = self.create_unique(&format!("{name}_vec"), &in_type);
         in_type = in_type.depending(vec_var);
@@ -1784,11 +1797,11 @@ use #count instead"
         );
 
         let preamble = vec![v_set(vec_var, list[0].clone()), create_iter];
-        (
-            preamble,
-            for_var,
-            v_block(vec![for_next, break_if_done], Type::Void, "iter_step"),
-        )
+        // N8a.4 (P3): return for_next and break_if_done as separate values so callers
+        // inline them directly in the loop body.  A v_block wrapper would declare
+        // `for_var` inside a nested Rust `{ }` block, making it invisible to the
+        // short_circuit/count_step expression that follows in native code.
+        (preamble, for_var, for_next, break_if_done)
     }
 
     /// `any(vec, pred)` — true if pred returns true for any element.
@@ -1803,7 +1816,8 @@ use #count instead"
         let acc = self.create_unique("any_acc", &Type::Boolean);
         self.vars.defined(acc);
 
-        let (preamble, for_var, iter_step) = self.predicate_loop_scaffold("any", list, types);
+        let (preamble, for_var, for_next, break_if_done) =
+            self.predicate_loop_scaffold("any", list, types);
 
         // if pred(elem) { acc = true; break }
         let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
@@ -1817,7 +1831,7 @@ use #count instead"
             Value::Null,
         );
 
-        let loop_body = vec![iter_step, short_circuit];
+        let loop_body = vec![for_next, break_if_done, short_circuit];
         let mut stmts = vec![v_set(acc, Value::Boolean(false))];
         stmts.extend(preamble);
         stmts.push(v_loop(loop_body, "any"));
@@ -1839,7 +1853,8 @@ use #count instead"
         let acc = self.create_unique("all_acc", &Type::Boolean);
         self.vars.defined(acc);
 
-        let (preamble, for_var, iter_step) = self.predicate_loop_scaffold("all", list, types);
+        let (preamble, for_var, for_next, break_if_done) =
+            self.predicate_loop_scaffold("all", list, types);
 
         // if !pred(elem) { acc = false; break }
         let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
@@ -1854,7 +1869,7 @@ use #count instead"
             Value::Null,
         );
 
-        let loop_body = vec![iter_step, short_circuit];
+        let loop_body = vec![for_next, break_if_done, short_circuit];
         let mut stmts = vec![v_set(acc, Value::Boolean(true))];
         stmts.extend(preamble);
         stmts.push(v_loop(loop_body, "all"));
@@ -1881,14 +1896,15 @@ use #count instead"
         let acc = self.create_unique("cntif_acc", &I32);
         self.vars.defined(acc);
 
-        let (preamble, for_var, iter_step) = self.predicate_loop_scaffold("count_if", list, types);
+        let (preamble, for_var, for_next, break_if_done) =
+            self.predicate_loop_scaffold("count_if", list, types);
 
         // if pred(elem) { acc += 1 }
         let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
         let inc = v_set(acc, self.cl("OpAddInt", &[Value::Var(acc), Value::Int(1)]));
         let count_step = v_if(pred_call, inc, Value::Null);
 
-        let loop_body = vec![iter_step, count_step];
+        let loop_body = vec![for_next, break_if_done, count_step];
         let mut stmts = vec![v_set(acc, Value::Int(0))];
         stmts.extend(preamble);
         stmts.push(v_loop(loop_body, "count_if"));

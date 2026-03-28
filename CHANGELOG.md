@@ -6,6 +6,316 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Safety fixes
+
+- **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
+  `State::coroutine_create` now calls `serialise_text_args` after copying the raw
+  argument bytes.  For each text (`Str`) argument that points into a dynamic heap
+  allocation (not a static literal in `text_code`), the function clones the string
+  data into an owned `String` stored in `frame.text_owned`, then overwrites the
+  `Str` bytes in `stack_bytes` to point to the owned buffer.  The owned `String`
+  outlives any `OpFreeText` the caller may emit after the create; the `Str` pointer
+  is therefore never dangling on the first or any subsequent resume (P2-R1, critical
+  use-after-free).
+  At `coroutine_next`, each owned String's current buffer address is patched back
+  into the cloned `stack_bytes` before the bytes are copied to the live stack
+  (M6-b pointer-patch step).
+  At `coroutine_return`, the existing `frame.text_owned.clear()` now properly drains
+  the owned Strings that were populated by S25.1, freeing their heap allocations via
+  Rust RAII instead of leaking them (P2-R2, high memory leak).
+  Two new tests `coroutine_text_arg_dynamic_serialised` and
+  `coroutine_text_arg_freed_at_return` in `tests/expressions.rs` exercise the create
+  → resume → exhaust cycle with a dynamically formatted text argument.
+
+- **`const` parameter writes now panic in release builds** (S22) — The
+  `#[cfg(debug_assertions)]` guard on auto-lock insertion has been removed from
+  `src/parser/expressions.rs`.  `store.claim()` and `store.delete()` now use
+  `assert!` instead of `debug_assert!`, so writes to `const` Reference or Vector
+  parameters produce a panic in both debug and release builds.  Previously, release
+  builds silently discarded the write into a dummy buffer, causing `par()` workers
+  to continue with stale data.  Tests `claim_on_locked_store_panics` and
+  `delete_on_locked_store_panics` in `tests/expressions.rs` verify the runtime
+  enforcement.
+
+- **`e#remove` on a generator iterator: defense-in-depth runtime guard** (S24) —
+  Calling `e#remove` inside a generator `for` loop was already rejected at compile
+  time (CO1.5c).  A matching runtime guard has been added to `state/io.rs::remove()`
+  and `codegen_runtime.rs::OpRemove()`: if `store_nr == u16::MAX` (the coroutine
+  sentinel), a `debug_assert!` fires and the call returns early, preventing
+  release-build store corruption even if the compiler check is somehow bypassed.
+
+- **Generator functions rejected as `par()` workers at compile time** (S23) — The
+  parser now detects when a `par()` worker function has return type `iterator<T>` and
+  emits a clear diagnostic instead of allowing the call to proceed.  At runtime,
+  worker threads have their own (empty) coroutine table; passing a generator DbRef
+  across thread boundaries would either panic with an out-of-bounds index or silently
+  advance the wrong generator.  A runtime bounds guard in `coroutine_next` provides
+  defence-in-depth.  Test `par_worker_returns_generator` in `tests/parse_errors.rs`
+  covers the compile-time path.
+
+- **Abandoned coroutine frame freed on early `for` loop exit** (S37) — When a `for`
+  loop breaks before a generator exhausts, `OpFreeRef` calls `free_ref` on the
+  coroutine DbRef.  `database.free()` is a no-op for `COROUTINE_STORE`
+  (store_nr == u16::MAX), so `text_owned` buffers, `stack_bytes`, and `call_frames`
+  in the `CoroutineFrame` were silently leaked on every early-break path.
+  Fix: `free_ref` now checks `db.store_nr == COROUTINE_STORE` and calls
+  `free_coroutine(db.rec)` explicitly before returning.  Test
+  `coroutine_early_break_frame_freed` in `tests/expressions.rs` exercises the
+  early-break path and verifies the correct first-yield value is returned.
+
+- **Exhausted coroutine slots freed immediately** (S26) — `coroutine_return` now sets
+  the slot to `None` after marking it `Exhausted`, so the `State::coroutines` Vec does
+  not grow without bound across repeated `for n in gen() { }` loops.  A guard in
+  `coroutine_next` handles the `None` case (push null, return) so existing code that
+  re-iterates is unaffected.  Test `coroutine_frame_freed_after_exhaustion` in
+  `tests/expressions.rs` runs 1 000 loops to confirm no slot leak.
+
+- **Coroutine `text_positions` save/restore across yield (debug builds)** (S27) —
+  In debug builds, `coroutine_yield` now saves the suspended frame's
+  `text_positions` entries and removes them from the live set; `coroutine_next`
+  restores them on resume.  This prevents false double-free warnings and
+  mask-missing-free bugs in `TextStore` ownership tracking when a generator is
+  interleaved with text operations in the caller.  Test
+  `coroutine_text_positions_save_restore` in `tests/expressions.rs`.
+
+- **`WorkerStores` newtype for compile-time worker-store isolation** (S30) —
+  `clone_for_worker` now returns `WorkerStores` instead of plain `Stores`.
+  `WorkerStores` is `Send` but not `Sync` (via `PhantomData<*mut ()>`), giving a
+  compile-time guarantee that worker-thread store snapshots are passed exclusively to
+  `State::new_worker` and cannot be aliased across threads.  A `Deref<Target = Stores>`
+  impl allows existing test code to inspect fields without change.
+
+- **Debug generation counter for stale-DbRef detection in coroutines** (S28) —
+  `Store` now carries a `generation: u32` field (debug builds only), incremented on
+  every `claim`, `delete`, and `resize` call.  `coroutine_yield` snapshots the
+  generation of every live, unlocked store; `coroutine_next` asserts that no snapshot
+  store changed between yield and resume.  This catches the stale-DbRef hazard — where
+  a struct record held by a suspended generator is freed or reallocated by the caller —
+  as an early `debug_assert!` panic rather than silent corruption.  Test
+  `coroutine_stale_store_guard` in `tests/expressions.rs`.
+
+- **Parallel worker stores use `thread::scope` and skip `claims` clone** (S29) —
+  `run_parallel_direct` in `src/parallel.rs` now uses `thread::scope` instead of
+  `thread::spawn` + manual join loop, giving lifetime-bounded joining with no `Vec`
+  of handles.  `Store::clone_locked_for_worker` skips cloning the `claims` `HashSet`
+  (workers never call `validate()`) and `store.valid()` skips the claims check for
+  locked stores, removing a spurious "Unknown record" panic that appeared in debug
+  builds when workers accessed struct fields.
+
+- **Store allocator uses free-bitmap; non-LIFO slot reuse now correct** (S29 P1-R4) —
+  `database_named` previously always allocated from `self.max` and only reclaimed the
+  top slot on `free_named`.  Native `OpFreeRef` legitimately frees slots in non-LIFO
+  order, leaving freed slots permanently wasted and `max` growing without bound.  A
+  `free_bits: Vec<u64>` bitmap was added to `Stores`; `set_free_bit`/`clear_free_bit`
+  helpers update it on every free/alloc, and `find_free_slot` scans for the lowest set
+  bit below `max`.  `clone_for_worker` propagates the bitmap to worker stores.
+  Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
+  freed non-top slot is reused by the next `database()` call and `max` does not grow.
+
+### Coroutine safety documentation
+
+- **Store-backed `Str` debug guard in `coroutine_yield`** (P2-R5 M10-a) — In
+  `#[cfg(debug_assertions)]` builds on 64-bit targets, `coroutine_yield` now
+  scans every tracked text local in the generator's `locals_bytes` and warns
+  (`eprintln!("[P2-R5] ...")`) if the first 8 bytes (the `Str.ptr` field) fall
+  within any live non-stack store allocation.  A store-backed Str in a suspended
+  generator dangles if the consumer frees or reuses the backing record before
+  the next resume.  The check is a heuristic (cannot cover full pointer
+  provenance) but catches the common case of a recently-read text field local.
+  No change to correct-program behaviour; the warning is diagnostic only.
+  See `COROUTINE.md` CL-2b and `SAFE.md` § P2-R5.
+
+- **Yielded `Str` ownership rule documented** (P2-R10) — `COROUTINE.md` CL-7 records
+  the ownership invariant for `text` values produced by `yield`: the value is a
+  zero-copy reference into the generator's frame (or `text_owned` buffer once CO1.3d
+  lands) and is valid only for the current loop-body iteration.  Consumers that need
+  to keep the text beyond one iteration must copy it (`stored = "{value}"`) or pass
+  it to a function that calls `set_str`.  No runtime change; documentation only.
+
+- **Text locals survive yield/resume in coroutines** (P2-R3 CO1.3d) — Text
+  variables in generator functions are `String` objects (24 B) on the live stack.
+  The bitwise copy of the locals region at yield is safe: `String` owns its heap
+  buffer and no external code can free that buffer while the generator is suspended.
+  The M8-b `debug_assert!` that fired for any text local at yield time has been
+  removed; the S27 `text_positions` save/restore is preserved for correctness.
+  Additionally, `coroutine_return` and `push_null_value` now push
+  `Str::new(STRING_NULL)` (not 16 zero bytes) when an exhausted `iterator<text>`
+  generator returns its null sentinel — the zero-pointer `Str` caused a panic in
+  `append_text` via `slice::from_raw_parts(0, 0)`.  Test
+  `coroutine_text_local_survives_yield` in `tests/expressions.rs` is now active and
+  passing.
+
+### Native store safety
+
+- **Locked store cleared on free; `40-par-ref-return.loft` fixed** (S36) —
+  `free_named` in `src/database/allocation.rs` now calls `unlock()` on the store
+  before marking it free in the bitmap.  The parser auto-inserts
+  `n_set_store_lock(stores, param, true)` at the start of functions with `const`
+  reference parameters but does not emit the matching unlock before return.  When
+  the store was freed while still locked, `find_free_slot` selected the freed slot
+  for reuse and `database_named` called `init()` on a locked store, triggering:
+  "Write to locked store at rec=1 fld=0".  The bug was invisible in the interpreter
+  because `test_runner.rs` creates a fresh `Stores` per test function; in native
+  mode all `test_*` functions share one `Stores`, so the leaked lock carried over
+  from `test_par_struct_simple` into `test_par_struct_return_single_thread`.
+  `40-par-ref-return.loft` now passes in `native_scripts` with 45/45.
+
+### Interpreter fixes
+
+- **`20-binary.loft` double-free fixed** (S34) — When `adjust_first_assignment_slot`
+  cannot move a work variable downward (same-scope siblings block the move) and
+  Option A fires — forcing the variable to the current TOS, aliasing it with the
+  outer `rv` — the variable is now marked `skip_free` at that point.
+  `generate_call` suppresses the `OpFreeRef` bytecode for any `skip_free` variable,
+  preventing the "Double free store" panic caused by both `rv` and `_read_34` each
+  trying to free the same database record at slot 820.  `skip_free` flags set during
+  codegen are propagated back to `data.definitions[def_nr].variables` before
+  `validate_slots` runs, which now skips slot-overlap pairs where either variable is
+  `skip_free`.  The `binary` test (`tests/scripts/20-binary.loft`) no longer has
+  `#[ignore]`; `"20-binary.loft"` removed from `ignored_scripts()` in `tests/wrap.rs`.
+
+### WASM / native codegen fixes
+
+- **Native codegen: Insert-return pattern fixed** (S35) — `output_set` in
+  `src/generation/dispatch.rs` now detects `Value::Insert` as the RHS of an
+  assignment and hoists all-but-last ops as standalone statements before the
+  declaration line, emitting only the final expression as the assignment value.
+  Previously the inner `Set` ops were emitted inline inside an expression context,
+  producing malformed Rust (`let mut var_rv: DbRef = let mut var__read_34: DbRef = …`).
+  The same function now also suppresses `OpFreeRef` for variables marked `skip_free`,
+  matching the bytecode interpreter fix (S34) and preventing a double-free in the
+  native binary.  `"20-binary.loft"` removed from `SCRIPTS_NATIVE_SKIP` in
+  `tests/native.rs`; `native_binary_script` test passes without `#[ignore]`.
+
+- **WASM random bridge wired; `rand_indices` shuffles via host bridge** (W1.19) —
+  `codegen_runtime::n_rand` previously returned `i32::MIN` (null) when compiled
+  without `feature = "random"`, making all `rand(lo, hi)` calls return null in WASM.
+  It now delegates to `ops::rand_int`, which already had a WASM fallback calling
+  `host_random_int` from `src/wasm.rs`.  A matching WASM `shuffle_ints` fallback
+  (feature="wasm", not feature="random") was added to `src/ops.rs`, performing a
+  Fisher-Yates shuffle via repeated `host_random_int(0, i)` calls; `n_rand_indices`
+  in `codegen_runtime.rs` now enables the shuffle for both the PCG and WASM code
+  paths.  `"21-random.loft"` removed from `WASM_SKIP` in `tests/wrap.rs`; the WASM
+  compilation test now exercises `rand()`, `rand_seed()`, and `rand_indices()`.
+
+- **WASM time bridge wired to `std::time::SystemTime`** (W1.20) — `host_time_now()`
+  and `host_time_ticks()` in `src/wasm.rs` previously returned hard-coded `0`.
+  They now call `std::time::SystemTime::now()` via the WASI clock interface (available
+  in `wasm32-wasip2` through Rust's std).  `host_time_ticks()` delegates to
+  `host_time_now()` (millisecond wall-clock); `n_ticks` computes elapsed microseconds
+  as `(host_time_ticks() - start_time_ms) * 1000`, which is sufficient for benchmark
+  timing.  `"22-time.loft"` removed from `WASM_SKIP` in `tests/wrap.rs`; the WASM
+  compilation test now exercises `now()` and `ticks()` end-to-end.
+
+
+- **WASM skip for lock functions removed** (W1.17) — `n_get_store_lock` and
+  `n_set_store_lock` are resolved from `loft::codegen_runtime` (listed in
+  `CODEGEN_RUNTIME_FNS` in `generation/mod.rs`), so no `todo!()` stub is emitted.
+  `18-locks.loft` removed from `WASM_SKIP`; the WASM compilation test now exercises
+  `#lock` attribute syntax and `get_store_lock()` / `set_store_lock()`.
+
+- **WASM skip for function references removed** (W1.15) — `output_call_ref` in
+  `emit.rs` generates a `match` dispatch over all reachable definitions with a
+  matching signature, implementing fn-ref calls (`f(args)` where `f: fn(T) -> R`)
+  in native/WASM output.  `06-function.loft` removed from `WASM_SKIP`; the WASM
+  compilation test now exercises function references, lambdas, and higher-order
+  functions (`map`, `filter`, `reduce`).
+
+### Native test harness fixes
+
+- **`any`, `all`, `count_if` now work in native code generation; `47-predicates.loft` and `46-caveats.loft` unskipped** (N8a.4) —
+  `predicate_loop_scaffold` in `src/parser/collections.rs` previously wrapped
+  `[for_next, break_if_done]` in a `v_block`, which in native codegen became a
+  Rust `{ ... }` block.  The loop variable (`any_elm`, `all_elm`, `cntif_elm`) was
+  declared inside that block, making it invisible to the `short_circuit` or
+  `count_step` expression that followed outside the block.  The fix inlines
+  `for_next` and `break_if_done` directly in the loop body (the scaffold now returns
+  a 4-tuple instead of 3), eliminating the nested block.  Both `47-predicates.loft`
+  and `46-caveats.loft` (which uses `any`/`all` internally) removed from
+  `SCRIPTS_NATIVE_SKIP`.
+
+- **Native coroutine `yield from` delegation** (N8b.3) — `yield from sub_gen()`
+  now works in native-compiled generators.  The sub-generator is stored as
+  `Option<Box<dyn LoftCoroutine>>` directly in the outer struct, avoiding the
+  `NATIVE_COROUTINES` `RefCell` that would cause a "RefCell already borrowed" panic
+  when the outer `next_i64` tries to advance the inner generator.  The outer
+  `next_i64` body is wrapped in a `loop {}` when yield-from segments are present;
+  exhausted sub-generators set the next state and `continue` immediately.  Factory
+  functions for sub-generators are called directly (not via `alloc_coroutine`) so
+  sub-generators are never registered in the shared table.  CO1.4 test in
+  `51-coroutines.loft` (`outer_with_from` producing 1+10+20+2 = 33) now passes.
+
+- **Native coroutine state-machine code generation** (N8b.1, N8b.2) — Generator
+  functions (`fn foo() -> iterator<integer>`) are now supported by the `--native`
+  Rust backend.  Each generator is translated into a hand-written Rust state-machine
+  struct (e.g. `NCountGen { state: u32, … }`) implementing the new `LoftCoroutine`
+  trait (`fn next_i64(&mut self, stores: &mut Stores) -> i64`).  The coroutine body
+  is split at `yield` nodes into match arms; a catch-all `_ =>` arm returns
+  `COROUTINE_EXHAUSTED` (= `i32::MIN as i64`).  Three new pieces land in
+  `src/codegen_runtime.rs`: the `LoftCoroutine` trait, a thread-local
+  `NATIVE_COROUTINES` table (avoiding changes to `Stores`), `alloc_coroutine`,
+  `coroutine_next_i64`, and `coroutine_is_exhausted`.  Call sites emit
+  `loft::codegen_runtime::alloc_coroutine(foo(stores, args))` via a new
+  `src/generation/coroutine.rs` module.  `OpCoroutineNext` and `OpCoroutineExhausted`
+  are dispatched in `src/generation/dispatch.rs`.  `collect_calls` in
+  `src/generation/mod.rs` now walks `Value::Yield` nodes so helper functions called
+  from yield expressions are included in the reachable set.  `51-coroutines.loft`
+  removed from `SCRIPTS_NATIVE_SKIP`; `native_scripts` passes all 4 generator tests.
+
+- **`45-field-iter.loft` stale skip removed from native test harness** (N8a.5) —
+  The `// A10` skip entry for `45-field-iter.loft` in `SCRIPTS_NATIVE_SKIP` was
+  stale: the field-iteration native backend already worked correctly after the A10
+  implementation.  The entry has been removed; `45-field-iter.loft` now runs in the
+  `native_scripts` test alongside all other unblocked scripts.
+
+- **Tuple types now supported in native code generation; `50-tuples.loft` unskipped** (N8a) —
+  Three complementary fixes enable tuple types in the `--native` backend:
+  (N8a.1) `rust_type(Type::Tuple)` now emits the correct Rust type `(T0, T1, …)`
+  instead of `()`, and `default_native_value` returns `String` so tuple zero-values
+  `(0, 0)` are built dynamically.
+  (N8a.2) `Value::TupleGet` in `emit.rs` now uses the variable's declared name instead
+  of its internal index number; `Value::TuplePut` emits the actual element assignment
+  `var_x.i = …` rather than a stub.  `TuplePut` added to `is_void_value` in
+  `pre_eval.rs` so the block emitter treats it as a statement, not a return expression.
+  (N8a.3) Tuple-returning functions `make_pair`/`swap_pair` added to
+  `tests/scripts/50-tuples.loft` (with LHS destructuring); the script removed from
+  `SCRIPTS_NATIVE_SKIP`.  Both interpreter and native backends pass all tuple assertions.
+
+- **Slot conflict in `20-binary.loft` fixed; removed from native skip list** (S32) —
+  `adjust_first_assignment_slot` in `src/state/codegen.rs` now checks for same-scope
+  sibling overlap (`has_sibling_overlap`) before moving a variable down to TOS, mirroring
+  the existing `has_child_overlap` guard for child-scope variables.  This prevented `rv`
+  and `_read_34` in `n_main` from being assigned the same slot range `[820, 832)` despite
+  overlapping live intervals.  `20-binary.loft` removed from `SCRIPTS_NATIVE_SKIP`.
+
+- **Generic instantiation confirmed working in native backend; `48-generics.loft` unskipped** (N8c) —
+  Audit (N8c.1) showed that monomorphised generic functions already emit correct native
+  code.  `48-generics.loft` removed from `SCRIPTS_NATIVE_SKIP`.
+
+- **Optional feature dependencies now passed to standalone `rustc`** (S31) — The
+  native test harness now calls `collect_extra_externs()`, which scans all `.rlib`
+  files in the current test binary's `deps/` directory and passes each as
+  `--extern crate_name=path`.  This unblocks scripts that use `rand`, `rand_seed`,
+  or `rand_indices`: `tests/scripts/15-random.loft` and `tests/docs/21-random.loft`
+  have been removed from the native skip lists.
+
+- **Native rlib lookup now uses the current test binary's profile** (S33) — The
+  previous `find_loft_rlib()` compared modification times across `release/` and
+  `debug/` deps directories and could select the wrong profile's rlib (e.g. a
+  newer no-features rlib from a `--no-default-features` CI step).  The function
+  now uses `current_exe().parent()` — always the current test binary's own `deps/`
+  directory — so the selected rlib always matches the features the test was compiled
+  with.  `tests/docs/14-image.loft` has been removed from `NATIVE_SKIP`.
+
+### Test coverage
+
+- **`single` (f32) type fully covered** — New `tests/scripts/52-single.loft` covers
+  all previously zero-coverage `single` operations: arithmetic (sub, mul, div, rem),
+  all six comparison operators, NaN null semantics and propagation, null coalescing,
+  positive/negative infinity (non-null), conversions (`as single` from integer/float/text;
+  `single as` float/integer/long/text), format specifiers, and NaN-producing casts.
+  The test is registered in `tests/wrap.rs` as `single_type`.
+
 ### New features
 
 - **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now
@@ -33,6 +343,48 @@ All notable changes to the loft language and interpreter.
   `closure_capture_multiple`, and `closure_capture_after_change` all pass without
   `#[ignore]` in both debug and release builds.  Text capture and mutable capture
   remain deferred (A5.6 in ROADMAP.md).
+
+- **Mutable closure captures write back to outer scope after each call** (A5.6c)
+  — Void-return lambda calls now emit a write-back sequence after the `CallRef`
+  instruction: for each field of the closure record, `OpGetInt` (or the
+  field-type equivalent) reads the updated value back and stores it to the
+  corresponding outer-scope variable.  Two root-cause bugs were fixed along the
+  way: (1) `closure_vars.insert` was executing before the RHS lambda was parsed
+  (because the insert check ran before `parse_assign_op`, which is where the
+  lambda tokens are consumed); (2) the write-back used `Value::Block` (which
+  creates a new scope), causing `scopes.rs` to emit `OpFreeRef` for the closure
+  variable at the inner scope exit — leaving a dangling DbRef for the second
+  call.  The fix uses `Value::Insert` instead, keeping the closure record alive
+  across all calls in the outer scope.
+  Test `p1_1_lambda_void_body` in `tests/issues.rs` passes without `#[ignore]`.
+
+- **Text capture via `CallRef` no longer produces garbage DbRef** (A5.6b.1) —
+  In `generate_call_ref`, the `__closure` argument (a `DbRef`) was being pushed
+  onto the wrong stack frame: it was placed at the stack position of `x`
+  (the first explicit argument), not at the position expected by the lambda
+  body.  Two separate code paths were fixed: (1) for zero-param fn-refs the
+  fast path now injects the closure arg; (2) `text_return` no longer adds
+  captured RefVar(Text) variables as spurious extra args to the lambda's
+  parameter type, which previously caused arity-mismatch failures.
+
+- **`generate_call_ref` pre-allocates text work buffers for closures** (A5.6b.2)
+  — A spurious `debug_assert!(work_vars.is_empty())` in `generate_call_ref`
+  fired when a capturing lambda returned text, because the closure record
+  contains a RefVar work buffer.  The assert has been removed; the existing
+  logic already handles non-empty `work_vars` correctly.  Test
+  `closure_capture_text_integer_return` passes without `#[ignore]`.
+
+- **`yield` inside `par(...)` body now produces a compile-time error** (P2-R6
+  M11-a) — The parser sets an `in_par_body` flag while parsing the body block
+  of a `for … par(…)` loop.  When `yield` is encountered with `in_par_body`
+  true, an Error diagnostic is emitted: "yield is not allowed inside a
+  par(...) parallel body".  The yield expression is still consumed (to keep the
+  lexer in sync) but no coroutine IR is generated, so scope analysis does not
+  see orphaned reference variables.  The `in_par_body` flag is saved and
+  restored for nested par() bodies.  Test
+  `p2_r6_yield_inside_par_body_rejected` in `tests/issues.rs` passes without
+  `#[ignore]`.  The existing runtime out-of-bounds guard (S23 / M11-b) in
+  `coroutine_next` remains as defence-in-depth.
 
 - **`yield from` slot-assignment regression fixed** (CO1.4-fix) — `yield from
   inner()` inside a coroutine with local variables before the delegation now

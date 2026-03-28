@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // CO1: Coroutines — yield, iterator<T>, next(), exhausted(), for-loop, text param, nested call.
-// Blocked: yield from (CO1.4 slot-assignment regression).
+// CO1.4: yield from delegation.
 
 fn count() -> iterator<integer> {
   yield 10;
@@ -23,6 +23,17 @@ fn gen_doubles() -> iterator<integer> {
 fn gen_len(s: text) -> iterator<integer> {
   yield len(s);
   yield len(s);
+}
+
+fn inner_vals() -> iterator<integer> {
+  yield 10;
+  yield 20;
+}
+
+fn outer_with_from() -> iterator<integer> {
+  yield 1;
+  yield from inner_vals();
+  yield 2;
 }
 
 fn main() {
@@ -54,6 +65,11 @@ fn main() {
   total3 = 0;
   for n in gen_len("hello") { total3 += n; }
   assert(total3 == 10, "text param survives yield: {total3}");
+
+  // --- CO1.4: yield from delegation ---
+  yf_total = 0;
+  for n in outer_with_from() { yf_total += n; }
+  assert(yf_total == 33, "yield from: {yf_total}");
 
   println("CO1: coroutines ok");
 }

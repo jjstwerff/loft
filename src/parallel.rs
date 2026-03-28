@@ -10,7 +10,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::database::{Call, Stores};
+use crate::database::{Call, Stores, WorkerStores};
 use crate::keys::DbRef;
 use crate::state::State;
 use crate::vector;
@@ -62,7 +62,7 @@ impl WorkerProgram {
     }
 
     /// Create a worker `State` from this program, with `stack_trace_lib_nr` propagated.
-    fn new_state(&self, worker_stores: crate::database::Stores) -> State {
+    fn new_state(&self, worker_stores: WorkerStores) -> State {
         let (bytecode, text_code, library) = self.clone_refs();
         let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
         state.stack_trace_lib_nr = self.stack_trace_lib_nr;
@@ -92,43 +92,51 @@ pub fn run_parallel_direct(
     }
     #[cfg(feature = "threading")]
     {
+        // S29/P1-R2: use thread::scope instead of thread::spawn + manual join loop.
+        // thread::scope proves to the borrow checker that out_ptr outlives all threads
+        // (the scope joins threads automatically at the closing brace).
+        // Arc<SendMutPtr> is retained because scoped-spawn still requires Send.
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let mut handles = Vec::with_capacity(threads);
         let out = Arc::new(SendMutPtr(out_ptr));
 
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let out_t = Arc::clone(&out);
-            let ret_sz = return_size as usize;
+        thread::scope(|s| {
+            for t in 0..threads {
+                let start = t * n_rows / threads;
+                let end = (t + 1) * n_rows / threads;
+                let worker_stores = stores.clone_for_worker();
+                let prog = Arc::clone(&program);
+                let input_t = *input;
+                let extras = extra_args.to_vec();
+                let out_t = Arc::clone(&out);
+                let ret_sz = return_size as usize;
 
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                for row_idx in start..end {
-                    let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx_i32,
-                        &state.database.allocations,
-                    );
-                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
-                    unsafe {
-                        let dst = out_t.0.add(row_idx * ret_sz);
-                        std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
+                s.spawn(move || {
+                    let mut state = prog.new_state(worker_stores);
+                    for row_idx in start..end {
+                        let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                        let row_ref = vector::get_vector(
+                            &input_t,
+                            element_size,
+                            row_idx_i32,
+                            &state.database.allocations,
+                        );
+                        let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                        // SAFETY: non-overlapping ranges; thread::scope proves out_ptr outlives
+                        // all threads.
+                        unsafe {
+                            let dst = out_t.0.add(row_idx * ret_sz);
+                            std::ptr::copy_nonoverlapping(
+                                (&raw const val).cast::<u8>(),
+                                dst,
+                                ret_sz,
+                            );
+                        }
                     }
-                }
-            });
-            handles.push(handle);
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
+                });
+            }
+            // thread::scope joins all spawned threads here automatically.
+        });
     }
     #[cfg(not(feature = "threading"))]
     {

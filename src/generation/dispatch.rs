@@ -82,6 +82,29 @@ impl Output<'_> {
                 return Ok(());
             }
         }
+        // S35: Set(var, Insert([stmt1, ..., last_expr])) — hoist all-but-last ops as
+        // statements before the declaration, then assign only from the final expression.
+        // Without this, the inner Set ops are emitted inline inside an expression context,
+        // producing malformed Rust like `let mut var_rv: DbRef = let mut var__read: DbRef = …`.
+        if let Value::Insert(ops) = to
+            && !ops.is_empty()
+        {
+            for op in &ops[..ops.len() - 1] {
+                self.indent(w)?;
+                self.output_code_inner(w, op)?;
+                writeln!(w, ";")?;
+            }
+            self.indent(w)?;
+            if self.declared.contains(&var) {
+                write!(w, "var_{name} = ")?;
+            } else {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                write!(w, "let mut var_{name}: {tp_str} = ")?;
+            }
+            self.output_code_inner(w, &ops[ops.len() - 1])?;
+            return Ok(());
+        }
         if self.declared.contains(&var) {
             write!(w, "var_{name} = ")?;
         } else {
@@ -218,6 +241,45 @@ impl Output<'_> {
             "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
             "OpClearVector" => return self.clear_vector(w, vals),
             "OpFreeText" | "OpCreateStack" => return Ok(()),
+            // N8b.2: advance a native coroutine and return the yielded value.
+            // parameters[0] = gen DbRef expression; parameters[1] = Int(value_size).
+            "OpCoroutineNext" => {
+                if let Some(gen_val) = vals.first() {
+                    let gen_code = self.generate_expr_buf(gen_val)?;
+                    let value_size = if let Some(Value::Int(n)) = vals.get(1) {
+                        *n
+                    } else {
+                        4 // fallback: i32
+                    };
+                    match value_size {
+                        8 => write!(
+                            w,
+                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores)"
+                        )?,
+                        1 => write!(
+                            w,
+                            "(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) != 0)"
+                        )?,
+                        _ => write!(
+                            w,
+                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as i32"
+                        )?,
+                    }
+                }
+                return Ok(());
+            }
+            // N8b.2: test whether a native coroutine is exhausted.
+            // parameters[0] = gen DbRef expression.
+            "OpCoroutineExhausted" => {
+                if let Some(gen_val) = vals.first() {
+                    let gen_code = self.generate_expr_buf(gen_val)?;
+                    write!(
+                        w,
+                        "loft::codegen_runtime::coroutine_is_exhausted({gen_code})"
+                    )?;
+                }
+                return Ok(());
+            }
             "OpNullRefSentinel" => {
                 write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
                 return Ok(());
@@ -251,6 +313,14 @@ impl Output<'_> {
                 // After freeing, reset the variable to null so a subsequent OpDatabase
                 // knows to allocate a fresh store rather than reusing the freed one.
                 if let [ref db_val] = vals[..] {
+                    // S34/S35: skip_free variables share a slot with an outer variable that
+                    // already owns the record; suppressing their OpFreeRef prevents a double-free.
+                    if let Value::Var(v) = db_val
+                        && self.data.def(self.def_nr).variables.is_skip_free(*v)
+                    {
+                        write!(w, "()")?;
+                        return Ok(());
+                    }
                     let var_name = if let Value::Var(v) = db_val {
                         format!(
                             "var_{}",

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! Memory/store allocation helpers and claim management.
 
-use crate::database::{Parts, Stores};
+use crate::database::{Parts, Stores, WorkerStores};
 use crate::keys::DbRef;
 use crate::store::Store;
 use crate::tree;
@@ -22,12 +22,20 @@ impl Stores {
     /// # Panics
     /// When a store already in use is allocated again.
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
-        if self.max >= self.allocations.len() as u16 {
+        // S29 (P1-R4 M4-b): find the lowest free slot using the free_bits bitmap.
+        // If a freed slot exists below max, reuse it; otherwise grow max.
+        let slot = self.find_free_slot();
+        if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
         } else {
-            self.allocations[self.max as usize].init();
+            self.allocations[slot as usize].init();
         }
-        let store = &mut self.allocations[self.max as usize];
+        if slot == self.max {
+            self.max += 1;
+        }
+        // Clear the bitmap bit for this slot (it is now active).
+        self.clear_free_bit(slot);
+        let store = &mut self.allocations[slot as usize];
         assert!(store.free, "Allocating a used store");
         store.free = false;
         let rec = if size == u32::MAX {
@@ -35,9 +43,8 @@ impl Stores {
         } else {
             store.claim(size)
         };
-        self.max += 1;
         let result = DbRef {
-            store_nr: self.max - 1,
+            store_nr: slot,
             rec,
             pos: 8,
         };
@@ -86,16 +93,59 @@ impl Stores {
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         debug_assert!(!self.allocations[al as usize].free, "Double free store");
+        // S36: clear the lock before marking free.  When a function with a `const`
+        // reference parameter auto-locks the store at entry, it may not unlock before
+        // returning (the auto-lock is inserted by the parser but no matching unlock is
+        // emitted).  If the store is then freed while still locked, `find_free_slot`
+        // will select the slot for reuse and `database_named` will call `init()` on it,
+        // which panics: "Write to locked store".  Freeing a store implicitly ends its
+        // ownership, so the lock is moot and must be cleared here.
+        self.allocations[al as usize].unlock();
         self.allocations[al as usize].free = true;
-        // Shrink max when freeing the top store, cascading through any
-        // lower stores that were already freed (non-LIFO order from native
-        // recursive calls where stores are allocated at call time rather
-        // than pre-allocated like the interpreter does).
+        // S29 (P1-R4 M4-b): mark slot as free in the bitmap so database_named()
+        // can reuse it without LIFO ordering.
+        self.set_free_bit(al);
+        // Trim max when freeing the top slot(s) so that database_named() doesn't
+        // needlessly grow the allocations Vec when all top slots are free.
         if al == self.max - 1 {
             self.max -= 1;
             while self.max > 0 && self.allocations[(self.max - 1) as usize].free {
                 self.max -= 1;
             }
+        }
+    }
+
+    /// S29: Find the lowest free slot index below `max` using the `free_bits` bitmap.
+    /// Returns `self.max` when no freed slot is available (caller must grow the Vec).
+    fn find_free_slot(&self) -> u16 {
+        for (wi, &word) in self.free_bits.iter().enumerate() {
+            if word != 0 {
+                let bit = word.trailing_zeros() as u16;
+                let slot = wi as u16 * 64 + bit;
+                if slot < self.max {
+                    return slot;
+                }
+            }
+        }
+        self.max
+    }
+
+    /// S29: Set bit `slot` in `free_bits`, growing the Vec as needed.
+    fn set_free_bit(&mut self, slot: u16) {
+        let wi = slot as usize / 64;
+        let bi = slot as usize % 64;
+        while self.free_bits.len() <= wi {
+            self.free_bits.push(0);
+        }
+        self.free_bits[wi] |= 1u64 << bi;
+    }
+
+    /// S29: Clear bit `slot` in `free_bits` (slot is now active).
+    fn clear_free_bit(&mut self, slot: u16) {
+        let wi = slot as usize / 64;
+        let bi = slot as usize % 64;
+        if wi < self.free_bits.len() {
+            self.free_bits[wi] &= !(1u64 << bi);
         }
     }
 
@@ -229,7 +279,7 @@ impl Stores {
     /// `State::new_worker → Stores::database` can safely re-initialise them without
     /// hitting the "Write to locked store" debug assert.
     #[must_use]
-    pub fn clone_for_worker(&self) -> Stores {
+    pub fn clone_for_worker(&self) -> WorkerStores {
         let allocations = self
             .allocations
             .iter()
@@ -237,16 +287,32 @@ impl Stores {
                 if s.free {
                     super::super::store::Store::new(100)
                 } else {
-                    s.clone_locked()
+                    // S29/P1-R3: use claims-free clone — workers never call validate()
+                    s.clone_locked_for_worker()
                 }
             })
             .collect();
-        Stores {
+        // S29: build a free_bits bitmap for the worker that reflects which slots are
+        // free (main-thread freed slots become fresh empty stores in the worker clone,
+        // so they are available for re-allocation by the worker).
+        let mut free_bits: Vec<u64> = Vec::new();
+        for (i, s) in self.allocations.iter().enumerate() {
+            if s.free {
+                let word = i / 64;
+                let bit = i % 64;
+                while free_bits.len() <= word {
+                    free_bits.push(0);
+                }
+                free_bits[word] |= 1u64 << bit;
+            }
+        }
+        WorkerStores::new(Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations,
             files: Vec::new(),
             max: self.max,
+            free_bits,
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
             parallel_ctx: None,
@@ -257,7 +323,7 @@ impl Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
-        }
+        })
     }
 
     #[must_use]

@@ -11,12 +11,13 @@ mod debug;
 mod io;
 mod text;
 
-use crate::data::{Data, Type};
+use crate::data::{Context, Data, Type};
 pub use crate::database::Call;
-use crate::database::{ParallelCtx, Stores};
+use crate::database::{ParallelCtx, Stores, WorkerStores};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Str};
 use crate::log_config::LogConfig;
+use crate::variables::size as var_size;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Error, Write};
 use std::sync::Arc;
@@ -76,6 +77,17 @@ pub struct CoroutineFrame {
     pub call_frames: Vec<CallFrame>,
     /// Call depth baseline when the coroutine was last running.
     pub call_depth: usize,
+    /// S27 (debug-only): `text_positions` entries for this frame's locals, saved at
+    /// yield and restored at resume.  Prevents stale entries from masking
+    /// double-free or missing-free bugs in the consumer while the frame is suspended.
+    #[cfg(debug_assertions)]
+    pub saved_text_positions: std::collections::BTreeSet<u32>,
+    /// S28 (debug-only): snapshot of `(store_nr, generation)` for all live stores at
+    /// the moment of `coroutine_yield`.  Checked at `coroutine_next`; a mismatch
+    /// means a store was mutated between yields and any `DbRef` locals held by the
+    /// generator may be stale.
+    #[cfg(debug_assertions)]
+    pub saved_store_generations: Vec<(u16, u32)>,
 }
 
 /// Internal State of the interpreter to run bytecode.
@@ -329,6 +341,76 @@ impl State {
             .expect("coroutine_frame_mut: empty slot")
     }
 
+    /// S25.1 (CO1.3d): check whether a raw text pointer is inside the static text pool.
+    /// Static Str values (from string literals compiled into `text_code`) are permanently
+    /// live and need no ownership transfer.
+    fn is_in_text_code(&self, ptr: *const u8) -> bool {
+        let base = self.text_code.as_ptr();
+        // SAFETY: offset by known length stays within the same allocation.
+        let end = unsafe { base.add(self.text_code.len()) };
+        ptr >= base && ptr < end
+    }
+
+    /// S25.1 (CO1.3d / P2-R1): scan the first `args_size` bytes of `stack_bytes` for
+    /// text (`Str`) arguments.  For each non-null, non-static `Str`, clone the backing
+    /// data into an owned `String`, update `stack_bytes` to point to the owned buffer,
+    /// and record `(byte_offset, owned_string)` in the returned vec.
+    ///
+    /// After this call, the `Str` pointers in `stack_bytes` are independent of the
+    /// caller's `String` allocations, so `OpFreeText` on the caller's side cannot
+    /// dangle the coroutine's copy.
+    fn serialise_text_args(
+        &self,
+        d_nr: u32,
+        stack_bytes: &mut Vec<u8>,
+        args_size: u32,
+    ) -> Vec<(u32, String)> {
+        if self.data_ptr.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: data_ptr is set in execute_argv and remains valid for the duration
+        // of execution.  coroutine_create is only called from fill.rs during execution.
+        let data = unsafe { &*self.data_ptr };
+        if d_nr as usize >= data.definitions.len() {
+            return Vec::new();
+        }
+        let def = &data.definitions[d_nr as usize];
+        let mut text_owned: Vec<(u32, String)> = Vec::new();
+        let mut byte_offset: usize = 0;
+
+        for attr in &def.attributes {
+            if byte_offset >= args_size as usize {
+                break; // only scan the arg region
+            }
+            let attr_size = var_size(&attr.typedef, &Context::Argument) as usize;
+            if matches!(&attr.typedef, Type::Text(_)) {
+                // Read the Str from stack_bytes at byte_offset.
+                // SAFETY: byte_offset + size_of::<Str>() <= args_size <= stack_bytes.len().
+                // Str is stored unaligned in the byte-packed stack; read_unaligned is correct.
+                #[allow(clippy::cast_ptr_alignment)]
+                let str_val: Str = unsafe {
+                    let src = stack_bytes.as_ptr().add(byte_offset).cast::<Str>();
+                    std::ptr::read_unaligned(src)
+                };
+                // Skip null sentinel and static text (pointer lives in text_code).
+                let is_null = str_val.ptr == STRING_NULL.as_ptr() || str_val.len == 0;
+                if !is_null && !self.is_in_text_code(str_val.ptr) {
+                    let owned = str_val.str().to_owned();
+                    let new_str = Str::new(owned.as_str());
+                    // Patch stack_bytes to point to the owned buffer.
+                    #[allow(clippy::cast_ptr_alignment)]
+                    unsafe {
+                        let dst = stack_bytes.as_mut_ptr().add(byte_offset).cast::<Str>();
+                        std::ptr::write_unaligned(dst, new_str);
+                    }
+                    text_owned.push((byte_offset as u32, owned));
+                }
+            }
+            byte_offset += attr_size;
+        }
+        text_owned
+    }
+
     // CO1.2: Create a coroutine frame — copy arguments into the frame without
     // entering the function body.
     pub fn coroutine_create(&mut self, d_nr: u32, args_size: u32, entry_pos: u32) {
@@ -339,6 +421,9 @@ impl State {
         unsafe {
             std::ptr::copy_nonoverlapping(src, stack_bytes.as_mut_ptr(), args_size as usize);
         }
+        // S25.1 (CO1.3d / P2-R1): serialise text args to owned Strings before the
+        // caller's OpFreeText can free the backing allocations.
+        let text_owned = self.serialise_text_args(d_nr, &mut stack_bytes, args_size);
         // CO1.3d: append the 4-byte return-address slot expected by the function body.
         // fn_call pushes this slot for regular calls; coroutines must include it so that
         // get_var offsets computed at codegen time remain valid after resume.
@@ -352,9 +437,13 @@ impl State {
             stack_base: 0,
             caller_return_pos: 0,
             stack_bytes,
-            text_owned: Vec::new(),
+            text_owned, // S25.1: populated by serialise_text_args above
             call_frames: Vec::new(),
             call_depth: 0,
+            #[cfg(debug_assertions)]
+            saved_text_positions: std::collections::BTreeSet::new(),
+            #[cfg(debug_assertions)]
+            saved_store_generations: Vec::new(),
         };
         let idx = self.allocate_coroutine(frame);
 
@@ -378,6 +467,21 @@ impl State {
             return;
         }
         let idx = gen_ref.rec as usize;
+        // S23: defense-in-depth runtime guard — coroutine DbRefs must not cross
+        // thread boundaries.  Worker State instances have only a null slot at index
+        // 0; a rec from the main thread would be out-of-bounds here.
+        assert!(
+            idx < self.coroutines.len(),
+            "coroutine DbRef (rec={idx}) out of range — \
+             iterator<T> values must not cross thread boundaries \
+             (use a non-generator worker function in par())"
+        );
+        // S26: slot may be None — freed on exhaustion by coroutine_return.
+        // Treat as exhausted (same as the Exhausted variant).
+        if self.coroutines[idx].is_none() {
+            self.push_null_value(value_size);
+            return;
+        }
         let status = self.coroutine_frame_mut(idx).status;
 
         match status {
@@ -399,13 +503,67 @@ impl State {
                     f.status = CoroutineStatus::Running;
                 }
 
-                let bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
+                let mut bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
                 let code_pos = self.coroutine_frame_mut(idx).code_pos;
                 let saved_frames: Vec<_> = self
                     .coroutine_frame_mut(idx)
                     .call_frames
                     .drain(..)
                     .collect();
+
+                // S27 (debug-only): restore the generator's text_positions entries
+                // that were removed at yield.  The generator's locals are live again
+                // once the stack bytes are copied back below.
+                #[cfg(debug_assertions)]
+                {
+                    let saved: std::collections::BTreeSet<u32> =
+                        std::mem::take(&mut self.coroutine_frame_mut(idx).saved_text_positions);
+                    self.text_positions.extend(saved);
+                }
+
+                // S28 (debug-only): detect store mutations between yield and resume.
+                // Any live store whose generation changed since the last yield may have
+                // invalidated DbRef locals held by the suspended generator.
+                #[cfg(debug_assertions)]
+                {
+                    let saved_gens: Vec<(u16, u32)> = self
+                        .coroutine_frame_mut(idx)
+                        .saved_store_generations
+                        .clone();
+                    for (store_nr, saved_gen) in saved_gens {
+                        let cur_gen = self
+                            .database
+                            .allocations
+                            .get(store_nr as usize)
+                            .map_or(0, |s| s.generation);
+                        debug_assert!(
+                            cur_gen == saved_gen,
+                            "stale DbRef: store {store_nr} was mutated between coroutine \
+                             yields (generation at yield: {saved_gen}, now: {cur_gen}). \
+                             DbRef locals held by the generator may point to freed or \
+                             reallocated records — see CAVEATS.md S28"
+                        );
+                    }
+                }
+
+                // S25.1 (CO1.3d / M6-b): patch Str pointers in the cloned bytes to
+                // reflect the current buffer addresses of the owned Strings.  Collect
+                // (offset, Str) pairs while the frame borrow is live, then apply them
+                // to the local `bytes` clone.  String heap buffers are stable: they are
+                // not pushed, reallocated, or dropped between here and the copy below.
+                let text_patches: Vec<(u32, Str)> = self
+                    .coroutine_frame_mut(idx)
+                    .text_owned
+                    .iter()
+                    .map(|(off, s)| (*off, Str::new(s.as_str())))
+                    .collect();
+                #[allow(clippy::cast_ptr_alignment)]
+                for (offset, new_str) in &text_patches {
+                    unsafe {
+                        let dst = bytes.as_mut_ptr().add(*offset as usize).cast::<Str>();
+                        std::ptr::write_unaligned(dst, *new_str);
+                    }
+                }
 
                 let dest = self
                     .database
@@ -443,9 +601,53 @@ impl State {
         match value_size {
             4 => self.put_stack(i32::MIN), // integer null sentinel
             8 => self.put_stack(i64::MIN), // long null sentinel
+            // Text Str sentinel: use STRING_NULL ("\0") so that the ptr is non-null
+            // and conv_bool_from_text / append_text / str() don't crash on ptr=0.
+            v if v == std::mem::size_of::<Str>() as u32 => {
+                self.put_stack(Str::new(STRING_NULL));
+            }
             _ => {
                 for _ in 0..value_size {
                     self.put_stack(0u8);
+                }
+            }
+        }
+    }
+
+    /// P2-R5 (debug-only, 64-bit): scan `locals_bytes` for text locals whose first
+    /// 8 bytes (the `Str.ptr` field) fall inside a live non-stack store allocation.
+    /// Emits a diagnostic warning; does not panic.  See COROUTINE.md CL-2b.
+    #[cfg(all(debug_assertions, target_pointer_width = "64"))]
+    fn warn_store_backed_text(&self, locals_bytes: &[u8], base_abs: u32, value_start_abs: u32) {
+        // Collect first to release the borrow on self.text_positions.
+        let positions: Vec<u32> = self
+            .text_positions
+            .range(base_abs..value_start_abs)
+            .copied()
+            .collect();
+        for p in positions {
+            let off = (p - base_abs) as usize;
+            if off + 8 > locals_bytes.len() {
+                continue;
+            }
+            let ptr_val = u64::from_ne_bytes(locals_bytes[off..off + 8].try_into().unwrap());
+            if ptr_val == 0 {
+                continue; // null / STRING_NULL — not store-backed
+            }
+            for (store_idx, store) in self.database.allocations.iter().enumerate() {
+                if store.free || store_idx as u16 == self.stack_cur.store_nr {
+                    continue;
+                }
+                let start = store.ptr as u64;
+                let end = start + store.byte_capacity();
+                if ptr_val >= start && ptr_val < end {
+                    eprintln!(
+                        "[P2-R5] coroutine_yield: text local at abs offset {p} holds \
+                         a store-backed Str (ptr={ptr_val:#x}, store {store_idx}). \
+                         If store {store_idx} or its backing record is freed before \
+                         the next resume this Str will dangle (COROUTINE.md CL-2b)."
+                    );
+                    break;
                 }
             }
         }
@@ -467,21 +669,31 @@ impl State {
         let value_start = stack_top - value_size;
         let locals_len = (value_start - base) as usize;
 
-        // Serialise locals (integer-only path — no text_owned handling yet).
+        // Serialise locals (CO1.3d: text locals are String objects — bitwise copy is safe
+        // because String owns its heap buffer and no external code frees it while suspended).
         let mut locals_bytes = vec![0u8; locals_len];
-        let store = self.database.store(&self.stack_cur);
-        let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
-        unsafe {
-            std::ptr::copy_nonoverlapping(src, locals_bytes.as_mut_ptr(), locals_len);
-        }
-
-        // Copy yielded value bytes separately (for the slide step).
         let vs = value_size as usize;
         let mut value_bytes = vec![0u8; vs];
-        let val_src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + value_start);
-        unsafe {
-            std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
+        {
+            let store = self.database.store(&self.stack_cur);
+            let src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, locals_bytes.as_mut_ptr(), locals_len);
+            }
+            let val_src = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + value_start);
+            unsafe {
+                std::ptr::copy_nonoverlapping(val_src, value_bytes.as_mut_ptr(), vs);
+            }
         }
+
+        // P2-R5 (debug-only, 64-bit only): warn if any text local is a store-backed Str.
+        // See COROUTINE.md CL-2b and SAFE.md § P2-R5.
+        #[cfg(all(debug_assertions, target_pointer_width = "64"))]
+        self.warn_store_backed_text(
+            &locals_bytes,
+            self.stack_cur.pos + base,
+            self.stack_cur.pos + value_start,
+        );
 
         // Extract frame fields before mutable borrow conflicts.
         let call_depth = self.coroutine_frame_mut(idx).call_depth;
@@ -495,11 +707,49 @@ impl State {
         {
             let frame = self.coroutine_frame_mut(idx);
             frame.stack_bytes = locals_bytes;
-            // text_owned stays empty — CO1.3d will handle text serialisation.
+            // CO1.3d: text locals are String objects (24 B); bitwise copy in stack_bytes is
+            // safe — String owns its heap buffer and no external code can free it while
+            // the generator is suspended.  frame.text_owned is left unchanged (still holds
+            // any text arg clones from coroutine_create / prior yields).
             frame.call_frames = saved_frames;
             frame.code_pos = code_pos;
             frame.status = CoroutineStatus::Suspended;
         }
+
+        // S27 (debug-only): remove text_positions entries for the generator's locals
+        // [base, value_start) and save them in the frame.  While suspended, the consumer
+        // may create text values at the same absolute stack positions; keeping the
+        // generator's entries would mask missing or double OpFreeText calls.
+        // CO1.3d is now implemented — text locals are serialised to frame.text_owned above,
+        // so the M8-b debug_assert guarding against unserialized text locals is removed.
+        #[cfg(debug_assertions)]
+        {
+            let locals_range = base..value_start;
+            let to_save: std::collections::BTreeSet<u32> =
+                self.text_positions.range(locals_range).copied().collect();
+            for p in &to_save {
+                self.text_positions.remove(p);
+            }
+            self.coroutine_frame_mut(idx).saved_text_positions = to_save;
+        }
+
+        // S28 (debug-only): snapshot all live, unlocked store generations at the
+        // yield point.  `coroutine_next` will compare these on resume and fire a
+        // debug_assert if any store was mutated while the generator was suspended.
+        // Locked stores are worker snapshots that can never change; skip them.
+        #[cfg(debug_assertions)]
+        {
+            let gens: Vec<(u16, u32)> = self
+                .database
+                .allocations
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| !s.free && !s.locked)
+                .map(|(i, s)| (i as u16, s.generation))
+                .collect();
+            self.coroutine_frame_mut(idx).saved_store_generations = gens;
+        }
+
         self.active_coroutines.pop();
 
         // Slide the yielded value to stack_base.
@@ -534,19 +784,21 @@ impl State {
         let stack_base = frame.stack_base;
         let caller_return_pos = frame.caller_return_pos;
 
-        // Exhaust.
+        // Exhaust and immediately free the slot (S26).
+        // Setting the slot to None prevents unbounded growth of the coroutines table
+        // when many generators are created over a program's lifetime.
+        // coroutine_exhausted() treats None as exhausted, so callers see no difference.
         frame.status = CoroutineStatus::Exhausted;
         self.active_coroutines.pop();
+        // Free the slot: coroutine_exhausted() returns true for None entries.
+        self.coroutines[idx] = None;
 
         // Restore call stack to consumer depth.
         self.call_stack.truncate(call_depth);
 
         // Rewind stack to frame base; push typed null.
         self.stack_pos = stack_base;
-        // Zero-fill value_size bytes as the null return value.
-        for _ in 0..value_size {
-            self.put_stack(0u8);
-        }
+        self.push_null_value(value_size);
 
         // Return to consumer.
         self.code_pos = caller_return_pos;
@@ -904,15 +1156,17 @@ impl State {
 
     /// Create a `State` for use in a parallel worker thread.
     ///
-    /// `db` should be built with `Stores::clone_for_worker()`; this call
-    /// allocates a fresh stack store at the next available index in `db`.
+    /// `worker` must be produced by [`Stores::clone_for_worker`]; the
+    /// `WorkerStores` newtype is the compile-time proof of that invariant (S30).
+    /// This call allocates a fresh stack store at the next available index.
     #[must_use]
     pub fn new_worker(
-        mut db: Stores,
+        worker: WorkerStores,
         bytecode: Arc<Vec<u8>>,
         text_code: Arc<Vec<u8>>,
         library: Arc<Vec<Call>>,
     ) -> State {
+        let mut db = worker.stores;
         State {
             stack_cur: db.database(1000),
             stack_pos: 4,

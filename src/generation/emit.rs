@@ -152,8 +152,23 @@ impl Output<'_> {
                 }
                 write!(w, ")")?;
             }
-            Value::TupleGet(var, idx) => write!(w, "var_{var}.{idx}")?,
-            Value::TuplePut(var, idx, _val) => write!(w, "var_{var}.{idx} = ...")?,
+            Value::TupleGet(var, idx) => {
+                // N8a.2: use the variable's declared name (like all other emitters),
+                // not its internal number.  Before this fix `var_0.0` was emitted even
+                // when the parameter was declared as `var_pair`.
+                let variables = &self.data.def(self.def_nr).variables;
+                let name = sanitize(variables.name(*var));
+                write!(w, "var_{name}.{idx}")?;
+            }
+            Value::TuplePut(var, idx, val) => {
+                // N8a.2: emit the actual element assignment instead of the `= ...` stub.
+                // TuplePut is a void statement (assignment); is_void_value returns true for it
+                // so the block emitter adds `;` and does not treat it as the return value.
+                let variables = &self.data.def(self.def_nr).variables;
+                let name = sanitize(variables.name(*var));
+                write!(w, "var_{name}.{idx} = ")?;
+                self.output_code_inner(w, val)?;
+            }
             Value::Yield(inner) => {
                 write!(w, "yield ")?;
                 self.output_code_inner(w, inner)?;
