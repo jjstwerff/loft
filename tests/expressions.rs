@@ -629,3 +629,65 @@ fn delete_on_locked_store_panics() {
     stores.store_mut(&db).lock();
     stores.store_mut(&db).delete(cr.rec); // must panic
 }
+
+// ── S25.1 — text arg `Str` serialised at coroutine_create ────────────────────
+
+/// S25.1 (P2-R1): text args are passed as `Str { ptr, len }` — a borrowed reference
+/// into the caller's owned `String`.  After `coroutine_create`, the caller's String
+/// may be freed by `OpFreeText` before the generator is first resumed.  The `Str`
+/// in `stack_bytes` then holds a dangling pointer.
+/// Fix: `serialise_text_slots` at `coroutine_create` converts every dynamic text arg
+/// to an owned `String` in `frame.text_owned`.  See SAFE.md § P2-R1.
+#[test]
+#[ignore = "S25.1 (P2-R1): text arg Str may dangle after coroutine_create — \
+serialise_text_slots not yet called at create; see SAFE.md § P2-R1 and COROUTINE.md § CO1.3d"]
+fn coroutine_text_arg_dynamic_serialised() {
+    // gen_label receives a format-string arg (dynamic heap String, not a static literal).
+    // After coroutine_create, the Str in stack_bytes must point to a serialised owned
+    // String — not the caller's allocation which OpFreeText may free immediately after.
+    code!(
+        "fn gen_label(prefix: text) -> iterator<integer> {
+             yield len(prefix);
+             yield len(prefix);
+         }
+         fn sum_dynamic_lens(n: integer) -> integer {
+             total = 0;
+             for v in gen_label(\"item #{n}\") { total += v; }
+             total
+         }"
+    )
+    .expr("sum_dynamic_lens(3)")
+    .result(Value::Int(12)); // len("item 3") = 6, two yields: 6 + 6 = 12
+}
+
+// ── S25.2 — `String` locals freed before coroutine_return rewinds stack ──────
+
+/// S25.2 (P2-R2): when a generator has a `text` local variable, the `String` heap
+/// allocation lives on the coroutine's live stack.  `coroutine_return` calls
+/// `frame.text_owned.clear()` and `frame.stack_bytes.clear()`, but neither path
+/// calls `String::drop()` for stack-resident Strings → heap leak.
+/// Fix: drain `text_positions` entries in the live frame region before rewinding.
+/// See SAFE.md § P2-R2.
+#[test]
+#[ignore = "S25.2 (P2-R2): String locals on coroutine live stack not freed at return — \
+stack rewind skips String::drop(); heap leak. Fix: drain text_positions before rewind; \
+see SAFE.md § P2-R2 and COROUTINE.md § CO1.3d"]
+fn coroutine_text_local_freed_at_return() {
+    // gen_greeting builds a text local (`msg`) inside the generator body, yields it once,
+    // then returns.  After exhaustion the String backing `msg` must be freed.
+    // Without S25.2 the allocation leaks silently; the test verifies the correct value
+    // is observed (leak has no observable effect on correctness in a short run).
+    code!(
+        "fn gen_greeting(name: text) -> iterator<text> {
+             msg = \"hello, \" ++ name;
+             yield msg;
+         }
+         fn collect_greeting() -> integer {
+             result = 0;
+             for g in gen_greeting(\"world\") { result = len(g); }
+             result
+         }"
+    )
+    .expr("collect_greeting()")
+    .result(Value::Int(12)); // len("hello, world") = 12
+}
