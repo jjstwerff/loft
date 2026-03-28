@@ -6,6 +6,7 @@ use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 mod calls;
+mod coroutine;
 mod dispatch;
 mod emit;
 mod pre_eval;
@@ -55,6 +56,9 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             collect_calls(next, data, calls);
             collect_calls(extra, data, calls);
         }
+        // N8b.1: walk into yield expressions so helper functions are included in the
+        // reachable set and emitted before the coroutine state-machine struct.
+        Value::Yield(inner) => collect_calls(inner, data, calls),
         _ => {}
     }
 }
@@ -278,7 +282,8 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Index(_, _, _) => "DbRef",
         Type::Routine(_) | Type::Function(_, _) => "u32",
         Type::Unknown(_) => "??",
-        Type::Iterator(_, _) => "Iterator",
+        // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
+        Type::Iterator(_, _) => "DbRef",
         Type::Keys => "&[Key]",
         Type::Void => "()",
         // N8a.1: emit the correct Rust tuple type, e.g. (i32, i64) for (integer, long).
@@ -308,6 +313,8 @@ fn default_native_value(tp: &Type) -> String {
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
+        // N8b.1: exhausted / uninitialized generator variable.
+        Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
         // N8a.1: a tuple null is the zero-default for each element type.
         Type::Tuple(elems) => {
             let parts: Vec<String> = elems.iter().map(default_native_value).collect();
@@ -787,6 +794,10 @@ extern crate loft;"
         // Skip functions implemented in codegen_runtime.
         if def.code == Value::Null && CODEGEN_RUNTIME_FNS.contains(&def.name.as_str()) {
             return Ok(());
+        }
+        // N8b.1: generator functions (returning iterator<T>) are emitted as state machines.
+        if matches!(def.returned, Type::Iterator(_, _)) {
+            return self.output_coroutine(w, def_nr);
         }
         // n_assert needs generic Display parameters to accept both Str and &str.
         if def.name == "n_assert" && def.code == Value::Null {

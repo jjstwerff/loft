@@ -1529,3 +1529,74 @@ pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
         .get_byte(v_rec, 8 + idx as u32, 0)
         != 0
 }
+
+// ── N8b.1: Native coroutine runtime ─────────────────────────────────────────
+
+/// Sentinel `store_nr` for `DbRef`s that point to native coroutine generators.
+/// Must not clash with any real `Stores` allocation (stores use 0..`Stores::max`).
+pub const NATIVE_COROUTINE_STORE: u16 = 0xFFFD;
+
+/// Return value from `LoftCoroutine::next_i64` when the generator is exhausted.
+/// Chosen as `i64::MIN` because it is outside any representable loft integer.
+pub const COROUTINE_EXHAUSTED: i64 = i64::MIN;
+
+/// Trait implemented by every native generator (state-machine struct).
+/// The generated `fn {name}(stores, args) -> Box<dyn LoftCoroutine>` factory
+/// constructs an instance; `alloc_coroutine` stores it and returns a `DbRef`.
+pub trait LoftCoroutine {
+    /// Advance the generator one step.  Returns the yielded value as `i64`,
+    /// or `COROUTINE_EXHAUSTED` when no further values are available.
+    fn next_i64(&mut self, stores: &mut Stores) -> i64;
+}
+
+std::thread_local! {
+    /// Per-thread storage for native coroutine instances.
+    /// Slot 0 is always `None` and acts as the null sentinel.
+    static NATIVE_COROUTINES: std::cell::RefCell<Vec<Option<Box<dyn LoftCoroutine>>>> =
+        std::cell::RefCell::new(vec![None]);
+}
+
+/// Store a native coroutine generator and return a `DbRef` that identifies it.
+pub fn alloc_coroutine(coro: Box<dyn LoftCoroutine>) -> DbRef {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        for (i, slot) in coroutines.iter_mut().enumerate().skip(1) {
+            if slot.is_none() {
+                *slot = Some(coro);
+                return DbRef { store_nr: NATIVE_COROUTINE_STORE, rec: i as u32, pos: 0 };
+            }
+        }
+        let idx = coroutines.len();
+        coroutines.push(Some(coro));
+        DbRef { store_nr: NATIVE_COROUTINE_STORE, rec: idx as u32, pos: 0 }
+    })
+}
+
+/// Advance a native coroutine and return the yielded value as `i64`.
+/// Frees the coroutine slot automatically when it is exhausted.
+pub fn coroutine_next_i64(gen_ref: DbRef, stores: &mut Stores) -> i64 {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        let idx = gen_ref.rec as usize;
+        if let Some(slot) = coroutines.get_mut(idx)
+            && let Some(coro) = slot.as_mut()
+        {
+            let val = coro.next_i64(stores);
+            if val == COROUTINE_EXHAUSTED {
+                coroutines[idx] = None; // free on exhaustion (P2-R7 parity)
+            }
+            val
+        } else {
+            COROUTINE_EXHAUSTED
+        }
+    })
+}
+
+/// Test whether a native coroutine has been exhausted (its slot freed).
+pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
+    NATIVE_COROUTINES.with(|c| {
+        let coroutines = c.borrow();
+        let idx = gen_ref.rec as usize;
+        coroutines.get(idx).map_or(true, Option::is_none)
+    })
+}

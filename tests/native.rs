@@ -31,10 +31,7 @@ const NATIVE_SKIP: &[&str] = &[
 /// Script files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for issue numbers.
 /// Do NOT remove tests from this list by weakening the test — fix the native codegen instead.
-const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // CO1: native codegen does not support coroutines/yield (interpreter-only).
-    "51-coroutines.loft",
-];
+const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
 ///
@@ -51,13 +48,17 @@ fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))?;
 
-    // Find the most recently modified libloft-*.rlib in this profile's deps/.
+    // Find the most recently modified loft rlib in this profile's deps/.
+    // Accept both "libloft-HASH.rlib" (cargo test profile) and "libloft.rlib"
+    // (produced when building lib+test together).  Both live in the same
+    // profile-specific deps/ directory, so there is no cross-profile shadowing
+    // (the S33 risk only arose when scanning multiple profile directories).
     let rlib = std::fs::read_dir(&deps)
         .ok()?
         .flatten()
         .filter(|e| {
             let n = e.file_name().to_string_lossy().to_string();
-            n.starts_with("libloft-") && n.ends_with(".rlib")
+            (n.starts_with("libloft-") || n == "libloft.rlib") && n.ends_with(".rlib")
         })
         .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?
         .path();
