@@ -133,6 +133,21 @@ All notable changes to the loft language and interpreter.
   `#[ignore]` (CO1.3d pending); the guard fires first, preventing the dangling-pointer
   path from being exercised silently.
 
+### Native store safety
+
+- **Locked store cleared on free; `40-par-ref-return.loft` fixed** (S36) —
+  `free_named` in `src/database/allocation.rs` now calls `unlock()` on the store
+  before marking it free in the bitmap.  The parser auto-inserts
+  `n_set_store_lock(stores, param, true)` at the start of functions with `const`
+  reference parameters but does not emit the matching unlock before return.  When
+  the store was freed while still locked, `find_free_slot` selected the freed slot
+  for reuse and `database_named` called `init()` on a locked store, triggering:
+  "Write to locked store at rec=1 fld=0".  The bug was invisible in the interpreter
+  because `test_runner.rs` creates a fresh `Stores` per test function; in native
+  mode all `test_*` functions share one `Stores`, so the leaked lock carried over
+  from `test_par_struct_simple` into `test_par_struct_return_single_thread`.
+  `40-par-ref-return.loft` now passes in `native_scripts` with 45/45.
+
 ### Interpreter fixes
 
 - **`20-binary.loft` double-free fixed** (S34) — When `adjust_first_assignment_slot`
