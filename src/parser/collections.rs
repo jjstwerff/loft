@@ -1167,11 +1167,19 @@ use #count instead"
                 Value::Var(idx_var),
             ],
         );
-        let get_call = if matches!(ret_type, Type::Reference(_, _)) {
+        let get_call = if matches!(ret_type, Type::Reference(_, _)) || fn_d_nr == u32::MAX {
+            // fn_d_nr == u32::MAX: worker was rejected (e.g. S23 generator check);
+            // skip the type-based field access to avoid crashing on Unknown type.
             get_vec
         } else {
             let vec_tp = self.data.type_def_nr(ret_type);
-            self.get_field(vec_tp, usize::MAX, get_vec)
+            if vec_tp == u32::MAX {
+                // Unsupported return type (e.g. iterator<T> in first pass before S23
+                // diagnostic fires): fall back to raw vector access to prevent crash.
+                get_vec
+            } else {
+                self.get_field(vec_tp, usize::MAX, get_vec)
+            }
         };
         let b_assign = v_set(b_var, get_call);
         let idx_inc = v_set(

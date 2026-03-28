@@ -76,6 +76,11 @@ pub struct CoroutineFrame {
     pub call_frames: Vec<CallFrame>,
     /// Call depth baseline when the coroutine was last running.
     pub call_depth: usize,
+    /// S27 (debug-only): `text_positions` entries for this frame's locals, saved at
+    /// yield and restored at resume.  Prevents stale entries from masking
+    /// double-free or missing-free bugs in the consumer while the frame is suspended.
+    #[cfg(debug_assertions)]
+    pub saved_text_positions: std::collections::BTreeSet<u32>,
 }
 
 /// Internal State of the interpreter to run bytecode.
@@ -355,6 +360,8 @@ impl State {
             text_owned: Vec::new(),
             call_frames: Vec::new(),
             call_depth: 0,
+            #[cfg(debug_assertions)]
+            saved_text_positions: std::collections::BTreeSet::new(),
         };
         let idx = self.allocate_coroutine(frame);
 
@@ -378,6 +385,21 @@ impl State {
             return;
         }
         let idx = gen_ref.rec as usize;
+        // S23: defense-in-depth runtime guard — coroutine DbRefs must not cross
+        // thread boundaries.  Worker State instances have only a null slot at index
+        // 0; a rec from the main thread would be out-of-bounds here.
+        assert!(
+            idx < self.coroutines.len(),
+            "coroutine DbRef (rec={idx}) out of range — \
+             iterator<T> values must not cross thread boundaries \
+             (use a non-generator worker function in par())"
+        );
+        // S26: slot may be None — freed on exhaustion by coroutine_return.
+        // Treat as exhausted (same as the Exhausted variant).
+        if self.coroutines[idx].is_none() {
+            self.push_null_value(value_size);
+            return;
+        }
         let status = self.coroutine_frame_mut(idx).status;
 
         match status {
@@ -406,6 +428,16 @@ impl State {
                     .call_frames
                     .drain(..)
                     .collect();
+
+                // S27 (debug-only): restore the generator's text_positions entries
+                // that were removed at yield.  The generator's locals are live again
+                // once the stack bytes are copied back below.
+                #[cfg(debug_assertions)]
+                {
+                    let saved: std::collections::BTreeSet<u32> =
+                        std::mem::take(&mut self.coroutine_frame_mut(idx).saved_text_positions);
+                    self.text_positions.extend(saved);
+                }
 
                 let dest = self
                     .database
@@ -500,6 +532,22 @@ impl State {
             frame.code_pos = code_pos;
             frame.status = CoroutineStatus::Suspended;
         }
+
+        // S27 (debug-only): remove text_positions entries for the generator's locals
+        // [base, value_start) and save them in the frame.  While suspended, the consumer
+        // may create text values at the same absolute stack positions; keeping the
+        // generator's entries would mask missing or double OpFreeText calls.
+        #[cfg(debug_assertions)]
+        {
+            let locals_range = base..value_start;
+            let to_save: std::collections::BTreeSet<u32> =
+                self.text_positions.range(locals_range).copied().collect();
+            for p in &to_save {
+                self.text_positions.remove(p);
+            }
+            self.coroutine_frame_mut(idx).saved_text_positions = to_save;
+        }
+
         self.active_coroutines.pop();
 
         // Slide the yielded value to stack_base.
@@ -534,9 +582,14 @@ impl State {
         let stack_base = frame.stack_base;
         let caller_return_pos = frame.caller_return_pos;
 
-        // Exhaust.
+        // Exhaust and immediately free the slot (S26).
+        // Setting the slot to None prevents unbounded growth of the coroutines table
+        // when many generators are created over a program's lifetime.
+        // coroutine_exhausted() treats None as exhausted, so callers see no difference.
         frame.status = CoroutineStatus::Exhausted;
         self.active_coroutines.pop();
+        // Free the slot: coroutine_exhausted() returns true for None entries.
+        self.coroutines[idx] = None;
 
         // Restore call stack to consumer depth.
         self.call_stack.truncate(call_depth);

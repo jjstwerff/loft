@@ -412,6 +412,25 @@ impl Store {
         }
     }
 
+    /// Like [`clone_locked`] but omits the `claims` clone (S29/P1-R3).
+    /// Worker stores are always locked and never call `validate()`, so the claims
+    /// `HashSet` is wasted memory — O(records) allocation per worker per `par()` call.
+    pub fn clone_locked_for_worker(&self) -> Store {
+        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+        let ptr = unsafe { A.alloc(l) };
+        unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
+        Store {
+            ptr,
+            size: self.size,
+            claims: HashSet::new(), // S29/P1-R3: workers never validate(); skip clone
+            #[cfg(feature = "mmap")]
+            file: None,
+            free: self.free,
+            locked: true,
+            free_root: 0,
+        }
+    }
+
     // ---- LLRB free-space tree ------------------------------------------------
     // Nodes are stored inside free blocks using fields at FL_LEFT / FL_RIGHT /
     // FL_COLOR.  Key = (positive_block_size, block_position); ties break on pos.
@@ -793,7 +812,12 @@ impl Store {
     /// Try to validate a record reference as much as possible.
     /// Complete validations are only done in 'test' mode.
     pub fn valid(&self, rec: u32, fld: u32) -> bool {
-        debug_assert!(self.claims.contains(&rec), "Unknown record {rec}");
+        // S29/P1-R3: locked (worker) stores have empty claims by design — skip the
+        // claims check.  Records in worker stores are valid copies of the originals.
+        debug_assert!(
+            self.locked || self.claims.contains(&rec),
+            "Unknown record {rec}"
+        );
         // Read size before any multiplication to avoid overflow when fld 0 is negative
         // (a negative header means the block was freed — a bug if still in claims).
         let size: i32 = *self.addr(rec, 0);

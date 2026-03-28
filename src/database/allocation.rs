@@ -237,7 +237,8 @@ impl Stores {
                 if s.free {
                     super::super::store::Store::new(100)
                 } else {
-                    s.clone_locked()
+                    // S29/P1-R3: use claims-free clone — workers never call validate()
+                    s.clone_locked_for_worker()
                 }
             })
             .collect();

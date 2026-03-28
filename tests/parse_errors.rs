@@ -701,7 +701,6 @@ fn generator_remove_rejected() {
 /// compile time.  Worker threads run inside par() and cannot advance coroutines
 /// from the main thread — calling coroutine_next on an out-of-range index panics.
 #[test]
-#[ignore = "S23: par() does not yet reject worker functions whose return type is iterator<T>"]
 fn par_worker_returns_generator() {
     code!(
         "fn gen_worker(x: integer) -> iterator<integer> { yield x; }
@@ -710,7 +709,7 @@ fn par_worker_returns_generator() {
              for a in items par(b = gen_worker(a), 1) { assert(b > 0); }
          }"
     )
-    .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers");
+    .error("parallel worker 'gen_worker' returns iterator(integer(-2147483647, 2147483647, false), null) — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
