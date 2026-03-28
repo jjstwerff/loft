@@ -187,6 +187,24 @@ impl Parser {
             Type::Void
         } else if self.lexer.has_token("yield") {
             // CO1.3c: yield expr — only valid inside generator functions.
+            // P2-R6 M11-a: also forbidden inside a par() body (worker runs in a
+            // separate thread; there is no safe coroutine resumption path).
+            if self.in_par_body && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "yield is not allowed inside a par(...) parallel body"
+                );
+                // Consume the expression tokens to keep the lexer in sync, but
+                // emit Value::Null so no coroutine IR is generated — generating
+                // yield state-machine code outside a coroutine context confuses
+                // scope analysis (ref variables without matching OpFreeRef).
+                if !self.lexer.has_keyword("from") {
+                    let mut discarded = Value::Null;
+                    self.expression(&mut discarded);
+                }
+                return Type::Void;
+            }
             let r_type = self.data.def(self.context).returned.clone();
             if !matches!(r_type, Type::Iterator(_, _)) && !self.first_pass {
                 diagnostic!(

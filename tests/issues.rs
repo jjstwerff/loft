@@ -1309,18 +1309,16 @@ fn test() { }"
 // inside a parallel-for worker function body.
 
 #[test]
-#[ignore = "P2-R6 M11-a: compiler check for yield inside par() not yet implemented"]
 fn p2_r6_yield_inside_par_body_rejected() {
     code!(
-        "fn gen() -> iterator<integer> {
-    items = [1, 2, 3];
+        "fn gen(items: vector<integer>) -> iterator<integer> {
     for a in items par(b = double(a), 1) {
         yield b;
     }
 }
 fn double(x: integer) -> integer { x * 2 }"
     )
-    .error("yield is not allowed inside a par(...) parallel body at p2_r6_yield_inside_par_body_rejected:4:9");
+    .error("yield is not allowed inside a par(...) parallel body at p2_r6_yield_inside_par_body_rejected:3:16");
 }
 
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────

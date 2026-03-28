@@ -129,6 +129,10 @@ pub struct Parser {
     pub(crate) init_field_tracking: bool,
     /// #91: field names accessed via $ during the current init(expr) parse.
     pub(crate) init_field_deps: Vec<String>,
+    /// P2-R6 M11-a: true while parsing the body of a `for … par(…) { … }` loop.
+    /// `yield` inside a par() body is illegal — the worker runs in a separate
+    /// thread with its own store; there is no safe coroutine resumption path.
+    pub(crate) in_par_body: bool,
 }
 
 // Operators ordered on their precedence
@@ -282,6 +286,7 @@ impl Parser {
             last_closure_alloc: None,
             init_field_tracking: false,
             init_field_deps: Vec::new(),
+            in_par_body: false,
         }
     }
 

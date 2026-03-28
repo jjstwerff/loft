@@ -1109,9 +1109,14 @@ use #count instead"
         self.vars.loop_var(b_var);
         let in_loop = self.in_loop;
         self.in_loop = true;
+        // P2-R6 M11-a: flag that we are inside a par() body so that any `yield`
+        // encountered during parsing can emit a compile-time error.
+        let outer_par = self.in_par_body;
+        self.in_par_body = true;
         let mut block = Value::Null;
         self.parse_block("parallel for", &mut block, &Type::Void);
         let count = self.vars.loop_counter();
+        self.in_par_body = outer_par;
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
 
