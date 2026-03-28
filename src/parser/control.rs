@@ -2012,6 +2012,30 @@ impl Parser {
             }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);
+            // A5.6c: for void-return capturing lambdas, write updated closure
+            // record fields back to the corresponding outer variables so the caller
+            // observes mutations made inside the lambda body (e.g. `count += x`).
+            // Non-void returns are not handled here — they require a temp to hold
+            // the return value while writing back, which is left for A5.6 (1.1+).
+            if matches!(*ret_type, Type::Void)
+                && let Some(&closure_w) = self.closure_vars.get(&v_nr)
+                && let Type::Reference(closure_rec_d, _) = self.vars.tp(closure_w).clone()
+            {
+                let n_attrs = self.data.attributes(closure_rec_d);
+                let mut block: Vec<Value> = vec![val.clone()];
+                for aid in 0..n_attrs {
+                    let cap_name = self.data.attr_name(closure_rec_d, aid).clone();
+                    let outer_v = self.vars.var(&cap_name);
+                    if outer_v != u16::MAX {
+                        let field_val =
+                            self.get_field(closure_rec_d, aid, Value::Var(closure_w));
+                        block.push(v_set(outer_v, field_val));
+                    }
+                }
+                if block.len() > 1 {
+                    *val = v_block(block, Type::Void, "closure writeback");
+                }
+            }
         }
         Some(*ret_type)
     }
