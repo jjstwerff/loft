@@ -1046,7 +1046,7 @@ fn test() {
 
 // P1.1: lambda with no return type (void).
 #[test]
-#[ignore = "A5: lambda captures outer variable 'count' — requires closure capture (A5, 1.1+)"]
+#[ignore = "A5.6c: mutable capture write-back not yet implemented"]
 fn p1_1_lambda_void_body() {
     code!(
         "fn test() {
