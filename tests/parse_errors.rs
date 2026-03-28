@@ -659,7 +659,6 @@ fn local_not_captured() {
 
 /// A5.2: closure record is synthesized with the correct captured variable.
 #[test]
-#[ignore = "A5.4: mutable capture (count += x) not yet supported — codegen panics on self-reference"]
 fn closure_record_single_capture() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
@@ -670,7 +669,6 @@ fn closure_record_single_capture() {
 
 /// A5.2: multiple captures produce a record with multiple fields.
 #[test]
-#[ignore = "A5.3: closure work variable slot position exceeds stack.position at call site"]
 fn closure_record_multi_capture() {
     // A5.3: multi-capture — captured reads redirect to closure record fields.
     // No more "Unknown variable" errors thanks to the pre-has_var redirect.

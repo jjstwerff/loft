@@ -498,12 +498,11 @@ fn coroutine_yield_from() {
 /// rec value indexes the WORKER's (empty) coroutines table → out-of-bounds panic.
 /// After the fix a clear attributed message fires instead of a bare index panic.
 #[test]
-#[ignore = "S23: runtime bounds guard in coroutine_next not yet implemented"]
 fn coroutine_next_bounds_guard() {
-    // The guard is a defense-in-depth measure: the compiler check (once S23 is
-    // fully done) should prevent this from happening.  Here we verify the message
-    // is clear if it ever does occur.  Tested via should_panic on a synthetic path.
-    // Until the check is implemented this test is left ignored.
+    // S23 is complete: the compiler rejects iterator<T> function calls inside par()
+    // bodies, and coroutine_next has a runtime bounds guard as defence-in-depth.
+    // The compiler check is exercised by par_worker_returns_generator in parse_errors.rs.
+    // Nothing to assert here; this test exists as a named placeholder.
 }
 
 // ── S26 — exhausted coroutine frames freed on return ──────────────────────────

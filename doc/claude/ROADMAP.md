@@ -39,6 +39,13 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 | P2-R7     | Coroutine: free exhausted frames (`OpFreeCoroutine`) | M  | ✓      |              | SAFE.md § P2-R7            |
 | P2-R8     | Coroutine: generation-counter guard for stale `DbRef` | M  | ✓     |              | SAFE.md § P2-R8            |
 | P2-R10    | Coroutine: document yielded `Str` ownership rule     | S  | ✓      |              | SAFE.md § P2-R10           |
+| S34       | Interpreter: `20-binary.loft` slot `pos >= TOS` panic | M  | ~      |              | tests/scripts/20-binary.loft (wrap::binary #[ignore]) |
+| W1.15     | WASM: `CallRef` / function references                | M  | ~      |              | CAVEATS.md C3, #77, 06-function.loft |
+| W1.16     | WASM: file I/O ops                                   | M  | ~      |              | CAVEATS.md C3, #74, 13-file.loft     |
+| W1.17     | WASM: locks (`set_store_lock`)                       | S  | ~      |              | CAVEATS.md C3, 18-locks.loft         |
+| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ~      |              | CAVEATS.md C3, 19-threading.loft     |
+| W1.19     | WASM: random numbers (external crate)                | S  | ~      |              | CAVEATS.md C3, #79, 21-random.loft   |
+| W1.20     | WASM: time functions                                 | S  | ~      |              | CAVEATS.md C3, 22-time.loft          |
 
 ---
 
