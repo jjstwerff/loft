@@ -1164,18 +1164,21 @@ impl State {
             panic!("generate_call_ref: variable is not Type::Function");
         };
         let ret_type = *ret_type;
+
+        // Generate all args: visible params, then work-buffer blocks (12B DbRefs each),
+        // then closure arg (12B DbRef).  Blocks produce the correct type/size automatically.
         for arg in args {
             self.generate(arg, stack, false);
         }
-        // fn-ref variable is below the pushed arguments; compute distance from current top
+
+        // fn-ref variable is below all pushed arguments.
         let fn_var_dist = stack.position - stack.function.stack(v_nr);
-        // A5.3: total_arg_size includes all args pushed including hidden __closure.
+        // declared: visible param sizes; extra: work-buf + closure (all 12-byte DbRefs).
         let declared_size: u16 = param_types
             .iter()
             .map(|t| size(t, &Context::Argument))
             .sum();
         let extra = if args.len() > param_types.len() {
-            // Hidden closure arg is a DbRef (12 bytes).
             (args.len() - param_types.len()) as u16 * super::size_ref() as u16
         } else {
             0

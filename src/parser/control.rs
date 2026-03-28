@@ -1805,6 +1805,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // pre-existing length; A5.6b.2 added ~9 lines
     pub(crate) fn parse_call(&mut self, val: &mut Value, source: u16, name: &str) -> Type {
         let call_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
@@ -1816,9 +1817,28 @@ impl Parser {
                 if let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
+                    // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
+                    // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
+                    // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
+                    let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
+                        (0..deps.len())
+                            .map(|_| self.vars.work_text(&mut self.lexer))
+                            .collect()
+                    } else {
+                        vec![]
+                    };
                     if !self.first_pass {
                         self.var_usages(v_nr, true);
                         let mut args = vec![];
+                        // A5.6b.2: inject work-buffer DbRef blocks before __closure (zero-param case).
+                        let ref_def = self.data.def_nr("reference");
+                        for &wv in &work_vars {
+                            args.push(v_block(
+                                vec![self.cl("OpCreateStack", &[Value::Var(wv)])],
+                                Type::Reference(ref_def, vec![wv]),
+                                "cref_work_buf",
+                            ));
+                        }
                         // A5.6b.1: zero-param closures still have a hidden __closure arg;
                         // inject it the same way try_fn_ref_call does for non-zero-param calls.
                         if let Some(closure_alloc) = self.last_closure_alloc.take() {
@@ -1987,6 +2007,16 @@ impl Parser {
         let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone() else {
             return None;
         };
+        // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
+        // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
+        // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
+        let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
+            (0..deps.len())
+                .map(|_| self.vars.work_text(&mut self.lexer))
+                .collect()
+        } else {
+            vec![]
+        };
         if !self.first_pass {
             if list.len() != param_types.len() {
                 diagnostic!(
@@ -2001,6 +2031,17 @@ impl Parser {
             let mut converted = list.to_vec();
             for (i, expected) in param_types.iter().enumerate() {
                 self.convert(&mut converted[i], &types[i], expected);
+            }
+            // A5.6b.2: inject hidden work-buffer DbRef args for text-returning lambdas.
+            // Each block emits OpCreateStack → 12-byte DbRef, matching callee's &text param.
+            // Order: visible params → work bufs → __closure (must match callee slot layout).
+            let ref_def = self.data.def_nr("reference");
+            for &wv in &work_vars {
+                converted.push(v_block(
+                    vec![self.cl("OpCreateStack", &[Value::Var(wv)])],
+                    Type::Reference(ref_def, vec![wv]),
+                    "cref_work_buf",
+                ));
             }
             // A5.3: inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding

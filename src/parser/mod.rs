@@ -130,7 +130,7 @@ pub struct Parser {
     /// #91: field names accessed via $ during the current init(expr) parse.
     pub(crate) init_field_deps: Vec<String>,
     /// P2-R6 M11-a: true while parsing the body of a `for … par(…) { … }` loop.
-    /// `yield` inside a par() body is illegal — the worker runs in a separate
+    /// `yield` inside a `par()` body is illegal — the worker runs in a separate
     /// thread with its own store; there is no safe coroutine resumption path.
     pub(crate) in_par_body: bool,
 }
