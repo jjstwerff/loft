@@ -77,15 +77,18 @@ pub fn host_fs_file_size(_path: &str) -> i64 {
 // ── W1.6  Time and environment host bridges ──────────────────────────────────
 
 /// Return the current time as milliseconds since the Unix epoch.
+/// `wasm32-wasip2` supports `std::time::SystemTime` via the WASI clock API.
 pub fn host_time_now() -> i64 {
-    // TODO W1.9: call extern "C" { fn time_now() -> i64; }
-    0
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
-/// Return microseconds elapsed since some fixed start point (monotonic).
+/// Return the current time as milliseconds since the Unix epoch (monotonic approximation).
+/// `n_ticks` computes elapsed time as `(host_time_ticks() - start_time_ms) * 1000`
+/// microseconds; using wall-clock milliseconds is accurate enough for benchmarks.
 pub fn host_time_ticks() -> i64 {
-    // TODO W1.9: call extern "C" { fn time_ticks() -> i64; }
-    0
+    host_time_now()
 }
 
 /// Return the value of environment variable `name`, or empty string if absent.

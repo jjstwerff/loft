@@ -150,6 +150,17 @@ pub fn shuffle_ints(v: &mut [i32]) {
     }
 }
 
+/// Fisher-Yates shuffle via the WASM host-bridge RNG.
+/// Used by `n_rand_indices` when `feature = "random"` is not available.
+#[cfg(all(feature = "wasm", not(feature = "random")))]
+pub fn shuffle_ints(v: &mut [i32]) {
+    let n = v.len();
+    for i in (1..n).rev() {
+        let j = crate::wasm::host_random_int(0, i as i32) as usize;
+        v.swap(i, j);
+    }
+}
+
 #[must_use]
 pub fn text_character(val: &str, from: i32) -> char {
     let len = val.len() as i32;

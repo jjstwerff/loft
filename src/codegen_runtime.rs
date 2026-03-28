@@ -1248,18 +1248,13 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 }
 
 /// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i32::MIN` (null) when `lo > hi` or when the `random` feature is disabled.
+/// Returns `i32::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
 pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
-    #[cfg(feature = "random")]
-    {
-        crate::ops::rand_int(lo, hi)
-    }
-    #[cfg(not(feature = "random"))]
-    {
-        let _ = (lo, hi);
-        i32::MIN
-    }
+    // ops::rand_int handles both the full PCG path (feature="random") and the
+    // WASM host-bridge path (feature="wasm", not feature="random") so a single
+    // call site covers all configurations.
+    crate::ops::rand_int(lo, hi)
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
@@ -1272,9 +1267,11 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
     } else {
         n as usize
     };
-    // Build shuffled index list.
+    // Build shuffled index list.  shuffle_ints is available under feature="random"
+    // (PCG64 RNG) and feature="wasm" (host_random_int bridge); without either the
+    // indices are returned in ascending order.
     let mut indices: Vec<i32> = (0..count as i32).collect();
-    #[cfg(feature = "random")]
+    #[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
     crate::ops::shuffle_ints(&mut indices);
     // Allocate: vec_rec holds size + data, header_rec holds pointer to vec_rec.
     let base = stores.null();
