@@ -11,16 +11,24 @@ extern crate loft;
 
 use loft::logger::{Logger, RuntimeLogConfig, Severity};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Per-process counter to guarantee unique temp-file names even when tests run in
+/// parallel.  macOS `SystemTime` only has microsecond resolution, so `subsec_nanos()`
+/// alone produces collisions between concurrently-starting tests.
+static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+fn unique_tmp(prefix: &str) -> PathBuf {
+    let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "loft_{prefix}_{pid}_{id}.txt",
+        pid = std::process::id()
+    ))
+}
 
 /// Build a Logger that writes to a temp file and return (logger, path).
 fn logger_with_tmpfile(level: Severity) -> (Logger, PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "loft_logger_test_{}.txt",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
-    ));
+    let path = unique_tmp("logger_test");
     let config = RuntimeLogConfig {
         log_path: path.clone(),
         default_level: level,
@@ -113,13 +121,7 @@ fn logger_warn_suppressed_at_error_level() {
 /// are suppressed.  This tests the coverage-gap path `should_suppress = true` in Logger::log.
 #[test]
 fn logger_rate_limiting_suppresses_excess() {
-    let path = std::env::temp_dir().join(format!(
-        "loft_logger_rate_{}.txt",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
-    ));
+    let path = unique_tmp("logger_rate");
     let config = RuntimeLogConfig {
         log_path: path.clone(),
         default_level: Severity::Info,
