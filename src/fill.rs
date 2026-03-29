@@ -3,6 +3,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(unused_parens)]
 
+use crate::codegen_runtime;
 use crate::keys::{DbRef, Str};
 use crate::ops;
 use crate::state::State;
@@ -1859,14 +1860,14 @@ fn size_file(s: &mut State) {
 
 fn delete(s: &mut State) {
     let v_path = s.string();
-    let new_value = std::fs::remove_file(v_path.str()).is_ok();
+    let new_value = codegen_runtime::fs_delete(v_path.str());
     s.put_stack(new_value);
 }
 
 fn move_file(s: &mut State) {
     let v_to = s.string();
     let v_from = s.string();
-    let new_value = std::fs::rename(v_from.str(), v_to.str()).is_ok();
+    let new_value = codegen_runtime::fs_move(v_from.str(), v_to.str());
     s.put_stack(new_value);
 }
 
@@ -1882,13 +1883,13 @@ fn call_ref(s: &mut State) {
 
 fn mkdir(s: &mut State) {
     let v_path = s.string();
-    let new_value = std::fs::create_dir(v_path.str()).is_ok();
+    let new_value = codegen_runtime::fs_mkdir(v_path.str());
     s.put_stack(new_value);
 }
 
 fn mkdir_all(s: &mut State) {
     let v_path = s.string();
-    let new_value = std::fs::create_dir_all(v_path.str()).is_ok();
+    let new_value = codegen_runtime::fs_mkdir_all(v_path.str());
     s.put_stack(new_value);
 }
 

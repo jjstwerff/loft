@@ -10,7 +10,11 @@
 //! **Interpreter safety:** This module is purely additive — it does not modify
 //! any interpreter code path.  It only re-exposes `Stores` methods with the
 //! signatures that generated code expects.
-
+//!
+//! `dead_code` is suppressed because every public item here is part of the
+//! generated-code ABI — callers are emitted by `generation.rs`, not by the
+//! interpreter or test suite directly.
+#![allow(dead_code)]
 #![allow(non_snake_case)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
@@ -1061,10 +1065,14 @@ impl IterState for i64 {
 /// - `on & 63 == 2`: sorted vector — `arg` is the element size in bytes directly.
 ///
 /// Bytecode equivalent: `State::remove` in `src/state/io.rs`.
+///
+/// # Panics
+/// Panics if `data.store_nr == u16::MAX` (coroutine `DbRef`) — the compiler is
+/// expected to reject `e#remove` on generator iterators before this is reached.
 pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
     // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
     // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
-    debug_assert!(
+    assert!(
         data.store_nr != u16::MAX,
         "e#remove on coroutine DbRef — compiler check should have rejected this"
     );
@@ -1615,4 +1623,63 @@ pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
         let idx = gen_ref.rec as usize;
         coroutines.get(idx).is_none_or(Option::is_none)
     })
+}
+
+// ── FS-B  File-system dispatch helpers ───────────────────────────────────────
+// Called from fill.rs (interpreter) and generated native code alike.
+// Paths: interpreter uses `crate::codegen_runtime::*`; native uses
+// `use loft::codegen_runtime::*` so these names resolve in both contexts.
+// Under `--features wasm` each function calls the host bridge; otherwise it
+// calls the real filesystem.
+
+/// Delete `path`.  Returns `true` on success.
+#[must_use]
+pub fn fs_delete(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_delete(path) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::remove_file(path).is_ok()
+    }
+}
+
+/// Rename / move `from` to `to`.  Returns `true` on success.
+#[must_use]
+pub fn fs_move(from: &str, to: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_move(from, to) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::rename(from, to).is_ok()
+    }
+}
+
+/// Create directory `path`.  Returns `true` on success.
+#[must_use]
+pub fn fs_mkdir(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_mkdir(path) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::create_dir(path).is_ok()
+    }
+}
+
+/// Create directory `path` and all parents.  Returns `true` on success.
+#[must_use]
+pub fn fs_mkdir_all(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_mkdir_all(path) == 0
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::fs::create_dir_all(path).is_ok()
+    }
 }

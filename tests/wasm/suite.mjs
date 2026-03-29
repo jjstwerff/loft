@@ -9,7 +9,7 @@
  *
  * Prerequisites:
  *   1. Build the WASM package:
- *        wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --features wasm
+ *        wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm
  *   2. Run:
  *        node tests/wasm/suite.mjs
  *
@@ -23,19 +23,17 @@
  * Exit code: 0 if all run tests pass, 1 if any fail.
  */
 
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'fs';
-import { execSync } from 'child_process';
-import { join, basename } from 'path';
-import { createHost } from './host.mjs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
+import { execSync, spawnSync } from 'child_process';
+import { basename, join } from 'path';
 
-// ── Load WASM package ──────────────────────────────────────────────────────────
+// ── Check WASM package ────────────────────────────────────────────────────────
 
-let compileAndRun;
 try {
-  ({ compile_and_run: compileAndRun } = await import('./pkg/loft_wasm.js'));
+  await import('./pkg/loft.js');
 } catch {
   console.log('SKIP  suite — WASM package not built');
-  console.log('      wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --features wasm');
+  console.log('      wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm');
   process.exit(0);
 }
 
@@ -74,74 +72,6 @@ const SKIP_COMPARE = new Set([
   '21-random.loft',    // same — doc version
 ]);
 
-// ── VirtFS fixture builder ─────────────────────────────────────────────────────
-
-/**
- * Build a VirtFS tree from a directory on disk (recursively, text files only).
- * Binary files are silently skipped — add binary support if tests need it.
- *
- * @param {string} diskPath  Absolute or relative path on the real filesystem.
- * @param {object} node      The VirtFS directory node to populate.
- */
-function populateFromDisk(diskPath, node) {
-  if (!existsSync(diskPath)) return;
-  for (const entry of readdirSync(diskPath)) {
-    const full = join(diskPath, entry);
-    const st = statSync(full);
-    if (st.isDirectory()) {
-      node[entry] = {};
-      populateFromDisk(full, node[entry]);
-    } else if (st.isFile()) {
-      try {
-        const content = readFileSync(full, 'utf8');
-        node[entry] = { $type: 'text', $content: content };
-      } catch {
-        // Skip binary files (readFileSync throws on non-UTF8 with 'utf8' encoding)
-      }
-    }
-  }
-}
-
-/**
- * Build the base VirtFS tree for a given loft test file.
- *
- * The WASM module may call loftHost.fs_* for any path the loft program accesses.
- * We pre-populate VirtFS with:
- *   - The source file itself under its original path
- *   - tests/scripts/ and tests/docs/ directories (needed by some tests)
- *   - tests/example/ (used by 19-files.loft and docs tests)
- *   - A working /tmp directory
- *
- * @param {string} relPath  Relative path to the .loft file (e.g. 'tests/scripts/01-integers.loft')
- * @param {string} content  Source code of the file.
- * @returns {object}        VirtFS tree object.
- */
-function buildTree(relPath, content) {
-  const tree = { '/': { tests: { scripts: {}, docs: {}, example: {} }, tmp: {} } };
-
-  // Place the source file at its natural path
-  const parts = relPath.split('/');
-  let node = tree['/'];
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (!node[parts[i]]) node[parts[i]] = {};
-    node = node[parts[i]];
-  }
-  node[parts[parts.length - 1]] = { $type: 'text', $content: content };
-
-  // Populate supporting directories from disk (text files only)
-  populateFromDisk('tests/example', tree['/'].tests.example);
-
-  // Provide wordlist and log fixtures used by some scripts tests
-  if (existsSync('tests/scripts/wordlist.txt')) {
-    tree['/'].tests.scripts['wordlist.txt'] = {
-      $type: 'text',
-      $content: readFileSync('tests/scripts/wordlist.txt', 'utf8')
-    };
-  }
-
-  return tree;
-}
-
 // ── Native reference runner ────────────────────────────────────────────────────
 
 /**
@@ -166,21 +96,27 @@ function runNative(filePath) {
 // ── WASM runner ────────────────────────────────────────────────────────────────
 
 /**
- * Run a loft source string through the WASM module and return the result.
+ * Run a loft file through the WASM module in a subprocess and return the result.
  *
- * @param {string} name     Logical filename (e.g. 'main.loft').
- * @param {string} content  Source code.
- * @param {object} tree     VirtFS tree to back the host.
+ * Each test gets its own Node.js process with a fresh WASM module instance,
+ * so a WASM crash (RuntimeError: unreachable / memory access out of bounds)
+ * does not corrupt state and cause all subsequent tests to fail.
+ *
+ * @param {string} filePath  Path to the .loft file.
  * @returns {{ success: boolean, output: string, diagnostics: string }}
  */
-function runWasm(name, content, tree) {
-  const { host } = createHost(tree);
-  globalThis.loftHost = host;
+function runWasm(filePath) {
+  const result = spawnSync('node', ['tests/wasm/run-one.mjs', filePath], {
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (result.error) {
+    return { success: false, output: '', diagnostics: String(result.error) };
+  }
   try {
-    const raw = compileAndRun(JSON.stringify([{ name, content }]));
-    return JSON.parse(raw);
-  } catch (err) {
-    return { success: false, output: '', diagnostics: String(err) };
+    return JSON.parse(result.stdout);
+  } catch {
+    return { success: false, output: '', diagnostics: result.stderr || result.stdout || 'no output' };
   }
 }
 
@@ -225,9 +161,7 @@ for (const filePath of allTests) {
     continue;
   }
 
-  const content = readFileSync(filePath, 'utf8');
-  const tree    = buildTree(filePath, content);
-  const wasmResult = runWasm(name, content, tree);
+  const wasmResult = runWasm(filePath);
 
   if (!wasmResult.success) {
     console.error(`FAIL  ${filePath}`);

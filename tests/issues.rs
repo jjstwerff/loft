@@ -987,8 +987,33 @@ fn n1_native_pipeline_trivial_program() {
         binary.to_str().unwrap().to_string(),
     ];
     if let Some(ref rlib) = loft_rlib {
-        rustc_args.push(format!("--extern=loft={}", rlib.display()));
-        rustc_args.push(format!("-L={}", deps_dir.display()));
+        rustc_args.push("--extern".to_string());
+        rustc_args.push(format!("loft={}", rlib.display()));
+        rustc_args.push("-L".to_string());
+        rustc_args.push(deps_dir.display().to_string());
+        // S31: pass --extern for every non-loft rlib in deps/ so that optional
+        // feature dependencies (rand_core, rand_pcg, png, etc.) can be resolved.
+        // Without this, rustc cannot find crates that loft was compiled with.
+        if let Ok(entries) = std::fs::read_dir(&deps_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with("lib")
+                    || !name.ends_with(".rlib")
+                    || name.starts_with("libloft")
+                {
+                    continue;
+                }
+                let without_lib = &name[3..];
+                let without_rlib = without_lib.trim_end_matches(".rlib");
+                let crate_name = if let Some(pos) = without_rlib.rfind('-') {
+                    without_rlib[..pos].replace('-', "_")
+                } else {
+                    without_rlib.replace('-', "_")
+                };
+                rustc_args.push("--extern".to_string());
+                rustc_args.push(format!("{crate_name}={}", entry.path().display()));
+            }
+        }
     }
     rustc_args.push(tmp_rs.to_str().unwrap().to_string());
     match std::process::Command::new("rustc")

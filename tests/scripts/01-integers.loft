@@ -148,4 +148,15 @@ fn main() {
   // Long text-to-long parse edge cases:
   assert(!("xyz" as long), "parse non-numeric text to long yields null");
   assert(!("" as long), "parse empty text to long yields null");
+  // --- Null-preserving cross-type casts (GAPS §3) ---
+  // i32::MIN (integer null) widens to i64::MIN (long null); does not become -2147483648L.
+  n_int = null as integer;
+  assert(!(n_int as long), "integer null cast to long preserves null");
+  // i32::MIN cast to float produces NaN (float null), not -2147483648.0.
+  assert(!(n_int as float), "integer null cast to float produces float null");
+  // i64::MIN (long null) narrows to i32::MIN (integer null).
+  n_long = null as long;
+  assert(!(n_long as integer), "long null cast to integer preserves null");
+  // i64::MIN cast to float produces NaN (float null).
+  assert(!(n_long as float), "long null cast to float produces float null");
 }

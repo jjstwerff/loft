@@ -487,7 +487,7 @@ the recompile overhead that caching was designed to address)
 
 **Effort:** Very High
 **Depends:** TR1
-**Target:** 1.1+
+**Target:** 0.8.3 (all CO1.x sub-items completed in 0.8.3; originally planned for 1.1+)
 
 ---
 
@@ -694,7 +694,7 @@ from an outer scope.  No other code path is changed.
 crosses function scope — the closure is returned from `make_greeter` and called from
 outside.  The `last_closure_alloc` block references variable slots in `make_greeter`'s
 frame; calling the returned fn-ref from a different scope would access those stale slots.
-This pattern requires A5.6 (1.1+) — returning a closure alongside its DbRef.
+This pattern requires A5.6 (0.8.3) — returning a closure alongside its DbRef.
 
 After this fix, add a **same-scope** test that exercises A5.6b.1 directly:
 ```
@@ -704,7 +704,7 @@ f("world")  // expected: "Hello world"
 ```
 Same-scope calls use `last_closure_alloc` correctly (consumed at the call site within
 the same definition) and do not require the returning-closure architecture.  The
-existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (1.1+).
+existing `closure_capture_text` test should remain `#[ignore]` until A5.6 (0.8.3).
 
 **A5.6b.2 — `generate_call_ref`: text work buffers not pre-allocated** (✓ implemented):
 Text-returning lambdas called via `CallRef` now correctly push the hidden `__work_N`
@@ -774,44 +774,202 @@ update the ignore reason from the old "A5, 1.1+" text to "A5.6c" once the fix is
 implemented.
 
 **Effort:** A5.6b.1 Medium · A5.6b.2 Small · A5.6c Medium
-**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c); A5.6 (capture-at-definition-time) in 1.1+
+**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c completed; A5.6 capture-at-definition-time also 0.8.3)
 
-**A5.6 — Full capture-at-definition-time semantics** (1.1+, depends on A5.6b.1–A5.6c):
-After A5.6b.1, A5.6b.2, and A5.6c are resolved, the remaining gaps in closure
-semantics are:
+**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** (0.8.3, depends on A5.6b.1–A5.6c ✓):
+After A5.6b.1, A5.6b.2, and A5.6c are implemented, the last open item for
+`closure_capture_text` is the **cross-scope** pattern: a capturing lambda returned
+from a function and then called from outside.  Two distinct problems remain:
 
-1. **Lambdas as first-class values stored in collections or struct fields.**
-   Currently `closure_vars` only maps fn-ref variables created by direct assignment.
-   If a lambda is stored in a vector or struct field, the closure record association
-   is lost and the hidden `__closure` arg is never injected at call sites.
-   Fix: extend `closure_vars` to handle indirect storage, or store the closure DbRef
-   alongside the fn-ref `d_nr` value as a single `(d_nr, closure_dbref)` pair in a
-   16-byte fn-ref slot (requires opcode changes).
+---
 
-2. **Lambda re-definition (reassignment of a fn-ref variable).**
-   If `f = fn(x) { count += x }` is followed by `f = fn(x) { count -= x }`, the
-   second assignment clears `closure_vars[f]` and sets a new closure record.  The
-   old closure record must be freed.  `get_free_vars` must emit `OpFreeRef` for the
-   OLD closure record at the reassignment point.
+#### The opcode problem: `Type::Function` is 4 bytes — no room for closure DbRef
 
-3. **Returning a closure from a function.**
-   `fn make_adder(n: integer) -> fn(integer) -> integer { fn(x: integer) -> integer { n + x } }`
-   The closure record must outlive `make_adder`'s stack frame.  Currently the
-   `__clos` variable lives on `make_adder`'s stack and is freed when `make_adder`
-   returns — before the returned fn-ref can be called.  Fix: the closure record must
-   be heap-allocated (already the case via `OpDatabase`) and returned alongside the
-   fn-ref as a `(d_nr, closure_dbref)` pair; `make_greeter` in the failing test
-   exercises exactly this scenario.
+`size(Type::Function, _)` returns 4 (same arm as `Type::Integer` in
+`src/variables/mod.rs:995`).  `fn_call_ref` in `state/mod.rs:221` reads exactly 4
+bytes: `*get_var::<i32>(fn_var)` = the d_nr.
 
-4. **Closure lifetime and sharing.**
-   When the same lambda is called multiple times, the closure record is shared across
-   all calls.  After A5.6c adds write-back, each call to `f(10)` reads the closure
-   record, modifies it, and writes back.  Concurrent use (via `par()`) would require
-   locking or per-call copies — deferred to the parallel safety audit.
+A closure DbRef is 12 bytes (store_nr + rec + pos — same layout as every other
+`DbRef`).  When `make_greeter` returns the inner lambda as its return value, only
+the 4-byte d_nr lands on the caller's stack; the 12-byte DbRef for the closure
+record has nowhere to go and is lost.  The closure record itself stays alive in the
+store (it was heap-allocated via `OpDatabase`), but no pointer to it survives the
+return — so the lambda body's `__closure` parameter can never be populated.
 
-**Effort:** High (multiple sub-items, some requiring opcode-level changes)
-**Depends on:** A5.6b.1, A5.6b.2, A5.6c
-**Target:** 1.1+
+**Fix — 16-byte fn-ref slot:**
+
+```
+offset 0..4:  d_nr (i32)        — function definition index
+offset 4..8:  store_nr (i32) ─┐
+offset 8..12: rec (i32)        ├─ closure DbRef (12 bytes; all-zero = no closure)
+offset 12..16: pos (i32)      ─┘
+```
+
+`size(Type::Function, _)` → 16 (move `Type::Function` out of the `4`-byte arm in
+`src/variables/mod.rs:995`; add a new arm `Type::Function(_, _) => 4 + size_of::<DbRef>() as u16`).
+
+**Emitting the fn-ref value (vectors.rs `emit_lambda_code`):**
+
+Non-capturing lambdas: `*code = Value::Int(d_nr as i32)` unchanged — `OpPutInt`
+writes d_nr to bytes 0..4; bytes 4..16 stay zero (zeroed by `OpReserveFrame`).
+
+Capturing lambdas: emit a `v_block` that:
+1. Runs the existing `alloc_steps` to allocate and fill the closure record into work
+   var `w` (type `Type::Reference`).
+2. Emits `v_set(fn_ref_var, Value::Int(d_nr as i32))` — writes d_nr to bytes 0..4
+   of the new 16-byte work var `fn_ref_var` (type `Type::Function`).
+3. Emits `cl("OpStoreClosure", [Var(fn_ref_var), Var(w)])` — a new opcode that
+   copies the 12-byte DbRef from `w`'s stack slot into `fn_ref_var`'s bytes 4..16.
+4. Yields `Value::Var(fn_ref_var)`.
+
+Then **drop** `self.last_closure_alloc` — the closure is now embedded in the fn-ref
+value and no longer needs to be injected separately at call sites.
+
+**New opcode: `OpStoreClosure(fn_ref_var: u16, closure_var: u16)`** (fill.rs):
+Reads the absolute stack position of `fn_ref_var` and `closure_var`; copies 12 bytes
+from `closure_var`'s slot to `fn_ref_var`'s slot at byte offset 4.  No stack push/pop.
+
+**Calling through the 16-byte fn-ref (state/mod.rs `fn_call_ref`):**
+
+```rust
+pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
+    let d_nr = *self.get_var::<i32>(fn_var) as usize;
+    // Read closure DbRef from bytes 4..16 of the 16-byte fn-ref slot.
+    // The slot start is at (stack_pos - fn_var); byte 4 is one i32 further.
+    let store_nr = *self.get_var::<i32>(fn_var - 4);   // fn_var_abs + 4
+    let has_closure = store_nr != -1;  // -1 is the null sentinel for store_nr
+    let total = arg_size + if has_closure { size_of::<DbRef>() as u16 } else { 0 };
+    if has_closure {
+        let rec = *self.get_var::<i32>(fn_var - 8);
+        let pos = *self.get_var::<i32>(fn_var - 12);
+        // Push DbRef (12 bytes) onto the stack as __closure argument
+        self.push_stack(store_nr);
+        self.push_stack(rec);
+        self.push_stack(pos);
+    }
+    let code_pos = self.fn_positions[d_nr] as i32;
+    self.fn_call(d_nr as u32, total, code_pos);
+}
+```
+
+Note: the fn-ref variable's absolute position is `stack_pos - fn_var`.  Because the
+stack grows upward, `fn_var_abs + 4` is referenced as `stack_pos - (fn_var - 4)`.
+Verify the offset arithmetic matches `get_var`'s addressing in the implementation.
+
+**Call-site codegen (parser/control.rs `try_fn_ref_call`, zero-param path):**
+
+Remove the `last_closure_alloc.take()` and `closure_vars.get(&v_nr)` injection.
+The closure is now pushed by `fn_call_ref` at runtime from the embedded DbRef —
+no parser-level injection needed.  `generate_call_ref` is unchanged (already
+simplified by A5.6b.2): all args in `converted` are visible params and work bufs.
+
+**`generate_var` for `Type::Function` (codegen.rs line 1210):**
+
+Change from `OpVarInt` (4 bytes) to a new `OpVarFnRef` (16 bytes).  This is the
+read side of the 16-byte push: push all 16 bytes of the fn-ref slot onto the stack
+so fn-ref values can be passed, returned, and assigned.
+
+`OpVarFnRef` implementation (fill.rs): read `pos: u16` from bytecode; push 16 bytes
+starting at `stack_pos - pos` onto the stack (similar to `OpVarRef` which pushes 12
+bytes, but 4 bytes larger).
+
+**`OpPutInt` for `Type::Function` (codegen.rs lines 1521, 1210):**
+
+Assignment `v_set(fn_ref_var, Value::Int(d_nr))` still uses `OpPutInt` — it writes
+4 bytes to the variable's slot at offset 0 (the d_nr).  Bytes 4..16 are untouched
+(already zeroed by `OpReserveFrame` or set by a preceding `OpStoreClosure`).
+So `OpPutInt` at call sites for fn-ref assignment is **correct as-is** when the
+RHS is `Value::Int(d_nr)`.
+
+For the case where a fn-ref is copied variable-to-variable (`f = g` where both are
+`Type::Function`), use `OpVarFnRef` to push 16 bytes then `OpPutFnRef` (new) to
+store them — OR reuse `OpPutRef`-style logic for 16 bytes.
+
+---
+
+#### The parser problem: `expr(args)` chained calls not handled
+
+`parse_part` (operators.rs:277) loops on `.` and `[` only.  After
+`make_greeter("Hello")` returns `Type::Function`, the `("world")` token is not
+consumed as a chained call — it is parsed as a separate parenthesised expression.
+
+**Fix (operators.rs `parse_part`):**
+
+Extend the loop to handle `(` when `t` is `Type::Function`:
+
+```rust
+while self.lexer.peek_token(".")
+    || self.lexer.peek_token("[")
+    || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+{
+    if self.lexer.has_token("(") {
+        if let Type::Function(param_types, ret_type) = t.clone() {
+            // Store fn-ref expression in a work var so CallRef can name it.
+            let fn_work = self.create_unique("__fnref_tmp", &t);
+            if !self.first_pass {
+                let orig = std::mem::replace(code, Value::Var(fn_work));
+                // emit: fn_work = <fn_ref_expression>
+                // (parse_code will insert the assignment via inline-ref logic)
+                // Actually: wrap in a block: { fn_work = orig; fn_work }
+                // ... see implementation note below
+            }
+            t = self.call_fn_work_var(fn_work, param_types, *ret_type);
+        }
+    } else { /* existing . and [ handlers */ }
+}
+```
+
+`call_fn_work_var(work_var, param_types, ret_type)`: parse argument list, emit
+`Value::CallRef(work_var, args)`, return `ret_type`.  Because the closure DbRef is
+embedded in the 16-byte fn-ref slot of `work_var`, `fn_call_ref` pushes it at
+runtime — no explicit closure injection needed.
+
+**Implementation note:** Storing `orig` into `fn_work` before the call requires
+either:
+(a) Wrapping in a `v_block([v_set(fn_work, orig), Value::CallRef(fn_work, args)], ret_type)`, or
+(b) Using the inline-ref temp pattern from `parse_part`'s existing chained-ref logic
+    (lines 342–361) — mark `fn_work` as an inline-ref temp; `parse_code` inserts the
+    null-init.
+
+Option (a) is simpler for the first implementation.
+
+---
+
+#### Remaining deferred sub-items (post-0.8.3)
+
+After the 16-byte fn-ref lands, these edge cases remain deferred:
+
+1. **Lambda re-definition:** if `f = fn(x) { ... }` is followed by `f = fn(x) { ... }`,
+   the old closure record (bytes 4..16 of the old fn-ref) must be freed before overwriting.
+   `get_free_vars` must emit `OpFreeRef` reading from the fn-ref slot before the
+   `OpPutInt`/`OpStoreClosure` of the new lambda.
+
+2. **Lambdas in collections / struct fields:** `closure_vars` is irrelevant with 16-byte
+   fn-refs; the closure DbRef travels with the fn-ref value.  But for collections,
+   `OpVarFnRef` / store operations need to work correctly for the 16-byte size.
+
+3. **Concurrent sharing:** two parallel workers calling the same closure simultaneously
+   share the closure record.  Requires per-call copy or locking — deferred to the
+   parallel safety audit.
+
+---
+
+**Files changed:**
+
+| File | Change |
+|------|--------|
+| `src/variables/mod.rs` | `size(Type::Function)` → 16 |
+| `src/fill.rs` | Add `op_store_closure`, `op_var_fn_ref`; update `call_ref` if needed |
+| `src/state/mod.rs` | `fn_call_ref`: read closure from bytes 4..16, push if present |
+| `src/state/codegen.rs` | `generate_var`: `OpVarFnRef` for Function; check all `Type::Function` arms |
+| `src/parser/vectors.rs` | `emit_lambda_code`: `OpStoreClosure` for capturing lambdas |
+| `src/parser/control.rs` | Remove closure injection from `try_fn_ref_call` and zero-param path |
+| `src/parser/operators.rs` | `parse_part`: handle `(` after `Type::Function` expressions |
+| `tests/expressions.rs` | Remove `#[ignore]` from `closure_capture_text`; add intermediate test |
+
+**Effort:** High (8 files, 2 new opcodes, parser and runtime changes)
+**Depends on:** A5.6b.1 ✓, A5.6b.2 ✓, A5.6c ✓
+**Target:** 0.8.3
 
 ---
 
@@ -1044,9 +1202,14 @@ A10 field iteration test now passes.
 
 ---
 
-### L7  Non-zero exit code on parse/runtime errors
+### L7  Non-zero exit code on parse/runtime errors *(completed 0.8.3)*
+
+**Implemented.** `src/main.rs` now checks `p.diagnostics.level() >= Level::Error` before calling
+`std::process::exit(1)`; warning-only programs execute and exit 0.  A missing file produces
+`Level::Fatal` in the lexer, which is `>= Level::Error`, so `loft nonexistent.loft` exits 1.
+
 **Sources:** CAVEATS.md C6, `src/main.rs`, `src/diagnostics.rs`
-**Severity:** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
+**Severity (original):** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
 **Description:** Two issues in `src/main.rs`:
 
 1. **Parse/compile error path (line 343):** The diagnostic check `if !p.diagnostics.is_empty()` exits with code 1 whenever any diagnostic is present, including warnings-only programs. This is too aggressive: a program with only warnings should execute and exit 0.
@@ -1312,27 +1475,165 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 
 ---
 
-### S25  CO1.3d — coroutine text serialisation (must land atomically)
+### S25  CO1.3d — coroutine text serialisation
 **Sources:** SAFE.md § P2-R1/R2/R3, CAVEATS.md C23/C24, COROUTINE.md § CO1.3d/SC-CO-1/SC-CO-8/SC-CO-10
-**Severity:** Critical (P2-R1 use-after-free) / High (P2-R2 memory leak) — both caused by `text_owned` being permanently empty.
-**Description:** `CoroutineFrame.text_owned` is designed to hold owned copies of all dynamic-text locals across suspension.  The serialisation path (`serialise_text_slots`) is specified in COROUTINE.md but not implemented.  Until it lands, text arguments dangle (C23) and text locals leak (C24).  **Must land atomically** — implementing `free_dynamic_str` at yield without simultaneously implementing the pointer-patch at resume and the String drain at exhaustion introduces an explicit use-after-free.
-**Fix path:**
 
-#### S25.1 — `serialise_text_slots` at coroutine create + yield
-1. Implement `serialise_text_slots(stack_bytes, text_slot_layout, stores) -> Vec<(u32, String)>` per COROUTINE.md spec:
-   - Walk each text slot in `stack_bytes` by (offset, Type) from the function definition.
-   - Skip null Str and static Str (ptr inside `text_code`).
-   - Call `s.str().to_owned()` to make an owned `String`; call `free_dynamic_str` on the original.
-   - Patch `stack_bytes` with a Str pointing to the owned buffer; record `(offset, String)` in `text_owned`.
-2. Call `serialise_text_slots` from `coroutine_create` (text arg slots) and `coroutine_yield` (all text locals).
-3. Add `debug_assert!(def.text_slot_count == 0, …)` to `coroutine_yield` until S25.1 is complete (M8-b from SAFE.md).
+#### S25.1 — Text arg serialisation at coroutine create *(completed 0.8.3)*
 
-#### S25.2 — Pointer-patch on resume + String drain on exhaustion
-1. In `coroutine_next`: before copying `stack_bytes` to live stack, write updated `Str` pointers from `text_owned` buffers into the bytes (M6-b from SAFE.md).
-2. In `coroutine_return`: drain `text_owned` with `for (_, s) in frame.text_owned.drain(..) { drop(s); }` before `stack_bytes.clear()` (M7-a from SAFE.md).
-3. Add a leak-detection test: generator with text local, yields once, loop broken — verify no allocation escapes under Miri or similar.
+`serialise_text_args` in `State` walks each attribute slot in `stack_bytes`
+(only arg-sized `Str` slots, 16 bytes each), clones dynamic strings into
+owned `String` objects stored in `text_owned`, and patches the `Str` pointer
+in `stack_bytes` to point to the owned buffer.  Called from `coroutine_create`.
+This fixed C23 (use-after-free on first resume for generators with `text` args).
 
-**Effort:** Large (S25.1 + S25.2 combined; must not be split across releases)
+#### S25.2 — Pointer-patch on resume + String drain on exhaustion *(completed 0.8.3)*
+
+`coroutine_next` re-patches text-arg `Str` pointers from `text_owned` into the
+cloned `bytes` before copying them to the live stack (M6-b).
+`coroutine_return` calls `frame.text_owned.clear()` before `stack_bytes.clear()`,
+which drops the owned String objects via RAII (M7-a).
+
+#### S25.3 — Text local leak on early `break` from a generator loop *(completed 0.8.3 — C24)*
+
+**Severity:** High — memory leak affects every generator with at least one text
+local variable that is consumed via `break` (not iterated to exhaustion).
+
+**Precise diagnosis (2026-03-29):**
+
+Text local variables (e.g. `word = "hello"` inside a generator body) are `String`
+objects (24 bytes: ptr+len+cap) held on the generator's live stack.  At
+`coroutine_yield`, the raw bytes `[base..value_start]` are bitwise-copied to
+`frame.stack_bytes`.  The copy is safe across yield/resume cycles because:
+
+- String heap buffers are not freed while the generator is suspended (no Rust
+  destructor runs on the abandoned live-stack copy).
+- On resume, `coroutine_next` raw-copies `frame.stack_bytes` back to the live
+  stack — the same heap pointer is restored and remains valid.
+- At exhaustion via `coroutine_return`, `OpFreeText` has already been emitted
+  before `OpCoroutineReturn` by `scopes::check`.  The live-stack String is freed
+  by `OpFreeText`; `frame.stack_bytes` then contains stale bytes pointing to an
+  already-freed allocation, which `frame.stack_bytes.clear()` discards safely.
+
+**The single remaining leak path** — generator is `Suspended` (has yielded), then
+the consumer breaks from the for-loop before exhaustion:
+
+1. `OpFreeCoroutine` fires → `free_coroutine(idx)`
+2. `free_coroutine` sets `self.coroutines[idx] = None`
+3. This drops `Box<CoroutineFrame>`, which drops `stack_bytes: Vec<u8>`
+4. `Vec<u8>::drop` frees the raw byte buffer but does NOT call `String::drop` on
+   embedded String structs — their heap allocations (`"hello"`, etc.) are leaked.
+
+**Complication — uninitialized text local slots:**
+
+Zone 2 variables (including text locals) are pre-claimed at function entry via
+`OpReserveFrame` (which only bumps `stack_pos`, does not zero memory).  If a
+text local is assigned AFTER the yield point, its slot in `frame.stack_bytes`
+contains garbage bytes from the store.  Calling `drop_in_place::<String>` on
+garbage bytes is undefined behaviour.
+
+**Fix design (S25.3):**
+
+Step 1 — **Zero Zone 2 at generator startup** (in `coroutine_next`, `Created` status only).
+After copying `frame.stack_bytes` (args+return-slot only) to the live stack,
+compute the Zone 2 region extent from `def.variables` and zero those store bytes:
+
+```rust
+// After: std::ptr::copy_nonoverlapping(bytes, dst, bytes.len())
+// New:   zero the Zone-2 region so uninitialised text locals start with null ptr.
+let zone2_abs = self.stack_cur.pos + stack_base + bytes.len() as u32;
+let zone2_size = Self::generator_zone2_size(d_nr, self.data_ptr);
+if zone2_size > 0 {
+    let store = self.database.store_mut(&self.stack_cur);
+    let ptr = store.addr_mut::<u8>(self.stack_cur.rec, zone2_abs);
+    unsafe { std::ptr::write_bytes(ptr, 0, zone2_size); }
+}
+```
+
+```rust
+/// Compute the total Zone-2 variable extent for generator function `d_nr`.
+/// Returns bytes above the args+return-slot region (= `args_size + 4`).
+fn generator_zone2_size(d_nr: u32, data_ptr: *const Data) -> usize {
+    if data_ptr.is_null() { return 0; }
+    let data = unsafe { &*data_ptr };
+    let def = data.definitions.get(d_nr as usize)?;
+    let vars = &def.variables;
+    let mut top: u16 = 0;
+    for v in 0..vars.count() {
+        if vars.is_argument(v) { continue; }
+        let slot = vars.stack(v);
+        if slot == u16::MAX { continue; }
+        let sz = vars.size(v, &Context::Variable);
+        top = top.max(slot.saturating_add(sz));
+    }
+    top as usize
+}
+```
+
+Step 2 — **Drop text locals in `free_coroutine`** before setting the slot to `None`:
+
+```rust
+pub fn free_coroutine(&mut self, idx: usize) {
+    if idx > 0 && idx < self.coroutines.len() {
+        // C24 / S25.3: drop text-local String objects from a suspended frame.
+        if let Some(frame) = self.coroutines[idx].as_mut() {
+            if frame.status == CoroutineStatus::Suspended {
+                let d_nr = frame.d_nr;
+                let data_ptr = self.data_ptr; // raw ptr — no borrow conflict
+                Self::drop_text_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
+            }
+        }
+        self.coroutines[idx] = None;
+    }
+}
+
+/// Drop String objects embedded at text-local slots in `bytes`.
+/// Guards against uninitialized slots via null-ptr check (Step 1 zeroed them).
+fn drop_text_locals_in_bytes(d_nr: u32, bytes: &mut Vec<u8>, data_ptr: *const Data) {
+    if data_ptr.is_null() { return; }
+    let data = unsafe { &*data_ptr };
+    let Some(def) = data.definitions.get(d_nr as usize) else { return };
+    let vars = &def.variables;
+    for v in 0..vars.count() {
+        if vars.is_argument(v) { continue; }
+        if !matches!(vars.tp(v), Type::Text(_)) { continue; }
+        let slot = vars.stack(v);
+        if slot == u16::MAX { continue; }
+        let off = slot as usize;
+        if off + std::mem::size_of::<String>() > bytes.len() { continue; }
+        // Check the String's ptr field (first word on 64-bit).
+        // Null means uninitialized (zeroed in Step 1); skip.
+        let ptr_val: usize = unsafe {
+            std::ptr::read_unaligned(bytes.as_ptr().add(off).cast::<usize>())
+        };
+        if ptr_val == 0 { continue; }
+        // Drop in place and zero to prevent any future double-drop.
+        unsafe { std::ptr::drop_in_place(bytes.as_mut_ptr().add(off).cast::<String>()); }
+        unsafe { std::ptr::write_bytes(bytes.as_mut_ptr().add(off), 0, std::mem::size_of::<String>()); }
+    }
+}
+```
+
+Step 3 — **Fix misleading comment** in `coroutine_yield` (line ~723):
+Remove the sentence "CO1.3d is now implemented — text locals are serialised to
+frame.text_owned above".  Replace with accurate text: "The raw-bytes copy of text
+locals in `stack_bytes` is safe across yield/resume cycles because no external code
+frees the String heap buffers while suspended.  The early-break leak is fixed by
+`free_coroutine` (S25.3)."
+
+**Files changed:** `src/state/mod.rs` (3 locations: `free_coroutine`, `coroutine_next`,
+new `generator_zone2_size` + `drop_text_locals_in_bytes` helpers)
+
+**Tests to add** (`tests/expressions.rs`):
+- `coroutine_text_local_early_break` — generator has text local, loop breaks after
+  first yield.  Run under Miri to verify no leak.
+- `coroutine_text_local_declared_after_first_yield` — text local declared after
+  the first yield; no panic at break.  Verifies the null-ptr guard.
+
+**Atomicity:** Steps 1 and 2 must land in the same commit.  If Step 1 lands without
+Step 2, Zone 2 is zeroed but Strings are still leaked.  If Step 2 lands without
+Step 1, `drop_in_place` may fire on garbage bytes (UB).
+
+**Effort:** Small (1–2 hours)
 **Target:** 0.8.3
 
 ---

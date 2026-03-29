@@ -19,54 +19,52 @@ build can be retested quickly.
 
 ---
 
-## C1 — Lambda closure capture: one remaining restriction
+## C1 — Lambda closure capture: cross-scope restriction (A5.6)
 
-Read-only capture of non-text values (integers, floats, booleans, enums) works
-in both debug and release builds.  Mutable capture (`count += x`) also works (A5.6a).
-One restriction remains:
+Same-scope closure capture (all types — integers, text, mutable) works (A5.6a–c ✓).
+One restriction remains: **cross-scope closures**, where a capturing lambda is
+returned from a function and called from a different scope.
 
-1. **Text capture not supported** — two runtime bugs block it:
-   - **Bug 1 (stack layout):** `OpSetText`/`OpGetText` on the closure record produces a garbage
-     `DbRef` in the lambda's stack frame, causing store-bounds panics at runtime.
-   - **Bug 2 (text work buffers):** Text-returning lambdas via `CallRef` require the caller to
-     pre-allocate a text work buffer (`RefVar(Text)` argument), which `generate_call` does but
-     `generate_call_ref` does not.  `codegen.rs:generate_call_ref` has a `debug_assert` that
-     fires immediately in debug builds when this case is hit.
-   Root cause of Bug 1: `OpCallRef` stack frame setup vs. where the lambda's bytecode expects
-   `__closure` to live; needs a dedicated investigation with targeted logging.
+Root cause (two parts, detailed design in PLANNING.md § A5.6):
 
-**Note:** The current implementation captures variable values at the call site,
-not at the point of lambda definition.  `closure_capture_after_change` documents
-this: `x = 10; f = fn(y) { x + y }; x = 99; f(5)` returns 104, not 15.
-Capture-at-definition-time is a deferred improvement.
+1. **`Type::Function` is 4 bytes (d_nr only).** When `make_greeter` returns the inner
+   lambda, only the 4-byte d_nr fits in the return slot; the closure record's 12-byte
+   DbRef is lost.  Fix: extend `Type::Function` to 16 bytes; `fn_call_ref` reads the
+   embedded DbRef and pushes it as `__closure` at runtime.
 
-**Reproducer (restriction 1):**
+2. **Parser does not handle `expr(args)` chained calls.** `parse_part` only loops on
+   `.` and `[`; `make_greeter("Hello")("world")` parses the `("world")` as a separate
+   expression rather than a chained call.  Fix: extend `parse_part` to handle `(` when
+   the current type is `Type::Function`.
+
+**Note:** Capture-at-definition-time is not guaranteed — `closure_capture_after_change`
+shows `x = 10; f = fn(y) { x + y }; x = 99; f(5)` returns 104.
+
+**Reproducer:**
 ```loft
-fn test() {
-  prefix = "Hello";
-  greet = fn(name: text) -> text { "{prefix}, {name}!" };  // text capture — runtime crash
-  greet("World");
+fn make_greeter(prefix: text) -> fn(text) -> text {
+    fn(name: text) -> text { "{prefix} {name}" }
 }
+make_greeter("Hello")("world")  // should be "Hello world" — crashes/wrong output
 ```
 
-**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` (all pass); `closure_capture_text` (`#[ignore]`, restriction 1); `tests/parse_errors.rs` — `capture_detected` (passes, mutable capture)
-**Workaround:** pass captured text values as explicit function arguments.
-**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (1.1+); needs investigation of `OpCallRef` stack layout + `generate_call_ref` text buffer allocation.
+**Tests:** `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` / `closure_capture_text_integer_return` / `closure_capture_text_return` (all pass); `closure_capture_text` (`#[ignore]` — A5.6 cross-scope, 0.8.3).
+**Workaround:** pass captured values as explicit function arguments.
+**Planned fix:** A5.6 in [PLANNING.md](PLANNING.md) and [ROADMAP.md](ROADMAP.md) (0.8.3) — 16-byte fn-ref + parser `parse_part` fix.
 **Docs:** [LOFT.md](LOFT.md) § Lambda expressions.
 
 ---
 
-## C3 — WASM backend: file I/O and threading not implemented
+## C3 — WASM backend: threading not implemented
 
-The `--native-wasm` backend currently lacks support for file I/O and threading.
-Random numbers, time functions, and dynamic function references (`CallRef`) are
-now implemented (W1.15, W1.17, W1.19, W1.20 — all 0.8.3).
+The `--native-wasm` backend currently lacks support for threading.
+File I/O, random numbers, time functions, and dynamic function references (`CallRef`) are
+now all implemented (W1.15, W1.16, W1.17, W1.19, W1.20 — all 0.8.3).
 
 **Affected files:** `tests/wrap.rs` — `WASM_SKIP` array:
 
 | File | Reason |
 |------|--------|
-| `13-file.loft` | File I/O ops missing; no WASM filesystem (#74) |
 | `19-threading.loft` | WASM threading model differs; W1.18 not yet landed |
 
 **Previously skipped — now passing:**
@@ -74,12 +72,13 @@ now implemented (W1.15, W1.17, W1.19, W1.20 — all 0.8.3).
 | File | Fixed by |
 |------|----------|
 | `06-function.loft` | W1.15 — `output_call_ref` dispatch table |
+| `13-file.loft` | W1.16 — `OpDelete`/`OpMoveFile`/`OpMkdir`/`OpMkdirAll` in `codegen_runtime` |
 | `18-locks.loft` | W1.17 — lock functions in `CODEGEN_RUNTIME_FNS` |
 | `21-random.loft` | W1.19 — WASM `rand`/`rand_indices` bridge |
 | `22-time.loft` | W1.20 — `host_time_now()` via `std::time::SystemTime` |
 
 **Workaround:** use the interpreter (`cargo run --bin loft`) instead of `--native-wasm`.
-**Remaining work:** W1.16 (file I/O), W1.18 (threading) in [ROADMAP.md](ROADMAP.md) (0.8.3).
+**Remaining work:** W1.18 (threading) in [ROADMAP.md](ROADMAP.md) (0.8.3).
 
 ---
 
@@ -104,19 +103,19 @@ zone-1 pre-claim prevents running_tos from overestimating across sequential bloc
 
 ---
 
-## C6 — Exit code always 0
+## C6 — Exit code always 0 *(fixed)*
 
-`loft` exits with code 0 even on parse errors.  Shell scripts that check
-`$?` will miss failures.
+**Fixed.** `main.rs` already calls `std::process::exit(1)` whenever
+`p.diagnostics.level() >= Level::Error`.  A missing file produces a
+`Level::Fatal` diagnostic (`lexer.switch` → `"Unknown file:{filename}"`),
+which is greater than `Level::Error`, so the process exits with code 1.
 
-**Reproducer:**
+**Reproducer (now works correctly):**
 ```sh
-loft nonexistent.loft; echo $?   # prints 0
+loft nonexistent.loft; echo $?   # prints 1
 ```
 
-**Test:** none (shell-level behaviour).
-**Workaround:** capture output and grep for `Error:` or `panicked`.
-**Planned fix:** L7 in [ROADMAP.md](ROADMAP.md) (0.8.3) — emit non-zero exit code on parse/runtime errors.
+**Test:** none (shell-level behaviour; verified by code inspection of `main.rs` lines 348–354 and `lexer.rs` `switch()`).
 **Docs:** [LOFT.md](LOFT.md) § Known Limitations.
 
 ---
@@ -241,23 +240,21 @@ are tracked via `init_field_tracking`/`init_field_deps` on the parser, and
 
 ---
 
-## C19 — Native codegen: coroutines interpreter-only
+## C19 — Native codegen: all language features now supported *(fixed in 0.8.3)*
 
-The `--native` backend does not support all language features:
+The `--native` backend now supports all previously-missing language features:
 
 | Feature | Interpreter | `--native` |
 |---------|-------------|-----------|
 | Tuple types (`(integer, float)`) | Yes | **Fixed** (N8a, 0.8.3) |
-| Coroutines (`yield`, `iterator<T>`) | Yes | No |
+| Coroutines (`yield`, `iterator<T>`) | Yes | **Fixed** (N8b, 0.8.3) |
 | Generic functions (`fn f<T>`) | Yes | **Fixed** (N8c, 0.8.3) |
 
-Coroutine scripts remain skipped from the native test suite
-(`SCRIPTS_NATIVE_SKIP` in `tests/native.rs`).  Tuples and generics now pass.
+`SCRIPTS_NATIVE_SKIP` and `NATIVE_SKIP` in `tests/native.rs` are both empty.
 
-**Test:** `tests/scripts/51-coroutines.loft` — passes in interpreter, skipped in native.
-`50-tuples.loft` — removed from skip list (N8a, 0.8.3).  `48-generics.loft` — removed from skip list (N8c, 0.8.3).
-**Workaround:** Use the interpreter (`cargo run --bin loft`) for programs that use coroutines.
-**Planned fix:** N8b.1–N8b.3 (coroutines) in [ROADMAP.md](ROADMAP.md); design in [PLANNING.md](PLANNING.md) § N8.
+**Tests:** `51-coroutines.loft` — passes in both interpreter and native.
+`50-tuples.loft`, `48-generics.loft` — pass in both.
+**Fixed by:** N8a (tuples), N8b (coroutines: state-machine transform), N8c (generics).
 
 ---
 
@@ -320,35 +317,21 @@ causes a dangling pointer.
 
 ---
 
-## C24 — Coroutine with `text` locals: memory leak on exhaustion
+## C24 — Coroutine text locals: memory leak on early `break`
 
-**Partially fixed (S25.2, 0.8.3) — text args now freed; text locals still leak**
+**Fixed in 0.8.3 (S25.1/S25.2/S25.3).**
 
-Text args held in `frame.text_owned` are now properly freed at exhaustion:
-`coroutine_return` calls `frame.text_owned.clear()`, which drops the owned
-Strings via RAII.  Before S25.1 landed, `text_owned` was always empty; now it
-contains the serialised text args, so the drain is effective.
+Text locals (`word = "hello"` inside a generator) are `String` objects on the
+generator's live stack.  The early-break path (`for item in gen { break; }`)
+previously leaked every live text local in `frame.stack_bytes`.
 
-Text LOCAL variables (e.g. `greeting = "hello, " ++ name`) are `String` objects
-stored inline on the generator's live stack.  The `coroutine_yield` path does not
-yet serialise them into `text_owned` (CO1.3d yield path not implemented).  At
-`coroutine_return`, these live-stack Strings are abandoned — their heap allocations
-are leaked.  This affects every generator that has at least one text local and
-yields at least once.
+Fix (S25.3): `free_coroutine` now calls `drop_text_locals_in_bytes` for Suspended
+frames, which drops each text-local String whose slot is within the `stack_bytes`
+snapshot.  A prerequisite `generator_zone2_size` zeroing at first resume establishes
+the null-ptr invariant so unassigned slots are safely skipped.
 
-**Reproducer (still open):**
-```loft
-fn gen_texts() -> iterator<integer> {
-  greeting = "hello";  // text local on the generator stack
-  yield 1;
-  // exhaustion: greeting's String heap allocation still leaks
-}
-```
-
-**Test:** none for the remaining leak (requires allocator leak detection).
-**Workaround:** avoid text locals in generators where memory pressure matters.
-**Remaining fix:** CO1.3d yield path — `serialise_text_slots` at `coroutine_yield`.
-**Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3.
+**Tests:** `coroutine_text_local_early_break`, `coroutine_text_local_declared_after_first_yield`.
+**Docs:** [SAFE.md](SAFE.md) § P2-R2/P2-R3, [PLANNING.md](PLANNING.md) § S25.3.
 
 ---
 
@@ -364,20 +347,19 @@ DbRef is encountered (defence-in-depth for indirect paths).
 
 ---
 
-## C26 — `e#remove` on a generator iterator: store corruption in release
+## C26 — `e#remove` on a generator iterator: store corruption in release *(fully fixed)*
 
-**Partially fixed in 0.8.3 (S24) — compiler rejection already in place; runtime guard added.**
+**Fixed in 0.8.3 (S24 + assert! upgrade).**
 
 `e#remove` on a generator-typed loop variable is rejected at compile time
 (CO1.5c — `loop_value == Null` in `collections.rs`).  A defense-in-depth
-runtime guard was added to `remove()` (`state/io.rs`) and `OpRemove()`
-(`codegen_runtime.rs`): if `store_nr == u16::MAX`, a `debug_assert!` fires and
-the call returns early, preventing release-build store corruption even if the
-compiler check is somehow bypassed.
+runtime guard in `remove()` (`state/io.rs`) and `OpRemove()`
+(`codegen_runtime.rs`) checks `store_nr == u16::MAX` and panics if somehow
+reached.  The guard has been upgraded from `debug_assert!` to `assert!` so
+it fires in both debug and release builds.
 
 **Test:** `generator_remove_rejected` in `tests/parse_errors.rs` — compile-time
 rejection passes.
-**Workaround:** only use `e#remove` with store-backed collection iterators.
 **Docs:** [SAFE.md](SAFE.md) § P2-R9, [COROUTINE.md](COROUTINE.md) § SC-CO-11.
 
 ---
@@ -429,11 +411,8 @@ emitting an `OpFreeRef` for the aliased variable, eliminating the double-free th
 the "Double free store" panic in the bytecode interpreter.
 
 **Test (interpreter):** `20-binary.loft` passes in `cargo test --test wrap` (S34).
-**Test (native):** in `SCRIPTS_NATIVE_SKIP` — native codegen emits malformed Rust for the
-`Set(rv, Insert([Set(_read_34, Null), Block]))` pattern.  Before S34, `validate_slots`
-panicked during `byte_code()`, which `catch_unwind` caught and converted to a silent skip.
-After S34's bytecode fix the panic is gone, so the pre-existing native codegen bug for the
-Insert-return pattern is now visible.  Tracked in `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`.
+**Test (native):** `native_binary_script` in `tests/native.rs` — passes.
+`SCRIPTS_NATIVE_SKIP` is now empty; the Insert-return native codegen issue was resolved.
 **Fixed by:** S32 — `has_sibling_overlap` (interpreter + native slot assignment); S34 —
 `skip_free` + suppressed `OpFreeRef` in `generate_call` (interpreter double-free only).
 

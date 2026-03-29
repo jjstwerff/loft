@@ -9,3 +9,4 @@ tests/generated
 .DS_Store
 ide/assets/base-fs.json
 tests/wasm/pkg/
+tests/wasm/assets.json

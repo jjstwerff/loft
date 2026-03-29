@@ -48,7 +48,6 @@ const SUITE_SKIP: &[&str] = &[
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
-    "13-file.loft",      // #74: file I/O ops missing; also no WASM filesystem
     "19-threading.loft", // todo!(); WASM threading model differs
 ];
 

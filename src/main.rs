@@ -5,6 +5,7 @@
 #[macro_use]
 pub mod diagnostics;
 mod calc;
+mod codegen_runtime;
 mod compile;
 mod data;
 mod database;

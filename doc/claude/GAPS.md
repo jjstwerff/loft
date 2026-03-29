@@ -63,19 +63,19 @@ Null sentinels: `i32::MIN` (integer null), `i64::MIN` (long null), `f64::NAN` (f
 
 | Expression | Expected | Tested? |
 |---|---|---|
-| `i32::MIN & 5` | null | No |
-| `i32::MIN \| 5` | null | No |
-| `i32::MIN ^ 5` | null | No |
-| `5 << 32` | undefined / null | No |
-| `5 << -1` | undefined / null | No |
-| `(-5) >> 1` | negative (sign-extended) | No |
-| `nan < 0.0` | false | No |
-| `nan >= nan` | false | No |
-| `0.0 / 0.0` | NaN | No |
-| `1.0 / 0.0` | Infinity | No |
-| `inf + inf` | Infinity | No |
-| `inf - inf` | NaN | No |
-| `inf * 0.0` | NaN | No |
+| `i32::MIN & 5` | null | Yes (`01-integers.loft`) |
+| `i32::MIN \| 5` | null | Yes (`01-integers.loft`) |
+| `i32::MIN ^ 5` | null | Yes (`01-integers.loft`) |
+| `5 << 32` | undefined / null | No — debug assert fires; unsafe to test |
+| `5 << -1` | undefined / null | No — debug assert fires; unsafe to test |
+| `(-5) >> 1` | negative (sign-extended) | Yes (`01-integers.loft`) |
+| `nan < 0.0` | false | Yes (`02-floats.loft`) |
+| `nan >= nan` | false | Yes (`02-floats.loft` — `nan <= nan`) |
+| `0.0 / 0.0` | NaN | Yes (`02-floats.loft`) |
+| `1.0 / 0.0` | Infinity | Yes (`02-floats.loft`) |
+| `inf + inf` | Infinity | Yes (`02-floats.loft`) |
+| `inf - inf` | NaN | Yes (`02-floats.loft`) |
+| `inf * 0.0` | NaN | Yes (`02-floats.loft`) |
 
 **Shift validation** — `src/ops.rs` has `assert!((0..32).contains(&v2))` in debug only; release builds are unchecked:
 - Shift by 32 or more (should produce null or error, not silent UB)
@@ -89,14 +89,17 @@ Add to `tests/expressions_auto_convert.rs`:
 
 | Conversion | Expected | Tested? |
 |---|---|---|
-| `NaN as integer` | `i32::MIN` (null) | No |
-| `Infinity as integer` | implementation-defined | No |
+| `NaN as integer` | `i32::MIN` (null) | Yes (`02-floats.loft`) |
+| `Infinity as integer` | saturates to `i32::MAX` | Yes (`02-floats.loft`) |
+| `-Infinity as integer` | `i32::MIN` (null) | Yes (`02-floats.loft`) |
 | `-Infinity as long` | implementation-defined | No |
 | `i64::MAX as float` | precision loss | No |
-| `i32::MIN as float` | -2147483648.0 (exact) | No |
-| `i32::MIN as long` | `i64::MIN` (still null) | No |
+| `i32::MIN as float` | float null (NaN) | Yes (`01-integers.loft`) |
+| `i32::MIN as long` | `i64::MIN` (still null) | Yes (`01-integers.loft`) |
+| `i64::MIN as integer` | `i32::MIN` (null) | Yes (`01-integers.loft`) |
+| `i64::MIN as float` | float null (NaN) | Yes (`01-integers.loft`) |
 | `3.9 as integer` | `3` (truncation) | Yes (partial) |
-| `(-3.9) as integer` | `-3` (truncation toward zero) | No |
+| `(-3.9) as integer` | `-3` (truncation toward zero) | Yes (`02-floats.loft`) |
 
 ---
 
@@ -168,11 +171,15 @@ Currently missing from `tests/vectors.rs`:
 
 ### 9. Logger (`src/logger.rs`, 34.7%)
 
-Add to `tests/log_config.rs`:
+**Partly addressed** — `tests/logger_severity.rs` adds direct unit tests for:
 
-- `log_warn` and `log_error` paths (only `log_info` is exercised)
-- Rate-limiting: same message logged >N times within window — verify suppression
-- Production mode: `log_fatal` in production mode — verify behaviour differs from debug
+- `log_warn` and `log_error` paths verified with file output
+- Level filtering: Info suppressed at Warn level; Warn suppressed at Error level
+- Rate-limiting: third message suppressed when `rate_per_minute = 2`
+
+Still missing:
+
+- Production mode: `log_fatal` in production mode — verify `had_fatal` is set instead of panicking
 - `LOFT_LOG=crash_tail:N` env var — verify last N lines are flushed on panic
 
 ---
