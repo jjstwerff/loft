@@ -267,23 +267,41 @@ shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> n
 <p class="down"><strong>Downside</strong> Capturing lambdas can only be called directly by name in the same scope — passing them to <code>map</code>/<code>filter</code>/<code>reduce</code> or returning them from a function is not yet supported. Any extra context must be embedded in the element struct or passed as an explicit parameter. Python's <code>lambda</code> and nested <code>def</code> close over surrounding variables naturally in any context, and list comprehensions (<code>[x + offset for x in v]</code>) are shorter than the loft workaround.</p>
 </div>
 
-<h2 id="exceptions">9. No exception handling</h2>
+<h2 id="exceptions">9. No exception handling — file errors use <code>FileResult</code></h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// Preconditions are assertions; failures abort the program:</span>
+  <pre><code><span class="cm">// Logic errors: assert aborts the program</span>
 <span class="kw">fn</span> <span class="fn-call">divide</span>(a: <span class="ty"><a href="stdlib-types.html">float</a></span>, b: <span class="ty"><a href="stdlib-types.html">float</a></span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
     <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b != <span class="nm">0.0</span>, <span class="st">"division by zero"</span>);
     a / b
 }
 
-<span class="cm">// I/O errors surface as null:</span>
-f = <span class="fn-call">open</span>(<span class="st">"data.txt"</span>);
-<span class="kw">if</span> f == <span class="kw">null</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"file not found"</span>); }</code></pre>
+<span class="cm">// Reading: check f#exists before using content</span>
+f = <span class="fn-call">file</span>(<span class="st">"data.txt"</span>);
+<span class="kw">if</span> f#<span class="fn-call">exists</span> {
+    data = f.<span class="fn-call">content</span>();
+} <span class="kw">else</span> {
+    <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"file not found"</span>);
+}
+
+<span class="cm">// Mutating ops return a FileResult enum</span>
+result = <span class="fn-call">delete</span>(<span class="st">"old.txt"</span>);
+<span class="kw">match</span> result {
+    FileResult.Ok             -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"deleted"</span>);
+    FileResult.NotFound       -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"not found"</span>);
+    FileResult.PermissionDenied -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"permission denied"</span>);
+    FileResult.IsDirectory    -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"is a directory"</span>);
+    _                         -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"other error"</span>);
+}
+
+<span class="cm">// Or just check success:</span>
+<span class="kw">if</span> !<span class="fn-call">move</span>(<span class="st">"a.txt"</span>, <span class="st">"b.txt"</span>).<span class="fn-call">ok</span>() { <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"rename failed"</span>); }</code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code><span class="kw">def</span> <span class="fn-call">divide</span>(a: <span class="bi">float</span>, b: <span class="bi">float</span>) -&gt; <span class="bi">float</span>:
+  <pre class="python-pre"><code><span class="cm"># Logic errors: raise an exception</span>
+<span class="kw">def</span> <span class="fn-call">divide</span>(a: <span class="bi">float</span>, b: <span class="bi">float</span>) -&gt; <span class="bi">float</span>:
     <span class="kw">if</span> b == <span class="nm">0</span>:
         <span class="kw">raise</span> <span class="fn-call">ValueError</span>(<span class="st">"division by zero"</span>)
     <span class="kw">return</span> a / b
@@ -293,16 +311,26 @@ f = <span class="fn-call">open</span>(<span class="st">"data.txt"</span>);
 <span class="kw">except</span> ValueError <span class="kw">as</span> e:
     <span class="bi">print</span>(<span class="st">f"error: {e}"</span>)
 
+<span class="cm"># File errors: catch specific exception types</span>
 <span class="kw">try</span>:
     <span class="kw">with</span> <span class="bi">open</span>(<span class="st">"data.txt"</span>) <span class="kw">as</span> f:
         data = f.<span class="fn-call">read</span>()
 <span class="kw">except</span> FileNotFoundError:
-    <span class="bi">print</span>(<span class="st">"file not found"</span>)</code></pre>
+    <span class="bi">print</span>(<span class="st">"file not found"</span>)
+
+<span class="kw">try</span>:
+    os.<span class="fn-call">remove</span>(<span class="st">"old.txt"</span>)
+<span class="kw">except</span> FileNotFoundError:
+    <span class="bi">print</span>(<span class="st">"not found"</span>)
+<span class="kw">except</span> PermissionError:
+    <span class="bi">print</span>(<span class="st">"permission denied"</span>)
+<span class="kw">except</span> IsADirectoryError:
+    <span class="bi">print</span>(<span class="st">"is a directory"</span>)</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> No exception hierarchy to learn, no accidental exception swallowing, no overhead from unwinding the stack. File and I/O operations signal failure by returning null, which is explicit and cheap to check. The control flow of a loft function is always straightforward — there are no hidden exit paths.</p>
-<p class="down"><strong>Downside</strong> There is no structured way to recover from errors in user code. An assertion failure aborts the entire program. Python's <code>try</code>/<code>except</code>/<code>finally</code>/<code>else</code> and user-defined exception hierarchies allow fine-grained error handling, retry logic, cleanup on failure, and graceful degradation — patterns that are impossible to express in loft today.</p>
+<p class="up"><strong>Upside</strong> File errors are represented as a typed <code>FileResult</code> enum — <code>Ok</code>, <code>NotFound</code>, <code>PermissionDenied</code>, <code>IsDirectory</code>, <code>NotDirectory</code>, <code>Other</code> — so every failure case is named and exhaustively matchable. No accidental exception swallowing, no hidden exit paths, no stack-unwinding overhead. The control flow of every loft function is straightforward to read.</p>
+<p class="down"><strong>Downside</strong> Logic errors (<code>assert</code>, <code>panic</code>) abort the entire program — there is no <code>try</code>/<code>except</code> to catch them. Python's exception hierarchy supports retry logic, cleanup via <code>finally</code>, and graceful degradation from arbitrary errors anywhere in the call stack — patterns that are not expressible in loft today.</p>
 </div>
 
 <h2 id="parallel">10. Built-in parallel for-loops — <code>par(...)</code></h2>
