@@ -428,8 +428,19 @@ the recompile overhead that caching was designed to address)
   
   **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
 
-  **Effort:** Medium  
+  **Effort:** Medium
   **Target:** 1.1+
+
+- **T1.9** — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
+
+  Adds `Type::Tuple` dispatch in `parse_match`, a new `parse_tuple_match` function, and
+  `parse_tuple_elem_pattern` for per-position patterns (wildcard, binding, literal, range,
+  or-pattern, nested tuple). Exhaustiveness: requires at least one total (all-binding or
+  `_`) arm. Works on tuple variables and parameters; match on tuple-returning function
+  calls requires T1.8a first.
+
+  **Effort:** Small
+  **Target:** 0.9.0
 
 **Effort:** Very High
 **Target:** 1.1+
@@ -536,6 +547,27 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 **Target:** 0.9.0
 
 ---
+
+---
+
+### A8  Slicing & comprehension on `sorted` / `index`
+**Sources:** [SORTED_SLICE.md](SORTED_SLICE.md)
+**Description:** Extend `sorted<T>` and `index<T>` with key-range slicing, open-ended
+bounds, partial-key match iteration, and vector comprehensions over key ranges.
+
+**Features:**
+- `col[lo..]`, `col[..hi]`, `col[..]` — open-ended range iterators (A8.1)
+- `sorted[lo..hi]` — range slicing on sorted (A8.2; index already works)
+- `col[k1]` on multi-key index — partial-key match iterator (A8.3)
+- `[for v in col[lo..hi] { v.f }]` — comprehensions on key ranges (A8.4)
+- `rev(col[lo..hi])` — reverse range iteration (A8.5)
+- `match col[key] { null → ..., elm → ... }` — documented + tested (A8.6)
+
+**Fix path:** See [SORTED_SLICE.md](SORTED_SLICE.md) — 6-step plan, all work in
+`src/parser/fields.rs` and `src/codegen_runtime.rs`. No new opcodes.
+
+**Effort:** M
+**Target:** 0.9.0
 
 ---
 

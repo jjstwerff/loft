@@ -32,7 +32,7 @@ silent data corruption or use-after-free is not acceptable even as a preview.
 
 | ID        | Title                                                | E  | Design | Depends on   | Source                     |
 |-----------|------------------------------------------------------|----|--------|--------------|----------------------------|
-| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § Threading        |
+| W1.18     | WASM: threading (`par()` / spawn)                    | H  | ✓      |              | WASM.md § W1.18            |
 | A5.6      | Closure: capture-at-definition-time semantics        | H  | ~      | A5.6b.1–c   | PLANNING.md § A5.6         |
 
 ### Known test skips at current HEAD
@@ -85,6 +85,18 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`       | S  | ✓      |              | 01_code.loft               |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision        | MH | ✓      | A2.2         | control.rs, main.rs        |
 | A2.4      | ↳ `--debug` per-type safety logging                  | M  | ✓      | A2.2         | fill.rs, native.rs         |
+| T1.9      | Tuple destructuring in `match`                       | S  | ✓      |              | TUPLE_MATCH.md             |
+| T1.9-1    | ↳ `Type::Tuple` dispatch in `parse_match`            | XS | ✓      |              | control.rs                 |
+| T1.9-2    | ↳ `parse_tuple_match` — arm loop, if-chain           | S  | ✓      |              | control.rs                 |
+| T1.9-3    | ↳ `parse_tuple_elem_pattern` — wildcard/binding/literal/range/nested | S | ✓ | | control.rs |
+| T1.9-4    | ↳ Tests + doc additions (`28-tuples.loft`)           | S  | ✓      |              | tests/docs/                |
+| A8        | Slicing & comprehension on `sorted` / `index`        | M  | ✓      |              | SORTED_SLICE.md            |
+| A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S | ✓  |              | fields.rs, codegen_runtime.rs |
+| A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)       | XS | ✓     | A8.1         | fields.rs                  |
+| A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)| M  | ✓     |              | fields.rs                  |
+| A8.4      | ↳ Comprehensions on key ranges                       | S  | ✓     | A8.1         | tests/docs/                |
+| A8.5      | ↳ Reverse range iteration (`rev(col[lo..hi])`)       | S  | ✓     | A8.1         | fields.rs, objects.rs      |
+| A8.6      | ↳ `match` on collection results (tests + docs)       | S  | ✓     |              | tests/docs/                |
 | P2        | REPL / interactive mode                              | H  | ✓      | L1           | PLANNING.md P2             |
 | P2.1      | ↳ Input completeness detection                       | S  | ✓      |              | new repl.rs                |
 | P2.2      | ↳ Single-statement execution                         | M  | ✓      | P2.1         | main.rs, repl.rs           |

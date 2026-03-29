@@ -10,6 +10,7 @@
 - [Implementation Notes](#implementation-notes)
 - [Cargo Feature Gates](#cargo-feature-gates)
 - [Threading in WASM — Two-Tier Design](#threading-in-wasm--two-tier-design)
+- [W1.18 — Node.js Worker Threads: Testing `par()` Outside the Browser](#w118--nodejs-worker-threads-testing-par-outside-the-browser)
 - [PNG Image Support in WASM](#png-image-support-in-wasm)
 - [Logging in WASM](#logging-in-wasm)
 - [Test Compatibility Matrix](#test-compatibility-matrix)
@@ -2292,6 +2293,371 @@ used by WASM worker spawning (W1.18).
 
 **Effort:** XS (investigation; likely a stale skip)
 **Source:** `src/generation/mod.rs:CODEGEN_RUNTIME_FNS`, `tests/docs/18-locks.loft`
+
+---
+
+## W1.18 — Node.js Worker Threads: Testing `par()` Outside the Browser
+
+### Why Node.js, not the browser
+
+The browser Tier 2 design requires `SharedArrayBuffer`, which demands `COOP`/`COEP` HTTP
+headers (Spectre mitigation). That makes `file://` URLs and most dev servers ineligible,
+and adds a server-side prerequisite to every CI run.
+
+Node.js removes all of these obstacles:
+
+| Capability | Browser | Node.js |
+|---|---|---|
+| `SharedArrayBuffer` | Requires COOP/COEP headers | Always available |
+| `Atomics.wait()` on main thread | **Blocked** (main thread is not allowed) | **Allowed** |
+| Worker spawning | `new Worker(url)` | `new Worker(__filename, { workerData })` |
+| Shared WASM memory | `SharedArrayBuffer` via `.memory` | Same — identical API |
+| CI without a browser | Not possible | Yes — just `node` |
+
+The test for `19-threading.loft` is currently `#[ignore]` under WASM (WASM_SKIP) because
+Tier 1 runs `par()` sequentially. W1.18 enables real parallel execution in Node.js by
+implementing Tier 2 entirely within the existing `tests/wasm/` harness.
+
+---
+
+### Architecture
+
+```
+tests/wasm/
+├── parallel.mjs           ← NEW: thread pool manager
+├── worker.mjs             ← NEW: worker thread entry point
+├── harness.mjs            — extended: detect CPU count, init pool
+├── host.mjs               — extended: parallel_run / parallel_wait hooks
+└── pkg/                   — wasm-pack output (wasm-threads feature build)
+```
+
+The WASM module is compiled **once** and shared across all workers via
+`WebAssembly.Module`, which is structured-cloneable. The WASM linear memory is created
+as a `SharedArrayBuffer`-backed `WebAssembly.Memory` (`{ shared: true }`) so every worker
+operates on the same Store heap — exactly matching the native `thread::spawn` + shared
+`Stores` model.
+
+---
+
+### Shared memory layout
+
+One `Int32Array` on top of a separate small `SharedArrayBuffer` carries the control
+signals (not inside the WASM heap itself, to avoid alignment issues):
+
+```
+Control buffer — Int32Array(N_WORKERS * 4 entries):
+
+  offset 0..N:       per-worker command  (0=idle, 1=run, 2=exit)
+  offset N..2N:      per-worker fn_index (bytecode entry point)
+  offset 2N..3N:     per-worker start    (inclusive element index)
+  offset 3N..4N:     per-worker end      (exclusive element index)
+```
+
+Results are written directly to the Store heap inside shared WASM memory — no transfer
+needed, matching the native `copy_nonoverlapping` pattern.
+
+A second `Int32Array(N_WORKERS)` — `doneSignal` — is used for completion notification:
+each worker writes `1` and calls `Atomics.notify` when its chunk finishes.
+
+---
+
+### Worker entry point (`tests/wasm/worker.mjs`)
+
+```js
+import { receiveMessageOnPort, parentPort, workerData } from 'node:worker_threads';
+
+const { module, memory, control, done, workerId } = workerData;
+
+// Initialise WASM with the shared memory
+const { instance } = await WebAssembly.instantiate(module, {
+  env: { memory },
+  // host bridge functions injected identically to harness.mjs
+  loftHost: buildWorkerHost(),
+});
+
+const { worker_entry } = instance.exports;
+
+// Signal ready
+Atomics.store(done, workerId, 0);
+parentPort.postMessage({ type: 'ready' });
+
+// Work loop — park until signalled
+while (true) {
+  Atomics.wait(control, workerId, 0);           // sleep until cmd != 0
+  const cmd = Atomics.load(control, workerId);
+  if (cmd === 2) break;                          // exit
+
+  const N = done.length;
+  const fnIndex = Atomics.load(control, N      + workerId);
+  const start   = Atomics.load(control, N * 2  + workerId);
+  const end     = Atomics.load(control, N * 3  + workerId);
+
+  worker_entry(fnIndex, start, end);             // write results to shared Store
+
+  Atomics.store(done, workerId, 1);
+  Atomics.notify(done, workerId);
+  Atomics.store(control, workerId, 0);           // reset to idle
+}
+```
+
+`buildWorkerHost()` supplies the same `loftHost` bridge as `host.mjs` but wired to a
+per-worker `VirtFS` snapshot (read-only view of the main thread's virtual filesystem).
+
+---
+
+### Thread pool manager (`tests/wasm/parallel.mjs`)
+
+```js
+import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
+
+const WORKER_SCRIPT = fileURLToPath(new URL('./worker.mjs', import.meta.url));
+
+export class LoftThreadPool {
+  constructor(module, memory, nWorkers) {
+    this.nWorkers = nWorkers;
+    // Control buffer: 4 slots × N workers (command, fn_index, start, end)
+    this.control  = new Int32Array(new SharedArrayBuffer(4 * nWorkers * 4));
+    this.done     = new Int32Array(new SharedArrayBuffer(nWorkers * 4));
+
+    this.workers = Array.from({ length: nWorkers }, (_, id) =>
+      new Worker(WORKER_SCRIPT, {
+        workerData: { module, memory, control: this.control,
+                      done: this.done, workerId: id },
+      })
+    );
+  }
+
+  /** Wait for all workers to post { type: 'ready' }. */
+  async waitReady() {
+    await Promise.all(this.workers.map(w =>
+      new Promise(resolve => {
+        w.once('message', (msg) => { if (msg.type === 'ready') resolve(); });
+      })
+    ));
+  }
+
+  /**
+   * Distribute a par() loop across all workers.
+   * @param {number} fnIndex  — WASM function table index for the worker body
+   * @param {number} total    — total number of elements
+   */
+  runParallel(fnIndex, total) {
+    const chunkSize = Math.ceil(total / this.nWorkers);
+    const N = this.nWorkers;
+
+    for (let t = 0; t < N; t++) {
+      const start = t * chunkSize;
+      const end   = Math.min(start + chunkSize, total);
+      Atomics.store(this.done,    t,         0);
+      Atomics.store(this.control, N      + t, fnIndex);
+      Atomics.store(this.control, N * 2  + t, start);
+      Atomics.store(this.control, N * 3  + t, end);
+      Atomics.store(this.control, t,          1);      // command = run
+      Atomics.notify(this.control, t);
+    }
+
+    // Main thread waits for all workers
+    for (let t = 0; t < N; t++) {
+      Atomics.wait(this.done, t, 0);                   // wait until done[t] == 1
+    }
+  }
+
+  /** Shut down all workers. */
+  terminate() {
+    for (let t = 0; t < this.nWorkers; t++) {
+      Atomics.store(this.control, t, 2);               // command = exit
+      Atomics.notify(this.control, t);
+    }
+    return Promise.all(this.workers.map(w => w.terminate()));
+  }
+}
+```
+
+---
+
+### Harness integration (`tests/wasm/harness.mjs` — additions)
+
+```js
+import { LoftThreadPool } from './parallel.mjs';
+import os from 'node:os';
+
+// Build wasm-threads feature binary for threaded tests
+// wasm-pack build --target nodejs --out-dir tests/wasm/pkg-mt \
+//   -- --features wasm-threads --no-default-features
+
+async function initThreaded(wasmPath, nWorkers = os.cpus().length) {
+  // Fetch and compile the module once (structured-cloneable)
+  const bytes  = readFileSync(wasmPath);
+  const module = await WebAssembly.compile(bytes);
+
+  // Shared memory — this becomes the Store heap
+  const memory = new WebAssembly.Memory({
+    initial:  256,    // 16 MB
+    maximum:  16384,  // 1 GB
+    shared:   true,
+  });
+
+  const pool = new LoftThreadPool(module, memory, nWorkers);
+  await pool.waitReady();
+
+  // Instantiate the main-thread copy
+  const { instance } = await WebAssembly.instantiate(module, {
+    env:      { memory },
+    loftHost: createHost(new VirtFS(baseTree)),
+  });
+
+  // Register the pool so the host bridge can dispatch par() calls
+  instance.exports.set_thread_pool_ptr(/* ptr to pool dispatch table */);
+
+  return { instance, pool, memory };
+}
+```
+
+The `parallel_run(fn_index, total)` and `parallel_wait()` calls from `fill.rs`
+(via the WASM host bridge) route to `pool.runParallel(fnIndex, total)`.
+
+---
+
+### Rust-side WASM host bridge additions (W1.18)
+
+Two new `extern "C"` imports are declared in `src/parallel.rs` under
+`#[cfg(all(target_arch = "wasm32", feature = "threading"))]`:
+
+```rust
+#[wasm_bindgen]
+extern "C" {
+    /// Distribute fn_index over `total` elements using the JS worker pool.
+    /// Blocks (via Atomics.wait in JS) until all workers complete.
+    fn parallel_run(fn_index: u32, total: u32);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "threading"))]
+pub fn run_parallel_raw(
+    _stores: &mut Stores,
+    _program: &[u8],
+    fn_pos: u32,
+    _input: &DbRef,
+    _element_size: u32,
+    _return_size: u32,
+    n_elements: u32,
+) -> Vec<u64> {
+    // Dispatch to the JS worker pool; results are already in shared Store memory
+    unsafe { parallel_run(fn_pos, n_elements); }
+    // Return an empty Vec — caller reads results directly from shared Store
+    vec![]
+}
+```
+
+Results land in shared WASM linear memory (the Store heap), identical to the native
+`copy_nonoverlapping` path — no serialisation, no transfer, no post-processing.
+
+---
+
+### `worker_entry` export (Rust)
+
+A new `#[wasm_bindgen]` export gives workers their entry point:
+
+```rust
+/// Called by each JS worker to execute one chunk of a par() loop.
+/// fn_pos:   bytecode position of the worker function
+/// start:    first element index (inclusive)
+/// end:      last element index (exclusive)
+#[wasm_bindgen]
+pub fn worker_entry(fn_pos: u32, start: u32, end: u32) {
+    WORKER_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        for i in start..end {
+            state.execute_at_raw(fn_pos, &DbRef::element(i), 4);
+        }
+    });
+}
+```
+
+`WORKER_STATE` is a `thread_local!` — each Web Worker / Node.js worker thread gets its
+own `State` instance backed by the shared `Memory`, matching `clone_for_worker()` in
+native.
+
+---
+
+### Sequence diagram
+
+```
+Main thread                         Worker 0..N-1
+    │                                    │
+    ├─ compile module (once)             │
+    ├─ create shared Memory              │
+    ├─ spawn N workers via Worker()      │
+    │    ←── { type: 'ready' } ─────────┤ workers init WASM + park on Atomics.wait
+    │                                    │
+    │  [par() loop begins]               │
+    ├─ write fn_index, start, end        │
+    ├─ Atomics.store(control[t], 1)      │
+    ├─ Atomics.notify(control[t]) ──────→│ workers wake, call worker_entry()
+    ├─ Atomics.wait(done[t], 0) (block)  │ results written to shared Store heap
+    │                              ←─────│ Atomics.store(done[t], 1) + notify
+    ├─ all done                          │
+    ├─ read results from shared Store    │ workers park again on Atomics.wait
+    ├─ continue execution                │
+    │                                    │
+    │  [test teardown]                   │
+    ├─ Atomics.store(control[t], 2)      │
+    ├─ Atomics.notify(control[t]) ──────→│ workers exit
+    └─ pool.terminate()                  │
+```
+
+---
+
+### Build target
+
+A second wasm-pack build produces the threaded binary for W1.18 tests:
+
+```sh
+# Single-threaded (existing, all other WASM tests)
+wasm-pack build --target nodejs --out-dir tests/wasm/pkg \
+  -- --features wasm --no-default-features
+
+# Multi-threaded (W1.18 tests only)
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+  wasm-pack build --target nodejs --out-dir tests/wasm/pkg-mt \
+  -- --features wasm-threads --no-default-features
+```
+
+`harness.mjs` selects `pkg-mt` for tests tagged `@threaded`; all other tests
+continue using `pkg`.
+
+---
+
+### Test coverage
+
+Once W1.18 lands, `19-threading.loft` is removed from `WASM_SKIP` in `tests/wrap.rs`:
+
+```rust
+// tests/wrap.rs — WASM_SKIP list (W1.18 removal)
+// "19-threading.loft",   ← removed when W1.18 is complete
+```
+
+The threading test file exercises:
+- `par()` with Form 1 worker (`double_score(a)`)
+- `par()` with Form 2 method (`a.get_value()`)
+- Result ordering (results must match sequential order)
+- Multi-core count (`par(..., 4)` attribute)
+
+---
+
+### Implementation steps (W1.18)
+
+| Step | File | Description |
+|------|------|-------------|
+| W1.18-1 | `src/parallel.rs` | Add `#[cfg(wasm+threading)]` branch: `parallel_run` import + `run_parallel_raw` stub |
+| W1.18-2 | `src/lib.rs` | Export `worker_entry(fn_pos, start, end)` via `#[wasm_bindgen]` |
+| W1.18-3 | `tests/wasm/worker.mjs` | Worker thread script: init WASM, park/wake loop, call `worker_entry` |
+| W1.18-4 | `tests/wasm/parallel.mjs` | `LoftThreadPool` class: spawn, `runParallel`, `terminate` |
+| W1.18-5 | `tests/wasm/harness.mjs` | `initThreaded()` helper; route `@threaded` tests to `pkg-mt` |
+| W1.18-6 | `tests/wrap.rs` | Remove `19-threading.loft` from `WASM_SKIP`; add threaded build step |
+
+**Effort:** H (as in ROADMAP.md — shared memory + Atomics protocol + WASM export plumbing)
+**Design:** ✓ (this section)
 
 ---
 

@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="report.html">Report a problem</a> · <span class="nav-sep">Language:</span> · <span class="cur">vs Rust</span> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <span class="cur">vs Rust</span> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>vs Rust</h1>
 <article>
 <p>Loft is inspired by Rust but designed for general-purpose scripting with a shorter learning curve and less ceremony. It trades some of Rust's safety guarantees and expressive power for a simpler mental model. This page documents the most important differences so that Rust programmers know exactly what they gain and what they give up.</p>
@@ -116,27 +116,31 @@ let xor  = a ^ b;          // bitwise XOR</code></pre>
 <p class="down"><strong>Downside</strong> Exponentiation requires a function call: <code>pow(base, exp)</code> for <code>float</code>/<code>single</code> — there is no <code>**</code> or <code>^</code> exponentiation operator. Integer exponentiation is not in the standard library; compute it with a loop or cast to float first.</p>
 </div>
 
-<h2 id="loops">5. No <code>loop</code> or <code>while</code></h2>
+<h2 id="loops">5. No <code>loop</code> keyword — use <code>while</code> or <code>for + break</code></h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..2147483647</span> {  <span class="cm">// large upper bound</span>
-    <span class="kw">if</span> <span class="fn-call">done</span>() { <span class="kw">break</span>; }
+  <pre><code><span class="kw">while</span> !<span class="fn-call">done</span>() { <span class="fn-call">step</span>(); }  <span class="cm">// while works</span>
+
+<span class="cm">// Infinite loop workaround — use a long range:</span>
+<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0l..9223372036854775807l</span> {  <span class="cm">// long: ~9.2×10^18</span>
+    <span class="kw">if</span> <span class="fn-call">should_exit</span>() { <span class="kw">break</span>; }
     <span class="fn-call">step</span>();
 }</code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
-  <pre class="rust-pre"><code>loop {
-    if done() { break; }
+  <pre class="rust-pre"><code>while !done() { step(); }
+
+loop {           // truly infinite — no bound needed
+    if should_exit() { break; }
     step();
-}
-while !done() { step(); }</code></pre>
+}</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Every loop has an iteration variable, making it easy to add index tracking or break conditions without restructuring. For a near-unbounded poll loop use <code>for _ in 0..2147483647</code> — the <code>break</code> will fire long before the limit is reached in practice.</p>
-<p class="down"><strong>Downside</strong> <code>while condition { }</code> is universally understood and directly expresses intent. Its absence surprises Rust and C programmers. Event loops and polling patterns are more verbose with the open-ended range workaround.</p>
+<p class="up"><strong>Upside</strong> <code>while condition { }</code> works exactly as expected. Every <code>for</code> loop has an iteration variable, making it easy to add index tracking or a cycle limit without restructuring.</p>
+<p class="down"><strong>Downside</strong> There is no <code>loop { }</code> keyword for an unconditionally infinite loop. The workaround — a <code>for</code> loop over a <code>long</code> range — is verbose but practically unbounded: the 64-bit maximum (~9.2×10^18) exceeds any realistic event-loop iteration count.</p>
 </div>
 
 <h2 id="filtered-loops">6. Filtered loops — <code>for ... if ...</code></h2>
@@ -268,63 +272,76 @@ fn area(s: &amp;Shape) -&gt; f64 {
 <p class="down"><strong>Downside</strong> Rust's <code>match</code> is exhaustive: the compiler forces you to handle every variant. In loft, leaving a variant without an implementation emits a compiler warning but does not stop compilation. To suppress the warning and produce a null return, write an explicit empty-body stub: <code>fn area(self: NewShape) -&gt; float { }</code>. Exhaustiveness is enforced by discipline, not the type system.</p>
 </div>
 
-<h2 id="closures">11. Lambdas without closure capture</h2>
+<h2 id="closures">11. Closures — same-scope capture works</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// Lambda expressions — long and short form:</span>
+  <pre><code><span class="cm">// Capture works when called in the same scope:</span>
+offset = <span class="nm">10</span>;
+shift = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + offset };
+<span class="fn-call">assert</span>(<span class="fn-call">shift</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"shift"</span>);
+
+<span class="cm">// Non-capturing lambdas work with map/filter/reduce:</span>
 doubled = <span class="fn-call">map</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
 evens   = <span class="fn-call">filter</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>], |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
 
-<span class="cm">// Named function references also work:</span>
-<span class="kw">fn</span> <span class="fn-call">add</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { a + b }
-total = <span class="fn-call">reduce</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="nm">0</span>, <span class="kw">fn</span> add);
-
-<span class="cm">// But lambdas cannot capture surrounding variables:</span>
-offset = <span class="nm">10</span>;
-<span class="cm">// shifted = map(nums, |x| { x + offset });  // error: offset not in scope</span></code></pre>
+<span class="cm">// Cross-scope: returning a capturing lambda is not yet supported:</span>
+<span class="cm">// fn make_adder(n: integer) -> fn(integer) -> integer {</span>
+<span class="cm">//     fn(x: integer) -> integer { x + n }  // A5.6: planned</span>
+<span class="cm">// }</span></code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
-  <pre class="rust-pre"><code>fn double(r: &amp;Score) -&gt; i32 { r.value * 2 }
-
-// Rayon parallel iterator:
-let total: i32 = scores.par_iter().map(double).sum();
-
-// Closure captures context freely:
+  <pre class="rust-pre"><code>// Closure captures context freely, any scope:
 let offset = 5;
+let shift = |x| x + offset;
+assert_eq!(shift(5), 10);
+
+// Works as argument to higher-order functions:
 let shifted: Vec&lt;i32&gt; = v.iter()
     .map(|x| x + offset)
-    .collect();</code></pre>
+    .collect();
+
+// Returning a capturing closure:
+fn make_adder(n: i32) -&gt; impl Fn(i32) -&gt; i32 {
+    move |x| x + n
+}</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Simpler mental model. No capture modes (<code>move</code> vs borrow), no <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> trait bounds, no lifetime constraints on captured variables. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported, with type inference from call-site context. Named function references (<code>fn name</code>) are compile-checked.</p>
-<p class="down"><strong>Downside</strong> No closure capture. Lambdas and function references cannot read variables from the surrounding scope — context must be embedded in the data or passed as an explicit parameter. Rust's <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> traits give far more flexibility for callbacks that need local state.</p>
+<p class="up"><strong>Upside</strong> Same-scope capture works for integers, text, and mutable variables — no capture modes (<code>move</code> vs borrow), no <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> trait bounds, no lifetime annotations. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported. Named function references (<code>fn name</code>) are compile-checked.</p>
+<p class="down"><strong>Downside</strong> Capturing lambdas can only be called directly by name in the same scope — passing them to <code>map</code>/<code>filter</code>/<code>reduce</code> or returning them from a function is not yet supported (planned as A5.6). Rust's <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> traits give full flexibility: closures can be stored in structs, returned from functions, and passed freely across scopes.</p>
 </div>
 
-<h2 id="generics">12. No generic functions or trait system</h2>
+<h2 id="generics">12. Generic functions — pass-through only, no trait bounds</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// No generic functions — must write a version per type</span>
-<span class="kw">fn</span> <span class="fn-call">max_int</span>(a: <span class="ty"><a href="stdlib.html#types">integer</a></span>, b: <span class="ty"><a href="stdlib.html#types">integer</a></span>) -> <span class="ty"><a href="stdlib.html#types">integer</a></span> {
-    <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
-}
-<span class="kw">fn</span> <span class="fn-call">max_float</span>(a: <span class="ty"><a href="stdlib.html#types">float</a></span>, b: <span class="ty"><a href="stdlib.html#types">float</a></span>) -> <span class="ty"><a href="stdlib.html#types">float</a></span> {
+  <pre><code><span class="cm">// Pass-through generics work:</span>
+<span class="kw">fn</span> <span class="fn-call">identity</span>&lt;T&gt;(x: T) -> T { x }
+<span class="fn-call">identity</span>(<span class="nm">42</span>)        <span class="cm">// integer</span>
+<span class="fn-call">identity</span>(<span class="st">"hello"</span>)  <span class="cm">// text</span>
+
+<span class="cm">// Trait-bounded generics are not supported:</span>
+<span class="cm">// fn max&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T { ... }  // not valid</span>
+<span class="cm">// Must write a version per type:</span>
+<span class="kw">fn</span> <span class="fn-call">max_int</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
     <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
 }</code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
-  <pre class="rust-pre"><code>fn max&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T {
+  <pre class="rust-pre"><code>fn identity&lt;T&gt;(x: T) -&gt; T { x }
+
+fn max&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T {
     if a &gt; b { a } else { b }
-}</code></pre>
+}
+// One function works for all comparable types.</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Nothing to learn about type parameters, trait bounds, <code>where</code> clauses, <code>dyn Trait</code>, <code>impl Trait</code>, or associated types. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need.</p>
-<p class="down"><strong>Downside</strong> Code cannot be written once and reused across types. Every generic algorithm must be duplicated per type or pushed down into the standard library. There is no way for user code to define an "anything sortable" or "anything printable" abstraction.</p>
+<p class="up"><strong>Upside</strong> Basic generic functions (<code>identity</code>, <code>pick_second</code>, wrappers) work out of the box. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need. No <code>dyn Trait</code>, <code>impl Trait</code>, or associated types to learn.</p>
+<p class="down"><strong>Downside</strong> No trait bounds — a generic function cannot constrain <code>T</code> to be comparable, printable, or hashable. Any algorithm that requires an operation on <code>T</code> (comparison, addition, display) must be written once per concrete type. There is no way for user code to define "anything sortable" without duplicating the sort logic.</p>
 </div>
 
 <h2 id="formatting">13. String formatting — embedded expressions</h2>
@@ -348,7 +365,7 @@ let hex  = format!("{:#x}", n);
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Concise — no <code>format!()</code> call, no separate variable. Full format expressions (arithmetic, slices, <code>for</code> comprehensions) can appear directly inside <code>{}</code>. Specifiers mirror Rust: <code>:width</code>, <code>:.precision</code>, <code>:width.precision</code>, sign (<code>+</code>), radix (<code>#x</code>, <code>#o</code>, <code>b</code>), alignment (<code>&lt;</code>, <code>&gt;</code>, <code>^</code>), and zero-padding (<code>0N</code>) all work.</p>
-<p class="down"><strong>Downside</strong> Unknown radix letters in specifiers are compile-time errors (e.g. <code>:5z</code> or <code>:5B</code> are both rejected). Radix letters are case-sensitive: valid ones are <code>b</code>, <code>o</code>, <code>x</code>/<code>X</code>, <code>e</code>, and <code>j</code>/<code>json</code> — uppercase <code>B</code> or <code>O</code> produce an error. Applying a numeric specifier to an incompatible type (such as <code>:x</code> on a text value) is silently ignored rather than flagged.</p>
+<p class="down"><strong>Downside</strong> Unknown radix letters in specifiers are compile-time errors (e.g. <code>:5z</code> or <code>:5B</code> are both rejected). Radix letters are case-sensitive: valid ones are <code>b</code>, <code>o</code>, <code>x</code>/<code>X</code>, <code>e</code>, and <code>j</code>/<code>json</code> — uppercase <code>B</code> or <code>O</code> produce an error. Applying a numeric specifier to an incompatible type (such as <code>:x</code> on a <code>text</code> value, or zero-padding on a <code>boolean</code>) is a compile-time error.</p>
 </div>
 
 <h2 id="parallel">14. Built-in parallel for-loops — <code>par(...)</code></h2>
