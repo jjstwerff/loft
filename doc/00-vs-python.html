@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="report.html">Report a problem</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <span class="cur">vs Python</span> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <span class="cur">vs Python</span> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>vs Python</h1>
 <article>
 <p>Loft and Python share a similar surface syntax — assignment without type annotations, brace-free expressions, and names that just work. But loft is statically typed and compiled to bytecode, while Python is dynamically typed and interpreted. This page documents the most important differences so that Python programmers know exactly what they gain and what they give up.</p>
@@ -104,21 +104,21 @@ p.x = <span class="st">"hi"</span> <span class="cm"># allowed at runtime; mypy c
 <p class="down"><strong>Downside</strong> No inheritance, no <code>__repr__</code>, no operator overloading (<code>__add__</code>, <code>__eq__</code>, etc.), no properties or descriptors. Python's <code>@dataclass</code> generates <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code> automatically. Loft structs are data holders; all display and comparison logic must be written by hand. Python also supports plain dicts as lightweight records, which is often more convenient for ad-hoc data.</p>
 </div>
 
-<h2 id="loops">4. No <code>while</code> loop</h2>
+<h2 id="loops">4. <code>while</code> loop — yes; no <code>loop</code> or <code>while ... else</code></h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// Condition-driven poll loop — use a large upper bound:</span>
-<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..2147483647</span> {
-    <span class="kw">if</span> <span class="fn-call">ready</span>() { <span class="kw">break</span>; }
-    <span class="fn-call">step</span>();
-}
+  <pre><code><span class="kw">while</span> !<span class="fn-call">ready</span>() { <span class="fn-call">step</span>(); }  <span class="cm">// works</span>
 
-<span class="cm">// Draining a collection while it has elements:</span>
-<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..2147483647</span> {
-    <span class="kw">if</span> <span class="fn-call">length</span>(queue) == <span class="nm">0</span> { <span class="kw">break</span>; }
+<span class="kw">while</span> <span class="fn-call">length</span>(queue) > <span class="nm">0</span> {
     <span class="fn-call">process</span>(queue[<span class="nm">0</span>]);
     queue#remove;
+}
+
+<span class="cm">// No loop keyword — infinite loop needs a large bound:</span>
+<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..2147483647</span> {
+    <span class="kw">if</span> <span class="fn-call">should_exit</span>() { <span class="kw">break</span>; }
+    <span class="fn-call">step</span>();
 }</code></pre>
 </div>
 <div>
@@ -127,12 +127,16 @@ p.x = <span class="st">"hi"</span> <span class="cm"># allowed at runtime; mypy c
     <span class="fn-call">step</span>()
 
 <span class="kw">while</span> queue:
-    <span class="fn-call">process</span>(queue.<span class="fn-call">pop</span>(<span class="nm">0</span>))</code></pre>
+    <span class="fn-call">process</span>(queue.<span class="fn-call">pop</span>(<span class="nm">0</span>))
+
+<span class="kw">while</span> <span class="kw">True</span>:          <span class="cm"># truly infinite</span>
+    <span class="kw">if</span> <span class="fn-call">should_exit</span>(): <span class="kw">break</span>
+    <span class="fn-call">step</span>()</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Every loop has an iteration variable, making it easy to add a cycle limit or index tracking without restructuring. The <code>break</code> fires long before the range limit in practice. Filtered loops (<code>for x in v if pred(x)</code>) and loop attributes (<code>x#first</code>, <code>x#count</code>) are only available on <code>for</code>, so a single loop construct covers all cases.</p>
-<p class="down"><strong>Downside</strong> <code>while condition:</code> is instantly understood by every programmer and reads exactly as its semantics. Its absence is surprising and the workaround is verbose. Python also has <code>while ... else</code> (executes when the condition first becomes false without a <code>break</code>), a pattern with no clean equivalent in loft.</p>
+<p class="up"><strong>Upside</strong> <code>while condition { }</code> works exactly as expected. Filtered loops (<code>for x in v if pred(x)</code>) and loop attributes (<code>x#first</code>, <code>x#count</code>) add expressive power to <code>for</code> without needing a separate loop form.</p>
+<p class="down"><strong>Downside</strong> No <code>while True:</code> equivalent — infinite loops require a bounded <code>for</code> range as a workaround. No <code>while ... else</code> (executes when the condition becomes false without a <code>break</code>), a Python pattern with no clean equivalent in loft.</p>
 </div>
 
 <h2 id="enum-dispatch">5. Polymorphic enum dispatch vs <code>isinstance</code></h2>
@@ -228,43 +232,39 @@ nums.<span class="fn-call">append</span>(<span class="st">"x"</span>)           
 <p class="down"><strong>Downside</strong> Python's built-in <code>dict</code> and <code>list</code> are among the most heavily optimised data structures in any scripting runtime. Python also has <code>set</code> and <code>frozenset</code> (no loft equivalent), ordered insertion semantics on <code>dict</code> (Python 3.7+), and an enormously expressive comprehension syntax (<code>[x*2 for x in v if x &gt; 0]</code>). Loft's <code>map()</code> / <code>filter()</code> / <code>reduce()</code> higher-order functions allocate a new vector at each stage, while Python's generators are lazy and allocation-free until consumed.</p>
 </div>
 
-<h2 id="closures">8. Lambdas without closure capture</h2>
+<h2 id="closures">8. Closures — same-scope capture works</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// Lambda expressions — long and short form:</span>
+  <pre><code><span class="cm">// Capture works when called in the same scope:</span>
+offset = <span class="nm">10</span>;
+shift = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + offset };
+<span class="fn-call">assert</span>(<span class="fn-call">shift</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"shift"</span>);
+
+<span class="cm">// Non-capturing lambdas work with map/filter/reduce:</span>
 doubled = <span class="fn-call">map</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
 evens   = <span class="fn-call">filter</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>], |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
 
-<span class="cm">// Named function references also work:</span>
-<span class="kw">fn</span> <span class="fn-call">add</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { a + b }
-total = <span class="fn-call">reduce</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="nm">0</span>, <span class="kw">fn</span> add);
-
-<span class="cm">// But lambdas cannot capture surrounding variables:</span>
-offset = <span class="nm">10</span>;
-<span class="cm">// shifted = map(nums, |x| { x + offset });  // error</span></code></pre>
+<span class="cm">// Passing a capturing lambda to map/filter is not yet supported:</span>
+<span class="cm">// shifted = map(nums, |x| { x + offset });  // workaround: pass offset explicitly</span></code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>double  = <span class="kw">lambda</span> x: x * <span class="nm">2</span>
-is_even = <span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>
-
-f = double
-<span class="kw">assert</span> <span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>
+  <pre class="python-pre"><code>offset = <span class="nm">10</span>
+shift = <span class="kw">lambda</span> x: x + offset  <span class="cm"># capture works anywhere</span>
+<span class="kw">assert</span> <span class="fn-call">shift</span>(<span class="nm">5</span>) == <span class="nm">15</span>
 
 nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>]
 doubled = <span class="bi">list</span>(<span class="bi">map</span>(<span class="kw">lambda</span> x: x * <span class="nm">2</span>, nums))
 evens   = <span class="bi">list</span>(<span class="bi">filter</span>(<span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>, nums))
-total   = <span class="bi">sum</span>(nums)
 
-<span class="cm"># capture context freely:</span>
-offset = <span class="nm">10</span>
+<span class="cm"># capturing lambda passed to map:</span>
 shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> nums]</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Simpler mental model — no capture modes, no scope surprises. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported, with type inference from call-site context. Named function references (<code>fn name</code>) are compile-checked. Higher-order functions (<code>map</code>, <code>filter</code>, <code>reduce</code>) accept both lambdas and fn-refs.</p>
-<p class="down"><strong>Downside</strong> No closure capture — lambdas cannot read variables from the surrounding scope. Any extra data must be embedded in the element struct or passed as an explicit parameter. Python's <code>lambda</code> and nested <code>def</code> close over surrounding variables naturally, making short callbacks, key functions, and event handlers concise. List comprehensions (<code>[f(x) for x in v]</code>) are shorter and more Pythonic than <code>map(v, fn f)</code>.</p>
+<p class="up"><strong>Upside</strong> Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported. Named function references (<code>fn name</code>) are compile-checked. Higher-order functions (<code>map</code>, <code>filter</code>, <code>reduce</code>) accept both lambdas and fn-refs.</p>
+<p class="down"><strong>Downside</strong> Capturing lambdas can only be called directly by name in the same scope — passing them to <code>map</code>/<code>filter</code>/<code>reduce</code> or returning them from a function is not yet supported. Any extra context must be embedded in the element struct or passed as an explicit parameter. Python's <code>lambda</code> and nested <code>def</code> close over surrounding variables naturally in any context, and list comprehensions (<code>[x + offset for x in v]</code>) are shorter than the loft workaround.</p>
 </div>
 
 <h2 id="exceptions">9. No exception handling</h2>
@@ -335,15 +335,17 @@ total = <span class="bi">sum</span>(results)
 <p class="down"><strong>Downside</strong> Workers can return primitives (<code>integer</code>, <code>long</code>, <code>float</code>, <code>boolean</code>), <code>text</code>, and inline enums — but not struct references. Context must be embedded as fields in the element struct; workers cannot capture local variables. Python's <code>ProcessPoolExecutor</code> works with any picklable object and gives full control over timeouts, cancellation, and error propagation.</p>
 </div>
 
-<h2 id="generics">11. No generic functions</h2>
+<h2 id="generics">11. Generic functions — pass-through only, no duck typing</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// Must write a version per type — no type parameters:</span>
+  <pre><code><span class="cm">// Pass-through generics work:</span>
+<span class="kw">fn</span> <span class="fn-call">identity</span>&lt;T&gt;(x: T) -> T { x }
+<span class="fn-call">identity</span>(<span class="nm">42</span>)        <span class="cm">// integer</span>
+<span class="fn-call">identity</span>(<span class="st">"hello"</span>)  <span class="cm">// text</span>
+
+<span class="cm">// Algorithms requiring operations on T still need per-type versions:</span>
 <span class="kw">fn</span> <span class="fn-call">max_int</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
-    <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
-}
-<span class="kw">fn</span> <span class="fn-call">max_float</span>(a: <span class="ty"><a href="stdlib-types.html">float</a></span>, b: <span class="ty"><a href="stdlib-types.html">float</a></span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
     <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
 }</code></pre>
 </div>
@@ -361,8 +363,8 @@ T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Nothing to learn about type parameters, bounds, variance, or protocols. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.</p>
-<p class="down"><strong>Downside</strong> Code cannot be written once and reused across types. Every generic algorithm must be duplicated per type or moved into the standard library. Python's duck typing means a function that calls <code>len(x)</code> automatically works on any type that implements <code>__len__</code> — no explicit annotation required. Python 3.12 TypeVar syntax and structural subtyping (<code>Protocol</code>) give this generality with optional static checking.</p>
+<p class="up"><strong>Upside</strong> Basic generic functions (pass-through, wrapping, forwarding) work out of the box. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.</p>
+<p class="down"><strong>Downside</strong> A generic function cannot perform operations on <code>T</code> — no comparison, no arithmetic, no display. Any algorithm that requires an operation must be written once per concrete type. Python's duck typing lets a single function work on any type that supports the needed operation (<code>len</code>, <code>&gt;</code>, <code>+</code>) without explicit annotation. Python 3.12 <code>TypeVar</code> and <code>Protocol</code> add optional static checking on top.</p>
 </div>
 
 <h2 id="signatures">12. Function signatures — defaults and named args, but no *args</h2>
