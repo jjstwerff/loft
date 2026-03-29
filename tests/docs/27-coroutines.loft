@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Coroutines
+// #warn Variable d is never read
 // @TITLE: Lazy sequences with generators and yield
 // A generator function produces values one at a time.
 // Declare the return type as 'iterator<T>' and use 'yield' to emit each value.

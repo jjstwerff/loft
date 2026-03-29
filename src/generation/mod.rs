@@ -188,6 +188,10 @@ pub struct Output<'a> {
     /// `OpClearStackText`/`OpClearText`.  Set by `output_block` before each
     /// op is emitted; consumed (and reset to 0) by `clear_stack_text`.
     pub next_format_count: usize,
+    /// When true, `Value::Yield(expr)` emits `__values.push((expr) as i64);`
+    /// instead of `yield expr`.  Used in the eager-collect factory function
+    /// for `ForLoopBody` coroutine segments.
+    pub yield_collect: bool,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
