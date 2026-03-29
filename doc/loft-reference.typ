@@ -1602,7 +1602,7 @@ Use the short form (pipe-bar syntax) when the call site already knows the types:
 |param| { body }
 ```
 
-Both forms work anywhere a function reference is expected — especially with map, filter, and reduce.  The short form does not allow type annotations; use the full fn(…) form when you need explicit types. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.
+Both forms work anywhere a function reference is expected — especially with map, filter, and reduce.  The short form does not allow type annotations; use the full fn(…) form when you need explicit types. Lambdas that need outer variables can capture them: see the Closures page.
 
 ```rust
 fn main() {
@@ -4357,6 +4357,392 @@ fn main() {
 ```
 
 
+= Closures
+
+A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.
+
+=== Integer capture
+
+A lambda may read any integer variable in scope at the call site. Store the lambda, then call it by name.
+
+=== Multiple integer captures
+
+A lambda can read more than one outer variable at once. All are captured at the moment the lambda is called.
+
+=== Text capture
+
+Text values are captured by deep-copy, so they are independent of the original variable after the call.
+
+=== Capture timing
+
+Loft captures variables at the moment the lambda is called, not at the moment the lambda is written.  If a variable changes between writing and calling the lambda, the lambda sees the updated value.
+
+=== Current limitation: captured lambdas and higher-order functions
+
+Captured closures only work when called directly by name in the same scope. Passing a capturing lambda as an argument to map, filter, reduce, or a user-defined higher-order function is not yet supported — the hidden closure record is not forwarded through the call. Workaround: pass the extra value as an explicit extra argument instead. Non-capturing lambdas (those that only use their own parameters) work fine with all higher-order functions.
+
+```rust
+fn main() {
+```
+
+=== Integer capture
+
+```rust
+  offset = 100;
+  shift = fn(x: integer) -> integer { x + offset };
+  assert(shift(5) == 105, "shift(5): {shift(5)}");
+  assert(shift(-3) == 97, "shift(-3): {shift(-3)}");
+```
+
+=== Multiple integer captures
+
+```rust
+  lo = 10;
+  hi = 20;
+  clamp_val = fn(x: integer) -> integer {
+    if x < lo { lo } else if x > hi { hi } else { x }
+  };
+  assert(clamp_val(5) == 10, "clamp below: {clamp_val(5)}");
+  assert(clamp_val(15) == 15, "clamp mid: {clamp_val(15)}");
+  assert(clamp_val(25) == 20, "clamp above: {clamp_val(25)}");
+```
+
+=== Text capture
+
+```rust
+  greeting = "Hello";
+  make_msg = fn(name: text) -> text { "{greeting}, {name}!" };
+  assert(make_msg("World") == "Hello, World!", "greeting capture");
+  assert(make_msg("Loft") == "Hello, Loft!", "greeting capture 2");
+```
+
+=== Capture timing
+
+'base' is 10 when the lambda is written but 20 when it is called. The lambda sees the value at call time: 20.
+
+```rust
+  base = 10;
+  add_base = fn(n: integer) -> integer { base + n };
+  base = 20;
+  assert(add_base(5) == 25, "sees base=20 at call time: {add_base(5)}");
+```
+
+=== Non-capturing lambdas with higher-order functions
+
+No capture needed here — the lambda uses only its own parameter.
+
+```rust
+  nums = [1, 2, 3, 4, 5];
+  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  assert(doubled[0] == 2, "doubled[0]: {doubled[0]}");
+  assert(doubled[4] == 10, "doubled[4]: {doubled[4]}");
+```
+
+```rust
+  evens = filter(nums, fn(x: integer) -> boolean { x % 2 == 0 });
+  assert(evens[0] == 2, "evens[0]: {evens[0]}");
+  assert(evens[1] == 4, "evens[1]: {evens[1]}");
+```
+
+Workaround for captured value + higher-order function: pass the extra value as an explicit argument to a named helper.
+
+```rust
+}
+```
+
+
+= Coroutines
+
+A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
+
+=== Declaring a generator function
+
+A function whose return type is 'iterator\<T\>' is a generator. 'yield value' emits one item and pauses; the next call resumes from there.
+
+=== Iterating with a for loop
+
+A 'for' loop drives the generator forward automatically. The body runs once per yielded value. Use 'break' to stop early without consuming the rest.
+
+=== Manual advance with next() and exhausted()
+
+Call 'next(gen)' yourself when you need fine-grained control. 'exhausted(gen)' returns true once there are no more values.
+
+=== Generators with parameters
+
+A generator function may take any parameters, including text. Parameter values are preserved across yields so the generator can use them throughout its lifetime.
+
+=== Delegation with yield from
+
+'yield from sub_gen()' forwards all values from another generator inline, as if each of its yields appeared at this point directly.
+
+=== Early termination with break
+
+Stopping a 'for' loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.
+
+```rust
+fn count_up(start: integer, stop: integer) -> iterator<integer> {
+  for i in start..stop {
+    yield i;
+  }
+}
+```
+
+```rust
+fn squares(n: integer) -> iterator<integer> {
+  for i in 1..=n {
+    yield i * i;
+  }
+}
+```
+
+Yields the length of 's' twice — shows that a text parameter survives yields.
+
+```rust
+fn len_twice(s: text) -> iterator<integer> {
+  yield len(s);
+  yield len(s);
+}
+```
+
+```rust
+fn inner_vals() -> iterator<integer> {
+  yield 10;
+  yield 20;
+}
+```
+
+```rust
+fn outer_combined() -> iterator<integer> {
+  yield 1;
+  yield from inner_vals();
+  yield 2;
+}
+```
+
+```rust
+fn large_range(limit: integer) -> iterator<integer> {
+  for i in 1..=limit {
+    yield i;
+  }
+}
+```
+
+```rust
+fn main() {
+```
+
+=== Iterating with a for loop
+
+```rust
+  total = 0;
+  for n in count_up(1, 6) {
+    total += n;
+  }
+  assert(total == 15, "sum 1..5: {total}");
+```
+
+Squares via for loop with index tracking.
+
+```rust
+  idx = 0;
+  for s in squares(4) {
+    idx += 1;
+    if idx == 1 { assert(s == 1, "sq1: {s}"); }
+    if idx == 2 { assert(s == 4, "sq2: {s}"); }
+    if idx == 3 { assert(s == 9, "sq3: {s}"); }
+    if idx == 4 { assert(s == 16, "sq4: {s}"); }
+  }
+  assert(idx == 4, "squares count: {idx}");
+```
+
+=== Manual advance with next() and exhausted()
+
+```rust
+  gen = count_up(10, 13);
+  a = next(gen);
+  b = next(gen);
+  c = next(gen);
+  assert(a == 10 && b == 11 && c == 12, "manual next: {a},{b},{c}");
+```
+
+One extra advance past the last element; exhausted() is true after that.
+
+```rust
+  d = next(gen);
+  done = exhausted(gen);
+  assert(done, "exhausted after last value");
+```
+
+=== Generators with parameters
+
+'len_twice' takes a text parameter and yields its length twice. The text value is preserved across the yield.
+
+```rust
+  lt_total = 0;
+  for n in len_twice("hello") {
+    lt_total += n;
+  }
+  assert(lt_total == 10, "len_twice: {lt_total}");
+```
+
+=== Delegation with yield from
+
+```rust
+  yf_total = 0;
+  for n in outer_combined() {
+    yf_total += n;
+  }
+  assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
+```
+
+=== Early termination with break
+
+Stop after the first 5 values from a 1000-element generator.
+
+```rust
+  limit_total = 0;
+  for n in large_range(1000) {
+    if n > 5 { break; }
+    limit_total += n;
+  }
+  assert(limit_total == 15, "early break sum 1..5: {limit_total}");
+}
+```
+
+
+= Tuples
+
+A tuple groups a fixed number of values of possibly different types. You do not need to give a tuple a name — use it directly where you need to pass or return multiple values together. Access individual elements with '.0', '.1', etc.
+
+=== Creating tuples
+
+Write the elements in parentheses, separated by commas. The compiler infers the element types from what you put in. You can add an explicit type annotation when needed.
+
+=== Accessing elements
+
+Use '.0', '.1', '.2', ... to read individual elements.
+
+=== Modifying elements
+
+Tuple elements can be reassigned like ordinary variables.
+
+=== Tuples as function parameters
+
+Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter ('&') gives the function a direct link to the caller's tuple so it can modify individual elements in place.
+
+=== Returning tuples
+
+A function can return a tuple to give back more than one value at once.
+
+=== Destructuring
+
+Assign a tuple to multiple names in one step using the '(a, b) = expr' form. This is concise when a function returns a tuple and you need both values.
+
+=== Three or more elements
+
+Tuples can have any number of elements.
+
+```rust
+fn min_max(lo: integer, hi: integer) -> (integer, integer) {
+  if lo <= hi {
+    (lo, hi)
+  } else {
+    (hi, lo)
+  }
+}
+```
+
+```rust
+fn swap_ints(pair: &(integer, integer)) {
+  tmp = pair.0;
+  pair.0 = pair.1;
+  pair.1 = tmp;
+}
+```
+
+```rust
+fn main() {
+```
+
+=== Creating tuples
+
+```rust
+  t = (10, 20);
+  assert(t.0 == 10, "t.0: {t.0}");
+  assert(t.1 == 20, "t.1: {t.1}");
+```
+
+Type annotation
+
+```rust
+  w: (integer, integer) = (3, 4);
+  assert(w.0 + w.1 == 7, "annotated sum: {w.0+w.1}");
+```
+
+=== Modifying elements
+
+```rust
+  v = (1, 2);
+  v.0 = 10;
+  assert(v.0 + v.1 == 12, "after assign: {v.0}+{v.1}");
+```
+
+=== Tuples as value parameters
+
+```rust
+  p = (10, 20);
+  sum = p.0 + p.1;
+  assert(sum == 30, "sum: {sum}");
+```
+
+=== Tuples as reference parameters (swap in place)
+
+```rust
+  pair = (3, 7);
+  swap_ints(pair);
+  assert(pair.0 == 7 && pair.1 == 3, "after swap: ({pair.0},{pair.1})");
+```
+
+=== Returning a tuple from a function
+
+```rust
+  bounds = min_max(5, 2);
+  assert(bounds.0 == 2, "min: {bounds.0}");
+  assert(bounds.1 == 5, "max: {bounds.1}");
+```
+
+Already in order
+
+```rust
+  bounds2 = min_max(1, 9);
+  assert(bounds2.0 == 1, "min2: {bounds2.0}");
+  assert(bounds2.1 == 9, "max2: {bounds2.1}");
+```
+
+=== Destructuring
+
+```rust
+  (lo, hi) = min_max(8, 3);
+  assert(lo == 3, "destructured lo: {lo}");
+  assert(hi == 8, "destructured hi: {hi}");
+```
+
+=== Three or more elements
+
+```rust
+  u = (1, 2, 3);
+  assert(u.0 + u.1 + u.2 == 6, "triple sum: {u.0}+{u.1}+{u.2}");
+```
+
+```rust
+  triple = (10, 20, 30);
+  triple.1 = 99;
+  assert(triple.0 == 10 && triple.1 == 99 && triple.2 == 30,
+    "triple modified: ({triple.0},{triple.1},{triple.2})");
+}
+```
+
+
 = Standard Library
 
 == Types
@@ -5159,31 +5545,54 @@ Returns microseconds elapsed since program start (monotonic clock). Unaffected b
 
 = Roadmap
 
-Loft is under active development. Everything documented on the language pages works today. This page shows what is coming next. Code examples show the intended syntax — they do not work yet.
+Loft is under active development. Everything documented on the language pages works today.
 
-=== Closure capture
+=== Completed in 0.8.3
 
-Lambdas will be able to read variables from the surrounding scope without passing them as extra arguments:
+==== Closure capture
+
+Lambdas can now read variables from the surrounding scope. The compiler detects which outer variables the lambda body uses and injects them at call time:
 
 ```
-factor = 10;
-scaled = map(nums, |x| { x * factor });  // captures 'factor'
+offset = 100;
+shift = fn(x: integer) -> integer { x + offset };
+assert(shift(5) == 105, "shift(5)");
 ```
 
-Today you must pass `factor` explicitly. Closure capture removes that boilerplate for any read-only use of outer variables.
+Note: captured lambdas only work when called directly by name in the same scope. Passing a capturing lambda to `map`/`filter`/`reduce` is not yet supported — pass the extra value as an explicit argument instead.
 
-=== Tuple types
+==== Tuple types
 
 Return multiple values from a function and destructure them at the call site — no struct definition needed:
 
 ```
-fn min_max(v: vector<integer>) -> (integer, integer) {
-    (min(v), max(v))
+fn min_max(lo: integer, hi: integer) -> (integer, integer) {
+    (lo, hi)
 }
 
-(lo, hi) = min_max([3, 1, 4, 1, 5]);
-assert(lo == 1 && hi == 5, "min_max");
+(a, b) = min_max(1, 5);
+assert(a == 1 && b == 5, "min_max");
 ```
+
+==== Coroutines / generators
+
+Lazy sequences with `yield` — generate values on demand without building a collection:
+
+```
+fn count_up(start: integer, stop: integer) -> iterator<integer> {
+    for i in start..stop {
+        yield i;
+    }
+}
+
+total = 0;
+for n in count_up(1, 6) { total += n; }
+assert(total == 15, "sum 1..5");
+```
+
+Use `yield from sub_gen()` to forward all values from a sub-generator inline. Use `next(gen)` and `exhausted(gen)` for manual iteration.
+
+=== Coming next
 
 === HTTP client and JSON
 
@@ -5218,25 +5627,6 @@ $ loft
 ```
 
 Definitions persist across lines. A syntax error discards the failed line and continues.
-
-=== Coroutines
-
-Lazy sequences with `yield` — generate values on demand without building a collection:
-
-```
-fn fibonacci() -> iterator<integer> {
-    a = 0; b = 1;
-    loop {
-        yield a;
-        (a, b) = (b, a + b);
-    }
-}
-
-for n in fibonacci() {
-    if n > 100 { break; }
-    print("{n} ");
-}
-```
 
 === Web IDE
 

@@ -44,6 +44,12 @@ enum YieldSegment {
     /// - `init`: expression that creates the sub-generator (e.g. `n_inner(stores)`)
     /// - `state_idx`: the state number for this segment (used to name the struct field)
     YieldFrom { pre: Vec<Value>, init: Value },
+    /// A for-loop body containing yields.  The factory function runs the loop
+    /// eagerly and collects all yielded values into a `Vec<i64>` buffer; `next_i64`
+    /// just returns items from that buffer.  This covers the common
+    /// `for i in range { yield expr; }` pattern without requiring a full
+    /// state-machine decomposition of the range-iteration IR.
+    ForLoopBody { pre: Vec<Value>, body: Value },
 }
 
 /// Try to recognise a `yield from` desugared block.
@@ -87,6 +93,17 @@ fn detect_yield_from(val: &Value) -> Option<Value> {
     }
 }
 
+/// Returns true if `v` contains any `Value::Yield` node at any depth.
+fn contains_yield(v: &Value) -> bool {
+    match v {
+        Value::Yield(_) => true,
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(contains_yield),
+        Value::If(_, t, f) => contains_yield(t) || contains_yield(f),
+        Value::Set(_, rhs) | Value::Drop(rhs) | Value::Return(rhs) => contains_yield(rhs),
+        _ => false,
+    }
+}
+
 /// Scan the top-level operators of a function body and build yield segments.
 fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
     let mut segments = Vec::new();
@@ -101,6 +118,14 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
             segments.push(YieldSegment::YieldFrom {
                 pre: std::mem::take(&mut pre),
                 init,
+            });
+        } else if matches!(op, Value::Block(_)) && contains_yield(op) {
+            // A block (typically a for-loop) that contains yields somewhere inside.
+            // Use the eager-collect approach: the factory will run the block and
+            // push all yielded values to a Vec<i64>; next_i64 pops from that buffer.
+            segments.push(YieldSegment::ForLoopBody {
+                pre: std::mem::take(&mut pre),
+                body: op.clone(),
             });
         } else {
             pre.push(op.clone());
@@ -136,6 +161,14 @@ fn emit_struct_def(
             )?;
         }
     }
+    // ForLoopBody: add a value buffer + index for the eager-collect approach.
+    if segments
+        .iter()
+        .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
+    {
+        writeln!(w, "    __values: Vec<i64>,")?;
+        writeln!(w, "    __idx: usize,")?;
+    }
     writeln!(w, "}}\n")
 }
 
@@ -147,6 +180,13 @@ fn emit_factory_fn(
     attrs: &[crate::data::Attribute],
     segments: &[YieldSegment],
 ) -> std::io::Result<()> {
+    // ForLoopBody: the entire factory is emitted by Output::emit_for_body_factory.
+    if segments
+        .iter()
+        .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
+    {
+        return Ok(());
+    }
     write!(w, "fn {fn_name}(stores: &mut Stores")?;
     for attr in attrs {
         let arg_tp = rust_type(&attr.typedef, &Context::Argument);
@@ -261,6 +301,18 @@ impl Output<'_> {
                     writeln!(w, "                }}")?;
                     writeln!(w, "                return val;")?;
                 }
+                YieldSegment::ForLoopBody { .. } => {
+                    // Values were collected eagerly in the factory. Just pop from the buffer.
+                    writeln!(w, "                if self.__idx < self.__values.len() {{")?;
+                    writeln!(w, "                    let v = self.__values[self.__idx];")?;
+                    writeln!(w, "                    self.__idx += 1;")?;
+                    writeln!(w, "                    return v;")?;
+                    writeln!(w, "                }}")?;
+                    writeln!(
+                        w,
+                        "                return loft::codegen_runtime::COROUTINE_EXHAUSTED;"
+                    )?;
+                }
             }
             writeln!(w, "            }}")?;
         }
@@ -335,6 +387,96 @@ impl Output<'_> {
         // ── 3. Factory function ──────────────────────────────────────────────
         let def = self.data.def(def_nr);
         let attrs: Vec<_> = def.attributes.clone();
-        emit_factory_fn(w, &fn_name, &struct_name, &attrs, &segments)
+        let has_for_body = segments
+            .iter()
+            .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
+        emit_factory_fn(w, &fn_name, &struct_name, &attrs, &segments)?;
+        if has_for_body {
+            self.emit_for_body_factory(w, &fn_name, &struct_name, &attrs, &segments)?;
+        }
+        Ok(())
+    }
+
+    /// Emit the factory function for a generator that contains for-loop bodies
+    /// with yields.  Runs the body eagerly, pushing all yielded values to a Vec.
+    fn emit_for_body_factory(
+        &mut self,
+        w: &mut dyn Write,
+        fn_name: &str,
+        struct_name: &str,
+        attrs: &[crate::data::Attribute],
+        segments: &[YieldSegment],
+    ) -> std::io::Result<()> {
+        write!(w, "fn {fn_name}(stores: &mut Stores")?;
+        for attr in attrs {
+            let arg_tp = rust_type(&attr.typedef, &Context::Argument);
+            write!(w, ", var_{}: {arg_tp}", sanitize(&attr.name))?;
+        }
+        writeln!(w, ") -> Box<dyn loft::codegen_runtime::LoftCoroutine> {{")?;
+        // Declare local copies of params for use in the body.
+        for attr in attrs {
+            let aname = sanitize(&attr.name);
+            match &attr.typedef {
+                Type::Text(_) => writeln!(w, "    let var_{aname}: &str = var_{aname};")?,
+                _ => writeln!(w, "    let var_{aname} = var_{aname};")?,
+            }
+        }
+        writeln!(w, "    let mut __values: Vec<i64> = Vec::new();")?;
+        // Run each for-loop body with yield_collect enabled.
+        self.yield_collect = true;
+        for seg in segments {
+            match seg {
+                YieldSegment::ForLoopBody { pre, body } => {
+                    for stmt in pre {
+                        let stmt_code = self.generate_expr_buf(stmt)?;
+                        writeln!(w, "    {stmt_code};")?;
+                    }
+                    let body_code = self.generate_expr_buf(body)?;
+                    writeln!(w, "    {body_code};")?;
+                }
+                YieldSegment::Simple { pre, val } => {
+                    for stmt in pre {
+                        let stmt_code = self.generate_expr_buf(stmt)?;
+                        writeln!(w, "    {stmt_code};")?;
+                    }
+                    let val_code = self.generate_expr_buf(val)?;
+                    writeln!(w, "    __values.push(({val_code}) as i64);")?;
+                }
+                YieldSegment::YieldFrom { pre, init } => {
+                    // Eagerly drain the sub-generator.
+                    for stmt in pre {
+                        let stmt_code = self.generate_expr_buf(stmt)?;
+                        writeln!(w, "    {stmt_code};")?;
+                    }
+                    let factory = self.gen_inner_factory(init)?;
+                    writeln!(w, "    {{")?;
+                    writeln!(w, "        let mut __sub = {factory};")?;
+                    writeln!(w, "        loop {{")?;
+                    writeln!(w, "            let v = __sub.next_i64(stores);")?;
+                    writeln!(
+                        w,
+                        "            if v == loft::codegen_runtime::COROUTINE_EXHAUSTED {{ break; }}"
+                    )?;
+                    writeln!(w, "            __values.push(v);")?;
+                    writeln!(w, "        }}")?;
+                    writeln!(w, "    }}")?;
+                }
+            }
+        }
+        self.yield_collect = false;
+        writeln!(w, "    Box::new({struct_name} {{")?;
+        writeln!(w, "        state: 0,")?;
+        for attr in attrs {
+            let aname = sanitize(&attr.name);
+            match &attr.typedef {
+                Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
+                _ => writeln!(w, "        var_{aname},")?,
+            }
+        }
+        // ForLoopBody: value buffer + index.
+        writeln!(w, "        __values,")?;
+        writeln!(w, "        __idx: 0,")?;
+        writeln!(w, "    }})")?;
+        writeln!(w, "}}\n")
     }
 }

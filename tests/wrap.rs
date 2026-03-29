@@ -66,6 +66,8 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     println!("wasm  {entry:?}");
 
     // Parse
+    let source = std::fs::read_to_string(entry)?;
+    let expected = expected_warnings(&source);
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;
@@ -76,7 +78,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
         println!("{l}");
     }
     if !p.diagnostics.is_empty() {
-        return Err(Error::from(std::io::ErrorKind::InvalidData));
+        check_diagnostics(p.diagnostics.lines(), &expected)?;
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
@@ -103,6 +105,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             reachable: HashSet::new(),
             loop_stack: Vec::new(),
             next_format_count: 0,
+            yield_collect: false,
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }

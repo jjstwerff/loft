@@ -170,8 +170,15 @@ impl Output<'_> {
                 self.output_code_inner(w, val)?;
             }
             Value::Yield(inner) => {
-                write!(w, "yield ")?;
-                self.output_code_inner(w, inner)?;
+                if self.yield_collect {
+                    // Inside a ForLoopBody factory: push to the collector instead.
+                    write!(w, "__values.push((")?;
+                    self.output_code_inner(w, inner)?;
+                    write!(w, ") as i64)")?;
+                } else {
+                    write!(w, "yield ")?;
+                    self.output_code_inner(w, inner)?;
+                }
             }
         }
         Ok(())
@@ -214,10 +221,14 @@ impl Output<'_> {
             if def.name.starts_with("Op") {
                 continue;
             }
-            if def.attributes.len() != param_types.len() {
+            // Total args = visible params + hidden args (closure record, work bufs).
+            // Match on args.len() so capturing lambdas are preferred over non-capturing
+            // ones that share the same visible signature.
+            if def.attributes.len() != args.len() {
                 continue;
             }
-            // Compare parameter types and return type via their Rust type strings.
+            // Compare visible parameter types only (hidden args are closure/work bufs
+            // that are always compatible and differ only by definition number).
             let params_match =
                 def.attributes
                     .iter()

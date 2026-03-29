@@ -359,6 +359,7 @@ impl Test {
             reachable: Default::default(),
             loop_stack: Vec::new(),
             next_format_count: 0,
+            yield_collect: false,
         };
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.

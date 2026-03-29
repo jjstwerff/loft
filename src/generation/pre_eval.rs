@@ -202,6 +202,24 @@ impl Output<'_> {
             self.collect_pre_evals_inner(true_v, result)?;
             return self.collect_pre_evals_inner(false_v, result);
         }
+        // CallRef dispatches to user functions — same hoisting rules as user-defined Call.
+        // The closure arg appears once per candidate match arm (all arms receive the same
+        // allocation block), so use replace_all=true to substitute every occurrence.
+        if let Value::CallRef(_, args) = v {
+            for arg in args {
+                let needs_pre = self.create_stack_var(arg).is_none()
+                    && (matches!(arg, Value::Block(_) | Value::Insert(_))
+                        || self.needs_pre_eval(arg));
+                if needs_pre {
+                    let name = format!("_pre_{}", self.counter);
+                    self.counter += 1;
+                    self.rewrite_code(result, arg, name, true)?;
+                } else {
+                    self.collect_pre_evals_inner(arg, result)?;
+                }
+            }
+            return Ok(());
+        }
         if let Value::Call(d_nr, vals) = v {
             let def_fn = self.data.def(*d_nr);
             if def_fn.rust.is_empty() {

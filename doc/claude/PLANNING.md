@@ -53,6 +53,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [A1 — Parallel workers: extra args + value-struct + text/ref returns](#a1--parallel-workers-extra-arguments-value-struct-returns-and-textreference-returns) *(completed 0.8.3)*
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(deferred to 1.1+)*
   - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(completed 0.8.3)*
+  - [A14 — `par_light`: lightweight parallel loop with pre-allocated stores](#a14--par_light-lightweight-parallel-loop-with-pre-allocated-stores)
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
@@ -1363,6 +1364,33 @@ All steps done.  Step 8 was completed earlier.  Step 10:
 - **10b** — `Value::Iter` arm already present in `scan_inner` (added earlier).
 - **Scope-cycle root cause** — Fixed: `build_scope_parents` now uses `entry().or_insert()`
   to keep the first-seen parent and skips self-loops (`bl.scope == parent`).
+
+---
+
+### A14  `par_light`: lightweight parallel loop with pre-allocated stores
+
+**Sources:** [LIGHT_PAR.md](LIGHT_PAR.md)
+
+**Description:** A `par_light(...)` loop clause that eliminates the per-thread
+`clone_for_worker()` deep copy.  Workers borrow the main thread's stores read-only
+(via shallow locked borrow, O(1) per store) and allocate from a pre-allocated per-thread
+store pool owned by the main thread.  Eligible workers are those that do not create
+stores inside any recursive function call — the compiler validates this by walking
+the call graph and rejecting if any cycle contains `OpNewRef`.
+
+**Speedup**: proportional to total active store bytes × thread count; no benefit for
+stores smaller than ~10 KB.
+
+Steps (see LIGHT_PAR.md for full criteria):
+- **L1** — `Store::borrow_locked_for_light_worker` + sentinel Drop
+- **L2** — `WorkerPool` struct
+- **L3** — `Stores::clone_for_light_worker`
+- **L4** — `run_parallel_light`
+- **L5** — Compiler call-graph analysis + `M` computation
+- **L6** — Parser: `par_light(...)` clause
+- **L7** — Performance benchmark
+
+**Target:** 0.9.0
 
 ---
 

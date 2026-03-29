@@ -758,6 +758,7 @@ pub(crate) fn run_tests(
                             reachable: HashSet::new(),
                             loop_stack: Vec::new(),
                             next_format_count: 0,
+                            yield_collect: false,
                         };
                         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
                             .expect("native codegen write");
