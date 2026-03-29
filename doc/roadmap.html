@@ -12,69 +12,7 @@
 <article>
 <p>Loft is under active development. Everything documented on the language pages works today.</p>
 
-<h2 id="completed-083">Completed in 0.8.3</h2>
-
-<h3 id="closures">Closure capture</h3>
-<p>Lambdas can now read variables from the surrounding scope. The compiler detects which outer variables the lambda body uses and injects them at call time:</p>
-<pre><code>offset = <span class="nm">100</span>;
-shift = <span class="kw">fn</span>(x: <span class="ty">integer</span>) -&gt; <span class="ty">integer</span> { x + offset };
-<span class="fn-call">assert</span>(<span class="fn-call">shift</span>(<span class="nm">5</span>) == <span class="nm">105</span>, <span class="st">"shift(5)"</span>);</code></pre>
-<p>Note: captured lambdas only work when called directly by name in the same scope. Passing a capturing lambda to <code>map</code>/<code>filter</code>/<code>reduce</code> is not yet supported — pass the extra value as an explicit argument instead.</p>
-
-<h3 id="tuples">Tuple types</h3>
-<p>Return multiple values from a function and destructure them at the call site — no struct definition needed:</p>
-<pre><code><span class="kw">fn</span> <span class="fn-name">min_max</span>(lo: <span class="ty">integer</span>, hi: <span class="ty">integer</span>) -&gt; (<span class="ty">integer</span>, <span class="ty">integer</span>) {
-    (lo, hi)
-}
-
-(a, b) = <span class="fn-call">min_max</span>(<span class="nm">1</span>, <span class="nm">5</span>);
-<span class="fn-call">assert</span>(a == <span class="nm">1</span> &amp;&amp; b == <span class="nm">5</span>, <span class="st">"min_max"</span>);</code></pre>
-
-<h3 id="coroutines">Coroutines / generators</h3>
-<p>Lazy sequences with <code>yield</code> — generate values on demand without building a collection:</p>
-<pre><code><span class="kw">fn</span> <span class="fn-name">count_up</span>(start: <span class="ty">integer</span>, stop: <span class="ty">integer</span>) -&gt; <span class="ty">iterator&lt;integer&gt;</span> {
-    <span class="kw">for</span> i <span class="kw">in</span> start..stop {
-        <span class="kw">yield</span> i;
-    }
-}
-
-total = <span class="nm">0</span>;
-<span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">count_up</span>(<span class="nm">1</span>, <span class="nm">6</span>) { total += n; }
-<span class="fn-call">assert</span>(total == <span class="nm">15</span>, <span class="st">"sum 1..5"</span>);</code></pre>
-<p>Use <code>yield from sub_gen()</code> to forward all values from a sub-generator inline. Use <code>next(gen)</code> and <code>exhausted(gen)</code> for manual iteration.</p>
-
-<h3 id="while-loop">While loop</h3>
-<p>The <code>while</code> keyword is now supported as syntax sugar over <code>for</code> + <code>break</code>:</p>
-<pre><code>i = <span class="nm">0</span>;
-<span class="kw">while</span> i &lt; <span class="nm">10</span> { i += <span class="nm">1</span>; }</code></pre>
-
-<h3 id="json">JSON serialisation and parsing</h3>
-<p>Any value can be serialised to JSON using the <code>:j</code> format specifier, and parsed back with <code>Type.parse(text)</code>:</p>
-<pre><code><span class="kw">struct</span> Point { x: <span class="ty">float</span>, y: <span class="ty">float</span> }
-p = Point { x: <span class="nm">1.5</span>, y: <span class="nm">2.5</span> };
-s = <span class="st">"{p:j}"</span>;          <span class="cm">// {"x":1.5,"y":2.5}</span>
-q = Point.<span class="fn-call">parse</span>(s);  <span class="cm">// round-trip</span></code></pre>
-<p>No annotations needed — structs, enums, vectors, and primitives all work automatically.</p>
-
-<h3 id="wasm">WebAssembly runtime</h3>
-<p>Loft programs can run entirely in the browser. The <code>compile_and_run()</code> WASM entry point accepts a JSON array of source files, runs the full pipeline in memory, and returns output and diagnostics. A virtual filesystem bridges loft's file-I/O, random, time, and lock APIs to JavaScript host functions. A suite runner in <code>tests/wasm/</code> validates all docs and scripts against the interpreter.</p>
-
-<h3 id="native-extensions">Native extensions</h3>
-<p>Rust functions can be registered into loft at runtime using the plugin API:</p>
-<ul>
-<li><code>#native "symbol"</code> — annotate a loft function to dispatch to a named Rust symbol</li>
-<li>cdylib shared libraries loaded at startup via <code>libloading</code></li>
-<li>Stable <code>repr(C)</code> <code>LoftPluginCtx</code> ABI published in the <code>loft-plugin-api</code> crate</li>
-</ul>
-
-<h3 id="language-improvements">Language and tooling improvements</h3>
-<ul>
-<li><strong>Exit codes</strong> — <code>loft</code> now exits with code 1 on parse or compile errors, making it usable in scripts and CI pipelines.</li>
-<li><strong>Format specifier errors</strong> — using a numeric radix specifier (<code>:x</code>, <code>:b</code>) or zero-padding (<code>:05</code>) on an incompatible type is now a compile error instead of a silent no-op.</li>
-<li><strong>Generic functions</strong>, <strong>tuples</strong>, and <strong>coroutines</strong> now compile and run correctly in <code>--native</code> mode.</li>
-</ul>
-
-<h2 id="pending-083">Still pending for 0.8.3</h2>
+<h2 id="pending-083">In progress — 0.8.3</h2>
 
 <h3 id="cross-scope-closures">Cross-scope closures (A5.6)</h3>
 <p>Same-scope capture (integers, text, mutable) works. One restriction remains: a capturing lambda returned from a function and called from a different scope does not yet work. The fix requires extending <code>Type::Function</code> to carry the closure DbRef alongside the definition number.</p>
