@@ -44,6 +44,9 @@
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
 <li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
 <li><a href="#25-generics">Generics</a> — <span class="toc-desc">Generic functions</span></li>
+<li><a href="#26-closures">Closures</a> — <span class="toc-desc">Capturing variables from the surrounding scope</span></li>
+<li><a href="#27-coroutines">Coroutines</a> — <span class="toc-desc">Lazy sequences with generators and yield</span></li>
+<li><a href="#28-tuples">Tuples</a> — <span class="toc-desc">Grouping values without defining a struct</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-math">Math</a></li>
@@ -388,7 +391,7 @@
   <span class="fn-call">f</span>(x)
 }</code></pre>
 <h2 id="lambda-expressions">Lambda Expressions</h2>
-<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) when the call site already knows the types: |param| { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce.  The short form does not allow type annotations; use the full fn(…) form when you need explicit types. Note: lambdas cannot read variables from the surrounding scope yet. Pass any needed values as extra function arguments for now.</p>
+<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) when the call site already knows the types: |param| { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce.  The short form does not allow type annotations; use the full fn(…) form when you need explicit types. Lambdas that need outer variables can capture them: see the Closures page.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Passing both arguments explicitly overrides the default.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
@@ -1856,6 +1859,221 @@ for e in data#errors { log_warn(e) }
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call">test_identity</span>();
   <span class="fn-call">test_pick_second</span>();
+}</code></pre>
+</section>
+<section class="print-section" id="26-closures">
+<h1>Closures</h1>
+<p>A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.</p>
+<h2 id="integer-capture">Integer capture</h2>
+<p>A lambda may read any integer variable in scope at the call site. Store the lambda, then call it by name.</p>
+<h2 id="multiple-integer-captures">Multiple integer captures</h2>
+<p>A lambda can read more than one outer variable at once. All are captured at the moment the lambda is called.</p>
+<h2 id="text-capture">Text capture</h2>
+<p>Text values are captured by deep-copy, so they are independent of the original variable after the call.</p>
+<h2 id="capture-timing">Capture timing</h2>
+<p>Loft captures variables at the moment the lambda is called, not at the moment the lambda is written.  If a variable changes between writing and calling the lambda, the lambda sees the updated value.</p>
+<h2 id="current-limitation-captured-lambdas-and-higher-order-functions">Current limitation: captured lambdas and higher-order functions</h2>
+<p>Captured closures only work when called directly by name in the same scope. Passing a capturing lambda as an argument to map, filter, reduce, or a user-defined higher-order function is not yet supported — the hidden closure record is not forwarded through the call. Workaround: pass the extra value as an explicit extra argument instead. Non-capturing lambdas (those that only use their own parameters) work fine with all higher-order functions.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="integer-capture">Integer capture</h2>
+<pre><code>  offset = <span class="nm">100</span>;
+  shift = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + offset };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">shift</span>(<span class="nm">5</span>) == <span class="nm">105</span>, <span class="st">"shift(5): {shift(5)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">shift</span>(-<span class="nm">3</span>) == <span class="nm">97</span>, <span class="st">"shift(-3): {shift(-3)}"</span>);</code></pre>
+<h2 id="multiple-integer-captures">Multiple integer captures</h2>
+<pre><code>  lo = <span class="nm">10</span>;
+  hi = <span class="nm">20</span>;
+  clamp_val = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+    <span class="kw">if</span> x &lt; lo { lo } <span class="kw">else</span> <span class="kw">if</span> x &gt; hi { hi } <span class="kw">else</span> { x }
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamp_val</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"clamp below: {clamp_val(5)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamp_val</span>(<span class="nm">15</span>) == <span class="nm">15</span>, <span class="st">"clamp mid: {clamp_val(15)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamp_val</span>(<span class="nm">25</span>) == <span class="nm">20</span>, <span class="st">"clamp above: {clamp_val(25)}"</span>);</code></pre>
+<h2 id="text-capture">Text capture</h2>
+<pre><code>  greeting = <span class="st">"Hello"</span>;
+  make_msg = <span class="kw">fn</span>(name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="st">"{greeting}, {name}!"</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">make_msg</span>(<span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"greeting capture"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">make_msg</span>(<span class="st">"Loft"</span>) == <span class="st">"Hello, Loft!"</span>, <span class="st">"greeting capture 2"</span>);</code></pre>
+<h2 id="capture-timing">Capture timing</h2>
+<p><code>base</code> is 10 when the lambda is written but 20 when it is called. The lambda sees the value at call time: 20.</p>
+<pre><code>  base = <span class="nm">10</span>;
+  add_base = <span class="kw">fn</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { base + n };
+  base = <span class="nm">20</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add_base</span>(<span class="nm">5</span>) == <span class="nm">25</span>, <span class="st">"sees base=20 at call time: {add_base(5)}"</span>);</code></pre>
+<h2 id="non-capturing-lambdas-with-higher-order-functions">Non-capturing lambdas with higher-order functions</h2>
+<p>No capture needed here — the lambda uses only its own parameter.</p>
+<pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+  doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"doubled[0]: {doubled[0]}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">4</span>] == <span class="nm">10</span>, <span class="st">"doubled[4]: {doubled[4]}"</span>);</code></pre>
+<pre><code>  evens = <span class="fn-call">filter</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { x % <span class="nm">2</span> == <span class="nm">0</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"evens[0]: {evens[0]}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"evens[1]: {evens[1]}"</span>);</code></pre>
+<p>Workaround for captured value + higher-order function: pass the extra value as an explicit argument to a named helper.</p>
+<pre><code>}</code></pre>
+</section>
+<section class="print-section" id="27-coroutines">
+<h1>Coroutines</h1>
+<p>A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
+<h2 id="declaring-a-generator-function">Declaring a generator function</h2>
+<p>A function whose return type is <code>iterator&lt;T&gt;</code> is a generator. <code>yield value</code> emits one item and pauses; the next call resumes from there.</p>
+<h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
+<p>A <code>for</code> loop drives the generator forward automatically. The body runs once per yielded value. Use <code>break</code> to stop early without consuming the rest.</p>
+<h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
+<p>Call <code>next(gen)</code> yourself when you need fine-grained control. <code>exhausted(gen)</code> returns true once there are no more values.</p>
+<h2 id="generators-with-parameters">Generators with parameters</h2>
+<p>A generator function may take any parameters, including text. Parameter values are preserved across yields so the generator can use them throughout its lifetime.</p>
+<h2 id="delegation-with-yield-from">Delegation with yield from</h2>
+<p><code>yield from sub_gen()</code> forwards all values from another generator inline, as if each of its yields appeared at this point directly.</p>
+<h2 id="early-termination-with-break">Early termination with break</h2>
+<p>Stopping a <code>for</code> loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">count_up</span>(start: <span class="ty"><a href="stdlib-types.html">integer</a></span>, stop: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> start..stop {
+    yield i;
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">squares</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=n {
+    yield i * i;
+  }
+}</code></pre>
+<p>Yields the length of <code>s</code> twice — shows that a text parameter survives yields.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">len_twice</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield <span class="bi"><a href="stdlib-text.html">len</a></span>(s);
+  yield <span class="bi"><a href="stdlib-text.html">len</a></span>(s);
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">inner_vals</span>() -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield <span class="nm">10</span>;
+  yield <span class="nm">20</span>;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">outer_combined</span>() -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield <span class="nm">1</span>;
+  yield from <span class="fn-call">inner_vals</span>();
+  yield <span class="nm">2</span>;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">large_range</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=<span class="kw">limit</span> {
+    yield i;
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
+<pre><code>  total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">count_up</span>(<span class="nm">1</span>, <span class="nm">6</span>) {
+    total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"sum 1..5: {total}"</span>);</code></pre>
+<p>Squares via for loop with index tracking.</p>
+<pre><code>  idx = <span class="nm">0</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> <span class="fn-call">squares</span>(<span class="nm">4</span>) {
+    idx += <span class="nm">1</span>;
+    <span class="kw">if</span> idx == <span class="nm">1</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">1</span>, <span class="st">"sq1: {s}"</span>); }
+    <span class="kw">if</span> idx == <span class="nm">2</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">4</span>, <span class="st">"sq2: {s}"</span>); }
+    <span class="kw">if</span> idx == <span class="nm">3</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">9</span>, <span class="st">"sq3: {s}"</span>); }
+    <span class="kw">if</span> idx == <span class="nm">4</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">16</span>, <span class="st">"sq4: {s}"</span>); }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(idx == <span class="nm">4</span>, <span class="st">"squares count: {idx}"</span>);</code></pre>
+<h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
+<pre><code>  gen = <span class="fn-call">count_up</span>(<span class="nm">10</span>, <span class="nm">13</span>);
+  a = <span class="fn-call">next</span>(gen);
+  b = <span class="fn-call">next</span>(gen);
+  c = <span class="fn-call">next</span>(gen);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);</code></pre>
+<p>One extra advance past the last element; exhausted() is true after that.</p>
+<pre><code>  d = <span class="fn-call">next</span>(gen);
+  done = <span class="fn-call">exhausted</span>(gen);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(done, <span class="st">"exhausted after last value"</span>);</code></pre>
+<h2 id="generators-with-parameters">Generators with parameters</h2>
+<p><code>len_twice</code> takes a text parameter and yields its length twice. The text value is preserved across the yield.</p>
+<pre><code>  lt_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">len_twice</span>(<span class="st">"hello"</span>) {
+    lt_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lt_total == <span class="nm">10</span>, <span class="st">"len_twice: {lt_total}"</span>);</code></pre>
+<h2 id="delegation-with-yield-from">Delegation with yield from</h2>
+<pre><code>  yf_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">outer_combined</span>() {
+    yf_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
+<h2 id="early-termination-with-break">Early termination with break</h2>
+<p>Stop after the first 5 values from a 1000-element generator.</p>
+<pre><code>  limit_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">large_range</span>(<span class="nm">1000</span>) {
+    <span class="kw">if</span> n &gt; <span class="nm">5</span> { <span class="kw">break</span>; }
+    limit_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(limit_total == <span class="nm">15</span>, <span class="st">"early break sum 1..5: {limit_total}"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="28-tuples">
+<h1>Tuples</h1>
+<p>A tuple groups a fixed number of values of possibly different types. You do not need to give a tuple a name — use it directly where you need to pass or return multiple values together. Access individual elements with <code>.0</code>, <code>.1</code>, etc.</p>
+<h2 id="creating-tuples">Creating tuples</h2>
+<p>Write the elements in parentheses, separated by commas. The compiler infers the element types from what you put in. You can add an explicit type annotation when needed.</p>
+<h2 id="accessing-elements">Accessing elements</h2>
+<p>Use <code>.0</code>, <code>.1</code>, <code>.2</code>, ... to read individual elements.</p>
+<h2 id="modifying-elements">Modifying elements</h2>
+<p>Tuple elements can be reassigned like ordinary variables.</p>
+<h2 id="tuples-as-function-parameters">Tuples as function parameters</h2>
+<p>Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter (<code>&amp;</code>) gives the function a direct link to the caller's tuple so it can modify individual elements in place.</p>
+<h2 id="returning-tuples">Returning tuples</h2>
+<p>A function can return a tuple to give back more than one value at once.</p>
+<h2 id="destructuring">Destructuring</h2>
+<p>Assign a tuple to multiple names in one step using the <code>(a, b) = expr</code> form. This is concise when a function returns a tuple and you need both values.</p>
+<h2 id="three-or-more-elements">Three or more elements</h2>
+<p>Tuples can have any number of elements.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">min_max</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  <span class="kw">if</span> lo &lt;= hi {
+    (lo, hi)
+  } <span class="kw">else</span> {
+    (hi, lo)
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">swap_ints</span>(pair: &amp;(<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)) {
+  tmp = pair.<span class="nm">0</span>;
+  pair.<span class="nm">0</span> = pair.<span class="nm">1</span>;
+  pair.<span class="nm">1</span> = tmp;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="creating-tuples">Creating tuples</h2>
+<pre><code>  t = (<span class="nm">10</span>, <span class="nm">20</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t.<span class="nm">0</span> == <span class="nm">10</span>, <span class="st">"t.0: {t.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t.<span class="nm">1</span> == <span class="nm">20</span>, <span class="st">"t.1: {t.1}"</span>);</code></pre>
+<p>Type annotation</p>
+<pre><code>  w: (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) = (<span class="nm">3</span>, <span class="nm">4</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(w.<span class="nm">0</span> + w.<span class="nm">1</span> == <span class="nm">7</span>, <span class="st">"annotated sum: {w.0+w.1}"</span>);</code></pre>
+<h2 id="modifying-elements">Modifying elements</h2>
+<pre><code>  v = (<span class="nm">1</span>, <span class="nm">2</span>);
+  v.<span class="nm">0</span> = <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v.<span class="nm">0</span> + v.<span class="nm">1</span> == <span class="nm">12</span>, <span class="st">"after assign: {v.0}+{v.1}"</span>);</code></pre>
+<h2 id="tuples-as-value-parameters">Tuples as value parameters</h2>
+<pre><code>  p = (<span class="nm">10</span>, <span class="nm">20</span>);
+  sum = p.<span class="nm">0</span> + p.<span class="nm">1</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">30</span>, <span class="st">"sum: {sum}"</span>);</code></pre>
+<h2 id="tuples-as-reference-parameters-swap-in-place">Tuples as reference parameters (swap in place)</h2>
+<pre><code>  pair = (<span class="nm">3</span>, <span class="nm">7</span>);
+  <span class="fn-call">swap_ints</span>(pair);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pair.<span class="nm">0</span> == <span class="nm">7</span> &amp;&amp; pair.<span class="nm">1</span> == <span class="nm">3</span>, <span class="st">"after swap: ({pair.0},{pair.1})"</span>);</code></pre>
+<h2 id="returning-a-tuple-from-a-function">Returning a tuple from a function</h2>
+<pre><code>  bounds = <span class="fn-call">min_max</span>(<span class="nm">5</span>, <span class="nm">2</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds.<span class="nm">0</span> == <span class="nm">2</span>, <span class="st">"min: {bounds.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds.<span class="nm">1</span> == <span class="nm">5</span>, <span class="st">"max: {bounds.1}"</span>);</code></pre>
+<p>Already in order</p>
+<pre><code>  bounds2 = <span class="fn-call">min_max</span>(<span class="nm">1</span>, <span class="nm">9</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds2.<span class="nm">0</span> == <span class="nm">1</span>, <span class="st">"min2: {bounds2.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds2.<span class="nm">1</span> == <span class="nm">9</span>, <span class="st">"max2: {bounds2.1}"</span>);</code></pre>
+<h2 id="destructuring">Destructuring</h2>
+<pre><code>  (lo, hi) = <span class="fn-call">min_max</span>(<span class="nm">8</span>, <span class="nm">3</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lo == <span class="nm">3</span>, <span class="st">"destructured lo: {lo}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hi == <span class="nm">8</span>, <span class="st">"destructured hi: {hi}"</span>);</code></pre>
+<h2 id="three-or-more-elements">Three or more elements</h2>
+<pre><code>  u = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u.<span class="nm">0</span> + u.<span class="nm">1</span> + u.<span class="nm">2</span> == <span class="nm">6</span>, <span class="st">"triple sum: {u.0}+{u.1}+{u.2}"</span>);</code></pre>
+<pre><code>  triple = (<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>);
+  triple.<span class="nm">1</span> = <span class="nm">99</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(triple.<span class="nm">0</span> == <span class="nm">10</span> &amp;&amp; triple.<span class="nm">1</span> == <span class="nm">99</span> &amp;&amp; triple.<span class="nm">2</span> == <span class="nm">30</span>,
+    <span class="st">"triple modified: ({triple.0},{triple.1},{triple.2})"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">

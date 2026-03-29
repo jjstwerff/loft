@@ -1,0 +1,121 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Coroutines
+// @TITLE: Lazy sequences with generators and yield
+// A generator function produces values one at a time.
+// Declare the return type as 'iterator<T>' and use 'yield' to emit each value.
+// The function body is suspended between yields and resumed when the next
+// value is requested.  When the body finishes the generator is exhausted.
+// Generators are useful when you want to produce values on demand, stop early
+// with 'break', or chain sequences without building intermediate collections.
+// ## Declaring a generator function
+// A function whose return type is 'iterator<T>' is a generator.
+// 'yield value' emits one item and pauses; the next call resumes from there.
+// ## Iterating with a for loop
+// A 'for' loop drives the generator forward automatically.
+// The body runs once per yielded value.
+// Use 'break' to stop early without consuming the rest.
+// ## Manual advance with next() and exhausted()
+// Call 'next(gen)' yourself when you need fine-grained control.
+// 'exhausted(gen)' returns true once there are no more values.
+// ## Generators with parameters
+// A generator function may take any parameters, including text.
+// Parameter values are preserved across yields so the generator can
+// use them throughout its lifetime.
+// ## Delegation with yield from
+// 'yield from sub_gen()' forwards all values from another generator
+// inline, as if each of its yields appeared at this point directly.
+// ## Early termination with break
+// Stopping a 'for' loop before the generator is exhausted is safe.
+// The abandoned generator frame is freed automatically.
+
+fn count_up(start: integer, stop: integer) -> iterator<integer> {
+  for i in start..stop {
+    yield i;
+  }
+}
+
+fn squares(n: integer) -> iterator<integer> {
+  for i in 1..=n {
+    yield i * i;
+  }
+}
+
+// Yields the length of 's' twice — shows that a text parameter survives yields.
+fn len_twice(s: text) -> iterator<integer> {
+  yield len(s);
+  yield len(s);
+}
+
+fn inner_vals() -> iterator<integer> {
+  yield 10;
+  yield 20;
+}
+
+fn outer_combined() -> iterator<integer> {
+  yield 1;
+  yield from inner_vals();
+  yield 2;
+}
+
+fn large_range(limit: integer) -> iterator<integer> {
+  for i in 1..=limit {
+    yield i;
+  }
+}
+
+fn main() {
+  // ## Iterating with a for loop
+  total = 0;
+  for n in count_up(1, 6) {
+    total += n;
+  }
+  assert(total == 15, "sum 1..5: {total}");
+
+  // Squares via for loop with index tracking.
+  idx = 0;
+  for s in squares(4) {
+    idx += 1;
+    if idx == 1 { assert(s == 1, "sq1: {s}"); }
+    if idx == 2 { assert(s == 4, "sq2: {s}"); }
+    if idx == 3 { assert(s == 9, "sq3: {s}"); }
+    if idx == 4 { assert(s == 16, "sq4: {s}"); }
+  }
+  assert(idx == 4, "squares count: {idx}");
+
+  // ## Manual advance with next() and exhausted()
+  gen = count_up(10, 13);
+  a = next(gen);
+  b = next(gen);
+  c = next(gen);
+  assert(a == 10 && b == 11 && c == 12, "manual next: {a},{b},{c}");
+  // One extra advance past the last element; exhausted() is true after that.
+  d = next(gen);
+  done = exhausted(gen);
+  assert(done, "exhausted after last value");
+
+  // ## Generators with parameters
+  // 'len_twice' takes a text parameter and yields its length twice.
+  // The text value is preserved across the yield.
+  lt_total = 0;
+  for n in len_twice("hello") {
+    lt_total += n;
+  }
+  assert(lt_total == 10, "len_twice: {lt_total}");
+
+  // ## Delegation with yield from
+  yf_total = 0;
+  for n in outer_combined() {
+    yf_total += n;
+  }
+  assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
+
+  // ## Early termination with break
+  // Stop after the first 5 values from a 1000-element generator.
+  limit_total = 0;
+  for n in large_range(1000) {
+    if n > 5 { break; }
+    limit_total += n;
+  }
+  assert(limit_total == 15, "early break sum 1..5: {limit_total}");
+}

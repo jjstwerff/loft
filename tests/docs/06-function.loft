@@ -98,8 +98,7 @@ fn apply_fn(f:  fn(integer) -> integer, x: integer) -> integer {
 // Both forms work anywhere a function reference is expected — especially with
 // map, filter, and reduce.  The short form does not allow type annotations;
 // use the full fn(…) form when you need explicit types.
-// Note: lambdas cannot read variables from the surrounding scope yet.
-// Pass any needed values as extra function arguments for now.
+// Lambdas that need outer variables can capture them: see the Closures page.
 
 
 fn main() {

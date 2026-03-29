@@ -133,6 +133,7 @@ give each item a traceable history.
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
 | [THREADING.md](doc/claude/THREADING.md) | Parallel for-loop (`par(...)`), `fn <name>` references, runtime parallel execution |
 | [SAFE.md](doc/claude/SAFE.md) | Thread safety analysis — parallel worker store isolation, risks, and mitigation designs |
+| [LIGHT_PAR.md](doc/claude/LIGHT_PAR.md) | `par_light(...)` design — shallow-borrow stores + pre-allocated pool for non-recursive workers |
 | [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
 | [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
 | [DOC.md](doc/claude/DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |

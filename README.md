@@ -40,7 +40,9 @@ distance: 5.0
 - **String interpolation** — `"{expr}"` with format specifiers
 - **Parallel for** — `par(...)` distributes work across CPU cores
 - **JSON** — serialise with `"{value:j}"`, deserialise with `Type.parse(json)`
-- **Lambdas** — `fn(x: integer) -> integer { x * 2 }` or `|x| { x * 2 }`
+- **Lambdas and closures** — `fn(x: integer) -> integer { x * 2 }` or `|x| { x * 2 }`; lambdas capture outer variables automatically
+- **Generators** — `iterator<T>` return type with `yield`; lazy sequences and `yield from` delegation
+- **Tuples** — multi-value returns `(integer, text)`, destructuring `(a, b) = fn()`
 - **Native compilation** — compile to a native binary via `rustc` or to WebAssembly
 - **File I/O, logging, PNG images** — batteries included
 
@@ -93,7 +95,7 @@ To build locally: `cargo run --bin gendoc`, then open `doc/index.html`.
 
 ## Known limitations (0.8.x)
 
-- **No closure capture** — lambdas work but cannot read variables from the surrounding scope; pass needed values as extra arguments
+- **Closure scope** — captured lambdas only work when called directly by name in the same scope; passing capturing lambdas to `map`/`filter`/`reduce` is not yet supported
 - **No REPL** — interactive mode is planned for 0.9.0
 
 ---

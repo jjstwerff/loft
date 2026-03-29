@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Tuples
+// @TITLE: Grouping values without defining a struct
+// A tuple groups a fixed number of values of possibly different types.
+// You do not need to give a tuple a name — use it directly where you need
+// to pass or return multiple values together.
+// Access individual elements with '.0', '.1', etc.
+// ## Creating tuples
+// Write the elements in parentheses, separated by commas.
+// The compiler infers the element types from what you put in.
+// You can add an explicit type annotation when needed.
+// ## Accessing elements
+// Use '.0', '.1', '.2', ... to read individual elements.
+// ## Modifying elements
+// Tuple elements can be reassigned like ordinary variables.
+// ## Tuples as function parameters
+// Pass a tuple to a function by value (a copy) or by reference.
+// A value parameter gets its own copy — changes inside the function do not
+// affect the caller.
+// A reference parameter ('&') gives the function a direct link to the caller's
+// tuple so it can modify individual elements in place.
+// ## Returning tuples
+// A function can return a tuple to give back more than one value at once.
+// ## Destructuring
+// Assign a tuple to multiple names in one step using the '(a, b) = expr' form.
+// This is concise when a function returns a tuple and you need both values.
+// ## Three or more elements
+// Tuples can have any number of elements.
+
+fn min_max(lo: integer, hi: integer) -> (integer, integer) {
+  if lo <= hi {
+    (lo, hi)
+  } else {
+    (hi, lo)
+  }
+}
+
+fn swap_ints(pair: &(integer, integer)) {
+  tmp = pair.0;
+  pair.0 = pair.1;
+  pair.1 = tmp;
+}
+
+fn main() {
+  // ## Creating tuples
+  t = (10, 20);
+  assert(t.0 == 10, "t.0: {t.0}");
+  assert(t.1 == 20, "t.1: {t.1}");
+
+  // Type annotation
+  w: (integer, integer) = (3, 4);
+  assert(w.0 + w.1 == 7, "annotated sum: {w.0+w.1}");
+
+  // ## Modifying elements
+  v = (1, 2);
+  v.0 = 10;
+  assert(v.0 + v.1 == 12, "after assign: {v.0}+{v.1}");
+
+  // ## Tuples as value parameters
+  p = (10, 20);
+  sum = p.0 + p.1;
+  assert(sum == 30, "sum: {sum}");
+
+  // ## Tuples as reference parameters (swap in place)
+  pair = (3, 7);
+  swap_ints(pair);
+  assert(pair.0 == 7 && pair.1 == 3, "after swap: ({pair.0},{pair.1})");
+
+  // ## Returning a tuple from a function
+  bounds = min_max(5, 2);
+  assert(bounds.0 == 2, "min: {bounds.0}");
+  assert(bounds.1 == 5, "max: {bounds.1}");
+
+  // Already in order
+  bounds2 = min_max(1, 9);
+  assert(bounds2.0 == 1, "min2: {bounds2.0}");
+  assert(bounds2.1 == 9, "max2: {bounds2.1}");
+
+  // ## Destructuring
+  (lo, hi) = min_max(8, 3);
+  assert(lo == 3, "destructured lo: {lo}");
+  assert(hi == 8, "destructured hi: {hi}");
+
+  // ## Three or more elements
+  u = (1, 2, 3);
+  assert(u.0 + u.1 + u.2 == 6, "triple sum: {u.0}+{u.1}+{u.2}");
+
+  triple = (10, 20, 30);
+  triple.1 = 99;
+  assert(triple.0 == 10 && triple.1 == 99 && triple.2 == 30,
+    "triple modified: ({triple.0},{triple.1},{triple.2})");
+}

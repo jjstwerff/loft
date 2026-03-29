@@ -230,3 +230,4 @@ fn main() {
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
 - [STDLIB.md](STDLIB.md) — `par(...)` parallel for-loop user-facing API
 - [PLANNING.md](PLANNING.md) — A1 (parallel workers: extra args + text/ref returns)
+- [LIGHT_PAR.md](LIGHT_PAR.md) — `par_light(...)` design: shallow-borrow stores + pre-allocated pool

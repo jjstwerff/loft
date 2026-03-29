@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Coroutines</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <span class="cur">Coroutines</span> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Coroutines</h1>
+<article>
+<p>A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
+<h2 id="declaring-a-generator-function">Declaring a generator function</h2>
+<p>A function whose return type is <code>iterator&lt;T&gt;</code> is a generator. <code>yield value</code> emits one item and pauses; the next call resumes from there.</p>
+<h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
+<p>A <code>for</code> loop drives the generator forward automatically. The body runs once per yielded value. Use <code>break</code> to stop early without consuming the rest.</p>
+<h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
+<p>Call <code>next(gen)</code> yourself when you need fine-grained control. <code>exhausted(gen)</code> returns true once there are no more values.</p>
+<h2 id="generators-with-parameters">Generators with parameters</h2>
+<p>A generator function may take any parameters, including text. Parameter values are preserved across yields so the generator can use them throughout its lifetime.</p>
+<h2 id="delegation-with-yield-from">Delegation with yield from</h2>
+<p><code>yield from sub_gen()</code> forwards all values from another generator inline, as if each of its yields appeared at this point directly.</p>
+<h2 id="early-termination-with-break">Early termination with break</h2>
+<p>Stopping a <code>for</code> loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">count_up</span>(start: <span class="ty"><a href="stdlib-types.html">integer</a></span>, stop: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> start..stop {
+    yield i;
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">squares</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=n {
+    yield i * i;
+  }
+}</code></pre>
+<p>Yields the length of <code>s</code> twice — shows that a text parameter survives yields.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">len_twice</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield <span class="bi"><a href="stdlib-text.html">len</a></span>(s);
+  yield <span class="bi"><a href="stdlib-text.html">len</a></span>(s);
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">inner_vals</span>() -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield <span class="nm">10</span>;
+  yield <span class="nm">20</span>;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">outer_combined</span>() -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield <span class="nm">1</span>;
+  yield from <span class="fn-call">inner_vals</span>();
+  yield <span class="nm">2</span>;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">large_range</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=<span class="kw">limit</span> {
+    yield i;
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
+<pre><code>  total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">count_up</span>(<span class="nm">1</span>, <span class="nm">6</span>) {
+    total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"sum 1..5: {total}"</span>);</code></pre>
+<p>Squares via for loop with index tracking.</p>
+<pre><code>  idx = <span class="nm">0</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> <span class="fn-call">squares</span>(<span class="nm">4</span>) {
+    idx += <span class="nm">1</span>;
+    <span class="kw">if</span> idx == <span class="nm">1</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">1</span>, <span class="st">"sq1: {s}"</span>); }
+    <span class="kw">if</span> idx == <span class="nm">2</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">4</span>, <span class="st">"sq2: {s}"</span>); }
+    <span class="kw">if</span> idx == <span class="nm">3</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">9</span>, <span class="st">"sq3: {s}"</span>); }
+    <span class="kw">if</span> idx == <span class="nm">4</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">16</span>, <span class="st">"sq4: {s}"</span>); }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(idx == <span class="nm">4</span>, <span class="st">"squares count: {idx}"</span>);</code></pre>
+<h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
+<pre><code>  gen = <span class="fn-call">count_up</span>(<span class="nm">10</span>, <span class="nm">13</span>);
+  a = <span class="fn-call">next</span>(gen);
+  b = <span class="fn-call">next</span>(gen);
+  c = <span class="fn-call">next</span>(gen);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);</code></pre>
+<p>One extra advance past the last element; exhausted() is true after that.</p>
+<pre><code>  d = <span class="fn-call">next</span>(gen);
+  done = <span class="fn-call">exhausted</span>(gen);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(done, <span class="st">"exhausted after last value"</span>);</code></pre>
+<h2 id="generators-with-parameters">Generators with parameters</h2>
+<p><code>len_twice</code> takes a text parameter and yields its length twice. The text value is preserved across the yield.</p>
+<pre><code>  lt_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">len_twice</span>(<span class="st">"hello"</span>) {
+    lt_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lt_total == <span class="nm">10</span>, <span class="st">"len_twice: {lt_total}"</span>);</code></pre>
+<h2 id="delegation-with-yield-from">Delegation with yield from</h2>
+<pre><code>  yf_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">outer_combined</span>() {
+    yf_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
+<h2 id="early-termination-with-break">Early termination with break</h2>
+<p>Stop after the first 5 values from a 1000-element generator.</p>
+<pre><code>  limit_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">large_range</span>(<span class="nm">1000</span>) {
+    <span class="kw">if</span> n &gt; <span class="nm">5</span> { <span class="kw">break</span>; }
+    limit_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(limit_total == <span class="nm">15</span>, <span class="st">"early break sum 1..5: {limit_total}"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>
