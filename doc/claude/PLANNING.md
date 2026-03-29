@@ -776,41 +776,199 @@ implemented.
 **Effort:** A5.6b.1 Medium · A5.6b.2 Small · A5.6c Medium
 **Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c completed; A5.6 capture-at-definition-time also 0.8.3)
 
-**A5.6 — Full capture-at-definition-time semantics** (1.1+, depends on A5.6b.1–A5.6c):
-After A5.6b.1, A5.6b.2, and A5.6c are resolved, the remaining gaps in closure
-semantics are:
+**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** (0.8.3, depends on A5.6b.1–A5.6c ✓):
+After A5.6b.1, A5.6b.2, and A5.6c are implemented, the last open item for
+`closure_capture_text` is the **cross-scope** pattern: a capturing lambda returned
+from a function and then called from outside.  Two distinct problems remain:
 
-1. **Lambdas as first-class values stored in collections or struct fields.**
-   Currently `closure_vars` only maps fn-ref variables created by direct assignment.
-   If a lambda is stored in a vector or struct field, the closure record association
-   is lost and the hidden `__closure` arg is never injected at call sites.
-   Fix: extend `closure_vars` to handle indirect storage, or store the closure DbRef
-   alongside the fn-ref `d_nr` value as a single `(d_nr, closure_dbref)` pair in a
-   16-byte fn-ref slot (requires opcode changes).
+---
 
-2. **Lambda re-definition (reassignment of a fn-ref variable).**
-   If `f = fn(x) { count += x }` is followed by `f = fn(x) { count -= x }`, the
-   second assignment clears `closure_vars[f]` and sets a new closure record.  The
-   old closure record must be freed.  `get_free_vars` must emit `OpFreeRef` for the
-   OLD closure record at the reassignment point.
+#### The opcode problem: `Type::Function` is 4 bytes — no room for closure DbRef
 
-3. **Returning a closure from a function.**
-   `fn make_adder(n: integer) -> fn(integer) -> integer { fn(x: integer) -> integer { n + x } }`
-   The closure record must outlive `make_adder`'s stack frame.  Currently the
-   `__clos` variable lives on `make_adder`'s stack and is freed when `make_adder`
-   returns — before the returned fn-ref can be called.  Fix: the closure record must
-   be heap-allocated (already the case via `OpDatabase`) and returned alongside the
-   fn-ref as a `(d_nr, closure_dbref)` pair; `make_greeter` in the failing test
-   exercises exactly this scenario.
+`size(Type::Function, _)` returns 4 (same arm as `Type::Integer` in
+`src/variables/mod.rs:995`).  `fn_call_ref` in `state/mod.rs:221` reads exactly 4
+bytes: `*get_var::<i32>(fn_var)` = the d_nr.
 
-4. **Closure lifetime and sharing.**
-   When the same lambda is called multiple times, the closure record is shared across
-   all calls.  After A5.6c adds write-back, each call to `f(10)` reads the closure
-   record, modifies it, and writes back.  Concurrent use (via `par()`) would require
-   locking or per-call copies — deferred to the parallel safety audit.
+A closure DbRef is 12 bytes (store_nr + rec + pos — same layout as every other
+`DbRef`).  When `make_greeter` returns the inner lambda as its return value, only
+the 4-byte d_nr lands on the caller's stack; the 12-byte DbRef for the closure
+record has nowhere to go and is lost.  The closure record itself stays alive in the
+store (it was heap-allocated via `OpDatabase`), but no pointer to it survives the
+return — so the lambda body's `__closure` parameter can never be populated.
 
-**Effort:** High (multiple sub-items, some requiring opcode-level changes)
-**Depends on:** A5.6b.1, A5.6b.2, A5.6c
+**Fix — 16-byte fn-ref slot:**
+
+```
+offset 0..4:  d_nr (i32)        — function definition index
+offset 4..8:  store_nr (i32) ─┐
+offset 8..12: rec (i32)        ├─ closure DbRef (12 bytes; all-zero = no closure)
+offset 12..16: pos (i32)      ─┘
+```
+
+`size(Type::Function, _)` → 16 (move `Type::Function` out of the `4`-byte arm in
+`src/variables/mod.rs:995`; add a new arm `Type::Function(_, _) => 4 + size_of::<DbRef>() as u16`).
+
+**Emitting the fn-ref value (vectors.rs `emit_lambda_code`):**
+
+Non-capturing lambdas: `*code = Value::Int(d_nr as i32)` unchanged — `OpPutInt`
+writes d_nr to bytes 0..4; bytes 4..16 stay zero (zeroed by `OpReserveFrame`).
+
+Capturing lambdas: emit a `v_block` that:
+1. Runs the existing `alloc_steps` to allocate and fill the closure record into work
+   var `w` (type `Type::Reference`).
+2. Emits `v_set(fn_ref_var, Value::Int(d_nr as i32))` — writes d_nr to bytes 0..4
+   of the new 16-byte work var `fn_ref_var` (type `Type::Function`).
+3. Emits `cl("OpStoreClosure", [Var(fn_ref_var), Var(w)])` — a new opcode that
+   copies the 12-byte DbRef from `w`'s stack slot into `fn_ref_var`'s bytes 4..16.
+4. Yields `Value::Var(fn_ref_var)`.
+
+Then **drop** `self.last_closure_alloc` — the closure is now embedded in the fn-ref
+value and no longer needs to be injected separately at call sites.
+
+**New opcode: `OpStoreClosure(fn_ref_var: u16, closure_var: u16)`** (fill.rs):
+Reads the absolute stack position of `fn_ref_var` and `closure_var`; copies 12 bytes
+from `closure_var`'s slot to `fn_ref_var`'s slot at byte offset 4.  No stack push/pop.
+
+**Calling through the 16-byte fn-ref (state/mod.rs `fn_call_ref`):**
+
+```rust
+pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
+    let d_nr = *self.get_var::<i32>(fn_var) as usize;
+    // Read closure DbRef from bytes 4..16 of the 16-byte fn-ref slot.
+    // The slot start is at (stack_pos - fn_var); byte 4 is one i32 further.
+    let store_nr = *self.get_var::<i32>(fn_var - 4);   // fn_var_abs + 4
+    let has_closure = store_nr != -1;  // -1 is the null sentinel for store_nr
+    let total = arg_size + if has_closure { size_of::<DbRef>() as u16 } else { 0 };
+    if has_closure {
+        let rec = *self.get_var::<i32>(fn_var - 8);
+        let pos = *self.get_var::<i32>(fn_var - 12);
+        // Push DbRef (12 bytes) onto the stack as __closure argument
+        self.push_stack(store_nr);
+        self.push_stack(rec);
+        self.push_stack(pos);
+    }
+    let code_pos = self.fn_positions[d_nr] as i32;
+    self.fn_call(d_nr as u32, total, code_pos);
+}
+```
+
+Note: the fn-ref variable's absolute position is `stack_pos - fn_var`.  Because the
+stack grows upward, `fn_var_abs + 4` is referenced as `stack_pos - (fn_var - 4)`.
+Verify the offset arithmetic matches `get_var`'s addressing in the implementation.
+
+**Call-site codegen (parser/control.rs `try_fn_ref_call`, zero-param path):**
+
+Remove the `last_closure_alloc.take()` and `closure_vars.get(&v_nr)` injection.
+The closure is now pushed by `fn_call_ref` at runtime from the embedded DbRef —
+no parser-level injection needed.  `generate_call_ref` is unchanged (already
+simplified by A5.6b.2): all args in `converted` are visible params and work bufs.
+
+**`generate_var` for `Type::Function` (codegen.rs line 1210):**
+
+Change from `OpVarInt` (4 bytes) to a new `OpVarFnRef` (16 bytes).  This is the
+read side of the 16-byte push: push all 16 bytes of the fn-ref slot onto the stack
+so fn-ref values can be passed, returned, and assigned.
+
+`OpVarFnRef` implementation (fill.rs): read `pos: u16` from bytecode; push 16 bytes
+starting at `stack_pos - pos` onto the stack (similar to `OpVarRef` which pushes 12
+bytes, but 4 bytes larger).
+
+**`OpPutInt` for `Type::Function` (codegen.rs lines 1521, 1210):**
+
+Assignment `v_set(fn_ref_var, Value::Int(d_nr))` still uses `OpPutInt` — it writes
+4 bytes to the variable's slot at offset 0 (the d_nr).  Bytes 4..16 are untouched
+(already zeroed by `OpReserveFrame` or set by a preceding `OpStoreClosure`).
+So `OpPutInt` at call sites for fn-ref assignment is **correct as-is** when the
+RHS is `Value::Int(d_nr)`.
+
+For the case where a fn-ref is copied variable-to-variable (`f = g` where both are
+`Type::Function`), use `OpVarFnRef` to push 16 bytes then `OpPutFnRef` (new) to
+store them — OR reuse `OpPutRef`-style logic for 16 bytes.
+
+---
+
+#### The parser problem: `expr(args)` chained calls not handled
+
+`parse_part` (operators.rs:277) loops on `.` and `[` only.  After
+`make_greeter("Hello")` returns `Type::Function`, the `("world")` token is not
+consumed as a chained call — it is parsed as a separate parenthesised expression.
+
+**Fix (operators.rs `parse_part`):**
+
+Extend the loop to handle `(` when `t` is `Type::Function`:
+
+```rust
+while self.lexer.peek_token(".")
+    || self.lexer.peek_token("[")
+    || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+{
+    if self.lexer.has_token("(") {
+        if let Type::Function(param_types, ret_type) = t.clone() {
+            // Store fn-ref expression in a work var so CallRef can name it.
+            let fn_work = self.create_unique("__fnref_tmp", &t);
+            if !self.first_pass {
+                let orig = std::mem::replace(code, Value::Var(fn_work));
+                // emit: fn_work = <fn_ref_expression>
+                // (parse_code will insert the assignment via inline-ref logic)
+                // Actually: wrap in a block: { fn_work = orig; fn_work }
+                // ... see implementation note below
+            }
+            t = self.call_fn_work_var(fn_work, param_types, *ret_type);
+        }
+    } else { /* existing . and [ handlers */ }
+}
+```
+
+`call_fn_work_var(work_var, param_types, ret_type)`: parse argument list, emit
+`Value::CallRef(work_var, args)`, return `ret_type`.  Because the closure DbRef is
+embedded in the 16-byte fn-ref slot of `work_var`, `fn_call_ref` pushes it at
+runtime — no explicit closure injection needed.
+
+**Implementation note:** Storing `orig` into `fn_work` before the call requires
+either:
+(a) Wrapping in a `v_block([v_set(fn_work, orig), Value::CallRef(fn_work, args)], ret_type)`, or
+(b) Using the inline-ref temp pattern from `parse_part`'s existing chained-ref logic
+    (lines 342–361) — mark `fn_work` as an inline-ref temp; `parse_code` inserts the
+    null-init.
+
+Option (a) is simpler for the first implementation.
+
+---
+
+#### Remaining deferred sub-items (post-0.8.3)
+
+After the 16-byte fn-ref lands, these edge cases remain deferred:
+
+1. **Lambda re-definition:** if `f = fn(x) { ... }` is followed by `f = fn(x) { ... }`,
+   the old closure record (bytes 4..16 of the old fn-ref) must be freed before overwriting.
+   `get_free_vars` must emit `OpFreeRef` reading from the fn-ref slot before the
+   `OpPutInt`/`OpStoreClosure` of the new lambda.
+
+2. **Lambdas in collections / struct fields:** `closure_vars` is irrelevant with 16-byte
+   fn-refs; the closure DbRef travels with the fn-ref value.  But for collections,
+   `OpVarFnRef` / store operations need to work correctly for the 16-byte size.
+
+3. **Concurrent sharing:** two parallel workers calling the same closure simultaneously
+   share the closure record.  Requires per-call copy or locking — deferred to the
+   parallel safety audit.
+
+---
+
+**Files changed:**
+
+| File | Change |
+|------|--------|
+| `src/variables/mod.rs` | `size(Type::Function)` → 16 |
+| `src/fill.rs` | Add `op_store_closure`, `op_var_fn_ref`; update `call_ref` if needed |
+| `src/state/mod.rs` | `fn_call_ref`: read closure from bytes 4..16, push if present |
+| `src/state/codegen.rs` | `generate_var`: `OpVarFnRef` for Function; check all `Type::Function` arms |
+| `src/parser/vectors.rs` | `emit_lambda_code`: `OpStoreClosure` for capturing lambdas |
+| `src/parser/control.rs` | Remove closure injection from `try_fn_ref_call` and zero-param path |
+| `src/parser/operators.rs` | `parse_part`: handle `(` after `Type::Function` expressions |
+| `tests/expressions.rs` | Remove `#[ignore]` from `closure_capture_text`; add intermediate test |
+
+**Effort:** High (8 files, 2 new opcodes, parser and runtime changes)
+**Depends on:** A5.6b.1 ✓, A5.6b.2 ✓, A5.6c ✓
 **Target:** 0.8.3
 
 ---

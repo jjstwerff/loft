@@ -19,39 +19,38 @@ build can be retested quickly.
 
 ---
 
-## C1 — Lambda closure capture: one remaining restriction
+## C1 — Lambda closure capture: cross-scope restriction (A5.6)
 
-Read-only capture of non-text values (integers, floats, booleans, enums) works
-in both debug and release builds.  Mutable capture (`count += x`) also works (A5.6a).
-One restriction remains:
+Same-scope closure capture (all types — integers, text, mutable) works (A5.6a–c ✓).
+One restriction remains: **cross-scope closures**, where a capturing lambda is
+returned from a function and called from a different scope.
 
-1. **Text capture not supported** — two runtime bugs block it:
-   - **Bug 1 (stack layout):** `OpSetText`/`OpGetText` on the closure record produces a garbage
-     `DbRef` in the lambda's stack frame, causing store-bounds panics at runtime.
-   - **Bug 2 (text work buffers):** Text-returning lambdas via `CallRef` require the caller to
-     pre-allocate a text work buffer (`RefVar(Text)` argument), which `generate_call` does but
-     `generate_call_ref` does not.  `codegen.rs:generate_call_ref` has a `debug_assert` that
-     fires immediately in debug builds when this case is hit.
-   Root cause of Bug 1: `OpCallRef` stack frame setup vs. where the lambda's bytecode expects
-   `__closure` to live; needs a dedicated investigation with targeted logging.
+Root cause (two parts, detailed design in PLANNING.md § A5.6):
 
-**Note:** The current implementation captures variable values at the call site,
-not at the point of lambda definition.  `closure_capture_after_change` documents
-this: `x = 10; f = fn(y) { x + y }; x = 99; f(5)` returns 104, not 15.
-Capture-at-definition-time is a deferred improvement.
+1. **`Type::Function` is 4 bytes (d_nr only).** When `make_greeter` returns the inner
+   lambda, only the 4-byte d_nr fits in the return slot; the closure record's 12-byte
+   DbRef is lost.  Fix: extend `Type::Function` to 16 bytes; `fn_call_ref` reads the
+   embedded DbRef and pushes it as `__closure` at runtime.
 
-**Reproducer (restriction 1):**
+2. **Parser does not handle `expr(args)` chained calls.** `parse_part` only loops on
+   `.` and `[`; `make_greeter("Hello")("world")` parses the `("world")` as a separate
+   expression rather than a chained call.  Fix: extend `parse_part` to handle `(` when
+   the current type is `Type::Function`.
+
+**Note:** Capture-at-definition-time is not guaranteed — `closure_capture_after_change`
+shows `x = 10; f = fn(y) { x + y }; x = 99; f(5)` returns 104.
+
+**Reproducer:**
 ```loft
-fn test() {
-  prefix = "Hello";
-  greet = fn(name: text) -> text { "{prefix}, {name}!" };  // text capture — runtime crash
-  greet("World");
+fn make_greeter(prefix: text) -> fn(text) -> text {
+    fn(name: text) -> text { "{prefix} {name}" }
 }
+make_greeter("Hello")("world")  // should be "Hello world" — crashes/wrong output
 ```
 
-**Tests:** `tests/expressions.rs` — `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` (all pass); `closure_capture_text` (`#[ignore]`, restriction 1); `tests/parse_errors.rs` — `capture_detected` (passes, mutable capture)
-**Workaround:** pass captured text values as explicit function arguments.
-**Planned fix:** A5.6 in [ROADMAP.md](ROADMAP.md) (0.8.3); needs investigation of `OpCallRef` stack layout + `generate_call_ref` text buffer allocation.
+**Tests:** `closure_capture_integer` / `closure_capture_multiple` / `closure_capture_after_change` / `closure_capture_text_integer_return` / `closure_capture_text_return` (all pass); `closure_capture_text` (`#[ignore]` — A5.6 cross-scope, 0.8.3).
+**Workaround:** pass captured values as explicit function arguments.
+**Planned fix:** A5.6 in [PLANNING.md](PLANNING.md) and [ROADMAP.md](ROADMAP.md) (0.8.3) — 16-byte fn-ref + parser `parse_part` fix.
 **Docs:** [LOFT.md](LOFT.md) § Lambda expressions.
 
 ---

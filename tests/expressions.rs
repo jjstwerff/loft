@@ -345,9 +345,9 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6b: text capture blocked by two runtime bugs — (1) OpSetText/OpGetText on \
-closure records produces garbage DbRef in the lambda stack frame; (2) text-returning lambdas \
-via CallRef don't allocate text work variable buffers. See CAVEATS.md C1."]
+#[ignore = "A5.6: cross-scope closure — (1) Type::Function is 4 bytes (d_nr only), closure \
+DbRef is lost when make_greeter returns; (2) parse_part does not handle expr(args) chained \
+calls. Same-scope text capture works (closure_capture_text_return passes). See CAVEATS.md C1."]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(
