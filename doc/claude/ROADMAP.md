@@ -85,6 +85,13 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`       | S  | ✓      |              | 01_code.loft               |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision        | MH | ✓      | A2.2         | control.rs, main.rs        |
 | A2.4      | ↳ `--debug` per-type safety logging                  | M  | ✓      | A2.2         | fill.rs, native.rs         |
+| A8        | Slicing & comprehension on `sorted` / `index`        | M  | ✓      |              | SORTED_SLICE.md            |
+| A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S | ✓  |              | fields.rs, codegen_runtime.rs |
+| A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)       | XS | ✓     | A8.1         | fields.rs                  |
+| A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)| M  | ✓     |              | fields.rs                  |
+| A8.4      | ↳ Comprehensions on key ranges                       | S  | ✓     | A8.1         | tests/docs/                |
+| A8.5      | ↳ Reverse range iteration (`rev(col[lo..hi])`)       | S  | ✓     | A8.1         | fields.rs, objects.rs      |
+| A8.6      | ↳ `match` on collection results (tests + docs)       | S  | ✓     |              | tests/docs/                |
 | P2        | REPL / interactive mode                              | H  | ✓      | L1           | PLANNING.md P2             |
 | P2.1      | ↳ Input completeness detection                       | S  | ✓      |              | new repl.rs                |
 | P2.2      | ↳ Single-statement execution                         | M  | ✓      | P2.1         | main.rs, repl.rs           |

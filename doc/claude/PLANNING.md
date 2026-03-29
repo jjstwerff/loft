@@ -539,6 +539,27 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 
 ---
 
+### A8  Slicing & comprehension on `sorted` / `index`
+**Sources:** [SORTED_SLICE.md](SORTED_SLICE.md)
+**Description:** Extend `sorted<T>` and `index<T>` with key-range slicing, open-ended
+bounds, partial-key match iteration, and vector comprehensions over key ranges.
+
+**Features:**
+- `col[lo..]`, `col[..hi]`, `col[..]` — open-ended range iterators (A8.1)
+- `sorted[lo..hi]` — range slicing on sorted (A8.2; index already works)
+- `col[k1]` on multi-key index — partial-key match iterator (A8.3)
+- `[for v in col[lo..hi] { v.f }]` — comprehensions on key ranges (A8.4)
+- `rev(col[lo..hi])` — reverse range iteration (A8.5)
+- `match col[key] { null → ..., elm → ... }` — documented + tested (A8.6)
+
+**Fix path:** See [SORTED_SLICE.md](SORTED_SLICE.md) — 6-step plan, all work in
+`src/parser/fields.rs` and `src/codegen_runtime.rs`. No new opcodes.
+
+**Effort:** M
+**Target:** 0.9.0
+
+---
+
 ### A4  Spatial index operations (full implementation)
 **Sources:** PROBLEMS #22
 **Description:** `spacial<T>` collection type: insert, lookup, and iteration operations
