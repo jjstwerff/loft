@@ -85,6 +85,11 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`       | S  | ✓      |              | 01_code.loft               |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision        | MH | ✓      | A2.2         | control.rs, main.rs        |
 | A2.4      | ↳ `--debug` per-type safety logging                  | M  | ✓      | A2.2         | fill.rs, native.rs         |
+| T1.9      | Tuple destructuring in `match`                       | S  | ✓      |              | TUPLE_MATCH.md             |
+| T1.9-1    | ↳ `Type::Tuple` dispatch in `parse_match`            | XS | ✓      |              | control.rs                 |
+| T1.9-2    | ↳ `parse_tuple_match` — arm loop, if-chain           | S  | ✓      |              | control.rs                 |
+| T1.9-3    | ↳ `parse_tuple_elem_pattern` — wildcard/binding/literal/range/nested | S | ✓ | | control.rs |
+| T1.9-4    | ↳ Tests + doc additions (`28-tuples.loft`)           | S  | ✓      |              | tests/docs/                |
 | A8        | Slicing & comprehension on `sorted` / `index`        | M  | ✓      |              | SORTED_SLICE.md            |
 | A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S | ✓  |              | fields.rs, codegen_runtime.rs |
 | A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)       | XS | ✓     | A8.1         | fields.rs                  |

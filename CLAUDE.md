@@ -150,6 +150,7 @@ give each item a traceable history.
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, stack layout |
+| [TUPLE_MATCH.md](doc/claude/TUPLE_MATCH.md) | T1.9: tuple destructuring in match — element patterns, exhaustiveness, IR lowering |
 | [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
