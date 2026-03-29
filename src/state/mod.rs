@@ -331,12 +331,12 @@ impl State {
     /// live at the last yield point.
     pub fn free_coroutine(&mut self, idx: usize) {
         if idx > 0 && idx < self.coroutines.len() {
-            if let Some(frame) = self.coroutines[idx].as_mut() {
-                if frame.status == CoroutineStatus::Suspended {
-                    let d_nr = frame.d_nr;
-                    let data_ptr = self.data_ptr; // raw ptr — no borrow conflict with frame
-                    Self::drop_text_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
-                }
+            if let Some(frame) = self.coroutines[idx].as_mut()
+                && frame.status == CoroutineStatus::Suspended
+            {
+                let d_nr = frame.d_nr;
+                let data_ptr = self.data_ptr; // raw ptr — no borrow conflict with frame
+                Self::drop_text_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
             }
             self.coroutines[idx] = None;
         }
@@ -428,6 +428,9 @@ impl State {
                 continue;
             }
             // Drop the String heap buffer and zero the slot to prevent double-drop.
+            // SAFETY: stack_bytes stores Strings at their original stack offsets; the
+            // slot is aligned as it was when pushed.  Unaligned cast is intentional.
+            #[allow(clippy::cast_ptr_alignment)]
             unsafe {
                 std::ptr::drop_in_place(bytes.as_mut_ptr().add(off).cast::<String>());
                 std::ptr::write_bytes(
@@ -567,6 +570,7 @@ impl State {
     /// CO1.2: Advance a coroutine — restore stack, resume execution.
     /// # Panics
     /// Panics on re-entrant advance (coroutine already running).
+    #[allow(clippy::too_many_lines)] // borrow-checker constraints prevent splitting this function
     pub fn coroutine_next(&mut self, value_size: u32) {
         let gen_ref = *self.get_stack::<DbRef>();
 

@@ -63,6 +63,7 @@ fill:
 
 ci:
 	-rm -rf tests/generated
+	-rm -f /tmp/loft_native_*
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
 	cargo test >> result.txt 2>&1

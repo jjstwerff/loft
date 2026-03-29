@@ -10,7 +10,11 @@
 //! **Interpreter safety:** This module is purely additive — it does not modify
 //! any interpreter code path.  It only re-exposes `Stores` methods with the
 //! signatures that generated code expects.
-
+//!
+//! `dead_code` is suppressed because every public item here is part of the
+//! generated-code ABI — callers are emitted by `generation.rs`, not by the
+//! interpreter or test suite directly.
+#![allow(dead_code)]
 #![allow(non_snake_case)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
@@ -1061,6 +1065,10 @@ impl IterState for i64 {
 /// - `on & 63 == 2`: sorted vector — `arg` is the element size in bytes directly.
 ///
 /// Bytecode equivalent: `State::remove` in `src/state/io.rs`.
+///
+/// # Panics
+/// Panics if `data.store_nr == u16::MAX` (coroutine `DbRef`) — the compiler is
+/// expected to reject `e#remove` on generator iterators before this is reached.
 pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
     // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
     // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
