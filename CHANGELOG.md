@@ -37,6 +37,27 @@ All notable changes to the loft language and interpreter.
   Tests: `interface_empty_parses`, `interface_with_method_parses`,
   `interface_duplicate_name_rejected`.
 
+- **Interface subsystem — op-sugar, bound syntax, factory-method guard, gendoc skip** (I3.1, I4, I5, I11):
+  - I3.1 (`src/parser/definitions.rs`): `op <token> (params) -> type` in interface bodies
+    is syntactic sugar for an `OpCamelCase` method stub. E.g. `op < (self: Self, other: Self) -> boolean`
+    registers a method named `OpLt`. The `rename()` helper in `mod.rs` is now `pub(crate)` and
+    covers `>` and `>=` in addition to its previous set.
+    Tests: `interface_op_sugar_lt_parses`, `interface_op_sugar_multi_parses`.
+  - I4 (`src/parser/definitions.rs`): `<T: A + B>` bound syntax in generic function declarations.
+    Bound names are collected during parsing and resolved in the second pass to `DefType::Interface`
+    def_nrs stored in `Definition.bounds` (introduced in I2). Unknown names emit
+    `"'Name' is not a known interface"`; non-interface names emit
+    `"'Name' is not an interface — bounds must be interface names"`.
+    Tests: `generic_fn_with_bound_parses`, `generic_fn_unknown_bound_errors`,
+    `generic_fn_struct_as_bound_errors`.
+  - I5 (`src/parser/definitions.rs`): phase-1 factory-method restriction in interface bodies.
+    A method that returns `Self` without a leading `self: Self` parameter emits
+    `"factory methods not yet supported: 'name' returns Self without a 'self: Self' parameter"`.
+    Test: `interface_factory_method_rejected`.
+  - I11 (`src/gendoc.rs`): `sig_kind` now returns `"interface"` for `pub interface` / `interface`
+    declarations (previously `"const"`). `generate_stdlib_section` skips interface items gracefully.
+    Unit test: `sig_kind_interface_returns_interface`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —

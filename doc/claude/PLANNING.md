@@ -872,8 +872,10 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 | I1  | Lexer: add `interface` keyword | XS | *(completed 0.8.3)* `src/lexer.rs` |
 | I2  | Data: `DefType::Interface` + `Definition.bounds: Vec<u32>` | S | *(completed 0.8.3)* `src/data.rs` |
 | I3  | Parser first pass: parse interface declarations | M | *(completed 0.8.3)* `src/parser/definitions.rs` |
-| I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | `src/parser/definitions.rs` |
-| I5  | Type resolution: validate interface bodies; resolve `Self` | S | `src/typedef.rs` |
+| I3.1| Op-sugar `op <token> (...)` in interface bodies → `OpCamelCase` | XS | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I5  | Type resolution: validate interface bodies; factory-method restriction (phase 1) | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I11 | gendoc stub/guard for `DefType::Interface` | XS | *(completed 0.8.3)* `src/gendoc.rs` |
 | I6  | Satisfaction checking at generic instantiation | M | `src/parser/definitions.rs` |
 | I7  | Allow bounded method calls on `T` inside generic bodies | S | `src/parser/control.rs` |
 | I8  | Allow bounded operator use on `T` (`OpCamelCase` in bound) | S | `src/parser/operators.rs` |

@@ -44,10 +44,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | A14.5     | ↳ Compiler call-graph analysis + `M` computation          | M  | ✓      |              | LIGHT_PAR.md § L5             |
 | A14.6     | ↳ Parser: `par_light(...)` clause                         | S  | ✓      | A14.4, A14.5 | LIGHT_PAR.md § L6             |
 | A14.7     | ↳ Performance benchmark                                   | S  | ✓      | A14.6        | LIGHT_PAR.md § L7             |
-| I3.1      | ↳ `op <> (...)` sugar in interface bodies → `OpCamelCase` | XS | ✓      | I3           | src/parser/definitions.rs     |
-| I4        | Interfaces: `<T: A + B>` bound syntax + conflict detection | S  | ✓      | I2           | src/parser/definitions.rs     |
-| I5        | Interfaces: type resolution + `Self` placeholder          | S  | ✓      | I3           | src/typedef.rs                |
-| I5.1      | ↳ Phase-1 factory-method restriction diagnostic           | XS | ✓      | I5           | src/typedef.rs                |
 | I6        | Interfaces: satisfaction checking at instantiation        | M  | ✓      | I4, I5       | src/parser/definitions.rs     |
 | I7        | Interfaces: allow bounded method calls on `T`             | S  | ✓      | I6           | src/parser/control.rs         |
 | I8.1      | Interfaces: same-type binary operators (`T op T`)         | S  | ✓      | I6           | src/parser/operators.rs       |
@@ -58,7 +54,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | I9.1      | ↳ Convert `sum_of`, `min_of`, `max_of` to bounded-generic loft | S | ✓ | I9          | default/01_code.loft          |
 | I9.2      | ↳ `sum_of(v, identity)` caller-supplied-identity overload | XS | ✓      | I9           | default/01_code.loft          |
 | I10       | Interfaces: "does not satisfy" diagnostics                | S  | ✓      | I6           | src/diagnostics.rs            |
-| I11       | Interfaces: gendoc stub/guard for `DefType::Interface`    | XS | ✓      | I2           | src/documentation.rs          |
 
 ---
 
