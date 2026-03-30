@@ -992,3 +992,54 @@ fn coroutine_stale_store_guard_all_builds() {
     .expr("run_stale()")
     .result(Value::Int(6));
 }
+
+// ── I6 — Satisfaction checking at generic instantiation ──────────────────────
+
+/// I6: calling a bounded generic function with a type that satisfies the interface
+/// (i.e. implements the required operator) must compile and return the correct value.
+#[test]
+#[ignore = "I6: satisfaction checking — not yet implemented"]
+fn satisfaction_check_passes_with_implementing_type() {
+    code!(
+        "interface Ordered { op < (self: Self, other: Self) -> boolean }
+         struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_first<T: Ordered>(a: T, b: T) -> T { a }"
+    )
+    .expr("pick_first(Score{value:3}, Score{value:7}).value")
+    .result(Value::Int(3));
+}
+
+// ── I7 — Bounded method calls on T ───────────────────────────────────────────
+
+/// I7: calling an interface method on a T-typed receiver inside a bounded generic
+/// function body must compile and produce the correct result at the call site.
+#[test]
+#[ignore = "I7: bounded method calls on T — not yet implemented"]
+fn bounded_method_call_in_generic_body() {
+    code!(
+        "interface Describable { fn label(self: Self) -> text }
+         struct Point { x: integer }
+         fn label(self: Point) -> text { \"point:{self.x}\" }
+         fn describe<T: Describable>(v: T) -> text { v.label() }"
+    )
+    .expr("describe(Point{x:42})")
+    .result(Value::Text("point:42".to_string()));
+}
+
+// ── I8.1 — T op T via bound ──────────────────────────────────────────────────
+
+/// I8.1: a same-type binary operator (`T < T`) inside a bounded generic function
+/// body must compile when the bound declares the operator via `op <`.
+#[test]
+#[ignore = "I8.1: T op T via bound operator — not yet implemented"]
+fn bounded_operator_in_generic_body() {
+    code!(
+        "interface Ordered { op < (self: Self, other: Self) -> boolean }
+         struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }"
+    )
+    .expr("pick_min(Score{value:7}, Score{value:3}).value")
+    .result(Value::Int(3));
+}

@@ -792,6 +792,22 @@ fn interface_factory_method_rejected() {
         .error("factory methods not yet supported: 'create' returns Self without a 'self: Self' parameter at interface_factory_method_rejected:1:44");
 }
 
+// ── I6/I10 — Satisfaction checking diagnostics ───────────────────────────────
+
+/// I6/I10: calling a bounded generic function with a type that does NOT implement
+/// the required interface method must produce a clear "does not satisfy" diagnostic.
+#[test]
+#[ignore = "I6: satisfaction checking — not yet implemented"]
+fn satisfaction_check_fails_missing_method() {
+    code!(
+        "interface Ordered { op < (self: Self, other: Self) -> boolean }
+         struct Thing { x: integer }
+         fn pick_first<T: Ordered>(a: T, b: T) -> T { a }
+         fn test() { pick_first(Thing{x:1}, Thing{x:2}) }"
+    )
+    .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:4:18");
+}
+
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
 
 /// #91: two init fields referencing each other via $ should produce an error.
