@@ -121,6 +121,33 @@ give each item a traceable history.
 
 ---
 
+## Debugging policy — MANDATORY
+
+### Never use `git bisect` or `git checkout HEAD -- <files>` to investigate bugs
+
+**`git bisect` is prohibited.**  Running bisect requires compiling and testing dozens of
+commits autonomously.  Claude cannot do this reliably: context windows are finite,
+intermediate states are inconsistent, and the process routinely requires reverting
+working-in-progress files — destroying multi-session work that is not yet committed.
+
+**`git checkout HEAD -- <file>` to "reset and try again" is prohibited.**  This silently
+discards uncommitted changes on specific files.  When multiple files are in flight across
+a feature branch, resetting individual files breaks invariants between them and produces
+states that are harder to debug than the original problem.
+
+**Use these approaches instead:**
+
+- Read the failing test's dump file (`tests/dumps/*.txt`) — it contains the full IR,
+  bytecode, and execution trace.  The root cause is almost always visible there.
+- Add `LOFT_LOG=minimal` or `LOFT_LOG=crash_tail:50` to the failing test to narrow down
+  the execution step.
+- Read the relevant source files and reason about the code path.  A focused read of
+  3–5 files is faster and safer than any automated bisect.
+- If a regression appeared after a specific recent commit, use `git show <commit>` or
+  `git diff <commit>^ <commit>` to read that change — do not re-run old code.
+
+---
+
 ## Documentation index
 
 | File | Topic |

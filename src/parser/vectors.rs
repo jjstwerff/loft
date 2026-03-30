@@ -629,13 +629,32 @@ impl Parser {
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
         let closure_rec_d = self.data.def(d_nr).closure_record;
         if closure_rec_d != u32::MAX && !self.first_pass {
-            // Build the closure allocation expression as an inline Block.
-            // This will be injected at the call site as a hidden argument.
+            // A5.3 (definition-time capture): Allocate and populate the closure record
+            // when the lambda is DEFINED (not when it is called), so that any captured
+            // variables are snapshotted at definition time.
+            //
+            // w is added to `work_refs` so that `parse_code` inserts `Set(w, Null)` at
+            // the START of the enclosing function body.  This pre-reserves w's frame slot
+            // in the outer scope (Zone-2 slot assignment), ensuring it is NOT inside the
+            // fn_ref_with_closure block's workspace — so `FreeStack` cannot clobber it.
+            //
+            // Inside the `fn_ref_with_closure` block, `Set(w, Null)` is the first op;
+            // scopes.rs sees that w is already registered (outer scope) and replaces it
+            // with `Insert([])` (no-op).  The block then runs Database + SetField ops and
+            // returns `Int(d_nr)` as its result.  FreeStack keeps 4 bytes (d_nr) and
+            // discards 0 bytes of workspace — w's pre-reserved slot is untouched.
+            //
+            // At call sites, `try_fn_ref_call` / `parse_call` inject `Value::Var(w)` as
+            // the hidden `__closure` arg (via `last_closure_alloc`).
             let rec_tp = Type::Reference(closure_rec_d, vec![]);
             let w = self.create_unique("__clos", &rec_tp);
             self.vars.defined(w);
+            // Register w as a work-ref so parse_code inserts Set(w,Null) at fn start.
+            self.vars.add_to_work_refs(w);
             let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
             let mut alloc_steps: Vec<Value> = Vec::new();
+            // Set(w, Null) is the first op; scopes.rs will suppress it inside the block
+            // (w already registered at outer scope) and hoist it to function start.
             alloc_steps.push(crate::data::v_set(w, Value::Null));
             alloc_steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
             let n_attrs = self.data.attributes(closure_rec_d);
@@ -655,16 +674,19 @@ impl Parser {
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;
-            // Final expression: the closure ref itself.
-            alloc_steps.push(Value::Var(w));
-            let closure_alloc = crate::data::v_block(alloc_steps, rec_tp.clone(), "closure alloc");
-            // Store the closure allocation expression for injection at call site.
-            self.last_closure_alloc = Some(Box::new(closure_alloc));
-            // A5.6c: record the work var so parse_assign can populate closure_vars
-            // and try_fn_ref_call can emit write-backs after each call.
+            // Block result = Int(d_nr): the 4-byte fn-ref value assigned to f.
+            alloc_steps.push(Value::Int(d_nr as i32));
+            // Use a full-range integer type so native codegen doesn't narrow-cast the
+            // d_nr value to u8 (which would corrupt the fn-ref dispatch).
+            *code = crate::data::v_block(
+                alloc_steps,
+                Type::Integer(i32::MIN + 1, i32::MAX as u32, false),
+                "fn_ref_with_closure",
+            );
+            // At call sites, inject the pre-populated w as the hidden __closure arg.
+            self.last_closure_alloc = Some(Box::new(Value::Var(w)));
+            // A5.6c: record the work var so parse_assign can populate closure_vars.
             self.last_closure_work_var = w;
-            // The lambda value is just the d_nr.
-            *code = Value::Int(d_nr as i32);
         } else {
             *code = Value::Int(d_nr as i32);
         }

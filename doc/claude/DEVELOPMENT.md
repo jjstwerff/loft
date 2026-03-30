@@ -576,6 +576,35 @@ makes history harder to navigate.  Rename before opening the PR, not after.
 
 ---
 
+## Debugging a Regression — MANDATORY APPROACH
+
+### Never use `git bisect` or `git checkout HEAD -- <files>`
+
+**`git bisect` is prohibited.**  It requires running tests against many historical
+commits.  Claude cannot do this reliably: context windows are finite, intermediate
+compile states are inconsistent, and the process almost always requires reverting
+in-progress files — destroying multi-session work that is not yet committed.
+
+**`git checkout HEAD -- <file>` to "reset and try again" is prohibited.**  This silently
+discards uncommitted changes on the named files.  When a feature branch has several
+files in flight (e.g. codegen, fill, debug, mod, scopes all modified together), resetting
+individual files breaks cross-file invariants and produces a state that is harder to
+debug than the original problem.
+
+**The correct approach for every regression:**
+
+1. Run the failing test with `LOFT_LOG=minimal cargo test --test <suite> <name>` and
+   read `tests/dumps/<name>.txt` — the full IR, bytecode, and execution trace are there.
+2. If the trace is too long, use `LOFT_LOG=crash_tail:50` to see the last 50 steps
+   before the panic.
+3. Read the 3–5 source files that the trace implicates.  Reason about the code path.
+   The root cause is almost always visible within one careful read.
+4. If you need to know what a recent commit changed, use `git show <sha>` or
+   `git diff <sha>^ <sha>` — read the diff, do not re-run old code.
+5. Fix forward.  Do not revert; do not bisect.
+
+---
+
 ## See also
 
 - [CODE.md](CODE.md) — Naming conventions, function-length rules, clippy policy, null sentinels

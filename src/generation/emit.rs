@@ -208,7 +208,8 @@ impl Output<'_> {
         // Only include native-callable functions (n_ / t_ prefix) in the reachable set;
         // bytecode ops (Op* prefix) are never callable via fn-refs in native mode.
         let n_defs = self.data.definitions();
-        let mut candidates: Vec<(u32, String)> = Vec::new();
+        // (d_nr, fn_name, has_closure): has_closure=true when the last attribute is __closure.
+        let mut candidates: Vec<(u32, String, bool)> = Vec::new();
         for d in 0..n_defs {
             if !self.reachable.is_empty() && !self.reachable.contains(&d) {
                 continue;
@@ -221,22 +222,32 @@ impl Output<'_> {
             if def.name.starts_with("Op") {
                 continue;
             }
-            // Total args = visible params + hidden args (closure record, work bufs).
-            // Match on args.len() so capturing lambdas are preferred over non-capturing
-            // ones that share the same visible signature.
+            // A5.6g: closure-capturing lambdas have a hidden __closure param as the last
+            // attribute. The closure is injected explicitly at the call site (in arg_exprs),
+            // so total arg count must equal the full attribute count.
+            let has_closure = def
+                .attributes
+                .last()
+                .map_or(false, |a| a.name == "__closure");
+            let visible_attr_count = if has_closure {
+                def.attributes.len() - 1
+            } else {
+                def.attributes.len()
+            };
+            // Total attribute count must equal total args (closure included for closures).
             if def.attributes.len() != args.len() {
                 continue;
             }
-            // Compare visible parameter types only (hidden args are closure/work bufs
-            // that are always compatible and differ only by definition number).
-            let params_match =
-                def.attributes
-                    .iter()
-                    .zip(param_types.iter())
-                    .all(|(a, expected)| {
-                        rust_type(&a.typedef, &Context::Argument)
-                            == rust_type(expected, &Context::Argument)
-                    });
+            // Compare visible parameter types only (Type::Function excludes __closure).
+            let params_match = def
+                .attributes
+                .iter()
+                .take(visible_attr_count)
+                .zip(param_types.iter())
+                .all(|(a, expected)| {
+                    rust_type(&a.typedef, &Context::Argument)
+                        == rust_type(expected, &Context::Argument)
+                });
             if !params_match {
                 continue;
             }
@@ -244,7 +255,7 @@ impl Output<'_> {
             {
                 continue;
             }
-            candidates.push((d, def.name.clone()));
+            candidates.push((d, def.name.clone(), has_closure));
         }
         // Evaluate args into pre-eval bindings to avoid double-borrow.
         let mut arg_exprs: Vec<String> = Vec::new();
@@ -254,7 +265,7 @@ impl Output<'_> {
         }
         // Generate a match dispatch on the fn-ref variable.
         write!(w, "match var_{var_name} {{")?;
-        for (d_nr, fn_name) in &candidates {
+        for (d_nr, fn_name, _has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
             for expr in &arg_exprs {
                 write!(w, ", {expr}")?;

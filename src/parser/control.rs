@@ -1847,12 +1847,12 @@ impl Parser {
                         // inject it the same way try_fn_ref_call does for non-zero-param calls.
                         if let Some(closure_alloc) = self.last_closure_alloc.take() {
                             args.push(*closure_alloc);
-                            // A5.6d: mark captured outer vars as read at the call site.
-                            for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
-                                self.var_usages(cv, true);
-                            }
                         } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
                             args.push(Value::Var(closure_w));
+                        }
+                        // A5.6d: mark captured vars as read at the call site
+                        for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+                            self.var_usages(cv, true);
                         }
                         *val = Value::CallRef(v_nr, args);
                     }
@@ -2060,12 +2060,12 @@ impl Parser {
             // the slot-position issue with pre-allocated work variables.
             if let Some(closure_alloc) = self.last_closure_alloc.take() {
                 converted.push(*closure_alloc);
-                // A5.6d: mark captured outer vars as read at the call site.
-                for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
-                    self.var_usages(cv, true);
-                }
             } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
                 converted.push(Value::Var(closure_w));
+            }
+            // A5.6d: mark captured vars as read at the call site
+            for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+                self.var_usages(cv, true);
             }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);

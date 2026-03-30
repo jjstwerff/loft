@@ -316,18 +316,19 @@ fn ref_tuple_unused_mutation_error() {
 #[test]
 fn closure_capture_integer() {
     // A lambda captures an integer from the enclosing scope.
-    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)")
-        .result(Value::Int(15));
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)").result(Value::Int(15));
 }
 
 #[test]
 fn closure_capture_after_change() {
-    // Capture copies x's value at the call site (current implementation captures
-    // at call time, not definition time).  x is 99 when f(5) runs → 99 + 5 = 104.
-    // Capture-at-definition-time (expected: 15) is a deferred improvement.
+    // A5.6-2: closure is allocated at definition time, so x=10 is captured into
+    // the closure record when `f = fn(...)` is evaluated.  x=99 is a later
+    // reassignment that does not affect the closure → f(5) = 10 + 5 = 15.
+    // The dead-assignment warning fires because x is only "used" at the call site
+    // (var_usages), so the compiler sees x=10 as overwritten before being read.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
         .warning("Dead assignment — 'x' is overwritten before being read at closure_capture_after_change:2:26")
-        .result(Value::Int(104));
+        .result(Value::Int(15));
 }
 
 #[test]
@@ -357,16 +358,17 @@ fn closure_capture_text_integer_return() {
     // Same-scope text capture: lambda reads captured text, returns integer.
     // A5.6b.1: zero-param fn-ref fast path now injects __closure arg; text_return
     // no longer adds captured vars as spurious RefVar(Text) work-buffer arguments.
-    expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()")
-        .result(Value::Int(5));
+    expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()").result(Value::Int(5));
 }
 
 // A5.6b.2: re-enabled after generate_call_ref work-buffer push fix.
 #[test]
 fn closure_capture_text_return() {
     // Same-scope text capture: lambda reads captured text, returns text.
-    expr!("greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")")
-        .result(Value::str("hello, world!"));
+    expr!(
+        "greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")"
+    )
+    .result(Value::str("hello, world!"));
 }
 
 // ── A5.6e — Closure capture coverage ────────────────────────────────────────

@@ -931,6 +931,13 @@ impl Function {
         self.variables[v as usize].skip_free = true;
     }
 
+    /// Register an existing variable as a work-reference so that `parse_code`
+    /// inserts `Set(v, Null)` at the function body start.  This pre-reserves v
+    /// in the outer scope, ensuring its frame slot survives inner-block FreeStack.
+    pub fn add_to_work_refs(&mut self, v: u16) {
+        self.work_refs.insert(v);
+    }
+
     pub fn inline_ref_references(&self) -> Vec<u16> {
         self.inline_ref_vars.iter().copied().collect()
     }

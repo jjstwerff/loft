@@ -345,3 +345,5 @@ fn OpCoroutineYield(value_size: const u16);
 // CO1.6: Coroutine stdlib opcodes
 fn OpCoroutineExhausted(gen: reference) -> boolean;
 #rust"s.coroutine_exhausted(&@gen)"
+
+

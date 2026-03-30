@@ -54,12 +54,12 @@ fn main() {
   assert(make_msg("Loft") == "Hello, Loft!", "greeting capture 2");
 
   // ## Capture timing
-  // 'base' is 10 when the lambda is written but 20 when it is called.
-  // The lambda sees the value at call time: 20.
+  // Closures capture at definition time. 'base' is 10 when the lambda is written;
+  // reassigning 'base' to 20 afterwards does not affect the captured value.
   base = 10;
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
-  assert(add_base(5) == 25, "sees base=20 at call time: {add_base(5)}");
+  assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
 
   // ## Non-capturing lambdas with higher-order functions
   // No capture needed here — the lambda uses only its own parameter.

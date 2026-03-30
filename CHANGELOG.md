@@ -370,6 +370,28 @@ All notable changes to the loft language and interpreter.
   (e.g. `"hello, world!"` became `"hello, world!hello, world!"` on the second call).  New test
   `closure_capture_text_loop` in `tests/expressions.rs` verifies the fix.
 
+- **Definition-time capture semantics and multi-call closure injection** (A5.6g) —
+  Closures now capture variable values at definition time (when the lambda is written),
+  not at call time (when it is first invoked).  `emit_lambda_code` allocates and
+  populates the closure record inside the `fn_ref_with_closure` block — the block is
+  the `*code` assigned to the fn-ref variable, so it runs exactly once at definition
+  time.  A `closure_vars` fallback was restored in `src/parser/control.rs` (both
+  `try_fn_ref_call` and `parse_call` paths): when `last_closure_alloc` has already
+  been consumed by a first call site, subsequent call sites to the same fn-ref variable
+  look up the closure work variable via `self.closure_vars.get(&v_nr)` and inject it
+  as the hidden `__closure` arg.  This fixes `closure_capture_struct_ref` and
+  `closure_capture_vector_elem`, which each call the lambda twice (condition + format
+  string).  Native codegen was also fixed: `OpVarFnRef`/`OpStoreClosure` declarations
+  were removed from `default/02_images.loft` (they would have overflowed the 254-entry
+  OPERATORS array); the `output_call_ref` dispatch in `src/generation/emit.rs` now
+  compares total attribute count (including `__closure`) against total args (since
+  the closure is injected explicitly at the call site, not by `fn_call_ref`); the
+  `OpGetClosure` injection was removed.  The block result type was changed to a
+  full-range integer to prevent native codegen from emitting a truncating `as u8`
+  cast that corrupted the d_nr dispatch value.  All 8 closure tests pass (1 ignored
+  for cross-scope closures, a known limitation in CAVEATS.md C1);
+  `tests/docs/26-closures.loft` updated to reflect definition-time semantics.
+
 ### New features
 
 - **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now

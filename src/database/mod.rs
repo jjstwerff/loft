@@ -144,6 +144,10 @@ pub struct Stores {
     /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
     /// Populated by `State::static_call` when `n_stack_trace` is invoked.
     pub call_stack_snapshot: Vec<(String, String, u32)>,
+    /// A5.6g: native-code closure store. Maps lambda d_nr → closure DbRef.
+    /// Set by `OpStoreClosure` (native) immediately before calling the lambda;
+    /// read by `OpGetClosure` in the match-dispatch arm.
+    pub closure_map: HashMap<u32, DbRef>,
 }
 
 impl Default for Stores {
@@ -174,6 +178,7 @@ impl Clone for Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
+            closure_map: HashMap::new(),
         }
     }
 }
@@ -426,6 +431,7 @@ impl Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: crate::wasm::host_time_now(),
             call_stack_snapshot: Vec::new(),
+            closure_map: HashMap::new(),
         };
         result.base_type("integer", 4); // 0
         result.base_type("long", 8); // 1

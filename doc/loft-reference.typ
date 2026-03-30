@@ -279,26 +279,30 @@ Upside ^ behaves exactly as Rust developers expect — it is bitwise XOR. Bitwis
 
 Downside Exponentiation requires a function call: pow(base, exp) for float/single — there is no \*\* or ^ exponentiation operator. Integer exponentiation is not in the standard library; compute it with a loop or cast to float first.
 
-=== No loop or while
+=== No loop keyword — use while or for + break
 
 ```rust
-for _ in 0..2147483647 {  // large upper bound
-    if done() { break; }
+while !done() { step(); }  // while works
+
+// Infinite loop workaround — use a long range:
+for _ in 0l..9223372036854775807l {  // long: ~9.2×10^18
+    if should_exit() { break; }
     step();
 }
 ```
 
 ```rust
-loop {
-    if done() { break; }
-    step();
-}
 while !done() { step(); }
+
+loop {           // truly infinite — no bound needed
+    if should_exit() { break; }
+    step();
+}
 ```
 
-Upside Every loop has an iteration variable, making it easy to add index tracking or break conditions without restructuring. For a near-unbounded poll loop use for \_ in 0..2147483647 — the break will fire long before the limit is reached in practice.
+Upside while condition { } works exactly as expected. Every for loop has an iteration variable, making it easy to add index tracking or a cycle limit without restructuring.
 
-Downside while condition { } is universally understood and directly expresses intent. Its absence surprises Rust and C programmers. Event loops and polling patterns are more verbose with the open-ended range workaround.
+Downside There is no loop { } keyword for an unconditionally infinite loop. The workaround — a for loop over a long range — is verbose but practically unbounded: the 64-bit maximum (~9.2×10^18) exceeds any realistic event-loop iteration count.
 
 === Filtered loops — for ... if ...
 
@@ -419,60 +423,73 @@ Upside Each variant's behaviour lives in its own small function — easy to read
 
 Downside Rust's match is exhaustive: the compiler forces you to handle every variant. In loft, leaving a variant without an implementation emits a compiler warning but does not stop compilation. To suppress the warning and produce a null return, write an explicit empty-body stub: fn area(self: NewShape) -\> float { }. Exhaustiveness is enforced by discipline, not the type system.
 
-=== Lambdas without closure capture
+=== Closures — same-scope capture works
 
 ```rust
-// Lambda expressions — long and short form:
+// Capture works when called in the same scope:
+offset = 10;
+shift = fn(x: integer) - integer { x + offset };
+assert(shift(5) == 15, "shift");
+
+// Non-capturing lambdas work with map/filter/reduce:
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
-// Named function references also work:
-fn add(a: integer, b: integer) - integer { a + b }
-total = reduce([1, 2, 3], 0, fn add);
-
-// But lambdas cannot capture surrounding variables:
-offset = 10;
-// shifted = map(nums, |x| { x + offset });  // error: offset not in scope
+// Cross-scope: returning a capturing lambda is not yet supported:
+// fn make_adder(n: integer) - fn(integer) - integer {
+//     fn(x: integer) - integer { x + n }  // A5.6: planned
+// }
 ```
 
 ```rust
-fn double(r: &Score) -> i32 { r.value * 2 }
-
-// Rayon parallel iterator:
-let total: i32 = scores.par_iter().map(double).sum();
-
-// Closure captures context freely:
+// Closure captures context freely, any scope:
 let offset = 5;
+let shift = |x| x + offset;
+assert_eq!(shift(5), 10);
+
+// Works as argument to higher-order functions:
 let shifted: Vec<i32> = v.iter()
     .map(|x| x + offset)
     .collect();
+
+// Returning a capturing closure:
+fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
+    move |x| x + n
+}
 ```
 
-Upside Simpler mental model. No capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, no lifetime constraints on captured variables. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported, with type inference from call-site context. Named function references (fn name) are compile-checked.
+Upside Same-scope capture works for integers, text, and mutable variables — no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, no lifetime annotations. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
 
-Downside No closure capture. Lambdas and function references cannot read variables from the surrounding scope — context must be embedded in the data or passed as an explicit parameter. Rust's Fn/FnMut/FnOnce traits give far more flexibility for callbacks that need local state.
+Downside Capturing lambdas can only be called directly by name in the same scope — passing them to map/filter/reduce or returning them from a function is not yet supported (planned as A5.6). Rust's Fn/FnMut/FnOnce traits give full flexibility: closures can be stored in structs, returned from functions, and passed freely across scopes.
 
-=== No generic functions or trait system
+=== Generic functions — pass-through only, no trait bounds
 
 ```rust
-// No generic functions — must write a version per type
+// Pass-through generics work:
+fn identity<T>(x: T) - T { x }
+identity(42)        // integer
+identity("hello")  // text
+
+// Trait-bounded generics are not supported:
+// fn max<T: PartialOrd>(a: T, b: T) -> T { ... }  // not valid
+// Must write a version per type:
 fn max_int(a: integer, b: integer) - integer {
     if a  b { a } else { b }
 }
-fn max_float(a: float, b: float) - float {
-    if a  b { a } else { b }
-}
 ```
 
 ```rust
+fn identity<T>(x: T) -> T { x }
+
 fn max<T: PartialOrd>(a: T, b: T) -> T {
     if a > b { a } else { b }
 }
+// One function works for all comparable types.
 ```
 
-Upside Nothing to learn about type parameters, trait bounds, where clauses, dyn Trait, impl Trait, or associated types. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need.
+Upside Basic generic functions (identity, pick\_second, wrappers) work out of the box. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need. No dyn Trait, impl Trait, or associated types to learn.
 
-Downside Code cannot be written once and reused across types. Every generic algorithm must be duplicated per type or pushed down into the standard library. There is no way for user code to define an "anything sortable" or "anything printable" abstraction.
+Downside No trait bounds — a generic function cannot constrain T to be comparable, printable, or hashable. Any algorithm that requires an operation on T (comparison, addition, display) must be written once per concrete type. There is no way for user code to define "anything sortable" without duplicating the sort logic.
 
 === String formatting — embedded expressions
 
@@ -494,7 +511,7 @@ let hex  = format!("{:#x}", n);
 
 Upside Concise — no format!() call, no separate variable. Full format expressions (arithmetic, slices, for comprehensions) can appear directly inside {}. Specifiers mirror Rust: :width, :.precision, :width.precision, sign (+), radix (\#x, \#o, b), alignment (\<, \>, ^), and zero-padding (0N) all work.
 
-Downside Unknown radix letters in specifiers are compile-time errors (e.g. :5z or :5B are both rejected). Radix letters are case-sensitive: valid ones are b, o, x/X, e, and j/json — uppercase B or O produce an error. Applying a numeric specifier to an incompatible type (such as :x on a text value) is silently ignored rather than flagged.
+Downside Unknown radix letters in specifiers are compile-time errors (e.g. :5z or :5B are both rejected). Radix letters are case-sensitive: valid ones are b, o, x/X, e, and j/json — uppercase B or O produce an error. Applying a numeric specifier to an incompatible type (such as :x on a text value, or zero-padding on a boolean) is a compile-time error.
 
 === Built-in parallel for-loops — par(...)
 
@@ -617,20 +634,20 @@ Upside Field access is checked at compile time — typos in field names are caug
 
 Downside No inheritance, no \_\_repr\_\_, no operator overloading (\_\_add\_\_, \_\_eq\_\_, etc.), no properties or descriptors. Python's \@dataclass generates \_\_init\_\_, \_\_repr\_\_, and \_\_eq\_\_ automatically. Loft structs are data holders; all display and comparison logic must be written by hand. Python also supports plain dicts as lightweight records, which is often more convenient for ad-hoc data.
 
-=== No while loop
+=== while loop — yes; no loop or while ... else
 
 ```rust
-// Condition-driven poll loop — use a large upper bound:
-for _ in 0..2147483647 {
-    if ready() { break; }
-    step();
-}
+while !ready() { step(); }  // works
 
-// Draining a collection while it has elements:
-for _ in 0..2147483647 {
-    if length(queue) == 0 { break; }
+while length(queue)  0 {
     process(queue[0]);
     queue#remove;
+}
+
+// No loop keyword — infinite loop needs a large bound:
+for _ in 0..2147483647 {
+    if should_exit() { break; }
+    step();
 }
 ```
 
@@ -640,11 +657,15 @@ for _ in 0..2147483647 {
 
 <span class="kw">while</span> queue:
     <span class="fn-call">process</span>(queue.<span class="fn-call">pop</span>(<span class="nm">0</span>))
+
+<span class="kw">while</span> <span class="kw">True</span>:          <span class="cm"># truly infinite</span>
+    <span class="kw">if</span> <span class="fn-call">should_exit</span>(): <span class="kw">break</span>
+    <span class="fn-call">step</span>()
 ```
 
-Upside Every loop has an iteration variable, making it easy to add a cycle limit or index tracking without restructuring. The break fires long before the range limit in practice. Filtered loops (for x in v if pred(x)) and loop attributes (x\#first, x\#count) are only available on for, so a single loop construct covers all cases.
+Upside while condition { } works exactly as expected. Filtered loops (for x in v if pred(x)) and loop attributes (x\#first, x\#count) add expressive power to for without needing a separate loop form.
 
-Downside while condition: is instantly understood by every programmer and reads exactly as its semantics. Its absence is surprising and the workaround is verbose. Python also has while ... else (executes when the condition first becomes false without a break), a pattern with no clean equivalent in loft.
+Downside No while True: equivalent — infinite loops require a bounded for range as a workaround. No while ... else (executes when the condition becomes false without a break), a Python pattern with no clean equivalent in loft.
 
 === Polymorphic enum dispatch vs isinstance
 
@@ -733,58 +754,72 @@ Upside All collection types — vector, hash, and sorted map — are built in; n
 
 Downside Python's built-in dict and list are among the most heavily optimised data structures in any scripting runtime. Python also has set and frozenset (no loft equivalent), ordered insertion semantics on dict (Python 3.7+), and an enormously expressive comprehension syntax (\[x\*2 for x in v if x \> 0\]). Loft's map() / filter() / reduce() higher-order functions allocate a new vector at each stage, while Python's generators are lazy and allocation-free until consumed.
 
-=== Lambdas without closure capture
+=== Closures — same-scope capture works
 
 ```rust
-// Lambda expressions — long and short form:
+// Capture works when called in the same scope:
+offset = 10;
+shift = fn(x: integer) - integer { x + offset };
+assert(shift(5) == 15, "shift");
+
+// Non-capturing lambdas work with map/filter/reduce:
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
-// Named function references also work:
-fn add(a: integer, b: integer) - integer { a + b }
-total = reduce([1, 2, 3], 0, fn add);
-
-// But lambdas cannot capture surrounding variables:
-offset = 10;
-// shifted = map(nums, |x| { x + offset });  // error
+// Passing a capturing lambda to map/filter is not yet supported:
+// shifted = map(nums, |x| { x + offset });  // workaround: pass offset explicitly
 ```
 
 ```python
-double  = <span class="kw">lambda</span> x: x * <span class="nm">2</span>
-is_even = <span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>
-
-f = double
-<span class="kw">assert</span> <span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>
+offset = <span class="nm">10</span>
+shift = <span class="kw">lambda</span> x: x + offset  <span class="cm"># capture works anywhere</span>
+<span class="kw">assert</span> <span class="fn-call">shift</span>(<span class="nm">5</span>) == <span class="nm">15</span>
 
 nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>]
 doubled = <span class="bi">list</span>(<span class="bi">map</span>(<span class="kw">lambda</span> x: x * <span class="nm">2</span>, nums))
 evens   = <span class="bi">list</span>(<span class="bi">filter</span>(<span class="kw">lambda</span> x: x % <span class="nm">2</span> == <span class="nm">0</span>, nums))
-total   = <span class="bi">sum</span>(nums)
 
-<span class="cm"># capture context freely:</span>
-offset = <span class="nm">10</span>
+<span class="cm"># capturing lambda passed to map:</span>
 shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> nums]
 ```
 
-Upside Simpler mental model — no capture modes, no scope surprises. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported, with type inference from call-site context. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
+Upside Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
 
-Downside No closure capture — lambdas cannot read variables from the surrounding scope. Any extra data must be embedded in the element struct or passed as an explicit parameter. Python's lambda and nested def close over surrounding variables naturally, making short callbacks, key functions, and event handlers concise. List comprehensions (\[f(x) for x in v\]) are shorter and more Pythonic than map(v, fn f).
+Downside Capturing lambdas can only be called directly by name in the same scope — passing them to map/filter/reduce or returning them from a function is not yet supported. Any extra context must be embedded in the element struct or passed as an explicit parameter. Python's lambda and nested def close over surrounding variables naturally in any context, and list comprehensions (\[x + offset for x in v\]) are shorter than the loft workaround.
 
-=== No exception handling
+=== No exception handling — file errors use FileResult
 
 ```rust
-// Preconditions are assertions; failures abort the program:
+// Logic errors: assert aborts the program
 fn divide(a: float, b: float) - float {
     assert(b != 0.0, "division by zero");
     a / b
 }
 
-// I/O errors surface as null:
-f = open("data.txt");
-if f == null { print("file not found"); }
+// Reading: check f#exists before using content
+f = file("data.txt");
+if f#exists {
+    data = f.content();
+} else {
+    print("file not found");
+}
+
+// Mutating ops return a FileResult enum
+result = delete("old.txt");
+match result {
+    FileResult.Ok             - print("deleted");
+    FileResult.NotFound       - print("not found");
+    FileResult.PermissionDenied - print("permission denied");
+    FileResult.IsDirectory    - print("is a directory");
+    _                         - print("other error");
+}
+
+// Or just check success:
+if !move("a.txt", "b.txt").ok() { print("rename failed"); }
 ```
 
 ```python
+<span class="cm"># Logic errors: raise an exception</span>
 <span class="kw">def</span> <span class="fn-call">divide</span>(a: <span class="bi">float</span>, b: <span class="bi">float</span>) -> <span class="bi">float</span>:
     <span class="kw">if</span> b == <span class="nm">0</span>:
         <span class="kw">raise</span> <span class="fn-call">ValueError</span>(<span class="st">"division by zero"</span>)
@@ -795,16 +830,26 @@ if f == null { print("file not found"); }
 <span class="kw">except</span> ValueError <span class="kw">as</span> e:
     <span class="bi">print</span>(<span class="st">f"error: {e}"</span>)
 
+<span class="cm"># File errors: catch specific exception types</span>
 <span class="kw">try</span>:
     <span class="kw">with</span> <span class="bi">open</span>(<span class="st">"data.txt"</span>) <span class="kw">as</span> f:
         data = f.<span class="fn-call">read</span>()
 <span class="kw">except</span> FileNotFoundError:
     <span class="bi">print</span>(<span class="st">"file not found"</span>)
+
+<span class="kw">try</span>:
+    os.<span class="fn-call">remove</span>(<span class="st">"old.txt"</span>)
+<span class="kw">except</span> FileNotFoundError:
+    <span class="bi">print</span>(<span class="st">"not found"</span>)
+<span class="kw">except</span> PermissionError:
+    <span class="bi">print</span>(<span class="st">"permission denied"</span>)
+<span class="kw">except</span> IsADirectoryError:
+    <span class="bi">print</span>(<span class="st">"is a directory"</span>)
 ```
 
-Upside No exception hierarchy to learn, no accidental exception swallowing, no overhead from unwinding the stack. File and I/O operations signal failure by returning null, which is explicit and cheap to check. The control flow of a loft function is always straightforward — there are no hidden exit paths.
+Upside File errors are represented as a typed FileResult enum — Ok, NotFound, PermissionDenied, IsDirectory, NotDirectory, Other — so every failure case is named and exhaustively matchable. No accidental exception swallowing, no hidden exit paths, no stack-unwinding overhead. The control flow of every loft function is straightforward to read.
 
-Downside There is no structured way to recover from errors in user code. An assertion failure aborts the entire program. Python's try/except/finally/else and user-defined exception hierarchies allow fine-grained error handling, retry logic, cleanup on failure, and graceful degradation — patterns that are impossible to express in loft today.
+Downside Logic errors (assert, panic) abort the entire program — there is no try/except to catch them. Python's exception hierarchy supports retry logic, cleanup via finally, and graceful degradation from arbitrary errors anywhere in the call stack — patterns that are not expressible in loft today.
 
 === Built-in parallel for-loops — par(...)
 
@@ -834,14 +879,16 @@ Upside Built into the language — no import, no boilerplate. The GIL does not a
 
 Downside Workers can return primitives (integer, long, float, boolean), text, and inline enums — but not struct references. Context must be embedded as fields in the element struct; workers cannot capture local variables. Python's ProcessPoolExecutor works with any picklable object and gives full control over timeouts, cancellation, and error propagation.
 
-=== No generic functions
+=== Generic functions — pass-through only, no duck typing
 
 ```rust
-// Must write a version per type — no type parameters:
+// Pass-through generics work:
+fn identity<T>(x: T) - T { x }
+identity(42)        // integer
+identity("hello")  // text
+
+// Algorithms requiring operations on T still need per-type versions:
 fn max_int(a: integer, b: integer) - integer {
-    if a  b { a } else { b }
-}
-fn max_float(a: float, b: float) - float {
     if a  b { a } else { b }
 }
 ```
@@ -858,9 +905,9 @@ T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
     <span class="kw">return</span> a <span class="kw">if</span> a > b <span class="kw">else</span> b
 ```
 
-Upside Nothing to learn about type parameters, bounds, variance, or protocols. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.
+Upside Basic generic functions (pass-through, wrapping, forwarding) work out of the box. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.
 
-Downside Code cannot be written once and reused across types. Every generic algorithm must be duplicated per type or moved into the standard library. Python's duck typing means a function that calls len(x) automatically works on any type that implements \_\_len\_\_ — no explicit annotation required. Python 3.12 TypeVar syntax and structural subtyping (Protocol) give this generality with optional static checking.
+Downside A generic function cannot perform operations on T — no comparison, no arithmetic, no display. Any algorithm that requires an operation must be written once per concrete type. Python's duck typing lets a single function work on any type that supports the needed operation (len, \>, +) without explicit annotation. Python 3.12 TypeVar and Protocol add optional static checking on top.
 
 === Function signatures — defaults and named args, but no \*args
 
@@ -4359,7 +4406,7 @@ fn main() {
 
 = Closures
 
-A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.
+\#warn Dead assignment — 'base' is overwritten before being read \@TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.
 
 === Integer capture
 
@@ -4418,13 +4465,13 @@ fn main() {
 
 === Capture timing
 
-'base' is 10 when the lambda is written but 20 when it is called. The lambda sees the value at call time: 20.
+Closures capture at definition time. 'base' is 10 when the lambda is written; reassigning 'base' to 20 afterwards does not affect the captured value.
 
 ```rust
   base = 10;
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
-  assert(add_base(5) == 25, "sees base=20 at call time: {add_base(5)}");
+  assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
 ```
 
 === Non-capturing lambdas with higher-order functions
@@ -4453,7 +4500,7 @@ Workaround for captured value + higher-order function: pass the extra value as a
 
 = Coroutines
 
-A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
+\#warn Variable d is never read \@TITLE: Lazy sequences with generators and yield A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
 
 === Declaring a generator function
 
@@ -5547,71 +5594,35 @@ Returns microseconds elapsed since program start (monotonic clock). Unaffected b
 
 Loft is under active development. Everything documented on the language pages works today.
 
-=== Completed in 0.8.3
+=== In progress — 0.8.3
 
-==== Closure capture
+==== Cross-scope closures (A5.6)
 
-Lambdas can now read variables from the surrounding scope. The compiler detects which outer variables the lambda body uses and injects them at call time:
+Same-scope capture (integers, text, mutable) works. One restriction remains: a capturing lambda returned from a function and called from a different scope does not yet work. The fix requires extending `Type::Function` to carry the closure DbRef alongside the definition number.
 
-```
-offset = 100;
-shift = fn(x: integer) -> integer { x + offset };
-assert(shift(5) == 105, "shift(5)");
-```
+==== WASM threading (W1.18)
 
-Note: captured lambdas only work when called directly by name in the same scope. Passing a capturing lambda to `map`/`filter`/`reduce` is not yet supported — pass the extra value as an explicit argument instead.
-
-==== Tuple types
-
-Return multiple values from a function and destructure them at the call site — no struct definition needed:
-
-```
-fn min_max(lo: integer, hi: integer) -> (integer, integer) {
-    (lo, hi)
-}
-
-(a, b) = min_max(1, 5);
-assert(a == 1 && b == 5, "min_max");
-```
-
-==== Coroutines / generators
-
-Lazy sequences with `yield` — generate values on demand without building a collection:
-
-```
-fn count_up(start: integer, stop: integer) -> iterator<integer> {
-    for i in start..stop {
-        yield i;
-    }
-}
-
-total = 0;
-for n in count_up(1, 6) { total += n; }
-assert(total == 15, "sum 1..5");
-```
-
-Use `yield from sub_gen()` to forward all values from a sub-generator inline. Use `next(gen)` and `exhausted(gen)` for manual iteration.
+`par(...)` loops are currently sequential in the WASM build. Threading support requires a Web Worker pool, which is planned as a follow-on item.
 
 === Coming next
 
-=== HTTP client and JSON
+==== HTTP client
 
-Built-in HTTP requests and automatic JSON serialization:
+Built-in HTTP requests using `ureq`:
 
 ```
-#json
 struct User { name: text, age: integer }
 
 resp = http_get("https://api.example.com/users/1");
 if resp.ok() {
-    user = User.from_json(resp.body);
+    user = User.parse(resp.body);
     println("{user.name} is {user.age}");
 }
 ```
 
-The `#json` annotation generates `to_json` and `from_json` methods automatically for any struct.
+JSON parsing and serialisation already work today via `Type.parse(text)` and the `:j` format specifier. The remaining work is the HTTP transport layer.
 
-=== Interactive mode
+==== Interactive mode
 
 Running `loft` with no arguments will start an interactive session:
 
@@ -5628,7 +5639,7 @@ $ loft
 
 Definitions persist across lines. A syntax error discards the failed line and continues.
 
-=== Web IDE
+==== Web IDE
 
 A browser-based IDE that runs the full Loft interpreter as WebAssembly — no installation, no server:
 
