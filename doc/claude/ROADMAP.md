@@ -27,7 +27,12 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
 | W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
 | W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
-| A5.6      | Closure: capture-at-definition-time semantics             | H  | ✓      |              | PLANNING.md § A5.6            |
+| A5.6      | Closure: cross-scope capture (16-byte fn-ref + chained call) | H  | ✓      | A5.6a–g ✓   | PLANNING.md § A5.6            |
+| A5.6-1    | ↳ Widen `Type::Function` to 16 bytes + `OpVarFnRef`       | S  | ✓      |              | variables/mod.rs, codegen.rs  |
+| A5.6-2    | ↳ `OpStoreClosure` — embed closure DbRef in fn-ref slot   | S  | ✓      | A5.6-1       | fill.rs, vectors.rs           |
+| A5.6-3    | ↳ `fn_call_ref` reads closure from bytes 4..16            | S  | ✓      | A5.6-2       | state/mod.rs, control.rs      |
+| A5.6-4    | ↳ `parse_part`: chained `expr(args)` on `Type::Function`  | S  | ✓      | A5.6-3       | operators.rs                  |
+| A5.6-5    | ↳ Un-ignore `closure_capture_text` test                   | XS | ✓      | A5.6-4       | tests/expressions.rs          |
 | CO1.7     | Coroutines: yield from inside for-loops                   | M  | ✓      | CO1.1–CO1.6  | PLANNING.md § CO1.7           |
 | CO1.8     | ↳ Multi-text parameters + nested-block safety             | S  | ✓      | CO1.3d       | PLANNING.md § CO1.8           |
 | CO1.9     | ↳ Store iteration generation guard in release builds      | S  | ✓      | CO1.6        | PLANNING.md § CO1.9           |
