@@ -46,6 +46,8 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
+- [I — Interfaces](#i--interfaces)
+  - [I1–I10 — Structural interfaces and bounded generics](#i1i10--structural-interfaces-and-bounded-generics) *(0.8.3)*
 - [P — Prototype Features](#p--prototype-features)
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
@@ -924,6 +926,84 @@ negligible.
 | `coroutine_store_mutation_detected` | Insert a record between two `next()` calls in both debug and release | `panic!` with "mutated between coroutine next() calls" |
 
 **Effort:** Small (9 targeted line-range edits, no new opcodes)
+**Target:** 0.8.3
+
+---
+
+## I — Interfaces
+
+### I1–I10 — Structural interfaces and bounded generics
+
+**Motivation:** loft's single-`<T>` generics are opaque — no method calls,
+operators, or comparisons are allowed on a generic `T`. Every generic algorithm
+that needs ordering or addition must be reimplemented per type or written in
+native Rust. Structural interfaces fix this by adding compile-time constraints
+on `T`, enabling bounded generics (`<T: Ordered>`) without vtables or runtime cost.
+
+Full design: [INTERFACES.md](INTERFACES.md).
+
+**Design principles:**
+- **Implicit satisfaction (structural):** a type satisfies an interface by having
+  the required methods — no explicit `impl` declaration needed, matching loft's
+  existing dispatch model.
+- **Static dispatch only:** interfaces are generic constraints, not types.
+  `x: Ordered` as a variable type is a compile error; there are no vtables.
+- **`Self` keyword:** refers to the concrete satisfying type inside interface bodies.
+- **Single bound per type parameter:** consistent with the existing single `<T>`.
+
+**Standard library interfaces** (declared in `default/01_code.loft`):
+
+```loft
+pub interface Ordered   { fn OpLt(self: Self, other: Self) -> boolean
+                          fn OpGt(self: Self, other: Self) -> boolean }
+pub interface Equatable { fn OpEq(self: Self, other: Self) -> boolean
+                          fn OpNe(self: Self, other: Self) -> boolean }
+pub interface Addable   { fn OpAdd(self: Self, other: Self) -> Self }
+pub interface Printable { fn to_text(self: Self) -> text }
+```
+
+**Example:**
+
+```loft
+interface Ordered {
+    fn OpLt(self: Self, other: Self) -> boolean
+}
+
+fn max_of<T: Ordered>(v: vector<T>) -> T {
+    result = v[0];
+    for item in v { if result < item { result = item; } }
+    result
+}
+
+struct Score { value: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+
+// Score satisfies Ordered automatically — no explicit declaration needed.
+best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
+```
+
+**Steps:**
+
+| ID  | Title | E | Source |
+|-----|-------|---|--------|
+| I1  | Lexer: add `interface` keyword | XS | `src/lexer.rs` |
+| I2  | Data: `DefType::Interface` + `Definition.bounds: Vec<u32>` | S | `src/data.rs` |
+| I3  | Parser first pass: parse interface declarations | M | `src/parser/definitions.rs` |
+| I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | `src/parser/definitions.rs` |
+| I5  | Type resolution: validate interface bodies; resolve `Self` | S | `src/typedef.rs` |
+| I6  | Satisfaction checking at generic instantiation | M | `src/parser/definitions.rs` |
+| I7  | Allow bounded method calls on `T` inside generic bodies | S | `src/parser/control.rs` |
+| I8  | Allow bounded operator use on `T` (`OpCamelCase` in bound) | S | `src/parser/operators.rs` |
+| I9  | Standard library interfaces + convert stdlib generics | M | `default/01_code.loft` |
+| I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | `src/diagnostics.rs` |
+
+**Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
+I2 is parallel with I1. I5 depends on I3. I10 depends on I6.
+
+**Native codegen impact:** none. Interfaces produce no bytecode and no Rust output.
+Specialised copies of bounded generic functions are identical to ordinary concrete
+functions from the codegen perspective.
+
 **Target:** 0.8.3
 
 ---
