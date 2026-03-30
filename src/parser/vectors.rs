@@ -639,10 +639,12 @@ impl Parser {
             alloc_steps.push(crate::data::v_set(w, Value::Null));
             alloc_steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
             let n_attrs = self.data.attributes(closure_rec_d);
+            let mut captured_var_nrs: Vec<u16> = Vec::new();
             for aid in 0..n_attrs {
                 let cap_name = self.data.attr_name(closure_rec_d, aid);
                 let v_nr = self.vars.var(&cap_name);
                 if v_nr != u16::MAX {
+                    captured_var_nrs.push(v_nr); // A5.6d: record for call-site var_usages
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
@@ -652,6 +654,7 @@ impl Parser {
                     ));
                 }
             }
+            self.last_closure_captured_vars = captured_var_nrs;
             // Final expression: the closure ref itself.
             alloc_steps.push(Value::Var(w));
             let closure_alloc = crate::data::v_block(alloc_steps, rec_tp.clone(), "closure alloc");
@@ -696,7 +699,7 @@ impl Parser {
         let count = captures.len();
         diagnostic!(
             self.lexer,
-            Level::Warning,
+            Level::Debug,
             "closure record '{record_name}' created with {count} {}: {}",
             if count == 1 { "field" } else { "fields" },
             fields.join(", ")

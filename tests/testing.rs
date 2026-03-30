@@ -395,6 +395,9 @@ impl Test {
         }
         let mut found = "".to_string();
         for l in p.diagnostics.lines() {
+            if l.starts_with("Debug: ") {
+                continue; // Debug-level diagnostics are not surfaced in tests
+            }
             if expected.contains(l) {
                 expected.remove(l);
             } else {

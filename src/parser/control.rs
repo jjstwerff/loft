@@ -1831,10 +1831,14 @@ impl Parser {
                         self.var_usages(v_nr, true);
                         let mut args = vec![];
                         // A5.6b.2: inject work-buffer DbRef blocks before __closure (zero-param case).
+                        // A5.6f: clear the work buffer before each call so loop iterations start fresh.
                         let ref_def = self.data.def_nr("reference");
                         for &wv in &work_vars {
                             args.push(v_block(
-                                vec![self.cl("OpCreateStack", &[Value::Var(wv)])],
+                                vec![
+                                    crate::data::v_set(wv, Value::Text(String::new())),
+                                    self.cl("OpCreateStack", &[Value::Var(wv)]),
+                                ],
                                 Type::Reference(ref_def, vec![wv]),
                                 "cref_work_buf",
                             ));
@@ -1843,6 +1847,10 @@ impl Parser {
                         // inject it the same way try_fn_ref_call does for non-zero-param calls.
                         if let Some(closure_alloc) = self.last_closure_alloc.take() {
                             args.push(*closure_alloc);
+                            // A5.6d: mark captured outer vars as read at the call site.
+                            for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+                                self.var_usages(cv, true);
+                            }
                         } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
                             args.push(Value::Var(closure_w));
                         }
@@ -2035,10 +2043,14 @@ impl Parser {
             // A5.6b.2: inject hidden work-buffer DbRef args for text-returning lambdas.
             // Each block emits OpCreateStack → 12-byte DbRef, matching callee's &text param.
             // Order: visible params → work bufs → __closure (must match callee slot layout).
+            // A5.6f: prepend v_set(wv, "") to clear the buffer so loop iterations start fresh.
             let ref_def = self.data.def_nr("reference");
             for &wv in &work_vars {
                 converted.push(v_block(
-                    vec![self.cl("OpCreateStack", &[Value::Var(wv)])],
+                    vec![
+                        crate::data::v_set(wv, Value::Text(String::new())),
+                        self.cl("OpCreateStack", &[Value::Var(wv)]),
+                    ],
                     Type::Reference(ref_def, vec![wv]),
                     "cref_work_buf",
                 ));
@@ -2048,6 +2060,10 @@ impl Parser {
             // the slot-position issue with pre-allocated work variables.
             if let Some(closure_alloc) = self.last_closure_alloc.take() {
                 converted.push(*closure_alloc);
+                // A5.6d: mark captured outer vars as read at the call site.
+                for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+                    self.var_usages(cv, true);
+                }
             } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
                 converted.push(Value::Var(closure_w));
             }

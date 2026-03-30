@@ -1083,10 +1083,6 @@ fn p1_1_lambda_void_body() {
     assert(count == 42, \"expected 42, got {count}\");
 }"
     )
-    .warning(
-        "closure record '__closure_0' created with 1 field: count(integer) \
-         at p1_1_lambda_void_body:3:40",
-    )
     .result(loft::data::Value::Null);
 }
 

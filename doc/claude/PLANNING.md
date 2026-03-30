@@ -440,7 +440,138 @@ the recompile overhead that caching was designed to address)
   calls requires T1.8a first.
 
   **Effort:** Small
-  **Target:** 0.9.0
+  **Target:** 0.8.3
+
+- **T1.10 — Same-element-type tuple coverage across data sources** (0.8.3):
+
+  T1.1–T1.8b verified tuples with *mixed* element types (`(integer, text)`,
+  `(integer, float)`, etc.) but left same-element-type (homogeneous) tuples
+  undertested, especially when the elements come from sources other than simple
+  literals.  This item adds tests for four practically important categories,
+  mirroring the CO1.7 iterator-source matrix.
+
+  **1 — Text elements (homogeneous text tuple)**
+  ```
+  fn make_greeting(first: text, last: text) -> (text, text) {
+      ("Hello " ++ first, last)
+  }
+  (g, s) = make_greeting("World", "!");
+  assert(g == "Hello World" && s == "!");
+  ```
+  Both elements are `text`.  Verifies that `T1.8b` lifetime tracking and
+  `OpPutText` work correctly when *all* tuple positions are text slots, not just
+  one mixed into scalars.  The `owned_elements` cleanup must emit `OpFreeRef`
+  for both positions at scope exit.
+
+  **2 — Store-backed text (text from a struct field)**
+  ```
+  struct Label { name: text }
+  fn label_pair(a: Label, b: Label) -> (text, text) {
+      (a.name, b.name)
+  }
+  la = Label { name: "alpha" };
+  lb = Label { name: "beta" };
+  (n1, n2) = label_pair(la, lb);
+  assert(n1 == "alpha" && n2 == "beta");
+  ```
+  Elements are texts read from struct record fields (heap-allocated strings).
+  Verifies that reading a `text` field and storing it into a tuple element does
+  not produce a dangling reference: the field read returns a `Str` backed by the
+  store, but the tuple element must be a self-contained owned value.
+
+  **3 — Struct record references (whole-store elements)**
+  ```
+  struct Point { x: integer, y: integer }
+  fn two_points(a: Point, b: Point) -> (Point, Point) {
+      (b, a)            // swap
+  }
+  p1 = Point { x: 1, y: 2 };
+  p2 = Point { x: 3, y: 4 };
+  (q1, q2) = two_points(p1, p2);
+  assert(q1.x == 3 && q2.x == 1);
+  ```
+  Both elements are `Type::Reference` (12-byte `DbRef`).  Verifies that two
+  adjacent DbRef slots in a tuple are laid out correctly and that element access
+  (`q1.x`) produces the right field read after destructuring.
+
+  **4 — Elements sourced from a vector**
+  ```
+  fn first_two(v: vector<integer>) -> (integer, integer) {
+      (v[0], v[1])
+  }
+  nums = [10, 20, 30];
+  (a, b) = first_two(nums);
+  assert(a == 10 && b == 20);
+  ```
+  Both elements come from indexed vector reads.  Verifies that the vector-element
+  `OpVarInt` / index-add path produces the correct values in consecutive tuple
+  slots and that destructuring (`(a, b) = ...`) correctly assigns each slot.
+
+  **Tests to add** (`tests/expressions.rs`, T1.10 section, or extend `tests/scripts/50-tuples.loft`):
+
+  | Test name | Element type | Checks |
+  |-----------|-------------|--------|
+  | `tuple_homogeneous_text` | `(text, text)` | both text slots live/freed correctly |
+  | `tuple_store_text_fields` | `(text, text)` from struct fields | field-text into tuple element |
+  | `tuple_struct_refs` | `(Point, Point)` | two DbRef slots, field access after destruct |
+  | `tuple_from_vector_elements` | `(integer, integer)` from vector | index read into tuple slots |
+
+  **Effort:** Small
+  **Target:** 0.8.3
+
+- **T1.11 — Tuple type constraints: struct field rejection + compound assignment** (0.8.3):
+
+  Two small correctness items that prevent silently wrong code or confusing errors when
+  tuples are used in unsupported positions:
+
+  **T1.11a — Reject `Type::Tuple` in struct field positions** (Issue 93):
+
+  Tuples are stack-only values; they cannot be embedded in a heap-allocated struct record.
+  Currently `struct Foo { pair: (integer, integer) }` is accepted at parse time and reaches
+  codegen, where it produces wrong field offsets.
+
+  Fix: in `typedef.rs::fill_all()`, after type resolution, check each field type and emit a
+  compile error if `Type::Tuple` appears in a struct field position:
+
+  ```rust
+  // T1.11a: tuples are stack-only — reject in struct field positions.
+  if matches!(field_tp, Type::Tuple(_)) {
+      self.data.add_error(
+          def_nr,
+          "struct field cannot have a tuple type — tuples are stack-only values",
+      );
+  }
+  ```
+
+  **T1.11b — Reject compound assignment on tuple LHS** (Issue 97):
+
+  `(a, b) += expr` falls through the assignment loop and produces a generic internal error
+  instead of a clear diagnostic. The compound operators (`+=`, `-=`, etc.) are not defined
+  for tuple types and the expression is always a mistake.
+
+  Fix: in `parse_assign` (operators.rs or expressions.rs), before entering the per-element
+  loop, check for a compound operator with a tuple LHS and emit a targeted error:
+
+  ```rust
+  // T1.11b: compound assignment on a tuple LHS is not supported.
+  if is_compound_op && matches!(lhs_tp, Type::Tuple(_)) {
+      self.data.add_error(
+          self.context,
+          "compound assignment is not supported for tuple destructuring — use `(a, b) = expr` instead",
+      );
+      return Value::Nothing;
+  }
+  ```
+
+  **Tests to add** (`tests/parse_errors.rs`):
+
+  | Test name | Input | Expected error |
+  |-----------|-------|---------------|
+  | `tuple_in_struct_field_rejected` | `struct Foo { pair: (integer, integer) }` | "struct field cannot have a tuple type" |
+  | `tuple_compound_assign_rejected` | `(a, b) += (1, 2)` | "compound assignment is not supported for tuple destructuring" |
+
+  **Effort:** XS
+  **Target:** 0.8.3
 
 **Effort:** Very High
 **Target:** 1.1+
@@ -497,9 +628,303 @@ the recompile overhead that caching was designed to address)
   operator codegen path; stack.position manually adjusted.  `push_null_value` writes
   `i32::MIN` / `i64::MIN` for typed null returns.
 
+- **CO1.7 — Yield from inside for-loops over multiple collection types** (0.8.3):
+
+  Existing tests only yield from simple sequential `yield expr;` statements.  This item
+  verifies that the coroutine save/restore machinery is correct when a `yield` occurs
+  *inside* a `for` loop body — a structurally different suspension point where the
+  iterator state (index variable, text byte offset, DbRef) must survive the yield/resume
+  cycle in `stack_bytes`.
+
+  Four collection types are tested, each combined with at least one plain `yield` outside
+  the loop so that both suspension-from-loop and suspension-from-statement are exercised
+  in the same generator:
+
+  **1 — Text (character iteration)**
+  ```
+  fn yield_chars(s: text) -> iterator<character> {
+      yield ' ';                         // plain yield before loop
+      for c in s { yield c; }           // yield inside text loop
+  }
+  // consumer: collect chars from yield_chars("ab") → [' ', 'a', 'b']
+  ```
+  The text-loop iterator state is two `i32` slots (`{id}#next` byte offset and
+  `{id}#index`).  Both must be serialised to `stack_bytes` at yield and restored on
+  resume; the text parameter/local itself must also survive (CO1.3d already handles this,
+  but the combination is not yet tested).
+
+  **2 — Store-backed string (text field of a struct record)**
+  ```
+  struct Item { name: text }
+  fn yield_name_chars(it: Item) -> iterator<character> {
+      yield ' ';
+      for c in it.name { yield c; }
+  }
+  ```
+  `it.name` is a `text` field on a heap-allocated struct record.  The field read
+  returns a live `String` reference; the text-loop position variables for `c` index
+  into that string.  Verifies that field-text iteration inside a generator does not
+  corrupt the DbRef to the struct record across yield/resume.
+
+  **3 — Whole store (all records of a struct type)**
+  ```
+  struct Node { value: integer }
+  fn yield_all_values() -> iterator<integer> {
+      yield 0;                           // sentinel before loop
+      for n in Node { yield n.value; }  // iterate every Node record
+  }
+  ```
+  Store iteration uses a `DbRef`-based index variable; the `DbRef` cursor must survive
+  serialisation.  Any structural mutation of the Node store between `next()` calls is
+  already caught by S28's generation-counter guard in debug builds.
+
+  **4 — Vector elements**
+  ```
+  fn yield_vec_items(v: vector<integer>) -> iterator<integer> {
+      yield -1;                          // sentinel before loop
+      for e in v { yield e; }
+      yield -2;                          // sentinel after loop
+  }
+  ```
+  Vector iteration uses an integer index variable.  The `vector<integer>` argument is
+  copied to a temp at loop entry (`vec_var`); the temp DbRef and the index must both
+  survive yield/resume.
+
+  **Implementation notes:**
+
+  No new opcodes are needed.  The existing `coroutine_yield` / `coroutine_next` path
+  serialises the full `[stack_base .. stack_pos)` range to `stack_bytes`, which covers
+  all iterator state variables regardless of loop kind.  If any test fails it will
+  indicate a specific gap in the serialisation (e.g. text-loop position variables not
+  being included in the saved slice, or a DbRef cursor being relative to a stack pointer
+  that shifts after resume).
+
+  **Tests to add** (`tests/expressions.rs`, CO1.7 section, or extend `tests/scripts/51-coroutines.loft`):
+
+  | Test name | Collection type | Checks |
+  |-----------|----------------|--------|
+  | `coroutine_yield_from_text_loop` | `text` literal | char sequence, plain yield before loop |
+  | `coroutine_yield_from_store_text_loop` | text field of struct | field-text chars, DbRef survives |
+  | `coroutine_yield_from_whole_store` | whole struct store | all records yielded |
+  | `coroutine_yield_from_vector_loop` | `vector<integer>` | pre/post sentinels + all elements |
+
 **Effort:** Very High
 **Depends:** TR1
-**Target:** 0.8.3 (all CO1.x sub-items completed in 0.8.3; originally planned for 1.1+)
+**Target:** 0.8.3 (CO1.1–CO1.6 completed; CO1.7 in progress)
+
+---
+
+**CO1.8 — Coroutine generator: multi-text and nested-block safety** (0.8.3, depends on CO1.3d ✓):
+
+CO1.3d fixed text serialisation for the common single-text-parameter case.  Three
+related gaps are not yet tested and may still corrupt memory:
+
+**CO1.8a — Multiple text parameters:**
+
+A generator with two or more `text` parameters must serialise all of them on
+`coroutine_create`, not only the first.  `serialise_text_args` iterates attribute
+definitions by index; the test only covers a single text param.
+
+```loft
+fn join_chars(a: text, b: text) -> iterator<character> {
+    for c in a { yield c; }
+    for c in b { yield c; }
+}
+// consumer: collect all → chars of "hello" ++ chars of "world"
+```
+
+If only `a` is serialised and `b` is not, the second `for c in b` loop yields
+garbage after the first resume.
+
+**CO1.8b — Text locals created after first yield:**
+
+A text local that is assigned inside the generator body (after a `yield`) is
+allocated as a Zone-2 slot.  `parse_code` inserts `v_set(wv, Text(""))` for it,
+so the slot is initialised on entry.  On resume, `coroutine_next` restores
+`stack_bytes` but does NOT re-run the initialisations — the slot gets its
+value from `stack_bytes`.  If the serialisation window does not include the
+zone-2 slot (e.g. if `stack_base` was snapshotted before the slot was pushed),
+the text local is zeroed on resume.
+
+```loft
+fn lazy_labels() -> iterator<text> {
+    yield "first";
+    let label = "second";   // text local created after first yield
+    yield label;
+}
+```
+
+If `label`'s slot is outside `[stack_base .. stack_pos)` at the first yield,
+it will be zero on resume and `yield label` outputs garbage.
+
+**CO1.8c — Text locals in deeply nested blocks:**
+
+`drop_text_locals_in_bytes` (S25.3) frees text locals that are alive in
+`stack_bytes` when a coroutine is freed.  It handles the simple case (text
+locals in the generator body at top scope).  Deeper nesting — text locals
+inside a `for` loop that is inside an `if` branch that is inside the generator
+— may produce additional text slots that `drop_text_locals_in_bytes` does not
+walk.  Result: memory leak on generator exhaustion or early `break`.
+
+```loft
+fn conditional_labels(v: vector<text>) -> iterator<text> {
+    if v.size > 0 {
+        for item in v {
+            let upper = item.upper();   // text local in nested block
+            yield upper;
+        }
+    }
+}
+```
+
+**Concrete source locations and fix paths:**
+
+**CO1.8a — `src/state/mod.rs`, `serialise_text_args` (line 474)**
+
+The loop already iterates ALL `def.attributes` and increments `byte_offset` per
+attribute size — it does not stop at the first text parameter.  The existing
+implementation is likely correct; the fix is to write the test and confirm.  If the
+test fails, check the `break` condition at line 494:
+```rust
+if byte_offset >= args_size as usize { break; }
+```
+If any text attribute is laid out past the `args_size` boundary this guard would
+prematurely exit.  Fix: compute `args_size` from the full attribute list rather than
+from `stack_pos - args_base`; or remove the guard and let the offset check at
+`off + size_of::<Str>() <= stack_bytes.len()` handle bounds.
+
+**CO1.8b — `src/state/mod.rs`, `coroutine_yield` and `generator_zone2_size` (lines 350–395)**
+
+At first resume `coroutine_next` zeros the Zone-2 region
+(`generator_zone2_size` bytes past the arg region).  `parse_code` inserts
+`v_set(wv, Text(""))` for every Zone-2 text variable, so the slot is
+initialised to an empty `Str` on entry.  At the first yield, `coroutine_yield`
+snapshots `[stack_base..stack_pos)` — `stack_base` is set to the bottom of the
+current call frame, which includes both the arg region and the Zone-2 region.
+This means the empty-`Str` value for `label` IS captured in `stack_bytes` at the
+first yield; on resume the slot is restored with the empty `Str`; `label = "second"`
+then overwrites it correctly.
+
+If `coroutine_text_local_after_yield` fails, verify that `stack_base` at yield time
+equals the start of the generator's call frame (not the start of the arg region
+only).  The relevant line in `coroutine_yield` is the snapshot:
+```rust
+let snap = &self.database.store(&self.stack_cur)
+    .as_bytes()[stack_base as usize .. self.stack_pos as usize];
+frame.stack_bytes = snap.to_vec();
+```
+If `stack_base` was advanced past Zone-2 init, extend it back to
+`args_base - zone2_size`.
+
+**CO1.8c — `src/state/mod.rs`, `drop_text_locals_in_bytes` (line 398)**
+
+The function already walks ALL variables in `def.variables` (not a fixed window)
+and uses an offset-bounds check:
+```rust
+if off + std::mem::size_of::<String>() > bytes.len() { continue; }
+```
+Variables in nested blocks have their own stack slots that are part of the same
+function frame; as long as their slot offset is within `bytes.len()`, they are freed.
+
+If `coroutine_text_local_nested_block` leaks, the failure mode is: the text local's
+slot was allocated AFTER the yield snapshot was taken (i.e., the nested block was
+never entered before the yield), so `off >= bytes.len()`.  In this case the slot is
+correctly skipped (the `String` is zeroed at first resume and never set, so there is
+nothing to free).  A real leak would require the block to have been entered, the
+`String` set, then the generator yielded without the slot being in the snapshot.
+That should not happen with the current `stack_base` pointing to the full frame.
+
+**Tests to add** (`tests/expressions.rs`):
+
+| Test name | File | Checks |
+|-----------|------|--------|
+| `coroutine_two_text_params` | expressions.rs | both param chars correct on each resume |
+| `coroutine_text_local_after_yield` | expressions.rs | correct value on second resume |
+| `coroutine_text_local_nested_block` | expressions.rs | no panic; run under Valgrind or `LOFT_LOG=ref_debug` for leak check |
+
+**Effort:** Small (tests + targeted fixes if they fail)
+**Target:** 0.8.3
+
+---
+
+**CO1.9 — Store iteration safety: generation guard in release builds** (0.8.3, depends on CO1.6 ✓):
+
+`S28` added a generation-counter guard that fires when a coroutine resumes and
+the store it was iterating has been structurally mutated between `next()` calls
+(records added or removed).  The guard currently uses `debug_assert_eq!` — it
+fires in debug builds but is **compiled out in release**, leaving silent wrong
+behaviour (skipped or duplicated records, or a stale DbRef dereference crash).
+
+The guard is a single integer comparison (generation counter in the store header).
+The failure mode without it — iterating a modified store — is severe and
+non-obvious, so it should be always-on:
+
+**Concrete source changes (5 locations in 2 files):**
+
+**`src/store.rs` — remove `#[cfg(debug_assertions)]` from all generation sites:**
+
+1. **`Store` struct** (line 56–57): remove `#[cfg(debug_assertions)]` attribute from
+   `pub generation: u32`.  The field is now always compiled in.
+
+2. **`Store::new`** (line 103–104) and **`Store::new_at_position`** (line 136–137):
+   remove `#[cfg(debug_assertions)]` from `generation: 0` in struct literals.
+
+3. **`Store::claim`** (lines 181–184): replace
+   ```rust
+   #[cfg(debug_assertions)]
+   { self.generation = self.generation.wrapping_add(1); }
+   ```
+   with the unconditional statement (no cfg gate).
+
+4. **`Store::resize`** (lines 279–282) and **`Store::delete`** (lines 319–322):
+   same change — remove the `#[cfg(debug_assertions)]` wrapper from each
+   `self.generation.wrapping_add(1)` statement.
+
+5. **`clone_locked_for_worker`** (line 439–441) and **`borrow_locked_for_light_worker`**
+   (line 460–462, once A14.1 lands): remove `#[cfg(debug_assertions)]` from
+   `generation: self.generation` in each struct literal.
+
+**`src/state/mod.rs` — promote generation check from debug-only to always-on:**
+
+6. **`CoroutineFrame` struct** (lines 89–90): remove `#[cfg(debug_assertions)]` from
+   `pub saved_store_generations: Vec<(u16, u32)>`.
+
+7. **`CoroutineFrame` initialisation** in `coroutine_create` (lines 557–558): remove
+   `#[cfg(debug_assertions)]` from `saved_store_generations: Vec::new()`.
+
+8. **`coroutine_yield` generation snapshot** (lines 881–892): remove the outer
+   `#[cfg(debug_assertions)]` block.  The snapshot is now always taken.
+
+9. **`coroutine_next` check** (lines 641–659): replace the entire
+   `#[cfg(debug_assertions)] { debug_assert!(...) }` block with:
+   ```rust
+   // CO1.9: generation guard is always-on; debug_assert would be elided in release.
+   for (store_nr, saved_gen) in &self.coroutine_frame(idx).saved_store_generations.clone() {
+       let cur_gen = self.database.allocations
+           .get(*store_nr as usize)
+           .map_or(0, |s| s.generation);
+       if cur_gen != *saved_gen {
+           panic!(
+               "store {store_nr} was mutated between coroutine next() calls \
+                (generation at yield: {saved_gen}, now: {cur_gen}); \
+                DbRef locals held by the generator may be stale — see PLANNING.md § CO1.9"
+           );
+       }
+   }
+   ```
+
+**No new opcodes.** The generation counter is a plain `u32`; the check is a tight
+integer comparison per live store (typically 1–3 stores).  Cost in release builds:
+negligible.
+
+**Tests to add** (`tests/expressions.rs`):
+
+| Test name | Scenario | Expected |
+|-----------|----------|---------|
+| `coroutine_store_mutation_detected` | Insert a record between two `next()` calls in both debug and release | `panic!` with "mutated between coroutine next() calls" |
+
+**Effort:** Small (9 targeted line-range edits, no new opcodes)
+**Target:** 0.8.3
 
 ---
 
@@ -567,7 +992,7 @@ bounds, partial-key match iteration, and vector comprehensions over key ranges.
 `src/parser/fields.rs` and `src/codegen_runtime.rs`. No new opcodes.
 
 **Effort:** M
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
@@ -807,9 +1232,11 @@ update the ignore reason from the old "A5, 1.1+" text to "A5.6c" once the fix is
 implemented.
 
 **Effort:** A5.6b.1 Medium · A5.6b.2 Small · A5.6c Medium
-**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c completed; A5.6 capture-at-definition-time also 0.8.3)
+**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c, A5.6d, A5.6e, A5.6f completed; full cross-scope A5.6 also 0.8.3)
 
-**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** (0.8.3, depends on A5.6b.1–A5.6c ✓):
+---
+
+**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** (0.8.3, depends on A5.6b.1–A5.6f ✓):
 After A5.6b.1, A5.6b.2, and A5.6c are implemented, the last open item for
 `closure_capture_text` is the **cross-scope** pattern: a capturing lambda returned
 from a function and then called from outside.  Two distinct problems remain:
@@ -987,20 +1414,125 @@ After the 16-byte fn-ref lands, these edge cases remain deferred:
 
 ---
 
+**Implementation steps (independently testable):**
+
+**A5.6-1 — Widen `Type::Function` to 16 bytes**
+
+- `src/variables/mod.rs`: change the `Type::Function(_, _)` arm in `size()` from `4` to
+  `4 + size_of::<DbRef>() as u16` (= 16).
+- `src/state/codegen.rs` (`generate_var`): change the `Type::Function` arm from emitting
+  `OpVarInt` (4 bytes) to a new `OpVarFnRef` (16 bytes).
+- `src/fill.rs`: add `op_var_fn_ref` — reads `pos: u16` from bytecode; pushes 16 bytes
+  starting at `stack_pos - pos` onto the stack (same as `op_var_ref` but 4 bytes larger).
+
+**Pass:** all existing non-capturing lambda tests pass; fn-ref variable occupies 16 bytes.
+
+---
+
+**A5.6-2 — `OpStoreClosure` + embed closure DbRef in fn-ref**
+
+- `src/fill.rs`: add `op_store_closure` — reads `fn_ref_pos: u16` and `closure_pos: u16`
+  from bytecode; copies 12 bytes from `stack_pos - closure_pos` to
+  `(stack_pos - fn_ref_pos) + 4`. No stack push/pop.
+- `src/parser/vectors.rs` (`emit_lambda_code`): for capturing lambdas, after the existing
+  `alloc_steps` (which produce the closure record in work var `w`), emit:
+  1. `v_set(fn_ref_var, Value::Int(d_nr as i32))` — writes d_nr into bytes 0..4.
+  2. `cl("OpStoreClosure", &[Value::Var(fn_ref_var), Value::Var(w)])` — embeds the
+     12-byte DbRef from `w` into fn-ref bytes 4..16.
+  Store result in `fn_ref_var` (a new Zone-1 work variable of type `Type::Function`).
+  **Drop** `self.last_closure_alloc` — the closure is now embedded in the fn-ref value and
+  no longer injected at call sites.
+
+**Pass:** a capturing lambda assigned to a local variable carries its closure DbRef in the
+fn-ref slot; `LOFT_LOG=ref_debug` shows the DbRef bytes 4..16 non-zero.
+
+---
+
+**A5.6-3 — `fn_call_ref` reads closure from fn-ref bytes 4..16**
+
+- `src/state/mod.rs` (`fn_call_ref`): after reading `d_nr` from `*get_var::<i32>(fn_var)`,
+  read `store_nr` from `*get_var::<i32>(fn_var - 4)`.  If `store_nr != -1` (non-null),
+  read `rec` and `pos` and push the 12-byte DbRef onto the stack as the `__closure`
+  argument.  Adjust `total_arg_size` accordingly.
+  ```rust
+  let store_nr = *self.get_var::<i32>(fn_var - 4);
+  let has_closure = store_nr != -1;
+  if has_closure {
+      let rec = *self.get_var::<i32>(fn_var - 8);
+      let pos = *self.get_var::<i32>(fn_var - 12);
+      self.push_stack(store_nr);
+      self.push_stack(rec);
+      self.push_stack(pos);
+  }
+  ```
+  (Offset arithmetic: fn-ref occupies bytes `[fn_var_abs .. fn_var_abs+16]`; d_nr is at
+  offset 0, store_nr at +4, rec at +8, pos at +12.  `get_var::<i32>(fn_var)` reads from
+  `stack_pos - fn_var` = `fn_var_abs`; `fn_var - 4` reads `fn_var_abs + 4`, etc.)
+- `src/parser/control.rs` (`try_fn_ref_call`, both paths): remove
+  `last_closure_alloc.take()` injection and `closure_vars` lookup — the closure is now
+  pushed by `fn_call_ref` at runtime from the embedded DbRef.
+
+**Pass:** `closure_capture_text_return` and `closure_capture_text_integer_return` pass
+without the closure being injected at the call site.
+
+---
+
+**A5.6-4 — `parse_part`: chained `(...)` call on `Type::Function`**
+
+- `src/parser/operators.rs` (`parse_part`): extend the postfix loop:
+  ```rust
+  while self.lexer.peek_token(".")
+      || self.lexer.peek_token("[")
+      || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+  {
+      if self.lexer.has_token("(") {
+          if let Type::Function(param_types, ret_type) = t.clone() {
+              // Store fn-ref in work var so CallRef can name it.
+              let fn_work = self.create_unique("__fnref_tmp", &t);
+              if !self.first_pass {
+                  let orig = std::mem::replace(code, Value::Var(fn_work));
+                  *code = Value::Block(Box::new(Block {
+                      ops: vec![Value::Set(fn_work, Box::new(orig))],
+                      result: Box::new(Value::Var(fn_work)),
+                      ..Default::default()
+                  }));
+              }
+              t = self.call_fn_work_var(fn_work, param_types, *ret_type);
+          }
+      } else { /* existing . and [ handlers */ }
+  }
+  ```
+  `call_fn_work_var`: parse argument list inside `(...)`, emit
+  `Value::CallRef(fn_work, args)`, return `ret_type`.
+
+**Pass:** `make_greeter("Hello")("world")` parses and produces "Hello world".
+
+---
+
+**A5.6-5 — Un-ignore `closure_capture_text`; full test pass**
+
+- `tests/expressions.rs`: remove `#[ignore]` from `closure_capture_text`.
+- `tests/wrap.rs` (WASM_SKIP): keep `19-threading.loft` skipped (that is W1.18, not A5.6).
+
+**Pass:** `cargo test --test expressions closure_capture_text` succeeds; full `make test`
+green.
+
+---
+
 **Files changed:**
 
 | File | Change |
 |------|--------|
 | `src/variables/mod.rs` | `size(Type::Function)` → 16 |
-| `src/fill.rs` | Add `op_store_closure`, `op_var_fn_ref`; update `call_ref` if needed |
+| `src/fill.rs` | Add `op_store_closure`, `op_var_fn_ref` |
 | `src/state/mod.rs` | `fn_call_ref`: read closure from bytes 4..16, push if present |
-| `src/state/codegen.rs` | `generate_var`: `OpVarFnRef` for Function; check all `Type::Function` arms |
-| `src/parser/vectors.rs` | `emit_lambda_code`: `OpStoreClosure` for capturing lambdas |
-| `src/parser/control.rs` | Remove closure injection from `try_fn_ref_call` and zero-param path |
-| `src/parser/operators.rs` | `parse_part`: handle `(` after `Type::Function` expressions |
-| `tests/expressions.rs` | Remove `#[ignore]` from `closure_capture_text`; add intermediate test |
+| `src/state/codegen.rs` | `generate_var`: `OpVarFnRef` for `Type::Function` |
+| `src/parser/vectors.rs` | `emit_lambda_code`: emit `OpStoreClosure`; drop `last_closure_alloc` |
+| `src/parser/control.rs` | Remove closure injection from `try_fn_ref_call` (both paths) |
+| `src/parser/operators.rs` | `parse_part`: handle chained `(...)` on `Type::Function` |
+| `tests/expressions.rs` | Remove `#[ignore]` from `closure_capture_text` |
 
-**Effort:** High (8 files, 2 new opcodes, parser and runtime changes)
+**Effort:** High (8 files, 2 new opcodes, 5 independently testable steps)
 **Depends on:** A5.6b.1 ✓, A5.6b.2 ✓, A5.6c ✓
 **Target:** 0.8.3
 
@@ -1413,16 +1945,16 @@ the call graph and rejecting if any cycle contains `OpNewRef`.
 **Speedup**: proportional to total active store bytes × thread count; no benefit for
 stores smaller than ~10 KB.
 
-Steps (see LIGHT_PAR.md for full criteria):
-- **L1** — `Store::borrow_locked_for_light_worker` + sentinel Drop
-- **L2** — `WorkerPool` struct
-- **L3** — `Stores::clone_for_light_worker`
-- **L4** — `run_parallel_light`
-- **L5** — Compiler call-graph analysis + `M` computation
-- **L6** — Parser: `par_light(...)` clause
-- **L7** — Performance benchmark
+Steps (see LIGHT_PAR.md for full criteria; LIGHT_PAR.md uses L1–L7 internally):
+- **A14.1** — `Store::borrow_locked_for_light_worker` + sentinel Drop
+- **A14.2** — `WorkerPool` struct
+- **A14.3** — `Stores::clone_for_light_worker`
+- **A14.4** — `run_parallel_light`
+- **A14.5** — Compiler call-graph analysis + `M` computation
+- **A14.6** — Parser: `par_light(...)` clause
+- **A14.7** — Performance benchmark
 
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 

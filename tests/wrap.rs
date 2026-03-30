@@ -520,7 +520,9 @@ fn check_diagnostics(diagnostics: &[String], expected: &[String]) -> std::io::Re
     let mut unexpected: Vec<&str> = Vec::new();
 
     for diag in diagnostics {
-        if diag.starts_with("Warning: ") {
+        if diag.starts_with("Debug: ") {
+            continue; // Debug-level diagnostics are not surfaced in script tests
+        } else if diag.starts_with("Warning: ") {
             if let Some(pos) = unmatched_expected
                 .iter()
                 .position(|pat| diag.contains(*pat))
