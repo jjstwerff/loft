@@ -965,3 +965,31 @@ fn tuple_match_binding() {
         .expr("sum_pair((3, 4))")
         .result(Value::Int(7));
 }
+
+// ── CO1.9 — Coroutine store-generation guard promoted to always-on ─────────────
+
+/// CO1.9: the store-mutation guard must fire in ALL build configurations, not just
+/// `#[cfg(debug_assertions)]`.  This test is identical to `coroutine_stale_store_guard`
+/// but has no `cfg` gate — it verifies that the panic is reachable in any build.
+#[test]
+#[ignore = "CO1.9: generation guard only compiled under debug_assertions before CO1.9"]
+#[should_panic(expected = "stale DbRef")]
+fn coroutine_stale_store_guard_all_builds() {
+    code!(
+        "struct Box { val: integer }
+         struct BoxList { items: vector<Box> }
+         fn count_up() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn run_stale() -> integer {
+             lst = BoxList {};
+             lst.items += [Box { val: 0 }];
+             total = 0;
+             for n in count_up() {
+                 lst.items += [Box { val: n }];
+                 total += n;
+             }
+             total
+         }"
+    )
+    .expr("run_stale()")
+    .result(Value::Int(6));
+}
