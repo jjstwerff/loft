@@ -1232,7 +1232,280 @@ update the ignore reason from the old "A5, 1.1+" text to "A5.6c" once the fix is
 implemented.
 
 **Effort:** A5.6b.1 Medium · A5.6b.2 Small · A5.6c Medium
-**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c, A5.6d, A5.6e, A5.6f completed; full cross-scope A5.6 also 0.8.3)
+**Target:** 0.8.3 (A5.6b.1, A5.6b.2, A5.6c completed; A5.6 capture-at-definition-time also 0.8.3)
+
+---
+
+**A5.6d — Suppress spurious closure diagnostics** (0.8.3):
+
+Three categories of false-positive diagnostics fire on valid closure code after A5.6b/c:
+
+1. **"closure record '…' created with N fields: …"** — emitted via `Level::Warning` in
+   `synthesize_closure_record` (`src/parser/vectors.rs`).  This was added during A5.2
+   development as a test-verification aid; it is not useful to end users and fires on every
+   capturing lambda even when everything is correct.
+
+2. **"Variable X is never read"** — fires for each outer variable that is captured by a
+   lambda.  Root cause: `emit_lambda_code` builds the closure-allocation block by reading
+   `Value::Var(v_nr)` for each captured variable but never calls `var_usages(v_nr, true)`,
+   so the variable's `uses` counter stays at 0 and `find_unused` incorrectly flags it.
+
+3. **"Dead assignment — 'X' is overwritten before being read"** — a false positive that
+   appears together with #2 because `uses == uses_at_write` when the write after the lambda
+   definition is processed.  This one is a *consequence* of #2; fixing #2 also fixes #3
+   for the spurious cases, while preserving the *legitimate* dead-assignment warning for
+   variables that are overwritten between lambda definition and call (see
+   `closure_capture_after_change`).
+
+#### Fix — three targeted changes
+
+**Change 1 — `synthesize_closure_record` (`src/parser/vectors.rs` ~line 699)**
+
+Demote the diagnostic from `Level::Warning` to `Level::Debug`.  The message is preserved
+for `LOFT_LOG=full` debugging but disappears from normal compiler output and test
+`.warning()` assertions.
+
+```rust
+diagnostic!(
+    self.lexer,
+    Level::Debug,    // was Level::Warning
+    "closure record '{record_name}' created with {count} {}: {}",
+    if count == 1 { "field" } else { "fields" },
+    fields.join(", ")
+);
+```
+
+**Change 2 — new Parser field `last_closure_captured_vars` (`src/parser/mod.rs`)**
+
+Add a `Vec<u16>` field to the `Parser` struct to carry captured variable numbers from
+`emit_lambda_code` to the call-site injection in `try_fn_ref_call`:
+
+```rust
+// A5.6d: outer variable numbers captured by the most recently parsed lambda.
+// Consumed by try_fn_ref_call to mark them as read at call-injection time.
+pub(crate) last_closure_captured_vars: Vec<u16>,
+```
+
+Initialise to `vec![]` alongside `last_closure_alloc: None` in `Parser::new`.
+
+**Change 3 — `emit_lambda_code` (`src/parser/vectors.rs` ~line 642)**
+
+Collect the captured variable numbers inside the existing attribute loop (second pass only):
+
+```rust
+let mut captured_var_nrs: Vec<u16> = Vec::new();
+for aid in 0..n_attrs {
+    let cap_name = self.data.attr_name(closure_rec_d, aid);
+    let v_nr = self.vars.var(&cap_name);
+    if v_nr != u16::MAX {
+        captured_var_nrs.push(v_nr);  // A5.6d: record for call-site var_usages
+        alloc_steps.push(self.set_field_no_check(...));
+    }
+}
+self.last_closure_captured_vars = captured_var_nrs;
+```
+
+**Change 4 — `try_fn_ref_call` (`src/parser/control.rs`): multi-param and zero-param paths**
+
+After consuming `last_closure_alloc`, drain `last_closure_captured_vars` and call
+`var_usages` for each captured outer variable.  This fires at call-injection time — *after*
+any writes between the lambda definition and the call — so legitimate dead-assignment
+warnings are preserved.
+
+Multi-param path (around line 2049):
+```rust
+if let Some(closure_alloc) = self.last_closure_alloc.take() {
+    converted.push(*closure_alloc);
+    // A5.6d: mark captured outer vars as read at the call site.
+    for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+        self.var_usages(cv, true);
+    }
+}
+```
+
+Zero-param path (around line 1844):
+```rust
+if let Some(closure_alloc) = self.last_closure_alloc.take() {
+    args.push(*closure_alloc);
+    // A5.6d: mark captured outer vars as read at the call site.
+    for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+        self.var_usages(cv, true);
+    }
+}
+```
+
+#### Test updates
+
+Remove `.warning("closure record '…'")` assertions from **all** closure tests:
+
+| File | Test | Warnings to remove |
+|------|------|--------------------|
+| `tests/expressions.rs` | `closure_capture_integer` | closure record; "Variable x is never read" |
+| `tests/expressions.rs` | `closure_capture_after_change` | closure record; "Variable x is never read" (keep "Dead assignment") |
+| `tests/expressions.rs` | `closure_capture_multiple` | closure record; "Variable a is never read"; "Variable b is never read" |
+| `tests/expressions.rs` | `closure_capture_text_integer_return` | closure record |
+| `tests/expressions.rs` | `closure_capture_text_return` | closure record |
+| `tests/parse_errors.rs` | `capture_detected` | closure record; "Variable count is never read" |
+| `tests/parse_errors.rs` | `closure_record_single_capture` | closure record; "Variable count is never read" |
+| `tests/parse_errors.rs` | `closure_record_multi_capture` | closure record; "Variable a is never read"; "Variable b is never read" |
+| `tests/issues.rs` | `p1_1_lambda_void_body` | closure record |
+
+The "Variable count/a/b/… is never read" warnings disappear because `var_usages` now fires
+at the call site (Change 4).  The "Dead assignment" in `closure_capture_after_change` is
+deliberately preserved: `x = 99` is written after the lambda definition and before the call,
+so `x.uses == x.uses_at_write` at that write and `defined()` fires correctly.
+
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+**A5.6e — Closure capture coverage: same-type data sources** (0.8.3, depends on A5.6b.1 ✓, A5.6b.2 ✓, A5.6c ✓, A5.6d):
+
+After A5.6b.1–d are implemented the closure machinery handles text, struct DbRefs, and
+vector elements.  This item adds four targeted tests that each capture a value from a
+different data source and verifies the captured value is correct at call time.  No new
+implementation is needed — the tests exercise existing code paths to catch regressions
+across capture categories.
+
+**Four data-source scenarios:**
+
+1. **Text literal** — capture a `text` local whose value comes from a string literal:
+
+```loft
+fn make_greeter_lit(greeting: text) -> fn(text) -> text {
+    fn(name: text) -> text { "{greeting} {name}" }
+}
+fn test_closure_capture_text_literal() {
+    let greet = make_greeter_lit("Hello");
+    assert(greet("World") == "Hello World");
+}
+```
+
+2. **Store-backed text** — capture a `text` field loaded from a store record:
+
+```loft
+store People { name: text }
+fn make_greeter_store(p: People) -> fn() -> text {
+    let captured = p.name;
+    fn() -> text { "Hi {captured}" }
+}
+fn test_closure_capture_text_store() {
+    let p = People { name: "Alice" };
+    let greet = make_greeter_store(p);
+    assert(greet() == "Hi Alice");
+}
+```
+
+3. **Struct record reference** — capture a reference to a whole store record (12-byte DbRef):
+
+```loft
+store Items { value: integer }
+fn make_adder(item: Items) -> fn(integer) -> integer {
+    fn(x: integer) -> integer { item.value + x }
+}
+fn test_closure_capture_struct_ref() {
+    let it = Items { value: 10 };
+    let add = make_adder(it);
+    assert(add(5) == 15);
+}
+```
+
+4. **Vector element** — capture a value obtained by indexing into a vector:
+
+```loft
+fn make_picker(v: vector<text>, idx: integer) -> fn() -> text {
+    let chosen = v[idx];
+    fn() -> text { chosen }
+}
+fn test_closure_capture_vector_element() {
+    let v = ["alpha", "beta", "gamma"];
+    let pick = make_picker(v, 1);
+    assert(pick() == "beta");
+}
+```
+
+**Tests to add** (all in `tests/expressions.rs`):
+
+| Test name | Scenario | Depends on |
+|-----------|----------|------------|
+| `closure_capture_text_literal`  | Text from literal captured into fn-ref | A5.6b.1, A5.6b.2 |
+| `closure_capture_text_store`    | Text from store field captured           | A5.6b.1, A5.6b.2 |
+| `closure_capture_struct_ref`    | Whole struct record (DbRef) captured     | A5.6b.1 |
+| `closure_capture_vector_elem`   | Vector element captured                  | A5.6b.1, A5.6b.2 |
+
+**Implementation notes:**
+
+- Text captures (scenarios 1 and 2) exercise `work_text()` + `OpCreateStack` path introduced
+  in A5.6b.2; the tests confirm arg_size is computed correctly for each.
+- Struct reference capture (scenario 3) passes a 12-byte DbRef directly; no work buffer
+  needed.  Verifies the base A5.6b.1 DbRef copy path for non-text captures.
+- Vector element capture (scenario 4) requires the element to be materialised into a local
+  before capture; tests that the generated `v_set` + closure alloc sequence is correct.
+- Spurious diagnostic suppression (A5.6d) should fire for all four: no "Variable X is never
+  read" warning should appear for the captured variable in any of these tests.
+
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+**A5.6f — Closure record text-field cleanup** (0.8.3, depends on A5.6b.1 ✓):
+
+When a lambda captures a `text` variable, `synthesize_closure_record` creates a
+`__closure_N` struct def with a `text` field for that variable.  When the closure
+record variable (`__cref_N`) goes out of scope, `get_free_vars` emits `OpFreeRef`
+to release the record's DbRef slot, but does **not** emit cleanup for the text
+fields stored inside the record.  The captured `String` is leaked.
+
+Phase 5 (A5.5) explicitly deferred this: "Per-field text/reference cleanup inside
+the record is pending — only matters when text captures become testable."  Now that
+A5.6b.1 makes text captures testable, the deferral must end.
+
+**Root cause:**
+
+`get_free_vars` (scopes.rs) emits `OpFreeRef` for `Type::Reference` variables.
+When the referenced struct def has `Type::Text` fields, each of those fields is an
+owned heap `String` that must be freed before the record itself is released.
+Currently this inner-field walk does not happen.
+
+**Fix path:**
+
+Mirror the `owned_elements` pattern used in T1.8b for tuple text slots:
+
+1. In `synthesize_closure_record` (vectors.rs), after adding text fields to the
+   struct def, record their field indices in `def.owned_text_fields: Vec<u16>`
+   (new field on `Definition`, set to `[]` for non-closure structs).
+
+2. In `get_free_vars` (scopes.rs), when emitting cleanup for a
+   `Type::Reference(def_nr, _)` variable, check
+   `data.definitions[def_nr].owned_text_fields`. For each listed field index,
+   emit a `Value::FreeRef(Value::GetField(var, field_idx))` before the
+   `OpFreeRef` for the record itself.
+
+   ```rust
+   // A5.6f: free captured text fields inside closure records before
+   // freeing the record DbRef itself.
+   for &field_idx in &data.definitions[def_nr].owned_text_fields {
+       free_ops.push(Value::FreeRef(Box::new(
+           Value::GetField(Box::new(Value::Var(v_nr)), field_idx)
+       )));
+   }
+   free_ops.push(Value::FreeRef(Box::new(Value::Var(v_nr))));
+   ```
+
+3. Alternatively (simpler): in `emit_lambda_code` (vectors.rs), when building the
+   closure allocation block, also register text-field cleanup in the scope-exit
+   sequence for the variable returned by `last_closure_alloc`.
+
+**Test to add** (`tests/expressions.rs`):
+
+| Test name | Scenario | Checks |
+|-----------|----------|--------|
+| `closure_capture_text_no_leak` | Lambda captures text, goes out of scope in a loop | no memory leak (run with `LOFT_LOG=ref_debug` to verify OpFreeRef emitted for text field) |
+
+**Effort:** Small
+**Target:** 0.8.3
 
 ---
 

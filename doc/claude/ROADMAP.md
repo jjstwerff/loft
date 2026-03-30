@@ -27,7 +27,10 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
 | W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
 | W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
-| A5.6      | Closure: capture-at-definition-time semantics             | H  | ✓      |              | PLANNING.md § A5.6            |
+| A5.6      | Closure: capture-at-definition-time semantics             | H  | ✓      | A5.6b.1–f    | PLANNING.md § A5.6            |
+| A5.6d     | ↳ Suppress spurious closure diagnostics                   | S  | ✓      | A5.6b.1–c    | PLANNING.md § A5.6d           |
+| A5.6f     | ↳ Closure record text-field cleanup                       | S  | ✓      | A5.6b.1      | PLANNING.md § A5.6f           |
+| A5.6e     | ↳ Closure capture coverage (text/store/struct/vector)     | S  | ✓      | A5.6b.1–f    | PLANNING.md § A5.6e           |
 | CO1.7     | Coroutines: yield from inside for-loops                   | M  | ✓      | CO1.1–CO1.6  | PLANNING.md § CO1.7           |
 | CO1.8     | ↳ Multi-text parameters + nested-block safety             | S  | ✓      | CO1.3d       | PLANNING.md § CO1.8           |
 | CO1.9     | ↳ Store iteration generation guard in release builds      | S  | ✓      | CO1.6        | PLANNING.md § CO1.9           |
