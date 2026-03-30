@@ -99,6 +99,9 @@ pub enum Value {
     TuplePut(u16, u16, Box<Value>),
     // CO1.3c: Yield a value from a generator function.
     Yield(Box<Value>),
+    // A5.6-1: Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
+    // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
+    FnRef(i32, u16, Box<Type>),
 }
 
 #[allow(dead_code)]
@@ -938,7 +941,11 @@ impl Data {
         if !self.def(def_nr).is_operator() || self.def(def_nr).op_code != u16::MAX {
             return;
         }
-        assert!(self.op_codes < 256, "Too many defined operators");
+        assert!(
+            (self.op_codes as usize) < crate::fill::OPERATORS.len(),
+            "Too many defined operators (max {})",
+            crate::fill::OPERATORS.len()
+        );
         self.definitions[def_nr as usize].op_code = self.op_codes;
         self.operators.insert(self.op_codes as u8, def_nr);
         self.op_codes += 1;
@@ -1736,6 +1743,9 @@ impl Data {
             Value::Yield(inner) => {
                 write!(write, "yield ")?;
                 self.show_code(write, vars, inner, indent, false)
+            }
+            Value::FnRef(d_nr, clos_var, _) => {
+                write!(write, "FnRef({d_nr}, {})", vars.name(*clos_var))
             }
         }
     }

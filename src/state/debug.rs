@@ -853,7 +853,12 @@ impl State {
                 3 => format!("{}", *self.get_stack::<f64>()), // float
                 4 => format!("{}", *self.get_stack::<u8>() == 1), // boolean
                 5 => {
-                    let s = self.string().str();
+                    let s = self.string();
+                    // Guard: ptr < 64 KiB means a DbRef-derived garbage pointer (A5.6).
+                    if (s.ptr as usize) < (1 << 16) {
+                        return format!(" -> <raw:{:#x}>[{}]", s.ptr as usize, self.stack_pos);
+                    }
+                    let s = s.str();
                     if s == STRING_NULL {
                         "null".to_string()
                     } else {
@@ -917,7 +922,13 @@ impl State {
             Type::Single => format!("{}", *self.get_stack::<f32>()),
             Type::Float => format!("{}", *self.get_stack::<f64>()),
             Type::Text(_) => {
-                let s = self.string().str();
+                let s = self.string();
+                // Guard: ptr < 64 KiB means a null-page address or a DbRef-derived value
+                // (e.g. OpVarFnRef's 16-byte fn_ref slot misread as Str). A5.6.
+                if (s.ptr as usize) < (1 << 16) {
+                    return format!("<raw:{:#x}>", s.ptr as usize);
+                }
+                let s = s.str();
                 if s == STRING_NULL {
                     "null".to_string()
                 } else {

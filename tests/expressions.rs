@@ -339,9 +339,11 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6: cross-scope closure — (1) Type::Function is 4 bytes (d_nr only), closure \
-DbRef is lost when make_greeter returns; (2) parse_part does not handle expr(args) chained \
-calls. Same-scope text capture works (closure_capture_text_return passes). See CAVEATS.md C1."]
+#[ignore = "A5.6-text: cross-scope text-returning closure requires work-ref type propagation. \
+make_greeter declares '-> fn(text) -> text' (text([])) but the lambda produces text([1]); \
+the call site uses the declared return type so pushes wrong arg_size. \
+Fix: propagate actual fn_type from lambda through the declaring function's return type, \
+or have fn_call_ref look up work-ref count from the fn definition table. See CAVEATS.md."]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(

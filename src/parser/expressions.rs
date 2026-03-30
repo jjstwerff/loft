@@ -58,7 +58,8 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Break(_)
         | Value::Continue(_)
         | Value::Keys(_)
-        | Value::TupleGet(_, _) => false,
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _) => false,
     }
 }
 
@@ -730,6 +731,9 @@ use a separate collection or add after the loop"
                 let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
+                    // A5.6-2: store mapping in Function struct for native codegen.
+                    self.vars
+                        .set_closure_var_of(var_nr, self.last_closure_work_var);
                     self.last_closure_work_var = u16::MAX;
                 }
                 return result;

@@ -180,6 +180,10 @@ impl Output<'_> {
                     self.output_code_inner(w, inner)?;
                 }
             }
+            // A5.6-1: FnRef carries the d_nr (function index) for the fn-ref slot.
+            // In native code the fn-ref variable holds a u32 d_nr; the closure is stored
+            // separately. Emit only the d_nr constant; closure injection is done at the call site.
+            Value::FnRef(d_nr, _, _) => write!(w, "{d_nr}_u32")?,
         }
         Ok(())
     }
@@ -234,8 +238,8 @@ impl Output<'_> {
             } else {
                 def.attributes.len()
             };
-            // Total attribute count must equal total args (closure included for closures).
-            if def.attributes.len() != args.len() {
+            // Visible arg count must equal args provided at call site (closure is injected separately).
+            if visible_attr_count != args.len() {
                 continue;
             }
             // Compare visible parameter types only (Type::Function excludes __closure).
@@ -263,12 +267,20 @@ impl Output<'_> {
             let expr = self.generate_expr_buf(arg)?;
             arg_exprs.push(expr);
         }
+        // Look up the closure work-var for this fn-ref variable (if any).
+        let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
         // Generate a match dispatch on the fn-ref variable.
         write!(w, "match var_{var_name} {{")?;
-        for (d_nr, fn_name, _has_closure) in &candidates {
+        for (d_nr, fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
             for expr in &arg_exprs {
                 write!(w, ", {expr}")?;
+            }
+            if *has_closure {
+                if let Some(clos_nr) = closure_var_nr {
+                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
+                    write!(w, ", var_{clos_name}")?;
+                }
             }
             write!(w, "),")?;
         }

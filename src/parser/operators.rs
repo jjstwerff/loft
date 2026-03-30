@@ -274,7 +274,10 @@ impl Parser {
         parent_tp: &mut Type,
     ) -> Type {
         let mut t = self.parse_single(var_tp, code, parent_tp);
-        while self.lexer.peek_token(".") || self.lexer.peek_token("[") {
+        while self.lexer.peek_token(".")
+            || self.lexer.peek_token("[")
+            || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+        {
             if !self.first_pass && t.is_unknown() && matches!(code, Value::Var(_)) {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable");
             }
@@ -362,6 +365,63 @@ impl Parser {
             } else if self.lexer.has_token("[") {
                 t = self.parse_index(code, &t);
                 self.lexer.token("]");
+            } else if self.lexer.has_token("(") {
+                // A5.6-4: chained call on a Type::Function expression — expr(args).
+                if let Type::Function(param_types, ret_type) = t.clone() {
+                    let fn_type = Type::Function(param_types.clone(), ret_type.clone());
+                    // Allocate temp variable on BOTH passes (consistent unique counter).
+                    let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
+                    self.vars.defined(fn_work);
+                    // Create work vars for text-returning closures (both passes for counter sync).
+                    let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
+                        (0..deps.len())
+                            .map(|_| self.vars.work_text(&mut self.lexer))
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    // Parse arguments (both passes).
+                    let mut list: Vec<Value> = Vec::new();
+                    let mut types: Vec<Type> = Vec::new();
+                    let mut first = true;
+                    while !self.lexer.peek_token(")") && !self.lexer.peek_token("") {
+                        if !first {
+                            self.lexer.token(",");
+                        }
+                        first = false;
+                        let mut arg_val = Value::Null;
+                        let arg_tp = self.expression(&mut arg_val);
+                        list.push(arg_val);
+                        types.push(arg_tp);
+                    }
+                    self.lexer.token(")");
+                    if !self.first_pass {
+                        let mut converted = list;
+                        for (i, expected) in param_types.iter().enumerate() {
+                            if i < converted.len() {
+                                self.convert(&mut converted[i], &types[i], expected);
+                            }
+                        }
+                        let ref_def = self.data.def_nr("reference");
+                        for &wv in &work_vars {
+                            converted.push(v_block(
+                                vec![
+                                    v_set(wv, Value::Text(String::new())),
+                                    self.cl("OpCreateStack", &[Value::Var(wv)]),
+                                ],
+                                Type::Reference(ref_def, vec![wv]),
+                                "cref_work_buf",
+                            ));
+                        }
+                        let orig = std::mem::replace(code, Value::Null);
+                        *code = v_block(
+                            vec![v_set(fn_work, orig), Value::CallRef(fn_work, converted)],
+                            *ret_type.clone(),
+                            "fn_call_tmp",
+                        );
+                    }
+                    t = *ret_type;
+                }
             }
         }
         t

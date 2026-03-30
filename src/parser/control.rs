@@ -1843,13 +1843,8 @@ impl Parser {
                                 "cref_work_buf",
                             ));
                         }
-                        // A5.6b.1: zero-param closures still have a hidden __closure arg;
-                        // inject it the same way try_fn_ref_call does for non-zero-param calls.
-                        if let Some(closure_alloc) = self.last_closure_alloc.take() {
-                            args.push(*closure_alloc);
-                        } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
-                            args.push(Value::Var(closure_w));
-                        }
+                        // A5.6-3: closure is embedded in the 16-byte fn-ref slot; fn_call_ref
+                        // pushes it automatically — no explicit injection needed here.
                         // A5.6d: mark captured vars as read at the call site
                         for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
                             self.var_usages(cv, true);
@@ -2057,12 +2052,8 @@ impl Parser {
             }
             // A5.3: inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding
-            // the slot-position issue with pre-allocated work variables.
-            if let Some(closure_alloc) = self.last_closure_alloc.take() {
-                converted.push(*closure_alloc);
-            } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
-                converted.push(Value::Var(closure_w));
-            }
+            // A5.6-3: closure is embedded in the 16-byte fn-ref slot; fn_call_ref
+            // pushes it automatically — no explicit injection needed at call sites.
             // A5.6d: mark captured vars as read at the call site
             for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
                 self.var_usages(cv, true);

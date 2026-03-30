@@ -629,32 +629,44 @@ impl Parser {
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
         let closure_rec_d = self.data.def(d_nr).closure_record;
         if closure_rec_d != u32::MAX && !self.first_pass {
-            // A5.3 (definition-time capture): Allocate and populate the closure record
-            // when the lambda is DEFINED (not when it is called), so that any captured
-            // variables are snapshotted at definition time.
+            // A5.6-1/2 (16-byte fn-ref + embedded closure):
+            // Allocate and populate the closure record at lambda DEFINITION time.
+            // Embed the closure DbRef into a 16-byte fn-ref slot so the closure
+            // travels with the fn-ref even when it escapes its defining scope.
             //
-            // w is added to `work_refs` so that `parse_code` inserts `Set(w, Null)` at
-            // the START of the enclosing function body.  This pre-reserves w's frame slot
-            // in the outer scope (Zone-2 slot assignment), ensuring it is NOT inside the
-            // fn_ref_with_closure block's workspace — so `FreeStack` cannot clobber it.
+            // Layout of the 16-byte fn-ref frame slot:
+            //   bytes  0.. 4: d_nr (i32, function definition number)
+            //   bytes  4..16: closure DbRef (12 bytes; null = no closure)
             //
-            // Inside the `fn_ref_with_closure` block, `Set(w, Null)` is the first op;
-            // scopes.rs sees that w is already registered (outer scope) and replaces it
-            // with `Insert([])` (no-op).  The block then runs Database + SetField ops and
-            // returns `Int(d_nr)` as its result.  FreeStack keeps 4 bytes (d_nr) and
-            // discards 0 bytes of workspace — w's pre-reserved slot is untouched.
+            // w (___clos_N) is added to work_refs so parse_code inserts Set(w,Null)
+            // at the START of the enclosing function body, pre-reserving w's slot
+            // in the outer scope — FreeStack cannot clobber it.
             //
-            // At call sites, `try_fn_ref_call` / `parse_call` inject `Value::Var(w)` as
-            // the hidden `__closure` arg (via `last_closure_alloc`).
+            // The fn_ref_var (__fn_ref_N) holds [d_nr, closure DbRef] as 16 bytes.
+            // At call sites, fn_call_ref reads the embedded DbRef and pushes it as
+            // the hidden __closure arg automatically — no explicit injection needed.
             let rec_tp = Type::Reference(closure_rec_d, vec![]);
             let w = self.create_unique("__clos", &rec_tp);
             self.vars.defined(w);
             // Register w as a work-ref so parse_code inserts Set(w,Null) at fn start.
             self.vars.add_to_work_refs(w);
             let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
+            // Build fn_type for fn_ref_var: visible params (excluding __closure) + ret.
+            let n_all_attrs = self.data.attributes(d_nr);
+            let has_closure_attr =
+                n_all_attrs > 0 && self.data.attr_name(d_nr, n_all_attrs - 1) == "__closure";
+            let n_visible = if has_closure_attr {
+                n_all_attrs - 1
+            } else {
+                n_all_attrs
+            };
+            let visible_params: Vec<Type> = (0..n_visible)
+                .map(|aid| self.data.attr_type(d_nr, aid).clone())
+                .collect();
+            let ret_tp = self.data.def(d_nr).returned.clone();
+            let fn_type = Type::Function(visible_params, Box::new(ret_tp));
             let mut alloc_steps: Vec<Value> = Vec::new();
-            // Set(w, Null) is the first op; scopes.rs will suppress it inside the block
-            // (w already registered at outer scope) and hoist it to function start.
+            // Allocate and populate the closure record w.
             alloc_steps.push(crate::data::v_set(w, Value::Null));
             alloc_steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
             let n_attrs = self.data.attributes(closure_rec_d);
@@ -663,7 +675,7 @@ impl Parser {
                 let cap_name = self.data.attr_name(closure_rec_d, aid);
                 let v_nr = self.vars.var(&cap_name);
                 if v_nr != u16::MAX {
-                    captured_var_nrs.push(v_nr); // A5.6d: record for call-site var_usages
+                    captured_var_nrs.push(v_nr);
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
@@ -674,18 +686,14 @@ impl Parser {
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;
-            // Block result = Int(d_nr): the 4-byte fn-ref value assigned to f.
-            alloc_steps.push(Value::Int(d_nr as i32));
-            // Use a full-range integer type so native codegen doesn't narrow-cast the
-            // d_nr value to u8 (which would corrupt the fn-ref dispatch).
-            *code = crate::data::v_block(
-                alloc_steps,
-                Type::Integer(i32::MIN + 1, i32::MAX as u32, false),
-                "fn_ref_with_closure",
-            );
-            // At call sites, inject the pre-populated w as the hidden __closure arg.
-            self.last_closure_alloc = Some(Box::new(Value::Var(w)));
-            // A5.6c: record the work var so parse_assign can populate closure_vars.
+            // Block result: push d_nr (4B via OpConstInt) + closure DbRef (12B via OpVarRef).
+            // Together these 16 bytes constitute the fn-ref slot value.
+            alloc_steps.push(Value::FnRef(d_nr as i32, w, Box::new(fn_type.clone())));
+            *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
+            // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
+            self.last_closure_alloc = None;
+            // A5.6c: record the work var so parse_assign can populate closure_vars
+            // (used by write-back and native codegen's closure_var_of lookup).
             self.last_closure_work_var = w;
         } else {
             *code = Value::Int(d_nr as i32);

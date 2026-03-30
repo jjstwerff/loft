@@ -370,6 +370,27 @@ All notable changes to the loft language and interpreter.
   (e.g. `"hello, world!"` became `"hello, world!hello, world!"` on the second call).  New test
   `closure_capture_text_loop` in `tests/expressions.rs` verifies the fix.
 
+- **`fn`-ref conditional assignment no longer SIGSEGVs** (A5.6h) —
+  `f = if flag { inc } else { dec }` caused a SIGSEGV at the `CallRef` opcode.
+  Root cause: a fn-ref slot is 16 bytes (`[d_nr 4B][closure DbRef 12B]`), but
+  each branch of an if-else expression generated only 4 bytes (the d_nr via
+  `OpConstInt`), because `generate_block` (called for each branch) was setting
+  `stack.position = to + size(Function) = to + 16` without emitting any instruction
+  to push the 12-byte sentinel.  This phantom advance caused the codegen stack
+  tracker to skip `OpNullRefSentinel` and left `CallRef` reading from the wrong
+  stack position (the frame header, containing d_nr=0, which dispatched to
+  `i_parse_errors()` and then SIGSEGVed in `dump_stack` on a garbage text pointer).
+  Fix: `generate_block` now emits `OpNullRefSentinel` when the block result type is
+  `Type::Function` and the block's content pushed fewer than 16 bytes.  A defensive
+  `gen_fn_ref_value` helper in `generate_set` handles non-Block fn-ref values.
+  Additionally, three native-codegen regressions introduced in A5.6g were resolved:
+  (1) `visible_attr_count` (not `def.attributes.len()`) is now used in the candidate
+  filter for closure-capturing lambdas; (2) the closure work-variable is injected at
+  call sites for closure-capturing dispatch; (3) `Value::FnRef(d_nr, …)` is added to
+  `collect_int_fn_refs` and emits `{d_nr}_u32` in native output so closure lambda
+  functions appear in the reachable set and are compiled.  Test: `fn_ref_conditional_call`
+  in `tests/issues.rs`; all 8 closure interpreter tests and the full native suite pass.
+
 - **Definition-time capture semantics and multi-call closure injection** (A5.6g) —
   Closures now capture variable values at definition time (when the lambda is written),
   not at call time (when it is first invoked).  `emit_lambda_code` allocates and

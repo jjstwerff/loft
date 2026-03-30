@@ -219,13 +219,33 @@ impl State {
     /// Reads the definition number stored in the fn-ref variable at `fn_var` bytes below the
     /// current stack top, looks up its bytecode position, then delegates to `fn_call`.
     pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
-        let d_nr = *self.get_var::<i32>(fn_var) as usize;
-        debug_assert!(
-            d_nr < self.fn_positions.len(),
-            "fn_call_ref: d_nr {d_nr} out of range"
+        // A5.6: fn-ref slot is 16B ([d_nr:i32][closure:DbRef]); fn_var must be ≥ 16.
+        assert!(
+            fn_var >= 16,
+            "fn_call_ref: fn_var={fn_var} < 16 — fn-ref slot is 16B (d_nr + closure DbRef)"
         );
+        let d_nr_i32 = *self.get_var::<i32>(fn_var);
+        // Negative d_nr = un-initialised slot (integer null sentinel = i32::MIN).
+        assert!(
+            d_nr_i32 >= 0,
+            "fn_call_ref: d_nr={d_nr_i32} is negative — fn-ref slot was never assigned"
+        );
+        let d_nr = d_nr_i32 as usize;
+        assert!(
+            d_nr < self.fn_positions.len(),
+            "fn_call_ref: d_nr={d_nr} out of range (fn_positions.len={})",
+            self.fn_positions.len()
+        );
+        // Read closure DbRef from bytes 4..16 of the fn-ref slot.
+        // fn_var is distance from fn_ref slot START to TOS; slot+4 = TOS-(fn_var-4).
+        let closure = *self.get_var::<DbRef>(fn_var - 4);
+        let has_closure = closure.rec != 0;
+        if has_closure {
+            self.put_stack(closure);
+        }
+        let total = arg_size + if has_closure { 12 } else { 0 };
         let code_pos = self.fn_positions[d_nr] as i32;
-        self.fn_call(d_nr as u32, arg_size, code_pos);
+        self.fn_call(d_nr as u32, total, code_pos);
     }
 
     pub fn static_call(&mut self) {
