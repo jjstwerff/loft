@@ -802,84 +802,14 @@ That should not happen with the current `stack_base` pointing to the full frame.
 
 ---
 
-**CO1.9 — Store iteration safety: generation guard in release builds** (0.8.3, depends on CO1.6 ✓):
+**CO1.9** *(completed 0.8.3)* — Store iteration safety: generation guard promoted to always-on.
 
-`S28` added a generation-counter guard that fires when a coroutine resumes and
-the store it was iterating has been structurally mutated between `next()` calls
-(records added or removed).  The guard currently uses `debug_assert_eq!` — it
-fires in debug builds but is **compiled out in release**, leaving silent wrong
-behaviour (skipped or duplicated records, or a stale DbRef dereference crash).
-
-The guard is a single integer comparison (generation counter in the store header).
-The failure mode without it — iterating a modified store — is severe and
-non-obvious, so it should be always-on:
-
-**Concrete source changes (5 locations in 2 files):**
-
-**`src/store.rs` — remove `#[cfg(debug_assertions)]` from all generation sites:**
-
-1. **`Store` struct** (line 56–57): remove `#[cfg(debug_assertions)]` attribute from
-   `pub generation: u32`.  The field is now always compiled in.
-
-2. **`Store::new`** (line 103–104) and **`Store::new_at_position`** (line 136–137):
-   remove `#[cfg(debug_assertions)]` from `generation: 0` in struct literals.
-
-3. **`Store::claim`** (lines 181–184): replace
-   ```rust
-   #[cfg(debug_assertions)]
-   { self.generation = self.generation.wrapping_add(1); }
-   ```
-   with the unconditional statement (no cfg gate).
-
-4. **`Store::resize`** (lines 279–282) and **`Store::delete`** (lines 319–322):
-   same change — remove the `#[cfg(debug_assertions)]` wrapper from each
-   `self.generation.wrapping_add(1)` statement.
-
-5. **`clone_locked_for_worker`** (line 439–441) and **`borrow_locked_for_light_worker`**
-   (line 460–462, once A14.1 lands): remove `#[cfg(debug_assertions)]` from
-   `generation: self.generation` in each struct literal.
-
-**`src/state/mod.rs` — promote generation check from debug-only to always-on:**
-
-6. **`CoroutineFrame` struct** (lines 89–90): remove `#[cfg(debug_assertions)]` from
-   `pub saved_store_generations: Vec<(u16, u32)>`.
-
-7. **`CoroutineFrame` initialisation** in `coroutine_create` (lines 557–558): remove
-   `#[cfg(debug_assertions)]` from `saved_store_generations: Vec::new()`.
-
-8. **`coroutine_yield` generation snapshot** (lines 881–892): remove the outer
-   `#[cfg(debug_assertions)]` block.  The snapshot is now always taken.
-
-9. **`coroutine_next` check** (lines 641–659): replace the entire
-   `#[cfg(debug_assertions)] { debug_assert!(...) }` block with:
-   ```rust
-   // CO1.9: generation guard is always-on; debug_assert would be elided in release.
-   for (store_nr, saved_gen) in &self.coroutine_frame(idx).saved_store_generations.clone() {
-       let cur_gen = self.database.allocations
-           .get(*store_nr as usize)
-           .map_or(0, |s| s.generation);
-       if cur_gen != *saved_gen {
-           panic!(
-               "store {store_nr} was mutated between coroutine next() calls \
-                (generation at yield: {saved_gen}, now: {cur_gen}); \
-                DbRef locals held by the generator may be stale — see PLANNING.md § CO1.9"
-           );
-       }
-   }
-   ```
-
-**No new opcodes.** The generation counter is a plain `u32`; the check is a tight
-integer comparison per live store (typically 1–3 stores).  Cost in release builds:
-negligible.
-
-**Tests to add** (`tests/expressions.rs`):
-
-| Test name | Scenario | Expected |
-|-----------|----------|---------|
-| `coroutine_store_mutation_detected` | Insert a record between two `next()` calls in both debug and release | `panic!` with "mutated between coroutine next() calls" |
-
-**Effort:** Small (9 targeted line-range edits, no new opcodes)
-**Target:** 0.8.3
+All `#[cfg(debug_assertions)]` gates removed from `Store.generation` field, struct
+constructors (`new`, `open`, `clone_locked`, `clone_locked_for_worker`), and increment
+sites (`claim`, `resize`, `delete`) in `src/store.rs`.  `CoroutineFrame.saved_store_generations`
+field and the yield snapshot in `coroutine_yield` also ungated.  `debug_assert!` in
+`coroutine_next` replaced with `assert!` so the guard panics in release builds too.
+Test: `coroutine_stale_store_guard_all_builds` (no `#[cfg]` gate).
 
 ---
 
@@ -939,9 +869,9 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 
 | ID  | Title | E | Source |
 |-----|-------|---|--------|
-| I1  | Lexer: add `interface` keyword | XS | `src/lexer.rs` |
-| I2  | Data: `DefType::Interface` + `Definition.bounds: Vec<u32>` | S | `src/data.rs` |
-| I3  | Parser first pass: parse interface declarations | M | `src/parser/definitions.rs` |
+| I1  | Lexer: add `interface` keyword | XS | *(completed 0.8.3)* `src/lexer.rs` |
+| I2  | Data: `DefType::Interface` + `Definition.bounds: Vec<u32>` | S | *(completed 0.8.3)* `src/data.rs` |
+| I3  | Parser first pass: parse interface declarations | M | *(completed 0.8.3)* `src/parser/definitions.rs` |
 | I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | `src/parser/definitions.rs` |
 | I5  | Type resolution: validate interface bodies; resolve `Self` | S | `src/typedef.rs` |
 | I6  | Satisfaction checking at generic instantiation | M | `src/parser/definitions.rs` |
@@ -1269,7 +1199,7 @@ implemented.
 
 ---
 
-**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** (0.8.3, depends on A5.6b.1–A5.6f ✓):
+**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** *(completed 0.8.3)*:
 After A5.6b.1, A5.6b.2, and A5.6c are implemented, the last open item for
 `closure_capture_text` is the **cross-scope** pattern: a capturing lambda returned
 from a function and then called from outside.  Two distinct problems remain:

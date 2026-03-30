@@ -8,6 +8,37 @@ All notable changes to the loft language and interpreter.
 
 ### Safety fixes
 
+- **Coroutine store-mutation guard promoted to always-on** (CO1.9) — The generation
+  counter in `Store` and the `saved_store_generations` snapshot in `CoroutineFrame`
+  were previously compiled only under `#[cfg(debug_assertions)]`.  All `#[cfg]` gates
+  have been removed so the guard fires in release builds too.  `debug_assert!` in
+  `coroutine_next` is replaced with `assert!`, meaning a mutated-store violation now
+  panics with a clear diagnostic in any build profile:
+  `"stale DbRef: store N was mutated between coroutine yields (generation at yield: X,
+  now: Y) — DbRef locals held by the generator may point to freed or reallocated records"`.
+  The affected sites in `store.rs` are `claim`, `resize`, `delete`, and the two
+  `clone_locked*` constructors.  New test `coroutine_stale_store_guard_all_builds`
+  (no `#[cfg(debug_assertions)]` gate) confirms the panic fires unconditionally.
+
+### Language features
+
+- **`interface` keyword and first-pass parser** (I1, I2, I3) — The first three steps
+  of the interface subsystem are implemented:
+  - I1 (`src/lexer.rs`): `"interface"` is now a reserved keyword.
+  - I2 (`src/data.rs`): `DefType::Interface` added to the definition-type enum;
+    `Definition.bounds: Vec<u32>` added to hold interface constraints for bounded
+    generic functions (`<T: A + B>`); initialised to `vec![]` in `add_def`.
+  - I3 (`src/parser/definitions.rs`, `src/parser/mod.rs`): new `parse_interface()`
+    method parses `interface Name { fn method(params) -> type }` declarations.
+    `Self` is temporarily registered as a type placeholder so `parse_type_full`
+    resolves it during method signature parsing.  Duplicate interface names emit
+    "Redefined interface Name".  `parse_interface` is added to the `parse_file`
+    top-level dispatch chain alongside `parse_struct`, `parse_enum`, etc.
+  Tests: `interface_empty_parses`, `interface_with_method_parses`,
+  `interface_duplicate_name_rejected`.
+
+### Coroutine safety documentation
+
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
   `State::coroutine_create` now calls `serialise_text_args` after copying the raw
   argument bytes.  For each text (`Str`) argument that points into a dynamic heap
