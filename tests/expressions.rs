@@ -864,3 +864,119 @@ fn coroutine_text_local_declared_after_first_yield() {
     .expr("take_first_int()")
     .result(Value::Int(1));
 }
+
+// ── T1.10 — Homogeneous-type tuple coverage ───────────────────────────────────
+
+/// T1.10-1: homogeneous (text, text) tuple — both slots live and freed correctly.
+#[test]
+#[ignore = "T1.10: homogeneous text tuple coverage not yet verified"]
+fn tuple_homogeneous_text() {
+    code!(
+        "fn make_pair(first: text, last: text) -> (text, text) { (first, last) }
+         fn test() {
+             (g, s) = make_pair(\"Hello\", \"World\");
+             assert(g == \"Hello\", \"first\");
+             assert(s == \"World\", \"second\");
+         }"
+    );
+}
+
+/// T1.10-2: text fields from a struct record into a tuple — field text into
+/// tuple element does not produce a dangling reference.
+#[test]
+#[ignore = "T1.10: store-backed text tuple element coverage not yet verified"]
+fn tuple_store_text_fields() {
+    code!(
+        "struct Label { name: text }
+         fn label_pair(a: Label, b: Label) -> (text, text) { (a.name, b.name) }
+         fn test() {
+             la = Label { name: \"alpha\" };
+             lb = Label { name: \"beta\" };
+             (n1, n2) = label_pair(la, lb);
+             assert(n1 == \"alpha\", \"first\");
+             assert(n2 == \"beta\", \"second\");
+         }"
+    );
+}
+
+/// T1.10-3: two struct-reference elements — adjacent DbRef slots in a tuple.
+#[test]
+#[ignore = "T1.10: struct-reference tuple element coverage not yet verified"]
+fn tuple_struct_refs() {
+    code!(
+        "struct Point { x: integer, y: integer }
+         fn two_points(a: Point, b: Point) -> (Point, Point) { (b, a) }
+         fn test() {
+             p1 = Point { x: 1, y: 2 };
+             p2 = Point { x: 3, y: 4 };
+             (q1, q2) = two_points(p1, p2);
+             assert(q1.x == 3, \"q1.x\");
+             assert(q2.x == 1, \"q2.x\");
+         }"
+    );
+}
+
+/// T1.10-4: tuple elements sourced from indexed vector reads.
+#[test]
+#[ignore = "T1.10: vector-sourced tuple element coverage not yet verified"]
+fn tuple_from_vector_elements() {
+    code!(
+        "fn first_two(v: vector<integer>) -> (integer, integer) { (v[0], v[1]) }
+         fn test() {
+             nums = [10, 20, 30];
+             (a, b) = first_two(nums);
+             assert(a == 10, \"first\");
+             assert(b == 20, \"second\");
+         }"
+    );
+}
+
+// ── T1.9 — Tuple destructuring in `match` ────────────────────────────────────
+
+/// T1.9-1: wildcard arm `_` in a tuple match should evaluate to the arm body.
+#[test]
+#[ignore = "T1.9: parse_match does not yet dispatch on Type::Tuple"]
+fn tuple_match_wildcard() {
+    code!(
+        "fn test() -> integer {
+             t: (integer, integer) = (1, 2);
+             match t { _ => 42 }
+         }"
+    )
+    .expr("test()")
+    .result(Value::Int(42));
+}
+
+/// T1.9-2: literal pattern arms — match on both element values.
+#[test]
+#[ignore = "T1.9: parse_tuple_match literal pattern arms not yet implemented"]
+fn tuple_match_literal() {
+    code!(
+        "fn classify(t: (integer, integer)) -> integer {
+             match t {
+                 (0, 0) => 0;
+                 (1, _) => 1;
+                 _      => 99;
+             }
+         }"
+    )
+    .expr("classify((0, 0))")
+    .result(Value::Int(0))
+    .expr("classify((1, 5))")
+    .result(Value::Int(1))
+    .expr("classify((2, 3))")
+    .result(Value::Int(99));
+}
+
+/// T1.9-3: binding variables in a tuple arm — bound names usable in arm body.
+#[test]
+#[ignore = "T1.9: binding variables in tuple match arms not yet implemented"]
+fn tuple_match_binding() {
+    code!(
+        "fn sum_pair(t: (integer, integer)) -> integer {
+             match t { (a, b) => a + b }
+         }"
+    )
+    .expr("sum_pair((3, 4))")
+    .result(Value::Int(7));
+}

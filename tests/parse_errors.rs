@@ -699,6 +699,26 @@ fn par_worker_returns_generator() {
     .error("parallel worker 'gen_worker' returns iterator(integer(-2147483647, 2147483647, false), null) — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
+// ── T1.11 — Tuple type constraints ───────────────────────────────────────────
+
+/// T1.11a: a tuple type in a struct field position must be rejected at compile
+/// time because tuples are stack-only values that cannot be heap-allocated.
+#[test]
+#[ignore = "T1.11a: typedef.rs::fill_all does not yet reject tuple-typed struct fields"]
+fn tuple_in_struct_field_rejected() {
+    code!("struct Foo { pair: (integer, integer) }\nfn test() {}")
+        .error("struct field cannot have a tuple type — tuples are stack-only values");
+}
+
+/// T1.11b: compound assignment on a tuple LHS must produce a clear diagnostic
+/// instead of a generic internal error.
+#[test]
+#[ignore = "T1.11b: parse_assign does not yet reject compound assignment on a tuple LHS"]
+fn tuple_compound_assign_rejected() {
+    code!("fn test() { a = 1; b = 2; (a, b) += (1, 2); }")
+        .error("compound assignment is not supported for tuple destructuring — use (a, b) = expr instead");
+}
+
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
 
 /// #91: two init fields referencing each other via $ should produce an error.
