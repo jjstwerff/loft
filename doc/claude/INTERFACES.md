@@ -782,18 +782,46 @@ but surprising to users expecting `<` syntax. Consider allowing
 bodies that desugars to `fn OpLt`. This is a purely cosmetic change that
 can be added without altering the data model.
 
+*Mitigation:* Add `op <op> (self: Self, ...) -> T` sugar in `parse_interface`
+(`src/parser/definitions.rs`) that maps the operator token to its `OpCamelCase`
+name and stores it as an ordinary method stub. Zero data model impact; the
+desugaring happens before any downstream step sees the signature.
+
 **Q3: Interface visibility / `pub`** — should interfaces follow the same
 `pub` / non-`pub` visibility rules as functions? Recommended: yes, using the
 existing `pub_visible` field on `Definition`.
+
+*Mitigation:* Reuse `pub_visible` on `Definition` unchanged. `parse_interface`
+checks for a leading `pub` token and sets the flag exactly as `parse_function`
+does. No new field or mechanism required.
 
 **Q4: `Self` in return position** — `fn create(x: integer) -> Self` (a
 factory method with no `self` parameter) is probably not useful at this stage
 and complicates the `Self` substitution. Restrict `Self` to appear only when
 `self: Self` is the first parameter in phase 1.
 
+*Mitigation (phase 1):* In the I5 validation pass, emit
+`"factory methods (Self in return without self parameter) are not yet supported"`
+if `Self` appears in the return type but no `self: Self` first parameter is
+present. This makes the restriction explicit rather than silently producing
+wrong code. The caller-supplied-identity overload
+(`fn sum_of<T: Addable>(v: vector<T>, identity: T) -> T`) is the recommended
+workaround for the empty-collection case (see Q6).
+
+*Mitigation (phase 2):* Track a separate `Self` substitution for parameterless
+factory methods keyed by the call-site's concrete type. Requires no data-model
+change; only extends the substitution logic in I6.
+
 **Q5: Interfaces in the doc generator** — `gendoc` (`src/documentation.rs`)
 will need a rendering path for `DefType::Interface`. Deferring to after the
 feature lands; add a stub that omits interfaces from HTML output until then.
+
+*Mitigation:* Add a guard in the `documentation.rs` rendering loop that
+silently skips `DefType::Interface` definitions (the same pattern used for
+any unhandled variant). This prevents a panic on the first `cargo run --bin
+gendoc` run after I2 lands. A proper interface section (name, signatures,
+known implementing types) can be added as a follow-up without touching any
+other step.
 
 **Q6: Zero/identity element for generic arithmetic** — the first-element
 initialisation pattern (`result = v[0]; for item in v[1..]`) is loft-idiomatic
@@ -810,5 +838,28 @@ Two paths exist:
   `fn sum_of<T: Addable>(v: vector<T>, identity: T) -> T`
   where the caller passes the zero value. No language change needed.
 
-Recommendation: ship the first-element pattern in phase 1; add the factory
-method form in phase 2 when Q4 is reconsidered.
+*Mitigation:* Ship the caller-supplied-identity overload in phase 1 alongside
+I9. Add it next to the first-element form in `default/01_code.loft`. This
+covers the empty-safe use case with no language change. Revisit the factory
+method form (`fn zero() -> Self`) in phase 2 after Q4 is relaxed.
+
+---
+
+## Phase 1 gaps
+
+### Left-side concrete operand (`concrete op T -> T`)
+
+`2.0 * my_t_value` is not supported in phase 1. Operator dispatch always
+starts from the `self` position, so the left operand must be of type `T`.
+
+*Mitigation (phase 1):* Document as a known limitation. Most cases can be
+rewritten using commutativity: `my_t_value * 2.0`. Where commutativity does
+not hold, the user defines a helper method instead of relying on operator
+syntax.
+
+*Mitigation (phase 2):* After the primary `T.OpMul(concrete)` lookup
+succeeds, allow declaring `fn OpMul(factor: float, self: Self) -> Self` in the
+interface with `factor` as the first parameter — but this requires either
+commutativity to be declared explicitly in the interface, or a second-pass
+fallback lookup. Add a design note before implementing to avoid ambiguity with
+existing overload resolution.
