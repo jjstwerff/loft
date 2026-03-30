@@ -267,6 +267,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_part(
         &mut self,
         var_tp: &Type,

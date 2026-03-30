@@ -937,14 +937,9 @@ fn tuple_from_vector_elements() {
 #[test]
 #[ignore = "T1.9: parse_match does not yet dispatch on Type::Tuple"]
 fn tuple_match_wildcard() {
-    code!(
-        "fn test() -> integer {
-             t: (integer, integer) = (1, 2);
-             match t { _ => 42 }
-         }"
-    )
-    .expr("test()")
-    .result(Value::Int(42));
+    code!("fn pick_wildcard(t: (integer, integer)) -> integer { match t { _ => 42 } }")
+        .expr("pick_wildcard((1, 2))")
+        .result(Value::Int(42));
 }
 
 /// T1.9-2: literal pattern arms — match on both element values.
@@ -954,9 +949,9 @@ fn tuple_match_literal() {
     code!(
         "fn classify(t: (integer, integer)) -> integer {
              match t {
-                 (0, 0) => 0;
-                 (1, _) => 1;
-                 _      => 99;
+                 (0, 0) => 0,
+                 (1, _) => 1,
+                 _      => 99,
              }
          }"
     )
@@ -972,11 +967,7 @@ fn tuple_match_literal() {
 #[test]
 #[ignore = "T1.9: binding variables in tuple match arms not yet implemented"]
 fn tuple_match_binding() {
-    code!(
-        "fn sum_pair(t: (integer, integer)) -> integer {
-             match t { (a, b) => a + b }
-         }"
-    )
-    .expr("sum_pair((3, 4))")
-    .result(Value::Int(7));
+    code!("fn sum_pair(t: (integer, integer)) -> integer { match t { (a, b) => a + b } }")
+        .expr("sum_pair((3, 4))")
+        .result(Value::Int(7));
 }

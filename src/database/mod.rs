@@ -103,6 +103,7 @@ impl Debug for Content {
     }
 }
 
+#[allow(clippy::doc_markdown)]
 pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,

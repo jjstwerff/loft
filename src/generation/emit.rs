@@ -192,6 +192,8 @@ impl Output<'_> {
     /// The variable `v_nr` holds a `u32` definition number at runtime.
     /// We enumerate all reachable definitions with a matching signature and
     /// generate a `match` dispatch.
+    #[allow(clippy::unnecessary_map_or)]
+    #[allow(clippy::collapsible_if)]
     fn output_call_ref(
         &mut self,
         w: &mut dyn Write,

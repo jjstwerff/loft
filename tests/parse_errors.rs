@@ -707,7 +707,7 @@ fn par_worker_returns_generator() {
 #[ignore = "T1.11a: typedef.rs::fill_all does not yet reject tuple-typed struct fields"]
 fn tuple_in_struct_field_rejected() {
     code!("struct Foo { pair: (integer, integer) }\nfn test() {}")
-        .error("struct field cannot have a tuple type — tuples are stack-only values");
+        .error("struct field cannot have a tuple type — tuples are stack-only values at tuple_in_struct_field_rejected:1:40");
 }
 
 /// T1.11b: compound assignment on a tuple LHS must produce a clear diagnostic
@@ -716,7 +716,7 @@ fn tuple_in_struct_field_rejected() {
 #[ignore = "T1.11b: parse_assign does not yet reject compound assignment on a tuple LHS"]
 fn tuple_compound_assign_rejected() {
     code!("fn test() { a = 1; b = 2; (a, b) += (1, 2); }")
-        .error("compound assignment is not supported for tuple destructuring — use (a, b) = expr instead");
+        .error("compound assignment is not supported for tuple destructuring — use (a, b) = expr instead at tuple_compound_assign_rejected:1:36");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────

@@ -1094,6 +1094,7 @@ impl Parser {
     }
 
     // <field> ::= { <field_limit> | 'not' 'null' | <field_default> | 'check' '(' <expr> ')' | <type-id> [ '[' ['-'] <field> { ',' ['-'] <field> } ']' ] } }
+    #[allow(clippy::too_many_lines)] // pre-existing length; T1.11a added one branch
     pub(crate) fn parse_field(&mut self, d_nr: u32, a_name: &String) {
         let mut a_type: Type = Type::Unknown(0);
         let mut defined = false;
@@ -1145,6 +1146,23 @@ impl Parser {
                         }
                     }
                 }
+            } else if let Some(tp) = self.parse_type_full(d_nr, false) {
+                // T1.11a: tuple-typed struct fields are not allowed because tuples are
+                // stack-only values that cannot be stored in heap-allocated records.
+                if matches!(tp, Type::Tuple(_)) {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "struct field cannot have a tuple type — tuples are stack-only values"
+                        );
+                    }
+                    defined = true; // suppress the generic "needs type" fallback error
+                } else {
+                    defined = true;
+                    a_type = tp;
+                }
+                break;
             } else {
                 break;
             }

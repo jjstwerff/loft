@@ -626,6 +626,7 @@ impl Parser {
 
     // A5.3-complete: emit the lambda value — plain Int(d_nr) for non-capturing
     // lambdas, or an Insert block that allocates and populates the closure record.
+    #[allow(clippy::similar_names)]
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
         let closure_rec_d = self.data.def(d_nr).closure_record;
         if closure_rec_d != u32::MAX && !self.first_pass {

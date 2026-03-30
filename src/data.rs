@@ -1639,6 +1639,7 @@ impl Data {
     # Errors
     When the file cannot be written.
     */
+    #[allow(clippy::too_many_lines)]
     pub fn show_code(
         &self,
         write: &mut dyn Write,

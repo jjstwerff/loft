@@ -702,6 +702,31 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
         }
+        // T1.11b: compound assignment on a tuple LHS is not supported.
+        // (a, b) = expr is handled above; (a, b) += expr has no defined semantics.
+        // Return early in both passes to prevent downstream "No matching operator" errors.
+        // Consume the operator and RHS so the parser state stays clean after the early exit.
+        if matches!(code, Value::Tuple(_))
+            && ["+=", "-=", "*=", "%=", "/="]
+                .iter()
+                .any(|op| self.lexer.peek_token(op))
+        {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "compound assignment is not supported for tuple destructuring — use (a, b) = expr instead"
+                );
+            }
+            for op in ["+=", "-=", "*=", "%=", "/="] {
+                if self.lexer.has_token(op) {
+                    break;
+                }
+            }
+            let mut discard = Value::Null;
+            self.expression(&mut discard);
+            return Type::Void;
+        }
         let to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
