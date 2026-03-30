@@ -112,6 +112,29 @@ All notable changes to the loft language and interpreter.
   Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
   freed non-top slot is reused by the next `database()` call and `max` does not grow.
 
+### Language features
+
+- **Tuple destructuring in `match`** (T1.9) — `match` now dispatches on `Type::Tuple`
+  subjects.  New `parse_tuple_match` in `src/parser/control.rs` parses comma- or
+  semicolon-separated arms with wildcard (`_`), binding-variable, and literal patterns.
+  Logical AND for multi-element conditions is built as `v_if(a, b, false)` (there is no
+  `OpAnd`).  Tests: `tuple_match_wildcard`, `tuple_match_literal`, `tuple_match_binding`.
+
+- **Homogeneous-type tuple coverage** (T1.10) — Three new tests confirm that same-element-type
+  tuples work across common data sources: `tuple_homogeneous_text` (`(text, text)` pair
+  from function parameters), `tuple_store_text_fields` (text fields extracted from two
+  struct records), and `tuple_from_vector_elements` (`(integer, integer)` from indexed
+  vector reads).  `tuple_struct_refs` (two `(Point, Point)` DbRefs) remains ignored
+  pending T1.8 lifetime tracking for DbRef tuple slots.
+
+- **Tuple type constraint diagnostics** (T1.11) — Two new compile-time guards:
+  (a) `struct Foo { pair: (integer, integer) }` now emits "struct field cannot have a
+  tuple type — tuples are stack-only values" at parse time (`parse_field` in
+  `definitions.rs` detects `(` via `parse_type_full` before `fill_all` is reached);
+  (b) `(a, b) += expr` now emits "compound assignment is not supported for tuple
+  destructuring — use (a, b) = expr instead" (`parse_assign` in `expressions.rs` returns
+  early in both passes, consuming the operator and RHS to keep the parser state clean).
+
 ### Coroutine safety documentation
 
 - **Store-backed `Str` debug guard in `coroutine_yield`** (P2-R5 M10-a) — In

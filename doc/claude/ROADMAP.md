@@ -37,13 +37,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | CO1.7     | Coroutines: yield from inside for-loops                   | M  | ✓      | CO1.1–CO1.6  | PLANNING.md § CO1.7           |
 | CO1.8     | ↳ Multi-text parameters + nested-block safety             | S  | ✓      | CO1.3d       | PLANNING.md § CO1.8           |
 | CO1.9     | ↳ Store iteration generation guard in release builds      | S  | ✓      | CO1.6        | PLANNING.md § CO1.9           |
-| T1.9      | Tuple destructuring in `match`                            | S  | ✓      |              | TUPLE_MATCH.md                |
-| T1.9-1    | ↳ `Type::Tuple` dispatch in `parse_match`                 | XS | ✓      |              | control.rs                    |
-| T1.9-2    | ↳ `parse_tuple_match` — arm loop, if-chain                | S  | ✓      |              | control.rs                    |
-| T1.9-3    | ↳ `parse_tuple_elem_pattern` — wildcard/binding/literal/range/nested | S | ✓ | | control.rs            |
-| T1.9-4    | ↳ Tests + doc additions (`28-tuples.loft`)                | S  | ✓      |              | tests/docs/                   |
-| T1.10     | Tuple homogeneous-type coverage (text/store/struct/vector)| S  | ✓      | T1.8a, T1.8b | PLANNING.md § T1.10           |
-| T1.11     | Tuple type constraints (struct fields + compound assign)  | XS | ✓      | T1.1, T1.2   | PLANNING.md § T1.11           |
 | A8        | Slicing & comprehension on `sorted` / `index`             | M  | ✓      |              | SORTED_SLICE.md               |
 | A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S  | ✓      |              | fields.rs, codegen_runtime.rs |
 | A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)            | XS | ✓      | A8.1         | fields.rs                     |

@@ -433,18 +433,13 @@ the recompile overhead that caching was designed to address)
   **Effort:** Medium
   **Target:** 1.1+
 
-- **T1.9** — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
+- **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
 
-  Adds `Type::Tuple` dispatch in `parse_match`, a new `parse_tuple_match` function, and
-  `parse_tuple_elem_pattern` for per-position patterns (wildcard, binding, literal, range,
-  or-pattern, nested tuple). Exhaustiveness: requires at least one total (all-binding or
-  `_`) arm. Works on tuple variables and parameters; match on tuple-returning function
-  calls requires T1.8a first.
+  `Type::Tuple` dispatch added to `parse_match`; new `parse_tuple_match` handles wildcard
+  (`_`), binding, and literal patterns. AND conditions use `v_if(a,b,false)` (no OpAnd).
+  Tests: `tuple_match_wildcard`, `tuple_match_literal`, `tuple_match_binding`.
 
-  **Effort:** Small
-  **Target:** 0.8.3
-
-- **T1.10 — Same-element-type tuple coverage across data sources** (0.8.3):
+- **T1.10** *(completed 0.8.3)* — Same-element-type tuple coverage across data sources:
 
   T1.1–T1.8b verified tuples with *mixed* element types (`(integer, text)`,
   `(integer, float)`, etc.) but left same-element-type (homogeneous) tuples
@@ -518,62 +513,20 @@ the recompile overhead that caching was designed to address)
   | `tuple_struct_refs` | `(Point, Point)` | two DbRef slots, field access after destruct |
   | `tuple_from_vector_elements` | `(integer, integer)` from vector | index read into tuple slots |
 
-  **Effort:** Small
-  **Target:** 0.8.3
+  3 of 4 tests pass; `tuple_struct_refs` remains ignored pending T1.8 DbRef lifetime
+  tracking. `tuple_homogeneous_text`, `tuple_store_text_fields`, `tuple_from_vector_elements`
+  all active.
 
-- **T1.11 — Tuple type constraints: struct field rejection + compound assignment** (0.8.3):
+- **T1.11** *(completed 0.8.3)* — Tuple type constraints: struct field rejection + compound assignment:
 
   Two small correctness items that prevent silently wrong code or confusing errors when
   tuples are used in unsupported positions:
 
-  **T1.11a — Reject `Type::Tuple` in struct field positions** (Issue 93):
-
-  Tuples are stack-only values; they cannot be embedded in a heap-allocated struct record.
-  Currently `struct Foo { pair: (integer, integer) }` is accepted at parse time and reaches
-  codegen, where it produces wrong field offsets.
-
-  Fix: in `typedef.rs::fill_all()`, after type resolution, check each field type and emit a
-  compile error if `Type::Tuple` appears in a struct field position:
-
-  ```rust
-  // T1.11a: tuples are stack-only — reject in struct field positions.
-  if matches!(field_tp, Type::Tuple(_)) {
-      self.data.add_error(
-          def_nr,
-          "struct field cannot have a tuple type — tuples are stack-only values",
-      );
-  }
-  ```
-
-  **T1.11b — Reject compound assignment on tuple LHS** (Issue 97):
-
-  `(a, b) += expr` falls through the assignment loop and produces a generic internal error
-  instead of a clear diagnostic. The compound operators (`+=`, `-=`, etc.) are not defined
-  for tuple types and the expression is always a mistake.
-
-  Fix: in `parse_assign` (operators.rs or expressions.rs), before entering the per-element
-  loop, check for a compound operator with a tuple LHS and emit a targeted error:
-
-  ```rust
-  // T1.11b: compound assignment on a tuple LHS is not supported.
-  if is_compound_op && matches!(lhs_tp, Type::Tuple(_)) {
-      self.data.add_error(
-          self.context,
-          "compound assignment is not supported for tuple destructuring — use `(a, b) = expr` instead",
-      );
-      return Value::Nothing;
-  }
-  ```
-
-  **Tests to add** (`tests/parse_errors.rs`):
-
-  | Test name | Input | Expected error |
-  |-----------|-------|---------------|
-  | `tuple_in_struct_field_rejected` | `struct Foo { pair: (integer, integer) }` | "struct field cannot have a tuple type" |
-  | `tuple_compound_assign_rejected` | `(a, b) += (1, 2)` | "compound assignment is not supported for tuple destructuring" |
-
-  **Effort:** XS
-  **Target:** 0.8.3
+  T1.11a: `parse_field` in `definitions.rs` rejects `Type::Tuple` via `parse_type_full`
+  (the parser's `(` branch fires before `fill_all` is ever reached).
+  T1.11b: `parse_assign` in `expressions.rs` returns early (both passes) when a compound
+  operator follows a tuple LHS; consumes the operator and RHS to keep parser state clean.
+  Tests: `tuple_in_struct_field_rejected`, `tuple_compound_assign_rejected`.
 
 **Effort:** Very High
 **Target:** 1.1+
