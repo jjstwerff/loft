@@ -869,7 +869,6 @@ fn coroutine_text_local_declared_after_first_yield() {
 
 /// T1.10-1: homogeneous (text, text) tuple — both slots live and freed correctly.
 #[test]
-#[ignore = "T1.10: homogeneous text tuple coverage not yet verified"]
 fn tuple_homogeneous_text() {
     code!(
         "fn make_pair(first: text, last: text) -> (text, text) { (first, last) }
@@ -884,7 +883,6 @@ fn tuple_homogeneous_text() {
 /// T1.10-2: text fields from a struct record into a tuple — field text into
 /// tuple element does not produce a dangling reference.
 #[test]
-#[ignore = "T1.10: store-backed text tuple element coverage not yet verified"]
 fn tuple_store_text_fields() {
     code!(
         "struct Label { name: text }
@@ -901,7 +899,7 @@ fn tuple_store_text_fields() {
 
 /// T1.10-3: two struct-reference elements — adjacent DbRef slots in a tuple.
 #[test]
-#[ignore = "T1.10: struct-reference tuple element coverage not yet verified"]
+#[ignore = "T1.10-3: struct-reference tuple elements trigger use-after-free — T1.8 lifetime tracking needed for DbRef tuple slots"]
 fn tuple_struct_refs() {
     code!(
         "struct Point { x: integer, y: integer }
@@ -918,7 +916,6 @@ fn tuple_struct_refs() {
 
 /// T1.10-4: tuple elements sourced from indexed vector reads.
 #[test]
-#[ignore = "T1.10: vector-sourced tuple element coverage not yet verified"]
 fn tuple_from_vector_elements() {
     code!(
         "fn first_two(v: vector<integer>) -> (integer, integer) { (v[0], v[1]) }
@@ -935,7 +932,6 @@ fn tuple_from_vector_elements() {
 
 /// T1.9-1: wildcard arm `_` in a tuple match should evaluate to the arm body.
 #[test]
-#[ignore = "T1.9: parse_match does not yet dispatch on Type::Tuple"]
 fn tuple_match_wildcard() {
     code!("fn pick_wildcard(t: (integer, integer)) -> integer { match t { _ => 42 } }")
         .expr("pick_wildcard((1, 2))")
@@ -944,7 +940,6 @@ fn tuple_match_wildcard() {
 
 /// T1.9-2: literal pattern arms — match on both element values.
 #[test]
-#[ignore = "T1.9: parse_tuple_match literal pattern arms not yet implemented"]
 fn tuple_match_literal() {
     code!(
         "fn classify(t: (integer, integer)) -> integer {
@@ -965,7 +960,6 @@ fn tuple_match_literal() {
 
 /// T1.9-3: binding variables in a tuple arm — bound names usable in arm body.
 #[test]
-#[ignore = "T1.9: binding variables in tuple match arms not yet implemented"]
 fn tuple_match_binding() {
     code!("fn sum_pair(t: (integer, integer)) -> integer { match t { (a, b) => a + b } }")
         .expr("sum_pair((3, 4))")
