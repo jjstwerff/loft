@@ -317,8 +317,6 @@ fn ref_tuple_unused_mutation_error() {
 fn closure_capture_integer() {
     // A lambda captures an integer from the enclosing scope.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)")
-        .warning("closure record '__closure_0' created with 1 field: x(integer) at closure_capture_integer:2:67")
-        .warning("Variable x is never read at closure_capture_integer:2:22")
         .result(Value::Int(15));
 }
 
@@ -328,9 +326,7 @@ fn closure_capture_after_change() {
     // at call time, not definition time).  x is 99 when f(5) runs → 99 + 5 = 104.
     // Capture-at-definition-time (expected: 15) is a deferred improvement.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
-        .warning("closure record '__closure_0' created with 1 field: x(integer) at closure_capture_after_change:2:67")
         .warning("Dead assignment — 'x' is overwritten before being read at closure_capture_after_change:2:26")
-        .warning("Variable x is never read at closure_capture_after_change:2:22")
         .result(Value::Int(104));
 }
 
@@ -338,9 +334,6 @@ fn closure_capture_after_change() {
 fn closure_capture_multiple() {
     // A lambda captures two variables from the enclosing scope.
     expr!("a = 3; b = 7; f = fn(x: integer) -> integer { a + b + x }; f(10)")
-        .warning("closure record '__closure_0' created with 2 fields: a(integer), b(integer) at closure_capture_multiple:2:77")
-        .warning("Variable a is never read at closure_capture_multiple:2:22")
-        .warning("Variable b is never read at closure_capture_multiple:2:29")
         .result(Value::Int(20));
 }
 
@@ -365,7 +358,6 @@ fn closure_capture_text_integer_return() {
     // A5.6b.1: zero-param fn-ref fast path now injects __closure arg; text_return
     // no longer adds captured vars as spurious RefVar(Text) work-buffer arguments.
     expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()")
-        .warning("closure record '__closure_0' created with 1 field: prefix(text([])) at closure_capture_text_integer_return:2:73")
         .result(Value::Int(5));
 }
 
@@ -374,8 +366,57 @@ fn closure_capture_text_integer_return() {
 fn closure_capture_text_return() {
     // Same-scope text capture: lambda reads captured text, returns text.
     expr!("greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")")
-        .warning("closure record '__closure_0' created with 1 field: greeting(text([])) at closure_capture_text_return:2:92")
         .result(Value::str("hello, world!"));
+}
+
+// ── A5.6e — Closure capture coverage ────────────────────────────────────────
+
+#[test]
+fn closure_capture_struct_ref() {
+    // A5.6e scenario 3: capture a struct record (12-byte DbRef).
+    // Verifies the base A5.6b.1 DbRef copy path for non-text captures.
+    code!(
+        "struct Item { value: integer }
+fn test() {
+    it = Item { value: 10 };
+    add = fn(x: integer) -> integer { it.value + x };
+    assert(add(5) == 15, \"expected 15, got {add(5)}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+#[test]
+fn closure_capture_vector_elem() {
+    // A5.6e scenario 4: capture a value obtained by indexing a vector.
+    // Verifies that the element is materialised into a local before capture
+    // and the closure correctly reads it at call time.
+    code!(
+        "fn test() {
+    nums = [10, 20, 30];
+    chosen = nums[1];
+    pick = fn() -> integer { chosen };
+    assert(pick() == 20, \"expected 20, got {pick()}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+#[test]
+fn closure_capture_text_loop() {
+    // A5.6f: work buffer must be cleared before each call so loop iterations
+    // don't accumulate text from previous calls.
+    code!(
+        "fn test() {
+    for i in 0..5 {
+        prefix = \"hello\";
+        f = fn(name: text) -> text { \"{prefix}, {name}!\" };
+        result = f(\"world\");
+        assert(result == \"hello, world!\", \"iter {i}: expected hello, world!, got {result}\");
+    }
+}"
+    )
+    .result(loft::data::Value::Null);
 }
 
 // ── CO1.2 — OpCoroutineCreate + OpCoroutineNext ─────────────────────────────

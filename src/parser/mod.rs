@@ -124,6 +124,9 @@ pub struct Parser {
     pub(crate) last_closure_work_var: u16,
     // A5.3: closure allocation expression to inject at the call site.
     pub(crate) last_closure_alloc: Option<Box<Value>>,
+    // A5.6d: outer variable numbers captured by the most recently parsed lambda.
+    // Consumed by try_fn_ref_call to mark them as read at call-injection time.
+    pub(crate) last_closure_captured_vars: Vec<u16>,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
     /// Decremented after each init(expr) is parsed.
     pub(crate) init_field_tracking: bool,
@@ -284,6 +287,7 @@ impl Parser {
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
             last_closure_alloc: None,
+            last_closure_captured_vars: vec![],
             init_field_tracking: false,
             init_field_deps: Vec::new(),
             in_par_body: false,

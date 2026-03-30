@@ -347,7 +347,9 @@ fn main() {
     p.parse(&abs_file, false);
     if !p.diagnostics.is_empty() {
         for l in p.diagnostics.lines() {
-            println!("{l}");
+            if !l.starts_with("Debug: ") {
+                println!("{l}");
+            }
         }
         if p.diagnostics.level() >= Level::Error {
             std::process::exit(1);

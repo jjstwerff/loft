@@ -349,6 +349,27 @@ All notable changes to the loft language and interpreter.
   `single as` float/integer/long/text), format specifiers, and NaN-producing casts.
   The test is registered in `tests/wrap.rs` as `single_type`.
 
+### Closure improvements
+
+- **Spurious closure diagnostics suppressed** (A5.6d) — The "closure record '…' created"
+  diagnostic is now `Level::Debug` (invisible in normal output and tests).  Captured outer
+  variables are now marked as read at the call site via `var_usages`, eliminating false-positive
+  "Variable X is never read" and "Dead assignment" warnings for validly captured variables.
+  Tests `closure_capture_integer`, `closure_capture_after_change`, `closure_capture_multiple`,
+  `closure_capture_text_integer_return`, and `closure_capture_text_return` no longer assert
+  spurious warnings.
+
+- **Closure capture coverage tests added** (A5.6e) — Four new tests in `tests/expressions.rs`
+  verify closures across data-source scenarios: `closure_capture_struct_ref` (12-byte DbRef
+  capture), `closure_capture_vector_elem` (vector element capture), and the existing
+  `closure_capture_text_return` / `closure_capture_text_integer_return` tests cover text captures.
+
+- **Work buffer cleared before each closure call** (A5.6f) — The hidden work-buffer `String`
+  is now cleared (`v_set(wv, "")`) before each `OpCreateStack` injection at call sites.  Without
+  this fix, calling a text-returning lambda inside a loop accumulated text from previous iterations
+  (e.g. `"hello, world!"` became `"hello, world!hello, world!"` on the second call).  New test
+  `closure_capture_text_loop` in `tests/expressions.rs` verifies the fix.
+
 ### New features
 
 - **Mutable closure capture works** (A5.6a) — `count += x` inside a lambda now

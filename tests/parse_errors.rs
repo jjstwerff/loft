@@ -637,8 +637,7 @@ fn capture_detected() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
-    .warning("Variable count is never read at capture_detected:2:10")
-    .warning("closure record '__closure_0' created with 1 field: count(integer) at capture_detected:3:38");
+;
 }
 
 /// A5.1: lambda that does NOT reference outer variables has no capture error.
@@ -663,8 +662,7 @@ fn closure_record_single_capture() {
     code!(
         "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
     )
-    .warning("Variable count is never read at closure_record_single_capture:2:10")
-    .warning("closure record '__closure_0' created with 1 field: count(integer) at closure_record_single_capture:3:38");
+;
 }
 
 /// A5.2: multiple captures produce a record with multiple fields.
@@ -675,9 +673,7 @@ fn closure_record_multi_capture() {
     code!(
         "fn test() {\n  a = 1;\n  b = 2.0;\n  f = fn(x: integer) -> float { (a + x) as float + b };\n  assert(f(3) == 6.0);\n}"
     )
-    .warning("Variable a is never read at closure_record_multi_capture:2:6")
-    .warning("Variable b is never read at closure_record_multi_capture:3:6")
-    .warning("closure record '__closure_0' created with 2 fields: a(integer), b(float) at closure_record_multi_capture:4:56");
+;
 }
 
 // ── CO1.5c — e#remove rejection on generator iterators ──────────────────────

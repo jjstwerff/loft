@@ -1,15 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Closures
-// #warn closure record '__closure_0' created
-// #warn closure record '__closure_1' created
-// #warn closure record '__closure_2' created
-// #warn closure record '__closure_3' created
 // #warn Dead assignment — 'base' is overwritten before being read
-// #warn Variable offset is never read
-// #warn Variable lo is never read
-// #warn Variable hi is never read
-// #warn Variable base is never read
 // @TITLE: Capturing variables from the surrounding scope
 // A closure is a lambda that reads variables from the function scope in which
 // it is written.  No explicit capture list is needed — the compiler detects
