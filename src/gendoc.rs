@@ -1039,3 +1039,19 @@ fn generate_typst(
     println!("Generated doc/loft-reference.typ");
     Ok(())
 }
+
+// ── I11 — gendoc guard for interface declarations ────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::sig_kind;
+
+    /// I11: `sig_kind` must return `"interface"` (not `"const"`) for interface
+    /// declarations so that they are skipped gracefully in stdlib rendering.
+    #[test]
+    #[ignore = "I11: sig_kind interface guard — not yet implemented"]
+    fn sig_kind_interface_returns_interface() {
+        assert_eq!(sig_kind("pub interface Ordered { }"), "interface");
+        assert_eq!(sig_kind("interface Foo {}"), "interface");
+    }
+}

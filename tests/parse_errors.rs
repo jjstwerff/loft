@@ -738,6 +738,68 @@ fn interface_duplicate_name_rejected() {
         .error("Redefined interface Foo at interface_duplicate_name_rejected:2:16");
 }
 
+// ── I3.1 — op-sugar in interface bodies ──────────────────────────────────────
+
+/// I3.1: `op < (self: Self, other: Self) -> boolean` in an interface body is
+/// syntactic sugar for a method named `OpLt` and must parse without error.
+#[test]
+#[ignore = "I3.1: op-sugar in interface bodies — not yet implemented"]
+fn interface_op_sugar_lt_parses() {
+    code!(
+        "interface Ordered { op < (self: Self, other: Self) -> boolean }\nfn test() {}"
+    );
+}
+
+/// I3.1: a multi-operator interface with `op +` and `op ==` desugars correctly.
+#[test]
+#[ignore = "I3.1: op-sugar in interface bodies — not yet implemented"]
+fn interface_op_sugar_multi_parses() {
+    code!(
+        "interface Addable { op + (self: Self, other: Self) -> Self\n\
+                             op == (self: Self, other: Self) -> boolean }\nfn test() {}"
+    );
+}
+
+// ── I4 — <T: Bound> bound syntax ─────────────────────────────────────────────
+
+/// I4: `fn foo<T: Ordered>(x: T) -> T` with a valid interface bound parses
+/// without error and stores the bound for later satisfaction checking.
+#[test]
+#[ignore = "I4: <T: Bound> syntax — not yet implemented"]
+fn generic_fn_with_bound_parses() {
+    code!(
+        "interface Ordered { op < (self: Self, other: Self) -> boolean }\n\
+         fn identity<T: Ordered>(x: T) -> T { x }\nfn test() {}"
+    );
+}
+
+/// I4: a bound name that does not exist must produce a clear diagnostic.
+#[test]
+#[ignore = "I4: unknown bound name error — not yet implemented"]
+fn generic_fn_unknown_bound_errors() {
+    code!("fn foo<T: NonExistent>(x: T) -> T { x }\nfn test() {}")
+        .error("'NonExistent' is not a known interface at generic_fn_unknown_bound_errors:1:11");
+}
+
+/// I4: a struct name used as a type bound must be rejected — only interfaces are valid bounds.
+#[test]
+#[ignore = "I4: non-interface bound rejected — not yet implemented"]
+fn generic_fn_struct_as_bound_errors() {
+    code!("struct Point { x: integer }\nfn foo<T: Point>(x: T) -> T { x }\nfn test() {}")
+        .error("'Point' is not an interface — bounds must be interface names at generic_fn_struct_as_bound_errors:2:11");
+}
+
+// ── I5 — Factory-method restriction ──────────────────────────────────────────
+
+/// I5: a method that returns `Self` without a leading `self: Self` parameter
+/// is a factory method and must be rejected in phase 1.
+#[test]
+#[ignore = "I5: factory method restriction — not yet implemented"]
+fn interface_factory_method_rejected() {
+    code!("interface Creatable { fn create() -> Self }\nfn test() {}")
+        .error("factory methods not yet supported: 'create' returns Self without a 'self: Self' parameter at interface_factory_method_rejected:1:23");
+}
+
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
 
 /// #91: two init fields referencing each other via $ should produce an error.
