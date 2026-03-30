@@ -721,21 +721,18 @@ fn tuple_compound_assign_rejected() {
 
 /// I3: a minimal empty interface declaration parses without error.
 #[test]
-#[ignore = "I3: parse_interface not yet implemented in definitions.rs"]
 fn interface_empty_parses() {
     code!("interface Foo {}\nfn test() {}");
 }
 
 /// I3: an interface with method signatures parses without error.
 #[test]
-#[ignore = "I3: parse_interface not yet implemented in definitions.rs"]
 fn interface_with_method_parses() {
     code!("interface Printable { fn to_text(self: Self) -> text }\nfn test() {}");
 }
 
 /// I3: a duplicate interface name is rejected with a "Redefined interface" diagnostic.
 #[test]
-#[ignore = "I3: parse_interface not yet implemented in definitions.rs"]
 fn interface_duplicate_name_rejected() {
     code!("interface Foo {}\ninterface Foo {}\nfn test() {}")
         .error("Redefined interface Foo at interface_duplicate_name_rejected:2:16");

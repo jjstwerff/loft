@@ -972,7 +972,6 @@ fn tuple_match_binding() {
 /// `#[cfg(debug_assertions)]`.  This test is identical to `coroutine_stale_store_guard`
 /// but has no `cfg` gate — it verifies that the panic is reachable in any build.
 #[test]
-#[ignore = "CO1.9: generation guard only compiled under debug_assertions before CO1.9"]
 #[should_panic(expected = "stale DbRef")]
 fn coroutine_stale_store_guard_all_builds() {
     code!(
