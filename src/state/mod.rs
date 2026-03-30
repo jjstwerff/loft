@@ -82,11 +82,10 @@ pub struct CoroutineFrame {
     /// double-free or missing-free bugs in the consumer while the frame is suspended.
     #[cfg(debug_assertions)]
     pub saved_text_positions: std::collections::BTreeSet<u32>,
-    /// S28 (debug-only): snapshot of `(store_nr, generation)` for all live stores at
-    /// the moment of `coroutine_yield`.  Checked at `coroutine_next`; a mismatch
-    /// means a store was mutated between yields and any `DbRef` locals held by the
-    /// generator may be stale.
-    #[cfg(debug_assertions)]
+    /// CO1.9/S28: snapshot of `(store_nr, generation)` for all live stores at the moment
+    /// of `coroutine_yield`.  Checked at `coroutine_next`; a mismatch means a store was
+    /// mutated between yields and any `DbRef` locals held by the generator may be stale.
+    /// Always compiled in (was debug-only before CO1.9) so the guard fires in release too.
     pub saved_store_generations: Vec<(u16, u32)>,
 }
 
@@ -575,7 +574,6 @@ impl State {
             call_depth: 0,
             #[cfg(debug_assertions)]
             saved_text_positions: std::collections::BTreeSet::new(),
-            #[cfg(debug_assertions)]
             saved_store_generations: Vec::new(),
         };
         let idx = self.allocate_coroutine(frame);
@@ -657,9 +655,10 @@ impl State {
                 }
 
                 // S28 (debug-only): detect store mutations between yield and resume.
+                // CO1.9/S28: detect store mutations between yield and resume.
                 // Any live store whose generation changed since the last yield may have
-                // invalidated DbRef locals held by the suspended generator.
-                #[cfg(debug_assertions)]
+                // invalidated DbRef locals held by the suspended generator.  The guard
+                // is always-on (was debug-only before CO1.9) so it fires in release too.
                 {
                     let saved_gens: Vec<(u16, u32)> = self
                         .coroutine_frame_mut(idx)
@@ -671,7 +670,7 @@ impl State {
                             .allocations
                             .get(store_nr as usize)
                             .map_or(0, |s| s.generation);
-                        debug_assert!(
+                        assert!(
                             cur_gen == saved_gen,
                             "stale DbRef: store {store_nr} was mutated between coroutine \
                              yields (generation at yield: {saved_gen}, now: {cur_gen}). \
@@ -895,11 +894,10 @@ impl State {
             self.coroutine_frame_mut(idx).saved_text_positions = to_save;
         }
 
-        // S28 (debug-only): snapshot all live, unlocked store generations at the
-        // yield point.  `coroutine_next` will compare these on resume and fire a
-        // debug_assert if any store was mutated while the generator was suspended.
-        // Locked stores are worker snapshots that can never change; skip them.
-        #[cfg(debug_assertions)]
+        // CO1.9/S28: snapshot all live, unlocked store generations at the yield point.
+        // `coroutine_next` compares these on resume and panics if any store was mutated
+        // while the generator was suspended.  Locked stores are worker snapshots that
+        // can never change; skip them.  Always compiled in after CO1.9.
         {
             let gens: Vec<(u16, u32)> = self
                 .database

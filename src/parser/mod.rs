@@ -1696,6 +1696,7 @@ impl Parser {
                     && !self.parse_typedef()
                     && !self.parse_function()
                     && !self.parse_struct()
+                    && !self.parse_interface()
                     && !self.parse_constant())
             {
                 break;

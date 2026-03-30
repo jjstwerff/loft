@@ -738,7 +738,7 @@ fn interface_with_method_parses() {
 #[ignore = "I3: parse_interface not yet implemented in definitions.rs"]
 fn interface_duplicate_name_rejected() {
     code!("interface Foo {}\ninterface Foo {}\nfn test() {}")
-        .error("Redefined interface Foo at interface_duplicate_name_rejected:2:14");
+        .error("Redefined interface Foo at interface_duplicate_name_rejected:2:16");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────

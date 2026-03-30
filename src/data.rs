@@ -600,6 +600,10 @@ pub enum DefType {
     // A generic function template parameterised by a single type variable.
     // Not compiled until instantiated at a concrete call site (P5).
     Generic,
+    // I2: an interface declaration — a named set of required method signatures.
+    // Method stubs are stored as attributes on this definition.
+    // Used by bounded generics (<T: InterfaceName>) for satisfaction checking (I6).
+    Interface,
 }
 
 impl Display for DefType {
@@ -649,6 +653,10 @@ pub struct Definition {
     /// A5.2: definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
+    /// I2: for generic functions — the `def_nr`s of all required interface bounds.
+    /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
+    /// are stored as multiple entries; checked for conflicting method signatures at I6.
+    pub bounds: Vec<u32>,
 }
 
 impl Definition {
@@ -927,6 +935,7 @@ impl Data {
             variables: Function::new(name, &position.file),
             pub_visible: false,
             closure_record: u32::MAX,
+            bounds: Vec::new(),
         };
         self.definitions.push(new_def);
         rec

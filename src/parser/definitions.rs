@@ -1070,6 +1070,95 @@ impl Parser {
         true
     }
 
+    /// I3: parse an `interface` declaration and register it as `DefType::Interface`.
+    ///
+    /// Syntax: `interface Name { fn method(params) -> type [;] ... }`
+    ///
+    /// Method signatures are parsed for syntactic correctness (param/return types
+    /// resolved against the current scope).  `Self` is a placeholder type that
+    /// refers to the concrete satisfying type at instantiation (I6).
+    ///
+    /// This first-pass implementation registers the interface definition and
+    /// verifies syntax; semantic satisfaction checking comes in I5/I6.
+    pub(crate) fn parse_interface(&mut self) -> bool {
+        if !self.lexer.has_token("interface") {
+            return false;
+        }
+        let Some(id) = self.lexer.has_identifier() else {
+            diagnostic!(self.lexer, Level::Error, "Expect interface name");
+            return true;
+        };
+        if !is_camel(&id) && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Interface name '{}' must be CamelCase",
+                id
+            );
+        }
+        // Register or locate the interface definition.
+        let mut d_nr = self.data.def_nr(&id);
+        if d_nr == u32::MAX {
+            if self.first_pass {
+                d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Interface);
+            }
+        } else if self.first_pass {
+            diagnostic!(self.lexer, Level::Error, "Redefined interface {}", id);
+        }
+        // I3: register 'Self' as a type placeholder for method signature parsing.
+        // 'Self' resolves to its own definition (like a generic type variable) so
+        // that parse_type_full succeeds.  I6 substitutes the concrete satisfying type.
+        if self.first_pass && self.data.def_nr("Self") == u32::MAX {
+            let self_nr = self.data.add_def("Self", self.lexer.pos(), DefType::Struct);
+            self.data
+                .set_returned(self_nr, Type::Reference(self_nr, Vec::new()));
+        }
+        let context = self.context;
+        if d_nr != u32::MAX {
+            self.context = d_nr;
+        }
+        if !self.lexer.token("{") {
+            self.context = context;
+            return true;
+        }
+        // Parse zero or more method signatures: fn name(params) -> type [;]
+        while !self.lexer.peek_token("}") {
+            if self.lexer.peek().has == crate::lexer::LexItem::None {
+                break;
+            }
+            if !self.lexer.has_token("fn") {
+                if !self.first_pass {
+                    diagnostic!(self.lexer, Level::Error, "Expected 'fn' in interface body");
+                }
+                self.lexer.cont();
+                continue;
+            }
+            let Some(method_name) = self.lexer.has_identifier() else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expected method name in interface"
+                    );
+                }
+                break;
+            };
+            let mut args = Vec::new();
+            if self.lexer.token("(") {
+                self.parse_arguments(&method_name, &mut args);
+                self.lexer.token(")");
+            }
+            if self.lexer.has_token("->") {
+                let _ = self.parse_type_full(d_nr, true);
+            }
+            self.lexer.has_token(";");
+        }
+        self.lexer.token("}");
+        self.lexer.has_token(";");
+        self.context = context;
+        true
+    }
+
     /// #91: DFS cycle detection on init field dependencies.
     fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>)]) {
         let names: HashSet<String> = init_deps.iter().map(|(n, _)| n.clone()).collect();

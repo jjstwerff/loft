@@ -154,6 +154,7 @@ static KEYWORDS: &[&str] = &[
     "debug_assert",
     "assert",
     "panic",
+    "interface",
 ];
 
 #[derive(Debug)]
