@@ -76,6 +76,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | I9.2      | ↳ `sum_of(v, identity)` caller-supplied-identity overload | XS | ✓      | I9           | default/01_code.loft          |
 | I10       | Interfaces: "does not satisfy" diagnostics                | S  | ✓      | I6           | src/diagnostics.rs            |
 | I11       | Interfaces: gendoc stub/guard for `DefType::Interface`    | XS | ✓      | I2           | src/documentation.rs          |
+| S16b      | Range queries on `sorted<EnumVariant[field]>` resolve key against parent enum → "Unknown in expression type ParentEnum" | S | ✓ | | src/parser/fields.rs, index_type |
 
 ---
 

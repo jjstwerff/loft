@@ -274,7 +274,16 @@ impl Parser {
         | Type::Index(d_nr, _, _)
         | Type::Spacial(d_nr, _, _) = t
         {
-            self.data.def(*d_nr).returned.clone()
+            let ret = self.data.def(*d_nr).returned.clone();
+            // S16b: struct-enum variants have .returned = Type::Enum(parent, true, []).
+            // For collection element access we need Type::Reference(variant_def_nr, [])
+            // so that field access and range-query for-loops resolve fields against the
+            // variant struct (not the parent enum), and for_type() can map the element type.
+            if matches!(ret, Type::Enum(_, true, _)) {
+                Type::Reference(*d_nr, Vec::new())
+            } else {
+                ret
+            }
         } else if matches!(t, Type::Text(_)) {
             t.clone()
         } else if let Type::RefVar(tp) = t {
@@ -436,12 +445,20 @@ impl Parser {
             let start = v_set(iter, self.cl("OpIterate", &ls));
             let mut ls = vec![Value::Var(iter)];
             self.fill_iter(&mut ls, code, typedef, false, inclusive);
+            // S16b: annotate the step-block with the element type, not the collection type,
+            // so that IR dumps and any type-driven passes see the correct element type.
+            let elem_type = match typedef {
+                Type::Sorted(el, _, dep) | Type::Index(el, _, dep) => {
+                    Type::Reference(*el, dep.clone())
+                }
+                _ => typedef.clone(),
+            };
             *code = Value::Iter(
                 u16::MAX,
                 Box::new(start),
                 Box::new(v_block(
                     vec![self.cl("OpStep", &ls)],
-                    typedef.clone(),
+                    elem_type,
                     "Iterate keys",
                 )),
                 Box::new(Value::Null),
