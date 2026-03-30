@@ -634,7 +634,10 @@ fn generic_field_error() {
 /// A5.1: lambda referencing an outer variable is detected as a capture.
 #[test]
 fn capture_detected() {
-    code!("fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}");
+    code!(
+        "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
+    )
+;
 }
 
 /// A5.1: lambda that does NOT reference outer variables has no capture error.
@@ -656,7 +659,10 @@ fn local_not_captured() {
 /// A5.2: closure record is synthesized with the correct captured variable.
 #[test]
 fn closure_record_single_capture() {
-    code!("fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}");
+    code!(
+        "fn test() {\n  count = 0;\n  f = fn(x: integer) { count += x; };\n  f(1);\n}"
+    )
+;
 }
 
 /// A5.2: multiple captures produce a record with multiple fields.
@@ -666,7 +672,8 @@ fn closure_record_multi_capture() {
     // No more "Unknown variable" errors thanks to the pre-has_var redirect.
     code!(
         "fn test() {\n  a = 1;\n  b = 2.0;\n  f = fn(x: integer) -> float { (a + x) as float + b };\n  assert(f(3) == 6.0);\n}"
-    );
+    )
+;
 }
 
 // ── CO1.5c — e#remove rejection on generator iterators ──────────────────────

@@ -316,7 +316,8 @@ fn ref_tuple_unused_mutation_error() {
 #[test]
 fn closure_capture_integer() {
     // A lambda captures an integer from the enclosing scope.
-    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)").result(Value::Int(15));
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; f(5)")
+        .result(Value::Int(15));
 }
 
 #[test]
@@ -356,17 +357,16 @@ fn closure_capture_text_integer_return() {
     // Same-scope text capture: lambda reads captured text, returns integer.
     // A5.6b.1: zero-param fn-ref fast path now injects __closure arg; text_return
     // no longer adds captured vars as spurious RefVar(Text) work-buffer arguments.
-    expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()").result(Value::Int(5));
+    expr!("prefix = \"hello\"; f = fn() -> integer { len(prefix) }; f()")
+        .result(Value::Int(5));
 }
 
 // A5.6b.2: re-enabled after generate_call_ref work-buffer push fix.
 #[test]
 fn closure_capture_text_return() {
     // Same-scope text capture: lambda reads captured text, returns text.
-    expr!(
-        "greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")"
-    )
-    .result(Value::str("hello, world!"));
+    expr!("greeting = \"hello\"; f = fn(name: text) -> text { \"{greeting}, {name}!\" }; f(\"world\")")
+        .result(Value::str("hello, world!"));
 }
 
 // ── A5.6e — Closure capture coverage ────────────────────────────────────────
