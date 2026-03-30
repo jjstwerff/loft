@@ -2177,7 +2177,10 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
     }
 }
 
-fn rename(op: &str) -> &str {
+/// Map an operator token to its CamelCase name suffix used in `OpCamelCase` identifiers.
+/// E.g. `"<"` → `"Lt"`, so the method name becomes `"OpLt"`.
+/// Also used by I3.1 (`op <token>` sugar in interface bodies).
+pub(crate) fn rename(op: &str) -> &str {
     match op {
         "*" => "Mul",
         "+" => "Add",
@@ -2192,6 +2195,8 @@ fn rename(op: &str) -> &str {
         "!=" => "Ne",
         "<" => "Lt",
         "<=" => "Le",
+        ">" => "Gt",
+        ">=" => "Ge",
         "%" => "Rem",
         "!" => "Not",
         "+=" => "Append",

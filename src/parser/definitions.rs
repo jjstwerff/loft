@@ -6,8 +6,8 @@
 
 use super::{
     Argument, DefType, Function, HashMap, HashSet, Level, Link, Parser, Position, ToString, Type,
-    Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op, is_upper, v_block,
-    v_if,
+    Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op, is_upper, rename,
+    v_block, v_if,
 };
 
 impl Parser {
@@ -459,6 +459,8 @@ impl Parser {
         // P5.1: detect `<T>` type parameter after function name.
         let mut is_generic = false;
         let mut type_var_name = String::new();
+        // I4: bound names collected from `<T: A + B>` — resolved to def_nrs in the second pass.
+        let mut pending_bounds: Vec<String> = Vec::new();
         if self.lexer.has_token("<") {
             if let Some(tv) = self.lexer.has_identifier() {
                 if !is_camel(&tv) && !self.first_pass {
@@ -471,6 +473,23 @@ impl Parser {
                 }
                 type_var_name = tv;
                 is_generic = true;
+                // I4: parse `<T: A + B>` bound list; collect raw names here, resolve in second pass.
+                if self.lexer.has_token(":") {
+                    loop {
+                        if let Some(bound_name) = self.lexer.has_identifier() {
+                            pending_bounds.push(bound_name);
+                        } else if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Expected interface name in type bound"
+                            );
+                        }
+                        if !self.lexer.has_token("+") {
+                            break;
+                        }
+                    }
+                }
             } else if !self.first_pass {
                 diagnostic!(
                     self.lexer,
@@ -534,6 +553,31 @@ impl Parser {
         };
         if self.context == u32::MAX {
             return false;
+        }
+        // I4: resolve pending bound names to interface def_nrs in the second pass.
+        if !self.first_pass && !pending_bounds.is_empty() {
+            let mut bounds = Vec::new();
+            for bname in &pending_bounds {
+                let b_nr = self.data.def_nr(bname);
+                if b_nr == u32::MAX {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not a known interface",
+                        bname
+                    );
+                } else if !matches!(self.data.def_type(b_nr), DefType::Interface) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not an interface — bounds must be interface names",
+                        bname
+                    );
+                } else {
+                    bounds.push(b_nr);
+                }
+            }
+            self.data.definitions[self.context as usize].bounds = bounds;
         }
         let mut returned_not_null = false;
         let result = if self.lexer.has_token("->") {
@@ -1121,35 +1165,80 @@ impl Parser {
             self.context = context;
             return true;
         }
-        // Parse zero or more method signatures: fn name(params) -> type [;]
+        // Parse zero or more method/operator signatures.
         while !self.lexer.peek_token("}") {
             if self.lexer.peek().has == crate::lexer::LexItem::None {
                 break;
             }
-            if !self.lexer.has_token("fn") {
-                if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Error, "Expected 'fn' in interface body");
+            // I3.1: `op <token> (params) -> type` desugars to an `OpCamelCase` method stub.
+            let method_name = if self.lexer.has_keyword("op") {
+                if let crate::lexer::LexItem::Token(tok) = self.lexer.peek().has.clone() {
+                    self.lexer.cont();
+                    format!("Op{}", rename(&tok))
+                } else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Expected operator symbol after 'op' in interface body"
+                        );
+                    }
+                    self.lexer.cont();
+                    continue;
                 }
-                self.lexer.cont();
-                continue;
-            }
-            let Some(method_name) = self.lexer.has_identifier() else {
-                if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Expected method name in interface"
-                    );
+            } else {
+                if !self.lexer.has_token("fn") {
+                    if !self.first_pass {
+                        diagnostic!(self.lexer, Level::Error, "Expected 'fn' in interface body");
+                    }
+                    self.lexer.cont();
+                    continue;
                 }
-                break;
+                let Some(name) = self.lexer.has_identifier() else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Expected method name in interface"
+                        );
+                    }
+                    break;
+                };
+                name
             };
             let mut args = Vec::new();
             if self.lexer.token("(") {
                 self.parse_arguments(&method_name, &mut args);
                 self.lexer.token(")");
             }
-            if self.lexer.has_token("->") {
-                let _ = self.parse_type_full(d_nr, true);
+            let return_tp = if self.lexer.has_token("->") {
+                self.parse_type_full(d_nr, true)
+            } else {
+                None
+            };
+            // I5 (phase 1): factory methods (Self in return without self: Self first param)
+            // are not yet supported.  Emit a clear diagnostic rather than silently producing
+            // wrong code when I6 lands.
+            if !self.first_pass {
+                let self_nr = self.data.def_nr("Self");
+                if self_nr != u32::MAX {
+                    if let Some(Type::Reference(ret_nr, _)) = &return_tp {
+                        if *ret_nr == self_nr {
+                            let has_self_param = args.first().map_or(false, |a| {
+                                a.name == "self"
+                                    && matches!(&a.typedef, Type::Reference(nr, _) if *nr == self_nr)
+                            });
+                            if !has_self_param {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "factory methods not yet supported: '{}' returns Self without a 'self: Self' parameter",
+                                    method_name
+                                );
+                            }
+                        }
+                    }
+                }
             }
             self.lexer.has_token(";");
         }
