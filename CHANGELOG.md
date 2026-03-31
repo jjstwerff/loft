@@ -184,6 +184,18 @@ All notable changes to the loft language and interpreter.
   `"'T' is reserved as a generic type variable"` instead of a confusing
   "Redefined struct" message or a runtime crash.
 
+### Sorted collection slicing (A8)
+
+- **Open-ended bounds, range iteration, comprehensions** (A8.1, A8.2, A8.4, A8.6):
+  - A8.1: `col[lo..]`, `col[..hi]`, and `col[..]` now work on sorted collections.
+    Parser detects `..` before the first expression (open-start) and missing expression
+    after `..` (open-end). Runtime handles empty from/till arrays in OpIterate.
+    Tests: `sorted_open_end_range`, `sorted_open_start_range`.
+  - A8.2: `sorted[lo..hi]` range iteration verified working. Test: `sorted_range_iteration`.
+  - A8.4: `[for e in sorted[lo..hi] { expr }]` comprehensions verified.
+    Test: `sorted_range_comprehension`.
+  - A8.6: nullable lookup `if !col[k]` verified. Test: `sorted_nullable_lookup`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —

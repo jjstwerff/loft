@@ -27,13 +27,8 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
 | W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
 | W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
-| A8        | Slicing & comprehension on `sorted` / `index`             | M  | ✓      |              | SORTED_SLICE.md               |
-| A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S  | ✓      |              | fields.rs, codegen_runtime.rs |
-| A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)            | XS | ✓      | A8.1         | fields.rs                     |
 | A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)     | M  | ✓      |              | fields.rs                     |
-| A8.4      | ↳ Comprehensions on key ranges                            | S  | ✓      | A8.1         | tests/docs/                   |
 | A8.5      | ↳ Reverse range iteration (`rev(col[lo..hi])`)            | S  | ✓      | A8.1         | fields.rs, objects.rs         |
-| A8.6      | ↳ `match` on collection results (tests + docs)            | S  | ✓      |              | tests/docs/                   |
 | A14       | `par_light`: lightweight parallel loop                    | MH | ✓      |              | LIGHT_PAR.md                  |
 | A14.1     | ↳ `Store::borrow_locked_for_light_worker` + sentinel Drop | S  | ✓      |              | LIGHT_PAR.md § L1             |
 | A14.2     | ↳ `WorkerPool` struct                                     | S  | ✓      | A14.1        | LIGHT_PAR.md § L2             |
