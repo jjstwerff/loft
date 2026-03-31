@@ -51,6 +51,11 @@ pub fn check(data: &mut Data) {
         }
         let code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
         data.definitions[d_nr as usize].code = code;
+        // C35/C36/C37: set scopes on the COPY (not the original) and write
+        // it back BEFORE debug checks that read the variable table.
+        for (v_nr, scope) in &scopes.var_scope {
+            function.set_scope(*v_nr, *scope);
+        }
         data.definitions[d_nr as usize].variables = function;
         // A5.6: in debug builds, assert that every owned Reference variable emitted an
         // OpFreeRef.  Catches scope-registration bugs before they reach the runtime
@@ -70,11 +75,6 @@ pub fn check(data: &mut Data) {
             &data.definitions[d_nr as usize].variables,
             &data.definitions[d_nr as usize].name.clone(),
         );
-        for (v_nr, scope) in scopes.var_scope {
-            data.definitions[d_nr as usize]
-                .variables
-                .set_scope(v_nr, scope);
-        }
         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
         let free_text_nr = data.def_nr("OpFreeText");
         let free_ref_nr = data.def_nr("OpFreeRef");
