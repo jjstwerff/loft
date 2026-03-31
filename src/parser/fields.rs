@@ -73,9 +73,14 @@ impl Parser {
                     return self.parse_vector_method(code, &t, &field);
                 }
                 // I7: bounded method call on generic T — look for a T-stub.
+                // Verify the current function's bounds declare this method to
+                // prevent T-stubs from unrelated generics leaking in.
                 if let Some(_tv_name) = self.generic_type_name(&t) {
                     let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
-                    if stub_nr != u32::MAX && self.lexer.has_token("(") {
+                    if stub_nr != u32::MAX
+                        && self.has_bound_for_method(&field)
+                        && self.lexer.has_token("(")
+                    {
                         return self.parse_method(code, stub_nr, t.clone());
                     }
                 }

@@ -591,7 +591,14 @@ impl Parser {
                     let children: Vec<u32> = self.data.children_of(iface_nr).collect();
                     for child_nr in children {
                         let child_name = self.data.def(child_nr).name.clone();
-                        let method_suffix = if child_name.starts_with(&self_prefix) {
+                        // Extract method name from interface-scoped stub names:
+                        // "__iface_{d_nr}_{method}" → "method"
+                        // Also handle legacy "t_4Self_{method}" format.
+                        let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_")
+                        {
+                            rest.split_once('_')
+                                .map_or(rest.to_string(), |(_, m)| m.to_string())
+                        } else if child_name.starts_with(&self_prefix) {
                             child_name[self_prefix.len()..].to_string()
                         } else {
                             child_name.clone()
@@ -1268,13 +1275,25 @@ impl Parser {
             } else {
                 None
             };
-            // I6 (pre-step): register method stubs as children of the interface definition.
-            // This creates `DefType::Function` entries (named e.g. `t_4Self_OpLt`) with
-            // `parent = interface_d_nr`, so that `data.children_of(interface_d_nr)` can
-            // enumerate them for satisfaction checking.
+            // I6/I9-stub: register method stubs as children of the interface.
+            // Use interface-scoped names (`__iface_{d_nr}_{method}`) to avoid
+            // collision when multiple interfaces declare the same operator.
+            // `children_of(d_nr)` enumerates them for satisfaction checking;
+            // T-stub creation strips the prefix to extract the method name.
             if self.first_pass && d_nr != u32::MAX {
-                let stub_nr = self.data.add_fn(&mut self.lexer, &method_name, &args);
-                if stub_nr != u32::MAX {
+                let stub_name = format!("__iface_{}_{}", d_nr, method_name);
+                if self.data.def_nr(&stub_name) == u32::MAX {
+                    let stub_nr =
+                        self.data
+                            .add_def(&stub_name, self.lexer.pos(), DefType::Function);
+                    for a in &args {
+                        self.data.add_attribute(
+                            &mut self.lexer,
+                            stub_nr,
+                            &a.name,
+                            a.typedef.clone(),
+                        );
+                    }
                     self.data.definitions[stub_nr as usize].parent = d_nr;
                     if let Some(ref rt) = return_tp {
                         self.data.set_returned(stub_nr, rt.clone());

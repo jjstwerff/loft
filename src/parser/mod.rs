@@ -692,6 +692,30 @@ impl Parser {
         None
     }
 
+    /// Check whether the current generic function's bounds include an interface that
+    /// declares the given method.  Returns false if not inside a generic or if no bound
+    /// declares the method.
+    pub(crate) fn has_bound_for_method(&self, method: &str) -> bool {
+        if self.context == u32::MAX {
+            return false;
+        }
+        let bounds = &self.data.definitions[self.context as usize].bounds;
+        for &iface_nr in bounds {
+            for child_nr in self.data.children_of(iface_nr) {
+                let name = &self.data.def(child_nr).name;
+                // Interface stubs use "__iface_{d_nr}_{method}" naming
+                if let Some(rest) = name.strip_prefix("__iface_") {
+                    if let Some((_, m)) = rest.split_once('_') {
+                        if m == method {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Search for definitions with the given name and call that with the given parameters.
     fn call(
         &mut self,
@@ -847,11 +871,15 @@ impl Parser {
         let mut satisfied = true;
         for iface_nr in bounds {
             let iface_name = self.data.def(iface_nr).name.clone();
-            let self_prefix = format!("t_{}Self_", "Self".len());
             let children: Vec<u32> = self.data.children_of(iface_nr).collect();
             for child_nr in children {
                 let child_name = self.data.def(child_nr).name.clone();
-                let method_suffix = if child_name.starts_with(&self_prefix) {
+                // Extract method name from "__iface_{d_nr}_{method}" or legacy "t_4Self_{method}"
+                let self_prefix = format!("t_{}Self_", "Self".len());
+                let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_") {
+                    rest.split_once('_')
+                        .map_or(rest.to_string(), |(_, m)| m.to_string())
+                } else if child_name.starts_with(&self_prefix) {
                     child_name[self_prefix.len()..].to_string()
                 } else {
                     child_name.clone()
@@ -1448,7 +1476,13 @@ impl Parser {
             let op_method = format!("Op{}", rename(op));
             let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, op_method);
             let stub_nr = self.data.def_nr(&stub_name);
-            if stub_nr != u32::MAX {
+            // Only use the T-stub if the CURRENT function's bounds declare this method.
+            // Without this check, T-stubs from unrelated bounded generics (e.g., stdlib's
+            // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
+            if stub_nr != u32::MAX
+                && self.context != u32::MAX
+                && self.has_bound_for_method(&op_method)
+            {
                 let tp = self.call_nr(code, stub_nr, list, types, false);
                 if tp != Type::Null {
                     return tp;

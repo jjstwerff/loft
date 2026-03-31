@@ -118,22 +118,22 @@ fn wrong_cast() {
 
 #[test]
 fn field_type() {
-    code!("struct T { v: u8 }\nfn test() { r = T { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
-        .error("Cannot write integer(0, 255) on field T.v:text at field_type:2:29");
+    code!("struct Rec { v: u8 }\nfn test() { r = Rec { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
+        .error("Cannot write integer(0, 255) on field Rec.v:text at field_type:2:31");
 }
 
 #[test]
 fn key_field() {
     code!(
-        "struct T { n: text, v: u16 }
-struct N { d: vector<T>, h: hash<T[n]> }
+        "struct Rec { n: text, v: u16 }
+struct Coll { d: vector<Rec>, h: hash<Rec[n]> }
 fn test() {
-  s = N { d:[T {n: \"a\", v:12} ] };
+  s = Coll { d:[Rec {n: \"a\", v:12} ] };
   s.d[0].v = 13;
   s.d[0].n = \"b\";
 }"
     )
-    .error("Cannot write to key field T.n create a record instead at key_field:6:18");
+    .error("Cannot write to key field Rec.n create a record instead at key_field:6:18");
 }
 
 #[test]

@@ -692,9 +692,9 @@ fn add(r: &Data = null, val: integer) {
 #[test]
 fn n3_reference_assignment_emits_copy_record() {
     // Bytecode interpreter correctly deep-copies references already; test confirms behaviour.
-    code!("struct T { name: text }")
+    code!("struct Item { name: text }")
         .expr(
-            "a = T { name: \"hello\" };
+            "a = Item { name: \"hello\" };
 b = a;
 b.name += \" world\";
 a.name",
