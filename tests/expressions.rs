@@ -1561,3 +1561,92 @@ fn coroutine_text_local_nested_block() {
     )
     .result(Value::Int(7));
 }
+
+// ── A8.1 — Open-ended bounds on sorted/index ────────────────────────────────
+
+/// A8.1: `col[lo..]` iterates from `lo` to the end of a sorted collection.
+#[test]
+#[ignore = "A8.1: open-ended lower bound on sorted — not yet implemented"]
+fn sorted_open_end_range() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn sum_from(db: Db, lo: integer) -> integer {
+           total = 0;
+           for e in db.map[lo..] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_from(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 2)")
+    .result(Value::Int(50));
+}
+
+/// A8.1: `col[..hi]` iterates from start to `hi` (exclusive).
+#[test]
+#[ignore = "A8.1: open-ended upper bound on sorted — not yet implemented"]
+fn sorted_open_start_range() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn sum_to(db: Db, hi: integer) -> integer {
+           total = 0;
+           for e in db.map[..hi] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_to(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 3)")
+    .result(Value::Int(30));
+}
+
+// ── A8.2 — Range slicing on sorted ──────────────────────────────────────────
+
+/// A8.2: `sorted[lo..hi]` range iteration works on sorted collections.
+#[test]
+#[ignore = "A8.2: range on sorted — not yet verified"]
+fn sorted_range_iteration() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn sum_range(db: Db, lo: integer, hi: integer) -> integer {
+           total = 0;
+           for e in db.map[lo..hi] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_range(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}, Elm{key:4,val:40}]}, 2, 4)")
+    .result(Value::Int(50));
+}
+
+// ── A8.4 — Comprehensions on key ranges ─────────────────────────────────────
+
+/// A8.4: `[for v in col[lo..hi] { expr }]` builds a vector from a range.
+#[test]
+#[ignore = "A8.4: comprehension on key range — not yet verified"]
+fn sorted_range_comprehension() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn vals_in_range(db: Db, lo: integer, hi: integer) -> vector<integer> {
+           [for e in db.map[lo..hi] { e.val }]
+         }"
+    )
+    .expr("vals_in_range(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 1, 3).len()")
+    .result(Value::Int(2));
+}
+
+// ── A8.6 — Match on collection results ──────────────────────────────────────
+
+/// A8.6: nullable collection lookup — `if !col[k]` checks for missing keys.
+#[test]
+#[ignore = "A8.6: nullable lookup on sorted — not yet verified"]
+fn sorted_nullable_lookup() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn lookup_val(db: Db, k: integer) -> integer {
+           if !db.map[k] { -1 } else { db.map[k].val }
+         }"
+    )
+    .expr("lookup_val(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}]}, 2)")
+    .result(Value::Int(20));
+}
