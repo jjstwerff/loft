@@ -37,6 +37,18 @@ pub interface Ordered {
   op < (self: Self, other: Self) -> boolean
 }
 
+// Types that support the `==` equality operator.
+// Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.
+pub interface Equatable {
+  op == (self: Self, other: Self) -> boolean
+}
+
+// Types that support the `+` addition operator, returning the same type.
+// Satisfied by integer, long, single, float, and user types defining OpAdd.
+pub interface Addable {
+  op + (self: Self, other: Self) -> Self
+}
+
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"

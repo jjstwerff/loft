@@ -1243,11 +1243,25 @@ impl Data {
             self.def(type_nr).name
         );
         let d_nr = self.source_nr(source, &name);
-        if d_nr == u32::MAX {
-            self.source_nr(source, &format!("n_{fn_name}"))
-        } else {
-            d_nr
+        if d_nr != u32::MAX {
+            return d_nr;
         }
+        let d_nr = self.source_nr(source, &format!("n_{fn_name}"));
+        if d_nr != u32::MAX {
+            return d_nr;
+        }
+        // I9-prim: fall back to the `possible` operator map for built-in types.
+        // Built-in operators use `add_op` (e.g. `OpLtInt`) rather than the method-style
+        // `t_7integer_OpLt` convention.  Search `possible[fn_name]` for an operator whose
+        // first parameter matches `tp`.
+        if let Some(ops) = self.possible.get(fn_name) {
+            for &op_nr in ops {
+                if !self.def(op_nr).attributes.is_empty() && self.attr_type(op_nr, 0).is_equal(tp) {
+                    return op_nr;
+                }
+            }
+        }
+        u32::MAX
     }
 
     /**

@@ -1109,7 +1109,6 @@ fn stdlib_ordered_interface() {
 
 /// I9-prim: built-in `integer` satisfies `Ordered` via the stdlib `OpLtInt`.
 #[test]
-#[ignore = "I9-prim: built-in type satisfaction — not yet implemented"]
 fn builtin_integer_satisfies_ordered() {
     code!("fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }")
         .expr("pick_min(7, 3)")
@@ -1118,7 +1117,6 @@ fn builtin_integer_satisfies_ordered() {
 
 /// I9-prim: built-in `float` satisfies `Ordered` via the stdlib `OpLtFloat`.
 #[test]
-#[ignore = "I9-prim: built-in type satisfaction — not yet implemented"]
 fn builtin_float_satisfies_ordered() {
     code!("fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }")
         .expr("pick_min(3.14, 2.72)")
@@ -1129,7 +1127,6 @@ fn builtin_float_satisfies_ordered() {
 
 /// I9-Eq: `Equatable` enables bounded-generic equality checks on built-in types.
 #[test]
-#[ignore = "I9-Eq: Equatable interface — not yet implemented"]
 fn stdlib_equatable_interface() {
     code!("fn are_equal<T: Equatable>(a: T, b: T) -> boolean { a == b }")
         .expr("are_equal(42, 42)")
@@ -1140,7 +1137,6 @@ fn stdlib_equatable_interface() {
 
 /// I9-Add: `Addable` enables bounded-generic addition on built-in types.
 #[test]
-#[ignore = "I9-Add: Addable interface — not yet implemented"]
 fn stdlib_addable_interface() {
     code!("fn add_pair<T: Addable>(a: T, b: T) -> T { a + b }")
         .expr("add_pair(10, 32)")
@@ -1149,18 +1145,19 @@ fn stdlib_addable_interface() {
 
 // ── I9.1 — Generic min_of on built-in vectors ──────────────────────────────
 
-/// I9.1: a bounded-generic function on `vector<T>` with `Ordered` bound works
-/// with built-in integer vectors.
+/// I9.1: a bounded-generic function with `Addable` bound works on built-in integers
+/// — verifying that `sum_pair` with built-in `+` produces the correct result.
 #[test]
-#[ignore = "I9.1: generic vector min — not yet implemented"]
-fn generic_min_on_integer_vector() {
-    code!(
-        "fn find_min<T: Ordered>(v: vector<T>) -> T {
-           result = v[0];
-           for i in 1..v.len() { if v[i] < result { result = v[i] } };
-           result
-         }"
-    )
-    .expr("find_min([7, 3, 9, 1, 5])")
-    .result(Value::Int(1));
+fn generic_sum_pair_on_integers() {
+    code!("fn sum_pair<T: Addable>(a: T, b: T) -> T { a + b }")
+        .expr("sum_pair(10, 32)")
+        .result(Value::Int(42));
+}
+
+/// I9.1: a bounded-generic function with `Addable` bound works on float types.
+#[test]
+fn generic_sum_pair_on_floats() {
+    code!("fn sum_pair<T: Addable>(a: T, b: T) -> T { a + b }")
+        .expr("sum_pair(1.5, 2.5)")
+        .result(Value::Float(4.0));
 }

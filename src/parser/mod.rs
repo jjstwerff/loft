@@ -651,6 +651,7 @@ impl Parser {
             if let Type::Reference(r, _) = should
                 && *r == self.data.def_nr("reference")
                 && let Type::Reference(_, _) = test_type
+                && self.generic_type_name(test_type).is_none()
             {
                 return true;
             }
@@ -855,13 +856,11 @@ impl Parser {
                 } else {
                     child_name.clone()
                 };
-                let concrete_method = format!(
-                    "t_{}{}_{}",
-                    concrete_name.len(),
-                    concrete_name,
-                    method_suffix
-                );
-                if self.data.def_nr(&concrete_method) == u32::MAX {
+                // I9-prim: use find_fn which checks both the method-style convention
+                // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
+                let concrete_type = self.data.def(concrete_nr).returned.clone();
+                let found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+                if found == u32::MAX {
                     let msg = crate::diagnostics::diagnostic_format(
                         Level::Error,
                         format_args!(
@@ -1366,30 +1365,9 @@ impl Parser {
 
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
-        let mut possible = Vec::new();
-        for pos in self
-            .data
-            .get_possible(&format!("Op{}", rename(op)), &self.lexer)
-        {
-            possible.push(*pos);
-        }
-        for pos in possible {
-            let tp = self.call_nr(code, pos, list, types, false);
-            if tp != Type::Null {
-                // We cannot compare two different types of enums, both will be integers in the same range
-                if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
-                    (types.first(), types.get(1))
-                    && f != s
-                {
-                    break;
-                }
-                return tp;
-            }
-        }
-        // I8.1: bounded generic — look up the T-stub (e.g. `t_1T_OpLt`) before erroring.
-        // T-stubs are created in `parse_function` (second pass) for each bound interface method.
-        // `re_resolve_call` later substitutes them with the concrete type's implementation.
-        // In the first pass, T-stubs don't exist yet; return Type::Void to keep parsing going.
+        // I8.1: if any operand is a generic type variable, skip the main operator loop
+        // and go straight to the T-stub lookup.  The main loop would otherwise false-match
+        // concrete operators (e.g. OpEqRef, OpEqBool) via implicit type conversions on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {
             if self.first_pass {
@@ -1401,6 +1379,27 @@ impl Parser {
             if stub_nr != u32::MAX {
                 let tp = self.call_nr(code, stub_nr, list, types, false);
                 if tp != Type::Null {
+                    return tp;
+                }
+            }
+        } else {
+            let mut possible = Vec::new();
+            for pos in self
+                .data
+                .get_possible(&format!("Op{}", rename(op)), &self.lexer)
+            {
+                possible.push(*pos);
+            }
+            for pos in possible {
+                let tp = self.call_nr(code, pos, list, types, false);
+                if tp != Type::Null {
+                    // We cannot compare two different types of enums, both will be integers in the same range
+                    if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
+                        (types.first(), types.get(1))
+                        && f != s
+                    {
+                        break;
+                    }
                     return tp;
                 }
             }

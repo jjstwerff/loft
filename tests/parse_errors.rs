@@ -751,8 +751,8 @@ fn interface_op_sugar_lt_parses() {
 #[test]
 fn interface_op_sugar_multi_parses() {
     code!(
-        "interface Addable { op + (self: Self, other: Self) -> Self\n\
-                             op == (self: Self, other: Self) -> boolean }\nfn test() {}"
+        "interface Combinable { op & (self: Self, other: Self) -> Self\n\
+                                op ^ (self: Self, other: Self) -> Self }\nfn test() {}"
     );
 }
 
