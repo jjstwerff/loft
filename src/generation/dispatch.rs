@@ -146,9 +146,14 @@ impl Output<'_> {
                 } else if matches!(variables.tp(var), Type::Function(_, _) | Type::Routine(_))
                     && !matches!(to, Value::Null)
                 {
-                    // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
-                    // Also covers if-expressions that return fn-ref literals.
-                    write!(w, " as u32")?;
+                    // C31/A5.6: fn-ref is (u32, DbRef). Non-capturing lambdas produce Int(d_nr);
+                    // wrap as tuple with null DbRef. FnRef values already produce the tuple.
+                    if !matches!(to, Value::FnRef(_, _, _)) {
+                        write!(
+                            w,
+                            " as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                        )?;
+                    }
                 } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
                     // Variable is a narrow integer type (stored as i32), but the RHS expression
                     // (a function returning u16 or an iterator block returning as u16) produces

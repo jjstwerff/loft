@@ -139,6 +139,12 @@ fn collect_fn_ref_literals(
             collect_fn_ref_literals(f, data, variables, calls);
         }
         Value::Return(v) | Value::Drop(v) => collect_fn_ref_literals(v, data, variables, calls),
+        // C31/A5.6: FnRef at expression level (e.g. block result of make_adder).
+        Value::FnRef(d_nr, _, _) => {
+            if *d_nr >= 0 {
+                calls.insert((*d_nr).cast_unsigned());
+            }
+        }
         Value::Insert(ops) => {
             for op in ops {
                 collect_fn_ref_literals(op, data, variables, calls);
@@ -294,7 +300,9 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
         | Type::Iterator(_, _) => "DbRef",
-        Type::Routine(_) | Type::Function(_, _) => "u32",
+        Type::Routine(_) => "u32",
+        // C31/A5.6: fn-ref carries d_nr + closure DbRef as a tuple.
+        Type::Function(_, _) => "(u32, DbRef)",
         Type::Unknown(_) => "??",
         Type::Keys => "&[Key]",
         Type::Void => "()",
