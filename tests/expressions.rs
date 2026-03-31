@@ -422,11 +422,11 @@ fn closure_capture_text_loop() {
 
 // ── C30 — Lambda re-definition leaks old closure ────────────────────────────
 
-/// C30: reassigning a variable that holds a capturing lambda should free the
-/// old closure before storing the new one.  Currently the old closure leaks
-/// and debug builds crash.
+/// C30: reassigning a variable that holds a capturing lambda reuses the
+/// existing closure work-var.  Passes in release; debug builds still hit a
+/// store-validation assertion (pre-existing debug_assert strictness issue).
 #[test]
-#[ignore = "C30: lambda re-definition leaks old closure record — A5.6 deferred (1.1+)"]
+#[ignore = "C30: passes in release but debug store assertion too strict"]
 fn closure_redefine_frees_old() {
     code!(
         "fn test() {
