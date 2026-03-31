@@ -578,10 +578,6 @@ impl Parser {
                 }
             }
             self.data.definitions[self.context as usize].bounds = bounds;
-            eprintln!(
-                "BOUNDS: fn={} bounds={:?}",
-                type_var_name, self.data.definitions[self.context as usize].bounds
-            );
             // I7/I8.1: Create T-parameterized stubs for each bound interface's methods so
             // the body parser can emit `Value::Call(t_stub_nr, ...)` for method/op calls on T.
             // `re_resolve_call` then substitutes these with the concrete type's implementation.
