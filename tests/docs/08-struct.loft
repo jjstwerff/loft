@@ -57,6 +57,14 @@ struct Circle {
   radius: float,
   area: float computed(3.14159265 * $.radius * $.radius)
 }
+// ## Field iteration
+// 'for f in s#fields' visits every stored primitive field of a struct.
+// The parser unrolls this loop at compile time — no runtime allocation is needed.
+// The loop variable has two accessible parts:
+//   'f.name'  — the field name as text
+//   'f.value' — a FieldValue enum wrapping the actual value
+// Match on 'f.value' using the FvInt, FvFloat, FvBool, FvText, and other variants.
+// Reference, collection, and nested-struct fields are skipped silently.
 // ## Storing many structs in a vector
 // 'Area' uses smaller integer types to save memory: 'u16' holds values 0–65535,
 // and 'u8' holds values 0–255. This matters when you have millions of records
@@ -111,6 +119,22 @@ fn main() {
   assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
   map[3].height = 200;
   assert(map[3].height == 200, "individual tile update");
+  // ## Field iteration
+  // Iterate over each primitive field of a struct to inspect its name and value.
+  // This is useful for building generic display or serialisation routines
+  // without repeating each field name manually.
+  fi_col = Colour {r: 64, g: 128, b: 255 };
+  fi_parts = "";
+  for fi_f in fi_col#fields {
+    if fi_parts != "" { fi_parts += ","; }
+    fi_parts += fi_f.name;
+    fi_parts += "=";
+    match fi_f.value {
+      FvInt { v } => { fi_parts += "{v}"; },
+      _ => {}
+    }
+  }
+  assert(fi_parts == "r=64,g=128,b=255", "field iteration: {fi_parts}");
   // ## sizeof
   // 'sizeof(Type)' returns the packed byte size used when the type is stored
   // as a struct field or vector element. Range-constrained integer types like

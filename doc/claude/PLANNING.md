@@ -929,6 +929,64 @@ functions from the codegen perspective.
 
 ---
 
+### I12.diag — Factory-method diagnostic: add workaround hint (C33 mitigation)
+
+**Caveat:** C33 — Interfaces: factory methods (`fn zero() -> Self`) not supported.
+**Current behaviour:** The I5 restriction already emits a clear compile error naming
+the method and reason.  The message does not tell the user what to do instead.
+**Mitigation:** Append a workaround hint to the existing diagnostic:
+
+```
+factory methods not yet supported: 'zero' returns Self without a 'self: Self'
+parameter — pass the identity value as an extra parameter to the generic function
+instead, e.g. fn sum<T: Addable>(v: vector<T>, zero: T) -> T
+```
+
+**File:** `src/parser/definitions.rs` — the `diagnostic!` at the end of the I5 block
+(search for `"factory methods not yet supported"`).
+**Effort:** XS
+**Target:** 0.8.3
+
+---
+
+### I8.5.diag — Left-side concrete operand diagnostic (C34 mitigation)
+
+**Caveat:** C34 — Interfaces: left-side concrete operand (`concrete op T`) not
+supported in bounded generic bodies.
+**Current behaviour:** When `2 * t` is written where `t: T` (bounded generic), the
+operator resolver detects a generic type in the operand list and emits the generic
+P5.3 message: `"generic type T: operator '*' requires a concrete type"`.  This message
+does not explain that the operand ORDER is the problem, nor does it suggest a fix.
+**Mitigation:** Before emitting the P5.3 error, check whether the generic type is on
+the RIGHT side (index ≥ 1) while the LEFT side (index 0) is concrete.  If so, emit a
+more specific diagnostic:
+
+```
+operator '*': concrete left-side operand with generic right-side T is not yet
+supported — write 't * 2' instead of '2 * t', or use a method call (e.g.
+'t.scale(2)')
+```
+
+**File:** `src/parser/mod.rs` — the P5.3 error block (search for
+`"generic type {tv_name}: operator"`).  Add a check:
+```rust
+let generic_on_right = types.len() > 1
+    && self.generic_type_name(&types[0]).is_none()   // left is concrete
+    && self.generic_type_name(&types[1]).is_some();  // right is generic
+if generic_on_right {
+    specific!(..., "operator '{op}': concrete left-side operand with generic \
+        right-side {tv_name} is not yet supported — write 't {op} value' \
+        instead of 'value {op} t', or use a method call");
+} else {
+    specific!(..., "generic type {tv_name}: operator '{op}' requires a concrete type");
+}
+```
+
+**Effort:** XS
+**Target:** 0.8.3
+
+---
+
 ## A — Architecture
 
 ### A1  Parallel workers: struct/reference return types *(completed 0.8.3)*
@@ -1261,27 +1319,9 @@ implemented.
 **A5.6 — Full closure semantics** *(completed 0.8.3)*:
 Cross-scope text-capturing closures now work: `make_greeter("Hello")("world")` →
 `"Hello world"`.  All A5.6 sub-items (a, b.1, b.2, c, d, e, f, 1–5, text) are done.
-Three edge cases remain:
-
-**C30 — Lambda re-definition** (SIGSEGV in debug, leak in release):
-`f = fn(y) { x + y }; f = fn(y) { x + y }` creates two closure work-vars
-(`___clos_1`, `___clos_2`) that own separate stores.  Both are freed at function
-exit.  The SIGSEGV comes from `ConvRefFromNull` store allocation for both
-work-vars at function start creating stores that later conflict when
-`OpDatabase` clears and reclaims.
-
-**Fix:** Move closure ownership from work-vars to fn-ref variables:
-1. `skip_free` ALL capturing closure work-vars (not just cross-scope)
-2. Add `Type::Function` → `FreeFnRefClosure(v)` in `get_free_vars` (scopes.rs)
-3. Emit `FreeFnRefClosure(v)` before `set_var` on Function reassignment (codegen.rs)
-4. Guard: `debug_assert!` in `put_fn_ref` that old closure DbRef is null
-
-**Files:** `vectors.rs`, `scopes.rs`, `codegen.rs`, `fill.rs`
-**Test:** `closure_redefine_frees_old` (`#[ignore]`)
-**Effort:** Medium
-**Target:** 0.8.3
-
----
+C30 (lambda re-definition) is also fixed: closure work-var is reused on reassignment;
+`FreeFnRefClosure` emitted before each `SetVar` on a `Function`-typed variable.
+One edge case remains:
 
 **C31 — Closures in vectors** (parse-time assertion):
 `[f]` where `f: Type::Function` fails with "Unknown type" because
@@ -1776,7 +1816,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 1. In `execute_at` and `execute_at_ref` in `src/state/mod.rs`, set `self.data_ptr = data as *const Data;` (or equivalent) immediately before the dispatch call, mirroring what the single-threaded `execute` path does.
 2. Regression test: call `stack_trace()` inside a `par(...)` worker body; assert the returned vec is non-empty and contains the worker function name.
 **Effort:** Small
-**Target:** 0.9.0
+**Target:** 0.8.3
 
 ---
 
