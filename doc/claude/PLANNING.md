@@ -886,7 +886,9 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 | I9-p| Built-in type satisfaction via `possible` operator map | S | *(completed 0.8.3)* `src/data.rs`, `src/parser/mod.rs` |
 | I9.1| Bounded generics on built-in types (integer, float) | S | *(completed 0.8.3)* — verified via tests |
 | I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | *(completed 0.8.3)* `src/parser/mod.rs` |
-| I9+ | Remaining stdlib interfaces (`Numeric`, `Scalable`, `Printable`) | S | `default/01_code.loft` |
+| I9-v| Vector<T> element access fix in generic specialization | S | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I9+ | Stdlib `Numeric` interface (op *, op -) | S | *(completed 0.8.3)* `default/01_code.loft` |
+| I9+r| Remaining stdlib interfaces (`Scalable`, `Printable`) | S | `default/01_code.loft` |
 
 **Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
 I2 is parallel with I1. I5 depends on I3. I10 depends on I6.

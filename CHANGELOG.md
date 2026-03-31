@@ -110,6 +110,20 @@ All notable changes to the loft language and interpreter.
   - I9.1: bounded generics with Addable work on integer and float types.
     Tests: `generic_sum_pair_on_integers`, `generic_sum_pair_on_floats`.
 
+- **Vector<T> element access fix and Numeric interface** (I9-vec, I9.1, I9.2, I9+):
+  - I9-vec: fix vector element access in generic specialization. `substitute_type_in_value`
+    detects `OpGetVector` calls with baked-in `elm_size=0` (from type variable elements),
+    recomputes the correct size from the concrete type, and adds the value-extraction wrapper
+    (`OpGetInt`/`OpGetFloat`/etc.).  First-pass `call_op` for generic types now returns the
+    type variable type (not `Type::Void`) to prevent "cannot change type" errors.
+    Test: `generic_vector_element_access`.
+  - I9.1: bounded-generic comparison on vector elements using `Ordered` bound.
+    Test: `generic_min_of_vector_elements`.
+  - I9.2: bounded-generic sum of vector elements using `Addable` bound.
+    Test: `generic_sum_on_integer_vector`.
+  - I9+: `pub interface Numeric { op * ; op - }` added to `default/01_code.loft`.
+    Test: `stdlib_numeric_interface`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
