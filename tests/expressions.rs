@@ -1480,7 +1480,7 @@ fn stdlib_printable_interface() {
 /// C36: generic function with for loop panics "variable never assigned a slot"
 /// when instantiated with a struct type.
 #[test]
-#[ignore = "C36: generic for-loop slot panic on struct-type instantiation"]
+#[ignore = "C36: passes in release; debug store-lifetime assert on borrowed struct return"]
 fn generic_for_loop_struct_type() {
     code!(
         "struct Score { value: integer }
@@ -1502,18 +1502,18 @@ fn test() {
 
 /// C37: calling the same generic with two different struct types: slot conflict.
 #[test]
-#[ignore = "C37: two struct-type instantiations of same generic — slot conflict"]
+#[ignore = "C37: passes in release; debug store-lifetime assert on borrowed struct return"]
 fn generic_two_struct_types() {
     code!(
         "struct Score { value: integer }
 struct Weight { grams: integer }
 fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
 fn OpLt(self: Weight, other: Weight) -> boolean { self.grams < other.grams }
-fn max_of<T: Ordered>(a: T, b: T) -> T { if a < b { b } else { a } }
+fn bigger<T: Ordered>(a: T, b: T) -> T { if a < b { b } else { a } }
 fn test() {
-    s = max_of(Score{value: 3}, Score{value: 7});
+    s = bigger(Score{value: 3}, Score{value: 7});
     assert(s.value == 7, \"score\");
-    w = max_of(Weight{grams: 100}, Weight{grams: 50});
+    w = bigger(Weight{grams: 100}, Weight{grams: 50});
     assert(w.grams == 100, \"weight\");
 }"
     );
@@ -1521,7 +1521,7 @@ fn test() {
 
 /// C35: bounded generic returning text from struct type causes memory violation.
 #[test]
-#[ignore = "C35: bounded generic text return crashes on struct-type instantiation"]
+#[ignore = "C35: passes in release; debug store-lifetime assert on borrowed struct return"]
 fn generic_text_return_struct() {
     code!(
         "interface Describable { fn describe(self: Self) -> text }
