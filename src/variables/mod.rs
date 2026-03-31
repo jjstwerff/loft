@@ -245,6 +245,12 @@ impl Function {
     }
 
     pub fn set_loop(&mut self, on: u8, db_tp: u16, value: &Value) {
+        // Guard: if no loop is active (e.g. iterator created outside a for loop
+        // during native codegen), skip the metadata — it's only needed by the
+        // bytecode interpreter's iterate/step path.
+        if self.current_loop == u16::MAX || self.current_loop as usize >= self.loops.len() {
+            return;
+        }
         let l = &mut self.loops[self.current_loop as usize];
         l.on = on;
         l.db_tp = db_tp;
@@ -965,7 +971,7 @@ impl Function {
     }
 
     /// A5.6-2: Return the closure variable number for a fn_ref variable, if any.
-    #[allow(clippy::doc_markdown)]
+    #[allow(clippy::doc_markdown, dead_code)]
     pub fn closure_var_of(&self, fn_ref: u16) -> Option<u16> {
         self.closure_var_map.get(&fn_ref).copied()
     }
