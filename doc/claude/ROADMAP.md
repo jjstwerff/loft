@@ -22,6 +22,8 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
+| C30       | Lambda re-definition: free old closure before overwrite    | S  | ~      |              | CAVEATS.md § C30              |
+| C31       | Closures in collections / struct fields                    | M  | ~      |              | CAVEATS.md § C31              |
 
 ---
 

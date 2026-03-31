@@ -420,6 +420,60 @@ fn closure_capture_text_loop() {
     .result(loft::data::Value::Null);
 }
 
+// ── C30 — Lambda re-definition leaks old closure ────────────────────────────
+
+/// C30: reassigning a variable that holds a capturing lambda should free the
+/// old closure before storing the new one.  Currently the old closure leaks
+/// and debug builds crash.
+#[test]
+#[ignore = "C30: lambda re-definition leaks old closure record — A5.6 deferred (1.1+)"]
+fn closure_redefine_frees_old() {
+    code!(
+        "fn test() {
+    x = 10;
+    f = fn(y: integer) -> integer { x + y };
+    assert(f(5) == 15, \"first\");
+    x = 20;
+    f = fn(y: integer) -> integer { x + y };
+    assert(f(5) == 25, \"second\");
+}"
+    );
+}
+
+// ── C31 — Closures in collections not supported ─────────────────────────────
+
+/// C31: storing a capturing lambda in a vector should work but currently
+/// the 16-byte fn-ref layout is not handled by collection element operations.
+#[test]
+#[ignore = "C31: closures in collections not supported — A5.6 deferred (1.1+)"]
+fn closure_in_vector() {
+    code!(
+        "fn test() {
+    x = 10;
+    f = fn(y: integer) -> integer { x + y };
+    fns = [f];
+    assert(fns[0](5) == 15, \"call from vector\");
+}"
+    );
+}
+
+// ── C32 — Dead-assignment not tracking closure capture ──────────────────────
+
+/// C32: `x = 10` is captured by the closure, then `x = 99` overwrites it.
+/// The dead-assignment warning fires for `x = 10` even though the capture
+/// read it.  This is accepted behaviour — capture-at-definition is intentional.
+/// This test documents the current semantics, not a bug.
+#[test]
+fn closure_capture_dead_assignment_warning() {
+    // Same as closure_capture_after_change but explicitly documents the caveat.
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
+        .warning(
+            "Dead assignment — 'x' is overwritten before being read \
+             at closure_capture_dead_assignment_warning:2:26",
+        )
+        .result(Value::Int(15));
+}
+
 // ── CO1.2 — OpCoroutineCreate + OpCoroutineNext ─────────────────────────────
 
 #[test]
