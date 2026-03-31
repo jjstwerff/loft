@@ -4866,6 +4866,46 @@ pub type i32 = integer size(4)
 
 Full 32-bit integer range, 4 bytes.
 
+== Interfaces
+
+Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.
+
+```rust
+pub interface Ordered
+```
+
+Types that support the `\<` comparison operator. Satisfied by integer, long, single, float, text, and any user type defining OpLt.
+
+```rust
+pub interface Equatable
+```
+
+Types that support the `==` equality operator. Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.
+
+```rust
+pub interface Addable
+```
+
+Types that support the `+` addition operator, returning the same type. Satisfied by integer, long, single, float, and user types defining OpAdd.
+
+```rust
+pub interface Numeric
+```
+
+Types that support `\*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.
+
+```rust
+pub interface Scalable
+```
+
+Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) to avoid stub-name collision with `Numeric`. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
+
+```rust
+pub interface Printable
+```
+
+Types that can be converted to text via a `to\_text` method. User types satisfy Printable by defining `fn to\_text(self: T) -\> text`.
+
 == Math
 
 Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations
@@ -5351,16 +5391,22 @@ pub fn sum_of(v: vector<integer>) -> integer
 Sum of all integer elements. Returns 0 for an empty vector.
 
 ```rust
-pub fn min_of(v: vector<integer>) -> integer
+pub fn min_of<T: Ordered>(v: vector<T>) -> T
 ```
 
-Smallest integer element.
+Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op \<).
 
 ```rust
-pub fn max_of(v: vector<integer>) -> integer
+pub fn max_of<T: Ordered>(v: vector<T>) -> T
 ```
 
-Largest integer element.
+Largest element in a non-empty vector.  Works on any type satisfying Ordered (op \<).
+
+```rust
+pub fn sum<T: Addable>(v: vector<T>, init: T) -> T
+```
+
+Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum(\[10, 20, 12\], 0) == 42
 
 == A10: Field iteration support types
 

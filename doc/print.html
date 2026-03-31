@@ -49,6 +49,7 @@
 <li><a href="#28-tuples">Tuples</a> — <span class="toc-desc">Grouping values without defining a struct</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
+<li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
 <li class="toc-indent"><a href="#stdlib-math">Math</a></li>
 <li class="toc-indent"><a href="#stdlib-exp-ln-log2-log10">exp / ln / log2 / log10</a></li>
 <li class="toc-indent"><a href="#stdlib-min-max-clamp">min / max / clamp</a></li>
@@ -2309,6 +2310,32 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub type i32 = integer size(4)</code></pre>
 <p>Full 32-bit integer range, 4 bytes.</p>
 </div>
+<h2 id="stdlib-interfaces">Interfaces</h2>
+<p class="section-desc">Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.</p>
+<div class="item">
+<pre><code>pub interface Ordered</code></pre>
+<p>Types that support the `&lt;` comparison operator. Satisfied by integer, long, single, float, text, and any user type defining OpLt.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Equatable</code></pre>
+<p>Types that support the `==` equality operator. Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Addable</code></pre>
+<p>Types that support the `+` addition operator, returning the same type. Satisfied by integer, long, single, float, and user types defining OpAdd.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Numeric</code></pre>
+<p>Types that support `*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Scalable</code></pre>
+<p>Types that support integer scaling via a `scale` method. Uses a method (not `op *`) to avoid stub-name collision with `Numeric`. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -&gt; integer`.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Printable</code></pre>
+<p>Types that can be converted to text via a `to_text` method. User types satisfy Printable by defining `fn to_text(self: T) -&gt; text`.</p>
+</div>
 <h2 id="stdlib-math">Math</h2>
 <p class="section-desc">Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations</p>
 <div class="item">
@@ -2643,12 +2670,16 @@ for e in data#errors { log_warn(e) }
 <p>Sum of all integer elements. Returns 0 for an empty vector.</p>
 </div>
 <div class="item">
-<pre><code>pub fn min_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
-<p>Smallest integer element.</p>
+<pre><code>pub fn min_of&lt;T: Ordered&gt;(v: vector&lt;T&gt;) -&gt; T</code></pre>
+<p>Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op &lt;).</p>
 </div>
 <div class="item">
-<pre><code>pub fn max_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
-<p>Largest integer element.</p>
+<pre><code>pub fn max_of&lt;T: Ordered&gt;(v: vector&lt;T&gt;) -&gt; T</code></pre>
+<p>Largest element in a non-empty vector.  Works on any type satisfying Ordered (op &lt;).</p>
+</div>
+<div class="item">
+<pre><code>pub fn sum&lt;T: Addable&gt;(v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
+<p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42</p>
 </div>
 <h2 id="stdlib-a10-field-iteration-support-types">A10: Field iteration support types</h2>
 <div class="item">
