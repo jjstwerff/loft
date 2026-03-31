@@ -1344,3 +1344,79 @@ fn stdlib_min_of_float() {
 fn stdlib_max_of_float() {
     expr!("max_of([3.14, 2.72, 1.41])").result(Value::Float(3.14));
 }
+
+// ── I9-text — Text-returning interface methods ──────────────────────────────
+
+/// I9-text: a text-returning method in an interface must work when called on a
+/// concrete type inside a bounded generic body.  The hidden `__work_1` parameter
+/// added by `text_return` must be replicated in the T-stub.
+#[test]
+#[ignore = "I9-text: text-returning interface method — not yet fixed"]
+fn generic_text_returning_method() {
+    code!(
+        "struct Score { value: integer }
+         fn to_text(self: Score) -> text { \"{self.value}\" }
+         fn show<T: Printable>(v: T) -> text { v.to_text() }"
+    )
+    .expr("show(Score{value:42})")
+    .result(Value::Text("42".to_string()));
+}
+
+// ── I9-Pr — Printable interface ─────────────────────────────────────────────
+
+/// I9-Pr: `Printable` interface with `fn to_text(self) -> text`.
+#[test]
+#[ignore = "I9-Pr: Printable interface — not yet implemented"]
+fn stdlib_printable_interface() {
+    code!(
+        "struct Score { value: integer }
+         fn to_text(self: Score) -> text { \"{self.value}\" }
+         fn show<T: Printable>(v: T) -> text { v.to_text() }"
+    )
+    .expr("show(Score{value:99})")
+    .result(Value::Text("99".to_string()));
+}
+
+// ── CO1.7 — Coroutine yield from for-loops ──────────────────────────────────
+
+/// CO1.7: yield from inside a range-based for-loop.
+#[test]
+#[ignore = "CO1.7: coroutine yield from range loop — not yet verified"]
+fn coroutine_yield_from_range_loop() {
+    code!(
+        "fn yield_range() -> iterator<integer> {
+           yield 1;
+           for i in 0..3 { yield i * 10 };
+           yield 99
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for x in yield_range() { total = total + x };
+        total
+    }",
+    )
+    .result(Value::Int(130));
+}
+
+/// CO1.7: yield from inside a vector for-loop.
+#[test]
+#[ignore = "CO1.7: coroutine yield from vector loop — not yet verified"]
+fn coroutine_yield_from_vector_loop() {
+    code!(
+        "fn yield_items(v: vector<integer>) -> iterator<integer> {
+           yield -1;
+           for e in v { yield e };
+           yield -2
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for x in yield_items([10, 20, 30]) { total = total + x };
+        total
+    }",
+    )
+    .result(Value::Int(57));
+}
