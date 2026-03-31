@@ -984,6 +984,21 @@ impl Parser {
                     .collect();
                 // Re-resolve call target if it references the type variable.
                 let new_d = Self::re_resolve_call(d, tv_nr, concrete, data);
+                // I9-vec: fix vector element access with baked-in elm_size=0.
+                // The template bakes elm_size=0 for type-variable elements and omits the
+                // value-extraction wrapper (OpGetInt/OpGetFloat/etc.).  Fix both here.
+                if new_d != u32::MAX
+                    && (new_d as usize) < data.definitions.len()
+                    && data.def(new_d).name == "OpGetVector"
+                    && new_args.len() == 3
+                    && matches!(&new_args[1], Value::Int(0))
+                {
+                    let elm_size = Self::type_element_size(concrete);
+                    let mut fixed = new_args;
+                    fixed[1] = Value::Int(elm_size);
+                    let call = Value::Call(new_d, fixed);
+                    return Self::wrap_vector_get_val(call, concrete, data);
+                }
                 Value::Call(new_d, new_args)
             }
             Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
@@ -1039,6 +1054,56 @@ impl Parser {
                 )),
             ),
             other => other,
+        }
+    }
+
+    /// I9-vec: compute element store size from the Type alone (no database needed).
+    fn type_element_size(tp: &Type) -> i32 {
+        match tp {
+            Type::Integer(_, _, _)
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Text(_)
+            | Type::Enum(_, false, _) => 4,
+            Type::Long | Type::Float => 8,
+            _ => 12, // reference types: DbRef = 12 bytes
+        }
+    }
+
+    /// I9-vec: wrap an OpGetVector result with the appropriate value-extraction op
+    /// for concrete value types (OpGetInt, OpGetFloat, etc.).  Reference types need
+    /// no wrapper — the DbRef IS the value.
+    fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
+        let p = Value::Int(0);
+        let (op_name, extra) = match tp {
+            Type::Integer(_, _, _) => ("OpGetInt", None),
+            Type::Long => ("OpGetLong", None),
+            Type::Float => ("OpGetFloat", None),
+            Type::Single => ("OpGetSingle", None),
+            Type::Text(_) => ("OpGetText", None),
+            Type::Boolean => ("OpGetByte", Some(true)),
+            _ => return code, // reference/struct types: no wrapper needed
+        };
+        let d = data.def_nr(op_name);
+        if d == u32::MAX {
+            return code;
+        }
+        let val = if extra.is_some() {
+            // Boolean: GetByte + compare to 1
+            Value::Call(d, vec![code, p, Value::Int(0)])
+        } else {
+            Value::Call(d, vec![code, p])
+        };
+        if extra.is_some() {
+            let d_eq = data.def_nr("OpEqInt");
+            if d_eq != u32::MAX {
+                Value::Call(d_eq, vec![val, Value::Int(1)])
+            } else {
+                val
+            }
+        } else {
+            val
         }
     }
 
@@ -1371,7 +1436,14 @@ impl Parser {
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {
             if self.first_pass {
-                return Type::Void;
+                // Return the type variable type so assignments keep a consistent type
+                // through the first pass (Type::Void would trigger "cannot change type").
+                let tv_nr = self.data.def_nr(tv_name);
+                return if tv_nr != u32::MAX {
+                    Type::Reference(tv_nr, Vec::new())
+                } else {
+                    Type::Unknown(0)
+                };
             }
             let op_method = format!("Op{}", rename(op));
             let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, op_method);

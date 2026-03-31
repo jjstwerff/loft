@@ -49,6 +49,14 @@ pub interface Addable {
   op + (self: Self, other: Self) -> Self
 }
 
+// Types that support `*` and `-` (unary negation).
+// Separate from `Addable` to allow fine-grained bounds without stub-name collisions.
+// Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.
+pub interface Numeric {
+  op * (self: Self, other: Self) -> Self
+  op - (self: Self) -> Self
+}
+
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
