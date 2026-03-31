@@ -22,8 +22,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
-| N-fnref   | Native: fn-ref arg padding for map/filter built-in calls   | S  | ✓      |              | PLANNING.md § N-fnref         |
-| C35/36/37 | Generic instantiation with struct types (3 bugs, 1 cause)  | M  | ✓      |              | PLANNING.md § C35/C36/C37     |
 
 ---
 
