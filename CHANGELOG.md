@@ -163,6 +163,16 @@ All notable changes to the loft language and interpreter.
   - CO1.7 (partial): coroutine yield from range-based and vector for-loops verified.
     Tests: `coroutine_yield_from_range_loop`, `coroutine_yield_from_vector_loop`.
 
+- **CO1.7 complete: coroutine yield from all for-loop types** —
+  Fixed character null sentinel bug: `push_null_value(4)` uses `i32::MIN` as the
+  sentinel for all 4-byte values, but `op_conv_bool_from_character` only checked for
+  `char::from(0)`. The `i32::MIN` sentinel (0x80000000) looked like a valid character,
+  causing for-loops over character iterators to infinite-loop. Also fixed UB in
+  `var_character` (fill.rs): reading `i32::MIN` directly as `char` is not a valid
+  Unicode scalar — now reads as `u32` and converts via `char::from_u32`.
+  Tests: `coroutine_yield_from_text_loop`, `coroutine_character_iterator_exhausts`,
+  `coroutine_yield_from_struct_vector_loop`, `coroutine_yield_from_field_text_loop`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
