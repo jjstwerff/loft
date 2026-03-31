@@ -895,6 +895,11 @@ impl Parser {
                 self.data.set_attr_value(d_nr, a_nr, a.default.clone());
             }
         }
+        // C35/C36/C37: fix OpGetVector element sizes for struct types.
+        // substitute_type_in_value uses type_element_size which returns 12 for
+        // all reference types, but struct vectors store fields inline at the
+        // struct's database record size.
+        let new_code = self.fix_vector_element_sizes(new_code, &concrete);
         self.data.definitions[d_nr as usize].code = new_code;
         if existing == u32::MAX {
             self.data.set_returned(d_nr, new_returned);
@@ -1140,6 +1145,84 @@ impl Parser {
                 Box::new(Self::substitute_type_in_value(
                     *extra, tv_nr, concrete, data,
                 )),
+            ),
+            other => other,
+        }
+    }
+
+    /// C35/C36/C37: walk the code tree and fix `OpGetVector` element sizes for
+    /// concrete struct types.  The I9-vec substitution uses 12 (`DbRef`) for all
+    /// reference types, but struct vectors store fields inline at the database
+    /// record size.
+    fn fix_vector_element_sizes(&self, val: Value, concrete: &Type) -> Value {
+        match val {
+            Value::Call(d, args) => {
+                let fixed_args: Vec<Value> = args
+                    .into_iter()
+                    .map(|a| self.fix_vector_element_sizes(a, concrete))
+                    .collect();
+                // Fix OpGetVector(vec, elm_size=12, index) when concrete is a struct
+                if self.data.def(d).name == "OpGetVector"
+                    && fixed_args.len() == 3
+                    && let Value::Int(12) = &fixed_args[1]
+                    && let Type::Reference(d_nr, _) = concrete
+                    && *d_nr != u32::MAX
+                {
+                    let known = self.data.def(*d_nr).known_type;
+                    if known != u16::MAX {
+                        let db_size = i32::from(self.database.size(known));
+                        if db_size > 0 && db_size != 12 {
+                            let mut fixed = fixed_args;
+                            fixed[1] = Value::Int(db_size);
+                            return Value::Call(d, fixed);
+                        }
+                    }
+                }
+                Value::Call(d, fixed_args)
+            }
+            Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
+                operators: bl
+                    .operators
+                    .into_iter()
+                    .map(|v| self.fix_vector_element_sizes(v, concrete))
+                    .collect(),
+                result: bl.result,
+                name: bl.name,
+                scope: bl.scope,
+                var_size: bl.var_size,
+            })),
+            Value::Set(v, inner) => {
+                Value::Set(v, Box::new(self.fix_vector_element_sizes(*inner, concrete)))
+            }
+            Value::If(test, t, f) => Value::If(
+                Box::new(self.fix_vector_element_sizes(*test, concrete)),
+                Box::new(self.fix_vector_element_sizes(*t, concrete)),
+                Box::new(self.fix_vector_element_sizes(*f, concrete)),
+            ),
+            Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
+                operators: bl
+                    .operators
+                    .into_iter()
+                    .map(|v| self.fix_vector_element_sizes(v, concrete))
+                    .collect(),
+                result: bl.result,
+                name: bl.name,
+                scope: bl.scope,
+                var_size: bl.var_size,
+            })),
+            Value::Return(v) => {
+                Value::Return(Box::new(self.fix_vector_element_sizes(*v, concrete)))
+            }
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|v| self.fix_vector_element_sizes(v, concrete))
+                    .collect(),
+            ),
+            Value::Iter(v, create, next, extra) => Value::Iter(
+                v,
+                Box::new(self.fix_vector_element_sizes(*create, concrete)),
+                Box::new(self.fix_vector_element_sizes(*next, concrete)),
+                Box::new(self.fix_vector_element_sizes(*extra, concrete)),
             ),
             other => other,
         }
