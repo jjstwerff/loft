@@ -1688,7 +1688,6 @@ fn index_partial_key_match() {
 
 /// A8.1-idx: open-ended bounds work on index collections too.
 #[test]
-#[ignore = "A8.1-idx: open-ended on index — not yet verified"]
 fn index_open_end_range() {
     code!(
         "struct Elm { nr: integer, val: integer }

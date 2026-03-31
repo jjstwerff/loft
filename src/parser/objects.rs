@@ -880,6 +880,8 @@ impl Parser {
             if reverse {
                 // rev() wrapping a collection (not a range): set the reverse-iterator flag so
                 // that fill_iter adds bit 64 into the OpIterate/OpStep `on` byte.
+                // A8.5: also accept Iterator type from rev(col[lo..hi]) — the subscript
+                // already produced a range iterator with the reverse flag set.
                 if matches!(in_type, Type::Sorted(_, _, _) | Type::Index(_, _, _)) {
                     self.reverse_iterator = true;
                 } else if !matches!(in_type, Type::Null) {
