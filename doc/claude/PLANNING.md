@@ -888,7 +888,9 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 | I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | *(completed 0.8.3)* `src/parser/mod.rs` |
 | I9-v| Vector<T> element access fix in generic specialization | S | *(completed 0.8.3)* `src/parser/mod.rs` |
 | I9+ | Stdlib `Numeric` interface (op *, op -) | S | *(completed 0.8.3)* `default/01_code.loft` |
-| I9+r| Remaining stdlib interfaces (`Scalable`, `Printable`) | S | `default/01_code.loft` |
+| I9-v2| Generic accumulator fix (skip ref_return for generic templates) | S | *(completed 0.8.3)* `src/parser/control.rs` |
+| I9-Sc| Stdlib `Scalable` interface (method-based) | XS | *(completed 0.8.3)* `default/01_code.loft` |
+| I9+r| Remaining stdlib interface (`Printable`) | XS | `default/01_code.loft` |
 
 **Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
 I2 is parallel with I1. I5 depends on I3. I10 depends on I6.

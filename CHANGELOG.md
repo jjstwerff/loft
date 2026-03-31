@@ -124,6 +124,22 @@ All notable changes to the loft language and interpreter.
   - I9+: `pub interface Numeric { op * ; op - }` added to `default/01_code.loft`.
     Test: `stdlib_numeric_interface`.
 
+- **Generic accumulator fix, Scalable interface** (I9-var, I9.1, I9.2, I9-Sc):
+  - I9-var: skip `ref_return`/`text_return` for generic templates (`DefType::Generic`).
+    The return type `T = Reference(tv_nr)` triggered `ref_return` which promoted local
+    variables to hidden parameters.  After specialization to Integer/Float, the hidden
+    params caused a codegen crash.  This enables for-loop accumulator patterns inside
+    generic bodies.
+    Tests: `generic_intermediate_variable`, `generic_for_loop_accumulator`.
+  - I9.1: generic `find_max` on integer vectors using `Ordered` for-loop accumulator.
+    Test: `generic_max_on_integer_vector`.
+  - I9.2: generic `vec_sum` with caller-supplied identity using `Addable` for-loop.
+    Test: `generic_sum_with_identity`.
+  - I9-Sc: `pub interface Scalable { fn scale(self, factor: integer) -> integer }` in
+    `default/01_code.loft`.  Uses a method (not `op *`) to avoid stub-name collision
+    with `Numeric`.
+    Test: `stdlib_scalable_interface`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
