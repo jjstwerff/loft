@@ -22,8 +22,8 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
-| C30       | Lambda re-definition: free old closure before overwrite    | S  | ~      |              | CAVEATS.md § C30              |
-| C31       | Closures in collections / struct fields                    | M  | ~      |              | CAVEATS.md § C31              |
+| C30       | Lambda re-definition: move closure ownership to fn-ref     | M  | ✓      |              | PLANNING.md § C30             |
+| C31       | Closures in vectors: direct byte-copy for structural types | M  | ✓      |              | PLANNING.md § C31             |
 
 ---
 
@@ -52,6 +52,7 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`            | S  | ✓      |              | 01_code.loft                  |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision             | MH | ✓      | A2.2         | control.rs, main.rs           |
 | A2.4      | ↳ `--debug` per-type safety logging                       | M  | ✓      | A2.2         | fill.rs, native.rs            |
+| A2.4a     | ↳ Integer NULL-origin logging (`div/0` → `file:line`)     | S  | ✓      | A2.4         | ops.rs, fill.rs               |
 | P2        | REPL / interactive mode                                   | H  | ✓      | L1           | PLANNING.md § P2              |
 | P2.1      | ↳ Input completeness detection                            | S  | ✓      |              | new repl.rs                   |
 | P2.2      | ↳ Single-statement execution                              | M  | ✓      | P2.1         | main.rs, repl.rs              |

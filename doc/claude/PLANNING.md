@@ -969,6 +969,27 @@ When `stores.run_mode == Debug`, emit `warn` log entries for silent-null conditi
 integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 *Tests:* a deliberate overflow under `--debug` produces a `WARN` entry at the correct file:line.
 
+**A2.4a — Integer NULL-origin logging** (sub-item of A2.4):
+The most common silent-NULL scenario: `x = 10 / 0` produces `i32::MIN` which
+propagates through `x + 5`, `x * 2` etc. without any indication of origin.
+Under `--debug`, log the source location when NULL is produced:
+
+```
+[debug] integer null from division by zero at myfile.loft:42
+[debug] integer null from modulo by zero at myfile.loft:55
+```
+
+Implementation: ~20 lines across `ops.rs` (add `debug_mode: bool` param to
+`op_div_int`/`op_rem_int`) and `fill.rs` (pass `state.debug_mode` and
+`state.code_pos` to the ops).  Use `State.code_pos` + line-number table to
+resolve `file:line`.  Zero cost when `debug_mode = false` (single branch).
+
+Existing infrastructure already in place:
+- `ops.rs` already checks `v2 == 0` in `op_div_int`/`op_rem_int` — just add log call
+- `checked_int!` macro already panics on overflow in debug builds — extend to log
+- `sentinel_int!` macro already detects null-sentinel collisions — extend to log
+- Format output already renders NULL as `"null"` — provides visibility at print time
+
 **Effort:** Medium (logger.rs, native.rs, fill.rs; see LOGGER.md for full design)
 **Target:** 0.9.0
 
