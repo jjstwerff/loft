@@ -868,6 +868,9 @@ impl Parser {
             self.lexer.has_identifier();
             self.lexer.token("(");
             reverse = true;
+            // A8.5: set the reverse flag BEFORE parsing the inner expression so that
+            // rev(col[lo..hi]) passes the flag through parse_key → fill_iter.
+            self.reverse_iterator = true;
         }
         let in_type = if self.lexer.peek_token("..") || self.lexer.peek_token("..=") {
             // Open-start range: treat missing start as 0.
@@ -878,13 +881,19 @@ impl Parser {
         };
         if !self.lexer.has_token("..") {
             if reverse {
-                // rev() wrapping a collection (not a range): set the reverse-iterator flag so
-                // that fill_iter adds bit 64 into the OpIterate/OpStep `on` byte.
-                // A8.5: also accept Iterator type from rev(col[lo..hi]) — the subscript
-                // already produced a range iterator with the reverse flag set.
+                // A8.5: if the inner expression was a subscript that already produced
+                // a range iterator (parse_key consumed the `..`), the Value::Iter is
+                // ready with the reverse flag — just consume ')' and return.
+                if matches!(expr, Value::Iter(_, _, _, _)) {
+                    self.lexer.token(")");
+                    self.reverse_iterator = false;
+                    return in_type;
+                }
+                // rev() wrapping a bare collection (not a range subscript).
                 if matches!(in_type, Type::Sorted(_, _, _) | Type::Index(_, _, _)) {
-                    self.reverse_iterator = true;
+                    // reverse_iterator already set above
                 } else if !matches!(in_type, Type::Null) {
+                    self.reverse_iterator = false;
                     diagnostic!(
                         self.lexer,
                         Level::Error,

@@ -1650,7 +1650,6 @@ fn sorted_nullable_lookup() {
 
 /// A8.5: `rev(col[lo..hi])` iterates a range in reverse key order.
 #[test]
-#[ignore = "A8.5: reverse range on sorted — not yet implemented"]
 fn sorted_reverse_range() {
     code!(
         "struct Elm { key: integer, val: integer }
