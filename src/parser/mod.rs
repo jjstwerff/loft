@@ -1543,12 +1543,27 @@ impl Parser {
         // P5.3: generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {
-            specific!(
-                self.lexer,
-                &self.lexer.peek(),
-                Level::Error,
-                "generic type {tv_name}: operator '{op}' requires a concrete type",
-            );
+            // I8.5.diag: detect concrete-left/generic-right and suggest workaround.
+            let concrete_left_generic_right = types.len() > 1
+                && self.generic_type_name(&types[0]).is_none()
+                && self.generic_type_name(&types[1]).is_some();
+            if concrete_left_generic_right {
+                specific!(
+                    self.lexer,
+                    &self.lexer.peek(),
+                    Level::Error,
+                    "operator '{op}': concrete left-side operand with generic right-side \
+                     {tv_name} is not yet supported — write 't {op} value' instead of \
+                     'value {op} t', or use a method call",
+                );
+            } else {
+                specific!(
+                    self.lexer,
+                    &self.lexer.peek(),
+                    Level::Error,
+                    "generic type {tv_name}: operator '{op}' requires a concrete type",
+                );
+            }
         } else if types.len() > 1 {
             specific!(
                 self.lexer,
