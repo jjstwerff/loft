@@ -656,6 +656,8 @@ fn parallel_for_thread_scope_results() {
     .result(Value::Int(30));
 }
 
+// ── A14 — par_light infrastructure (auto-selection disabled pending store-count fix) ───
+
 // ── S28 — debug generation counter for stale DbRef across coroutine yield ─────
 
 /// S28: Mutating a struct store between coroutine next() calls should fire the

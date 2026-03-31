@@ -354,18 +354,9 @@ impl Parser {
         };
         // A14.5/A14.6: check if the worker qualifies for the light path.
         // Light path: primitive return (not text, not reference), no recursive store alloc.
-        let worker_d_nr = if let Value::Int(d) = &list[0] {
-            *d as u32
-        } else {
-            u32::MAX
-        };
-        let is_primitive_return =
-            !matches!(&worker_ret_type, Type::Text(_) | Type::Reference(_, _));
-        let light_m = if is_primitive_return && worker_d_nr != u32::MAX {
-            self.check_light_eligible(worker_d_nr)
-        } else {
-            None
-        };
+        // A14: auto-selection disabled pending store-count fix in clone_for_light_worker.
+        // TODO: check_light_eligible(worker_d_nr) when store borrowing is fixed.
+        let light_m: Option<usize> = None;
 
         let (par_fn_name, extra_pool_arg) = if let Some(m) = light_m {
             ("n_parallel_for_light", Some(Value::Int(m as i32)))
@@ -403,7 +394,8 @@ impl Parser {
     /// A14.5: check if a worker function qualifies for the light parallel path.
     /// Returns `Some(M)` (pool stores per worker) if eligible, `None` otherwise.
     /// Eligible = no text return AND no store allocation inside recursive calls.
-    fn check_light_eligible(&self, worker_d_nr: u32) -> Option<usize> {
+    #[allow(dead_code)] // A14: re-enable when store-count fix lands
+    pub(crate) fn check_light_eligible(&self, worker_d_nr: u32) -> Option<usize> {
         if worker_d_nr as usize >= self.data.definitions.len() {
             return None;
         }

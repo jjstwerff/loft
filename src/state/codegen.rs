@@ -981,7 +981,9 @@ impl State {
         }
         // push extra Call args beyond the declared parameter count.
         // Only for n_parallel_for — forwards extra context args + n_extra count.
-        if stack.data.def(op).name == "n_parallel_for" {
+        if stack.data.def(op).name == "n_parallel_for"
+            || stack.data.def(op).name == "n_parallel_for_light"
+        {
             let n_declared = stack.data.def(op).attributes.len();
             for extra in parameters.iter().skip(n_declared) {
                 self.generate(extra, stack, false);
@@ -1091,7 +1093,9 @@ impl State {
                 stack.position -= size(&a.typedef, &Context::Argument);
             }
             // also subtract the extra args pushed beyond declared params.
-            if stack.data.def(op).name == "n_parallel_for" {
+            if stack.data.def(op).name == "n_parallel_for"
+                || stack.data.def(op).name == "n_parallel_for_light"
+            {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {
                     // Extra args are always integer (4 bytes) in the current implementation.

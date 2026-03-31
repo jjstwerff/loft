@@ -709,19 +709,21 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
 /// A14.7: lightweight variant — borrows stores read-only instead of deep-copying.
 /// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
 fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
-    let n_extra = *stores.get::<i32>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i32>(stack) as u64);
-    }
-    extra_args.reverse();
-
+    // Stack layout (LIFO pop order): declared params first (top), then n_extra + extras.
+    // Declared: pool_m, func, threads, return_size, element_size, input
     let v_pool_m = *stores.get::<i32>(stack);
     let v_func = *stores.get::<i32>(stack);
     let v_threads = *stores.get::<i32>(stack);
     let v_return_size = *stores.get::<i32>(stack);
     let v_element_size = *stores.get::<i32>(stack);
     let v_input = *stores.get::<DbRef>(stack);
+    // Extras (pushed before declared params by codegen): n_extra count, then extra values.
+    let n_extra = *stores.get::<i32>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i32>(stack) as u64);
+    }
+    extra_args.reverse();
 
     let (fn_pos, program) = {
         let ctx = stores
@@ -785,16 +787,17 @@ fn parallel_light_execute_and_collect(
     n: usize,
     pool_m: usize,
 ) -> DbRef {
+    // Match the allocation pattern from parallel_execute_and_collect exactly.
     let result_db = stores.null();
     let vec_words = ((n as u32) * return_size + 15) / 8;
     let vec_cr = stores.claim(&result_db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
+    let header_rec = header_cr.rec;
+    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
     stores
         .store_mut(&result_db)
-        .set_int(header_cr.rec, 0, vec_rec as i32);
-    stores.store_mut(&result_db).set_int(vec_rec, 0, 0);
-    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
+        .set_int(header_rec, 4, vec_rec as i32);
     let out_ptr = std::ptr::from_mut::<u8>(stores.store_mut(&result_db).addr_mut::<u8>(vec_rec, 8));
 
     let mut pool = crate::parallel::WorkerPool::new(n_threads, pool_m, 256);
