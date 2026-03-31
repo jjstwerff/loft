@@ -578,15 +578,39 @@ impl State {
             }
             2 => {
                 // sorted points to the position of the record inside the vector
-                if reverse {
-                    start =
-                        vector::sorted_find(&data, ex, arg, all, &keys, &till).0 + u32::from(!ex);
-                    finish = vector::sorted_find(&data, ex, arg, all, &keys, &from).0 + 1;
+                // A8.1: empty from/till arrays signal "no constraint on this side".
+                let sorted_rec = all[data.store_nr as usize].get_int(data.rec, data.pos) as u32;
+                let vec_len = if sorted_rec == 0 {
+                    0
                 } else {
-                    let s = vector::sorted_find(&data, true, arg, all, &keys, &from).0;
+                    all[data.store_nr as usize].get_int(sorted_rec, 4) as u32
+                };
+                if reverse {
+                    start = if till.is_empty() {
+                        // A8.1: no upper bound → start past the last element
+                        vec_len
+                    } else {
+                        vector::sorted_find(&data, ex, arg, all, &keys, &till).0 + u32::from(!ex)
+                    };
+                    finish = if from.is_empty() {
+                        // A8.1: no lower bound → finish at 0 (visit all elements down to first)
+                        0
+                    } else {
+                        vector::sorted_find(&data, ex, arg, all, &keys, &from).0 + 1
+                    };
+                } else {
+                    let s = if from.is_empty() {
+                        0
+                    } else {
+                        vector::sorted_find(&data, true, arg, all, &keys, &from).0
+                    };
                     start = if s == 0 { u32::MAX } else { s - 1 };
-                    let (t, cmp) = vector::sorted_find(&data, ex, arg, all, &keys, &till);
-                    finish = if ex || cmp { t } else { t + 1 };
+                    finish = if till.is_empty() {
+                        vec_len
+                    } else {
+                        let (t, cmp) = vector::sorted_find(&data, ex, arg, all, &keys, &till);
+                        if ex || cmp { t } else { t + 1 }
+                    };
                 }
             }
             3 => {

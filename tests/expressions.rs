@@ -1566,7 +1566,6 @@ fn coroutine_text_local_nested_block() {
 
 /// A8.1: `col[lo..]` iterates from `lo` to the end of a sorted collection.
 #[test]
-#[ignore = "A8.1: open-ended lower bound on sorted — not yet implemented"]
 fn sorted_open_end_range() {
     code!(
         "struct Elm { key: integer, val: integer }
@@ -1583,7 +1582,6 @@ fn sorted_open_end_range() {
 
 /// A8.1: `col[..hi]` iterates from start to `hi` (exclusive).
 #[test]
-#[ignore = "A8.1: open-ended upper bound on sorted — not yet implemented"]
 fn sorted_open_start_range() {
     code!(
         "struct Elm { key: integer, val: integer }
@@ -1602,7 +1600,6 @@ fn sorted_open_start_range() {
 
 /// A8.2: `sorted[lo..hi]` range iteration works on sorted collections.
 #[test]
-#[ignore = "A8.2: range on sorted — not yet verified"]
 fn sorted_range_iteration() {
     code!(
         "struct Elm { key: integer, val: integer }
@@ -1621,7 +1618,6 @@ fn sorted_range_iteration() {
 
 /// A8.4: `[for v in col[lo..hi] { expr }]` builds a vector from a range.
 #[test]
-#[ignore = "A8.4: comprehension on key range — not yet verified"]
 fn sorted_range_comprehension() {
     code!(
         "struct Elm { key: integer, val: integer }
@@ -1638,7 +1634,6 @@ fn sorted_range_comprehension() {
 
 /// A8.6: nullable collection lookup — `if !col[k]` checks for missing keys.
 #[test]
-#[ignore = "A8.6: nullable lookup on sorted — not yet verified"]
 fn sorted_nullable_lookup() {
     code!(
         "struct Elm { key: integer, val: integer }

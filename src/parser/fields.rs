@@ -397,19 +397,28 @@ impl Parser {
     }
 
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
+        // A8.1: detect open-start `col[..hi]` or `col[..]` before parsing expression.
+        let open_start = self.lexer.peek_token("..") || self.lexer.peek_token("..=");
         let mut p = Value::Null;
-        let index_t = self.expression(&mut p);
-        if !self.convert(&mut p, &index_t, &key_types[0]) {
-            diagnostic!(self.lexer, Level::Error, "Invalid index key");
-        }
+        let _index_t = if open_start {
+            Type::Null // from=[] → no lower bound
+        } else {
+            let t = self.expression(&mut p);
+            if !self.convert(&mut p, &t, &key_types[0]) {
+                diagnostic!(self.lexer, Level::Error, "Invalid index key");
+            }
+            t
+        };
         let known = if self.first_pass {
             Value::Null
         } else {
             self.type_info(typedef)
         };
-        let mut nr = 1;
+        let mut nr = if open_start { 0 } else { 1 };
         let mut key = Vec::new();
-        key.push(p);
+        if !open_start {
+            key.push(p);
+        }
         if key_types.len() > 1 {
             while self.lexer.has_token(",") {
                 if nr >= key_types.len() {
@@ -425,8 +434,14 @@ impl Parser {
                 nr += 1;
             }
         }
-        if self.lexer.has_token("..") {
-            let inclusive = self.lexer.has_token("=");
+        if self.lexer.has_token("..") || open_start {
+            // Consume "..=" if present (open_start already peeked but didn't consume)
+            let inclusive = if !open_start {
+                self.lexer.has_token("=")
+            } else {
+                self.lexer.has_token(".."); // consume the ".."
+                self.lexer.has_token("=")
+            };
             let iter = self.create_unique("iter", &Type::Long);
             let mut ls = Vec::new();
             if !self.first_pass {
@@ -434,13 +449,20 @@ impl Parser {
                 ls.push(Value::Int(nr as i32));
                 ls.append(&mut key);
             }
-            let mut n = Value::Null;
-            self.expression(&mut n);
-            if !self.convert(&mut n, &index_t, &key_types[0]) {
-                diagnostic!(self.lexer, Level::Error, "Invalid index key");
+            // A8.1: open-end — if next token is `]` or `,`, skip upper-bound expression.
+            let open_end = self.lexer.peek_token("]") || self.lexer.peek_token(",");
+            let mut nr = 0;
+            if !open_end {
+                let mut n = Value::Null;
+                let n_t = self.expression(&mut n);
+                if !self.convert(&mut n, &n_t, &key_types[0]) {
+                    if !self.first_pass {
+                        diagnostic!(self.lexer, Level::Error, "Invalid index key");
+                    }
+                }
+                key.push(n);
+                nr = 1;
             }
-            key.push(n);
-            let mut nr = 1;
             if key_types.len() > 1 {
                 while self.lexer.has_token(",") {
                     if nr >= key_types.len() {
