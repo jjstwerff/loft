@@ -122,6 +122,9 @@ pub struct Parser {
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // A5.3: last closure work variable created by emit_lambda_code (transient).
     pub(crate) last_closure_work_var: u16,
+    // C30: when reassigning a Function variable, reuse its existing closure work-var
+    // so OpDatabase clears and reclaims the same store (avoids creating orphaned stores).
+    pub(crate) reuse_closure_work_var: u16,
     // A5.3: closure allocation expression to inject at the call site.
     pub(crate) last_closure_alloc: Option<Box<Value>>,
     // A5.6d: outer variable numbers captured by the most recently parsed lambda.
@@ -286,6 +289,7 @@ impl Parser {
             closure_param: u16::MAX,
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
+            reuse_closure_work_var: u16::MAX,
             last_closure_alloc: None,
             last_closure_captured_vars: vec![],
             init_field_tracking: false,
