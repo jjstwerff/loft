@@ -221,7 +221,9 @@ impl Function {
             loop_seq_ranges: other.loop_seq_ranges.clone(),
             scope_origins: other.scope_origins.clone(),
             logging: other.logging,
-            done: other.done,
+            // C35/C36/C37: generic instantiation copies must be re-analyzed by
+            // scopes::check — don't inherit the template's done flag.
+            done: false,
             closure_var_map: other.closure_var_map.clone(),
         }
     }

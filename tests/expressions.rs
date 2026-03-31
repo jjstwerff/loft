@@ -1475,6 +1475,67 @@ fn stdlib_printable_interface() {
     .result(Value::Text("world".to_string()));
 }
 
+// ── C35/C36/C37 — Generic instantiation with struct types ───────────────────
+
+/// C36: generic function with for loop panics "variable never assigned a slot"
+/// when instantiated with a struct type.
+#[test]
+#[ignore = "C36: generic for-loop slot panic on struct-type instantiation"]
+fn generic_for_loop_struct_type() {
+    code!(
+        "struct Score { value: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn largest<T: Ordered>(items: vector<T>) -> T {
+    best = items[0];
+    for i in 1..len(items) {
+        if best < items[i] { best = items[i]; }
+    }
+    best
+}
+fn test() {
+    scores = [Score{value: 3}, Score{value: 7}];
+    w = largest(scores);
+    assert(w.value == 7, \"expected 7\");
+}"
+    );
+}
+
+/// C37: calling the same generic with two different struct types: slot conflict.
+#[test]
+#[ignore = "C37: two struct-type instantiations of same generic — slot conflict"]
+fn generic_two_struct_types() {
+    code!(
+        "struct Score { value: integer }
+struct Weight { grams: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn OpLt(self: Weight, other: Weight) -> boolean { self.grams < other.grams }
+fn max_of<T: Ordered>(a: T, b: T) -> T { if a < b { b } else { a } }
+fn test() {
+    s = max_of(Score{value: 3}, Score{value: 7});
+    assert(s.value == 7, \"score\");
+    w = max_of(Weight{grams: 100}, Weight{grams: 50});
+    assert(w.grams == 100, \"weight\");
+}"
+    );
+}
+
+/// C35: bounded generic returning text from struct type causes memory violation.
+#[test]
+#[ignore = "C35: bounded generic text return crashes on struct-type instantiation"]
+fn generic_text_return_struct() {
+    code!(
+        "interface Describable { fn describe(self: Self) -> text }
+struct Temperature { celsius: float }
+fn describe(self: Temperature) -> text { \"{self.celsius}C\" }
+fn show<T: Describable>(item: T) -> text { describe(item) }
+fn test() {
+    t = Temperature { celsius: 37.0 };
+    s = show(t);
+    assert(s == \"37C\", \"expected 37C\");
+}"
+    );
+}
+
 // ── CO1.7 — Coroutine yield from for-loops ──────────────────────────────────
 
 /// CO1.7: yield from inside a range-based for-loop.
