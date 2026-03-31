@@ -22,9 +22,10 @@ All notable changes to the loft language and interpreter.
     `par(...)` is transparently optimized.
   - A14.7: `n_parallel_for_light` native function registered. Allocates result vector,
     creates `WorkerPool`, dispatches via `run_parallel_light`.
-  Auto-selection currently disabled pending a store-count fix in
-  `clone_for_light_worker` (workers need to borrow all stores referenced by the
-  input vector, not just `[..max]`). Infrastructure and codegen support are in place.
+  Auto-selection is fully enabled: eligible `par()` workers (primitive return,
+  no recursive store allocation) transparently use the light path.  Three bugs
+  fixed in the enablement: stack pop order in the native function, result DbRef
+  `pos` field (4 not 8), and store borrow range (all stores, not just `[..max]`).
 
 ### Safety fixes
 
