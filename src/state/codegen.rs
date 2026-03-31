@@ -770,7 +770,27 @@ impl State {
                 stack.add_op("OpClearText", self);
                 self.code_add(var_pos);
             }
-            self.set_var(stack, v, value);
+            // S-borrow: reassignment of Reference from OpGetVector — copy into
+            // existing store instead of overwriting the DbRef with a borrowed one.
+            // Only for user-defined struct types (not fn_ref, reference, etc.).
+            if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                && let Value::Call(call_d, _) = value
+                && stack.data.def(*call_d).name == "OpGetVector"
+                && d_nr != u32::MAX
+                && stack.data.def(d_nr).known_type != u16::MAX
+                && matches!(stack.data.def(d_nr).def_type, crate::data::DefType::Struct)
+                && !stack.data.def(d_nr).attributes.is_empty()
+            {
+                let tp_nr = stack.data.def(d_nr).known_type;
+                let copy_nr = stack.data.def_nr("OpCopyRecord");
+                let copy_val = Value::Call(
+                    copy_nr,
+                    vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+                );
+                self.generate(&copy_val, stack, false);
+            } else {
+                self.set_var(stack, v, value);
+            }
         } else {
             // First allocation — slot pre-assigned by assign_slots.
             #[cfg(debug_assertions)]
@@ -851,6 +871,29 @@ impl State {
                     // is Type::Reference, deep-copy the record to avoid aliasing.
                     // Without this, q1 and the original share the same store record,
                     // causing double-free on scope exit.
+                    let tp_nr = stack.data.def(d_nr).known_type;
+                    stack.add_op("OpConvRefFromNull", self);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                    self.code_add(tp_nr);
+                    let copy_nr = stack.data.def_nr("OpCopyRecord");
+                    let copy_val = Value::Call(
+                        copy_nr,
+                        vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+                    );
+                    self.generate(&copy_val, stack, false);
+                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && let Value::Call(call_d, _) = value
+                    && stack.data.def(*call_d).name == "OpGetVector"
+                    && d_nr != u32::MAX
+                    && stack.data.def(d_nr).known_type != u16::MAX
+                    && matches!(stack.data.def(d_nr).def_type, crate::data::DefType::Struct)
+                    && !stack.data.def(d_nr).attributes.is_empty()
+                {
+                    // S-borrow: vector element access returns a borrowed DbRef
+                    // pointing inside the vector's store.  Deep-copy into an
+                    // independent store so the variable can be safely returned
+                    // or outlive the vector.
                     let tp_nr = stack.data.def(d_nr).known_type;
                     stack.add_op("OpConvRefFromNull", self);
                     stack.add_op("OpDatabase", self);
