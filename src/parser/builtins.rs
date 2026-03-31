@@ -354,9 +354,19 @@ impl Parser {
         };
         // A14.5/A14.6: check if the worker qualifies for the light path.
         // Light path: primitive return (not text, not reference), no recursive store alloc.
-        // A14: auto-selection disabled pending store-count fix in clone_for_light_worker.
-        // TODO: check_light_eligible(worker_d_nr) when store borrowing is fixed.
-        let light_m: Option<usize> = None;
+        // A14.5/A14.6: auto-select light path for eligible workers.
+        let worker_d_nr = if let Value::Int(d) = &list[0] {
+            *d as u32
+        } else {
+            u32::MAX
+        };
+        let is_primitive_return =
+            !matches!(&worker_ret_type, Type::Text(_) | Type::Reference(_, _));
+        let light_m = if is_primitive_return && worker_d_nr != u32::MAX {
+            self.check_light_eligible(worker_d_nr)
+        } else {
+            None
+        };
 
         let (par_fn_name, extra_pool_arg) = if let Some(m) = light_m {
             ("n_parallel_for_light", Some(Value::Int(m as i32)))
@@ -380,9 +390,8 @@ impl Parser {
             list[2].clone(),                // threads: integer
             list[0].clone(),                // func: d_nr as integer
         ];
-        if let Some(pool_arg) = extra_pool_arg {
-            augmented.push(pool_arg); // pool_m for light path
-        }
+        // pool_m is hardcoded in the native function
+        let _ = extra_pool_arg;
         // Append any extra args (verified count above; types passed through).
         for extra in list.iter().skip(3) {
             augmented.push(extra.clone());
@@ -394,7 +403,6 @@ impl Parser {
     /// A14.5: check if a worker function qualifies for the light parallel path.
     /// Returns `Some(M)` (pool stores per worker) if eligible, `None` otherwise.
     /// Eligible = no text return AND no store allocation inside recursive calls.
-    #[allow(dead_code)] // A14: re-enable when store-count fix lands
     pub(crate) fn check_light_eligible(&self, worker_d_nr: u32) -> Option<usize> {
         if worker_d_nr as usize >= self.data.definitions.len() {
             return None;
@@ -409,9 +417,8 @@ impl Parser {
         let mut max_stores = 0usize;
         if self.has_recursive_allocation(worker_d_nr, &mut visited, &mut on_stack, &mut max_stores)
         {
-            return None; // recursive allocation detected
+            return None;
         }
-        // M = max stores needed + 1 for safety margin.
         Some(max_stores + 1)
     }
 
@@ -456,13 +463,15 @@ impl Parser {
     }
 
     /// Count reference-type local variables (each may need a store).
+    /// Count locally-allocated reference variables (excluding arguments — those
+    /// are passed by the caller and don't allocate new stores).
     fn count_ref_vars(&self, d_nr: u32) -> usize {
         if d_nr as usize >= self.data.definitions.len() {
             return 0;
         }
         let vars = &self.data.def(d_nr).variables;
         (0..vars.next_var())
-            .filter(|&v| matches!(vars.tp(v), Type::Reference(_, _)))
+            .filter(|&v| !vars.is_argument(v) && matches!(vars.tp(v), Type::Reference(_, _)))
             .count()
     }
 

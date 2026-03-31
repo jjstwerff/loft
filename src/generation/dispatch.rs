@@ -545,7 +545,7 @@ impl Output<'_> {
                     return Ok(());
                 }
             }
-            "n_parallel_for" => {
+            "n_parallel_for" | "n_parallel_for_light" => {
                 // Special-case: replace n_parallel_for(input, elem_sz, ret_sz, threads, fn_d_nr, extras..., n_extra)
                 // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm, extras...) as i64 }).
                 if vals.len() >= 5

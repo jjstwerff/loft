@@ -656,7 +656,46 @@ fn parallel_for_thread_scope_results() {
     .result(Value::Int(30));
 }
 
-// ── A14 — par_light infrastructure (auto-selection disabled pending store-count fix) ───
+// ── A14 — par_light auto-selection ───────────────────────────────────────────
+
+/// A14: par() with a simple integer worker automatically uses the light path.
+#[test]
+fn par_light_auto_selected() {
+    code!(
+        "struct Num { value: integer }
+         struct NumList { items: vector<Num> }
+         fn tripled(n: const Num) -> integer { n.value * 3 }
+         fn run_par() -> integer {
+             lst = NumList {};
+             lst.items += [Num{value:1}, Num{value:2}, Num{value:3}, Num{value:4}, Num{value:5},
+                           Num{value:6}, Num{value:7}, Num{value:8}, Num{value:9}, Num{value:10}];
+             total = 0;
+             for a in lst.items par(b = tripled(a), 4) { total += b };
+             total
+         }"
+    )
+    .expr("run_par()")
+    .result(Value::Int(165));
+}
+
+/// A14: par with extra args uses the light path too.
+#[test]
+fn par_light_extra_args() {
+    code!(
+        "struct Num { value: integer }
+         struct NumList { items: vector<Num> }
+         fn scaled(n: const Num, factor: integer) -> integer { n.value * factor }
+         fn run_par() -> integer {
+             lst = NumList {};
+             lst.items += [Num { value: 2 }, Num { value: 5 }];
+             total = 0;
+             for a in lst.items par(b = scaled(a, 10), 2) { total += b };
+             total
+         }"
+    )
+    .expr("run_par()")
+    .result(Value::Int(70));
+}
 
 // ── S28 — debug generation counter for stale DbRef across coroutine yield ─────
 

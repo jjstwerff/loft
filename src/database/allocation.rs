@@ -334,7 +334,9 @@ impl Stores {
     /// `pool_slice` must remain valid and exclusively owned by this worker.
     /// The original `Stores` must outlive the worker (guaranteed by `thread::scope`).
     pub unsafe fn clone_for_light_worker(&self, pool_slice: &mut [Store]) -> WorkerStores {
-        let mut allocations: Vec<Store> = self.allocations[..self.max as usize]
+        // Borrow ALL stores — the input vector may reference any store.
+        let mut allocations: Vec<Store> = self
+            .allocations
             .iter()
             .map(|s| {
                 if s.free {
@@ -370,7 +372,7 @@ impl Stores {
             names: self.names.clone(),
             allocations,
             files: Vec::new(),
-            max: self.max + pool_slice.len() as u16,
+            max: self.allocations.len() as u16 + pool_slice.len() as u16,
             free_bits,
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),

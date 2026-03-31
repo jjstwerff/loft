@@ -1127,9 +1127,16 @@ use #count instead"
             return;
         }
 
-        // A14: auto-selection disabled pending store-count fix in clone_for_light_worker.
-        // TODO: check_light_eligible(fn_d_nr) when store borrowing is fixed.
-        let light_m: Option<usize> = None;
+        // A14.5/A14.6: auto-select light path for eligible workers.
+        let is_primitive_return = !matches!(
+            ret_type,
+            Type::Text(_) | Type::Reference(_, _) | Type::Unknown(_)
+        );
+        let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
+            self.check_light_eligible(fn_d_nr)
+        } else {
+            None
+        };
         let actual_par_d_nr = if light_m.is_some() {
             let d = self.data.def_nr("n_parallel_for_light");
             if d == u32::MAX { par_for_d_nr } else { d }
@@ -1147,9 +1154,8 @@ use #count instead"
             threads_expr,
             Value::Int(fn_d_nr as i32),
         ];
-        if let Some(m) = light_m {
-            pf_args.push(Value::Int(m as i32));
-        }
+        // pool_m is hardcoded in the native function (avoids stack-ordering complexity)
+        let _ = light_m;
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
         let pf_call = Value::Call(actual_par_d_nr, pf_args);

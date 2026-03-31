@@ -942,7 +942,7 @@ fn parallel_for(input: reference, element_size: integer, return_size: integer, t
 // Internal: lightweight parallel map — borrows stores read-only instead of deep-copying.
 // The compiler automatically selects this when the worker qualifies (no recursive store
 // allocation, no text return).  Same signature as parallel_for + pool_stores_per_worker.
-fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer, pool_m: integer) -> reference;
+fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
 // Internal: read element idx from a parallel_for result reference.
 // Emitted by the compiler for the `par(...)` syntax; do not call directly.
 fn parallel_get_int(r: reference, idx: integer) -> integer;

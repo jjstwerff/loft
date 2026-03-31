@@ -24,8 +24,10 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             // n_parallel_for passes a worker function as args[4]: an integer
             // literal that is resolved to a closure in native output_call.
             // Detect it here so the worker is included in the reachable set.
-            if data.def(*d).name == "n_parallel_for"
-                && args.len() >= 5
+            if matches!(
+                data.def(*d).name.as_str(),
+                "n_parallel_for" | "n_parallel_for_light"
+            ) && args.len() >= 5
                 && let Value::Int(fn_d_nr) = &args[4]
                 && *fn_d_nr >= 0
             {
