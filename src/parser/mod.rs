@@ -836,11 +836,21 @@ impl Parser {
                 self.data.def(type_nr).name
             )
         };
-        // Return existing instantiation if already created.
+        // C35/C36/C37: on pass 1, just register the definition name so
+        // type resolution works.  Don't copy code or variables (they're
+        // placeholders on pass 1).  On pass 2, create or update the full
+        // definition with compiled code from the template.
         let existing = self.data.def_nr(&mangled);
-        if existing != u32::MAX {
-            return existing;
+        if self.first_pass {
+            if existing != u32::MAX {
+                return existing;
+            }
+            // Pass 1: register a minimal definition for the mangled name.
+            let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
+            let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
+            return d_nr;
         }
+        // Pass 2: always (re)build the definition from the compiled template.
         // Clone the template data before mutating self.data.
         let tmpl_code = self.data.definitions[g_nr as usize].code.clone();
         let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
@@ -858,16 +868,29 @@ impl Parser {
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
         let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
         let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
-        // Register the new definition.
-        let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
-        for a in &tmpl_attrs {
-            let a_nr = self
-                .data
-                .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
-            self.data.set_attr_value(d_nr, a_nr, a.default.clone());
+        // Pass 2: use existing definition from pass 1 or create new.
+        #[allow(clippy::if_not_else)]
+        let d_nr = if existing != u32::MAX {
+            existing
+        } else {
+            self.data.add_def(&mangled, &tmpl_pos, DefType::Function)
+        };
+        if existing == u32::MAX {
+            for a in &tmpl_attrs {
+                let a_nr =
+                    self.data
+                        .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
+                self.data.set_attr_value(d_nr, a_nr, a.default.clone());
+            }
         }
         self.data.definitions[d_nr as usize].code = new_code;
-        self.data.set_returned(d_nr, new_returned);
+        if existing == u32::MAX {
+            self.data.set_returned(d_nr, new_returned);
+        } else {
+            // C35/C36/C37: update returned type directly (set_returned asserts
+            // on double-set; existing definition already has the pass-1 type).
+            self.data.definitions[d_nr as usize].returned = new_returned;
+        }
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);

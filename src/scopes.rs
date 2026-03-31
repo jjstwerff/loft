@@ -310,7 +310,12 @@ impl Scopes {
                 // the block, the outer Zone 2 would never see it and the slot would remain
                 // u16::MAX → "variable never assigned a slot" panic at codegen.
                 let mut hoisted_ref: Option<u16> = None;
-                if let Some(Value::Var(ret_v)) = bl.operators.last() {
+                // C35/C36/C37: don't hoist at scope 0 (argument scope) — the variable
+                // would be treated as an argument and not assigned a slot by the body's
+                // process_scope.  Hoisting is only needed for nested blocks (scope > 0).
+                if self.scope > 0
+                    && let Some(Value::Var(ret_v)) = bl.operators.last()
+                {
                     let ret_v = *self.var_mapping.get(ret_v).unwrap_or(ret_v);
                     if !self.var_scope.contains_key(&ret_v)
                         && let Type::Reference(_, dep) | Type::Vector(_, dep) = function.tp(ret_v)
