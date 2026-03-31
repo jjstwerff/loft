@@ -196,6 +196,9 @@ All notable changes to the loft language and interpreter.
     Test: `sorted_range_comprehension`.
   - A8.6: nullable lookup `if !col[k]` verified. Test: `sorted_nullable_lookup`.
   - A8.1-idx: open-ended bounds also work on index collections. Test: `index_open_end_range`.
+  - A8.5: `rev(col[lo..hi])` reverse range iteration on sorted collections. Parser sets
+    `reverse_iterator` flag before the inner subscript expression so `fill_iter` picks it up.
+    Test: `sorted_reverse_range`.
 
 ### Coroutine safety documentation
 
