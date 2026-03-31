@@ -857,6 +857,13 @@ impl Parser {
             if existing != u32::MAX {
                 return existing;
             }
+            // C37: if the mangled name is the same as the template (type_nr was
+            // u32::MAX on pass 1), skip registration — pass 2 will use the
+            // correct mangled name once types are fully registered.
+            let generic_name = format!("n_{name}");
+            if mangled == generic_name {
+                return u32::MAX;
+            }
             // Pass 1: register a minimal definition for the mangled name.
             let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
             let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
