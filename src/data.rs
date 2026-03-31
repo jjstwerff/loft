@@ -105,6 +105,9 @@ pub enum Value {
     /// A5.6-text: free the closure `DbRef` embedded in a fn-ref variable (bytes 4..16).
     /// Codegen emits `OpVarRef` at offset+4 then `OpFreeRef`.  No new opcode needed.
     FreeFnRefClosure(u16),
+    /// C31: read one 4-byte word from a 16-byte fn-ref variable at `byte_offset`.
+    /// Codegen emits `OpVarInt(var_pos - byte_offset)`.  No new opcode needed.
+    FnRefWord(u16, u16),
 }
 
 #[allow(dead_code)]
@@ -1496,6 +1499,7 @@ impl Data {
             Type::RefVar(_) | Type::Sorted(_, _, _) => self.source_nr(0, "reference"),
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
+            Type::Function(_, _) => self.source_nr(0, "fn_ref"),
             _ => u32::MAX,
         }
     }
@@ -1525,6 +1529,7 @@ impl Data {
             Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Hash(_, _, _) => {
                 self.source_nr(0, "reference")
             }
+            Type::Function(_, _) => self.source_nr(0, "fn_ref"),
             _ => u32::MAX,
         }
     }
@@ -1786,6 +1791,9 @@ impl Data {
             }
             Value::FreeFnRefClosure(v) => {
                 write!(write, "FreeFnRefClosure({})", vars.name(*v))
+            }
+            Value::FnRefWord(v, off) => {
+                write!(write, "FnRefWord({}, +{off})", vars.name(*v))
             }
         }
     }

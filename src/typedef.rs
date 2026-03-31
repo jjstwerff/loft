@@ -124,6 +124,13 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
 }
 
 pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
+    // C31: ensure the synthetic "fn_ref" definition exists so Type::Function
+    // elements in vectors can resolve type_def_nr → known_type.
+    if data.def_nr("fn_ref") == u32::MAX {
+        let pos = data.def(0).position.clone();
+        let d = data.add_def("fn_ref", &pos, DefType::Struct);
+        data.definitions[d as usize].known_type = database.fn_ref();
+    }
     // Detect type cycles before computing sizes.
     for d_nr in start_def..data.definitions() {
         if matches!(data.def_type(d_nr), DefType::Struct) {
