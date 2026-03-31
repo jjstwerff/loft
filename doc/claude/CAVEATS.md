@@ -58,45 +58,14 @@ may still reach the runtime panics.
 
 ---
 
-## C17 — `stack_trace()` returns empty from parallel workers
+## C31 — Closures in struct fields not yet supported
 
-`stack_trace()` called inside a `par(...)` worker body always returns an empty
-`vector<StackFrame>`.  The worker's `execute_at` entry point does not set
-`state.data_ptr` before dispatch, so the call-stack walker finds a null pointer
-and returns immediately.
+Closures in **vectors** now work (both capturing and non-capturing).
+Storing closures as **struct fields** is not yet supported — requires
+`Type::Function` handling in the struct field write path.
 
-**Reproducer:**
-```loft
-fn worker(i: integer) -> integer {
-    frames = stack_trace();
-    assert(len(frames) > 0, "expected non-empty trace in worker");
-    i * 2
-}
-fn test() {
-    for i in 0..4 par(b = worker(i), 4) { results += [b] }
-}
-```
-
-**Impact:** debugging parallel code is significantly harder without stack traces.
-**Test:** `parallel_stack_trace_non_empty` (`tests/expressions.rs`) — passes when
-called from normal code, fails / skipped in a parallel worker.
-**Workaround:** log a manual trace (function name + argument values) from the worker.
-**Planned fix:** S21 — set `data_ptr` in `execute_at`/`execute_at_ref` before
-dispatch (`src/state/mod.rs`). Target: 0.8.3.
-
----
-
-## C31 — Closures in collections or struct fields not supported
-
-Storing a capturing lambda in a `vector<fn(...)>` or as a struct field
-does not work.  Two issues: (1) `element_store_size` now correctly returns
-16 for `Type::Function` (fixed), but (2) the parser's vector literal code
-requires a database type for element registration, and `Type::Function` has
-no database type → assertion "Unknown type" at parse time.
-
-**Workaround:** pass closures as function arguments or return values, not
-through collections or struct fields.
-**Planned fix:** A5.6 deferred item 2 in [PLANNING.md](PLANNING.md) (1.1+).
+**Workaround:** use vectors or function arguments to pass closures.
+**Planned fix:** deferred to 1.1+.
 
 ---
 

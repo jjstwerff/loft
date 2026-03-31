@@ -22,10 +22,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
-| C31       | Closures in vectors: direct byte-copy for structural types | M  | ✓      |              | PLANNING.md § C31             |
-| S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
-| I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
-| I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
 
 ---
 
