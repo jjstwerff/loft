@@ -1329,15 +1329,25 @@ One edge case remains:
 type with no database definition.  `element_store_size` already returns 16
 (fixed).
 
-**Fix:** Bypass the record-based vector element path for structural types.
-For `Type::Function` elements in vector literals, skip `new_record` (which
-requires a database type) and use direct 16-byte memcpy into the vector
-storage.  Similarly, vector element access (`v[i]`) must read 16 raw bytes
-instead of going through `OpGetRecord`.
+**Fix:** Register a synthetic "fn_ref" database type (16 bytes, `Parts::Base`)
+and decompose the 16-byte fn-ref into 4×i32 reads/writes using existing opcodes.
 
-**Files:** `vectors.rs` (skip new_record), `fields.rs` (element access)
+1. **database/types.rs**: add `fn_ref()` method on `Stores` (lazy, 16-byte Base)
+2. **typedef.rs `fill_all`**: create "fn_ref" Definition with `known_type`
+3. **data.rs**: `type_def_nr` / `type_elm`: `Type::Function → source_nr(0, "fn_ref")`
+4. **data.rs**: add `Value::FnRefWord(var_nr, byte_offset)` — reads one 4-byte
+   word from a 16-byte fn-ref variable.  Codegen emits `OpVarInt(var_pos - offset)`.
+   No new opcode.
+5. **vectors.rs `new_record`**: Function elements → 4× `OpSetInt(elm, off, FnRefWord)`
+6. **fields.rs `parse_vector_index`**: Function elements → `OpGetVector` for
+   element DbRef, then 4× `OpGetInt(elm_ref, off)` to reconstruct 16B on stack.
+
+**Guards:** `debug_assert!` in FnRefWord codegen (offset ∈ {0,4,8,12}).
+**Files:** `data.rs`, `database/types.rs`, `typedef.rs`, `vectors.rs`,
+`fields.rs`, `codegen.rs`
 **Test:** `closure_in_vector` (`#[ignore]`)
 **Effort:** Medium
+**Target:** 0.8.3
 **Target:** 0.8.3
 
 ---
