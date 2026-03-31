@@ -44,7 +44,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | A14.5     | ↳ Compiler call-graph analysis + `M` computation          | M  | ✓      |              | LIGHT_PAR.md § L5             |
 | A14.6     | ↳ Parser: `par_light(...)` clause                         | S  | ✓      | A14.4, A14.5 | LIGHT_PAR.md § L6             |
 | A14.7     | ↳ Performance benchmark                                   | S  | ✓      | A14.6        | LIGHT_PAR.md § L7             |
-| I9        | Interfaces: remaining stdlib interfaces (`Equatable`, `Addable`, `Numeric`, `Scalable`, `Printable`) | M | ✓ | I9 (Ordered) | default/01_code.loft |
+| I9        | Interfaces: remaining stdlib interfaces (`Numeric`, `Scalable`, `Printable`) | S | ✓ | I9 (Ordered, Equatable, Addable) | default/01_code.loft |
 | I9.1      | ↳ Convert `sum_of`, `min_of`, `max_of` to bounded-generic loft | S | ✓ | I9          | default/01_code.loft          |
 | I9.2      | ↳ `sum_of(v, identity)` caller-supplied-identity overload | XS | ✓      | I9           | default/01_code.loft          |
 

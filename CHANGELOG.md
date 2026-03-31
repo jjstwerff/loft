@@ -95,6 +95,21 @@ All notable changes to the loft language and interpreter.
     use the stdlib interface instead of local redefinitions.
     Test: `stdlib_ordered_interface`.
 
+- **Built-in type satisfaction and stdlib Equatable/Addable** (I9-prim, I9-Eq, I9-Add, I9.1):
+  - I9-prim: `find_fn` now falls back to the `possible` operator map when the method-style
+    name (`t_7integer_OpLt`) is not found. This lets built-in types (integer, float, etc.)
+    satisfy interfaces since their operators use the `add_op` convention (`OpLtInt`).
+    `call_op` skips the main operator loop when an operand is a generic type variable,
+    preventing false matches via `OpEqRef` / `OpEqBool` implicit conversions.
+    `check_satisfaction` delegates to `find_fn` for both naming conventions.
+    Tests: `builtin_integer_satisfies_ordered`, `builtin_float_satisfies_ordered`.
+  - I9-Eq: `pub interface Equatable { op == }` added to `default/01_code.loft`.
+    Test: `stdlib_equatable_interface`.
+  - I9-Add: `pub interface Addable { op + }` added to `default/01_code.loft`.
+    Test: `stdlib_addable_interface`.
+  - I9.1: bounded generics with Addable work on integer and float types.
+    Tests: `generic_sum_pair_on_integers`, `generic_sum_pair_on_floats`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
