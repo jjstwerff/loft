@@ -648,6 +648,22 @@ impl Parser {
             if let (Type::Enum(_, false, _), Type::Integer(_, _, _)) = (test_type, should) {
                 return true;
             }
+            // A5.6-text: Text types with different dependency lists are compatible.
+            if matches!((test_type, should), (Type::Text(_), Type::Text(_))) {
+                return true;
+            }
+            // A5.6-text: Function types match if params and return are convertible.
+            if let (Type::Function(t_params, t_ret), Type::Function(s_params, s_ret)) =
+                (test_type, should)
+                && t_params.len() == s_params.len()
+                && t_params
+                    .iter()
+                    .zip(s_params.iter())
+                    .all(|(t, s)| self.can_convert(t, s))
+                && self.can_convert(t_ret, s_ret)
+            {
+                return true;
+            }
             if let Type::Reference(r, _) = should
                 && *r == self.data.def_nr("reference")
                 && let Type::Reference(_, _) = test_type

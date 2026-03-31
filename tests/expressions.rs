@@ -339,15 +339,17 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6-text: cross-scope closure — ___clos_N freed at function return before fn-ref escapes"]
 fn closure_capture_text() {
-    // Captured text is deep-copied — independent of the original after capture.
+    // A5.6-text: cross-scope text-capturing closure returned from a function.
+    // The "never read" warning is expected — capture happens inside the lambda
+    // definition which the use-analysis doesn't track as a read of `prefix`.
     code!(
         "fn make_greeter(prefix: text) -> fn(text) -> text {
             fn(name: text) -> text { \"{prefix} {name}\" }
          }"
     )
     .expr("make_greeter(\"Hello\")(\"world\")")
+    .warning("Parameter prefix is never read at closure_capture_text:1:52")
     .result(Value::str("Hello world"));
 }
 

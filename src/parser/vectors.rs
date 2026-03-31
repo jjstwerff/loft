@@ -697,6 +697,13 @@ impl Parser {
             alloc_steps.push(Value::FnRef(d_nr as i32, w, Box::new(fn_type.clone())));
             *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
             // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
+            // A5.6-text: suppress scope-exit OpFreeRef on the closure work-var ONLY
+            // for cross-scope closures (function returns Function type).  The caller
+            // frees the closure via FreeFnRefClosure in the chained-call block.
+            // Same-scope closures keep normal freeing at function exit.
+            if matches!(self.data.def(self.context).returned, Type::Function(_, _)) {
+                self.vars.set_skip_free(w);
+            }
             self.last_closure_alloc = None;
             // A5.6-text: propagate the closure dep to the enclosing function's
             // declared return type so that free_vars at Return knows not to free

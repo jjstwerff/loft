@@ -102,6 +102,9 @@ pub enum Value {
     // A5.6-1: Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
     // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
     FnRef(i32, u16, Box<Type>),
+    /// A5.6-text: free the closure `DbRef` embedded in a fn-ref variable (bytes 4..16).
+    /// Codegen emits `OpVarRef` at offset+4 then `OpFreeRef`.  No new opcode needed.
+    FreeFnRefClosure(u16),
 }
 
 #[allow(dead_code)]
@@ -1793,6 +1796,9 @@ impl Data {
             }
             Value::FnRef(d_nr, clos_var, _) => {
                 write!(write, "FnRef({d_nr}, {})", vars.name(*clos_var))
+            }
+            Value::FreeFnRefClosure(v) => {
+                write!(write, "FreeFnRefClosure({})", vars.name(*v))
             }
         }
     }
