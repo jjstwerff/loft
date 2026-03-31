@@ -140,24 +140,14 @@ impl Output<'_> {
                     )?;
                 }
             } else {
-                // C31/A5.6: only wrap plain Int values assigned to Function variables.
-                // FnRef, Block, Call, If etc. already produce the (u32, DbRef) tuple.
-                let wrap_fn_ref = matches!(variables.tp(var), Type::Function(_, _))
-                    && matches!(to, Value::Int(_));
-                if wrap_fn_ref {
-                    write!(w, "(")?;
-                }
                 self.output_code_inner(w, to)?;
                 if needs_to_string {
                     write!(w, ".to_string()")?;
-                } else if wrap_fn_ref {
-                    write!(
-                        w,
-                        " as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
-                } else if matches!(variables.tp(var), Type::Routine(_))
+                } else if matches!(variables.tp(var), Type::Function(_, _) | Type::Routine(_))
                     && !matches!(to, Value::Null)
                 {
+                    // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
+                    // Also covers if-expressions that return fn-ref literals.
                     write!(w, " as u32")?;
                 } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
                     // Variable is a narrow integer type (stored as i32), but the RHS expression

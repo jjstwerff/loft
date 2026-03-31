@@ -66,9 +66,6 @@ pub struct Variable {
     /// Set by `clean_work_refs` for work-ref temporaries that have been re-purposed
     /// and must not be freed at scope exit (A14 replacement for type-mutation hack).
     pub skip_free: bool,
-    /// A5.6-text: true when this variable is captured by a closure.  Suppresses
-    /// the "never read" warning in `test_used` without affecting dead-assignment.
-    pub captured: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
     pub first_def: u32,
     /// Sequence number of the last `Value::Var` (or implicit `OpFreeText`/`OpFreeRef`) for this variable.
@@ -221,9 +218,7 @@ impl Function {
             loop_seq_ranges: other.loop_seq_ranges.clone(),
             scope_origins: other.scope_origins.clone(),
             logging: other.logging,
-            // C35/C36/C37: generic instantiation copies must be re-analyzed by
-            // scopes::check — don't inherit the template's done flag.
-            done: false,
+            done: other.done,
             closure_var_map: other.closure_var_map.clone(),
         }
     }
@@ -247,12 +242,6 @@ impl Function {
     }
 
     pub fn set_loop(&mut self, on: u8, db_tp: u16, value: &Value) {
-        // Guard: if no loop is active (e.g. iterator created outside a for loop
-        // during native codegen), skip the metadata — it's only needed by the
-        // bytecode interpreter's iterate/step path.
-        if self.current_loop == u16::MAX || self.current_loop as usize >= self.loops.len() {
-            return;
-        }
         let l = &mut self.loops[self.current_loop as usize];
         l.on = on;
         l.db_tp = db_tp;
@@ -686,7 +675,6 @@ impl Function {
             const_param: self.variables[var as usize].const_param,
             stack_allocated: false,
             skip_free: false,
-            captured: false,
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
@@ -713,7 +701,6 @@ impl Function {
             const_param: false,
             stack_allocated: false,
             skip_free: false,
-            captured: false,
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
@@ -738,7 +725,6 @@ impl Function {
             const_param: false,
             stack_allocated: false,
             skip_free: false,
-            captured: false,
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
@@ -834,7 +820,7 @@ impl Function {
             if var.name.starts_with('_') || var.name.contains('#') {
                 continue;
             }
-            if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
+            if var.uses == 0 && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);
                 diagnostic!(
                     lexer,
@@ -952,12 +938,6 @@ impl Function {
         self.variables[v as usize].skip_free = true;
     }
 
-    /// A5.6-text: mark a variable as captured by a closure, suppressing the
-    /// "never read" warning without affecting dead-assignment analysis.
-    pub fn set_captured(&mut self, v: u16) {
-        self.variables[v as usize].captured = true;
-    }
-
     /// Register an existing variable as a work-reference so that `parse_code`
     /// inserts `Set(v, Null)` at the function body start.  This pre-reserves v
     /// in the outer scope, ensuring its frame slot survives inner-block FreeStack.
@@ -973,7 +953,7 @@ impl Function {
     }
 
     /// A5.6-2: Return the closure variable number for a fn_ref variable, if any.
-    #[allow(clippy::doc_markdown, dead_code)]
+    #[allow(clippy::doc_markdown)]
     pub fn closure_var_of(&self, fn_ref: u16) -> Option<u16> {
         self.closure_var_map.get(&fn_ref).copied()
     }

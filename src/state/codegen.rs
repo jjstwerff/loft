@@ -368,35 +368,6 @@ impl State {
                 self.code_add(clos_pos);
                 *fn_type.clone()
             }
-            Value::FreeFnRefClosure(v) => {
-                // A5.6-text: free the closure DbRef embedded at bytes 4..16 of a
-                // fn-ref variable.  Read from (var_pos - 4) to skip the 4-byte d_nr.
-                // OpFreeRef is a no-op for null DbRefs (non-capturing lambdas).
-                let var_pos = stack.position - stack.function.stack(*v);
-                debug_assert!(
-                    var_pos >= 4,
-                    "FreeFnRefClosure: var_pos={var_pos} < 4 for var {}",
-                    stack.function.name(*v)
-                );
-                stack.add_op("OpVarRef", self);
-                self.code_add(var_pos - 4);
-                stack.add_op("OpFreeRef", self);
-                Type::Void
-            }
-            Value::FnRefWord(var_nr, byte_off) => {
-                // C31: read one 4-byte word from a 16-byte fn-ref variable.
-                // OpVarInt reads from (stack_pos - pos).  The fn-ref occupies
-                // 16 bytes starting at var_abs.  Word at byte_off is at var_abs+byte_off.
-                // var_pos = stack.position - var_abs.  Adjusted = var_pos - byte_off.
-                debug_assert!(
-                    *byte_off <= 12 && *byte_off % 4 == 0,
-                    "FnRefWord: invalid byte_off={byte_off}"
-                );
-                let var_pos = stack.position - stack.function.stack(*var_nr);
-                stack.add_op("OpVarInt", self);
-                self.code_add(var_pos - *byte_off);
-                I32.clone()
-            }
         }
     }
 
@@ -758,10 +729,8 @@ impl State {
         let pos = stack.function.stack(v);
         assert!(
             pos != u16::MAX,
-            "variable '{}' (var_nr={}) never assigned a slot in '{}'",
-            stack.function.name(v),
-            v,
-            stack.data.def(stack.def_nr).name,
+            "variable '{}' never assigned a slot",
+            stack.function.name(v)
         );
         if stack.function.is_stack_allocated(v) {
             // Reassignment — variable already on the stack.
@@ -770,27 +739,7 @@ impl State {
                 stack.add_op("OpClearText", self);
                 self.code_add(var_pos);
             }
-            // S-borrow: reassignment of Reference from OpGetVector — copy into
-            // existing store instead of overwriting the DbRef with a borrowed one.
-            // Only for user-defined struct types (not fn_ref, reference, etc.).
-            if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-                && let Value::Call(call_d, _) = value
-                && stack.data.def(*call_d).name == "OpGetVector"
-                && d_nr != u32::MAX
-                && stack.data.def(d_nr).known_type != u16::MAX
-                && matches!(stack.data.def(d_nr).def_type, crate::data::DefType::Struct)
-                && !stack.data.def(d_nr).attributes.is_empty()
-            {
-                let tp_nr = stack.data.def(d_nr).known_type;
-                let copy_nr = stack.data.def_nr("OpCopyRecord");
-                let copy_val = Value::Call(
-                    copy_nr,
-                    vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
-                );
-                self.generate(&copy_val, stack, false);
-            } else {
-                self.set_var(stack, v, value);
-            }
+            self.set_var(stack, v, value);
         } else {
             // First allocation — slot pre-assigned by assign_slots.
             #[cfg(debug_assertions)]
@@ -1048,25 +997,6 @@ impl State {
                     tps.push(a.typedef.clone());
                 } else {
                     tps.push(self.generate(&parameters[a_nr], stack, false));
-                    let pushed = stack.position - stack_before;
-                    // N-fnref: when a typed argument produces 0 bytes (Value::Null),
-                    // push the appropriate null value for the expected type.
-                    if pushed == 0 {
-                        let expected = size(&a.typedef, &Context::Argument);
-                        if expected == 12 {
-                            stack.add_op("OpNullRefSentinel", self);
-                        } else if expected == 16 {
-                            stack.add_op("OpConstInt", self);
-                            self.code_add(0i32);
-                            stack.add_op("OpNullRefSentinel", self);
-                        } else if expected == 4 {
-                            stack.add_op("OpConstInt", self);
-                            self.code_add(i32::MIN);
-                        } else if expected == 8 {
-                            stack.add_op("OpConstLong", self);
-                            self.code_add(i64::MIN);
-                        }
-                    }
                     // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).
                     // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
                     if matches!(a.typedef, Type::Function(_, _, _))
@@ -1944,12 +1874,6 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         }
         Value::FnRef(d_nr, clos_var, _) => {
             eprint!("FnRef({d_nr}, clos={})", vars.name(*clos_var));
-        }
-        Value::FreeFnRefClosure(v) => {
-            eprint!("FreeFnRefClosure({})", vars.name(*v));
-        }
-        Value::FnRefWord(v, off) => {
-            eprint!("FnRefWord({}, +{off})", vars.name(*v));
         }
     }
 }

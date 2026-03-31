@@ -355,19 +355,6 @@ impl Stores {
         }
     }
 
-    /// C31: lazily create a 16-byte base type for fn-ref vector elements
-    /// (4B `d_nr` + 12B closure `DbRef`).
-    pub fn fn_ref(&mut self) -> u16 {
-        if let Some(nr) = self.names.get("fn_ref") {
-            *nr
-        } else {
-            let num = self.types.len() as u16;
-            self.types.push(Type::new("fn_ref", Parts::Base, 16));
-            self.names.insert("fn_ref".to_string(), num);
-            num
-        }
-    }
-
     pub fn hash(&mut self, content: u16, key: &[String]) -> u16 {
         let mut name = "hash<".to_string() + &self.types[content as usize].name + "[";
         let mut key_nrs = Vec::new();

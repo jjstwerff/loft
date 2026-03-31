@@ -373,12 +373,11 @@ impl Parser {
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
-                    // A5.6-text: always allocate 1 work-buffer for any text-returning
-                    // fn-ref call, regardless of deps.len().  This keeps variable creation
-                    // identical on both parser passes — deps can change between passes
-                    // when return-type inference updates, but Type::Text(_) is stable.
-                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-                        vec![self.vars.work_text(&mut self.lexer)]
+                    // Create work vars for text-returning closures (both passes for counter sync).
+                    let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
+                        (0..deps.len())
+                            .map(|_| self.vars.work_text(&mut self.lexer))
+                            .collect()
                     } else {
                         vec![]
                     };
@@ -416,17 +415,8 @@ impl Parser {
                             ));
                         }
                         let orig = std::mem::replace(code, Value::Null);
-                        // A5.6-text: after the call, free the closure DbRef
-                        // embedded in fn-ref-tmp.  FreeFnRefClosure has zero net
-                        // stack effect (OpVarRef pushes 12B, OpFreeRef pops 12B),
-                        // so the CallRef's return value stays on the stack as the
-                        // block result.  No-op for non-capturing lambdas.
                         *code = v_block(
-                            vec![
-                                v_set(fn_work, orig),
-                                Value::CallRef(fn_work, converted),
-                                Value::FreeFnRefClosure(fn_work),
-                            ],
+                            vec![v_set(fn_work, orig), Value::CallRef(fn_work, converted)],
                             *ret_type.clone(),
                             "fn_call_tmp",
                         );

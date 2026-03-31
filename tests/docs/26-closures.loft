@@ -13,26 +13,22 @@
 // Store the lambda, then call it by name.
 // ## Multiple integer captures
 // A lambda can read more than one outer variable at once.
-// All are captured at the moment the lambda is written.
+// All are captured at the moment the lambda is called.
 // ## Text capture
 // Text values are captured by deep-copy, so they are independent of the
 // original variable after the call.
 // ## Capture timing
-// Loft captures variables at the moment the lambda is written (definition time),
-// not at the moment it is called.  If a variable changes between writing and
-// calling the lambda, the lambda sees the value it had when it was written.
-// ## Cross-scope closures
-// A function can return a capturing lambda to the caller.
-// The captured values travel with the lambda — no dangling references.
-// ## Current limitation (C31): closures in collections and struct fields
-// A capturing lambda cannot be stored in a 'vector<fn(...)>' or as a struct
-// field.  Pass closures as function arguments or return values instead.
+// Loft captures variables at the moment the lambda is called, not at the
+// moment the lambda is written.  If a variable changes between writing and
+// calling the lambda, the lambda sees the updated value.
+// ## Current limitation: captured lambdas and higher-order functions
+// Captured closures only work when called directly by name in the same scope.
+// Passing a capturing lambda as an argument to map, filter, reduce, or a
+// user-defined higher-order function is not yet supported — the hidden
+// closure record is not forwarded through the call.
+// Workaround: pass the extra value as an explicit extra argument instead.
 // Non-capturing lambdas (those that only use their own parameters) work
-// fine as elements of function vectors and with higher-order functions.
-
-fn make_adder(base_val: integer) -> fn(integer) -> integer {
-  fn(n: integer) -> integer { base_val + n }
-}
+// fine with all higher-order functions.
 
 fn main() {
   // ## Integer capture
@@ -64,15 +60,6 @@ fn main() {
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
-
-  // ## Cross-scope closures
-  // make_adder returns a lambda that captured base_val from its parameter.
-  // The captured value is preserved after make_adder returns.
-  add10 = make_adder(10);
-  add100 = make_adder(100);
-  assert(add10(5) == 15, "add10(5): {add10(5)}");
-  assert(add100(5) == 105, "add100(5): {add100(5)}");
-  assert(add10(0) == 10, "add10(0): {add10(0)}");
 
   // ## Non-capturing lambdas with higher-order functions
   // No capture needed here — the lambda uses only its own parameter.

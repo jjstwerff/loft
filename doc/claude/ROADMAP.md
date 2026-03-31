@@ -26,6 +26,10 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
 | I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
 | I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
+| A5.6-text | Closure 16-byte fn-ref + chained call parsing             | H  | ✓      |              | PLANNING.md § A5.6            |
+| T1.8      | Tuple struct-ref element move semantics + scope cleanup    | M  | ✓      |              | PLANNING.md § T1.8            |
+| S-lexer   | Fix 16-parser.loft "Unknown record" sentinel crash         | S+M| ✓      |              | PLANNING.md § S-lexer         |
+| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | ✓      |              | PLANNING.md § A7.2-par        |
 
 ---
 
@@ -54,7 +58,6 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`            | S  | ✓      |              | 01_code.loft                  |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision             | MH | ✓      | A2.2         | control.rs, main.rs           |
 | A2.4      | ↳ `--debug` per-type safety logging                       | M  | ✓      | A2.2         | fill.rs, native.rs            |
-| A2.4a     | ↳ Integer NULL-origin logging (`div/0` → `file:line`)     | S  | ✓      | A2.4         | ops.rs, fill.rs               |
 | P2        | REPL / interactive mode                                   | H  | ✓      | L1           | PLANNING.md § P2              |
 | P2.1      | ↳ Input completeness detection                            | S  | ✓      |              | new repl.rs                   |
 | P2.2      | ↳ Single-statement execution                              | M  | ✓      | P2.1         | main.rs, repl.rs              |

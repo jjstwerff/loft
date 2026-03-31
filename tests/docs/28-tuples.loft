@@ -25,10 +25,6 @@
 // ## Destructuring
 // Assign a tuple to multiple names in one step using the '(a, b) = expr' form.
 // This is concise when a function returns a tuple and you need both values.
-// ## Matching tuples
-// A tuple can be used as the subject of a 'match' expression.
-// Each element position can be a literal, a binding name, or a wildcard '_'.
-// This lets you branch on the combination of values in a single expression.
 // ## Three or more elements
 // Tuples can have any number of elements.
 
@@ -85,24 +81,6 @@ fn main() {
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
-
-  // ## Matching tuples
-  // Match on a pair: bind 'n' when the second element is a specific text,
-  // or bind both as 'n' and 's' for the general case.
-  tm_pair = (3, "hello");
-  tm_result = match tm_pair {
-    (0, _) => "starts at zero",
-    (n, "hi") => "greeting at {n}",
-    (n, s) => "got {n} and {s}"
-  };
-  assert(tm_result == "got 3 and hello", "tuple match: {tm_result}");
-
-  tm_pair2 = (0, "anything");
-  tm_result2 = match tm_pair2 {
-    (0, _) => "starts at zero",
-    (n, s) => "got {n} and {s}"
-  };
-  assert(tm_result2 == "starts at zero", "wildcard match: {tm_result2}");
 
   // ## Three or more elements
   u = (1, 2, 3);

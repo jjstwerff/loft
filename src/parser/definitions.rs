@@ -1349,13 +1349,10 @@ impl Parser {
                             && matches!(&a.typedef, Type::Reference(nr, _) if *nr == self_nr)
                     });
                     if !has_self_param {
-                        // I12.diag: include workaround hint in the error message.
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "factory methods not yet supported: '{}' returns Self without \
-                             a 'self: Self' parameter — pass the identity value as an extra \
-                             parameter instead, e.g. fn sum<T>(v: vector<T>, zero: T) -> T",
+                            "factory methods not yet supported: '{}' returns Self without a 'self: Self' parameter",
                             method_name
                         );
                     }
