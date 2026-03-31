@@ -937,7 +937,6 @@ impl State {
         }
         for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
             if a.mutable {
-                #[cfg(debug_assertions)]
                 let stack_before = stack.position;
                 // When a RefVar argument is passed directly to a matching RefVar parameter
                 // (e.g. a dispatcher forwarding its text-buffer arg to a variant), emit only

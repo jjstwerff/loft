@@ -531,6 +531,7 @@ impl State {
     # Panics
     When called on a not implemented data-structure
     */
+    #[allow(clippy::too_many_lines)]
     pub fn iterate(&mut self) {
         let on = *self.code::<u8>();
         let arg = *self.code::<u16>();
@@ -604,7 +605,14 @@ impl State {
             2 => {
                 // sorted points to the position of the record inside the vector
                 // A8.1: empty from/till arrays signal "no constraint on this side".
-                let sorted_rec = all[data.store_nr as usize].get_int(data.rec, data.pos) as u32;
+                // S-lexer: get_int returns i32::MIN for unresolved-type fields;
+                // guard against negative values (0 = empty, i32::MIN = unresolved).
+                let sorted_rec_raw = all[data.store_nr as usize].get_int(data.rec, data.pos);
+                let sorted_rec = if sorted_rec_raw <= 0 {
+                    0
+                } else {
+                    sorted_rec_raw as u32
+                };
                 let vec_len = if sorted_rec == 0 {
                     0
                 } else {
@@ -636,6 +644,12 @@ impl State {
                         let (t, cmp) = vector::sorted_find(&data, ex, arg, all, &keys, &till);
                         if ex || cmp { t } else { t + 1 }
                     };
+                }
+                if trace_iter {
+                    eprintln!(
+                        "[iterate] on=sorted reverse={reverse} ex={ex} sorted_rec={sorted_rec} \
+                         vec_len={vec_len} start={start} finish={finish}"
+                    );
                 }
             }
             3 => {

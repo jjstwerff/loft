@@ -70,6 +70,7 @@ fn parser_pending_native_libs_populated() {
 /// shared library (`libloft_native_test.so` / `.dylib` / `.dll`).
 /// Build with: `cargo build -p loft-native-test --release`
 #[test]
+#[ignore = "A7.2: fixture cdylib not built — run: cargo build -p loft-native-test --release"]
 fn load_one_registers_native_functions() {
     use loft::compile::byte_code;
     use loft::extensions;

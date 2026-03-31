@@ -359,7 +359,6 @@ script_test!(
 /// regenerating documentation.  Use this during active development on the parser
 /// to get a fast feedback cycle.
 #[test]
-#[ignore = "pre-existing: 16-parser.loft crashes with 'Unknown record' on main too"]
 fn last() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(PathBuf::from("tests/docs/16-parser.loft"), false, true)
