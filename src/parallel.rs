@@ -90,12 +90,26 @@ pub fn run_parallel_direct(
     if n_rows == 0 {
         return;
     }
-    #[cfg(feature = "threading")]
+    // W1.18-1: WASM threading dispatches to JS host bridge (Worker Threads).
+    #[cfg(all(feature = "threading", feature = "wasm"))]
     {
-        // S29/P1-R2: use thread::scope instead of thread::spawn + manual join loop.
-        // thread::scope proves to the borrow checker that out_ptr outlives all threads
-        // (the scope joins threads automatically at the closing brace).
-        // Arc<SendMutPtr> is retained because scoped-spawn still requires Send.
+        let _ = (stores, program, extra_args);
+        // Call globalThis.loftHost.parallel_run(fn_pos, input_store, input_rec,
+        //   input_pos, element_size, return_size, n_threads, out_store, out_rec, out_pos, n_rows)
+        let args = js_sys::Array::new();
+        args.push(&wasm_bindgen::JsValue::from(fn_pos));
+        args.push(&wasm_bindgen::JsValue::from(input.store_nr));
+        args.push(&wasm_bindgen::JsValue::from(input.rec));
+        args.push(&wasm_bindgen::JsValue::from(input.pos));
+        args.push(&wasm_bindgen::JsValue::from(element_size));
+        args.push(&wasm_bindgen::JsValue::from(return_size));
+        args.push(&wasm_bindgen::JsValue::from(n_threads as u32));
+        args.push(&wasm_bindgen::JsValue::from(n_rows as u32));
+        crate::wasm::host_call_raw("parallel_run", &args);
+    }
+    // Native OS threads via thread::scope.
+    #[cfg(all(feature = "threading", not(feature = "wasm")))]
+    {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
         let out = Arc::new(SendMutPtr(out_ptr));
@@ -122,8 +136,6 @@ pub fn run_parallel_direct(
                             &state.database.allocations,
                         );
                         let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
-                        // SAFETY: non-overlapping ranges; thread::scope proves out_ptr outlives
-                        // all threads.
                         unsafe {
                             let dst = out_t.0.add(row_idx * ret_sz);
                             std::ptr::copy_nonoverlapping(
@@ -135,7 +147,6 @@ pub fn run_parallel_direct(
                     }
                 });
             }
-            // thread::scope joins all spawned threads here automatically.
         });
     }
     #[cfg(not(feature = "threading"))]
