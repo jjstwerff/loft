@@ -758,8 +758,10 @@ impl State {
         let pos = stack.function.stack(v);
         assert!(
             pos != u16::MAX,
-            "variable '{}' never assigned a slot",
-            stack.function.name(v)
+            "variable '{}' (var_nr={}) never assigned a slot in '{}'",
+            stack.function.name(v),
+            v,
+            stack.data.def(stack.def_nr).name,
         );
         if stack.function.is_stack_allocated(v) {
             // Reassignment — variable already on the stack.
