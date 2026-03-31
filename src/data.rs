@@ -1424,6 +1424,17 @@ impl Data {
         &self.definitions[dnr as usize]
     }
 
+    /// Return the def_nrs of all definitions whose `parent` field equals `parent_nr`.
+    /// Used by the interface satisfaction checker (I6) to enumerate an interface's method stubs.
+    #[must_use]
+    pub fn children_of(&self, parent_nr: u32) -> impl Iterator<Item = u32> + '_ {
+        self.definitions
+            .iter()
+            .enumerate()
+            .filter(move |(_, d)| d.parent == parent_nr)
+            .map(|(i, _)| i as u32)
+    }
+
     /// # Panics
     /// When no definition on that number is found.
     pub fn def_mut(&mut self, dnr: u32) -> &mut Definition {

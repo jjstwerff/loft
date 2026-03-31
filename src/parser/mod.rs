@@ -821,7 +821,61 @@ impl Parser {
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);
         self.data.definitions[d_nr as usize].variables = vars;
+        // I6: verify the concrete type satisfies every declared bound.
+        // Emit a diagnostic and return u32::MAX if any required method is missing.
+        if !self.check_satisfaction(g_nr, type_nr) {
+            // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
+            // "Unknown function" error — the satisfaction error is sufficient.
+            // The function won't execute because parsing will halt on errors.
+        }
         d_nr
+    }
+
+    /// I6: Check that the concrete type (identified by `concrete_nr`) implements every
+    /// interface in `g_nr`'s bounds.  Returns `true` if satisfied (or no bounds),
+    /// `false` and emits a diagnostic for the first missing method otherwise.
+    fn check_satisfaction(&mut self, g_nr: u32, concrete_nr: u32) -> bool {
+        let bounds = self.data.definitions[g_nr as usize].bounds.clone();
+        if bounds.is_empty() {
+            return true;
+        }
+        if concrete_nr == u32::MAX {
+            return true; // can't check without a concrete type def_nr
+        }
+        let concrete_name = self.data.def(concrete_nr).name.clone();
+        let mut satisfied = true;
+        for iface_nr in bounds {
+            let iface_name = self.data.def(iface_nr).name.clone();
+            let self_prefix = format!("t_{}Self_", "Self".len());
+            let children: Vec<u32> = self.data.children_of(iface_nr).collect();
+            for child_nr in children {
+                let child_name = self.data.def(child_nr).name.clone();
+                let method_suffix = if child_name.starts_with(&self_prefix) {
+                    child_name[self_prefix.len()..].to_string()
+                } else {
+                    child_name.clone()
+                };
+                let concrete_method = format!(
+                    "t_{}{}_{}",
+                    concrete_name.len(),
+                    concrete_name,
+                    method_suffix
+                );
+                if self.data.def_nr(&concrete_method) == u32::MAX {
+                    let msg = crate::diagnostics::diagnostic_format(
+                        Level::Error,
+                        format_args!(
+                            "'{}' does not satisfy interface '{}': missing {}",
+                            concrete_name, iface_name, method_suffix
+                        ),
+                    );
+                    let peek_pos = self.lexer.peek().position.clone();
+                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+                    satisfied = false;
+                }
+            }
+        }
+        satisfied
     }
 
     /// Extract the type variable `def_nr` from a type tree.
@@ -1330,6 +1384,25 @@ impl Parser {
                     break;
                 }
                 return tp;
+            }
+        }
+        // I8.1: bounded generic — look up the T-stub (e.g. `t_1T_OpLt`) before erroring.
+        // T-stubs are created in `parse_function` (second pass) for each bound interface method.
+        // `re_resolve_call` later substitutes them with the concrete type's implementation.
+        // In the first pass, T-stubs don't exist yet; return Type::Void to keep parsing going.
+        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        if let Some(tv_name) = generic_name {
+            if self.first_pass {
+                return Type::Void;
+            }
+            let op_method = format!("Op{}", rename(op));
+            let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, op_method);
+            let stub_nr = self.data.def_nr(&stub_name);
+            if stub_nr != u32::MAX {
+                let tp = self.call_nr(code, stub_nr, list, types, false);
+                if tp != Type::Null {
+                    return tp;
+                }
             }
         }
         // P5.3: generic-specific error message for operators on T.

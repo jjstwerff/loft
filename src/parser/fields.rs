@@ -12,7 +12,11 @@ impl Parser {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
-            diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
+            if !self.first_pass {
+                diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
+            }
+            // In the first pass, skip the field name token so parsing continues.
+            self.lexer.has_identifier();
             return tp;
         }
         let mut t = tp;
@@ -67,6 +71,13 @@ impl Parser {
                     && self.lexer.has_token("(")
                 {
                     return self.parse_vector_method(code, &t, &field);
+                }
+                // I7: bounded method call on generic T — look for a T-stub.
+                if let Some(_tv_name) = self.generic_type_name(&t) {
+                    let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
+                    if stub_nr != u32::MAX && self.lexer.has_token("(") {
+                        return self.parse_method(code, stub_nr, t.clone());
+                    }
                 }
                 // P5.3: generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {

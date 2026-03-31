@@ -449,7 +449,7 @@ impl Parser {
             return false;
         };
         self.vars = Function::new(&fn_name, &self.lexer.pos().file);
-        if !self.default && !is_lower(&fn_name) {
+        if !self.default && !is_lower(&fn_name) && !is_op(&fn_name) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -578,6 +578,62 @@ impl Parser {
                 }
             }
             self.data.definitions[self.context as usize].bounds = bounds;
+            eprintln!(
+                "BOUNDS: fn={} bounds={:?}",
+                type_var_name, self.data.definitions[self.context as usize].bounds
+            );
+            // I7/I8.1: Create T-parameterized stubs for each bound interface's methods so
+            // the body parser can emit `Value::Call(t_stub_nr, ...)` for method/op calls on T.
+            // `re_resolve_call` then substitutes these with the concrete type's implementation.
+            let tv_nr = self.data.def_nr(&type_var_name);
+            let self_nr = self.data.def_nr("Self");
+            if tv_nr != u32::MAX && self_nr != u32::MAX {
+                let self_prefix = format!("t_{}Self_", "Self".len());
+                let iface_nrs: Vec<u32> =
+                    self.data.definitions[self.context as usize].bounds.clone();
+                for iface_nr in iface_nrs {
+                    let children: Vec<u32> = self.data.children_of(iface_nr).collect();
+                    for child_nr in children {
+                        let child_name = self.data.def(child_nr).name.clone();
+                        let method_suffix = if child_name.starts_with(&self_prefix) {
+                            child_name[self_prefix.len()..].to_string()
+                        } else {
+                            child_name.clone()
+                        };
+                        let t_stub_name = format!(
+                            "t_{}{}_{}",
+                            type_var_name.len(),
+                            type_var_name,
+                            method_suffix
+                        );
+                        if self.data.def_nr(&t_stub_name) != u32::MAX {
+                            continue; // already created (e.g. multiple bounds share a method)
+                        }
+                        let attrs_count = self.data.def(child_nr).attributes.len();
+                        let t_stub_nr =
+                            self.data
+                                .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
+                        for a_nr in 0..attrs_count {
+                            let a_name = self.data.attr_name(child_nr, a_nr);
+                            let a_type = self.data.attr_type(child_nr, a_nr);
+                            let new_type = Self::substitute_type(
+                                a_type,
+                                self_nr,
+                                &crate::data::Type::Reference(tv_nr, Vec::new()),
+                            );
+                            self.data
+                                .add_attribute(&mut self.lexer, t_stub_nr, &a_name, new_type);
+                        }
+                        let ret_type = self.data.def(child_nr).returned.clone();
+                        let t_ret_type = Self::substitute_type(
+                            ret_type,
+                            self_nr,
+                            &crate::data::Type::Reference(tv_nr, Vec::new()),
+                        );
+                        self.data.set_returned(t_stub_nr, t_ret_type);
+                    }
+                }
+            }
         }
         let mut returned_not_null = false;
         let result = if self.lexer.has_token("->") {
@@ -1216,6 +1272,19 @@ impl Parser {
             } else {
                 None
             };
+            // I6 (pre-step): register method stubs as children of the interface definition.
+            // This creates `DefType::Function` entries (named e.g. `t_4Self_OpLt`) with
+            // `parent = interface_d_nr`, so that `data.children_of(interface_d_nr)` can
+            // enumerate them for satisfaction checking.
+            if self.first_pass && d_nr != u32::MAX {
+                let stub_nr = self.data.add_fn(&mut self.lexer, &method_name, &args);
+                if stub_nr != u32::MAX {
+                    self.data.definitions[stub_nr as usize].parent = d_nr;
+                    if let Some(ref rt) = return_tp {
+                        self.data.set_returned(stub_nr, rt.clone());
+                    }
+                }
+            }
             // I5 (phase 1): factory methods (Self in return without self: Self first param)
             // are not yet supported.  Emit a clear diagnostic rather than silently producing
             // wrong code when I6 lands.

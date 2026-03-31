@@ -797,15 +797,14 @@ fn interface_factory_method_rejected() {
 /// I6/I10: calling a bounded generic function with a type that does NOT implement
 /// the required interface method must produce a clear "does not satisfy" diagnostic.
 #[test]
-#[ignore = "I6: satisfaction checking — not yet implemented"]
 fn satisfaction_check_fails_missing_method() {
     code!(
         "interface Ordered { op < (self: Self, other: Self) -> boolean }
          struct Thing { x: integer }
-         fn pick_first<T: Ordered>(a: T, b: T) -> T { a }
+         fn pick_first<T: Ordered>(a: T, _b: T) -> T { a }
          fn test() { pick_first(Thing{x:1}, Thing{x:2}) }"
     )
-    .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:4:18");
+    .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:4:57");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
