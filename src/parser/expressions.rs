@@ -59,7 +59,8 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Continue(_)
         | Value::Keys(_)
         | Value::TupleGet(_, _)
-        | Value::FnRef(_, _, _) => false,
+        | Value::FnRef(_, _, _)
+        | Value::FreeFnRefClosure(_) => false,
     }
 }
 

@@ -368,6 +368,21 @@ impl State {
                 self.code_add(clos_pos);
                 *fn_type.clone()
             }
+            Value::FreeFnRefClosure(v) => {
+                // A5.6-text: free the closure DbRef embedded at bytes 4..16 of a
+                // fn-ref variable.  Read from (var_pos - 4) to skip the 4-byte d_nr.
+                // OpFreeRef is a no-op for null DbRefs (non-capturing lambdas).
+                let var_pos = stack.position - stack.function.stack(*v);
+                debug_assert!(
+                    var_pos >= 4,
+                    "FreeFnRefClosure: var_pos={var_pos} < 4 for var {}",
+                    stack.function.name(*v)
+                );
+                stack.add_op("OpVarRef", self);
+                self.code_add(var_pos - 4);
+                stack.add_op("OpFreeRef", self);
+                Type::Void
+            }
         }
     }
 
@@ -1874,6 +1889,9 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         }
         Value::FnRef(d_nr, clos_var, _) => {
             eprint!("FnRef({d_nr}, clos={})", vars.name(*clos_var));
+        }
+        Value::FreeFnRefClosure(v) => {
+            eprint!("FreeFnRefClosure({})", vars.name(*v));
         }
     }
 }

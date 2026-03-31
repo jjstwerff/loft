@@ -31,7 +31,6 @@ impl Output<'_> {
             Value::Float(v) => write!(w, "{v}_f64")?,
             Value::Single(v) => write!(w, "{v}_f32")?,
             Value::Null => write!(w, "()")?,
-            Value::Line(_) => {}
             Value::Break(n) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break")?;
@@ -184,6 +183,7 @@ impl Output<'_> {
             // In native code the fn-ref variable holds a u32 d_nr; the closure is stored
             // separately. Emit only the d_nr constant; closure injection is done at the call site.
             Value::FnRef(d_nr, _, _) => write!(w, "{d_nr}_u32")?,
+            Value::FreeFnRefClosure(_) | Value::Line(_) => {} // no-op in native codegen
         }
         Ok(())
     }
