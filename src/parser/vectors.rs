@@ -1337,6 +1337,13 @@ impl Parser {
                     ls.push(crate::data::v_set(tmp, p.clone()));
                     tmp
                 };
+                // C31: when a capturing closure's fn-ref is stored in a vector,
+                // the closure work-var must survive until the vector is freed.
+                // Mark it skip_free so OpFreeRef at function exit doesn't destroy
+                // the closure while the vector still holds a reference to it.
+                if let Some(&clos_var) = self.closure_vars.get(&fn_var) {
+                    self.vars.set_skip_free(clos_var);
+                }
                 for off in [0u16, 4, 8, 12] {
                     ls.push(self.cl(
                         "OpSetInt",
