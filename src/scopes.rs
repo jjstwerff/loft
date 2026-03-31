@@ -31,41 +31,7 @@ struct Scopes {
 /// Perform scope analysis on all currently known functions.
 pub fn check(data: &mut Data) {
     for d_nr in 0..data.definitions() {
-        if !matches!(data.def(d_nr).def_type, DefType::Function) {
-            continue;
-        }
-        // C35/C36/C37: generic instantiations inherit done=true from the template.
-        // They need compute_intervals + assign_slots but NOT scan (the template's
-        // scan already remapped variables and set scopes).
-        if data.def(d_nr).variables.done {
-            let free_text_nr = data.def_nr("OpFreeText");
-            let free_ref_nr = data.def_nr("OpFreeRef");
-            let code_ref = data.definitions[d_nr as usize].code.clone();
-            // C35/C36/C37: always re-run intervals+slots for generic instantiations.
-            // Template slots are computed for generic type sizes which differ from
-            // the concrete struct type sizes after substitution.
-            {
-                let mut seq = 0u32;
-                compute_intervals(
-                    &code_ref,
-                    &mut data.definitions[d_nr as usize].variables,
-                    free_text_nr,
-                    free_ref_nr,
-                    &mut seq,
-                    0,
-                );
-                let local_start: u16 = {
-                    let vars = &data.definitions[d_nr as usize].variables;
-                    let arg_size: u16 = vars
-                        .arguments()
-                        .iter()
-                        .map(|&a| size(vars.var_type(a), &Context::Argument))
-                        .sum();
-                    arg_size + 4
-                };
-                let d = &mut data.definitions[d_nr as usize];
-                assign_slots(&mut d.variables, &mut d.code, local_start);
-            }
+        if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
             continue;
         }
         let mut scopes = Scopes {
@@ -85,11 +51,6 @@ pub fn check(data: &mut Data) {
         }
         let code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
         data.definitions[d_nr as usize].code = code;
-        // C35/C36/C37: set scopes on the COPY (not the original) and write
-        // it back BEFORE debug checks that read the variable table.
-        for (v_nr, scope) in &scopes.var_scope {
-            function.set_scope(*v_nr, *scope);
-        }
         data.definitions[d_nr as usize].variables = function;
         // A5.6: in debug builds, assert that every owned Reference variable emitted an
         // OpFreeRef.  Catches scope-registration bugs before they reach the runtime
@@ -109,6 +70,11 @@ pub fn check(data: &mut Data) {
             &data.definitions[d_nr as usize].variables,
             &data.definitions[d_nr as usize].name.clone(),
         );
+        for (v_nr, scope) in scopes.var_scope {
+            data.definitions[d_nr as usize]
+                .variables
+                .set_scope(v_nr, scope);
+        }
         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
         let free_text_nr = data.def_nr("OpFreeText");
         let free_ref_nr = data.def_nr("OpFreeRef");
@@ -310,12 +276,7 @@ impl Scopes {
                 // the block, the outer Zone 2 would never see it and the slot would remain
                 // u16::MAX → "variable never assigned a slot" panic at codegen.
                 let mut hoisted_ref: Option<u16> = None;
-                // C35/C36/C37: don't hoist at scope 0 (argument scope) — the variable
-                // would be treated as an argument and not assigned a slot by the body's
-                // process_scope.  Hoisting is only needed for nested blocks (scope > 0).
-                if self.scope > 0
-                    && let Some(Value::Var(ret_v)) = bl.operators.last()
-                {
+                if let Some(Value::Var(ret_v)) = bl.operators.last() {
                     let ret_v = *self.var_mapping.get(ret_v).unwrap_or(ret_v);
                     if !self.var_scope.contains_key(&ret_v)
                         && let Type::Reference(_, dep) | Type::Vector(_, dep) = function.tp(ret_v)

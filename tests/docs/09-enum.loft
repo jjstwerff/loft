@@ -64,25 +64,6 @@ fn opposite(self: Direction) -> Direction {
   }
 }
 
-// ## Nested field sub-patterns in match
-// Inside a struct-enum arm, each field position can carry a sub-pattern
-// instead of just a binding name.
-// Supported sub-patterns: enum variant name, scalar literal, wildcard '_',
-// or or-pattern ('A | B').
-// This lets you match on a field's value and bind others in a single arm,
-// without a nested match or an if-guard.
-
-enum Status {
-  Pending,
-  Paid,
-  Refunded
-}
-
-struct Order {
-  status: Status,
-  amount: integer
-}
-
 fn main() {
   // Plain enum values are ordered by declaration position.
   // North comes first (smallest), West comes last (greatest).
@@ -173,31 +154,4 @@ fn main() {
     _ => false
   };
   assert(vowel, "character or-pattern");
-
-  // ## Nested field sub-patterns
-  // An arm for a struct-enum variant can constrain a field to a specific value
-  // and still bind other fields in the same arm.
-  // Here: match an Order on its status field, binding amount only when Paid.
-  // A top-level '_' wildcard covers all other status values.
-  paid_order = Order { status: Paid, amount: 5000 };
-  charge = match paid_order {
-    Order { status: Paid, amount } => amount,
-    _ => 0
-  };
-  assert(charge == 5000, "paid order charged: {charge}");
-
-  pending_order = Order { status: Pending, amount: 200 };
-  charge2 = match pending_order {
-    Order { status: Paid, amount } => amount,
-    _ => 0
-  };
-  assert(charge2 == 0, "pending order not charged: {charge2}");
-
-  // Or-patterns in a field sub-pattern match multiple variant values in one arm.
-  refunded_order = Order { status: Refunded, amount: 300 };
-  is_inactive = match refunded_order {
-    Order { status: Pending | Refunded } => true,
-    _ => false
-  };
-  assert(is_inactive, "pending|refunded matches or-pattern");
 }

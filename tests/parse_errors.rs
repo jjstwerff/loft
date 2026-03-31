@@ -622,14 +622,6 @@ fn generic_operator_error() {
     );
 }
 
-/// I8.5.diag: concrete-left/generic-right operator produces a specific diagnostic.
-#[test]
-fn generic_concrete_left_operator_error() {
-    code!("interface Scalable85 { fn OpMul(self: Self, other: Self) -> Self }\nfn bad<T: Scalable85>(x: T) -> T { 2 * x }\nfn test() {}").error(
-        "operator '*': concrete left-side operand with generic right-side T is not yet supported — write 't * value' instead of 'value * t', or use a method call at generic_concrete_left_operator_error:2:42",
-    );
-}
-
 /// P5.3: field access on generic type T produces a generic-specific error.
 #[test]
 fn generic_field_error() {
@@ -794,7 +786,7 @@ fn generic_fn_struct_as_bound_errors() {
 #[test]
 fn interface_factory_method_rejected() {
     code!("interface Creatable { fn create() -> Self }\nfn test() {}")
-        .error("factory methods not yet supported: 'create' returns Self without a 'self: Self' parameter — pass the identity value as an extra parameter instead, e.g. fn sum<T>(v: vector<T>, zero: T) -> T at interface_factory_method_rejected:1:44");
+        .error("factory methods not yet supported: 'create' returns Self without a 'self: Self' parameter at interface_factory_method_rejected:1:44");
 }
 
 // ── I6/I10 — Satisfaction checking diagnostics ───────────────────────────────

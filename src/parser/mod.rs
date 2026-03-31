@@ -122,9 +122,6 @@ pub struct Parser {
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // A5.3: last closure work variable created by emit_lambda_code (transient).
     pub(crate) last_closure_work_var: u16,
-    // C30: when reassigning a Function variable, reuse its existing closure work-var
-    // so OpDatabase clears and reclaims the same store (avoids creating orphaned stores).
-    pub(crate) reuse_closure_work_var: u16,
     // A5.3: closure allocation expression to inject at the call site.
     pub(crate) last_closure_alloc: Option<Box<Value>>,
     // A5.6d: outer variable numbers captured by the most recently parsed lambda.
@@ -261,17 +258,10 @@ impl Parser {
             let mut lexer = Lexer::default();
             data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));
         }
-        // C31: register "fn_ref" definition early so type_def_nr(Type::Function)
-        // can resolve during parsing (before fill_all runs).
-        let mut database = Stores::new();
-        {
-            let d = data.add_def("fn_ref", &pos.clone(), DefType::Struct);
-            data.definitions[d as usize].known_type = database.fn_ref();
-        }
         Parser {
             todo_files: Vec::new(),
             data,
-            database,
+            database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
             in_format_expr: false,
@@ -296,7 +286,6 @@ impl Parser {
             closure_param: u16::MAX,
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
-            reuse_closure_work_var: u16::MAX,
             last_closure_alloc: None,
             last_closure_captured_vars: vec![],
             init_field_tracking: false,
@@ -659,22 +648,6 @@ impl Parser {
             if let (Type::Enum(_, false, _), Type::Integer(_, _, _)) = (test_type, should) {
                 return true;
             }
-            // A5.6-text: Text types with different dependency lists are compatible.
-            if matches!((test_type, should), (Type::Text(_), Type::Text(_))) {
-                return true;
-            }
-            // A5.6-text: Function types match if params and return are convertible.
-            if let (Type::Function(t_params, t_ret), Type::Function(s_params, s_ret)) =
-                (test_type, should)
-                && t_params.len() == s_params.len()
-                && t_params
-                    .iter()
-                    .zip(s_params.iter())
-                    .all(|(t, s)| self.can_convert(t, s))
-                && self.can_convert(t_ret, s_ret)
-            {
-                return true;
-            }
             if let Type::Reference(r, _) = should
                 && *r == self.data.def_nr("reference")
                 && let Type::Reference(_, _) = test_type
@@ -836,28 +809,11 @@ impl Parser {
                 self.data.def(type_nr).name
             )
         };
-        // C35/C36/C37: on pass 1, just register the definition name so
-        // type resolution works.  Don't copy code or variables (they're
-        // placeholders on pass 1).  On pass 2, create or update the full
-        // definition with compiled code from the template.
+        // Return existing instantiation if already created.
         let existing = self.data.def_nr(&mangled);
-        if self.first_pass {
-            if existing != u32::MAX {
-                return existing;
-            }
-            // C37: if the mangled name is the same as the template (type_nr was
-            // u32::MAX on pass 1), skip registration — pass 2 will use the
-            // correct mangled name once types are fully registered.
-            let generic_name = format!("n_{name}");
-            if mangled == generic_name {
-                return u32::MAX;
-            }
-            // Pass 1: register a minimal definition for the mangled name.
-            let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
-            let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
-            return d_nr;
+        if existing != u32::MAX {
+            return existing;
         }
-        // Pass 2: always (re)build the definition from the compiled template.
         // Clone the template data before mutating self.data.
         let tmpl_code = self.data.definitions[g_nr as usize].code.clone();
         let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
@@ -875,34 +831,16 @@ impl Parser {
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
         let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
         let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
-        // Pass 2: use existing definition from pass 1 or create new.
-        #[allow(clippy::if_not_else)]
-        let d_nr = if existing != u32::MAX {
-            existing
-        } else {
-            self.data.add_def(&mangled, &tmpl_pos, DefType::Function)
-        };
-        if existing == u32::MAX {
-            for a in &tmpl_attrs {
-                let a_nr =
-                    self.data
-                        .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
-                self.data.set_attr_value(d_nr, a_nr, a.default.clone());
-            }
+        // Register the new definition.
+        let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
+        for a in &tmpl_attrs {
+            let a_nr = self
+                .data
+                .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
+            self.data.set_attr_value(d_nr, a_nr, a.default.clone());
         }
-        // C35/C36/C37: fix OpGetVector element sizes for struct types.
-        // substitute_type_in_value uses type_element_size which returns 12 for
-        // all reference types, but struct vectors store fields inline at the
-        // struct's database record size.
-        let new_code = self.fix_vector_element_sizes(new_code, &concrete);
         self.data.definitions[d_nr as usize].code = new_code;
-        if existing == u32::MAX {
-            self.data.set_returned(d_nr, new_returned);
-        } else {
-            // C35/C36/C37: update returned type directly (set_returned asserts
-            // on double-set; existing definition already has the pass-1 type).
-            self.data.definitions[d_nr as usize].returned = new_returned;
-        }
+        self.data.set_returned(d_nr, new_returned);
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);
@@ -1140,84 +1078,6 @@ impl Parser {
                 Box::new(Self::substitute_type_in_value(
                     *extra, tv_nr, concrete, data,
                 )),
-            ),
-            other => other,
-        }
-    }
-
-    /// C35/C36/C37: walk the code tree and fix `OpGetVector` element sizes for
-    /// concrete struct types.  The I9-vec substitution uses 12 (`DbRef`) for all
-    /// reference types, but struct vectors store fields inline at the database
-    /// record size.
-    fn fix_vector_element_sizes(&self, val: Value, concrete: &Type) -> Value {
-        match val {
-            Value::Call(d, args) => {
-                let fixed_args: Vec<Value> = args
-                    .into_iter()
-                    .map(|a| self.fix_vector_element_sizes(a, concrete))
-                    .collect();
-                // Fix OpGetVector(vec, elm_size=12, index) when concrete is a struct
-                if self.data.def(d).name == "OpGetVector"
-                    && fixed_args.len() == 3
-                    && let Value::Int(12) = &fixed_args[1]
-                    && let Type::Reference(d_nr, _) = concrete
-                    && *d_nr != u32::MAX
-                {
-                    let known = self.data.def(*d_nr).known_type;
-                    if known != u16::MAX {
-                        let db_size = i32::from(self.database.size(known));
-                        if db_size > 0 && db_size != 12 {
-                            let mut fixed = fixed_args;
-                            fixed[1] = Value::Int(db_size);
-                            return Value::Call(d, fixed);
-                        }
-                    }
-                }
-                Value::Call(d, fixed_args)
-            }
-            Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
-                operators: bl
-                    .operators
-                    .into_iter()
-                    .map(|v| self.fix_vector_element_sizes(v, concrete))
-                    .collect(),
-                result: bl.result,
-                name: bl.name,
-                scope: bl.scope,
-                var_size: bl.var_size,
-            })),
-            Value::Set(v, inner) => {
-                Value::Set(v, Box::new(self.fix_vector_element_sizes(*inner, concrete)))
-            }
-            Value::If(test, t, f) => Value::If(
-                Box::new(self.fix_vector_element_sizes(*test, concrete)),
-                Box::new(self.fix_vector_element_sizes(*t, concrete)),
-                Box::new(self.fix_vector_element_sizes(*f, concrete)),
-            ),
-            Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
-                operators: bl
-                    .operators
-                    .into_iter()
-                    .map(|v| self.fix_vector_element_sizes(v, concrete))
-                    .collect(),
-                result: bl.result,
-                name: bl.name,
-                scope: bl.scope,
-                var_size: bl.var_size,
-            })),
-            Value::Return(v) => {
-                Value::Return(Box::new(self.fix_vector_element_sizes(*v, concrete)))
-            }
-            Value::Insert(ops) => Value::Insert(
-                ops.into_iter()
-                    .map(|v| self.fix_vector_element_sizes(v, concrete))
-                    .collect(),
-            ),
-            Value::Iter(v, create, next, extra) => Value::Iter(
-                v,
-                Box::new(self.fix_vector_element_sizes(*create, concrete)),
-                Box::new(self.fix_vector_element_sizes(*next, concrete)),
-                Box::new(self.fix_vector_element_sizes(*extra, concrete)),
             ),
             other => other,
         }
@@ -1651,27 +1511,12 @@ impl Parser {
         // P5.3: generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {
-            // I8.5.diag: detect concrete-left/generic-right and suggest workaround.
-            let concrete_left_generic_right = types.len() > 1
-                && self.generic_type_name(&types[0]).is_none()
-                && self.generic_type_name(&types[1]).is_some();
-            if concrete_left_generic_right {
-                specific!(
-                    self.lexer,
-                    &self.lexer.peek(),
-                    Level::Error,
-                    "operator '{op}': concrete left-side operand with generic right-side \
-                     {tv_name} is not yet supported — write 't {op} value' instead of \
-                     'value {op} t', or use a method call",
-                );
-            } else {
-                specific!(
-                    self.lexer,
-                    &self.lexer.peek(),
-                    Level::Error,
-                    "generic type {tv_name}: operator '{op}' requires a concrete type",
-                );
-            }
+            specific!(
+                self.lexer,
+                &self.lexer.peek(),
+                Level::Error,
+                "generic type {tv_name}: operator '{op}' requires a concrete type",
+            );
         } else if types.len() > 1 {
             specific!(
                 self.lexer,

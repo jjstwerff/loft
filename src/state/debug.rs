@@ -608,7 +608,6 @@ impl State {
     ///   currently executing (`u32::MAX` if unknown) and
     ///   `runtime_stack_pos − compile_stack_pos` at the current function entry.
     /// - `config` — logging configuration.
-    #[allow(clippy::too_many_lines)]
     pub(super) fn log_step(
         &mut self,
         log: &mut dyn Write,
@@ -700,16 +699,6 @@ impl State {
         for a_nr in (0..def.attributes.len()).rev() {
             let a = &def.attributes[a_nr];
             if a.mutable {
-                // C30: OpPutFnRef/OpVarFnRef _fnref attribute is typed as text but
-                // the stack holds a 16-byte fn-ref (d_nr + closure DbRef).  Reading
-                // it as Str dereferences a garbage pointer → SIGSEGV.
-                if (def.name == "OpPutFnRef" || def.name == "OpVarFnRef")
-                    && matches!(a.typedef, Type::Text(_))
-                {
-                    self.stack_pos -= 16;
-                    attr.insert(a_nr, format!("{}: fn-ref[{}]", a.name, self.stack_pos));
-                    continue;
-                }
                 let saved = self.stack_pos;
                 let v = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.dump_stack(&a.typedef, u32::MAX, data)

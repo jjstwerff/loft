@@ -513,9 +513,12 @@ impl ShowDb<'_> {
                     }
                 }
                 Parts::Base => {
-                    // C31: fn_ref and other base types — display as hex dump.
-                    let size = u32::from(self.stores.types[self.known_type as usize].size) * 8;
-                    write!(s, "<base:{size}B>").unwrap();
+                    panic!(
+                        "Not matching parts:{:?} type:{} name:{}",
+                        self.stores.types[self.known_type as usize].parts,
+                        self.known_type,
+                        self.stores.types[self.known_type as usize].name
+                    )
                 }
             }
         } else {

@@ -31,6 +31,7 @@ impl Output<'_> {
             Value::Float(v) => write!(w, "{v}_f64")?,
             Value::Single(v) => write!(w, "{v}_f32")?,
             Value::Null => write!(w, "()")?,
+            Value::Line(_) => {}
             Value::Break(n) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break")?;
@@ -148,11 +149,6 @@ impl Output<'_> {
                         write!(w, ", ")?;
                     }
                     self.output_code_inner(w, e)?;
-                    // Text literals in tuples need .to_string() since tuple
-                    // elements are String, not &str.
-                    if matches!(e, Value::Text(_)) {
-                        write!(w, ".to_string()")?;
-                    }
                 }
                 write!(w, ")")?;
             }
@@ -184,20 +180,10 @@ impl Output<'_> {
                     self.output_code_inner(w, inner)?;
                 }
             }
-            // C31/A5.6: FnRef emits (d_nr, closure_dbref) tuple.
-            Value::FnRef(d_nr, clos_var, _) => {
-                if *clos_var == u16::MAX {
-                    // Non-capturing lambda — null closure.
-                    write!(
-                        w,
-                        "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
-                } else {
-                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(*clos_var));
-                    write!(w, "({d_nr}_u32, var_{clos_name})")?;
-                }
-            }
-            Value::FreeFnRefClosure(_) | Value::FnRefWord(_, _) | Value::Line(_) => {}
+            // A5.6-1: FnRef carries the d_nr (function index) for the fn-ref slot.
+            // In native code the fn-ref variable holds a u32 d_nr; the closure is stored
+            // separately. Emit only the d_nr constant; closure injection is done at the call site.
+            Value::FnRef(d_nr, _, _) => write!(w, "{d_nr}_u32")?,
         }
         Ok(())
     }
@@ -283,22 +269,26 @@ impl Output<'_> {
             let expr = self.generate_expr_buf(arg)?;
             arg_exprs.push(expr);
         }
-        // C31/A5.6: fn-ref variable is (u32, DbRef).  Match on .0 (d_nr),
-        // pass .1 (closure DbRef) to candidates that have a __closure param.
-        write!(w, "match var_{var_name}.0 {{")?;
+        // Look up the closure work-var for this fn-ref variable (if any).
+        let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
+        // Generate a match dispatch on the fn-ref variable.
+        write!(w, "match var_{var_name} {{")?;
         for (d_nr, fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
             for expr in &arg_exprs {
                 write!(w, ", {expr}")?;
             }
             if *has_closure {
-                write!(w, ", var_{var_name}.1")?;
+                if let Some(clos_nr) = closure_var_nr {
+                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
+                    write!(w, ", var_{clos_name}")?;
+                }
             }
             write!(w, "),")?;
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}) }}"
         )?;
         Ok(())
     }
@@ -530,12 +520,6 @@ impl Output<'_> {
                     writeln!(w, "&mut var_{vname}")?;
                 } else {
                     let wrap_result = is_return_expr && is_text_result;
-                    // C31/A5.6: wrap Int fn-ref as (d_nr, null_DbRef) tuple
-                    // when the block result is Type::Function and the value is
-                    // a bare Int (non-capturing fn-ref).
-                    let wrap_fn_ref = is_return_expr
-                        && matches!(bl.result, Type::Function(_, _))
-                        && matches!(v, Value::Int(_));
                     let narrow_cast = if is_return_expr {
                         narrow_int_cast(&bl.result)
                     } else {
@@ -543,7 +527,7 @@ impl Output<'_> {
                     };
                     if wrap_result {
                         write!(w, "Str::new(")?;
-                    } else if wrap_fn_ref || narrow_cast.is_some() {
+                    } else if narrow_cast.is_some() {
                         write!(w, "(")?;
                     }
                     self.indent += 1;
@@ -551,11 +535,6 @@ impl Output<'_> {
                     self.indent -= 1;
                     if wrap_result {
                         write!(w, ")")?;
-                    } else if wrap_fn_ref {
-                        write!(
-                            w,
-                            " as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                        )?;
                     } else if let Some(cast) = narrow_cast {
                         write!(w, ") as {cast}")?;
                     }

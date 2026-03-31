@@ -929,64 +929,6 @@ functions from the codegen perspective.
 
 ---
 
-### I12.diag — Factory-method diagnostic: add workaround hint (C33 mitigation)
-
-**Caveat:** C33 — Interfaces: factory methods (`fn zero() -> Self`) not supported.
-**Current behaviour:** The I5 restriction already emits a clear compile error naming
-the method and reason.  The message does not tell the user what to do instead.
-**Mitigation:** Append a workaround hint to the existing diagnostic:
-
-```
-factory methods not yet supported: 'zero' returns Self without a 'self: Self'
-parameter — pass the identity value as an extra parameter to the generic function
-instead, e.g. fn sum<T: Addable>(v: vector<T>, zero: T) -> T
-```
-
-**File:** `src/parser/definitions.rs` — the `diagnostic!` at the end of the I5 block
-(search for `"factory methods not yet supported"`).
-**Effort:** XS
-**Target:** 0.8.3
-
----
-
-### I8.5.diag — Left-side concrete operand diagnostic (C34 mitigation)
-
-**Caveat:** C34 — Interfaces: left-side concrete operand (`concrete op T`) not
-supported in bounded generic bodies.
-**Current behaviour:** When `2 * t` is written where `t: T` (bounded generic), the
-operator resolver detects a generic type in the operand list and emits the generic
-P5.3 message: `"generic type T: operator '*' requires a concrete type"`.  This message
-does not explain that the operand ORDER is the problem, nor does it suggest a fix.
-**Mitigation:** Before emitting the P5.3 error, check whether the generic type is on
-the RIGHT side (index ≥ 1) while the LEFT side (index 0) is concrete.  If so, emit a
-more specific diagnostic:
-
-```
-operator '*': concrete left-side operand with generic right-side T is not yet
-supported — write 't * 2' instead of '2 * t', or use a method call (e.g.
-'t.scale(2)')
-```
-
-**File:** `src/parser/mod.rs` — the P5.3 error block (search for
-`"generic type {tv_name}: operator"`).  Add a check:
-```rust
-let generic_on_right = types.len() > 1
-    && self.generic_type_name(&types[0]).is_none()   // left is concrete
-    && self.generic_type_name(&types[1]).is_some();  // right is generic
-if generic_on_right {
-    specific!(..., "operator '{op}': concrete left-side operand with generic \
-        right-side {tv_name} is not yet supported — write 't {op} value' \
-        instead of 'value {op} t', or use a method call");
-} else {
-    specific!(..., "generic type {tv_name}: operator '{op}' requires a concrete type");
-}
-```
-
-**Effort:** XS
-**Target:** 0.8.3
-
----
-
 ## A — Architecture
 
 ### A1  Parallel workers: struct/reference return types *(completed 0.8.3)*
@@ -1026,27 +968,6 @@ companion to `assert()` that is also elided in release mode.
 When `stores.run_mode == Debug`, emit `warn` log entries for silent-null conditions:
 integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 *Tests:* a deliberate overflow under `--debug` produces a `WARN` entry at the correct file:line.
-
-**A2.4a — Integer NULL-origin logging** (sub-item of A2.4):
-The most common silent-NULL scenario: `x = 10 / 0` produces `i32::MIN` which
-propagates through `x + 5`, `x * 2` etc. without any indication of origin.
-Under `--debug`, log the source location when NULL is produced:
-
-```
-[debug] integer null from division by zero at myfile.loft:42
-[debug] integer null from modulo by zero at myfile.loft:55
-```
-
-Implementation: ~20 lines across `ops.rs` (add `debug_mode: bool` param to
-`op_div_int`/`op_rem_int`) and `fill.rs` (pass `state.debug_mode` and
-`state.code_pos` to the ops).  Use `State.code_pos` + line-number table to
-resolve `file:line`.  Zero cost when `debug_mode = false` (single branch).
-
-Existing infrastructure already in place:
-- `ops.rs` already checks `v2 == 0` in `op_div_int`/`op_rem_int` — just add log call
-- `checked_int!` macro already panics on overflow in debug builds — extend to log
-- `sentinel_int!` macro already detects null-sentinel collisions — extend to log
-- Format output already renders NULL as `"null"` — provides visibility at print time
 
 **Effort:** Medium (logger.rs, native.rs, fill.rs; see LOGGER.md for full design)
 **Target:** 0.9.0
@@ -1316,47 +1237,316 @@ implemented.
 
 ---
 
-**A5.6 — Full closure semantics** *(completed 0.8.3)*:
-Cross-scope text-capturing closures now work: `make_greeter("Hello")("world")` →
-`"Hello world"`.  All A5.6 sub-items (a, b.1, b.2, c, d, e, f, 1–5, text) are done.
-C30 (lambda re-definition) is also fixed: closure work-var is reused on reassignment;
-`FreeFnRefClosure` emitted before each `SetVar` on a `Function`-typed variable.
-One edge case remains:
-
-**C31 — Closures in vectors** (parse-time assertion):
-`[f]` where `f: Type::Function` fails with "Unknown type" because
-`type_def_nr(Type::Function)` returns `u32::MAX` — Function is a structural
-type with no database definition.  `element_store_size` already returns 16
-(fixed).
-
-**Fix:** Register a synthetic "fn_ref" database type (16 bytes, `Parts::Base`)
-and decompose the 16-byte fn-ref into 4×i32 reads/writes using existing opcodes.
-
-1. **database/types.rs**: add `fn_ref()` method on `Stores` (lazy, 16-byte Base)
-2. **typedef.rs `fill_all`**: create "fn_ref" Definition with `known_type`
-3. **data.rs**: `type_def_nr` / `type_elm`: `Type::Function → source_nr(0, "fn_ref")`
-4. **data.rs**: add `Value::FnRefWord(var_nr, byte_offset)` — reads one 4-byte
-   word from a 16-byte fn-ref variable.  Codegen emits `OpVarInt(var_pos - offset)`.
-   No new opcode.
-5. **vectors.rs `new_record`**: Function elements → 4× `OpSetInt(elm, off, FnRefWord)`
-6. **fields.rs `parse_vector_index`**: Function elements → `OpGetVector` for
-   element DbRef, then 4× `OpGetInt(elm_ref, off)` to reconstruct 16B on stack.
-
-**Guards:** `debug_assert!` in FnRefWord codegen (offset ∈ {0,4,8,12}).
-**Files:** `data.rs`, `database/types.rs`, `typedef.rs`, `vectors.rs`,
-`fields.rs`, `codegen.rs`
-**Test:** `closure_in_vector` (`#[ignore]`)
-**Effort:** Medium
-**Target:** 0.8.3
-**Target:** 0.8.3
+**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** *(completed 0.8.3)*:
+After A5.6b.1, A5.6b.2, and A5.6c are implemented, the last open item for
+`closure_capture_text` is the **cross-scope** pattern: a capturing lambda returned
+from a function and then called from outside.  Two distinct problems remain:
 
 ---
 
-3. **Concurrent sharing** — two parallel workers calling the same closure need
-   per-call copy or locking.  Deferred to 1.1+.
+#### The opcode problem: `Type::Function` is 4 bytes — no room for closure DbRef
+
+`size(Type::Function, _)` returns 4 (same arm as `Type::Integer` in
+`src/variables/mod.rs:995`).  `fn_call_ref` in `state/mod.rs:221` reads exactly 4
+bytes: `*get_var::<i32>(fn_var)` = the d_nr.
+
+A closure DbRef is 12 bytes (store_nr + rec + pos — same layout as every other
+`DbRef`).  When `make_greeter` returns the inner lambda as its return value, only
+the 4-byte d_nr lands on the caller's stack; the 12-byte DbRef for the closure
+record has nowhere to go and is lost.  The closure record itself stays alive in the
+store (it was heap-allocated via `OpDatabase`), but no pointer to it survives the
+return — so the lambda body's `__closure` parameter can never be populated.
+
+**Fix — 16-byte fn-ref slot:**
+
+```
+offset 0..4:  d_nr (i32)        — function definition index
+offset 4..8:  store_nr (i32) ─┐
+offset 8..12: rec (i32)        ├─ closure DbRef (12 bytes; all-zero = no closure)
+offset 12..16: pos (i32)      ─┘
+```
+
+`size(Type::Function, _)` → 16 (move `Type::Function` out of the `4`-byte arm in
+`src/variables/mod.rs:995`; add a new arm `Type::Function(_, _) => 4 + size_of::<DbRef>() as u16`).
+
+**Emitting the fn-ref value (vectors.rs `emit_lambda_code`):**
+
+Non-capturing lambdas: `*code = Value::Int(d_nr as i32)` unchanged — `OpPutInt`
+writes d_nr to bytes 0..4; bytes 4..16 stay zero (zeroed by `OpReserveFrame`).
+
+Capturing lambdas: emit a `v_block` that:
+1. Runs the existing `alloc_steps` to allocate and fill the closure record into work
+   var `w` (type `Type::Reference`).
+2. Emits `v_set(fn_ref_var, Value::Int(d_nr as i32))` — writes d_nr to bytes 0..4
+   of the new 16-byte work var `fn_ref_var` (type `Type::Function`).
+3. Emits `cl("OpStoreClosure", [Var(fn_ref_var), Var(w)])` — a new opcode that
+   copies the 12-byte DbRef from `w`'s stack slot into `fn_ref_var`'s bytes 4..16.
+4. Yields `Value::Var(fn_ref_var)`.
+
+Then **drop** `self.last_closure_alloc` — the closure is now embedded in the fn-ref
+value and no longer needs to be injected separately at call sites.
+
+**New opcode: `OpStoreClosure(fn_ref_var: u16, closure_var: u16)`** (fill.rs):
+Reads the absolute stack position of `fn_ref_var` and `closure_var`; copies 12 bytes
+from `closure_var`'s slot to `fn_ref_var`'s slot at byte offset 4.  No stack push/pop.
+
+**Calling through the 16-byte fn-ref (state/mod.rs `fn_call_ref`):**
+
+```rust
+pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
+    let d_nr = *self.get_var::<i32>(fn_var) as usize;
+    // Read closure DbRef from bytes 4..16 of the 16-byte fn-ref slot.
+    // The slot start is at (stack_pos - fn_var); byte 4 is one i32 further.
+    let store_nr = *self.get_var::<i32>(fn_var - 4);   // fn_var_abs + 4
+    let has_closure = store_nr != -1;  // -1 is the null sentinel for store_nr
+    let total = arg_size + if has_closure { size_of::<DbRef>() as u16 } else { 0 };
+    if has_closure {
+        let rec = *self.get_var::<i32>(fn_var - 8);
+        let pos = *self.get_var::<i32>(fn_var - 12);
+        // Push DbRef (12 bytes) onto the stack as __closure argument
+        self.push_stack(store_nr);
+        self.push_stack(rec);
+        self.push_stack(pos);
+    }
+    let code_pos = self.fn_positions[d_nr] as i32;
+    self.fn_call(d_nr as u32, total, code_pos);
+}
+```
+
+Note: the fn-ref variable's absolute position is `stack_pos - fn_var`.  Because the
+stack grows upward, `fn_var_abs + 4` is referenced as `stack_pos - (fn_var - 4)`.
+Verify the offset arithmetic matches `get_var`'s addressing in the implementation.
+
+**Call-site codegen (parser/control.rs `try_fn_ref_call`, zero-param path):**
+
+Remove the `last_closure_alloc.take()` and `closure_vars.get(&v_nr)` injection.
+The closure is now pushed by `fn_call_ref` at runtime from the embedded DbRef —
+no parser-level injection needed.  `generate_call_ref` is unchanged (already
+simplified by A5.6b.2): all args in `converted` are visible params and work bufs.
+
+**`generate_var` for `Type::Function` (codegen.rs line 1210):**
+
+Change from `OpVarInt` (4 bytes) to a new `OpVarFnRef` (16 bytes).  This is the
+read side of the 16-byte push: push all 16 bytes of the fn-ref slot onto the stack
+so fn-ref values can be passed, returned, and assigned.
+
+`OpVarFnRef` implementation (fill.rs): read `pos: u16` from bytecode; push 16 bytes
+starting at `stack_pos - pos` onto the stack (similar to `OpVarRef` which pushes 12
+bytes, but 4 bytes larger).
+
+**`OpPutInt` for `Type::Function` (codegen.rs lines 1521, 1210):**
+
+Assignment `v_set(fn_ref_var, Value::Int(d_nr))` still uses `OpPutInt` — it writes
+4 bytes to the variable's slot at offset 0 (the d_nr).  Bytes 4..16 are untouched
+(already zeroed by `OpReserveFrame` or set by a preceding `OpStoreClosure`).
+So `OpPutInt` at call sites for fn-ref assignment is **correct as-is** when the
+RHS is `Value::Int(d_nr)`.
+
+For the case where a fn-ref is copied variable-to-variable (`f = g` where both are
+`Type::Function`), use `OpVarFnRef` to push 16 bytes then `OpPutFnRef` (new) to
+store them — OR reuse `OpPutRef`-style logic for 16 bytes.
 
 ---
 
+#### The parser problem: `expr(args)` chained calls not handled
+
+`parse_part` (operators.rs:277) loops on `.` and `[` only.  After
+`make_greeter("Hello")` returns `Type::Function`, the `("world")` token is not
+consumed as a chained call — it is parsed as a separate parenthesised expression.
+
+**Fix (operators.rs `parse_part`):**
+
+Extend the loop to handle `(` when `t` is `Type::Function`:
+
+```rust
+while self.lexer.peek_token(".")
+    || self.lexer.peek_token("[")
+    || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+{
+    if self.lexer.has_token("(") {
+        if let Type::Function(param_types, ret_type) = t.clone() {
+            // Store fn-ref expression in a work var so CallRef can name it.
+            let fn_work = self.create_unique("__fnref_tmp", &t);
+            if !self.first_pass {
+                let orig = std::mem::replace(code, Value::Var(fn_work));
+                // emit: fn_work = <fn_ref_expression>
+                // (parse_code will insert the assignment via inline-ref logic)
+                // Actually: wrap in a block: { fn_work = orig; fn_work }
+                // ... see implementation note below
+            }
+            t = self.call_fn_work_var(fn_work, param_types, *ret_type);
+        }
+    } else { /* existing . and [ handlers */ }
+}
+```
+
+`call_fn_work_var(work_var, param_types, ret_type)`: parse argument list, emit
+`Value::CallRef(work_var, args)`, return `ret_type`.  Because the closure DbRef is
+embedded in the 16-byte fn-ref slot of `work_var`, `fn_call_ref` pushes it at
+runtime — no explicit closure injection needed.
+
+**Implementation note:** Storing `orig` into `fn_work` before the call requires
+either:
+(a) Wrapping in a `v_block([v_set(fn_work, orig), Value::CallRef(fn_work, args)], ret_type)`, or
+(b) Using the inline-ref temp pattern from `parse_part`'s existing chained-ref logic
+    (lines 342–361) — mark `fn_work` as an inline-ref temp; `parse_code` inserts the
+    null-init.
+
+Option (a) is simpler for the first implementation.
+
+---
+
+#### Remaining deferred sub-items (post-0.8.3)
+
+After the 16-byte fn-ref lands, these edge cases remain deferred:
+
+1. **Lambda re-definition:** if `f = fn(x) { ... }` is followed by `f = fn(x) { ... }`,
+   the old closure record (bytes 4..16 of the old fn-ref) must be freed before overwriting.
+   `get_free_vars` must emit `OpFreeRef` reading from the fn-ref slot before the
+   `OpPutInt`/`OpStoreClosure` of the new lambda.
+
+2. **Lambdas in collections / struct fields:** `closure_vars` is irrelevant with 16-byte
+   fn-refs; the closure DbRef travels with the fn-ref value.  But for collections,
+   `OpVarFnRef` / store operations need to work correctly for the 16-byte size.
+
+3. **Concurrent sharing:** two parallel workers calling the same closure simultaneously
+   share the closure record.  Requires per-call copy or locking — deferred to the
+   parallel safety audit.
+
+---
+
+**Implementation steps (independently testable):**
+
+**A5.6-1 — Widen `Type::Function` to 16 bytes**
+
+- `src/variables/mod.rs`: change the `Type::Function(_, _)` arm in `size()` from `4` to
+  `4 + size_of::<DbRef>() as u16` (= 16).
+- `src/state/codegen.rs` (`generate_var`): change the `Type::Function` arm from emitting
+  `OpVarInt` (4 bytes) to a new `OpVarFnRef` (16 bytes).
+- `src/fill.rs`: add `op_var_fn_ref` — reads `pos: u16` from bytecode; pushes 16 bytes
+  starting at `stack_pos - pos` onto the stack (same as `op_var_ref` but 4 bytes larger).
+
+**Pass:** all existing non-capturing lambda tests pass; fn-ref variable occupies 16 bytes.
+
+---
+
+**A5.6-2 — `OpStoreClosure` + embed closure DbRef in fn-ref**
+
+- `src/fill.rs`: add `op_store_closure` — reads `fn_ref_pos: u16` and `closure_pos: u16`
+  from bytecode; copies 12 bytes from `stack_pos - closure_pos` to
+  `(stack_pos - fn_ref_pos) + 4`. No stack push/pop.
+- `src/parser/vectors.rs` (`emit_lambda_code`): for capturing lambdas, after the existing
+  `alloc_steps` (which produce the closure record in work var `w`), emit:
+  1. `v_set(fn_ref_var, Value::Int(d_nr as i32))` — writes d_nr into bytes 0..4.
+  2. `cl("OpStoreClosure", &[Value::Var(fn_ref_var), Value::Var(w)])` — embeds the
+     12-byte DbRef from `w` into fn-ref bytes 4..16.
+  Store result in `fn_ref_var` (a new Zone-1 work variable of type `Type::Function`).
+  **Drop** `self.last_closure_alloc` — the closure is now embedded in the fn-ref value and
+  no longer injected at call sites.
+
+**Pass:** a capturing lambda assigned to a local variable carries its closure DbRef in the
+fn-ref slot; `LOFT_LOG=ref_debug` shows the DbRef bytes 4..16 non-zero.
+
+---
+
+**A5.6-3 — `fn_call_ref` reads closure from fn-ref bytes 4..16**
+
+- `src/state/mod.rs` (`fn_call_ref`): after reading `d_nr` from `*get_var::<i32>(fn_var)`,
+  read `store_nr` from `*get_var::<i32>(fn_var - 4)`.  If `store_nr != -1` (non-null),
+  read `rec` and `pos` and push the 12-byte DbRef onto the stack as the `__closure`
+  argument.  Adjust `total_arg_size` accordingly.
+  ```rust
+  let store_nr = *self.get_var::<i32>(fn_var - 4);
+  let has_closure = store_nr != -1;
+  if has_closure {
+      let rec = *self.get_var::<i32>(fn_var - 8);
+      let pos = *self.get_var::<i32>(fn_var - 12);
+      self.push_stack(store_nr);
+      self.push_stack(rec);
+      self.push_stack(pos);
+  }
+  ```
+  (Offset arithmetic: fn-ref occupies bytes `[fn_var_abs .. fn_var_abs+16]`; d_nr is at
+  offset 0, store_nr at +4, rec at +8, pos at +12.  `get_var::<i32>(fn_var)` reads from
+  `stack_pos - fn_var` = `fn_var_abs`; `fn_var - 4` reads `fn_var_abs + 4`, etc.)
+- `src/parser/control.rs` (`try_fn_ref_call`, both paths): remove
+  `last_closure_alloc.take()` injection and `closure_vars` lookup — the closure is now
+  pushed by `fn_call_ref` at runtime from the embedded DbRef.
+
+**Pass:** `closure_capture_text_return` and `closure_capture_text_integer_return` pass
+without the closure being injected at the call site.
+
+---
+
+**A5.6-4 — `parse_part`: chained `(...)` call on `Type::Function`**
+
+- `src/parser/operators.rs` (`parse_part`): extend the postfix loop:
+  ```rust
+  while self.lexer.peek_token(".")
+      || self.lexer.peek_token("[")
+      || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+  {
+      if self.lexer.has_token("(") {
+          if let Type::Function(param_types, ret_type) = t.clone() {
+              // Store fn-ref in work var so CallRef can name it.
+              let fn_work = self.create_unique("__fnref_tmp", &t);
+              if !self.first_pass {
+                  let orig = std::mem::replace(code, Value::Var(fn_work));
+                  *code = Value::Block(Box::new(Block {
+                      ops: vec![Value::Set(fn_work, Box::new(orig))],
+                      result: Box::new(Value::Var(fn_work)),
+                      ..Default::default()
+                  }));
+              }
+              t = self.call_fn_work_var(fn_work, param_types, *ret_type);
+          }
+      } else { /* existing . and [ handlers */ }
+  }
+  ```
+  `call_fn_work_var`: parse argument list inside `(...)`, emit
+  `Value::CallRef(fn_work, args)`, return `ret_type`.
+
+**Pass:** `make_greeter("Hello")("world")` parses and produces "Hello world".
+
+---
+
+**A5.6-5 — Un-ignore `closure_capture_text`; full test pass**
+
+- `tests/expressions.rs`: remove `#[ignore]` from `closure_capture_text`.
+- `tests/wrap.rs` (WASM_SKIP): keep `19-threading.loft` skipped (that is W1.18, not A5.6).
+
+**Pass:** `cargo test --test expressions closure_capture_text` succeeds; full `make test`
+green.
+
+---
+
+**Files changed:**
+
+| File | Change |
+|------|--------|
+| `src/variables/mod.rs` | `size(Type::Function)` → 16 |
+| `src/fill.rs` | Add `op_store_closure`, `op_var_fn_ref` |
+| `src/state/mod.rs` | `fn_call_ref`: read closure from bytes 4..16, push if present |
+| `src/state/codegen.rs` | `generate_var`: `OpVarFnRef` for `Type::Function` |
+| `src/parser/vectors.rs` | `emit_lambda_code`: emit `OpStoreClosure`; drop `last_closure_alloc` |
+| `src/parser/control.rs` | Remove closure injection from `try_fn_ref_call` (both paths) |
+| `src/parser/operators.rs` | `parse_part`: handle chained `(...)` on `Type::Function` |
+| `tests/expressions.rs` | Remove `#[ignore]` from `closure_capture_text` |
+
+**Guards and debugging:**
+- `fn_call_ref`: `debug_assert!(d_nr < self.fn_positions.len())` before indexing.
+- `OpStoreClosure`: `debug_assert!` that the fn_ref_var slot has 16 bytes allocated.
+- Strip internal text deps from the public fn-type: in `emit_lambda_code` (vectors.rs:667),
+  replace `Text(deps)` with `Text(vec![])` in the return type of the constructed
+  `Type::Function`.  Internal dependency tracking is for the lambda body, not the interface.
+- Add `LOFT_LOG=closure` mode that prints fn-ref slot contents (d_nr + DbRef) at call sites
+  in `fn_call_ref` — catches misaligned reads immediately.
+
+**Effort:** High (8 files, 2 new opcodes, 5 independently testable steps)
+**Depends on:** A5.6b.1 ✓, A5.6b.2 ✓, A5.6c ✓
+**Target:** 0.8.3
+
+---
 
 ### A7  Native extension libraries *(completed 0.8.3)*
 **Sources:** [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2
@@ -1826,7 +2016,7 @@ silent failure, or missing bound in the interpreter and database engine.  All ta
 1. In `execute_at` and `execute_at_ref` in `src/state/mod.rs`, set `self.data_ptr = data as *const Data;` (or equivalent) immediately before the dispatch call, mirroring what the single-threaded `execute` path does.
 2. Regression test: call `stack_trace()` inside a `par(...)` worker body; assert the returned vec is non-empty and contains the worker function name.
 **Effort:** Small
-**Target:** 0.8.3
+**Target:** 0.9.0
 
 ---
 
@@ -2455,141 +2645,6 @@ at the end prevents cleanup, compounding the issue.
 
 **Tests:** Remove `#[ignore]` from `load_one_registers_native_functions` once fixed.
 **Effort:** Small
-**Target:** 0.8.3
-
----
-
-### N-fnref  Native: fn-ref arg padding for map/filter built-in calls
-**Severity:** Medium — blocks `tests/scripts/33-lambdas-fn-refs.loft` in native mode
-**Description:** The A5.6-1 fn-ref padding (`OpNullRefSentinel` to pad 4→16 bytes)
-at `codegen.rs:1010-1013` only fires inside `if a.mutable`.  When a fn-ref is
-passed as an immutable parameter (e.g. `map(v, mfr_double)` where `mfr_double`
-is a non-capturing function reference), the padding is skipped.  The `Value::Int(d_nr)`
-produces 4 bytes but `size(Type::Function, Argument) = 16` → `debug_assert_eq` fires.
-
-**Fix:** Move the A5.6-1 padding to AFTER the mutable/immutable parameter generation,
-where it applies to ALL fn-ref parameters regardless of mutability:
-```rust
-// After both mutable and immutable parameter generation:
-if matches!(a.typedef, Type::Function(_, _)) && stack.position - stack_before < 16 {
-    stack.add_op("OpNullRefSentinel", self);
-}
-```
-Alternatively, duplicate the padding check in the immutable parameter path
-(`add_const` or the general `else` branch that handles non-mutable args).
-
-**Guard:** The existing `debug_assert_eq` at line 1020 catches mismatches.
-**Test:** `tests/scripts/33-lambdas-fn-refs.loft` in `native_scripts`.
-**Effort:** Small
-**Target:** 0.8.3
-
----
-
-### C35/C36/C37  Generic instantiation with struct types
-**Severity:** High — blocks generic functions over user-defined struct types
-**Description:** Three related bugs caused by the same root cause in
-`Function::copy()` (`src/variables/mod.rs:204-227`):
-
-- **C35:** text return from bounded generic crashes with `copy_nonoverlapping`
-- **C36:** for-loop in bounded generic panics "variable never assigned a slot"
-- **C37:** two struct-type instantiations of same generic → slot conflict
-
-**Root cause:** `Function::copy()` clones the `names: HashMap<String, u16>` map
-from the template function.  The `names` map records `variable_name → index` in
-the `variables` vector.  After cloning, the indices are correct (same vector
-layout).  But when `substitute_type()` changes variable types (replacing the
-generic type variable with the concrete struct type), variables may change SIZE
-(primitives = 4-8 bytes, structs = 12 bytes DbRef).  Slot assignment then fails
-because the size assumptions from the template don't match the instantiation.
-
-For C37 specifically: two instantiations of the same generic create two separate
-`Function` objects with independent `variables` vectors.  If scope numbers
-overlap between instantiations, `assign_slots` sees variables from both
-instantiations at the same scope → conflict.
-
-**Fix:** After `substitute_type()` in `try_generic_instantiation()`, rebuild
-the scope and slot assignment metadata:
-
-```rust
-// In parser/mod.rs, after substitute_type (line 873):
-vars.substitute_type(tv_nr, &concrete);
-// Rebuild slot-related state that depends on variable sizes/types.
-// The names map is correct (indices match the cloned variables vector).
-// But scope numbers may need isolation.
-```
-
-The specific fix for each manifestation:
-
-1. **C36/C37 (slot assignment):** After substitution, call `assign_slots()` on
-   the instantiated function with properly isolated scope numbers.  Each generic
-   instantiation must use unique scope numbers that don't collide with other
-   instantiations or the caller.
-
-2. **C35 (text return crash):** Follows from fixing C36/C37 — once variables
-   have correct slots, the text initialization writes to the correct address.
-
-**Guard:** Add `debug_assert!` in `Function::copy()` that verifies `names`
-entries match `variables` indices:
-```rust
-#[cfg(debug_assertions)]
-for (name, &idx) in &f.names {
-    assert!(
-        (idx as usize) < f.variables.len() && f.variables[idx as usize].name == *name,
-        "Function::copy: names[{name}] = {idx} doesn't match variables"
-    );
-}
-```
-
-**Debugging:** Add `LOFT_LOG=generic` trace that prints:
-- Template function name, variable count, scope count
-- Concrete type being substituted
-- Variable sizes before/after substitution
-- Scope numbers assigned to the instantiation
-
-**Files:** `src/variables/mod.rs` (Function::copy), `src/parser/mod.rs`
-(try_generic_instantiation), `src/variables/slots.rs` (scope isolation)
-**Tests:** C35/C36/C37 reproducers in CAVEATS.md
-**Effort:** Medium (single root cause, but scope isolation needs care)
-**Target:** 0.8.3
-
----
-
-### S-borrow  Deep-copy struct returns from generics and vectors
-**Severity:** Medium — debug-only assertion; release builds work correctly
-**Description:** When a generic function returns a struct-typed value obtained
-from a vector element (e.g. `best = items[i]; return best`), the return value
-is a **borrowed** DbRef pointing inside the vector's store.  When the caller's
-scope cleanup frees the vector, the returned DbRef becomes dangling.  In debug
-builds, `valid()` catches this as "Use after free".  Release builds work because
-the store buffer hasn't been reused yet.
-
-This is the same class of issue as T1.8c (tuple struct-ref deep copy) and
-affects:
-- C35/C36/C37: generic functions returning struct types from vector elements
-- Any function returning a struct reference obtained via `OpGetVector`
-
-**Root cause:** The callee's return type has `Type::Reference(d, dep)` with
-non-empty dep (borrowed from parameter).  The callee's scope analysis skips
-freeing it.  But the caller receives `Type::Reference(d, [])` with NO dep
-info → treats it as owned → frees it → double-free with the source vector.
-
-**Fix (in `scopes.rs free_vars`):** When `is_return == true` and the return
-variable has `Type::Reference(d, dep)` with `!dep.is_empty()`:
-1. Create a work variable `__ret_copy` of type `Type::Reference(d, [])` (owned)
-2. Emit `Set(__ret_copy, Null)` → allocates an independent store
-3. Emit `OpCopyRecord(ret_var, __ret_copy, tp)` → deep-copies the struct
-4. Return `Value::Return(Value::Var(__ret_copy))` instead of `Value::Var(ret_var)`
-
-The returned copy is OWNED by the caller.  The original borrowed ref stays
-in `ret_var` and is not freed (dep is non-empty).  Mirrors T1.8c tuple fix.
-
-**Guard:** `debug_assert!` in `copy_result` that the returned DbRef is not
-in the same store as any input parameter.  `LOFT_LOG=scope_debug` trace when
-a borrowed return is deep-copied.
-
-**Files:** `src/scopes.rs` (free_vars), `src/variables/mod.rs` (work variable)
-**Tests:** C35/C36/C37 tests (currently `#[ignore]` for debug assertion)
-**Effort:** Medium
 **Target:** 0.8.3
 
 ---
