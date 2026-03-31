@@ -383,6 +383,20 @@ impl State {
                 stack.add_op("OpFreeRef", self);
                 Type::Void
             }
+            Value::FnRefWord(var_nr, byte_off) => {
+                // C31: read one 4-byte word from a 16-byte fn-ref variable.
+                // OpVarInt reads from (stack_pos - pos).  The fn-ref occupies
+                // 16 bytes starting at var_abs.  Word at byte_off is at var_abs+byte_off.
+                // var_pos = stack.position - var_abs.  Adjusted = var_pos - byte_off.
+                debug_assert!(
+                    *byte_off <= 12 && *byte_off % 4 == 0,
+                    "FnRefWord: invalid byte_off={byte_off}"
+                );
+                let var_pos = stack.position - stack.function.stack(*var_nr);
+                stack.add_op("OpVarInt", self);
+                self.code_add(var_pos - *byte_off);
+                I32.clone()
+            }
         }
     }
 
@@ -1892,6 +1906,9 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         }
         Value::FreeFnRefClosure(v) => {
             eprint!("FreeFnRefClosure({})", vars.name(*v));
+        }
+        Value::FnRefWord(v, off) => {
+            eprint!("FnRefWord({}, +{off})", vars.name(*v));
         }
     }
 }

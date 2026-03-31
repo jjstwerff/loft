@@ -326,22 +326,14 @@ impl Parser {
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
         let known = self.data.def(elm_td).known_type;
-        // C31: Type::Function elements are 16 bytes, but type_elm maps to "integer"
-        // (known_type = 4 bytes).  Use element_store_size for the correct stride.
-        let elm_size = if matches!(etp, Type::Function(_, _)) {
-            self.element_store_size(etp)
-        } else {
-            i32::from(self.database.size(known))
-        };
+        let elm_size = i32::from(self.database.size(known));
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
                 let mut op = self.cl(
                     "OpGetVector",
                     &[code.clone(), Value::Int(elm_size), *next.clone()],
                 );
-                if !matches!(etp, Type::Function(_, _))
-                    && (self.database.is_base(known) || self.database.is_linked(known))
-                {
+                if self.database.is_base(known) || self.database.is_linked(known) {
                     op = self.get_val(etp, true, 0, op);
                 }
                 *code = Value::Iter(
@@ -366,12 +358,29 @@ impl Parser {
                 index_t.show(&self.data, &self.vars)
             );
         }
-        *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
-        // C31: Function elements are raw 16-byte values, not database records.
-        if !matches!(etp, Type::Function(_, _))
-            && (self.database.is_base(known) || self.database.is_linked(known))
-        {
-            *code = self.get_val(etp, true, 0, code.clone());
+        if matches!(etp, Type::Function(_, _)) {
+            // C31: read 16-byte fn-ref from vector element.  OpGetVector returns a
+            // DbRef to the element slot.  Read 4×4-byte words via OpGetInt to
+            // reconstruct the fn-ref on the stack.
+            let ref_tp = Type::Reference(elm_td, Vec::new());
+            let elm_ref = self.create_unique("__fn_elm_ref", &ref_tp);
+            self.vars.defined(elm_ref);
+            // C31: elm_ref borrows a position inside the vector store.
+            // Must not be freed at scope exit — freeing would destroy the vector.
+            self.vars.set_skip_free(elm_ref);
+            let get_vec = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
+            if !self.first_pass {
+                let mut ops = vec![crate::data::v_set(elm_ref, get_vec)];
+                for off in [0i32, 4, 8, 12] {
+                    ops.push(self.cl("OpGetInt", &[Value::Var(elm_ref), Value::Int(off)]));
+                }
+                *code = crate::data::v_block(ops, etp.clone(), "fn_ref_from_vec");
+            }
+        } else {
+            *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
+            if self.database.is_base(known) || self.database.is_linked(known) {
+                *code = self.get_val(etp, true, 0, code.clone());
+            }
         }
         None
     }

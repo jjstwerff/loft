@@ -440,10 +440,21 @@ fn closure_redefine_frees_old() {
 
 // ── C31 — Closures in collections not supported ─────────────────────────────
 
-/// C31: storing a capturing lambda in a vector should work but currently
-/// the 16-byte fn-ref layout is not handled by collection element operations.
+/// C31: non-capturing lambda stored in a vector.
 #[test]
-#[ignore = "C31: closures in collections not supported — A5.6 deferred (1.1+)"]
+fn closure_in_vector_non_capturing() {
+    code!(
+        "fn test() {
+    f = fn(y: integer) -> integer { y + 5 };
+    fns = [f];
+    assert(fns[0](10) == 15, \"call from vector\");
+}"
+    );
+}
+
+/// C31: capturing lambda stored in a vector — closure ownership issue.
+#[test]
+#[ignore = "C31: capturing closure in vector — closure freed before vector access"]
 fn closure_in_vector() {
     code!(
         "fn test() {

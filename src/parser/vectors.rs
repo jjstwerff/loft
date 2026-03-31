@@ -1325,6 +1325,28 @@ impl Parser {
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }
+            } else if matches!(in_t, Type::Function(_, _)) {
+                // C31: decompose 16-byte fn-ref into 4×4-byte OpSetInt writes.
+                // If p is a variable, read words via FnRefWord. Otherwise, store
+                // in a temp variable first.
+                let fn_var = if let Value::Var(v) = p {
+                    *v
+                } else {
+                    let tmp = self.create_unique("__fn_vec_tmp", in_t);
+                    self.vars.defined(tmp);
+                    ls.push(crate::data::v_set(tmp, p.clone()));
+                    tmp
+                };
+                for off in [0u16, 4, 8, 12] {
+                    ls.push(self.cl(
+                        "OpSetInt",
+                        &[
+                            Value::Var(elm),
+                            Value::Int(i32::from(off)),
+                            Value::FnRefWord(fn_var, off),
+                        ],
+                    ));
+                }
             } else if let Value::Insert(steps) = p {
                 for l in steps {
                     ls.push(l.clone());

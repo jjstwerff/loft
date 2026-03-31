@@ -738,10 +738,12 @@ impl Stores {
                 self.store_mut(rec).set_int(rec.rec, rec.pos, 0);
             }
             Parts::Base => {
-                panic!(
-                    "not implemented default {:?}",
-                    self.types[tp as usize].parts
-                );
+                // C31: zero-fill base types (e.g. fn_ref 16 bytes).
+                // Zero d_nr + null closure DbRef = valid empty fn-ref.
+                let size = u32::from(self.types[tp as usize].size) * 8;
+                for off in (0..size).step_by(4) {
+                    self.store_mut(rec).set_int(rec.rec, rec.pos + off, 0);
+                }
             }
         }
     }
