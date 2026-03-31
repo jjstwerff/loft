@@ -45,6 +45,21 @@ All notable changes to the loft language and interpreter.
   - W1.18-5: `tests/wasm/harness.mjs` — `initThreaded()` for shared-memory WASM.
   W1.18-6 (test enablement) deferred until wasm-threads build is available.
 
+### Closures (A5.6-text)
+
+- **Cross-scope text-capturing closures** — `make_greeter("Hello")("world")` now
+  produces `"Hello world"`.  Three bugs fixed:
+  - `can_convert` now handles `Function` types recursively and treats `Text` types
+    with different dependency lists as compatible.
+  - Chained fn-ref calls always allocate 1 work-buffer for text returns, keeping
+    variable creation identical on both parser passes (fixes SIGSEGV from counter
+    desynchronization).
+  - Cross-scope closures: `skip_free` on the closure work-var when the enclosing
+    function returns `Type::Function`; `Value::FreeFnRefClosure` IR node frees the
+    closure in the caller's chained-call block.
+  - `Variable.captured` flag suppresses false "never read" warning for captured
+    parameters without affecting dead-assignment analysis.
+
 ### Debugging infrastructure
 
 - **Debug boundary checks for DbRef, record fields, and stack pops** —
