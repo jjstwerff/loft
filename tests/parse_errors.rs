@@ -744,7 +744,7 @@ fn interface_duplicate_name_rejected() {
 /// syntactic sugar for a method named `OpLt` and must parse without error.
 #[test]
 fn interface_op_sugar_lt_parses() {
-    code!("interface Ordered { op < (self: Self, other: Self) -> boolean }\nfn test() {}");
+    code!("interface Rankable { op >= (self: Self, other: Self) -> boolean }\nfn test() {}");
 }
 
 /// I3.1: a multi-operator interface with `op +` and `op ==` desugars correctly.
@@ -762,10 +762,7 @@ fn interface_op_sugar_multi_parses() {
 /// without error and stores the bound for later satisfaction checking.
 #[test]
 fn generic_fn_with_bound_parses() {
-    code!(
-        "interface Ordered { op < (self: Self, other: Self) -> boolean }\n\
-         fn identity<T: Ordered>(x: T) -> T { x }\nfn test() {}"
-    );
+    code!("fn identity<T: Ordered>(x: T) -> T { x }\nfn test() {}");
 }
 
 /// I4: a bound name that does not exist must produce a clear diagnostic.
@@ -799,12 +796,11 @@ fn interface_factory_method_rejected() {
 #[test]
 fn satisfaction_check_fails_missing_method() {
     code!(
-        "interface Ordered { op < (self: Self, other: Self) -> boolean }
-         struct Thing { x: integer }
+        "struct Thing { x: integer }
          fn pick_first<T: Ordered>(a: T, _b: T) -> T { a }
          fn test() { pick_first(Thing{x:1}, Thing{x:2}) }"
     )
-    .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:4:57");
+    .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:3:57");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────

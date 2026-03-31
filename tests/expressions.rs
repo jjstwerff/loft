@@ -1000,8 +1000,7 @@ fn coroutine_stale_store_guard_all_builds() {
 #[test]
 fn satisfaction_check_passes_with_implementing_type() {
     code!(
-        "interface Ordered { op < (self: Self, other: Self) -> boolean }
-         struct Score { value: integer }
+        "struct Score { value: integer }
          fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
          fn pick_first<T: Ordered>(a: T, _b: T) -> T { a }"
     )
@@ -1032,8 +1031,7 @@ fn bounded_method_call_in_generic_body() {
 #[test]
 fn bounded_operator_in_generic_body() {
     code!(
-        "interface Ordered { op < (self: Self, other: Self) -> boolean }
-         struct Score { value: integer }
+        "struct Score { value: integer }
          fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
          fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }"
     )
@@ -1046,17 +1044,13 @@ fn bounded_operator_in_generic_body() {
 /// I8.2: a bounded operator whose return type is `Self` must propagate the
 /// correct concrete return type — here `pick_max` returns `T` (resolved to `Score`)
 /// whose `.value` field must be accessible on the result.
+/// Uses stdlib `Ordered` (`op <`) so the return type `Self` is tested end-to-end.
 #[test]
 fn bounded_operator_self_return_type() {
     code!(
-        "interface Comparable {
-             op < (self: Self, other: Self) -> boolean
-             op > (self: Self, other: Self) -> boolean
-         }
-         struct Score { value: integer }
+        "struct Score { value: integer }
          fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
-         fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
-         fn pick_max<T: Comparable>(a: T, b: T) -> T { if a > b { a } else { b } }"
+         fn pick_max<T: Ordered>(a: T, b: T) -> T { if a < b { b } else { a } }"
     )
     .expr("pick_max(Score{value:3}, Score{value:9}).value")
     .result(Value::Int(9));
@@ -1101,7 +1095,6 @@ fn bounded_unary_operator() {
 /// I9: the `Ordered` interface from the standard library enables bounded-generic
 /// functions that use `<` on user-defined types.
 #[test]
-#[ignore = "I9: stdlib Ordered interface — not yet implemented"]
 fn stdlib_ordered_interface() {
     code!(
         "struct Score { value: integer }

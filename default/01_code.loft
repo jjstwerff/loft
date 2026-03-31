@@ -27,6 +27,16 @@ pub type u16 = integer limit(0, 65535) size(2);
 pub type i16 = integer limit(-32768, 32767) size(2);
 // Full 32-bit integer range, 4 bytes.
 pub type i32 = integer size(4);
+// --- Interfaces ---
+// Standard interfaces for bounded generic functions.
+// A type satisfies an interface by defining the required operator or method.
+
+// Types that support the `<` comparison operator.
+// Satisfied by integer, long, single, float, text, and any user type defining OpLt.
+pub interface Ordered {
+  op < (self: Self, other: Self) -> boolean
+}
+
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
