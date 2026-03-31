@@ -2459,6 +2459,101 @@ at the end prevents cleanup, compounding the issue.
 
 ---
 
+### N-fnref  Native: fn-ref arg padding for map/filter built-in calls
+**Severity:** Medium — blocks `tests/scripts/33-lambdas-fn-refs.loft` in native mode
+**Description:** The A5.6-1 fn-ref padding (`OpNullRefSentinel` to pad 4→16 bytes)
+at `codegen.rs:1010-1013` only fires inside `if a.mutable`.  When a fn-ref is
+passed as an immutable parameter (e.g. `map(v, mfr_double)` where `mfr_double`
+is a non-capturing function reference), the padding is skipped.  The `Value::Int(d_nr)`
+produces 4 bytes but `size(Type::Function, Argument) = 16` → `debug_assert_eq` fires.
+
+**Fix:** Move the A5.6-1 padding to AFTER the mutable/immutable parameter generation,
+where it applies to ALL fn-ref parameters regardless of mutability:
+```rust
+// After both mutable and immutable parameter generation:
+if matches!(a.typedef, Type::Function(_, _)) && stack.position - stack_before < 16 {
+    stack.add_op("OpNullRefSentinel", self);
+}
+```
+Alternatively, duplicate the padding check in the immutable parameter path
+(`add_const` or the general `else` branch that handles non-mutable args).
+
+**Guard:** The existing `debug_assert_eq` at line 1020 catches mismatches.
+**Test:** `tests/scripts/33-lambdas-fn-refs.loft` in `native_scripts`.
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+### C35/C36/C37  Generic instantiation with struct types
+**Severity:** High — blocks generic functions over user-defined struct types
+**Description:** Three related bugs caused by the same root cause in
+`Function::copy()` (`src/variables/mod.rs:204-227`):
+
+- **C35:** text return from bounded generic crashes with `copy_nonoverlapping`
+- **C36:** for-loop in bounded generic panics "variable never assigned a slot"
+- **C37:** two struct-type instantiations of same generic → slot conflict
+
+**Root cause:** `Function::copy()` clones the `names: HashMap<String, u16>` map
+from the template function.  The `names` map records `variable_name → index` in
+the `variables` vector.  After cloning, the indices are correct (same vector
+layout).  But when `substitute_type()` changes variable types (replacing the
+generic type variable with the concrete struct type), variables may change SIZE
+(primitives = 4-8 bytes, structs = 12 bytes DbRef).  Slot assignment then fails
+because the size assumptions from the template don't match the instantiation.
+
+For C37 specifically: two instantiations of the same generic create two separate
+`Function` objects with independent `variables` vectors.  If scope numbers
+overlap between instantiations, `assign_slots` sees variables from both
+instantiations at the same scope → conflict.
+
+**Fix:** After `substitute_type()` in `try_generic_instantiation()`, rebuild
+the scope and slot assignment metadata:
+
+```rust
+// In parser/mod.rs, after substitute_type (line 873):
+vars.substitute_type(tv_nr, &concrete);
+// Rebuild slot-related state that depends on variable sizes/types.
+// The names map is correct (indices match the cloned variables vector).
+// But scope numbers may need isolation.
+```
+
+The specific fix for each manifestation:
+
+1. **C36/C37 (slot assignment):** After substitution, call `assign_slots()` on
+   the instantiated function with properly isolated scope numbers.  Each generic
+   instantiation must use unique scope numbers that don't collide with other
+   instantiations or the caller.
+
+2. **C35 (text return crash):** Follows from fixing C36/C37 — once variables
+   have correct slots, the text initialization writes to the correct address.
+
+**Guard:** Add `debug_assert!` in `Function::copy()` that verifies `names`
+entries match `variables` indices:
+```rust
+#[cfg(debug_assertions)]
+for (name, &idx) in &f.names {
+    assert!(
+        (idx as usize) < f.variables.len() && f.variables[idx as usize].name == *name,
+        "Function::copy: names[{name}] = {idx} doesn't match variables"
+    );
+}
+```
+
+**Debugging:** Add `LOFT_LOG=generic` trace that prints:
+- Template function name, variable count, scope count
+- Concrete type being substituted
+- Variable sizes before/after substitution
+- Scope numbers assigned to the instantiation
+
+**Files:** `src/variables/mod.rs` (Function::copy), `src/parser/mod.rs`
+(try_generic_instantiation), `src/variables/slots.rs` (scope isolation)
+**Tests:** C35/C36/C37 reproducers in CAVEATS.md
+**Effort:** Medium (single root cause, but scope isolation needs care)
+**Target:** 0.8.3
+
+---
+
 ### O1  Superinstruction merging
 **Status: deferred indefinitely — opcode table is full (254/256 used)**
 **Sources:** PERFORMANCE.md § P1
