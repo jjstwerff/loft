@@ -1341,6 +1341,7 @@ fn stdlib_min_of_float() {
 
 /// I9.1: generic max_of on float vectors.
 #[test]
+#[allow(clippy::approx_constant)]
 fn stdlib_max_of_float() {
     expr!("max_of([3.14, 2.72, 1.41])").result(Value::Float(3.14));
 }

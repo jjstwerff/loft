@@ -1217,6 +1217,7 @@ impl Parser {
     ///
     /// This first-pass implementation registers the interface definition and
     /// verifies syntax; semantic satisfaction checking comes in I5/I6.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_interface(&mut self) -> bool {
         if !self.lexer.has_token("interface") {
             return false;
@@ -1315,7 +1316,7 @@ impl Parser {
             // `children_of(d_nr)` enumerates them for satisfaction checking;
             // T-stub creation strips the prefix to extract the method name.
             if self.first_pass && d_nr != u32::MAX {
-                let stub_name = format!("__iface_{}_{}", d_nr, method_name);
+                let stub_name = format!("__iface_{d_nr}_{method_name}");
                 if self.data.def_nr(&stub_name) == u32::MAX {
                     let stub_nr =
                         self.data
@@ -1339,22 +1340,21 @@ impl Parser {
             // wrong code when I6 lands.
             if !self.first_pass {
                 let self_nr = self.data.def_nr("Self");
-                if self_nr != u32::MAX {
-                    if let Some(Type::Reference(ret_nr, _)) = &return_tp {
-                        if *ret_nr == self_nr {
-                            let has_self_param = args.first().map_or(false, |a| {
-                                a.name == "self"
-                                    && matches!(&a.typedef, Type::Reference(nr, _) if *nr == self_nr)
-                            });
-                            if !has_self_param {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "factory methods not yet supported: '{}' returns Self without a 'self: Self' parameter",
-                                    method_name
-                                );
-                            }
-                        }
+                if self_nr != u32::MAX
+                    && let Some(Type::Reference(ret_nr, _)) = &return_tp
+                    && *ret_nr == self_nr
+                {
+                    let has_self_param = args.first().is_some_and(|a| {
+                        a.name == "self"
+                            && matches!(&a.typedef, Type::Reference(nr, _) if *nr == self_nr)
+                    });
+                    if !has_self_param {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "factory methods not yet supported: '{}' returns Self without a 'self: Self' parameter",
+                            method_name
+                        );
                     }
                 }
             }

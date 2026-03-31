@@ -396,6 +396,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
         // A8.1: detect open-start `col[..hi]` or `col[..]` before parsing expression.
         let open_start = self.lexer.peek_token("..") || self.lexer.peek_token("..=");
@@ -414,7 +415,7 @@ impl Parser {
         } else {
             self.type_info(typedef)
         };
-        let mut nr = if open_start { 0 } else { 1 };
+        let mut nr = usize::from(!open_start);
         let mut key = Vec::new();
         if !open_start {
             key.push(p);
@@ -436,10 +437,10 @@ impl Parser {
         }
         if self.lexer.has_token("..") || open_start {
             // Consume "..=" if present (open_start already peeked but didn't consume)
-            let inclusive = if !open_start {
+            let inclusive = if open_start {
+                self.lexer.has_token(".."); // consume the ".."
                 self.lexer.has_token("=")
             } else {
-                self.lexer.has_token(".."); // consume the ".."
                 self.lexer.has_token("=")
             };
             let iter = self.create_unique("iter", &Type::Long);
@@ -455,10 +456,8 @@ impl Parser {
             if !open_end {
                 let mut n = Value::Null;
                 let n_t = self.expression(&mut n);
-                if !self.convert(&mut n, &n_t, &key_types[0]) {
-                    if !self.first_pass {
-                        diagnostic!(self.lexer, Level::Error, "Invalid index key");
-                    }
+                if !self.convert(&mut n, &n_t, &key_types[0]) && !self.first_pass {
+                    diagnostic!(self.lexer, Level::Error, "Invalid index key");
                 }
                 key.push(n);
                 nr = 1;

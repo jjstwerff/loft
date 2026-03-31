@@ -704,12 +704,11 @@ impl Parser {
             for child_nr in self.data.children_of(iface_nr) {
                 let name = &self.data.def(child_nr).name;
                 // Interface stubs use "__iface_{d_nr}_{method}" naming
-                if let Some(rest) = name.strip_prefix("__iface_") {
-                    if let Some((_, m)) = rest.split_once('_') {
-                        if m == method {
-                            return true;
-                        }
-                    }
+                if let Some(rest) = name.strip_prefix("__iface_")
+                    && let Some((_, m)) = rest.split_once('_')
+                    && m == method
+                {
+                    return true;
                 }
             }
         }
@@ -892,8 +891,7 @@ impl Parser {
                     let msg = crate::diagnostics::diagnostic_format(
                         Level::Error,
                         format_args!(
-                            "'{}' does not satisfy interface '{}': missing {}",
-                            concrete_name, iface_name, method_suffix
+                            "'{concrete_name}' does not satisfy interface '{iface_name}': missing {method_suffix}",
                         ),
                     );
                     let peek_pos = self.lexer.peek().position.clone();
@@ -1099,9 +1097,9 @@ impl Parser {
         }
     }
 
-    /// I9-vec: wrap an OpGetVector result with the appropriate value-extraction op
-    /// for concrete value types (OpGetInt, OpGetFloat, etc.).  Reference types need
-    /// no wrapper — the DbRef IS the value.
+    /// I9-vec: wrap an `OpGetVector` result with the appropriate value-extraction op
+    /// for concrete value types (`OpGetInt`, `OpGetFloat`, etc.).  Reference types need
+    /// no wrapper — the `DbRef` IS the value.
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
         let (op_name, extra) = match tp {
@@ -1125,10 +1123,10 @@ impl Parser {
         };
         if extra.is_some() {
             let d_eq = data.def_nr("OpEqInt");
-            if d_eq != u32::MAX {
-                Value::Call(d_eq, vec![val, Value::Int(1)])
-            } else {
+            if d_eq == u32::MAX {
                 val
+            } else {
+                Value::Call(d_eq, vec![val, Value::Int(1)])
             }
         } else {
             val
@@ -1467,10 +1465,10 @@ impl Parser {
                 // Return the type variable type so assignments keep a consistent type
                 // through the first pass (Type::Void would trigger "cannot change type").
                 let tv_nr = self.data.def_nr(tv_name);
-                return if tv_nr != u32::MAX {
-                    Type::Reference(tv_nr, Vec::new())
-                } else {
+                return if tv_nr == u32::MAX {
                     Type::Unknown(0)
+                } else {
+                    Type::Reference(tv_nr, Vec::new())
                 };
             }
             let op_method = format!("Op{}", rename(op));
