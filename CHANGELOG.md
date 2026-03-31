@@ -15,6 +15,13 @@ All notable changes to the loft language and interpreter.
   - A14.3: `Stores::clone_for_light_worker` — assembles worker view with shallow borrows
     of main stores + fresh pool stores. Zero large buffer copies.
   - A14.4: `run_parallel_light` — drop-in for `run_parallel_direct` using the pool.
+  - A14.5: `check_light_eligible` — DFS call-graph analysis validates no recursive store
+    allocation. Returns `M` (pool stores per worker) for eligible workers.
+  - A14.6: `build_parallel_for_ir` automatically selects `n_parallel_for_light` when
+    the worker qualifies (primitive return, no recursive allocation). No new syntax —
+    `par(...)` is transparently optimized.
+  - A14.7: `n_parallel_for_light` native function registered. Allocates result vector,
+    creates `WorkerPool`, dispatches via `run_parallel_light`.
 
 ### Safety fixes
 
