@@ -597,7 +597,13 @@ impl State {
                     self.code_add(0.0f64);
                 }
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
-                    stack.add_op("OpConvRefFromNull", self);
+                    // T1.8c: use NullRefSentinel (no store allocation) for tuple
+                    // reference elements.  The element will be overwritten by PutRef
+                    // or CopyRecord during destructuring; a real store is not needed
+                    // at null-init time.  Using OpConvRefFromNull here would leak a
+                    // store because the tuple scope-exit skip (scopes.rs:587) never
+                    // frees tuple elements.
+                    stack.add_op("OpNullRefSentinel", self);
                 }
                 Type::Text(_) => {
                     stack.add_op("OpConvTextFromNull", self);
@@ -805,6 +811,24 @@ impl State {
                     let copy_val = Value::Call(
                         copy_nr,
                         vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
+                    );
+                    self.generate(&copy_val, stack, false);
+                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && let Value::TupleGet(_, _) = value
+                {
+                    // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
+                    // is Type::Reference, deep-copy the record to avoid aliasing.
+                    // Without this, q1 and the original share the same store record,
+                    // causing double-free on scope exit.
+                    let tp_nr = stack.data.def(d_nr).known_type;
+                    stack.add_op("OpConvRefFromNull", self);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                    self.code_add(tp_nr);
+                    let copy_nr = stack.data.def_nr("OpCopyRecord");
+                    let copy_val = Value::Call(
+                        copy_nr,
+                        vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
                     );
                     self.generate(&copy_val, stack, false);
                 } else if matches!(stack.function.tp(v), Type::Vector(_, _))

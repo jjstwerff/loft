@@ -936,7 +936,6 @@ fn tuple_store_text_fields() {
 
 /// T1.10-3: two struct-reference elements — adjacent DbRef slots in a tuple.
 #[test]
-#[ignore = "T1.8: struct-ref tuple elements trigger use-after-free — needs DbRef lifetime tracking"]
 fn tuple_struct_refs() {
     code!(
         "struct Point { x: integer, y: integer }
