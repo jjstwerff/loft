@@ -772,79 +772,7 @@ impl State {
                 pos
             };
             if pos == stack.position {
-                // Slot is at current TOS — use direct placement (same as old claim() path).
-                // Large types (text, refs, vectors) always land here; non-reusing primitives too.
-                if matches!(*stack.function.tp(v), Type::Text(_)) {
-                    self.gen_set_first_text(stack, v, value);
-                } else if matches!(
-                    stack.function.tp(v),
-                    Type::Reference(_, _) | Type::Enum(_, true, _)
-                ) && *value == Value::Null
-                {
-                    self.gen_set_first_ref_null(stack, v);
-                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-                    && let Value::Call(op_nr, _) = value
-                    && stack.data.def(*op_nr).name == "OpCopyRecord"
-                {
-                    // The first assignment of a Reference variable being copied from another:
-                    // allocate a fresh store, initialize the struct record, then copy the data.
-                    stack.add_op("OpConvRefFromNull", self);
-                    stack.add_op("OpDatabase", self);
-                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
-                    let tp_nr = stack.data.def(d_nr).known_type;
-                    self.code_add(tp_nr);
-                    self.generate(value, stack, false);
-                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-                    && let Value::Var(src) = value
-                    && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
-                    && d_nr == *src_d_nr
-                {
-                    // First assignment `d = c` where both are owned References to the same struct:
-                    // give d its own independent record by allocating storage and copying c's data.
-                    let src = *src;
-                    let tp_nr = stack.data.def(d_nr).known_type;
-                    stack.add_op("OpConvRefFromNull", self);
-                    stack.add_op("OpDatabase", self);
-                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
-                    self.code_add(tp_nr);
-                    let copy_nr = stack.data.def_nr("OpCopyRecord");
-                    let copy_val = Value::Call(
-                        copy_nr,
-                        vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
-                    );
-                    self.generate(&copy_val, stack, false);
-                } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-                    && let Value::TupleGet(_, _) = value
-                {
-                    // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
-                    // is Type::Reference, deep-copy the record to avoid aliasing.
-                    // Without this, q1 and the original share the same store record,
-                    // causing double-free on scope exit.
-                    let tp_nr = stack.data.def(d_nr).known_type;
-                    stack.add_op("OpConvRefFromNull", self);
-                    stack.add_op("OpDatabase", self);
-                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
-                    self.code_add(tp_nr);
-                    let copy_nr = stack.data.def_nr("OpCopyRecord");
-                    let copy_val = Value::Call(
-                        copy_nr,
-                        vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
-                    );
-                    self.generate(&copy_val, stack, false);
-                } else if matches!(stack.function.tp(v), Type::Vector(_, _))
-                    && *value == Value::Null
-                {
-                    self.gen_set_first_vector_null(stack, v);
-                } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
-                    self.gen_set_first_tuple_null(stack, v);
-                } else if matches!(stack.function.tp(v), Type::Function(_, _)) {
-                    // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
-                    // gen_fn_ref_value ensures every branch (including if-else) reaches the
-                    // join point with a full 16-byte slot.
-                    self.gen_fn_ref_value(value, stack);
-                } else {
-                    self.generate(value, stack, false);
-                }
+                self.gen_set_first_at_tos(stack, v, value);
             } else {
                 // Slot is below current TOS — primitive reusing a dead variable's slot.
                 // Use set_var() so the value is generated at TOS then stored at pos via OpPutX.
@@ -873,6 +801,99 @@ impl State {
                 self.set_var(stack, v, value);
             }
         }
+    }
+
+    /// First assignment at current TOS — dispatch by variable type.
+    fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
+        // Slot is at current TOS — use direct placement (same as old claim() path).
+        // Large types (text, refs, vectors) always land here; non-reusing primitives too.
+        if matches!(*stack.function.tp(v), Type::Text(_)) {
+            self.gen_set_first_text(stack, v, value);
+        } else if matches!(
+            stack.function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && *value == Value::Null
+        {
+            self.gen_set_first_ref_null(stack, v);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            && let Value::Call(op_nr, _) = value
+            && stack.data.def(*op_nr).name == "OpCopyRecord"
+        {
+            // The first assignment of a Reference variable being copied from another:
+            // allocate a fresh store, initialize the struct record, then copy the data.
+            self.gen_set_first_ref_copy(stack, d_nr, value);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            && let Value::Var(src) = value
+            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
+            && d_nr == *src_d_nr
+        {
+            // First assignment `d = c` where both are owned References to the same struct:
+            // give d its own independent record by allocating storage and copying c's data.
+            self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            && let Value::TupleGet(_, _) = value
+        {
+            // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
+            // is Type::Reference, deep-copy the record to avoid aliasing.
+            self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
+        } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
+            self.gen_set_first_vector_null(stack, v);
+        } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
+            self.gen_set_first_tuple_null(stack, v);
+        } else if matches!(stack.function.tp(v), Type::Function(_, _)) {
+            // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
+            // gen_fn_ref_value ensures every branch (including if-else) reaches the
+            // join point with a full 16-byte slot.
+            self.gen_fn_ref_value(value, stack);
+        } else {
+            self.generate(value, stack, false);
+        }
+    }
+
+    /// First-assignment reference copy from a Call(OpCopyRecord, ...).
+    fn gen_set_first_ref_copy(&mut self, stack: &mut Stack, d_nr: u32, value: &Value) {
+        stack.add_op("OpConvRefFromNull", self);
+        stack.add_op("OpDatabase", self);
+        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        let tp_nr = stack.data.def(d_nr).known_type;
+        self.code_add(tp_nr);
+        self.generate(value, stack, false);
+    }
+
+    /// First-assignment reference copy from another variable of the same type.
+    fn gen_set_first_ref_var_copy(&mut self, stack: &mut Stack, v: u16, src: u16, d_nr: u32) {
+        let tp_nr = stack.data.def(d_nr).known_type;
+        stack.add_op("OpConvRefFromNull", self);
+        stack.add_op("OpDatabase", self);
+        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(tp_nr);
+        let copy_nr = stack.data.def_nr("OpCopyRecord");
+        let copy_val = Value::Call(
+            copy_nr,
+            vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
+        );
+        self.generate(&copy_val, stack, false);
+    }
+
+    /// First-assignment reference from tuple destructuring — deep copy.
+    fn gen_set_first_ref_tuple_copy(
+        &mut self,
+        stack: &mut Stack,
+        v: u16,
+        value: &Value,
+        d_nr: u32,
+    ) {
+        let tp_nr = stack.data.def(d_nr).known_type;
+        stack.add_op("OpConvRefFromNull", self);
+        stack.add_op("OpDatabase", self);
+        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(tp_nr);
+        let copy_nr = stack.data.def_nr("OpCopyRecord");
+        let copy_val = Value::Call(
+            copy_nr,
+            vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+        );
+        self.generate(&copy_val, stack, false);
     }
 
     pub(super) fn clear_stack(&mut self, stack: &mut Stack, loop_nr: u16) {

@@ -43,7 +43,7 @@ debug:
 test: clippy
 	-rm -f tests/generated/*
 	-rm -f tests/dumps/*.txt
-	RUST_BACKTRACE=1 cargo test -- --nocapture --test-threads=1 > result.txt 2>&1
+	RUST_BACKTRACE=1 cargo test -- --nocapture --test-threads=1 >> result.txt 2>&1
 
 quick:
 	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
@@ -78,8 +78,8 @@ run-tests:
 	cargo test > result.txt 2>&1
 
 clippy:
-	cargo clippy -- -W clippy::all -W clippy::cognitive_complexity > result.txt 2>&1
-	cargo clippy --tests -- -W clippy::all -W clippy::cognitive_complexity >> result.txt 2>&1
+	cargo clippy -- -D warnings -W clippy::all > result.txt 2>&1
+	cargo clippy --tests -- -D warnings -W clippy::all >> result.txt 2>&1
 	rustfmt src/*.rs --edition 2024
 	rustfmt tests/*.rs --edition 2024
 	cargo run --bin gendoc
