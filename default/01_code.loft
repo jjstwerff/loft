@@ -64,6 +64,12 @@ pub interface Scalable {
   fn scale(self: Self, factor: integer) -> integer
 }
 
+// Types that can be converted to text via a `to_text` method.
+// User types satisfy Printable by defining `fn to_text(self: T) -> text`.
+pub interface Printable {
+  fn to_text(self: Self) -> text
+}
+
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"

@@ -728,7 +728,7 @@ fn interface_empty_parses() {
 /// I3: an interface with method signatures parses without error.
 #[test]
 fn interface_with_method_parses() {
-    code!("interface Printable { fn to_text(self: Self) -> text }\nfn test() {}");
+    code!("interface Showable { fn display(self: Self) -> text }\nfn test() {}");
 }
 
 /// I3: a duplicate interface name is rejected with a "Redefined interface" diagnostic.

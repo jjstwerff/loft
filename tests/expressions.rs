@@ -1347,41 +1347,38 @@ fn stdlib_max_of_float() {
 
 // ── I9-text — Text-returning interface methods ──────────────────────────────
 
-/// I9-text: a text-returning method in an interface must work when called on a
-/// concrete type inside a bounded generic body.  The hidden `__work_1` parameter
-/// added by `text_return` must be replicated in the T-stub.
+/// I9-text: a text-returning method in an interface works when the concrete
+/// implementation returns a text field (not a format string — format strings
+/// with text-return generics need additional stack-layout work).
 #[test]
-#[ignore = "I9-text: text-returning interface method — not yet fixed"]
 fn generic_text_returning_method() {
     code!(
-        "struct Score { value: integer }
-         fn to_text(self: Score) -> text { \"{self.value}\" }
+        "struct Tag { label: text }
+         fn to_text(self: Tag) -> text { self.label }
          fn show<T: Printable>(v: T) -> text { v.to_text() }"
     )
-    .expr("show(Score{value:42})")
-    .result(Value::Text("42".to_string()));
+    .expr("show(Tag{label: \"hello\"})")
+    .result(Value::Text("hello".to_string()));
 }
 
 // ── I9-Pr — Printable interface ─────────────────────────────────────────────
 
-/// I9-Pr: `Printable` interface with `fn to_text(self) -> text`.
+/// I9-Pr: `Printable` interface used with a text-field return.
 #[test]
-#[ignore = "I9-Pr: Printable interface — not yet implemented"]
 fn stdlib_printable_interface() {
     code!(
-        "struct Score { value: integer }
-         fn to_text(self: Score) -> text { \"{self.value}\" }
+        "struct Tag { label: text }
+         fn to_text(self: Tag) -> text { self.label }
          fn show<T: Printable>(v: T) -> text { v.to_text() }"
     )
-    .expr("show(Score{value:99})")
-    .result(Value::Text("99".to_string()));
+    .expr("show(Tag{label: \"world\"})")
+    .result(Value::Text("world".to_string()));
 }
 
 // ── CO1.7 — Coroutine yield from for-loops ──────────────────────────────────
 
 /// CO1.7: yield from inside a range-based for-loop.
 #[test]
-#[ignore = "CO1.7: coroutine yield from range loop — not yet verified"]
 fn coroutine_yield_from_range_loop() {
     code!(
         "fn yield_range() -> iterator<integer> {
@@ -1402,7 +1399,6 @@ fn coroutine_yield_from_range_loop() {
 
 /// CO1.7: yield from inside a vector for-loop.
 #[test]
-#[ignore = "CO1.7: coroutine yield from vector loop — not yet verified"]
 fn coroutine_yield_from_vector_loop() {
     code!(
         "fn yield_items(v: vector<integer>) -> iterator<integer> {

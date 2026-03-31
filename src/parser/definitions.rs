@@ -633,7 +633,22 @@ impl Parser {
                             self_nr,
                             &crate::data::Type::Reference(tv_nr, Vec::new()),
                         );
-                        self.data.set_returned(t_stub_nr, t_ret_type);
+                        self.data.set_returned(t_stub_nr, t_ret_type.clone());
+                        // I9-text: if the interface method returns text, add the hidden
+                        // __work_1 parameter that text_return would add for concrete
+                        // implementations.  Without this, the call-site argument count
+                        // won't match after re_resolve_call substitutes the concrete
+                        // text-returning method (which has the hidden param).
+                        if matches!(t_ret_type, crate::data::Type::Text(_)) {
+                            self.data.add_attribute(
+                                &mut self.lexer,
+                                t_stub_nr,
+                                "__work_1",
+                                crate::data::Type::RefVar(Box::new(crate::data::Type::Text(
+                                    Vec::new(),
+                                ))),
+                            );
+                        }
                     }
                 }
             }
