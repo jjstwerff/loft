@@ -1416,3 +1416,86 @@ fn coroutine_yield_from_vector_loop() {
     )
     .result(Value::Int(57));
 }
+
+/// CO1.7-text: yield from inside a text character for-loop.
+/// Previously infinite-looped because the character null sentinel (i32::MIN)
+/// was not recognised by `op_conv_bool_from_character`.
+#[test]
+fn coroutine_yield_from_text_loop() {
+    code!(
+        "fn yield_chars(s: text) -> iterator<character> {
+           yield ' ';
+           for c in s { yield c }
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _ch in yield_chars(\"ab\") { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(3));
+}
+
+/// CO1.7-char: a plain character iterator (no text loop) must also exhaust
+/// correctly — the character null sentinel fix covers this case too.
+#[test]
+fn coroutine_character_iterator_exhausts() {
+    code!(
+        "fn gen_chars() -> iterator<character> {
+           yield 'x';
+           yield 'y'
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _c in gen_chars() { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(2));
+}
+
+/// CO1.7-store: yield from inside a vector-of-structs for-loop.
+#[test]
+fn coroutine_yield_from_struct_vector_loop() {
+    code!(
+        "struct Node { value: integer }
+         fn yield_values(ns: vector<Node>) -> iterator<integer> {
+           yield 0;
+           for n in ns { yield n.value }
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for v in yield_values([Node{value:10}, Node{value:20}, Node{value:30}]) {
+            total = total + v
+        };
+        total
+    }",
+    )
+    .result(Value::Int(60));
+}
+
+/// CO1.7-field-text: yield characters from a struct's text field.
+#[test]
+fn coroutine_yield_from_field_text_loop() {
+    code!(
+        "struct Item { name: text }
+         fn yield_name_chars(it: Item) -> iterator<character> {
+           yield ' ';
+           for c in it.name { yield c }
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _ch in yield_name_chars(Item{name: \"hi\"}) { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(3));
+}
