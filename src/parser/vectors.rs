@@ -689,6 +689,8 @@ impl Parser {
                         Value::Var(w),
                         Value::Var(v_nr),
                     ));
+                    // A5.6-text: suppress "never read" without affecting dead-assignment.
+                    self.vars.set_captured(v_nr);
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;

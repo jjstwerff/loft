@@ -66,8 +66,8 @@ pub struct Variable {
     /// Set by `clean_work_refs` for work-ref temporaries that have been re-purposed
     /// and must not be freed at scope exit (A14 replacement for type-mutation hack).
     pub skip_free: bool,
-    /// A5.6-text: variable is captured by a closure.  Suppresses the "never read"
-    /// warning in `test_used` without affecting the dead-assignment uses counter.
+    /// A5.6-text: true when this variable is captured by a closure.  Suppresses
+    /// the "never read" warning in `test_used` without affecting dead-assignment.
     pub captured: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
     pub first_def: u32,
@@ -944,8 +944,8 @@ impl Function {
         self.variables[v as usize].skip_free = true;
     }
 
-    /// A5.6-text: mark a variable as captured by a closure.
-    /// Suppresses the "never read" warning without affecting dead-assignment tracking.
+    /// A5.6-text: mark a variable as captured by a closure, suppressing the
+    /// "never read" warning without affecting dead-assignment analysis.
     pub fn set_captured(&mut self, v: u16) {
         self.variables[v as usize].captured = true;
     }
