@@ -452,9 +452,8 @@ fn closure_in_vector_non_capturing() {
     );
 }
 
-/// C31: capturing lambda stored in a vector — closure ownership issue.
+/// C31: capturing lambda stored in a vector.
 #[test]
-#[ignore = "C31: capturing closure in vector — closure freed before vector access"]
 fn closure_in_vector() {
     code!(
         "fn test() {
