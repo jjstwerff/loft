@@ -195,6 +195,7 @@ All notable changes to the loft language and interpreter.
   - A8.4: `[for e in sorted[lo..hi] { expr }]` comprehensions verified.
     Test: `sorted_range_comprehension`.
   - A8.6: nullable lookup `if !col[k]` verified. Test: `sorted_nullable_lookup`.
+  - A8.1-idx: open-ended bounds also work on index collections. Test: `index_open_end_range`.
 
 ### Coroutine safety documentation
 
