@@ -1603,7 +1603,25 @@ use #count instead"
             | Type::Character
             | Type::Text(_) => 4,
             Type::Long | Type::Float => 8,
-            _ => 12, // DbRef size for reference types
+            // C31: fn-ref is 16 bytes (4B d_nr + 12B closure DbRef).
+            Type::Function(_, _) => 16,
+            _ => {
+                // Guard: catch unhandled types that silently default to 12.
+                debug_assert!(
+                    matches!(
+                        elm,
+                        Type::Reference(..)
+                            | Type::Vector(..)
+                            | Type::Enum(..)
+                            | Type::Index(..)
+                            | Type::Hash(..)
+                            | Type::Sorted(..)
+                            | Type::Spacial(..)
+                    ),
+                    "element_store_size: unhandled type {elm:?} defaulting to 12"
+                );
+                12 // DbRef size for reference types
+            }
         }
     }
 
