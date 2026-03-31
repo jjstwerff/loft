@@ -144,66 +144,6 @@ pattern and emits a specific error naming the ordering problem and suggesting th
 
 ---
 
-## C35 — Bounded generic returning `text` from struct type causes memory violation
-
-A bounded generic function whose return type is `text` crashes at runtime with
-`unsafe precondition(s) violated: ptr::copy_nonoverlapping` when instantiated with
-a struct type.  The crash is in the generic specialisation's text-return path.
-
-**Reproducer:**
-```loft
-interface Describable { fn describe(self: Self) -> text }
-struct Temperature { celsius: float }
-fn describe(self: Temperature) -> text { "{self.celsius}C" }
-fn show<T: Describable>(item: T) -> text { describe(item) }
-fn main() {
-    t = Temperature { celsius: 37.0 };
-    s = show(t);   // crashes — text return from bounded generic on struct
-}
-```
-
-**Impact:** bounded generic functions that return `text` (e.g. `show<T: Printable>`)
-cannot be used with user-defined struct types.  Primitive types (`integer`, `float`,
-`boolean`) are unaffected.
-**Workaround:** call the concrete function directly: `describe(t)` instead of `show(t)`.
-**Planned fix:** needs investigation — likely in the generic specialisation's text
-return handling (`src/state/codegen.rs`).  No milestone assigned yet.
-
----
-
-## C36 — Generic function with `for` loop: slot assignment panic on struct-type instantiation
-
-A bounded (or unbounded) generic function that contains a `for` loop panics with
-`variable 'X' never assigned a slot` when instantiated with a struct type.
-The slot assignment algorithm does not correctly handle struct-typed local variables
-inside generic specialisations that contain loops.
-
-**Reproducer:**
-```loft
-struct Score { value: integer }
-fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
-fn largest<T: Ordered>(items: vector<T>) -> T {
-    best = items[0];
-    for i in 1..len(items) {
-        if best < items[i] { best = items[i]; }
-    }
-    best
-}
-fn main() {
-    scores = [Score{value: 3}, Score{value: 7}];
-    w = largest(scores);   // panics — 'best' never assigned a slot
-}
-```
-
-**Impact:** generic functions over struct types cannot contain `for` loops.
-Use direct index access where possible, or write separate concrete functions.
-**Workaround:** for two-element cases use a simple `if` comparison.
-For larger collections write a concrete (non-generic) function with the loop.
-**Planned fix:** needs investigation in slot assignment for generic specialisations
-(`src/state/codegen.rs` § slot assignment).  No milestone assigned yet.
-
----
-
 ## C37 — Calling the same generic function with two different struct-based types: slot conflict
 
 When the same generic function (e.g. `max_of<T: Ordered>`) is called with two
@@ -227,28 +167,6 @@ type per loft file.  Instantiation with two or more struct types in the same fil
 **Workaround:** write separate concrete wrapper functions for each struct type.
 **Planned fix:** needs investigation in flat-namespace slot assignment during generic
 specialisation (`src/state/codegen.rs`).  No milestone assigned yet.
-
----
-
-## See also
-
-- [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
-- [INCONSISTENCIES.md](INCONSISTENCIES.md) — language design asymmetries
-## C38 — Native codegen: fn-ref arguments not padded in map/filter built-in calls
-
-The bytecode codegen's `generate_call` pads fn-ref arguments to 16 bytes
-(4B d_nr + 12B null closure) for regular function calls.  However, the
-`map`/`filter`/`reduce` built-in call path in the parser does not go through
-`generate_call` and misses the padding.  This causes a `debug_assert_eq!`
-failure during bytecode compilation of scripts that pass fn-refs to `map`/`filter`.
-
-**Reproducer:** `tests/scripts/33-lambdas-fn-refs.loft` — `map(v, mfr_double)`
-where `mfr_double` is a non-capturing function reference.
-
-**Impact:** `33-lambdas-fn-refs.loft` fails in `native_scripts` test (bytecode
-compilation phase). Does not affect the interpreter (which doesn't hit this path)
-or `native_dir` tests (which don't use `map`/`filter` with fn-refs).
-**Planned fix:** N-fnref in [ROADMAP.md](ROADMAP.md) (0.8.3).
 
 ---
 

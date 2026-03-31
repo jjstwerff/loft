@@ -26,8 +26,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
 | I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
 | I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
-| N-fnref   | Native: fn-ref arg padding for map/filter built-in calls   | S  | ✓      |              | PLANNING.md § N-fnref         |
-| C35/36/37 | Generic instantiation with struct types (3 bugs, 1 cause)  | M  | ✓      |              | PLANNING.md § C35/C36/C37     |
 
 ---
 

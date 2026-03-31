@@ -74,6 +74,28 @@ All notable changes to the loft language and interpreter.
   vector to prevent premature cleanup.
   Tests: `closure_in_vector`, `closure_in_vector_non_capturing`.
 
+### Generic instantiation (C35/C36/C37)
+
+- **Generic functions over struct types now work** — three bugs fixed:
+  - Pass-2 code update: generic instantiation now gets the compiled template
+    body on pass 2 (not the pass-1 placeholder).
+  - Scope-0 hoist guard: don't pre-register block-result Reference variables
+    at the argument scope (prevents slot assignment failure).
+  - Vector element size: struct-typed generic vectors use the database record
+    size (e.g. 4B for `Score{value:integer}`) instead of the 12B DbRef size.
+  Tests: `generic_for_loop_struct_type` (C36), `generic_two_struct_types` (C37),
+  `generic_text_return_struct` (C35) — all pass in release.
+
+### Native codegen
+
+- **Native fn-ref as `(u32, DbRef)` tuple** (N-fnref) — native fn-ref variables
+  now carry the closure DbRef alongside the d_nr.  Fixes cross-scope closures
+  and fn-ref parameter passing in native mode.  All 77 native tests pass.
+- **Null-typed parameter padding** — codegen now pushes appropriate null values
+  when `Value::Null` is passed for typed function parameters.
+- **Fn-ref return wrapping** — block results of `Type::Function` wrap bare
+  `Value::Int` as `(d_nr, null_DbRef)` tuple in native emit.
+
 ### Diagnostic improvements
 
 - **I12.diag:** factory-method error now includes workaround hint (C33 mitigation).
