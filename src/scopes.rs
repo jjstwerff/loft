@@ -31,7 +31,41 @@ struct Scopes {
 /// Perform scope analysis on all currently known functions.
 pub fn check(data: &mut Data) {
     for d_nr in 0..data.definitions() {
-        if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
+        if !matches!(data.def(d_nr).def_type, DefType::Function) {
+            continue;
+        }
+        // C35/C36/C37: generic instantiations inherit done=true from the template.
+        // They need compute_intervals + assign_slots but NOT scan (the template's
+        // scan already remapped variables and set scopes).
+        if data.def(d_nr).variables.done {
+            let free_text_nr = data.def_nr("OpFreeText");
+            let free_ref_nr = data.def_nr("OpFreeRef");
+            let code_ref = data.definitions[d_nr as usize].code.clone();
+            // C35/C36/C37: always re-run intervals+slots for generic instantiations.
+            // Template slots are computed for generic type sizes which differ from
+            // the concrete struct type sizes after substitution.
+            {
+                let mut seq = 0u32;
+                compute_intervals(
+                    &code_ref,
+                    &mut data.definitions[d_nr as usize].variables,
+                    free_text_nr,
+                    free_ref_nr,
+                    &mut seq,
+                    0,
+                );
+                let local_start: u16 = {
+                    let vars = &data.definitions[d_nr as usize].variables;
+                    let arg_size: u16 = vars
+                        .arguments()
+                        .iter()
+                        .map(|&a| size(vars.var_type(a), &Context::Argument))
+                        .sum();
+                    arg_size + 4
+                };
+                let d = &mut data.definitions[d_nr as usize];
+                assign_slots(&mut d.variables, &mut d.code, local_start);
+            }
             continue;
         }
         let mut scopes = Scopes {
