@@ -349,7 +349,6 @@ fn closure_capture_text() {
          }"
     )
     .expr("make_greeter(\"Hello\")(\"world\")")
-    .warning("Parameter prefix is never read at closure_capture_text:1:52")
     .result(Value::str("Hello world"));
 }
 
