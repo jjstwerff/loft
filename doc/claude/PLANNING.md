@@ -879,9 +879,12 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 | I6  | Satisfaction checking at generic instantiation | M | *(completed 0.8.3)* `src/parser/mod.rs` |
 | I7  | Allow bounded method calls on `T` inside generic bodies | S | *(completed 0.8.3)* `src/parser/fields.rs` |
 | I8.1| Same-type binary operators (`T op T`) via bound | S | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I8.2| Result-type propagation from interface signature | S | *(completed 0.8.3)* — no code change; T-stub infra handles it |
+| I8.3| Mixed-type binary operators (`T op concrete`) | S | *(completed 0.8.3)* — no code change; `call_nr` handles mixed types |
+| I8.4| Unary operators on `T` | XS | *(completed 0.8.3)* — no code change; same `call_op` path |
+| I9  | Stdlib `Ordered` interface | S | *(completed 0.8.3)* `default/01_code.loft` |
 | I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | *(completed 0.8.3)* `src/parser/mod.rs` |
-| I8  | Allow bounded operator use on `T` (`OpCamelCase` in bound) | S | `src/parser/operators.rs` |
-| I9  | Standard library interfaces + convert stdlib generics | M | `default/01_code.loft` |
+| I9+ | Remaining stdlib interfaces (`Equatable`, `Addable`, `Numeric`, etc.) | M | `default/01_code.loft` |
 
 **Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
 I2 is parallel with I1. I5 depends on I3. I10 depends on I6.

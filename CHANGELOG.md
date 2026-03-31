@@ -80,6 +80,21 @@ All notable changes to the loft language and interpreter.
     (previously errored); user-defined operator functions (e.g. `fn OpLt(self: Score, ...)`)
     are now allowed in user code without a lowercase name error.
 
+- **Interface operator variants and stdlib `Ordered`** (I8.2, I8.3, I8.4, I9):
+  - I8.2: Return-type propagation from interface signature — verified: T-stubs correctly
+    substitute `Self` → `T` in both parameter types and the return type.
+    Test: `bounded_operator_self_return_type`.
+  - I8.3: Mixed-type binary operators (`T op concrete`, e.g. `T * integer`) — verified:
+    `call_op`'s T-stub lookup and `call_nr`'s argument matching handle mixed-type parameters.
+    Test: `bounded_mixed_type_operator`.
+  - I8.4: Unary operators on `T` (e.g. `op -`) — verified: single-operand dispatch uses the
+    same `call_op` → T-stub path as binary operators.
+    Test: `bounded_unary_operator`.
+  - I9: `pub interface Ordered { op < }` added to `default/01_code.loft`. User types satisfy
+    `Ordered` by defining `fn OpLt(self: T, other: T) -> boolean`. Existing tests updated to
+    use the stdlib interface instead of local redefinitions.
+    Test: `stdlib_ordered_interface`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
