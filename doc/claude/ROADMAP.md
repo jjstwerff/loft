@@ -22,6 +22,10 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
+| N-fnref   | Native: fn-ref arg padding for map/filter built-in calls   | S  | —      |              | codegen.rs § generate_call    |
+| C35       | Bounded generic text return from struct type crashes       | M  | —      |              | CAVEATS.md § C35              |
+| C36       | Generic function with for loop: slot panic on struct type  | M  | —      |              | CAVEATS.md § C36              |
+| C37       | Same generic with two struct types: slot conflict           | M  | —      |              | CAVEATS.md § C37              |
 
 ---
 

@@ -114,8 +114,7 @@ accept `zero: T` as an explicit argument (the workaround used in the stdlib).
 ```loft
 fn sum<T: Addable>(v: vector<T>, zero: T) -> T { ... }
 ```
-**0.8.3 mitigation (I12.diag):** the compile error will be extended to include the
-workaround hint in its message.
+**Mitigation (I12.diag, 0.8.3):** the compile error now includes the workaround hint.
 **Full fix:** I12 (factory-method restriction phase 2). Target: 1.1+.
 
 ---
@@ -139,9 +138,8 @@ left operand fail to compile inside a bounded generic.  Rewrite as a method call
 on the `T` value or put `T` on the left.
 **Workaround:** define and use the operator with `T` on the left: `x * 2` instead
 of `2 * x`; or use a named method (`x.scale(2)`).
-**0.8.3 mitigation (I8.5.diag):** the compiler will detect the concrete-left/generic-right
-pattern specifically and emit an error that names the ordering problem and suggests
-the workaround, replacing the generic "requires a concrete type" message.
+**Mitigation (I8.5.diag, 0.8.3):** the compiler now detects the concrete-left/generic-right
+pattern and emits a specific error naming the ordering problem and suggesting the workaround.
 **Full fix:** I8.5 (mixed-type operator, concrete left side). Target: 1.1+.
 
 ---
@@ -229,6 +227,28 @@ type per loft file.  Instantiation with two or more struct types in the same fil
 **Workaround:** write separate concrete wrapper functions for each struct type.
 **Planned fix:** needs investigation in flat-namespace slot assignment during generic
 specialisation (`src/state/codegen.rs`).  No milestone assigned yet.
+
+---
+
+## See also
+
+- [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
+- [INCONSISTENCIES.md](INCONSISTENCIES.md) — language design asymmetries
+## C38 — Native codegen: fn-ref arguments not padded in map/filter built-in calls
+
+The bytecode codegen's `generate_call` pads fn-ref arguments to 16 bytes
+(4B d_nr + 12B null closure) for regular function calls.  However, the
+`map`/`filter`/`reduce` built-in call path in the parser does not go through
+`generate_call` and misses the padding.  This causes a `debug_assert_eq!`
+failure during bytecode compilation of scripts that pass fn-refs to `map`/`filter`.
+
+**Reproducer:** `tests/scripts/33-lambdas-fn-refs.loft` — `map(v, mfr_double)`
+where `mfr_double` is a non-capturing function reference.
+
+**Impact:** `33-lambdas-fn-refs.loft` fails in `native_scripts` test (bytecode
+compilation phase). Does not affect the interpreter (which doesn't hit this path)
+or `native_dir` tests (which don't use `map`/`filter` with fn-refs).
+**Planned fix:** N-fnref in [ROADMAP.md](ROADMAP.md) (0.8.3).
 
 ---
 
