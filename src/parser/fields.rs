@@ -323,14 +323,22 @@ impl Parser {
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
         let known = self.data.def(elm_td).known_type;
-        let elm_size = i32::from(self.database.size(known));
+        // C31: Type::Function elements are 16 bytes, but type_elm maps to "integer"
+        // (known_type = 4 bytes).  Use element_store_size for the correct stride.
+        let elm_size = if matches!(etp, Type::Function(_, _)) {
+            self.element_store_size(etp)
+        } else {
+            i32::from(self.database.size(known))
+        };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
                 let mut op = self.cl(
                     "OpGetVector",
                     &[code.clone(), Value::Int(elm_size), *next.clone()],
                 );
-                if self.database.is_base(known) || self.database.is_linked(known) {
+                if !matches!(etp, Type::Function(_, _))
+                    && (self.database.is_base(known) || self.database.is_linked(known))
+                {
                     op = self.get_val(etp, true, 0, op);
                 }
                 *code = Value::Iter(
@@ -356,7 +364,10 @@ impl Parser {
             );
         }
         *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
-        if self.database.is_base(known) || self.database.is_linked(known) {
+        // C31: Function elements are raw 16-byte values, not database records.
+        if !matches!(etp, Type::Function(_, _))
+            && (self.database.is_base(known) || self.database.is_linked(known))
+        {
             *code = self.get_val(etp, true, 0, code.clone());
         }
         None
