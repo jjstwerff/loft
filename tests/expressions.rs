@@ -1161,3 +1161,60 @@ fn generic_sum_pair_on_floats() {
         .expr("sum_pair(1.5, 2.5)")
         .result(Value::Float(4.0));
 }
+
+// ── I9-vec — vector<T> element access in generic specialization ─────────────
+
+/// I9-vec: generic function with `vector<T>` parameter — element access `v[0]`
+/// must return the correct value after specialization for integer.
+#[test]
+#[ignore = "I9-vec: vector<T> element access — not yet implemented"]
+fn generic_vector_element_access() {
+    code!("fn first_of<T: Ordered>(v: vector<T>) -> T { v[0] }")
+        .expr("first_of([7, 3, 9])")
+        .result(Value::Int(7));
+}
+
+// ── I9.1 — Generic min/max on integer vectors ──────────────────────────────
+
+/// I9.1: bounded-generic `find_min` on `vector<T>` with `Ordered` bound.
+#[test]
+#[ignore = "I9.1: generic min on vector — not yet implemented"]
+fn generic_min_on_integer_vector() {
+    code!(
+        "fn find_min<T: Ordered>(v: vector<T>) -> T {
+           result = v[0];
+           for i in 1..v.len() { if v[i] < result { result = v[i] } };
+           result
+         }"
+    )
+    .expr("find_min([7, 3, 9, 1, 5])")
+    .result(Value::Int(1));
+}
+
+// ── I9.2 — Generic sum using Addable ────────────────────────────────────────
+
+/// I9.2: bounded-generic sum over a `vector<T>` with `Addable` bound.
+#[test]
+#[ignore = "I9.2: generic sum on vector — not yet implemented"]
+fn generic_sum_on_integer_vector() {
+    code!(
+        "fn vec_sum<T: Addable>(v: vector<T>, init: T) -> T {
+           result = init;
+           for i in 0..v.len() { result = result + v[i] };
+           result
+         }"
+    )
+    .expr("vec_sum([10, 20, 12], 0)")
+    .result(Value::Int(42));
+}
+
+// ── I9+ — Numeric interface ─────────────────────────────────────────────────
+
+/// I9+: `Numeric` interface with `op *` and `op -` (separate from Addable's `op +`).
+#[test]
+#[ignore = "I9+: Numeric interface — not yet implemented"]
+fn stdlib_numeric_interface() {
+    code!("fn square<T: Numeric>(v: T) -> T { v * v }")
+        .expr("square(6)")
+        .result(Value::Int(36));
+}
