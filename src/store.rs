@@ -836,6 +836,18 @@ impl Store {
             std::mem::size_of::<T>(),
             self.size * 8,
         );
+        // Validate field offset against record's claimed size (first word).
+        // rec=0 and rec=1 are special (store header / primary record).
+        #[cfg(debug_assertions)]
+        if rec > 1 && fld > 0 {
+            let rec_header =
+                unsafe { std::ptr::read_unaligned(self.ptr.add(rec as usize * 8).cast::<i32>()) };
+            let rec_size = rec_header.unsigned_abs() as isize * 8;
+            debug_assert!(
+                (fld as isize + std::mem::size_of::<T>() as isize) <= rec_size,
+                "Fld {fld} is outside of record {rec} size {rec_size}",
+            );
+        }
         unsafe {
             let off = self.ptr.offset(rec as isize * 8 + fld as isize).cast::<T>();
             off.as_mut().expect("Reference")
@@ -852,6 +864,16 @@ impl Store {
             std::mem::size_of::<T>(),
             self.size * 8,
         );
+        #[cfg(debug_assertions)]
+        if rec > 1 && fld > 0 {
+            let rec_header =
+                unsafe { std::ptr::read_unaligned(self.ptr.add(rec as usize * 8).cast::<i32>()) };
+            let rec_size = rec_header.unsigned_abs() as isize * 8;
+            debug_assert!(
+                (fld as isize + std::mem::size_of::<T>() as isize) <= rec_size,
+                "Fld {fld} is outside of record {rec} size {rec_size}",
+            );
+        }
         assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}");
         unsafe {
             let off = self.ptr.offset(rec as isize * 8 + fld as isize).cast::<T>();
