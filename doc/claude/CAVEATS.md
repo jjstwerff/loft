@@ -78,6 +78,66 @@ fn main() {
 
 ---
 
+## C30 — Lambda re-definition leaks the old closure record
+
+Reassigning a variable that holds a capturing lambda does not free the
+previous closure.  The old closure's store record is orphaned.
+
+**Reproducer:**
+```loft
+fn test() {
+    x = 10;
+    f = fn(y: integer) -> integer { x + y };
+    // f now holds closure with x=10
+    x = 20;
+    f = fn(y: integer) -> integer { x + y };
+    // old closure leaked — new closure overwrites fn-ref slot
+}
+```
+
+**Impact:** memory leak (one store per reassignment).  Crashes in debug builds.
+**Workaround:** avoid reassigning lambda variables that capture values.
+**Planned fix:** A5.6 deferred item 1 in [PLANNING.md](PLANNING.md) (1.1+).
+
+---
+
+## C31 — Closures in collections or struct fields not supported
+
+Storing a capturing lambda in a `vector<fn(...)>` or as a struct field
+may produce incorrect behaviour.  The 16-byte fn-ref layout (d_nr + closure
+DbRef) is not handled by collection element read/write operations.
+
+**Workaround:** pass closures as function arguments or return values, not
+through collections or struct fields.
+**Planned fix:** A5.6 deferred item 2 in [PLANNING.md](PLANNING.md) (1.1+).
+
+---
+
+## C32 — Captured parameter "never read" warning is false for cross-scope closures
+
+When a function parameter is captured by a closure that is returned from the
+function, the parameter IS read (by the capture) but the use-analysis does not
+track `SetText` on a closure record as a read.  The `Variable.captured` flag
+suppresses the "never read" warning, but the dead-assignment analysis still
+does not see the capture as a use.
+
+**Reproducer:**
+```loft
+fn make_greeter(prefix: text) -> fn(text) -> text {
+    fn(name: text) -> text { "{prefix} {name}" }
+}
+// No warning (suppressed by captured flag).
+// But: x = "a"; f = fn() { x }; x = "b";
+// Dead-assignment warning for x="a" fires even though it was captured.
+```
+
+**Impact:** cosmetic — the dead-assignment warning is arguably correct (the
+capture happens before the overwrite, and the captured value is `"a"` not `"b"`).
+**Planned fix:** none — accepted as a language semantic.  Capture-at-definition
+is the intended behaviour and the dead-assignment warning is informative.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
