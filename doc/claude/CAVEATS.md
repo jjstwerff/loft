@@ -58,26 +58,6 @@ may still reach the runtime panics.
 
 ---
 
-## C12 — No exception handling
-
-Runtime errors from `assert` and `panic` abort the program. There is no
-`try`/`catch` or `Result` mechanism for structured error recovery.
-
-**Reproducer:**
-```loft
-fn main() {
-  // This aborts — no way to catch it:
-  assert(false, "deliberate failure");
-  // This line is never reached.
-}
-```
-
-**Test:** none (cannot test abort from inside loft).
-**Workaround:** validate inputs before operations; use `FileResult` for file I/O errors.
-**Docs:** [00-vs-python.html](../00-vs-python.html) § No exception handling.
-
----
-
 ## C30 — Lambda re-definition leaks the old closure record
 
 Reassigning a variable that holds a capturing lambda does not free the
