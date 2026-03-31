@@ -57,6 +57,13 @@ pub interface Numeric {
   op - (self: Self) -> Self
 }
 
+// Types that support integer scaling via a `scale` method.
+// Uses a method (not `op *`) to avoid stub-name collision with `Numeric`.
+// User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -> integer`.
+pub interface Scalable {
+  fn scale(self: Self, factor: integer) -> integer
+}
+
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"

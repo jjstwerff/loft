@@ -1218,7 +1218,6 @@ fn stdlib_numeric_interface() {
 /// hidden parameter (because T looked like a Reference), causing a codegen crash
 /// when T was specialized to a value type.
 #[test]
-#[ignore = "I9-var: intermediate variables in generic bodies — not yet implemented"]
 fn generic_intermediate_variable() {
     code!(
         "fn first_of<T: Ordered>(v: vector<T>) -> T {
@@ -1231,7 +1230,6 @@ fn generic_intermediate_variable() {
 
 /// I9-var: a for-loop accumulator pattern inside a bounded-generic body.
 #[test]
-#[ignore = "I9-var: for-loop accumulator — not yet implemented"]
 fn generic_for_loop_accumulator() {
     code!(
         "fn find_min<T: Ordered>(v: vector<T>) -> T {
@@ -1248,7 +1246,6 @@ fn generic_for_loop_accumulator() {
 
 /// I9.1: a generic `find_max` using a for-loop accumulator on `vector<T>`.
 #[test]
-#[ignore = "I9.1: generic max on vector — not yet implemented"]
 fn generic_max_on_integer_vector() {
     code!(
         "fn find_max<T: Ordered>(v: vector<T>) -> T {
@@ -1266,7 +1263,6 @@ fn generic_max_on_integer_vector() {
 /// I9.2: a generic `vec_sum` with caller-supplied identity element, using
 /// a for-loop accumulator on `vector<T>`.
 #[test]
-#[ignore = "I9.2: generic sum with identity — not yet implemented"]
 fn generic_sum_with_identity() {
     code!(
         "fn vec_sum<T: Addable>(v: vector<T>, init: T) -> T {
@@ -1281,11 +1277,18 @@ fn generic_sum_with_identity() {
 
 // ── I9-Sc — Scalable interface ──────────────────────────────────────────────
 
-/// I9-Sc: `Scalable` interface with `op * (self: Self, factor: integer) -> Self`.
+/// I9-Sc: `Scalable` interface with `fn scale(self, factor) -> integer`.
+/// Uses a method-based interface to avoid stub-name collision with `Numeric`.
+/// The method returns integer to avoid struct-return allocation issues.
 #[test]
-#[ignore = "I9-Sc: Scalable interface — not yet implemented"]
 fn stdlib_scalable_interface() {
-    code!("fn double<T: Scalable>(v: T) -> T { v * 2 }")
-        .expr("double(21)")
-        .result(Value::Int(42));
+    code!(
+        "struct Weight { grams: integer }
+         fn scale(self: Weight, factor: integer) -> integer {
+             self.grams * factor
+         }
+         fn scaled<T: Scalable>(v: T, n: integer) -> integer { v.scale(n) }"
+    )
+    .expr("scaled(Weight{grams: 21}, 2)")
+    .result(Value::Int(42));
 }

@@ -234,10 +234,18 @@ impl Parser {
             }
             tp = result.clone();
         }
-        if let Type::Text(ls) = t {
-            self.text_return(ls);
-        } else if let Type::Reference(_, ls) | Type::Vector(_, ls) = t {
-            self.ref_return(ls);
+        // I9-var: skip ref_return/text_return for generic templates.
+        // The return type T = Reference(tv_nr) triggers ref_return which promotes local
+        // variables to hidden parameters.  After specialization to a value type (Integer,
+        // Float), those hidden params are wrong.  Specialized copies inherit the template's
+        // body and variable table; struct-returning specializations work correctly because
+        // they return arguments (not locals), so ref_return would be a no-op anyway.
+        if self.data.def_type(self.context) != DefType::Generic {
+            if let Type::Text(ls) = t {
+                self.text_return(ls);
+            } else if let Type::Reference(_, ls) | Type::Vector(_, ls) = t {
+                self.ref_return(ls);
+            }
         }
         tp
     }
