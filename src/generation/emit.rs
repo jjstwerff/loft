@@ -186,13 +186,16 @@ impl Output<'_> {
             }
             // C31/A5.6: FnRef emits (d_nr, closure_dbref) tuple.
             Value::FnRef(d_nr, clos_var, _) => {
-                let clos_name = sanitize(
-                    self.data
-                        .def(self.def_nr)
-                        .variables
-                        .name(*clos_var),
-                );
-                write!(w, "({d_nr}_u32, var_{clos_name})")?;
+                if *clos_var == u16::MAX {
+                    // Non-capturing lambda — null closure.
+                    write!(
+                        w,
+                        "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                    )?;
+                } else {
+                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(*clos_var));
+                    write!(w, "({d_nr}_u32, var_{clos_name})")?;
+                }
             }
             Value::FreeFnRefClosure(_) | Value::FnRefWord(_, _) | Value::Line(_) => {}
         }
@@ -280,31 +283,22 @@ impl Output<'_> {
             let expr = self.generate_expr_buf(arg)?;
             arg_exprs.push(expr);
         }
-        // Look up the closure work-var for this fn-ref variable (if any).
-        let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
-        // Generate a match dispatch on the fn-ref variable.
-        write!(w, "match var_{var_name} {{")?;
+        // C31/A5.6: fn-ref variable is (u32, DbRef).  Match on .0 (d_nr),
+        // pass .1 (closure DbRef) to candidates that have a __closure param.
+        write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
             for expr in &arg_exprs {
                 write!(w, ", {expr}")?;
             }
             if *has_closure {
-                if let Some(clos_nr) = closure_var_nr {
-                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
-                    write!(w, ", var_{clos_name}")?;
-                } else {
-                    // C31/A5.6: fn-ref variable has no closure_var_of mapping
-                    // (e.g. fn-ref from vector element or chained call).  Pass a
-                    // null DbRef so the function signature matches.
-                    write!(w, ", loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}")?;
-                }
+                write!(w, ", var_{var_name}.1")?;
             }
             write!(w, "),")?;
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}) }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
         )?;
         Ok(())
     }

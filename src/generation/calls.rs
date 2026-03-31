@@ -33,11 +33,23 @@ impl Output<'_> {
                         def_fn.attributes[idx].typedef,
                         Type::Function(_, _, _) | Type::Routine(_)
                     );
-                if param_is_fnref && matches!(v, Value::Int(_)) {
+                let param_is_function = idx < def_fn.attributes.len()
+                    && matches!(def_fn.attributes[idx].typedef, Type::Function(_, _));
+                if param_is_fnref && !param_is_function && matches!(v, Value::Int(_)) {
+                    // Routine-type fn-ref: just cast to u32.
                     let mut buf = Vec::new();
                     self.output_code_inner(&mut buf, v)?;
                     let s = String::from_utf8(buf).unwrap();
                     write!(w, "{s} as u32")?;
+                } else if param_is_function && matches!(v, Value::Int(_)) {
+                    // C31/A5.6: Function-type fn-ref: wrap as (d_nr, null_DbRef).
+                    let mut buf = Vec::new();
+                    self.output_code_inner(&mut buf, v)?;
+                    let s = String::from_utf8(buf).unwrap();
+                    write!(
+                        w,
+                        "({s} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                    )?;
                 } else {
                     self.output_code_inner(w, v)?;
                 }
