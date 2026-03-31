@@ -1710,7 +1710,6 @@ fn sorted_reverse_range() {
 
 /// A8.3: `idx[k1]` on a multi-key index iterates all elements matching k1.
 #[test]
-#[ignore = "A8.3: partial-key match on index — not yet implemented"]
 fn index_partial_key_match() {
     code!(
         "struct Elm { nr: integer, key: text, val: integer }

@@ -500,6 +500,43 @@ impl Parser {
                 )),
                 Box::new(Value::Null),
             );
+        } else if matches!(typedef, Type::Index(_, _, _) | Type::Sorted(_, _, _))
+            && key_types.len() > 1
+            && nr < key_types.len()
+        {
+            // A8.3: partial-key match — rewrite idx[k1] as idx[k1..=k1].
+            // Uses the existing inclusive-range iteration path with from=till=key.
+            let inclusive = true;
+            let iter = self.create_unique("iter", &Type::Long);
+            let mut ls = Vec::new();
+            if !self.first_pass {
+                self.fill_iter(&mut ls, code, typedef, true, inclusive);
+                ls.push(Value::Int(nr as i32));
+                let from_key = key.clone();
+                ls.append(&mut key);
+                // till = same key values as from (inclusive prefix match)
+                ls.push(Value::Int(nr as i32));
+                ls.extend(from_key);
+            }
+            let start = v_set(iter, self.cl("OpIterate", &ls));
+            let mut ls = vec![Value::Var(iter)];
+            self.fill_iter(&mut ls, code, typedef, false, inclusive);
+            let elem_type = match typedef {
+                Type::Sorted(el, _, dep) | Type::Index(el, _, dep) => {
+                    Type::Reference(*el, dep.clone())
+                }
+                _ => typedef.clone(),
+            };
+            *code = Value::Iter(
+                u16::MAX,
+                Box::new(start),
+                Box::new(v_block(
+                    vec![self.cl("OpStep", &ls)],
+                    elem_type,
+                    "Partial key match",
+                )),
+                Box::new(Value::Null),
+            );
         } else {
             let mut ls = vec![code.clone(), known.clone(), Value::Int(nr as i32)];
             ls.append(&mut key);
