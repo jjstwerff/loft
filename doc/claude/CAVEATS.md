@@ -144,29 +144,19 @@ pattern and emits a specific error naming the ordering problem and suggesting th
 
 ---
 
-## C37 — Calling the same generic function with two different struct-based types: slot conflict
+## C37 — Generic struct-type returns: debug store-lifetime assertion
 
-When the same generic function (e.g. `max_of<T: Ordered>`) is called with two
-different **struct** types in the same file, both specialisations share local variable
-names in the flat namespace.  The second specialisation's variables cannot be assigned
-slots and the runtime panics: `variable 'result' never assigned a slot`.
+Generic functions over struct types (C35/C36/C37) now work correctly in
+release builds.  In debug builds, the returned DbRef borrows a position
+inside the input vector's store.  When the vector is freed before the
+return value is used, the debug `valid()` check fires "Use after free".
 
-**Reproducer:**
-```loft
-struct Score { value: integer }
-fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
-fn main() {
-    a = max_of([4, 1, 9, 2]);              // max_of<integer> — OK alone
-    scores = [Score{value: 3}, Score{value: 7}];
-    b = max_of(scores);                    // max_of<Score> — slot conflict
-}
-```
-
-**Impact:** a generic function can only be instantiated with **one** concrete struct
-type per loft file.  Instantiation with two or more struct types in the same file panics.
-**Workaround:** write separate concrete wrapper functions for each struct type.
-**Planned fix:** needs investigation in flat-namespace slot assignment during generic
-specialisation (`src/state/codegen.rs`).  No milestone assigned yet.
+**Impact:** debug-only — release builds produce correct results.
+**Root cause:** the generic function returns a borrowed DbRef from the vector
+instead of deep-copying the struct record.  Similar to the T1.8c tuple
+deep-copy issue.
+**Planned fix:** deep-copy struct return values from generic functions,
+similar to `OpCopyRecord` in tuple destructuring.  No milestone assigned yet.
 
 ---
 
