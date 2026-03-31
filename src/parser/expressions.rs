@@ -751,6 +751,15 @@ use a separate collection or add after the loop"
                     self.append_to_file(code, file_v);
                     return Type::Void;
                 }
+                // C30: if re-assigning a Function variable that already has a closure
+                // work-var, tell emit_lambda_code to reuse it so OpDatabase clears
+                // and reclaims the same store instead of orphaning a new one.
+                if op == "="
+                    && var_nr != u16::MAX
+                    && let Some(&existing) = self.closure_vars.get(&var_nr)
+                {
+                    self.reuse_closure_work_var = existing;
+                }
                 // A5.3: record closure association if the RHS was a capturing lambda.
                 // NOTE: must come AFTER parse_assign_op because that is where the RHS
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
