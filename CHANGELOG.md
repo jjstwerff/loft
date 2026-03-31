@@ -67,6 +67,18 @@ All notable changes to the loft language and interpreter.
   `FreeFnRefClosure` before each `SetVar` on a `Function`-typed variable).  Also fixed
   a SIGSEGV in the debug logger that crashed when printing `FreeFnRefClosure` and other
   fn-ref opcodes.  Test: `closure_redefine_frees_old` (previously `#[ignore]`).
+- **Closures in vectors** (C31) — both capturing and non-capturing lambdas can now
+  be stored in `vector<fn(...)>`.  Synthetic "fn_ref" database type (16B) enables
+  vector element registration.  4×i32 decomposition for read/write using existing
+  opcodes.  Capturing closures' work-vars are marked `skip_free` when stored in a
+  vector to prevent premature cleanup.
+  Tests: `closure_in_vector`, `closure_in_vector_non_capturing`.
+
+### Diagnostic improvements
+
+- **I12.diag:** factory-method error now includes workaround hint (C33 mitigation).
+- **I8.5.diag:** concrete-left/generic-right operator pattern now produces a specific
+  error suggesting operand swap or method call (C34 mitigation).
 - **`element_store_size` corrected for `Type::Function`** (C31 groundwork) —
   previously returned 12 (falling through to the reference-sized arm); now returns
   16 (4 B definition number + 12 B closure DbRef).  A `debug_assert!` guard on the
