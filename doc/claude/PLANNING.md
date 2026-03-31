@@ -2554,6 +2554,44 @@ for (name, &idx) in &f.names {
 
 ---
 
+### S-borrow  Deep-copy struct returns from generics and vectors
+**Severity:** Medium — debug-only assertion; release builds work correctly
+**Description:** When a generic function returns a struct-typed value obtained
+from a vector element (e.g. `best = items[i]; return best`), the return value
+is a **borrowed** DbRef pointing inside the vector's store.  When the caller's
+scope cleanup frees the vector, the returned DbRef becomes dangling.  In debug
+builds, `valid()` catches this as "Use after free".  Release builds work because
+the store buffer hasn't been reused yet.
+
+This is the same class of issue as T1.8c (tuple struct-ref deep copy) and
+affects:
+- C35/C36/C37: generic functions returning struct types from vector elements
+- Any function returning a struct reference obtained via `OpGetVector`
+
+**Fix:** At the return site, when the return type is `Type::Reference` and the
+value was obtained from a vector element, emit `OpCopyRecord` to deep-copy the
+struct into an independent store.  This mirrors the T1.8c fix for tuple
+destructuring.
+
+The detection: in `generate_set` or `gen_return`, when assigning/returning a
+Reference value that came from an `OpGetVector` result, the DbRef points inside
+the vector's store (not an independent store).  The codegen should check if the
+source is a vector element and, if so, allocate a new store and copy.
+
+Alternatively: in `scopes::check`, when the return variable's value chain
+traces back to an `OpGetVector`, insert an `OpCopyRecord` before the return.
+
+**Guard:** `debug_assert!` in `fn_return` or `copy_result` that the returned
+DbRef's store is NOT the same as any input parameter's store (catches borrowed
+returns).
+
+**Files:** `src/state/codegen.rs` (gen_return or generate_set), `src/scopes.rs`
+**Tests:** C35/C36/C37 tests (currently `#[ignore]` for debug assertion)
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
 ### O1  Superinstruction merging
 **Status: deferred indefinitely — opcode table is full (254/256 used)**
 **Sources:** PERFORMANCE.md § P1
