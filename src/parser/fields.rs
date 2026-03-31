@@ -12,7 +12,11 @@ impl Parser {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
         if let Type::Unknown(_) = tp {
-            diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
+            if !self.first_pass {
+                diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
+            }
+            // In the first pass, skip the field name token so parsing continues.
+            self.lexer.has_identifier();
             return tp;
         }
         let mut t = tp;
@@ -67,6 +71,18 @@ impl Parser {
                     && self.lexer.has_token("(")
                 {
                     return self.parse_vector_method(code, &t, &field);
+                }
+                // I7: bounded method call on generic T — look for a T-stub.
+                // Verify the current function's bounds declare this method to
+                // prevent T-stubs from unrelated generics leaking in.
+                if let Some(_tv_name) = self.generic_type_name(&t) {
+                    let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
+                    if stub_nr != u32::MAX
+                        && self.has_bound_for_method(&field)
+                        && self.lexer.has_token("(")
+                    {
+                        return self.parse_method(code, stub_nr, t.clone());
+                    }
                 }
                 // P5.3: generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {
@@ -274,7 +290,16 @@ impl Parser {
         | Type::Index(d_nr, _, _)
         | Type::Spacial(d_nr, _, _) = t
         {
-            self.data.def(*d_nr).returned.clone()
+            let ret = self.data.def(*d_nr).returned.clone();
+            // S16b: struct-enum variants have .returned = Type::Enum(parent, true, []).
+            // For collection element access we need Type::Reference(variant_def_nr, [])
+            // so that field access and range-query for-loops resolve fields against the
+            // variant struct (not the parent enum), and for_type() can map the element type.
+            if matches!(ret, Type::Enum(_, true, _)) {
+                Type::Reference(*d_nr, Vec::new())
+            } else {
+                ret
+            }
         } else if matches!(t, Type::Text(_)) {
             t.clone()
         } else if let Type::RefVar(tp) = t {
@@ -371,20 +396,30 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
+        // A8.1: detect open-start `col[..hi]` or `col[..]` before parsing expression.
+        let open_start = self.lexer.peek_token("..") || self.lexer.peek_token("..=");
         let mut p = Value::Null;
-        let index_t = self.expression(&mut p);
-        if !self.convert(&mut p, &index_t, &key_types[0]) {
-            diagnostic!(self.lexer, Level::Error, "Invalid index key");
-        }
+        let _index_t = if open_start {
+            Type::Null // from=[] → no lower bound
+        } else {
+            let t = self.expression(&mut p);
+            if !self.convert(&mut p, &t, &key_types[0]) {
+                diagnostic!(self.lexer, Level::Error, "Invalid index key");
+            }
+            t
+        };
         let known = if self.first_pass {
             Value::Null
         } else {
             self.type_info(typedef)
         };
-        let mut nr = 1;
+        let mut nr = usize::from(!open_start);
         let mut key = Vec::new();
-        key.push(p);
+        if !open_start {
+            key.push(p);
+        }
         if key_types.len() > 1 {
             while self.lexer.has_token(",") {
                 if nr >= key_types.len() {
@@ -400,8 +435,14 @@ impl Parser {
                 nr += 1;
             }
         }
-        if self.lexer.has_token("..") {
-            let inclusive = self.lexer.has_token("=");
+        if self.lexer.has_token("..") || open_start {
+            // Consume "..=" if present (open_start already peeked but didn't consume)
+            let inclusive = if open_start {
+                self.lexer.has_token(".."); // consume the ".."
+                self.lexer.has_token("=")
+            } else {
+                self.lexer.has_token("=")
+            };
             let iter = self.create_unique("iter", &Type::Long);
             let mut ls = Vec::new();
             if !self.first_pass {
@@ -409,13 +450,18 @@ impl Parser {
                 ls.push(Value::Int(nr as i32));
                 ls.append(&mut key);
             }
-            let mut n = Value::Null;
-            self.expression(&mut n);
-            if !self.convert(&mut n, &index_t, &key_types[0]) {
-                diagnostic!(self.lexer, Level::Error, "Invalid index key");
+            // A8.1: open-end — if next token is `]` or `,`, skip upper-bound expression.
+            let open_end = self.lexer.peek_token("]") || self.lexer.peek_token(",");
+            let mut nr = 0;
+            if !open_end {
+                let mut n = Value::Null;
+                let n_t = self.expression(&mut n);
+                if !self.convert(&mut n, &n_t, &key_types[0]) && !self.first_pass {
+                    diagnostic!(self.lexer, Level::Error, "Invalid index key");
+                }
+                key.push(n);
+                nr = 1;
             }
-            key.push(n);
-            let mut nr = 1;
             if key_types.len() > 1 {
                 while self.lexer.has_token(",") {
                     if nr >= key_types.len() {
@@ -436,12 +482,20 @@ impl Parser {
             let start = v_set(iter, self.cl("OpIterate", &ls));
             let mut ls = vec![Value::Var(iter)];
             self.fill_iter(&mut ls, code, typedef, false, inclusive);
+            // S16b: annotate the step-block with the element type, not the collection type,
+            // so that IR dumps and any type-driven passes see the correct element type.
+            let elem_type = match typedef {
+                Type::Sorted(el, _, dep) | Type::Index(el, _, dep) => {
+                    Type::Reference(*el, dep.clone())
+                }
+                _ => typedef.clone(),
+            };
             *code = Value::Iter(
                 u16::MAX,
                 Box::new(start),
                 Box::new(v_block(
                     vec![self.cl("OpStep", &ls)],
-                    typedef.clone(),
+                    elem_type,
                     "Iterate keys",
                 )),
                 Box::new(Value::Null),

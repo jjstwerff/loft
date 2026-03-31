@@ -651,6 +651,7 @@ impl Parser {
             if let Type::Reference(r, _) = should
                 && *r == self.data.def_nr("reference")
                 && let Type::Reference(_, _) = test_type
+                && self.generic_type_name(test_type).is_none()
             {
                 return true;
             }
@@ -689,6 +690,29 @@ impl Parser {
             }
         }
         None
+    }
+
+    /// Check whether the current generic function's bounds include an interface that
+    /// declares the given method.  Returns false if not inside a generic or if no bound
+    /// declares the method.
+    pub(crate) fn has_bound_for_method(&self, method: &str) -> bool {
+        if self.context == u32::MAX {
+            return false;
+        }
+        let bounds = &self.data.definitions[self.context as usize].bounds;
+        for &iface_nr in bounds {
+            for child_nr in self.data.children_of(iface_nr) {
+                let name = &self.data.def(child_nr).name;
+                // Interface stubs use "__iface_{d_nr}_{method}" naming
+                if let Some(rest) = name.strip_prefix("__iface_")
+                    && let Some((_, m)) = rest.split_once('_')
+                    && m == method
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Search for definitions with the given name and call that with the given parameters.
@@ -821,7 +845,62 @@ impl Parser {
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);
         self.data.definitions[d_nr as usize].variables = vars;
+        // I6: verify the concrete type satisfies every declared bound.
+        // Emit a diagnostic and return u32::MAX if any required method is missing.
+        if !self.check_satisfaction(g_nr, type_nr) {
+            // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
+            // "Unknown function" error — the satisfaction error is sufficient.
+            // The function won't execute because parsing will halt on errors.
+        }
         d_nr
+    }
+
+    /// I6: Check that the concrete type (identified by `concrete_nr`) implements every
+    /// interface in `g_nr`'s bounds.  Returns `true` if satisfied (or no bounds),
+    /// `false` and emits a diagnostic for the first missing method otherwise.
+    fn check_satisfaction(&mut self, g_nr: u32, concrete_nr: u32) -> bool {
+        let bounds = self.data.definitions[g_nr as usize].bounds.clone();
+        if bounds.is_empty() {
+            return true;
+        }
+        if concrete_nr == u32::MAX {
+            return true; // can't check without a concrete type def_nr
+        }
+        let concrete_name = self.data.def(concrete_nr).name.clone();
+        let mut satisfied = true;
+        for iface_nr in bounds {
+            let iface_name = self.data.def(iface_nr).name.clone();
+            let children: Vec<u32> = self.data.children_of(iface_nr).collect();
+            for child_nr in children {
+                let child_name = self.data.def(child_nr).name.clone();
+                // Extract method name from "__iface_{d_nr}_{method}" or legacy "t_4Self_{method}"
+                let self_prefix = format!("t_{}Self_", "Self".len());
+                let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_") {
+                    rest.split_once('_')
+                        .map_or(rest.to_string(), |(_, m)| m.to_string())
+                } else if child_name.starts_with(&self_prefix) {
+                    child_name[self_prefix.len()..].to_string()
+                } else {
+                    child_name.clone()
+                };
+                // I9-prim: use find_fn which checks both the method-style convention
+                // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
+                let concrete_type = self.data.def(concrete_nr).returned.clone();
+                let found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+                if found == u32::MAX {
+                    let msg = crate::diagnostics::diagnostic_format(
+                        Level::Error,
+                        format_args!(
+                            "'{concrete_name}' does not satisfy interface '{iface_name}': missing {method_suffix}",
+                        ),
+                    );
+                    let peek_pos = self.lexer.peek().position.clone();
+                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+                    satisfied = false;
+                }
+            }
+        }
+        satisfied
     }
 
     /// Extract the type variable `def_nr` from a type tree.
@@ -931,6 +1010,21 @@ impl Parser {
                     .collect();
                 // Re-resolve call target if it references the type variable.
                 let new_d = Self::re_resolve_call(d, tv_nr, concrete, data);
+                // I9-vec: fix vector element access with baked-in elm_size=0.
+                // The template bakes elm_size=0 for type-variable elements and omits the
+                // value-extraction wrapper (OpGetInt/OpGetFloat/etc.).  Fix both here.
+                if new_d != u32::MAX
+                    && (new_d as usize) < data.definitions.len()
+                    && data.def(new_d).name == "OpGetVector"
+                    && new_args.len() == 3
+                    && matches!(&new_args[1], Value::Int(0))
+                {
+                    let elm_size = Self::type_element_size(concrete);
+                    let mut fixed = new_args;
+                    fixed[1] = Value::Int(elm_size);
+                    let call = Value::Call(new_d, fixed);
+                    return Self::wrap_vector_get_val(call, concrete, data);
+                }
                 Value::Call(new_d, new_args)
             }
             Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
@@ -986,6 +1080,56 @@ impl Parser {
                 )),
             ),
             other => other,
+        }
+    }
+
+    /// I9-vec: compute element store size from the Type alone (no database needed).
+    fn type_element_size(tp: &Type) -> i32 {
+        match tp {
+            Type::Integer(_, _, _)
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Text(_)
+            | Type::Enum(_, false, _) => 4,
+            Type::Long | Type::Float => 8,
+            _ => 12, // reference types: DbRef = 12 bytes
+        }
+    }
+
+    /// I9-vec: wrap an `OpGetVector` result with the appropriate value-extraction op
+    /// for concrete value types (`OpGetInt`, `OpGetFloat`, etc.).  Reference types need
+    /// no wrapper — the `DbRef` IS the value.
+    fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
+        let p = Value::Int(0);
+        let (op_name, extra) = match tp {
+            Type::Integer(_, _, _) => ("OpGetInt", None),
+            Type::Long => ("OpGetLong", None),
+            Type::Float => ("OpGetFloat", None),
+            Type::Single => ("OpGetSingle", None),
+            Type::Text(_) => ("OpGetText", None),
+            Type::Boolean => ("OpGetByte", Some(true)),
+            _ => return code, // reference/struct types: no wrapper needed
+        };
+        let d = data.def_nr(op_name);
+        if d == u32::MAX {
+            return code;
+        }
+        let val = if extra.is_some() {
+            // Boolean: GetByte + compare to 1
+            Value::Call(d, vec![code, p, Value::Int(0)])
+        } else {
+            Value::Call(d, vec![code, p])
+        };
+        if extra.is_some() {
+            let d_eq = data.def_nr("OpEqInt");
+            if d_eq == u32::MAX {
+                val
+            } else {
+                Value::Call(d_eq, vec![val, Value::Int(1)])
+            }
+        } else {
+            val
         }
     }
 
@@ -1312,24 +1456,56 @@ impl Parser {
 
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
-        let mut possible = Vec::new();
-        for pos in self
-            .data
-            .get_possible(&format!("Op{}", rename(op)), &self.lexer)
-        {
-            possible.push(*pos);
-        }
-        for pos in possible {
-            let tp = self.call_nr(code, pos, list, types, false);
-            if tp != Type::Null {
-                // We cannot compare two different types of enums, both will be integers in the same range
-                if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
-                    (types.first(), types.get(1))
-                    && f != s
-                {
-                    break;
+        // I8.1: if any operand is a generic type variable, skip the main operator loop
+        // and go straight to the T-stub lookup.  The main loop would otherwise false-match
+        // concrete operators (e.g. OpEqRef, OpEqBool) via implicit type conversions on T.
+        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        if let Some(tv_name) = generic_name {
+            if self.first_pass {
+                // Return the type variable type so assignments keep a consistent type
+                // through the first pass (Type::Void would trigger "cannot change type").
+                let tv_nr = self.data.def_nr(tv_name);
+                return if tv_nr == u32::MAX {
+                    Type::Unknown(0)
+                } else {
+                    Type::Reference(tv_nr, Vec::new())
+                };
+            }
+            let op_method = format!("Op{}", rename(op));
+            let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, op_method);
+            let stub_nr = self.data.def_nr(&stub_name);
+            // Only use the T-stub if the CURRENT function's bounds declare this method.
+            // Without this check, T-stubs from unrelated bounded generics (e.g., stdlib's
+            // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
+            if stub_nr != u32::MAX
+                && self.context != u32::MAX
+                && self.has_bound_for_method(&op_method)
+            {
+                let tp = self.call_nr(code, stub_nr, list, types, false);
+                if tp != Type::Null {
+                    return tp;
                 }
-                return tp;
+            }
+        } else {
+            let mut possible = Vec::new();
+            for pos in self
+                .data
+                .get_possible(&format!("Op{}", rename(op)), &self.lexer)
+            {
+                possible.push(*pos);
+            }
+            for pos in possible {
+                let tp = self.call_nr(code, pos, list, types, false);
+                if tp != Type::Null {
+                    // We cannot compare two different types of enums, both will be integers in the same range
+                    if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
+                        (types.first(), types.get(1))
+                        && f != s
+                    {
+                        break;
+                    }
+                    return tp;
+                }
             }
         }
         // P5.3: generic-specific error message for operators on T.
@@ -1696,6 +1872,7 @@ impl Parser {
                     && !self.parse_typedef()
                     && !self.parse_function()
                     && !self.parse_struct()
+                    && !self.parse_interface()
                     && !self.parse_constant())
             {
                 break;
@@ -2176,7 +2353,10 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
     }
 }
 
-fn rename(op: &str) -> &str {
+/// Map an operator token to its CamelCase name suffix used in `OpCamelCase` identifiers.
+/// E.g. `"<"` → `"Lt"`, so the method name becomes `"OpLt"`.
+/// Also used by I3.1 (`op <token>` sugar in interface bodies).
+pub(crate) fn rename(op: &str) -> &str {
     match op {
         "*" => "Mul",
         "+" => "Add",
@@ -2191,6 +2371,8 @@ fn rename(op: &str) -> &str {
         "!=" => "Ne",
         "<" => "Lt",
         "<=" => "Le",
+        ">" => "Gt",
+        ">=" => "Ge",
         "%" => "Rem",
         "!" => "Not",
         "+=" => "Append",

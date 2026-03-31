@@ -125,6 +125,8 @@ pub struct Function {
     scope_origins: HashMap<u16, &'static str>,
     pub done: bool,
     pub logging: bool,
+    // A5.6-2: maps fn_ref_var_nr → closure_var_nr for native codegen.
+    closure_var_map: HashMap<u16, u16>,
 }
 
 impl Display for Function {
@@ -158,6 +160,7 @@ impl Function {
             scope_origins: HashMap::new(),
             logging: false,
             done: false,
+            closure_var_map: HashMap::new(),
         }
     }
 
@@ -190,6 +193,9 @@ impl Function {
         self.loop_seq_ranges.clone_from(&other.loop_seq_ranges);
         self.scope_origins.clear();
         self.scope_origins.clone_from(&other.scope_origins);
+        self.closure_var_map.clear();
+        self.closure_var_map.clone_from(&other.closure_var_map);
+        other.closure_var_map.clear();
     }
 
     pub fn copy(other: &Function) -> Self {
@@ -213,6 +219,7 @@ impl Function {
             scope_origins: other.scope_origins.clone(),
             logging: other.logging,
             done: other.done,
+            closure_var_map: other.closure_var_map.clone(),
         }
     }
 
@@ -931,6 +938,26 @@ impl Function {
         self.variables[v as usize].skip_free = true;
     }
 
+    /// Register an existing variable as a work-reference so that `parse_code`
+    /// inserts `Set(v, Null)` at the function body start.  This pre-reserves v
+    /// in the outer scope, ensuring its frame slot survives inner-block FreeStack.
+    #[allow(clippy::doc_markdown)]
+    pub fn add_to_work_refs(&mut self, v: u16) {
+        self.work_refs.insert(v);
+    }
+
+    /// A5.6-2: Record that fn_ref variable `fn_ref` has its closure stored in `clos`.
+    #[allow(clippy::doc_markdown)]
+    pub fn set_closure_var_of(&mut self, fn_ref: u16, clos: u16) {
+        self.closure_var_map.insert(fn_ref, clos);
+    }
+
+    /// A5.6-2: Return the closure variable number for a fn_ref variable, if any.
+    #[allow(clippy::doc_markdown)]
+    pub fn closure_var_of(&self, fn_ref: u16) -> Option<u16> {
+        self.closure_var_map.get(&fn_ref).copied()
+    }
+
     pub fn inline_ref_references(&self) -> Vec<u16> {
         self.inline_ref_vars.iter().copied().collect()
     }
@@ -992,7 +1019,8 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
             2
         }
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
+        Type::Integer(_, _, _) | Type::Single | Type::Character => 4,
+        Type::Function(_, _) => 16,
         Type::Long | Type::Float => 8,
         Type::Text(_) if context == &Context::Variable => size_of::<String>() as u16,
         Type::Text(_) => size_of::<&str>() as u16,

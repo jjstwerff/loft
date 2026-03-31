@@ -1683,3 +1683,25 @@ pub fn fs_mkdir_all(path: &str) -> bool {
         std::fs::create_dir_all(path).is_ok()
     }
 }
+
+/// A5.6g: Store a closure DbRef associated with a lambda definition number.
+/// Called in generated native code when `OpStoreClosure` appears in the IR,
+/// immediately before the fn-ref variable is stored.
+/// The closure is later retrieved by `OpGetClosure` in the match-dispatch arm.
+#[allow(clippy::doc_markdown)]
+pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
+    stores.closure_map.insert(d_nr, closure);
+}
+
+/// A5.6g: Retrieve the closure DbRef for a lambda definition number.
+/// Called in generated native code inside match-dispatch arms for closure-capturing lambdas.
+/// Returns a null DbRef if no closure was registered for `d_nr`.
+#[must_use]
+#[allow(clippy::doc_markdown)]
+pub fn OpGetClosure(stores: &Stores, d_nr: u32) -> DbRef {
+    stores.closure_map.get(&d_nr).copied().unwrap_or(DbRef {
+        store_nr: 0,
+        rec: 0,
+        pos: 0,
+    })
+}

@@ -345,3 +345,13 @@ fn OpCoroutineYield(value_size: const u16);
 // CO1.6: Coroutine stdlib opcodes
 fn OpCoroutineExhausted(gen: reference) -> boolean;
 #rust"s.coroutine_exhausted(&@gen)"
+
+// A5.6-1: Push 16-byte fn-ref slot (d_nr + closure DbRef) from frame variable at pos.
+fn OpVarFnRef(pos: const u16) -> text;
+#rust"*s.get_var::<[i32; 4]>(@pos)"
+// A5.6-1: Pop 16-byte fn-ref value from stack into frame variable at pos.
+// _fnref: skips generated s.string() but operator() still accounts for its 16B.
+fn OpPutFnRef(pos: const u16, _fnref: text);
+#rust"{{ let v = *s.get_stack::<[i32; 4]>(); s.put_var(@pos, v); }}"
+
+

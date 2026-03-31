@@ -356,6 +356,18 @@ impl State {
                 self.code_add(var_pos);
                 Type::Void
             }
+            Value::FnRef(d_nr, clos_var, fn_type) => {
+                // A5.6-1: Construct 16-byte fn-ref on stack: push d_nr (4B) then closure DbRef (12B).
+                // Uses existing OpConstInt + OpVarRef — no new opcode needed.
+                // add_op → operator() already advances stack.position; no manual +4/+12 needed.
+                stack.add_op("OpConstInt", self);
+                self.code_add(*d_nr);
+                // clos_pos computed after ConstInt advanced stack.position by 4.
+                let clos_pos = stack.position - stack.function.stack(*clos_var);
+                stack.add_op("OpVarRef", self);
+                self.code_add(clos_pos);
+                *fn_type.clone()
+            }
         }
     }
 
@@ -443,6 +455,38 @@ impl State {
             self.code_put(end, (self.code_pos - false_pos) as i16); // actual end
         }
         tp
+    }
+
+    /// A5.6-2: generate a fn-ref assignment value, ensuring every branch in an if-else
+    /// expression produces a full 16-byte fn-ref slot ([d_nr 4B][closure DbRef 12B]).
+    /// A plain branch only pushes 4 bytes (d_nr via OpConstInt); OpNullRefSentinel pads
+    /// to 16 bytes.  For if-else, the sentinel must be emitted *inside* each branch so
+    /// both paths reach the join point with the same stack delta.
+    #[allow(clippy::doc_markdown)]
+    fn gen_fn_ref_value(&mut self, value: &Value, stack: &mut Stack) {
+        if let Value::If(test, t_val, f_val) = value {
+            self.generate(test, stack, false);
+            stack.add_op("OpGotoFalseWord", self);
+            let code_step = self.code_pos;
+            self.code_add(0i16);
+            let true_pos = self.code_pos;
+            let stack_pos = stack.position;
+            self.gen_fn_ref_value(t_val, stack);
+            stack.add_op("OpGotoWord", self);
+            let end = self.code_pos;
+            self.code_add(0i16);
+            let false_pos = self.code_pos;
+            self.code_put(code_step, (self.code_pos - true_pos) as i16);
+            stack.position = stack_pos;
+            self.gen_fn_ref_value(f_val, stack);
+            self.code_put(end, (self.code_pos - false_pos) as i16);
+        } else {
+            let before = stack.position;
+            self.generate(value, stack, false);
+            if stack.position - before < 16 {
+                stack.add_op("OpNullRefSentinel", self);
+            }
+        }
     }
 
     pub(super) fn gen_return(&mut self, v: &Value, stack: &mut Stack) -> Type {
@@ -769,6 +813,11 @@ impl State {
                     self.gen_set_first_vector_null(stack, v);
                 } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
                     self.gen_set_first_tuple_null(stack, v);
+                } else if matches!(stack.function.tp(v), Type::Function(_, _)) {
+                    // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
+                    // gen_fn_ref_value ensures every branch (including if-else) reaches the
+                    // join point with a full 16-byte slot.
+                    self.gen_fn_ref_value(value, stack);
                 } else {
                     self.generate(value, stack, false);
                 }
@@ -904,6 +953,13 @@ impl State {
                     tps.push(a.typedef.clone());
                 } else {
                     tps.push(self.generate(&parameters[a_nr], stack, false));
+                    // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).
+                    // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
+                    if matches!(a.typedef, Type::Function(_, _))
+                        && stack.position - stack_before < 16
+                    {
+                        stack.add_op("OpNullRefSentinel", self);
+                    }
                 }
                 #[cfg(debug_assertions)]
                 {
@@ -1207,7 +1263,8 @@ impl State {
         let code = self.code_pos;
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
-            Type::Integer(_, _, _) | Type::Function(_, _) => stack.add_op("OpVarInt", self),
+            Type::Integer(_, _, _) => stack.add_op("OpVarInt", self),
+            Type::Function(_, _) => stack.add_op("OpVarFnRef", self),
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
@@ -1362,6 +1419,12 @@ impl State {
                 stack.add_op("OpFreeStack", self);
                 self.code_add(size as u8);
                 self.code_add(stack.position - to);
+            } else if matches!(&block.result, Type::Function(_, _)) && stack.position < after {
+                // A5.6-2: a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
+                // If the block only pushed 4 bytes (d_nr via OpConstInt), pad to 16 with
+                // OpNullRefSentinel so both branches of an if-else reach the join point with
+                // the same stack delta.
+                stack.add_op("OpNullRefSentinel", self);
             }
             stack.position = after;
         }
@@ -1518,7 +1581,8 @@ impl State {
         self.generate(value, stack, false);
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
-            Type::Integer(_, _, _) | Type::Function(_, _) => stack.add_op("OpPutInt", self),
+            Type::Integer(_, _, _) => stack.add_op("OpPutInt", self),
+            Type::Function(_, _) => stack.add_op("OpPutFnRef", self),
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
@@ -1759,6 +1823,9 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         Value::Yield(inner) => {
             eprint!("yield ");
             print_ir(inner, data, vars, depth);
+        }
+        Value::FnRef(d_nr, clos_var, _) => {
+            eprint!("FnRef({d_nr}, clos={})", vars.name(*clos_var));
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 254] = &[
+pub const OPERATORS: &[fn(&mut State); 256] = &[
     goto,
     goto_word,
     goto_false,
@@ -264,6 +264,8 @@ pub const OPERATORS: &[fn(&mut State); 254] = &[
     coroutine_return,
     coroutine_yield,
     coroutine_exhausted,
+    var_fn_ref,
+    put_fn_ref,
 ];
 
 fn goto(s: &mut State) {
@@ -1940,4 +1942,18 @@ fn coroutine_exhausted(s: &mut State) {
     let v_gen = *s.get_stack::<DbRef>();
     let new_value = s.coroutine_exhausted(&v_gen);
     s.put_stack(new_value);
+}
+
+fn var_fn_ref(s: &mut State) {
+    let v_pos = *s.code::<u16>();
+    let new_value = *s.get_var::<[i32; 4]>(v_pos);
+    s.put_stack(new_value);
+}
+
+fn put_fn_ref(s: &mut State) {
+    let v_pos = *s.code::<u16>();
+    {
+        let v = *s.get_stack::<[i32; 4]>();
+        s.put_var(v_pos, v);
+    }
 }

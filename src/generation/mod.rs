@@ -72,6 +72,12 @@ fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
                 calls.insert((*n).cast_unsigned());
             }
         }
+        // A5.6-1: FnRef(d_nr, clos_var, _) is used for closure fn-refs.
+        Value::FnRef(d_nr, _, _) => {
+            if *d_nr >= 0 {
+                calls.insert((*d_nr).cast_unsigned());
+            }
+        }
         Value::If(test, t, f) => {
             collect_int_fn_refs(test, calls);
             collect_int_fn_refs(t, calls);

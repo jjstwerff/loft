@@ -359,6 +359,10 @@ fn generate_stdlib_section(
     let nav = build_nav(topic_info, stdlib_info, &stem);
     let mut body = String::new();
     for (sig, doc_lines) in &section.items {
+        // I11: interface declarations have no rendering path yet — skip gracefully.
+        if sig_kind(sig) == "interface" {
+            continue;
+        }
         let paras = group_paragraphs(doc_lines);
         if sig.is_empty() {
             body.push_str("<div class=\"section-desc\">");
@@ -452,6 +456,10 @@ fn sig_kind(sig: &str) -> &'static str {
         "struct"
     } else if trimmed.starts_with("pub enum ") {
         "enum"
+    } else if trimmed.starts_with("pub interface ") || trimmed.starts_with("interface ") {
+        // I11: interface declarations are not yet rendered; return a distinct kind so
+        // callers can skip them gracefully without mislabelling them as "const".
+        "interface"
     } else {
         "const"
     }
@@ -1038,4 +1046,19 @@ fn generate_typst(
     fs::write("doc/loft-reference.typ", &out)?;
     println!("Generated doc/loft-reference.typ");
     Ok(())
+}
+
+// ── I11 — gendoc guard for interface declarations ────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::sig_kind;
+
+    /// I11: `sig_kind` must return `"interface"` (not `"const"`) for interface
+    /// declarations so that they are skipped gracefully in stdlib rendering.
+    #[test]
+    fn sig_kind_interface_returns_interface() {
+        assert_eq!(sig_kind("pub interface Ordered { }"), "interface");
+        assert_eq!(sig_kind("interface Foo {}"), "interface");
+    }
 }

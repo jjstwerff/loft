@@ -99,6 +99,9 @@ pub enum Value {
     TuplePut(u16, u16, Box<Value>),
     // CO1.3c: Yield a value from a generator function.
     Yield(Box<Value>),
+    // A5.6-1: Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
+    // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
+    FnRef(i32, u16, Box<Type>),
 }
 
 #[allow(dead_code)]
@@ -597,6 +600,10 @@ pub enum DefType {
     // A generic function template parameterised by a single type variable.
     // Not compiled until instantiated at a concrete call site (P5).
     Generic,
+    // I2: an interface declaration — a named set of required method signatures.
+    // Method stubs are stored as attributes on this definition.
+    // Used by bounded generics (<T: InterfaceName>) for satisfaction checking (I6).
+    Interface,
 }
 
 impl Display for DefType {
@@ -646,6 +653,10 @@ pub struct Definition {
     /// A5.2: definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
+    /// I2: for generic functions — the `def_nr`s of all required interface bounds.
+    /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
+    /// are stored as multiple entries; checked for conflicting method signatures at I6.
+    pub bounds: Vec<u32>,
 }
 
 impl Definition {
@@ -924,6 +935,7 @@ impl Data {
             variables: Function::new(name, &position.file),
             pub_visible: false,
             closure_record: u32::MAX,
+            bounds: Vec::new(),
         };
         self.definitions.push(new_def);
         rec
@@ -938,7 +950,11 @@ impl Data {
         if !self.def(def_nr).is_operator() || self.def(def_nr).op_code != u16::MAX {
             return;
         }
-        assert!(self.op_codes < 256, "Too many defined operators");
+        assert!(
+            (self.op_codes as usize) < crate::fill::OPERATORS.len(),
+            "Too many defined operators (max {})",
+            crate::fill::OPERATORS.len()
+        );
         self.definitions[def_nr as usize].op_code = self.op_codes;
         self.operators.insert(self.op_codes as u8, def_nr);
         self.op_codes += 1;
@@ -1227,11 +1243,25 @@ impl Data {
             self.def(type_nr).name
         );
         let d_nr = self.source_nr(source, &name);
-        if d_nr == u32::MAX {
-            self.source_nr(source, &format!("n_{fn_name}"))
-        } else {
-            d_nr
+        if d_nr != u32::MAX {
+            return d_nr;
         }
+        let d_nr = self.source_nr(source, &format!("n_{fn_name}"));
+        if d_nr != u32::MAX {
+            return d_nr;
+        }
+        // I9-prim: fall back to the `possible` operator map for built-in types.
+        // Built-in operators use `add_op` (e.g. `OpLtInt`) rather than the method-style
+        // `t_7integer_OpLt` convention.  Search `possible[fn_name]` for an operator whose
+        // first parameter matches `tp`.
+        if let Some(ops) = self.possible.get(fn_name) {
+            for &op_nr in ops {
+                if !self.def(op_nr).attributes.is_empty() && self.attr_type(op_nr, 0).is_equal(tp) {
+                    return op_nr;
+                }
+            }
+        }
+        u32::MAX
     }
 
     /**
@@ -1406,6 +1436,16 @@ impl Data {
     pub fn def(&self, dnr: u32) -> &Definition {
         assert_ne!(dnr, u32::MAX, "Unknown definition");
         &self.definitions[dnr as usize]
+    }
+
+    /// Return the `def_nr`s of all definitions whose `parent` field equals `parent_nr`.
+    /// Used by the interface satisfaction checker (I6) to enumerate an interface's method stubs.
+    pub fn children_of(&self, parent_nr: u32) -> impl Iterator<Item = u32> + '_ {
+        self.definitions
+            .iter()
+            .enumerate()
+            .filter(move |(_, d)| d.parent == parent_nr)
+            .map(|(i, _)| i as u32)
     }
 
     /// # Panics
@@ -1632,6 +1672,7 @@ impl Data {
     # Errors
     When the file cannot be written.
     */
+    #[allow(clippy::too_many_lines)]
     pub fn show_code(
         &self,
         write: &mut dyn Write,
@@ -1736,6 +1777,9 @@ impl Data {
             Value::Yield(inner) => {
                 write!(write, "yield ")?;
                 self.show_code(write, vars, inner, indent, false)
+            }
+            Value::FnRef(d_nr, clos_var, _) => {
+                write!(write, "FnRef({d_nr}, {})", vars.name(*clos_var))
             }
         }
     }

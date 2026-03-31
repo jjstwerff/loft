@@ -6,8 +6,8 @@
 
 use super::{
     Argument, DefType, Function, HashMap, HashSet, Level, Link, Parser, Position, ToString, Type,
-    Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op, is_upper, v_block,
-    v_if,
+    Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op, is_upper, rename,
+    v_block, v_if,
 };
 
 impl Parser {
@@ -449,7 +449,7 @@ impl Parser {
             return false;
         };
         self.vars = Function::new(&fn_name, &self.lexer.pos().file);
-        if !self.default && !is_lower(&fn_name) {
+        if !self.default && !is_lower(&fn_name) && !is_op(&fn_name) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -459,6 +459,8 @@ impl Parser {
         // P5.1: detect `<T>` type parameter after function name.
         let mut is_generic = false;
         let mut type_var_name = String::new();
+        // I4: bound names collected from `<T: A + B>` — resolved to def_nrs in the second pass.
+        let mut pending_bounds: Vec<String> = Vec::new();
         if self.lexer.has_token("<") {
             if let Some(tv) = self.lexer.has_identifier() {
                 if !is_camel(&tv) && !self.first_pass {
@@ -471,6 +473,23 @@ impl Parser {
                 }
                 type_var_name = tv;
                 is_generic = true;
+                // I4: parse `<T: A + B>` bound list; collect raw names here, resolve in second pass.
+                if self.lexer.has_token(":") {
+                    loop {
+                        if let Some(bound_name) = self.lexer.has_identifier() {
+                            pending_bounds.push(bound_name);
+                        } else if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Expected interface name in type bound"
+                            );
+                        }
+                        if !self.lexer.has_token("+") {
+                            break;
+                        }
+                    }
+                }
             } else if !self.first_pass {
                 diagnostic!(
                     self.lexer,
@@ -534,6 +553,105 @@ impl Parser {
         };
         if self.context == u32::MAX {
             return false;
+        }
+        // I4: resolve pending bound names to interface def_nrs in the second pass.
+        if !self.first_pass && !pending_bounds.is_empty() {
+            let mut bounds = Vec::new();
+            for bname in &pending_bounds {
+                let b_nr = self.data.def_nr(bname);
+                if b_nr == u32::MAX {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not a known interface",
+                        bname
+                    );
+                } else if !matches!(self.data.def_type(b_nr), DefType::Interface) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not an interface — bounds must be interface names",
+                        bname
+                    );
+                } else {
+                    bounds.push(b_nr);
+                }
+            }
+            self.data.definitions[self.context as usize].bounds = bounds;
+            // I7/I8.1: Create T-parameterized stubs for each bound interface's methods so
+            // the body parser can emit `Value::Call(t_stub_nr, ...)` for method/op calls on T.
+            // `re_resolve_call` then substitutes these with the concrete type's implementation.
+            let tv_nr = self.data.def_nr(&type_var_name);
+            let self_nr = self.data.def_nr("Self");
+            if tv_nr != u32::MAX && self_nr != u32::MAX {
+                let self_prefix = format!("t_{}Self_", "Self".len());
+                let iface_nrs: Vec<u32> =
+                    self.data.definitions[self.context as usize].bounds.clone();
+                for iface_nr in iface_nrs {
+                    let children: Vec<u32> = self.data.children_of(iface_nr).collect();
+                    for child_nr in children {
+                        let child_name = self.data.def(child_nr).name.clone();
+                        // Extract method name from interface-scoped stub names:
+                        // "__iface_{d_nr}_{method}" → "method"
+                        // Also handle legacy "t_4Self_{method}" format.
+                        let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_")
+                        {
+                            rest.split_once('_')
+                                .map_or(rest.to_string(), |(_, m)| m.to_string())
+                        } else if child_name.starts_with(&self_prefix) {
+                            child_name[self_prefix.len()..].to_string()
+                        } else {
+                            child_name.clone()
+                        };
+                        let t_stub_name = format!(
+                            "t_{}{}_{}",
+                            type_var_name.len(),
+                            type_var_name,
+                            method_suffix
+                        );
+                        if self.data.def_nr(&t_stub_name) != u32::MAX {
+                            continue; // already created (e.g. multiple bounds share a method)
+                        }
+                        let attrs_count = self.data.def(child_nr).attributes.len();
+                        let t_stub_nr =
+                            self.data
+                                .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
+                        for a_nr in 0..attrs_count {
+                            let a_name = self.data.attr_name(child_nr, a_nr);
+                            let a_type = self.data.attr_type(child_nr, a_nr);
+                            let new_type = Self::substitute_type(
+                                a_type,
+                                self_nr,
+                                &crate::data::Type::Reference(tv_nr, Vec::new()),
+                            );
+                            self.data
+                                .add_attribute(&mut self.lexer, t_stub_nr, &a_name, new_type);
+                        }
+                        let ret_type = self.data.def(child_nr).returned.clone();
+                        let t_ret_type = Self::substitute_type(
+                            ret_type,
+                            self_nr,
+                            &crate::data::Type::Reference(tv_nr, Vec::new()),
+                        );
+                        self.data.set_returned(t_stub_nr, t_ret_type.clone());
+                        // I9-text: if the interface method returns text, add the hidden
+                        // __work_1 parameter that text_return would add for concrete
+                        // implementations.  Without this, the call-site argument count
+                        // won't match after re_resolve_call substitutes the concrete
+                        // text-returning method (which has the hidden param).
+                        if matches!(t_ret_type, crate::data::Type::Text(_)) {
+                            self.data.add_attribute(
+                                &mut self.lexer,
+                                t_stub_nr,
+                                "__work_1",
+                                crate::data::Type::RefVar(Box::new(crate::data::Type::Text(
+                                    Vec::new(),
+                                ))),
+                            );
+                        }
+                    }
+                }
+            }
         }
         let mut returned_not_null = false;
         let result = if self.lexer.has_token("->") {
@@ -1022,7 +1140,26 @@ impl Parser {
             d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Struct);
             self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
         } else if self.first_pass {
-            if let Type::Unknown(_) = self.data.definitions[d_nr as usize].returned {
+            // fix-tvscope: a type variable placeholder (e.g., `T` from generic stdlib
+            // functions) blocks user-defined struct of the same name.  Produce a clear
+            // diagnostic rather than the confusing "Redefined struct".
+            let is_type_var = {
+                let ex = &self.data.definitions[d_nr as usize];
+                ex.def_type == DefType::Struct
+                    && ex.attributes.is_empty()
+                    && matches!(&ex.returned, Type::Reference(r, _) if *r == d_nr)
+            };
+            if is_type_var {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}' is reserved as a generic type variable — choose a different struct name",
+                    id
+                );
+            } else if matches!(
+                self.data.definitions[d_nr as usize].returned,
+                Type::Unknown(_)
+            ) {
                 self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
@@ -1070,6 +1207,165 @@ impl Parser {
         true
     }
 
+    /// I3: parse an `interface` declaration and register it as `DefType::Interface`.
+    ///
+    /// Syntax: `interface Name { fn method(params) -> type [;] ... }`
+    ///
+    /// Method signatures are parsed for syntactic correctness (param/return types
+    /// resolved against the current scope).  `Self` is a placeholder type that
+    /// refers to the concrete satisfying type at instantiation (I6).
+    ///
+    /// This first-pass implementation registers the interface definition and
+    /// verifies syntax; semantic satisfaction checking comes in I5/I6.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn parse_interface(&mut self) -> bool {
+        if !self.lexer.has_token("interface") {
+            return false;
+        }
+        let Some(id) = self.lexer.has_identifier() else {
+            diagnostic!(self.lexer, Level::Error, "Expect interface name");
+            return true;
+        };
+        if !is_camel(&id) && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Interface name '{}' must be CamelCase",
+                id
+            );
+        }
+        // Register or locate the interface definition.
+        let mut d_nr = self.data.def_nr(&id);
+        if d_nr == u32::MAX {
+            if self.first_pass {
+                d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Interface);
+            }
+        } else if self.first_pass {
+            diagnostic!(self.lexer, Level::Error, "Redefined interface {}", id);
+        }
+        // I3: register 'Self' as a type placeholder for method signature parsing.
+        // 'Self' resolves to its own definition (like a generic type variable) so
+        // that parse_type_full succeeds.  I6 substitutes the concrete satisfying type.
+        if self.first_pass && self.data.def_nr("Self") == u32::MAX {
+            let self_nr = self.data.add_def("Self", self.lexer.pos(), DefType::Struct);
+            self.data
+                .set_returned(self_nr, Type::Reference(self_nr, Vec::new()));
+        }
+        let context = self.context;
+        if d_nr != u32::MAX {
+            self.context = d_nr;
+        }
+        if !self.lexer.token("{") {
+            self.context = context;
+            return true;
+        }
+        // Parse zero or more method/operator signatures.
+        while !self.lexer.peek_token("}") {
+            if self.lexer.peek().has == crate::lexer::LexItem::None {
+                break;
+            }
+            // I3.1: `op <token> (params) -> type` desugars to an `OpCamelCase` method stub.
+            let method_name = if self.lexer.has_keyword("op") {
+                if let crate::lexer::LexItem::Token(tok) = self.lexer.peek().has.clone() {
+                    self.lexer.cont();
+                    format!("Op{}", rename(&tok))
+                } else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Expected operator symbol after 'op' in interface body"
+                        );
+                    }
+                    self.lexer.cont();
+                    continue;
+                }
+            } else {
+                if !self.lexer.has_token("fn") {
+                    if !self.first_pass {
+                        diagnostic!(self.lexer, Level::Error, "Expected 'fn' in interface body");
+                    }
+                    self.lexer.cont();
+                    continue;
+                }
+                let Some(name) = self.lexer.has_identifier() else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Expected method name in interface"
+                        );
+                    }
+                    break;
+                };
+                name
+            };
+            let mut args = Vec::new();
+            if self.lexer.token("(") {
+                self.parse_arguments(&method_name, &mut args);
+                self.lexer.token(")");
+            }
+            let return_tp = if self.lexer.has_token("->") {
+                self.parse_type_full(d_nr, true)
+            } else {
+                None
+            };
+            // I6/I9-stub: register method stubs as children of the interface.
+            // Use interface-scoped names (`__iface_{d_nr}_{method}`) to avoid
+            // collision when multiple interfaces declare the same operator.
+            // `children_of(d_nr)` enumerates them for satisfaction checking;
+            // T-stub creation strips the prefix to extract the method name.
+            if self.first_pass && d_nr != u32::MAX {
+                let stub_name = format!("__iface_{d_nr}_{method_name}");
+                if self.data.def_nr(&stub_name) == u32::MAX {
+                    let stub_nr =
+                        self.data
+                            .add_def(&stub_name, self.lexer.pos(), DefType::Function);
+                    for a in &args {
+                        self.data.add_attribute(
+                            &mut self.lexer,
+                            stub_nr,
+                            &a.name,
+                            a.typedef.clone(),
+                        );
+                    }
+                    self.data.definitions[stub_nr as usize].parent = d_nr;
+                    if let Some(ref rt) = return_tp {
+                        self.data.set_returned(stub_nr, rt.clone());
+                    }
+                }
+            }
+            // I5 (phase 1): factory methods (Self in return without self: Self first param)
+            // are not yet supported.  Emit a clear diagnostic rather than silently producing
+            // wrong code when I6 lands.
+            if !self.first_pass {
+                let self_nr = self.data.def_nr("Self");
+                if self_nr != u32::MAX
+                    && let Some(Type::Reference(ret_nr, _)) = &return_tp
+                    && *ret_nr == self_nr
+                {
+                    let has_self_param = args.first().is_some_and(|a| {
+                        a.name == "self"
+                            && matches!(&a.typedef, Type::Reference(nr, _) if *nr == self_nr)
+                    });
+                    if !has_self_param {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "factory methods not yet supported: '{}' returns Self without a 'self: Self' parameter",
+                            method_name
+                        );
+                    }
+                }
+            }
+            self.lexer.has_token(";");
+        }
+        self.lexer.token("}");
+        self.lexer.has_token(";");
+        self.context = context;
+        true
+    }
+
     /// #91: DFS cycle detection on init field dependencies.
     fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>)]) {
         let names: HashSet<String> = init_deps.iter().map(|(n, _)| n.clone()).collect();
@@ -1094,6 +1390,7 @@ impl Parser {
     }
 
     // <field> ::= { <field_limit> | 'not' 'null' | <field_default> | 'check' '(' <expr> ')' | <type-id> [ '[' ['-'] <field> { ',' ['-'] <field> } ']' ] } }
+    #[allow(clippy::too_many_lines)] // pre-existing length; T1.11a added one branch
     pub(crate) fn parse_field(&mut self, d_nr: u32, a_name: &String) {
         let mut a_type: Type = Type::Unknown(0);
         let mut defined = false;
@@ -1145,6 +1442,23 @@ impl Parser {
                         }
                     }
                 }
+            } else if let Some(tp) = self.parse_type_full(d_nr, false) {
+                // T1.11a: tuple-typed struct fields are not allowed because tuples are
+                // stack-only values that cannot be stored in heap-allocated records.
+                if matches!(tp, Type::Tuple(_)) {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "struct field cannot have a tuple type — tuples are stack-only values"
+                        );
+                    }
+                    defined = true; // suppress the generic "needs type" fallback error
+                } else {
+                    defined = true;
+                    a_type = tp;
+                }
+                break;
             } else {
                 break;
             }

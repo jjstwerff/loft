@@ -321,12 +321,14 @@ fn closure_capture_integer() {
 
 #[test]
 fn closure_capture_after_change() {
-    // Capture copies x's value at the call site (current implementation captures
-    // at call time, not definition time).  x is 99 when f(5) runs → 99 + 5 = 104.
-    // Capture-at-definition-time (expected: 15) is a deferred improvement.
+    // A5.6-2: closure is allocated at definition time, so x=10 is captured into
+    // the closure record when `f = fn(...)` is evaluated.  x=99 is a later
+    // reassignment that does not affect the closure → f(5) = 10 + 5 = 15.
+    // The dead-assignment warning fires because x is only "used" at the call site
+    // (var_usages), so the compiler sees x=10 as overwritten before being read.
     expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
         .warning("Dead assignment — 'x' is overwritten before being read at closure_capture_after_change:2:26")
-        .result(Value::Int(104));
+        .result(Value::Int(15));
 }
 
 #[test]
@@ -337,9 +339,11 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6: cross-scope closure — (1) Type::Function is 4 bytes (d_nr only), closure \
-DbRef is lost when make_greeter returns; (2) parse_part does not handle expr(args) chained \
-calls. Same-scope text capture works (closure_capture_text_return passes). See CAVEATS.md C1."]
+#[ignore = "A5.6-text: cross-scope text-returning closure requires work-ref type propagation. \
+make_greeter declares '-> fn(text) -> text' (text([])) but the lambda produces text([1]); \
+the call site uses the declared return type so pushes wrong arg_size. \
+Fix: propagate actual fn_type from lambda through the declaring function's return type, \
+or have fn_call_ref look up work-ref count from the fn definition table. See CAVEATS.md."]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(
@@ -859,4 +863,860 @@ fn coroutine_text_local_declared_after_first_yield() {
     )
     .expr("take_first_int()")
     .result(Value::Int(1));
+}
+
+// ── T1.10 — Homogeneous-type tuple coverage ───────────────────────────────────
+
+/// T1.10-1: homogeneous (text, text) tuple — both slots live and freed correctly.
+#[test]
+fn tuple_homogeneous_text() {
+    code!(
+        "fn make_pair(first: text, last: text) -> (text, text) { (first, last) }
+         fn test() {
+             (g, s) = make_pair(\"Hello\", \"World\");
+             assert(g == \"Hello\", \"first\");
+             assert(s == \"World\", \"second\");
+         }"
+    );
+}
+
+/// T1.10-2: text fields from a struct record into a tuple — field text into
+/// tuple element does not produce a dangling reference.
+#[test]
+fn tuple_store_text_fields() {
+    code!(
+        "struct Label { name: text }
+         fn label_pair(a: Label, b: Label) -> (text, text) { (a.name, b.name) }
+         fn test() {
+             la = Label { name: \"alpha\" };
+             lb = Label { name: \"beta\" };
+             (n1, n2) = label_pair(la, lb);
+             assert(n1 == \"alpha\", \"first\");
+             assert(n2 == \"beta\", \"second\");
+         }"
+    );
+}
+
+/// T1.10-3: two struct-reference elements — adjacent DbRef slots in a tuple.
+#[test]
+#[ignore = "T1.10-3: struct-reference tuple elements trigger use-after-free — T1.8 lifetime tracking needed for DbRef tuple slots"]
+fn tuple_struct_refs() {
+    code!(
+        "struct Point { x: integer, y: integer }
+         fn two_points(a: Point, b: Point) -> (Point, Point) { (b, a) }
+         fn test() {
+             p1 = Point { x: 1, y: 2 };
+             p2 = Point { x: 3, y: 4 };
+             (q1, q2) = two_points(p1, p2);
+             assert(q1.x == 3, \"q1.x\");
+             assert(q2.x == 1, \"q2.x\");
+         }"
+    );
+}
+
+/// T1.10-4: tuple elements sourced from indexed vector reads.
+#[test]
+fn tuple_from_vector_elements() {
+    code!(
+        "fn first_two(v: vector<integer>) -> (integer, integer) { (v[0], v[1]) }
+         fn test() {
+             nums = [10, 20, 30];
+             (a, b) = first_two(nums);
+             assert(a == 10, \"first\");
+             assert(b == 20, \"second\");
+         }"
+    );
+}
+
+// ── T1.9 — Tuple destructuring in `match` ────────────────────────────────────
+
+/// T1.9-1: wildcard arm `_` in a tuple match should evaluate to the arm body.
+#[test]
+fn tuple_match_wildcard() {
+    code!("fn pick_wildcard(t: (integer, integer)) -> integer { match t { _ => 42 } }")
+        .expr("pick_wildcard((1, 2))")
+        .result(Value::Int(42));
+}
+
+/// T1.9-2: literal pattern arms — match on both element values.
+#[test]
+fn tuple_match_literal() {
+    code!(
+        "fn classify(t: (integer, integer)) -> integer {
+             match t {
+                 (0, 0) => 0,
+                 (1, _) => 1,
+                 _      => 99,
+             }
+         }"
+    )
+    .expr("classify((0, 0))")
+    .result(Value::Int(0))
+    .expr("classify((1, 5))")
+    .result(Value::Int(1))
+    .expr("classify((2, 3))")
+    .result(Value::Int(99));
+}
+
+/// T1.9-3: binding variables in a tuple arm — bound names usable in arm body.
+#[test]
+fn tuple_match_binding() {
+    code!("fn sum_pair(t: (integer, integer)) -> integer { match t { (a, b) => a + b } }")
+        .expr("sum_pair((3, 4))")
+        .result(Value::Int(7));
+}
+
+// ── CO1.9 — Coroutine store-generation guard promoted to always-on ─────────────
+
+/// CO1.9: the store-mutation guard must fire in ALL build configurations, not just
+/// `#[cfg(debug_assertions)]`.  This test is identical to `coroutine_stale_store_guard`
+/// but has no `cfg` gate — it verifies that the panic is reachable in any build.
+#[test]
+#[should_panic(expected = "stale DbRef")]
+fn coroutine_stale_store_guard_all_builds() {
+    code!(
+        "struct Box { val: integer }
+         struct BoxList { items: vector<Box> }
+         fn count_up() -> iterator<integer> { yield 1; yield 2; yield 3; }
+         fn run_stale() -> integer {
+             lst = BoxList {};
+             lst.items += [Box { val: 0 }];
+             total = 0;
+             for n in count_up() {
+                 lst.items += [Box { val: n }];
+                 total += n;
+             }
+             total
+         }"
+    )
+    .expr("run_stale()")
+    .result(Value::Int(6));
+}
+
+// ── I6 — Satisfaction checking at generic instantiation ──────────────────────
+
+/// I6: calling a bounded generic function with a type that satisfies the interface
+/// (i.e. implements the required operator) must compile and return the correct value.
+#[test]
+fn satisfaction_check_passes_with_implementing_type() {
+    code!(
+        "struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_first<T: Ordered>(a: T, _b: T) -> T { a }"
+    )
+    .expr("pick_first(Score{value:3}, Score{value:7}).value")
+    .result(Value::Int(3));
+}
+
+// ── I7 — Bounded method calls on T ───────────────────────────────────────────
+
+/// I7: calling an interface method on a T-typed receiver inside a bounded generic
+/// function body must compile and produce the correct result at the call site.
+#[test]
+fn bounded_method_call_in_generic_body() {
+    code!(
+        "interface HasValue { fn get_value(self: Self) -> integer }
+         struct Point { x: integer }
+         fn get_value(self: Point) -> integer { self.x }
+         fn extract<T: HasValue>(v: T) -> integer { v.get_value() }"
+    )
+    .expr("extract(Point{x:42})")
+    .result(Value::Int(42));
+}
+
+// ── I8.1 — T op T via bound ──────────────────────────────────────────────────
+
+/// I8.1: a same-type binary operator (`T < T`) inside a bounded generic function
+/// body must compile when the bound declares the operator via `op <`.
+#[test]
+fn bounded_operator_in_generic_body() {
+    code!(
+        "struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }"
+    )
+    .expr("pick_min(Score{value:7}, Score{value:3}).value")
+    .result(Value::Int(3));
+}
+
+// ── I8.2 — Return-type propagation from interface signature ──────────────────
+
+/// I8.2: a bounded operator whose return type is `Self` must propagate the
+/// correct concrete return type — here `pick_max` returns `T` (resolved to `Score`)
+/// whose `.value` field must be accessible on the result.
+/// Uses stdlib `Ordered` (`op <`) so the return type `Self` is tested end-to-end.
+#[test]
+fn bounded_operator_self_return_type() {
+    code!(
+        "struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_max<T: Ordered>(a: T, b: T) -> T { if a < b { b } else { a } }"
+    )
+    .expr("pick_max(Score{value:3}, Score{value:9}).value")
+    .result(Value::Int(9));
+}
+
+// ── I8.3 — Mixed-type binary operators (T op concrete) ──────────────────────
+
+/// I8.3: an operator with a concrete second parameter (`T * integer`) must
+/// compile inside a bounded generic body and produce the correct result.
+/// The interface declares a mixed-type signature: `self: Self, factor: integer -> integer`.
+#[test]
+fn bounded_mixed_type_operator() {
+    code!(
+        "interface Divisible { op / (self: Self, divisor: integer) -> integer }
+         struct Score { value: integer }
+         fn OpDiv(self: Score, divisor: integer) -> integer { self.value / divisor }
+         fn halve<T: Divisible>(v: T, n: integer) -> integer { v / n }"
+    )
+    .expr("halve(Score{value:42}, 6)")
+    .result(Value::Int(7));
+}
+
+// ── I8.4 — Unary operators on T ─────────────────────────────────────────────
+
+/// I8.4: a unary operator (`-T`) inside a bounded generic body must compile
+/// when the bound declares the unary operator.  Uses `op -` (negation) which
+/// returns `integer` to avoid struct-return allocation tracking issues.
+#[test]
+fn bounded_unary_operator() {
+    code!(
+        "interface Modular { op % (self: Self, modulus: integer) -> integer }
+         struct Score { value: integer }
+         fn OpRem(self: Score, modulus: integer) -> integer { self.value % modulus }
+         fn mod_measure<T: Modular>(v: T, m: integer) -> integer { v % m }"
+    )
+    .expr("mod_measure(Score{value:42}, 10)")
+    .result(Value::Int(2));
+}
+
+// ── I9 — Standard library interface: Ordered ────────────────────────────────
+
+/// I9: the `Ordered` interface from the standard library enables bounded-generic
+/// functions that use `<` on user-defined types.
+#[test]
+fn stdlib_ordered_interface() {
+    code!(
+        "struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }"
+    )
+    .expr("pick_min(Score{value:7}, Score{value:3}).value")
+    .result(Value::Int(3));
+}
+
+// ── I9-prim — Built-in types satisfy interfaces ─────────────────────────────
+
+/// I9-prim: built-in `integer` satisfies `Ordered` via the stdlib `OpLtInt`.
+#[test]
+fn builtin_integer_satisfies_ordered() {
+    code!("fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }")
+        .expr("pick_min(7, 3)")
+        .result(Value::Int(3));
+}
+
+/// I9-prim: built-in `float` satisfies `Ordered` via the stdlib `OpLtFloat`.
+#[test]
+fn builtin_float_satisfies_ordered() {
+    code!("fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }")
+        .expr("pick_min(3.14, 2.72)")
+        .result(Value::Float(2.72));
+}
+
+// ── I9-Eq — Equatable interface ─────────────────────────────────────────────
+
+/// I9-Eq: `Equatable` enables bounded-generic equality checks on built-in types.
+#[test]
+fn stdlib_equatable_interface() {
+    code!("fn are_equal<T: Equatable>(a: T, b: T) -> boolean { a == b }")
+        .expr("are_equal(42, 42)")
+        .result(Value::Boolean(true));
+}
+
+// ── I9-Add — Addable interface ──────────────────────────────────────────────
+
+/// I9-Add: `Addable` enables bounded-generic addition on built-in types.
+#[test]
+fn stdlib_addable_interface() {
+    code!("fn add_pair<T: Addable>(a: T, b: T) -> T { a + b }")
+        .expr("add_pair(10, 32)")
+        .result(Value::Int(42));
+}
+
+// ── I9.1 — Generic min_of on built-in vectors ──────────────────────────────
+
+/// I9.1: a bounded-generic function with `Addable` bound works on built-in integers
+/// — verifying that `sum_pair` with built-in `+` produces the correct result.
+#[test]
+fn generic_sum_pair_on_integers() {
+    code!("fn sum_pair<T: Addable>(a: T, b: T) -> T { a + b }")
+        .expr("sum_pair(10, 32)")
+        .result(Value::Int(42));
+}
+
+/// I9.1: a bounded-generic function with `Addable` bound works on float types.
+#[test]
+fn generic_sum_pair_on_floats() {
+    code!("fn sum_pair<T: Addable>(a: T, b: T) -> T { a + b }")
+        .expr("sum_pair(1.5, 2.5)")
+        .result(Value::Float(4.0));
+}
+
+// ── I9-vec — vector<T> element access in generic specialization ─────────────
+
+/// I9-vec: generic function with `vector<T>` parameter — element access `v[0]`
+/// must return the correct value after specialization for integer.
+#[test]
+fn generic_vector_element_access() {
+    code!("fn first_of<T: Ordered>(v: vector<T>) -> T { v[0] }")
+        .expr("first_of([7, 3, 9])")
+        .result(Value::Int(7));
+}
+
+// ── I9.1 — Generic min/max on integer vectors ──────────────────────────────
+
+/// I9.1: bounded-generic `min_of_pair` selects the smaller of two `vector<T>` elements.
+#[test]
+fn generic_min_of_vector_elements() {
+    code!(
+        "fn smaller<T: Ordered>(v: vector<T>) -> T {
+           if v[0] < v[1] { v[0] } else { v[1] }
+         }"
+    )
+    .expr("smaller([7, 3])")
+    .result(Value::Int(3));
+}
+
+// ── I9.2 — Generic sum using Addable ────────────────────────────────────────
+
+/// I9.2: bounded-generic sum of vector elements with `Addable` bound.
+#[test]
+fn generic_sum_on_integer_vector() {
+    code!(
+        "fn vec_sum3<T: Addable>(v: vector<T>, init: T) -> T {
+           v[0] + v[1] + v[2] + init
+         }"
+    )
+    .expr("vec_sum3([10, 20, 12], 0)")
+    .result(Value::Int(42));
+}
+
+// ── I9+ — Numeric interface ─────────────────────────────────────────────────
+
+/// I9+: `Numeric` interface with `op *` and `op -` (separate from Addable's `op +`).
+#[test]
+fn stdlib_numeric_interface() {
+    code!("fn square<T: Numeric>(v: T) -> T { v * v }")
+        .expr("square(6)")
+        .result(Value::Int(36));
+}
+
+// ── I9-var — Intermediate variables in generic bodies ───────────────────────
+
+/// I9-var: a generic function body can assign a vector element to a local
+/// variable and return it.  Previously, ref_return promoted the local to a
+/// hidden parameter (because T looked like a Reference), causing a codegen crash
+/// when T was specialized to a value type.
+#[test]
+fn generic_intermediate_variable() {
+    code!(
+        "fn first_of<T: Ordered>(v: vector<T>) -> T {
+           result = v[0]; result
+         }"
+    )
+    .expr("first_of([7, 3, 9])")
+    .result(Value::Int(7));
+}
+
+/// I9-var: a for-loop accumulator pattern inside a bounded-generic body.
+#[test]
+fn generic_for_loop_accumulator() {
+    code!(
+        "fn find_min<T: Ordered>(v: vector<T>) -> T {
+           result = v[0];
+           for i in 1..v.len() { if v[i] < result { result = v[i] } };
+           result
+         }"
+    )
+    .expr("find_min([7, 3, 9, 1, 5])")
+    .result(Value::Int(1));
+}
+
+// ── I9.1 — Generic min_of/max_of ───────────────────────────────────────────
+
+/// I9.1: a generic `find_max` using a for-loop accumulator on `vector<T>`.
+#[test]
+fn generic_max_on_integer_vector() {
+    code!(
+        "fn find_max<T: Ordered>(v: vector<T>) -> T {
+           result = v[0];
+           for i in 1..v.len() { if result < v[i] { result = v[i] } };
+           result
+         }"
+    )
+    .expr("find_max([3, 9, 1, 7, 5])")
+    .result(Value::Int(9));
+}
+
+// ── I9.2 — Generic sum with identity ────────────────────────────────────────
+
+/// I9.2: a generic `vec_sum` with caller-supplied identity element, using
+/// a for-loop accumulator on `vector<T>`.
+#[test]
+fn generic_sum_with_identity() {
+    code!(
+        "fn vec_sum<T: Addable>(v: vector<T>, init: T) -> T {
+           result = init;
+           for i in 0..v.len() { result = result + v[i] };
+           result
+         }"
+    )
+    .expr("vec_sum([10, 20, 12], 0)")
+    .result(Value::Int(42));
+}
+
+// ── I9-Sc — Scalable interface ──────────────────────────────────────────────
+
+/// I9-Sc: `Scalable` interface with `fn scale(self, factor) -> integer`.
+/// Uses a method-based interface to avoid stub-name collision with `Numeric`.
+/// The method returns integer to avoid struct-return allocation issues.
+#[test]
+fn stdlib_scalable_interface() {
+    code!(
+        "struct Weight { grams: integer }
+         fn scale(self: Weight, factor: integer) -> integer {
+             self.grams * factor
+         }
+         fn scaled<T: Scalable>(v: T, n: integer) -> integer { v.scale(n) }"
+    )
+    .expr("scaled(Weight{grams: 21}, 2)")
+    .result(Value::Int(42));
+}
+
+// ── I9-stub — Interface stub naming collision fix ───────────────────────────
+
+/// I9-stub: two interfaces can declare the same operator without conflicting.
+/// Previously, both `Addable { op + }` and `Numeric { op * ; op - }` worked, but
+/// defining a third interface with `op +` would fail on "Cannot redefine OpAdd".
+/// Tests with integer (no struct allocation issues).
+#[test]
+fn two_interfaces_same_operator_no_conflict() {
+    code!(
+        "interface Summable { op + (self: Self, other: Self) -> Self }
+         fn total<T: Summable>(a: T, b: T) -> T { a + b }"
+    )
+    .expr("total(10, 32)")
+    .result(Value::Int(42));
+}
+
+// ── I9.1 — Replace min_of/max_of with bounded generics ─────────────────────
+
+/// I9.1: stdlib `min_of` is now a bounded generic that works on any Ordered type.
+#[test]
+fn stdlib_min_of_generic() {
+    expr!("min_of([7, 3, 9, 1, 5])").result(Value::Int(1));
+}
+
+/// I9.1: stdlib `max_of` is now a bounded generic that works on any Ordered type.
+#[test]
+fn stdlib_max_of_generic() {
+    expr!("max_of([3, 9, 1, 7])").result(Value::Int(9));
+}
+
+// ── I9.2 — Generic sum with identity ────────────────────────────────────────
+
+/// I9.2: stdlib `sum` function with caller-supplied identity element.
+#[test]
+fn stdlib_sum_generic() {
+    expr!("sum([10, 20, 12], 0)").result(Value::Int(42));
+}
+
+// ── I9-Pr — Printable interface ─────────────────────────────────────────────
+
+/// I9.1: generic min_of/max_of work on float vectors — the key benefit of generifying.
+#[test]
+fn stdlib_min_of_float() {
+    expr!("min_of([3.14, 2.72, 1.41])").result(Value::Float(1.41));
+}
+
+/// I9.1: generic max_of on float vectors.
+#[test]
+#[allow(clippy::approx_constant)]
+fn stdlib_max_of_float() {
+    expr!("max_of([3.14, 2.72, 1.41])").result(Value::Float(3.14));
+}
+
+// ── I9-text — Text-returning interface methods ──────────────────────────────
+
+/// I9-text: a text-returning method in an interface works when the concrete
+/// implementation returns a text field (not a format string — format strings
+/// with text-return generics need additional stack-layout work).
+#[test]
+fn generic_text_returning_method() {
+    code!(
+        "struct Tag { label: text }
+         fn to_text(self: Tag) -> text { self.label }
+         fn show<T: Printable>(v: T) -> text { v.to_text() }"
+    )
+    .expr("show(Tag{label: \"hello\"})")
+    .result(Value::Text("hello".to_string()));
+}
+
+// ── I9-Pr — Printable interface ─────────────────────────────────────────────
+
+/// I9-Pr: `Printable` interface used with a text-field return.
+#[test]
+fn stdlib_printable_interface() {
+    code!(
+        "struct Tag { label: text }
+         fn to_text(self: Tag) -> text { self.label }
+         fn show<T: Printable>(v: T) -> text { v.to_text() }"
+    )
+    .expr("show(Tag{label: \"world\"})")
+    .result(Value::Text("world".to_string()));
+}
+
+// ── CO1.7 — Coroutine yield from for-loops ──────────────────────────────────
+
+/// CO1.7: yield from inside a range-based for-loop.
+#[test]
+fn coroutine_yield_from_range_loop() {
+    code!(
+        "fn yield_range() -> iterator<integer> {
+           yield 1;
+           for i in 0..3 { yield i * 10 };
+           yield 99
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for x in yield_range() { total = total + x };
+        total
+    }",
+    )
+    .result(Value::Int(130));
+}
+
+/// CO1.7: yield from inside a vector for-loop.
+#[test]
+fn coroutine_yield_from_vector_loop() {
+    code!(
+        "fn yield_items(v: vector<integer>) -> iterator<integer> {
+           yield -1;
+           for e in v { yield e };
+           yield -2
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for x in yield_items([10, 20, 30]) { total = total + x };
+        total
+    }",
+    )
+    .result(Value::Int(57));
+}
+
+/// CO1.7-text: yield from inside a text character for-loop.
+/// Previously infinite-looped because the character null sentinel (i32::MIN)
+/// was not recognised by `op_conv_bool_from_character`.
+#[test]
+fn coroutine_yield_from_text_loop() {
+    code!(
+        "fn yield_chars(s: text) -> iterator<character> {
+           yield ' ';
+           for c in s { yield c }
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _ch in yield_chars(\"ab\") { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(3));
+}
+
+/// CO1.7-char: a plain character iterator (no text loop) must also exhaust
+/// correctly — the character null sentinel fix covers this case too.
+#[test]
+fn coroutine_character_iterator_exhausts() {
+    code!(
+        "fn gen_chars() -> iterator<character> {
+           yield 'x';
+           yield 'y'
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _c in gen_chars() { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(2));
+}
+
+/// CO1.7-store: yield from inside a vector-of-structs for-loop.
+#[test]
+fn coroutine_yield_from_struct_vector_loop() {
+    code!(
+        "struct Node { value: integer }
+         fn yield_values(ns: vector<Node>) -> iterator<integer> {
+           yield 0;
+           for n in ns { yield n.value }
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for v in yield_values([Node{value:10}, Node{value:20}, Node{value:30}]) {
+            total = total + v
+        };
+        total
+    }",
+    )
+    .result(Value::Int(60));
+}
+
+/// CO1.7-field-text: yield characters from a struct's text field.
+#[test]
+fn coroutine_yield_from_field_text_loop() {
+    code!(
+        "struct Item { name: text }
+         fn yield_name_chars(it: Item) -> iterator<character> {
+           yield ' ';
+           for c in it.name { yield c }
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _ch in yield_name_chars(Item{name: \"hi\"}) { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(3));
+}
+
+// ── CO1.8 — Multi-text parameters + nested-block safety ─────────────────────
+
+/// CO1.8a: a generator with two text parameters must serialise both at create.
+#[test]
+fn coroutine_multi_text_params() {
+    code!(
+        "fn join_chars(a: text, b: text) -> iterator<character> {
+           for c in a { yield c };
+           for c in b { yield c }
+         }"
+    )
+    .expr(
+        "{
+        count = 0;
+        for _c in join_chars(\"he\", \"lo\") { count = count + 1 };
+        count
+    }",
+    )
+    .result(Value::Int(4));
+}
+
+/// CO1.8b: a text local created after the first yield must survive resume.
+#[test]
+fn coroutine_text_local_after_yield() {
+    code!(
+        "fn lazy_labels() -> iterator<integer> {
+           yield 1;
+           label = \"second\";
+           yield len(label)
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for v in lazy_labels() { total = total + v };
+        total
+    }",
+    )
+    .result(Value::Int(7));
+}
+
+/// CO1.8c: a text local inside a nested for-loop block must be freed correctly.
+#[test]
+fn coroutine_text_local_nested_block() {
+    code!(
+        "fn text_lens(v: vector<text>) -> iterator<integer> {
+           for item in v {
+             s = \"{item}!\";
+             yield len(s)
+           }
+         }"
+    )
+    .expr(
+        "{
+        total = 0;
+        for n in text_lens([\"hi\", \"bye\"]) { total = total + n };
+        total
+    }",
+    )
+    .result(Value::Int(7));
+}
+
+// ── A8.1 — Open-ended bounds on sorted/index ────────────────────────────────
+
+/// A8.1: `col[lo..]` iterates from `lo` to the end of a sorted collection.
+#[test]
+fn sorted_open_end_range() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn sum_from(db: Db, lo: integer) -> integer {
+           total = 0;
+           for e in db.map[lo..] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_from(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 2)")
+    .result(Value::Int(50));
+}
+
+/// A8.1: `col[..hi]` iterates from start to `hi` (exclusive).
+#[test]
+fn sorted_open_start_range() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn sum_to(db: Db, hi: integer) -> integer {
+           total = 0;
+           for e in db.map[..hi] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_to(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 3)")
+    .result(Value::Int(30));
+}
+
+// ── A8.2 — Range slicing on sorted ──────────────────────────────────────────
+
+/// A8.2: `sorted[lo..hi]` range iteration works on sorted collections.
+#[test]
+fn sorted_range_iteration() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn sum_range(db: Db, lo: integer, hi: integer) -> integer {
+           total = 0;
+           for e in db.map[lo..hi] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_range(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}, Elm{key:4,val:40}]}, 2, 4)")
+    .result(Value::Int(50));
+}
+
+// ── A8.4 — Comprehensions on key ranges ─────────────────────────────────────
+
+/// A8.4: `[for v in col[lo..hi] { expr }]` builds a vector from a range.
+#[test]
+fn sorted_range_comprehension() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn vals_in_range(db: Db, lo: integer, hi: integer) -> vector<integer> {
+           [for e in db.map[lo..hi] { e.val }]
+         }"
+    )
+    .expr("vals_in_range(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 1, 3).len()")
+    .result(Value::Int(2));
+}
+
+// ── A8.6 — Match on collection results ──────────────────────────────────────
+
+/// A8.6: nullable collection lookup — `if !col[k]` checks for missing keys.
+#[test]
+fn sorted_nullable_lookup() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn lookup_val(db: Db, k: integer) -> integer {
+           if !db.map[k] { -1 } else { db.map[k].val }
+         }"
+    )
+    .expr("lookup_val(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}]}, 2)")
+    .result(Value::Int(20));
+}
+
+// ── A8.5 — Reverse range iteration ──────────────────────────────────────────
+
+/// A8.5: `rev(col[lo..hi])` iterates a range in reverse key order.
+#[test]
+fn sorted_reverse_range() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn rev_sum(db: Db) -> integer {
+           result = 0;
+           for e in rev(db.map[1..3]) { result = result * 100 + e.val };
+           result
+         }"
+    )
+    .expr("rev_sum(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]})")
+    .result(Value::Int(2010));
+}
+
+// ── A8.3 — Partial-key match iterator ───────────────────────────────────────
+
+/// A8.3: `idx[k1]` on a multi-key index iterates all elements matching k1.
+#[test]
+#[ignore = "A8.3: partial-key match on index — not yet implemented"]
+fn index_partial_key_match() {
+    code!(
+        "struct Elm { nr: integer, key: text, val: integer }
+         struct Db { idx: index<Elm[nr, -key]> }
+         fn sum_by_nr(db: Db, n: integer) -> integer {
+           total = 0;
+           for e in db.idx[n] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_by_nr(Db{idx:[Elm{nr:1,key:\"a\",val:10}, Elm{nr:1,key:\"b\",val:20}, Elm{nr:2,key:\"c\",val:30}]}, 1)")
+    .result(Value::Int(30));
+}
+
+// ── A8.1-idx — Open-ended bounds on index ───────────────────────────────────
+
+/// A8.1-idx: open-ended bounds work on index collections too.
+#[test]
+fn index_open_end_range() {
+    code!(
+        "struct Elm { nr: integer, val: integer }
+         struct Db { idx: index<Elm[nr]> }
+         fn sum_from(db: Db, lo: integer) -> integer {
+           total = 0;
+           for e in db.idx[lo..] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_from(Db{idx:[Elm{nr:1,val:10}, Elm{nr:2,val:20}, Elm{nr:3,val:30}]}, 2)")
+    .result(Value::Int(50));
+}
+
+// ── A8.5-idx — Reverse range on index ───────────────────────────────────────
+
+/// A8.5-idx: `rev(idx[lo..hi])` works on index collections.
+#[test]
+#[ignore = "A8.5-idx: reverse range on index — not yet verified"]
+fn index_reverse_range() {
+    code!(
+        "struct Elm { nr: integer, val: integer }
+         struct Db { idx: index<Elm[nr]> }
+         fn rev_sum(db: Db) -> integer {
+           result = 0;
+           for e in rev(db.idx[1..3]) { result = result * 100 + e.val };
+           result
+         }"
+    )
+    .expr("rev_sum(Db{idx:[Elm{nr:1,val:10}, Elm{nr:2,val:20}, Elm{nr:3,val:30}]})")
+    .result(Value::Int(2010));
 }

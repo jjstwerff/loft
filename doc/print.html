@@ -49,6 +49,7 @@
 <li><a href="#28-tuples">Tuples</a> — <span class="toc-desc">Grouping values without defining a struct</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
+<li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
 <li class="toc-indent"><a href="#stdlib-math">Math</a></li>
 <li class="toc-indent"><a href="#stdlib-exp-ln-log2-log10">exp / ln / log2 / log10</a></li>
 <li class="toc-indent"><a href="#stdlib-min-max-clamp">min / max / clamp</a></li>
@@ -1863,7 +1864,7 @@ for e in data#errors { log_warn(e) }
 </section>
 <section class="print-section" id="26-closures">
 <h1>Closures</h1>
-<p>A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.</p>
+<p>#warn Dead assignment — <code>base</code> is overwritten before being read @TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.</p>
 <h2 id="integer-capture">Integer capture</h2>
 <p>A lambda may read any integer variable in scope at the call site. Store the lambda, then call it by name.</p>
 <h2 id="multiple-integer-captures">Multiple integer captures</h2>
@@ -1895,11 +1896,11 @@ for e in data#errors { log_warn(e) }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">make_msg</span>(<span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"greeting capture"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">make_msg</span>(<span class="st">"Loft"</span>) == <span class="st">"Hello, Loft!"</span>, <span class="st">"greeting capture 2"</span>);</code></pre>
 <h2 id="capture-timing">Capture timing</h2>
-<p><code>base</code> is 10 when the lambda is written but 20 when it is called. The lambda sees the value at call time: 20.</p>
+<p>Closures capture at definition time. <code>base</code> is 10 when the lambda is written; reassigning <code>base</code> to 20 afterwards does not affect the captured value.</p>
 <pre><code>  base = <span class="nm">10</span>;
   add_base = <span class="kw">fn</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { base + n };
   base = <span class="nm">20</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add_base</span>(<span class="nm">5</span>) == <span class="nm">25</span>, <span class="st">"sees base=20 at call time: {add_base(5)}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add_base</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"sees base=10 at definition time: {add_base(5)}"</span>);</code></pre>
 <h2 id="non-capturing-lambdas-with-higher-order-functions">Non-capturing lambdas with higher-order functions</h2>
 <p>No capture needed here — the lambda uses only its own parameter.</p>
 <pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
@@ -1914,7 +1915,7 @@ for e in data#errors { log_warn(e) }
 </section>
 <section class="print-section" id="27-coroutines">
 <h1>Coroutines</h1>
-<p>A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
+<p>#warn Variable d is never read @TITLE: Lazy sequences with generators and yield A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
 <h2 id="declaring-a-generator-function">Declaring a generator function</h2>
 <p>A function whose return type is <code>iterator&lt;T&gt;</code> is a generator. <code>yield value</code> emits one item and pauses; the next call resumes from there.</p>
 <h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
@@ -2309,6 +2310,32 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub type i32 = integer size(4)</code></pre>
 <p>Full 32-bit integer range, 4 bytes.</p>
 </div>
+<h2 id="stdlib-interfaces">Interfaces</h2>
+<p class="section-desc">Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.</p>
+<div class="item">
+<pre><code>pub interface Ordered</code></pre>
+<p>Types that support the `&lt;` comparison operator. Satisfied by integer, long, single, float, text, and any user type defining OpLt.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Equatable</code></pre>
+<p>Types that support the `==` equality operator. Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Addable</code></pre>
+<p>Types that support the `+` addition operator, returning the same type. Satisfied by integer, long, single, float, and user types defining OpAdd.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Numeric</code></pre>
+<p>Types that support `*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Scalable</code></pre>
+<p>Types that support integer scaling via a `scale` method. Uses a method (not `op *`) to avoid stub-name collision with `Numeric`. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -&gt; integer`.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Printable</code></pre>
+<p>Types that can be converted to text via a `to_text` method. User types satisfy Printable by defining `fn to_text(self: T) -&gt; text`.</p>
+</div>
 <h2 id="stdlib-math">Math</h2>
 <p class="section-desc">Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations</p>
 <div class="item">
@@ -2643,12 +2670,16 @@ for e in data#errors { log_warn(e) }
 <p>Sum of all integer elements. Returns 0 for an empty vector.</p>
 </div>
 <div class="item">
-<pre><code>pub fn min_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
-<p>Smallest integer element.</p>
+<pre><code>pub fn min_of&lt;T: Ordered&gt;(v: vector&lt;T&gt;) -&gt; T</code></pre>
+<p>Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op &lt;).</p>
 </div>
 <div class="item">
-<pre><code>pub fn max_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
-<p>Largest integer element.</p>
+<pre><code>pub fn max_of&lt;T: Ordered&gt;(v: vector&lt;T&gt;) -&gt; T</code></pre>
+<p>Largest element in a non-empty vector.  Works on any type satisfying Ordered (op &lt;).</p>
+</div>
+<div class="item">
+<pre><code>pub fn sum&lt;T: Addable&gt;(v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
+<p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42</p>
 </div>
 <h2 id="stdlib-a10-field-iteration-support-types">A10: Field iteration support types</h2>
 <div class="item">

@@ -234,10 +234,18 @@ impl Parser {
             }
             tp = result.clone();
         }
-        if let Type::Text(ls) = t {
-            self.text_return(ls);
-        } else if let Type::Reference(_, ls) | Type::Vector(_, ls) = t {
-            self.ref_return(ls);
+        // I9-var: skip ref_return/text_return for generic templates.
+        // The return type T = Reference(tv_nr) triggers ref_return which promotes local
+        // variables to hidden parameters.  After specialization to a value type (Integer,
+        // Float), those hidden params are wrong.  Specialized copies inherit the template's
+        // body and variable table; struct-returning specializations work correctly because
+        // they return arguments (not locals), so ref_return would be a no-op anyway.
+        if self.data.def_type(self.context) != DefType::Generic {
+            if let Type::Text(ls) = t {
+                self.text_return(ls);
+            } else if let Type::Reference(_, ls) | Type::Vector(_, ls) = t {
+                self.ref_return(ls);
+            }
         }
         tp
     }
@@ -334,6 +342,10 @@ impl Parser {
             // vector types — dispatch to vector match handler.
             Type::Vector(_, _) => {
                 return self.parse_vector_match(subject, &subject_type, code);
+            }
+            // T1.9: tuple types — dispatch to tuple match handler.
+            Type::Tuple(_) => {
+                return self.parse_tuple_match(subject, &subject_type, code);
             }
             _ => {
                 if !self.first_pass {
@@ -1422,6 +1434,229 @@ impl Parser {
         result_type
     }
 
+    /// Parse a `match` expression whose subject is a `Type::Tuple`.
+    ///
+    /// Arm syntax: `_ => expr` (wildcard) or `(pat0, pat1, ...) => expr` (element patterns).
+    /// Element patterns: `_` (wildcard), `identifier` (binding), or a literal value.
+    /// Arms are separated by `,` or `;` (optional after the last arm).
+    #[allow(clippy::too_many_lines)]
+    fn parse_tuple_match(&mut self, subject: Value, subject_type: &Type, code: &mut Value) -> Type {
+        let Type::Tuple(elem_types) = subject_type else {
+            unreachable!("parse_tuple_match called with non-tuple subject")
+        };
+        let elem_types = elem_types.clone();
+        let arity = elem_types.len();
+
+        // Store the tuple in a temp var so elements can be read multiple times.
+        let tmp = self.create_unique("match_tuple", subject_type);
+        self.vars.defined(tmp);
+
+        self.lexer.token("{");
+
+        // arms: (Option<cond>, arm_body, arm_type, Option<guard>)
+        let mut arms: Vec<(Option<Value>, Value, Type, Option<Value>)> = Vec::new();
+        let mut has_wildcard = false;
+        let mut result_type = Type::Void;
+
+        loop {
+            if self.lexer.peek_token("}") {
+                break;
+            }
+
+            let mut is_wildcard = false;
+            let mut bindings: Vec<Value> = Vec::new();
+            let mut elem_conds: Vec<Value> = Vec::new();
+
+            if let Some(id) = self.lexer.has_identifier() {
+                if id == "_" {
+                    is_wildcard = true;
+                } else if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "expected '_' or a tuple pattern '(...)' in tuple match"
+                    );
+                }
+            } else if self.lexer.has_token("(") {
+                // Element-by-element pattern
+                for (i, elem_type) in elem_types.iter().enumerate().take(arity) {
+                    if i > 0 && !self.lexer.has_token(",") && !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "expected ',' between tuple pattern elements"
+                        );
+                        break;
+                    }
+                    let elem_type = elem_type.clone();
+                    let elem_get = Value::TupleGet(tmp, i as u16);
+                    if let Some(id) = self.lexer.has_identifier() {
+                        if id == "_" {
+                            // element wildcard — no condition, no binding
+                        } else {
+                            // binding variable — always matches, captures element value
+                            let bind_nr = self.vars.add_variable(&id, &elem_type, &mut self.lexer);
+                            self.vars.defined(bind_nr);
+                            bindings.push(v_set(bind_nr, elem_get));
+                        }
+                    } else {
+                        // literal: build elem_get == literal condition
+                        let negate = self.lexer.has_token("-");
+                        let lit: Value = if let Some(n) = self.lexer.has_integer() {
+                            let v = n as i32;
+                            Value::Int(if negate { -v } else { v })
+                        } else if let Some(n) = self.lexer.has_long() {
+                            let v = n as i64;
+                            Value::Long(if negate { -v } else { v })
+                        } else if let Some(n) = self.lexer.has_float() {
+                            Value::Float(if negate { -n } else { n })
+                        } else if let Some(s) = self.lexer.has_cstring() {
+                            Value::Text(s)
+                        } else if self.lexer.has_token("true") {
+                            Value::Boolean(true)
+                        } else if self.lexer.has_token("false") {
+                            Value::Boolean(false)
+                        } else {
+                            let mut e = Value::Null;
+                            self.expression(&mut e);
+                            e
+                        };
+                        let mut elem_cond = Value::Null;
+                        self.call_op(
+                            &mut elem_cond,
+                            "==",
+                            &[elem_get, lit],
+                            &[elem_type.clone(), elem_type],
+                        );
+                        elem_conds.push(elem_cond);
+                    }
+                }
+                if !self.lexer.has_token(")") && !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "expected ')' to close tuple pattern"
+                    );
+                }
+                // All element positions were wildcards/bindings with no literal conditions.
+                // The arm is effectively unconditional (wildcard) when there are no bindings
+                // either; if there are bindings it acts like a wildcard-with-capture.
+                if elem_conds.is_empty() && bindings.is_empty() {
+                    is_wildcard = true;
+                }
+            } else if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "expected '_' or a tuple pattern '(...)' in tuple match"
+                );
+            }
+
+            // Optional guard clause
+            let guard_opt = if self.lexer.has_keyword("if") {
+                let mut g = Value::Null;
+                let gt = self.expression(&mut g);
+                if !self.first_pass && gt != Type::Boolean {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "guard must be boolean, got {}",
+                        gt.name(&self.data)
+                    );
+                }
+                Some(g)
+            } else {
+                None
+            };
+
+            if is_wildcard && guard_opt.is_none() {
+                has_wildcard = true;
+            }
+
+            self.lexer.token("=>");
+
+            let arm_write_state = self.vars.save_and_clear_write_state();
+            self.vars.clear_write_state();
+            let mut arm_body = Value::Null;
+            let arm_type = if self.lexer.peek_token("{") {
+                self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
+            } else {
+                self.expression(&mut arm_body)
+            };
+            self.vars.restore_write_state(&arm_write_state);
+
+            // Combine element conditions with AND (short-circuit: if a { b } else { false })
+            let cond: Option<Value> = if elem_conds.is_empty() {
+                None
+            } else {
+                let mut combined = elem_conds.remove(0);
+                for c in elem_conds {
+                    combined = v_if(combined, c, Value::Boolean(false));
+                }
+                Some(combined)
+            };
+
+            // Combine condition with guard
+            let full_cond = match (cond, guard_opt) {
+                (Some(c), Some(g)) => Some(v_if(c, g, Value::Boolean(false))),
+                (Some(c), None) => Some(c),
+                (None, Some(g)) => Some(g),
+                (None, None) => None,
+            };
+
+            // Prepend bindings to arm body
+            let arm_body = if bindings.is_empty() {
+                arm_body
+            } else {
+                bindings.push(arm_body);
+                v_block(bindings, arm_type.clone(), "tuple_binding")
+            };
+
+            if result_type == Type::Void {
+                result_type = arm_type.clone();
+            }
+            arms.push((full_cond, arm_body, arm_type, None));
+
+            if has_wildcard {
+                self.lexer.has_token(",");
+                self.lexer.has_token(";");
+                break;
+            }
+            if self.lexer.peek_token("}") {
+                self.lexer.has_token(",");
+                self.lexer.has_token(";");
+            } else {
+                // optional arm separator
+                self.lexer.has_token(",");
+                self.lexer.has_token(";");
+            }
+        }
+        self.lexer.token("}");
+
+        // Build if-else chain (last arm is fallback / wildcard)
+        let fallback = if has_wildcard {
+            let (_, arm_code, _, _) = arms.pop().unwrap();
+            arm_code
+        } else {
+            self.null(&result_type)
+        };
+        let mut chain = fallback;
+        for (cond_opt, arm_code, _, _) in arms.into_iter().rev() {
+            chain = if let Some(cond) = cond_opt {
+                v_if(cond, arm_code, chain)
+            } else {
+                arm_code
+            };
+        }
+
+        *code = v_block(
+            vec![v_set(tmp, subject), chain],
+            result_type.clone(),
+            "tuple_match",
+        );
+        result_type
+    }
+
     /// build a boolean condition for a single scalar pattern value.
     fn build_scalar_cond(&mut self, cond: &mut Value, v: u16, subject_type: &Type, pat: Value) {
         // Reuse the same logic as build_scalar_chain for special block patterns.
@@ -1843,16 +2078,11 @@ impl Parser {
                                 "cref_work_buf",
                             ));
                         }
-                        // A5.6b.1: zero-param closures still have a hidden __closure arg;
-                        // inject it the same way try_fn_ref_call does for non-zero-param calls.
-                        if let Some(closure_alloc) = self.last_closure_alloc.take() {
-                            args.push(*closure_alloc);
-                            // A5.6d: mark captured outer vars as read at the call site.
-                            for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
-                                self.var_usages(cv, true);
-                            }
-                        } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
-                            args.push(Value::Var(closure_w));
+                        // A5.6-3: closure is embedded in the 16-byte fn-ref slot; fn_call_ref
+                        // pushes it automatically — no explicit injection needed here.
+                        // A5.6d: mark captured vars as read at the call site
+                        for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+                            self.var_usages(cv, true);
                         }
                         *val = Value::CallRef(v_nr, args);
                     }
@@ -2057,15 +2287,11 @@ impl Parser {
             }
             // A5.3: inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding
-            // the slot-position issue with pre-allocated work variables.
-            if let Some(closure_alloc) = self.last_closure_alloc.take() {
-                converted.push(*closure_alloc);
-                // A5.6d: mark captured outer vars as read at the call site.
-                for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
-                    self.var_usages(cv, true);
-                }
-            } else if let Some(&closure_w) = self.closure_vars.get(&v_nr) {
-                converted.push(Value::Var(closure_w));
+            // A5.6-3: closure is embedded in the 16-byte fn-ref slot; fn_call_ref
+            // pushes it automatically — no explicit injection needed at call sites.
+            // A5.6d: mark captured vars as read at the call site
+            for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
+                self.var_usages(cv, true);
             }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);

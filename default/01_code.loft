@@ -27,6 +27,49 @@ pub type u16 = integer limit(0, 65535) size(2);
 pub type i16 = integer limit(-32768, 32767) size(2);
 // Full 32-bit integer range, 4 bytes.
 pub type i32 = integer size(4);
+// --- Interfaces ---
+// Standard interfaces for bounded generic functions.
+// A type satisfies an interface by defining the required operator or method.
+
+// Types that support the `<` comparison operator.
+// Satisfied by integer, long, single, float, text, and any user type defining OpLt.
+pub interface Ordered {
+  op < (self: Self, other: Self) -> boolean
+}
+
+// Types that support the `==` equality operator.
+// Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.
+pub interface Equatable {
+  op == (self: Self, other: Self) -> boolean
+}
+
+// Types that support the `+` addition operator, returning the same type.
+// Satisfied by integer, long, single, float, and user types defining OpAdd.
+pub interface Addable {
+  op + (self: Self, other: Self) -> Self
+}
+
+// Types that support `*` and `-` (unary negation).
+// Separate from `Addable` to allow fine-grained bounds without stub-name collisions.
+// Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.
+pub interface Numeric {
+  op * (self: Self, other: Self) -> Self
+  op - (self: Self) -> Self
+}
+
+// Types that support integer scaling via a `scale` method.
+// Uses a method (not `op *`) to avoid stub-name collision with `Numeric`.
+// User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -> integer`.
+pub interface Scalable {
+  fn scale(self: Self, factor: integer) -> integer
+}
+
+// Types that can be converted to text via a `to_text` method.
+// User types satisfy Printable by defining `fn to_text(self: T) -> text`.
+pub interface Printable {
+  fn to_text(self: Self) -> text
+}
+
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
@@ -912,18 +955,28 @@ fn OpNop();
 // --- Vector aggregates ---
 // Internal helpers for reduce-based aggregates.
 fn __add_int(a: integer, b: integer) -> integer { a + b }
-fn __add_float(a: float, b: float) -> float { a + b }
-fn __min_int(a: integer, b: integer) -> integer { if a < b { a } else { b } }
-fn __min_float(a: float, b: float) -> float { if a < b { a } else { b } }
-fn __max_int(a: integer, b: integer) -> integer { if a > b { a } else { b } }
-fn __max_float(a: float, b: float) -> float { if a > b { a } else { b } }
 
 // Sum of all integer elements. Returns 0 for an empty vector.
 pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
-// Smallest integer element.
-pub fn min_of(v: vector<integer>) -> integer { reduce(v, 2147483646, __min_int) }
-// Largest integer element.
-pub fn max_of(v: vector<integer>) -> integer { reduce(v, -2147483647, __max_int) }
+// Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
+pub fn min_of<T: Ordered>(v: vector<T>) -> T {
+  result = v[0];
+  for i in 1..v.len() { if v[i] < result { result = v[i] } };
+  result
+}
+// Largest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
+pub fn max_of<T: Ordered>(v: vector<T>) -> T {
+  result = v[0];
+  for i in 1..v.len() { if result < v[i] { result = v[i] } };
+  result
+}
+// Sum of vector elements with caller-supplied identity.  Works on any Addable type.
+// Example: sum([10, 20, 12], 0) == 42
+pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
+  result = init;
+  for i in 0..v.len() { result = result + v[i] };
+  result
+}
 
 // --- A10: Field iteration support types ---
 

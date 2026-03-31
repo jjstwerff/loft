@@ -46,6 +46,8 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S5 — Optional `& text` panic](#s5--fix-optional--text-parameter-subtract-with-overflow-panic) *(0.8.2)*
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
+- [I — Interfaces](#i--interfaces)
+  - [I1–I10 — Structural interfaces and bounded generics](#i1i10--structural-interfaces-and-bounded-generics) *(0.8.3)*
 - [P — Prototype Features](#p--prototype-features)
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*
@@ -431,18 +433,13 @@ the recompile overhead that caching was designed to address)
   **Effort:** Medium
   **Target:** 1.1+
 
-- **T1.9** — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
+- **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
 
-  Adds `Type::Tuple` dispatch in `parse_match`, a new `parse_tuple_match` function, and
-  `parse_tuple_elem_pattern` for per-position patterns (wildcard, binding, literal, range,
-  or-pattern, nested tuple). Exhaustiveness: requires at least one total (all-binding or
-  `_`) arm. Works on tuple variables and parameters; match on tuple-returning function
-  calls requires T1.8a first.
+  `Type::Tuple` dispatch added to `parse_match`; new `parse_tuple_match` handles wildcard
+  (`_`), binding, and literal patterns. AND conditions use `v_if(a,b,false)` (no OpAnd).
+  Tests: `tuple_match_wildcard`, `tuple_match_literal`, `tuple_match_binding`.
 
-  **Effort:** Small
-  **Target:** 0.8.3
-
-- **T1.10 — Same-element-type tuple coverage across data sources** (0.8.3):
+- **T1.10** *(completed 0.8.3)* — Same-element-type tuple coverage across data sources:
 
   T1.1–T1.8b verified tuples with *mixed* element types (`(integer, text)`,
   `(integer, float)`, etc.) but left same-element-type (homogeneous) tuples
@@ -516,62 +513,20 @@ the recompile overhead that caching was designed to address)
   | `tuple_struct_refs` | `(Point, Point)` | two DbRef slots, field access after destruct |
   | `tuple_from_vector_elements` | `(integer, integer)` from vector | index read into tuple slots |
 
-  **Effort:** Small
-  **Target:** 0.8.3
+  3 of 4 tests pass; `tuple_struct_refs` remains ignored pending T1.8 DbRef lifetime
+  tracking. `tuple_homogeneous_text`, `tuple_store_text_fields`, `tuple_from_vector_elements`
+  all active.
 
-- **T1.11 — Tuple type constraints: struct field rejection + compound assignment** (0.8.3):
+- **T1.11** *(completed 0.8.3)* — Tuple type constraints: struct field rejection + compound assignment:
 
   Two small correctness items that prevent silently wrong code or confusing errors when
   tuples are used in unsupported positions:
 
-  **T1.11a — Reject `Type::Tuple` in struct field positions** (Issue 93):
-
-  Tuples are stack-only values; they cannot be embedded in a heap-allocated struct record.
-  Currently `struct Foo { pair: (integer, integer) }` is accepted at parse time and reaches
-  codegen, where it produces wrong field offsets.
-
-  Fix: in `typedef.rs::fill_all()`, after type resolution, check each field type and emit a
-  compile error if `Type::Tuple` appears in a struct field position:
-
-  ```rust
-  // T1.11a: tuples are stack-only — reject in struct field positions.
-  if matches!(field_tp, Type::Tuple(_)) {
-      self.data.add_error(
-          def_nr,
-          "struct field cannot have a tuple type — tuples are stack-only values",
-      );
-  }
-  ```
-
-  **T1.11b — Reject compound assignment on tuple LHS** (Issue 97):
-
-  `(a, b) += expr` falls through the assignment loop and produces a generic internal error
-  instead of a clear diagnostic. The compound operators (`+=`, `-=`, etc.) are not defined
-  for tuple types and the expression is always a mistake.
-
-  Fix: in `parse_assign` (operators.rs or expressions.rs), before entering the per-element
-  loop, check for a compound operator with a tuple LHS and emit a targeted error:
-
-  ```rust
-  // T1.11b: compound assignment on a tuple LHS is not supported.
-  if is_compound_op && matches!(lhs_tp, Type::Tuple(_)) {
-      self.data.add_error(
-          self.context,
-          "compound assignment is not supported for tuple destructuring — use `(a, b) = expr` instead",
-      );
-      return Value::Nothing;
-  }
-  ```
-
-  **Tests to add** (`tests/parse_errors.rs`):
-
-  | Test name | Input | Expected error |
-  |-----------|-------|---------------|
-  | `tuple_in_struct_field_rejected` | `struct Foo { pair: (integer, integer) }` | "struct field cannot have a tuple type" |
-  | `tuple_compound_assign_rejected` | `(a, b) += (1, 2)` | "compound assignment is not supported for tuple destructuring" |
-
-  **Effort:** XS
-  **Target:** 0.8.3
+  T1.11a: `parse_field` in `definitions.rs` rejects `Type::Tuple` via `parse_type_full`
+  (the parser's `(` branch fires before `fill_all` is ever reached).
+  T1.11b: `parse_assign` in `expressions.rs` returns early (both passes) when a compound
+  operator follows a tuple LHS; consumes the operator and RHS to keep parser state clean.
+  Tests: `tuple_in_struct_field_rejected`, `tuple_compound_assign_rejected`.
 
 **Effort:** Very High
 **Target:** 1.1+
@@ -847,83 +802,107 @@ That should not happen with the current `stack_base` pointing to the full frame.
 
 ---
 
-**CO1.9 — Store iteration safety: generation guard in release builds** (0.8.3, depends on CO1.6 ✓):
+**CO1.9** *(completed 0.8.3)* — Store iteration safety: generation guard promoted to always-on.
 
-`S28` added a generation-counter guard that fires when a coroutine resumes and
-the store it was iterating has been structurally mutated between `next()` calls
-(records added or removed).  The guard currently uses `debug_assert_eq!` — it
-fires in debug builds but is **compiled out in release**, leaving silent wrong
-behaviour (skipped or duplicated records, or a stale DbRef dereference crash).
+All `#[cfg(debug_assertions)]` gates removed from `Store.generation` field, struct
+constructors (`new`, `open`, `clone_locked`, `clone_locked_for_worker`), and increment
+sites (`claim`, `resize`, `delete`) in `src/store.rs`.  `CoroutineFrame.saved_store_generations`
+field and the yield snapshot in `coroutine_yield` also ungated.  `debug_assert!` in
+`coroutine_next` replaced with `assert!` so the guard panics in release builds too.
+Test: `coroutine_stale_store_guard_all_builds` (no `#[cfg]` gate).
 
-The guard is a single integer comparison (generation counter in the store header).
-The failure mode without it — iterating a modified store — is severe and
-non-obvious, so it should be always-on:
+---
 
-**Concrete source changes (5 locations in 2 files):**
+## I — Interfaces
 
-**`src/store.rs` — remove `#[cfg(debug_assertions)]` from all generation sites:**
+### I1–I10 — Structural interfaces and bounded generics
 
-1. **`Store` struct** (line 56–57): remove `#[cfg(debug_assertions)]` attribute from
-   `pub generation: u32`.  The field is now always compiled in.
+**Motivation:** loft's single-`<T>` generics are opaque — no method calls,
+operators, or comparisons are allowed on a generic `T`. Every generic algorithm
+that needs ordering or addition must be reimplemented per type or written in
+native Rust. Structural interfaces fix this by adding compile-time constraints
+on `T`, enabling bounded generics (`<T: Ordered>`) without vtables or runtime cost.
 
-2. **`Store::new`** (line 103–104) and **`Store::new_at_position`** (line 136–137):
-   remove `#[cfg(debug_assertions)]` from `generation: 0` in struct literals.
+Full design: [INTERFACES.md](INTERFACES.md).
 
-3. **`Store::claim`** (lines 181–184): replace
-   ```rust
-   #[cfg(debug_assertions)]
-   { self.generation = self.generation.wrapping_add(1); }
-   ```
-   with the unconditional statement (no cfg gate).
+**Design principles:**
+- **Implicit satisfaction (structural):** a type satisfies an interface by having
+  the required methods — no explicit `impl` declaration needed, matching loft's
+  existing dispatch model.
+- **Static dispatch only:** interfaces are generic constraints, not types.
+  `x: Ordered` as a variable type is a compile error; there are no vtables.
+- **`Self` keyword:** refers to the concrete satisfying type inside interface bodies.
+- **Single bound per type parameter:** consistent with the existing single `<T>`.
 
-4. **`Store::resize`** (lines 279–282) and **`Store::delete`** (lines 319–322):
-   same change — remove the `#[cfg(debug_assertions)]` wrapper from each
-   `self.generation.wrapping_add(1)` statement.
+**Standard library interfaces** (declared in `default/01_code.loft`):
 
-5. **`clone_locked_for_worker`** (line 439–441) and **`borrow_locked_for_light_worker`**
-   (line 460–462, once A14.1 lands): remove `#[cfg(debug_assertions)]` from
-   `generation: self.generation` in each struct literal.
+```loft
+pub interface Ordered   { fn OpLt(self: Self, other: Self) -> boolean
+                          fn OpGt(self: Self, other: Self) -> boolean }
+pub interface Equatable { fn OpEq(self: Self, other: Self) -> boolean
+                          fn OpNe(self: Self, other: Self) -> boolean }
+pub interface Addable   { fn OpAdd(self: Self, other: Self) -> Self }
+pub interface Printable { fn to_text(self: Self) -> text }
+```
 
-**`src/state/mod.rs` — promote generation check from debug-only to always-on:**
+**Example:**
 
-6. **`CoroutineFrame` struct** (lines 89–90): remove `#[cfg(debug_assertions)]` from
-   `pub saved_store_generations: Vec<(u16, u32)>`.
+```loft
+interface Ordered {
+    fn OpLt(self: Self, other: Self) -> boolean
+}
 
-7. **`CoroutineFrame` initialisation** in `coroutine_create` (lines 557–558): remove
-   `#[cfg(debug_assertions)]` from `saved_store_generations: Vec::new()`.
+fn max_of<T: Ordered>(v: vector<T>) -> T {
+    result = v[0];
+    for item in v { if result < item { result = item; } }
+    result
+}
 
-8. **`coroutine_yield` generation snapshot** (lines 881–892): remove the outer
-   `#[cfg(debug_assertions)]` block.  The snapshot is now always taken.
+struct Score { value: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
 
-9. **`coroutine_next` check** (lines 641–659): replace the entire
-   `#[cfg(debug_assertions)] { debug_assert!(...) }` block with:
-   ```rust
-   // CO1.9: generation guard is always-on; debug_assert would be elided in release.
-   for (store_nr, saved_gen) in &self.coroutine_frame(idx).saved_store_generations.clone() {
-       let cur_gen = self.database.allocations
-           .get(*store_nr as usize)
-           .map_or(0, |s| s.generation);
-       if cur_gen != *saved_gen {
-           panic!(
-               "store {store_nr} was mutated between coroutine next() calls \
-                (generation at yield: {saved_gen}, now: {cur_gen}); \
-                DbRef locals held by the generator may be stale — see PLANNING.md § CO1.9"
-           );
-       }
-   }
-   ```
+// Score satisfies Ordered automatically — no explicit declaration needed.
+best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
+```
 
-**No new opcodes.** The generation counter is a plain `u32`; the check is a tight
-integer comparison per live store (typically 1–3 stores).  Cost in release builds:
-negligible.
+**Steps:**
 
-**Tests to add** (`tests/expressions.rs`):
+| ID  | Title | E | Source |
+|-----|-------|---|--------|
+| I1  | Lexer: add `interface` keyword | XS | *(completed 0.8.3)* `src/lexer.rs` |
+| I2  | Data: `DefType::Interface` + `Definition.bounds: Vec<u32>` | S | *(completed 0.8.3)* `src/data.rs` |
+| I3  | Parser first pass: parse interface declarations | M | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I3.1| Op-sugar `op <token> (...)` in interface bodies → `OpCamelCase` | XS | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I5  | Type resolution: validate interface bodies; factory-method restriction (phase 1) | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I11 | gendoc stub/guard for `DefType::Interface` | XS | *(completed 0.8.3)* `src/gendoc.rs` |
+| I6  | Satisfaction checking at generic instantiation | M | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I7  | Allow bounded method calls on `T` inside generic bodies | S | *(completed 0.8.3)* `src/parser/fields.rs` |
+| I8.1| Same-type binary operators (`T op T`) via bound | S | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I8.2| Result-type propagation from interface signature | S | *(completed 0.8.3)* — no code change; T-stub infra handles it |
+| I8.3| Mixed-type binary operators (`T op concrete`) | S | *(completed 0.8.3)* — no code change; `call_nr` handles mixed types |
+| I8.4| Unary operators on `T` | XS | *(completed 0.8.3)* — no code change; same `call_op` path |
+| I9  | Stdlib `Ordered`, `Equatable`, `Addable` interfaces | S | *(completed 0.8.3)* `default/01_code.loft` |
+| I9-p| Built-in type satisfaction via `possible` operator map | S | *(completed 0.8.3)* `src/data.rs`, `src/parser/mod.rs` |
+| I9.1| Bounded generics on built-in types (integer, float) | S | *(completed 0.8.3)* — verified via tests |
+| I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I9-v| Vector<T> element access fix in generic specialization | S | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I9+ | Stdlib `Numeric` interface (op *, op -) | S | *(completed 0.8.3)* `default/01_code.loft` |
+| I9-v2| Generic accumulator fix (skip ref_return for generic templates) | S | *(completed 0.8.3)* `src/parser/control.rs` |
+| I9-Sc| Stdlib `Scalable` interface (method-based) | XS | *(completed 0.8.3)* `default/01_code.loft` |
+| I9-st| Interface stub naming collision fix (__iface scoping) | S | *(completed 0.8.3)* `src/parser/definitions.rs`, `src/parser/mod.rs` |
+| I9.1| Generic min_of/max_of using Ordered | S | *(completed 0.8.3)* `default/01_code.loft` |
+| I9.2| Generic sum with Addable + identity | XS | *(completed 0.8.3)* `default/01_code.loft` |
+| I9-tx| T-stub hidden __work_1 for text-returning interface methods | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
+| I9-Pr| Stdlib `Printable` interface | XS | *(completed 0.8.3)* `default/01_code.loft` |
 
-| Test name | Scenario | Expected |
-|-----------|----------|---------|
-| `coroutine_store_mutation_detected` | Insert a record between two `next()` calls in both debug and release | `panic!` with "mutated between coroutine next() calls" |
+**Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
+I2 is parallel with I1. I5 depends on I3. I10 depends on I6.
 
-**Effort:** Small (9 targeted line-range edits, no new opcodes)
+**Native codegen impact:** none. Interfaces produce no bytecode and no Rust output.
+Specialised copies of bounded generic functions are identical to ordinary concrete
+functions from the codegen perspective.
+
 **Target:** 0.8.3
 
 ---
@@ -1236,7 +1215,7 @@ implemented.
 
 ---
 
-**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** (0.8.3, depends on A5.6b.1–A5.6f ✓):
+**A5.6 — Full closure semantics: 16-byte fn-ref + chained-call parser** *(completed 0.8.3)*:
 After A5.6b.1, A5.6b.2, and A5.6c are implemented, the last open item for
 `closure_capture_text` is the **cross-scope** pattern: a capturing lambda returned
 from a function and then called from outside.  Two distinct problems remain:

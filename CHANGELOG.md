@@ -8,6 +8,200 @@ All notable changes to the loft language and interpreter.
 
 ### Safety fixes
 
+- **Coroutine store-mutation guard promoted to always-on** (CO1.9) — The generation
+  counter in `Store` and the `saved_store_generations` snapshot in `CoroutineFrame`
+  were previously compiled only under `#[cfg(debug_assertions)]`.  All `#[cfg]` gates
+  have been removed so the guard fires in release builds too.  `debug_assert!` in
+  `coroutine_next` is replaced with `assert!`, meaning a mutated-store violation now
+  panics with a clear diagnostic in any build profile:
+  `"stale DbRef: store N was mutated between coroutine yields (generation at yield: X,
+  now: Y) — DbRef locals held by the generator may point to freed or reallocated records"`.
+  The affected sites in `store.rs` are `claim`, `resize`, `delete`, and the two
+  `clone_locked*` constructors.  New test `coroutine_stale_store_guard_all_builds`
+  (no `#[cfg(debug_assertions)]` gate) confirms the panic fires unconditionally.
+
+### Language features
+
+- **`interface` keyword and first-pass parser** (I1, I2, I3) — The first three steps
+  of the interface subsystem are implemented:
+  - I1 (`src/lexer.rs`): `"interface"` is now a reserved keyword.
+  - I2 (`src/data.rs`): `DefType::Interface` added to the definition-type enum;
+    `Definition.bounds: Vec<u32>` added to hold interface constraints for bounded
+    generic functions (`<T: A + B>`); initialised to `vec![]` in `add_def`.
+  - I3 (`src/parser/definitions.rs`, `src/parser/mod.rs`): new `parse_interface()`
+    method parses `interface Name { fn method(params) -> type }` declarations.
+    `Self` is temporarily registered as a type placeholder so `parse_type_full`
+    resolves it during method signature parsing.  Duplicate interface names emit
+    "Redefined interface Name".  `parse_interface` is added to the `parse_file`
+    top-level dispatch chain alongside `parse_struct`, `parse_enum`, etc.
+  Tests: `interface_empty_parses`, `interface_with_method_parses`,
+  `interface_duplicate_name_rejected`.
+
+- **Interface subsystem — op-sugar, bound syntax, factory-method guard, gendoc skip** (I3.1, I4, I5, I11):
+  - I3.1 (`src/parser/definitions.rs`): `op <token> (params) -> type` in interface bodies
+    is syntactic sugar for an `OpCamelCase` method stub. E.g. `op < (self: Self, other: Self) -> boolean`
+    registers a method named `OpLt`. The `rename()` helper in `mod.rs` is now `pub(crate)` and
+    covers `>` and `>=` in addition to its previous set.
+    Tests: `interface_op_sugar_lt_parses`, `interface_op_sugar_multi_parses`.
+  - I4 (`src/parser/definitions.rs`): `<T: A + B>` bound syntax in generic function declarations.
+    Bound names are collected during parsing and resolved in the second pass to `DefType::Interface`
+    def_nrs stored in `Definition.bounds` (introduced in I2). Unknown names emit
+    `"'Name' is not a known interface"`; non-interface names emit
+    `"'Name' is not an interface — bounds must be interface names"`.
+    Tests: `generic_fn_with_bound_parses`, `generic_fn_unknown_bound_errors`,
+    `generic_fn_struct_as_bound_errors`.
+  - I5 (`src/parser/definitions.rs`): phase-1 factory-method restriction in interface bodies.
+    A method that returns `Self` without a leading `self: Self` parameter emits
+    `"factory methods not yet supported: 'name' returns Self without a 'self: Self' parameter"`.
+    Test: `interface_factory_method_rejected`.
+  - I11 (`src/gendoc.rs`): `sig_kind` now returns `"interface"` for `pub interface` / `interface`
+    declarations (previously `"const"`). `generate_stdlib_section` skips interface items gracefully.
+    Unit test: `sig_kind_interface_returns_interface`.
+
+- **Interface subsystem — satisfaction checking, bounded method/operator calls** (I6, I7, I8.1, I10):
+  - I6 (`src/parser/mod.rs`): `check_satisfaction` verifies that a concrete type implements
+    every method declared in a bounded generic's interface constraints. Called from
+    `try_generic_instantiation` — emits `"'Type' does not satisfy interface 'Name': missing Method"`.
+    Tests: `satisfaction_check_passes_with_implementing_type`,
+    `satisfaction_check_fails_missing_method`.
+  - I7 (`src/parser/fields.rs`, `src/parser/definitions.rs`): T-parameterized method stubs
+    (e.g. `t_1T_label`) are created during second-pass bounds resolution. `field()` looks up
+    the T-stub via `find_fn` before reporting "field access requires a concrete type", enabling
+    `v.method()` inside generic bodies. `re_resolve_call` substitutes the concrete implementation
+    at specialization time.
+    Test: `bounded_method_call_in_generic_body`.
+  - I8.1 (`src/parser/mod.rs`): `call_op` looks up T-stubs for operators (e.g. `t_1T_OpLt`)
+    before erroring, enabling `a < b` inside bounded generic bodies. First-pass operator calls
+    on T now return `Type::Void` instead of erroring, allowing the second pass to proceed.
+    Test: `bounded_operator_in_generic_body`.
+  - I10: satisfaction diagnostics share the I6 implementation above.
+  - Supporting changes: `Data::children_of` iterates definitions by parent;
+    `field()` returns `Type::Unknown(0)` in the first pass for unknown-type field access
+    (previously errored); user-defined operator functions (e.g. `fn OpLt(self: Score, ...)`)
+    are now allowed in user code without a lowercase name error.
+
+- **Interface operator variants and stdlib `Ordered`** (I8.2, I8.3, I8.4, I9):
+  - I8.2: Return-type propagation from interface signature — verified: T-stubs correctly
+    substitute `Self` → `T` in both parameter types and the return type.
+    Test: `bounded_operator_self_return_type`.
+  - I8.3: Mixed-type binary operators (`T op concrete`, e.g. `T * integer`) — verified:
+    `call_op`'s T-stub lookup and `call_nr`'s argument matching handle mixed-type parameters.
+    Test: `bounded_mixed_type_operator`.
+  - I8.4: Unary operators on `T` (e.g. `op -`) — verified: single-operand dispatch uses the
+    same `call_op` → T-stub path as binary operators.
+    Test: `bounded_unary_operator`.
+  - I9: `pub interface Ordered { op < }` added to `default/01_code.loft`. User types satisfy
+    `Ordered` by defining `fn OpLt(self: T, other: T) -> boolean`. Existing tests updated to
+    use the stdlib interface instead of local redefinitions.
+    Test: `stdlib_ordered_interface`.
+
+- **Built-in type satisfaction and stdlib Equatable/Addable** (I9-prim, I9-Eq, I9-Add, I9.1):
+  - I9-prim: `find_fn` now falls back to the `possible` operator map when the method-style
+    name (`t_7integer_OpLt`) is not found. This lets built-in types (integer, float, etc.)
+    satisfy interfaces since their operators use the `add_op` convention (`OpLtInt`).
+    `call_op` skips the main operator loop when an operand is a generic type variable,
+    preventing false matches via `OpEqRef` / `OpEqBool` implicit conversions.
+    `check_satisfaction` delegates to `find_fn` for both naming conventions.
+    Tests: `builtin_integer_satisfies_ordered`, `builtin_float_satisfies_ordered`.
+  - I9-Eq: `pub interface Equatable { op == }` added to `default/01_code.loft`.
+    Test: `stdlib_equatable_interface`.
+  - I9-Add: `pub interface Addable { op + }` added to `default/01_code.loft`.
+    Test: `stdlib_addable_interface`.
+  - I9.1: bounded generics with Addable work on integer and float types.
+    Tests: `generic_sum_pair_on_integers`, `generic_sum_pair_on_floats`.
+
+- **Vector<T> element access fix and Numeric interface** (I9-vec, I9.1, I9.2, I9+):
+  - I9-vec: fix vector element access in generic specialization. `substitute_type_in_value`
+    detects `OpGetVector` calls with baked-in `elm_size=0` (from type variable elements),
+    recomputes the correct size from the concrete type, and adds the value-extraction wrapper
+    (`OpGetInt`/`OpGetFloat`/etc.).  First-pass `call_op` for generic types now returns the
+    type variable type (not `Type::Void`) to prevent "cannot change type" errors.
+    Test: `generic_vector_element_access`.
+  - I9.1: bounded-generic comparison on vector elements using `Ordered` bound.
+    Test: `generic_min_of_vector_elements`.
+  - I9.2: bounded-generic sum of vector elements using `Addable` bound.
+    Test: `generic_sum_on_integer_vector`.
+  - I9+: `pub interface Numeric { op * ; op - }` added to `default/01_code.loft`.
+    Test: `stdlib_numeric_interface`.
+
+- **Generic accumulator fix, Scalable interface** (I9-var, I9.1, I9.2, I9-Sc):
+  - I9-var: skip `ref_return`/`text_return` for generic templates (`DefType::Generic`).
+    The return type `T = Reference(tv_nr)` triggered `ref_return` which promoted local
+    variables to hidden parameters.  After specialization to Integer/Float, the hidden
+    params caused a codegen crash.  This enables for-loop accumulator patterns inside
+    generic bodies.
+    Tests: `generic_intermediate_variable`, `generic_for_loop_accumulator`.
+  - I9.1: generic `find_max` on integer vectors using `Ordered` for-loop accumulator.
+    Test: `generic_max_on_integer_vector`.
+  - I9.2: generic `vec_sum` with caller-supplied identity using `Addable` for-loop.
+    Test: `generic_sum_with_identity`.
+  - I9-Sc: `pub interface Scalable { fn scale(self, factor: integer) -> integer }` in
+    `default/01_code.loft`.  Uses a method (not `op *`) to avoid stub-name collision
+    with `Numeric`.
+    Test: `stdlib_scalable_interface`.
+
+- **Interface stub collision fix, generic min_of/max_of/sum** (I9-stub, I9.1, I9.2):
+  - I9-stub: interface method stubs now use `__iface_{d_nr}_{method}` naming instead of
+    `t_4Self_{method}`. Multiple interfaces can now declare the same operator without
+    collision. `has_bound_for_method` prevents T-stubs from leaking into unbound generics.
+  - I9.1: `min_of` and `max_of` replaced with bounded-generic versions using `Ordered`.
+    Now work on integer, float, and any user type satisfying `Ordered`. Unused helper
+    functions (`__min_int`, `__min_float`, `__max_int`, `__max_float`) removed.
+    Tests: `stdlib_min_of_generic`, `stdlib_max_of_generic`, `stdlib_min_of_float`,
+    `stdlib_max_of_float`.
+  - I9.2: `pub fn sum<T: Addable>(v: vector<T>, init: T) -> T` added. The caller supplies
+    the identity element. Integer-specific `sum_of(v)` kept for backward compatibility.
+    Test: `stdlib_sum_generic`.
+
+- **Text-returning interface methods, Printable, coroutine yield-from-loop** (I9-text, I9-Pr, CO1.7):
+  - I9-text: T-stub creation adds hidden `__work_1: RefVar(Text)` parameter for
+    text-returning interface methods. Matches the hidden param from `text_return` so
+    `re_resolve_call` finds the correct argument count.
+    Test: `generic_text_returning_method`.
+  - I9-Pr: `pub interface Printable { fn to_text(self: Self) -> text }` added to stdlib.
+    Test: `stdlib_printable_interface`.
+  - CO1.7 (partial): coroutine yield from range-based and vector for-loops verified.
+    Tests: `coroutine_yield_from_range_loop`, `coroutine_yield_from_vector_loop`.
+
+- **CO1.7 complete: coroutine yield from all for-loop types** —
+  Fixed character null sentinel bug: `push_null_value(4)` uses `i32::MIN` as the
+  sentinel for all 4-byte values, but `op_conv_bool_from_character` only checked for
+  `char::from(0)`. The `i32::MIN` sentinel (0x80000000) looked like a valid character,
+  causing for-loops over character iterators to infinite-loop. Also fixed UB in
+  `var_character` (fill.rs): reading `i32::MIN` directly as `char` is not a valid
+  Unicode scalar — now reads as `u32` and converts via `char::from_u32`.
+  Tests: `coroutine_yield_from_text_loop`, `coroutine_character_iterator_exhausts`,
+  `coroutine_yield_from_struct_vector_loop`, `coroutine_yield_from_field_text_loop`.
+
+- **CO1.8 complete: multi-text coroutine safety** — Verified all three CO1.8 sub-items
+  pass without code changes: (a) multiple text parameters serialised correctly,
+  (b) text locals after first yield survive resume, (c) text locals in nested blocks
+  freed correctly. Tests: `coroutine_multi_text_params`, `coroutine_text_local_after_yield`,
+  `coroutine_text_local_nested_block`.
+
+- **fix-tvscope: clear diagnostic for type variable name clash** — Defining `struct T`
+  when `T` is a generic type variable (from stdlib generics) now produces
+  `"'T' is reserved as a generic type variable"` instead of a confusing
+  "Redefined struct" message or a runtime crash.
+
+### Sorted collection slicing (A8)
+
+- **Open-ended bounds, range iteration, comprehensions** (A8.1, A8.2, A8.4, A8.6):
+  - A8.1: `col[lo..]`, `col[..hi]`, and `col[..]` now work on sorted collections.
+    Parser detects `..` before the first expression (open-start) and missing expression
+    after `..` (open-end). Runtime handles empty from/till arrays in OpIterate.
+    Tests: `sorted_open_end_range`, `sorted_open_start_range`.
+  - A8.2: `sorted[lo..hi]` range iteration verified working. Test: `sorted_range_iteration`.
+  - A8.4: `[for e in sorted[lo..hi] { expr }]` comprehensions verified.
+    Test: `sorted_range_comprehension`.
+  - A8.6: nullable lookup `if !col[k]` verified. Test: `sorted_nullable_lookup`.
+  - A8.1-idx: open-ended bounds also work on index collections. Test: `index_open_end_range`.
+  - A8.5: `rev(col[lo..hi])` reverse range iteration on sorted collections. Parser sets
+    `reverse_iterator` flag before the inner subscript expression so `fill_iter` picks it up.
+    Test: `sorted_reverse_range`.
+
+### Coroutine safety documentation
+
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
   `State::coroutine_create` now calls `serialise_text_args` after copying the raw
   argument bytes.  For each text (`Str`) argument that points into a dynamic heap
@@ -111,6 +305,29 @@ All notable changes to the loft language and interpreter.
   bit below `max`.  `clone_for_worker` propagates the bitmap to worker stores.
   Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
   freed non-top slot is reused by the next `database()` call and `max` does not grow.
+
+### Language features
+
+- **Tuple destructuring in `match`** (T1.9) — `match` now dispatches on `Type::Tuple`
+  subjects.  New `parse_tuple_match` in `src/parser/control.rs` parses comma- or
+  semicolon-separated arms with wildcard (`_`), binding-variable, and literal patterns.
+  Logical AND for multi-element conditions is built as `v_if(a, b, false)` (there is no
+  `OpAnd`).  Tests: `tuple_match_wildcard`, `tuple_match_literal`, `tuple_match_binding`.
+
+- **Homogeneous-type tuple coverage** (T1.10) — Three new tests confirm that same-element-type
+  tuples work across common data sources: `tuple_homogeneous_text` (`(text, text)` pair
+  from function parameters), `tuple_store_text_fields` (text fields extracted from two
+  struct records), and `tuple_from_vector_elements` (`(integer, integer)` from indexed
+  vector reads).  `tuple_struct_refs` (two `(Point, Point)` DbRefs) remains ignored
+  pending T1.8 lifetime tracking for DbRef tuple slots.
+
+- **Tuple type constraint diagnostics** (T1.11) — Two new compile-time guards:
+  (a) `struct Foo { pair: (integer, integer) }` now emits "struct field cannot have a
+  tuple type — tuples are stack-only values" at parse time (`parse_field` in
+  `definitions.rs` detects `(` via `parse_type_full` before `fill_all` is reached);
+  (b) `(a, b) += expr` now emits "compound assignment is not supported for tuple
+  destructuring — use (a, b) = expr instead" (`parse_assign` in `expressions.rs` returns
+  early in both passes, consuming the operator and RHS to keep the parser state clean).
 
 ### Coroutine safety documentation
 
@@ -369,6 +586,49 @@ All notable changes to the loft language and interpreter.
   this fix, calling a text-returning lambda inside a loop accumulated text from previous iterations
   (e.g. `"hello, world!"` became `"hello, world!hello, world!"` on the second call).  New test
   `closure_capture_text_loop` in `tests/expressions.rs` verifies the fix.
+
+- **`fn`-ref conditional assignment no longer SIGSEGVs** (A5.6h) —
+  `f = if flag { inc } else { dec }` caused a SIGSEGV at the `CallRef` opcode.
+  Root cause: a fn-ref slot is 16 bytes (`[d_nr 4B][closure DbRef 12B]`), but
+  each branch of an if-else expression generated only 4 bytes (the d_nr via
+  `OpConstInt`), because `generate_block` (called for each branch) was setting
+  `stack.position = to + size(Function) = to + 16` without emitting any instruction
+  to push the 12-byte sentinel.  This phantom advance caused the codegen stack
+  tracker to skip `OpNullRefSentinel` and left `CallRef` reading from the wrong
+  stack position (the frame header, containing d_nr=0, which dispatched to
+  `i_parse_errors()` and then SIGSEGVed in `dump_stack` on a garbage text pointer).
+  Fix: `generate_block` now emits `OpNullRefSentinel` when the block result type is
+  `Type::Function` and the block's content pushed fewer than 16 bytes.  A defensive
+  `gen_fn_ref_value` helper in `generate_set` handles non-Block fn-ref values.
+  Additionally, three native-codegen regressions introduced in A5.6g were resolved:
+  (1) `visible_attr_count` (not `def.attributes.len()`) is now used in the candidate
+  filter for closure-capturing lambdas; (2) the closure work-variable is injected at
+  call sites for closure-capturing dispatch; (3) `Value::FnRef(d_nr, …)` is added to
+  `collect_int_fn_refs` and emits `{d_nr}_u32` in native output so closure lambda
+  functions appear in the reachable set and are compiled.  Test: `fn_ref_conditional_call`
+  in `tests/issues.rs`; all 8 closure interpreter tests and the full native suite pass.
+
+- **Definition-time capture semantics and multi-call closure injection** (A5.6g) —
+  Closures now capture variable values at definition time (when the lambda is written),
+  not at call time (when it is first invoked).  `emit_lambda_code` allocates and
+  populates the closure record inside the `fn_ref_with_closure` block — the block is
+  the `*code` assigned to the fn-ref variable, so it runs exactly once at definition
+  time.  A `closure_vars` fallback was restored in `src/parser/control.rs` (both
+  `try_fn_ref_call` and `parse_call` paths): when `last_closure_alloc` has already
+  been consumed by a first call site, subsequent call sites to the same fn-ref variable
+  look up the closure work variable via `self.closure_vars.get(&v_nr)` and inject it
+  as the hidden `__closure` arg.  This fixes `closure_capture_struct_ref` and
+  `closure_capture_vector_elem`, which each call the lambda twice (condition + format
+  string).  Native codegen was also fixed: `OpVarFnRef`/`OpStoreClosure` declarations
+  were removed from `default/02_images.loft` (they would have overflowed the 254-entry
+  OPERATORS array); the `output_call_ref` dispatch in `src/generation/emit.rs` now
+  compares total attribute count (including `__closure`) against total args (since
+  the closure is injected explicitly at the call site, not by `fn_call_ref`); the
+  `OpGetClosure` injection was removed.  The block result type was changed to a
+  full-range integer to prevent native codegen from emitting a truncating `as u8`
+  cast that corrupted the d_nr dispatch value.  All 8 closure tests pass (1 ignored
+  for cross-scope closures, a known limitation in CAVEATS.md C1);
+  `tests/docs/26-closures.loft` updated to reflect definition-time semantics.
 
 ### New features
 

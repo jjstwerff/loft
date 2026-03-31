@@ -118,22 +118,22 @@ fn wrong_cast() {
 
 #[test]
 fn field_type() {
-    code!("struct T { v: u8 }\nfn test() { r = T { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
-        .error("Cannot write integer(0, 255) on field T.v:text at field_type:2:29");
+    code!("struct Rec { v: u8 }\nfn test() { r = Rec { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
+        .error("Cannot write integer(0, 255) on field Rec.v:text at field_type:2:31");
 }
 
 #[test]
 fn key_field() {
     code!(
-        "struct T { n: text, v: u16 }
-struct N { d: vector<T>, h: hash<T[n]> }
+        "struct Rec { n: text, v: u16 }
+struct Coll { d: vector<Rec>, h: hash<Rec[n]> }
 fn test() {
-  s = N { d:[T {n: \"a\", v:12} ] };
+  s = Coll { d:[Rec {n: \"a\", v:12} ] };
   s.d[0].v = 13;
   s.d[0].n = \"b\";
 }"
     )
-    .error("Cannot write to key field T.n create a record instead at key_field:6:18");
+    .error("Cannot write to key field Rec.n create a record instead at key_field:6:18");
 }
 
 #[test]
@@ -697,6 +697,120 @@ fn par_worker_returns_generator() {
          }"
     )
     .error("parallel worker 'gen_worker' returns iterator(integer(-2147483647, 2147483647, false), null) — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
+}
+
+// ── T1.11 — Tuple type constraints ───────────────────────────────────────────
+
+/// T1.11a: a tuple type in a struct field position must be rejected at compile
+/// time because tuples are stack-only values that cannot be heap-allocated.
+#[test]
+fn tuple_in_struct_field_rejected() {
+    code!("struct Foo { pair: (integer, integer) }\nfn test() {}")
+        .error("struct field cannot have a tuple type — tuples are stack-only values at tuple_in_struct_field_rejected:1:40");
+}
+
+/// T1.11b: compound assignment on a tuple LHS must produce a clear diagnostic
+/// instead of a generic internal error.
+#[test]
+fn tuple_compound_assign_rejected() {
+    code!("fn test() { a = 1; b = 2; (a, b) += (1, 2); }")
+        .error("compound assignment is not supported for tuple destructuring — use (a, b) = expr instead at tuple_compound_assign_rejected:1:36");
+}
+
+// ── I1/I3 — Interface declarations ───────────────────────────────────────────
+
+/// I3: a minimal empty interface declaration parses without error.
+#[test]
+fn interface_empty_parses() {
+    code!("interface Foo {}\nfn test() {}");
+}
+
+/// I3: an interface with method signatures parses without error.
+#[test]
+fn interface_with_method_parses() {
+    code!("interface Showable { fn display(self: Self) -> text }\nfn test() {}");
+}
+
+/// I3: a duplicate interface name is rejected with a "Redefined interface" diagnostic.
+#[test]
+fn interface_duplicate_name_rejected() {
+    code!("interface Foo {}\ninterface Foo {}\nfn test() {}")
+        .error("Redefined interface Foo at interface_duplicate_name_rejected:2:16");
+}
+
+// ── I3.1 — op-sugar in interface bodies ──────────────────────────────────────
+
+/// I3.1: `op < (self: Self, other: Self) -> boolean` in an interface body is
+/// syntactic sugar for a method named `OpLt` and must parse without error.
+#[test]
+fn interface_op_sugar_lt_parses() {
+    code!("interface Rankable { op >= (self: Self, other: Self) -> boolean }\nfn test() {}");
+}
+
+/// I3.1: a multi-operator interface with `op +` and `op ==` desugars correctly.
+#[test]
+fn interface_op_sugar_multi_parses() {
+    code!(
+        "interface Combinable { op & (self: Self, other: Self) -> Self\n\
+                                op ^ (self: Self, other: Self) -> Self }\nfn test() {}"
+    );
+}
+
+// ── I4 — <T: Bound> bound syntax ─────────────────────────────────────────────
+
+/// I4: `fn foo<T: Ordered>(x: T) -> T` with a valid interface bound parses
+/// without error and stores the bound for later satisfaction checking.
+#[test]
+fn generic_fn_with_bound_parses() {
+    code!("fn identity<T: Ordered>(x: T) -> T { x }\nfn test() {}");
+}
+
+/// I4: a bound name that does not exist must produce a clear diagnostic.
+#[test]
+fn generic_fn_unknown_bound_errors() {
+    code!("fn foo<T: NonExistent>(x: T) -> T { x }\nfn test() {}")
+        .error("'NonExistent' is not a known interface at generic_fn_unknown_bound_errors:1:32");
+}
+
+/// I4: a struct name used as a type bound must be rejected — only interfaces are valid bounds.
+#[test]
+fn generic_fn_struct_as_bound_errors() {
+    code!("struct Point { x: integer }\nfn foo<T: Point>(x: T) -> T { x }\nfn test() {}")
+        .error("'Point' is not an interface — bounds must be interface names at generic_fn_struct_as_bound_errors:2:26");
+}
+
+// ── I5 — Factory-method restriction ──────────────────────────────────────────
+
+/// I5: a method that returns `Self` without a leading `self: Self` parameter
+/// is a factory method and must be rejected in phase 1.
+#[test]
+fn interface_factory_method_rejected() {
+    code!("interface Creatable { fn create() -> Self }\nfn test() {}")
+        .error("factory methods not yet supported: 'create' returns Self without a 'self: Self' parameter at interface_factory_method_rejected:1:44");
+}
+
+// ── I6/I10 — Satisfaction checking diagnostics ───────────────────────────────
+
+/// I6/I10: calling a bounded generic function with a type that does NOT implement
+/// the required interface method must produce a clear "does not satisfy" diagnostic.
+#[test]
+fn satisfaction_check_fails_missing_method() {
+    code!(
+        "struct Thing { x: integer }
+         fn pick_first<T: Ordered>(a: T, _b: T) -> T { a }
+         fn test() { pick_first(Thing{x:1}, Thing{x:2}) }"
+    )
+    .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:3:57");
+}
+
+// ── fix-tvscope — Type variable namespace ────────────────────────────────────
+
+/// fix-tvscope: defining a struct whose name clashes with a generic type variable
+/// produces a clear diagnostic instead of the confusing "Redefined struct T".
+#[test]
+fn struct_name_clashes_with_type_variable() {
+    code!("struct T { v: integer }\nfn test() {}")
+        .error("'T' is reserved as a generic type variable \u{2014} choose a different struct name at struct_name_clashes_with_type_variable:1:11");
 }
 
 // ── Fix #91 — Circular init detection ────────────────────────────────────────

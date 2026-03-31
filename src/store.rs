@@ -50,10 +50,10 @@ pub struct Store {
     /// Populated lazily: `open()` calls `fl_rebuild()`; `new()` starts empty
     /// and the tree fills as blocks are freed.
     free_root: u32,
-    /// S28: monotonic counter incremented on every `claim` and `delete` in debug
-    /// builds.  Saved into `CoroutineFrame` at yield; compared at resume to detect
-    /// store mutations that may have invalidated `DbRef` locals held by the generator.
-    #[cfg(debug_assertions)]
+    /// CO1.9/S28: monotonic counter incremented on every `claim`, `resize`, and `delete`.
+    /// Saved into `CoroutineFrame` at yield; compared at resume to detect store mutations
+    /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
+    /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
 }
 
@@ -100,7 +100,6 @@ impl Store {
             free: true,
             locked: false,
             free_root: 0,
-            #[cfg(debug_assertions)]
             generation: 0,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
@@ -133,7 +132,6 @@ impl Store {
             free: true,
             locked: false,
             free_root: 0,
-            #[cfg(debug_assertions)]
             generation: 0,
         };
         if init {
@@ -176,12 +174,9 @@ impl Store {
         debug_assert!(!self.locked, "Claim on locked store (size={size})");
         assert!(!self.locked, "Claim on locked store (size={size})");
         assert!(size >= 1, "Incomplete record");
-        // S28: increment generation so coroutine_next can detect store mutations
+        // CO1.9/S28: increment generation so coroutine_next can detect store mutations
         // that may invalidate DbRef locals held by suspended generators.
-        #[cfg(debug_assertions)]
-        {
-            self.generation = self.generation.wrapping_add(1);
-        }
+        self.generation = self.generation.wrapping_add(1);
         #[cfg(debug_assertions)]
         self.fl_validate();
         // Fast path: find the smallest tracked free block that fits.
@@ -274,12 +269,9 @@ impl Store {
 
     /// Mutate the claimed size of a record
     pub fn resize(&mut self, rec: u32, size: u32) -> u32 {
-        // S28: increment generation so coroutine_next can detect resize operations
+        // CO1.9/S28: increment generation so coroutine_next can detect resize operations
         // that may invalidate DbRef locals (record relocation) held by suspended generators.
-        #[cfg(debug_assertions)]
-        {
-            self.generation = self.generation.wrapping_add(1);
-        }
+        self.generation = self.generation.wrapping_add(1);
         let req_size = size as i32;
         let claim = *self.addr::<i32>(rec, 0);
         if claim >= req_size {
@@ -314,12 +306,9 @@ impl Store {
     pub fn delete(&mut self, rec: u32) {
         debug_assert!(!self.locked, "Delete on locked store (rec={rec})");
         assert!(!self.locked, "Delete on locked store (rec={rec})");
-        // S28: increment generation so coroutine_next can detect deletions that
+        // CO1.9/S28: increment generation so coroutine_next can detect deletions that
         // may free a record still referenced by a suspended generator.
-        #[cfg(debug_assertions)]
-        {
-            self.generation = self.generation.wrapping_add(1);
-        }
+        self.generation = self.generation.wrapping_add(1);
         self.valid(rec, 4);
         let mut claim = *self.addr::<i32>(rec, 0);
         // Coalesce with any adjacent free blocks that follow.
@@ -436,7 +425,6 @@ impl Store {
             free: self.free,
             locked: true,
             free_root: 0, // workers never claim/delete; no free tree needed
-            #[cfg(debug_assertions)]
             generation: self.generation,
         }
     }
@@ -457,7 +445,6 @@ impl Store {
             free: self.free,
             locked: true,
             free_root: 0,
-            #[cfg(debug_assertions)]
             generation: self.generation,
         }
     }

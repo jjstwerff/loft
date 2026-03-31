@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// S16: field-name overlap between plain structs in the same file.
+// Two structs share a field named `val` but at different byte offsets.
+// SortElm: val is field 0 (offset 0).
+// IdxElm:  val is field 1 (offset 4, after `nr: integer`).
+// All operations that use the key field — lookup, range query, full iteration —
+// must use each struct's OWN offset for `val`, not the other's.
+
+struct SortElm {
+  val: integer,
+  name: text
+}
+
+struct SortDb {
+  map: sorted < SortElm[val] >
+}
+
+// Shares field name `val` with SortElm, but at a different offset.
+struct IdxElm {
+  nr: integer,
+  val: integer
+}
+
+struct IdxDb {
+  map: index < IdxElm[nr, val] >
+}
+
+fn main() {
+  // === Sorted: basic lookup ===
+  sdb = SortDb {map: [
+    SortElm {val: 10, name: "ten"},
+    SortElm {val: 30, name: "thirty"},
+    SortElm {val: 20, name: "twenty"}
+  ]};
+  assert(sdb.map[10].name == "ten", "sorted lookup val=10: {sdb.map[10].name}");
+  assert(sdb.map[20].name == "twenty", "sorted lookup val=20: {sdb.map[20].name}");
+  assert(!sdb.map[99], "sorted missing key is null");
+
+  // === Sorted: full iteration (ascending by val) ===
+  sorted_sum = 0;
+  for s in sdb.map {
+    sorted_sum += s.val;
+  }
+  assert(sorted_sum == 60, "sorted full iteration sum: {sorted_sum}");
+
+  // === Sorted: range query ===
+  range_sum = 0;
+  for s in sdb.map[15..25] {
+    range_sum += s.val;
+  }
+  assert(range_sum == 20, "sorted range [15..25] sum: {range_sum}");
+
+  // === Index: basic lookup ===
+  idb = IdxDb {map: [
+    IdxElm {nr: 1, val: 100},
+    IdxElm {nr: 2, val: 200},
+    IdxElm {nr: 3, val: 300}
+  ]};
+  assert(idb.map[1, 100].val == 100, "index lookup (1,100): {idb.map[1,100].val}");
+  assert(idb.map[2, 200].val == 200, "index lookup (2,200): {idb.map[2,200].val}");
+  assert(!idb.map[9, 999], "index missing key is null");
+
+  // === Index: full iteration ===
+  idx_sum = 0;
+  for i in idb.map {
+    idx_sum += i.val;
+  }
+  assert(idx_sum == 600, "index full iteration sum: {idx_sum}");
+
+  // === Index: range query on first key ===
+  idx_range_sum = 0;
+  for i in idb.map[1..3] {
+    idx_range_sum += i.val;
+  }
+  assert(idx_range_sum == 300, "index range [1..3] sum: {idx_range_sum}");
+}

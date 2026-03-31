@@ -626,16 +626,48 @@ impl Parser {
 
     // A5.3-complete: emit the lambda value — plain Int(d_nr) for non-capturing
     // lambdas, or an Insert block that allocates and populates the closure record.
+    #[allow(clippy::similar_names)]
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
         let closure_rec_d = self.data.def(d_nr).closure_record;
         if closure_rec_d != u32::MAX && !self.first_pass {
-            // Build the closure allocation expression as an inline Block.
-            // This will be injected at the call site as a hidden argument.
+            // A5.6-1/2 (16-byte fn-ref + embedded closure):
+            // Allocate and populate the closure record at lambda DEFINITION time.
+            // Embed the closure DbRef into a 16-byte fn-ref slot so the closure
+            // travels with the fn-ref even when it escapes its defining scope.
+            //
+            // Layout of the 16-byte fn-ref frame slot:
+            //   bytes  0.. 4: d_nr (i32, function definition number)
+            //   bytes  4..16: closure DbRef (12 bytes; null = no closure)
+            //
+            // w (___clos_N) is added to work_refs so parse_code inserts Set(w,Null)
+            // at the START of the enclosing function body, pre-reserving w's slot
+            // in the outer scope — FreeStack cannot clobber it.
+            //
+            // The fn_ref_var (__fn_ref_N) holds [d_nr, closure DbRef] as 16 bytes.
+            // At call sites, fn_call_ref reads the embedded DbRef and pushes it as
+            // the hidden __closure arg automatically — no explicit injection needed.
             let rec_tp = Type::Reference(closure_rec_d, vec![]);
             let w = self.create_unique("__clos", &rec_tp);
             self.vars.defined(w);
+            // Register w as a work-ref so parse_code inserts Set(w,Null) at fn start.
+            self.vars.add_to_work_refs(w);
             let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
+            // Build fn_type for fn_ref_var: visible params (excluding __closure) + ret.
+            let n_all_attrs = self.data.attributes(d_nr);
+            let has_closure_attr =
+                n_all_attrs > 0 && self.data.attr_name(d_nr, n_all_attrs - 1) == "__closure";
+            let n_visible = if has_closure_attr {
+                n_all_attrs - 1
+            } else {
+                n_all_attrs
+            };
+            let visible_params: Vec<Type> = (0..n_visible)
+                .map(|aid| self.data.attr_type(d_nr, aid).clone())
+                .collect();
+            let ret_tp = self.data.def(d_nr).returned.clone();
+            let fn_type = Type::Function(visible_params, Box::new(ret_tp));
             let mut alloc_steps: Vec<Value> = Vec::new();
+            // Allocate and populate the closure record w.
             alloc_steps.push(crate::data::v_set(w, Value::Null));
             alloc_steps.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp_nr)]));
             let n_attrs = self.data.attributes(closure_rec_d);
@@ -644,7 +676,7 @@ impl Parser {
                 let cap_name = self.data.attr_name(closure_rec_d, aid);
                 let v_nr = self.vars.var(&cap_name);
                 if v_nr != u16::MAX {
-                    captured_var_nrs.push(v_nr); // A5.6d: record for call-site var_usages
+                    captured_var_nrs.push(v_nr);
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
@@ -655,16 +687,15 @@ impl Parser {
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;
-            // Final expression: the closure ref itself.
-            alloc_steps.push(Value::Var(w));
-            let closure_alloc = crate::data::v_block(alloc_steps, rec_tp.clone(), "closure alloc");
-            // Store the closure allocation expression for injection at call site.
-            self.last_closure_alloc = Some(Box::new(closure_alloc));
+            // Block result: push d_nr (4B via OpConstInt) + closure DbRef (12B via OpVarRef).
+            // Together these 16 bytes constitute the fn-ref slot value.
+            alloc_steps.push(Value::FnRef(d_nr as i32, w, Box::new(fn_type.clone())));
+            *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
+            // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
+            self.last_closure_alloc = None;
             // A5.6c: record the work var so parse_assign can populate closure_vars
-            // and try_fn_ref_call can emit write-backs after each call.
+            // (used by write-back and native codegen's closure_var_of lookup).
             self.last_closure_work_var = w;
-            // The lambda value is just the d_nr.
-            *code = Value::Int(d_nr as i32);
         } else {
             *code = Value::Int(d_nr as i32);
         }

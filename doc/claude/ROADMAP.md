@@ -27,24 +27,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
 | W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
 | W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
-| A5.6      | Closure: capture-at-definition-time semantics             | H  | ✓      |              | PLANNING.md § A5.6            |
-| CO1.7     | Coroutines: yield from inside for-loops                   | M  | ✓      | CO1.1–CO1.6  | PLANNING.md § CO1.7           |
-| CO1.8     | ↳ Multi-text parameters + nested-block safety             | S  | ✓      | CO1.3d       | PLANNING.md § CO1.8           |
-| CO1.9     | ↳ Store iteration generation guard in release builds      | S  | ✓      | CO1.6        | PLANNING.md § CO1.9           |
-| T1.9      | Tuple destructuring in `match`                            | S  | ✓      |              | TUPLE_MATCH.md                |
-| T1.9-1    | ↳ `Type::Tuple` dispatch in `parse_match`                 | XS | ✓      |              | control.rs                    |
-| T1.9-2    | ↳ `parse_tuple_match` — arm loop, if-chain                | S  | ✓      |              | control.rs                    |
-| T1.9-3    | ↳ `parse_tuple_elem_pattern` — wildcard/binding/literal/range/nested | S | ✓ | | control.rs            |
-| T1.9-4    | ↳ Tests + doc additions (`28-tuples.loft`)                | S  | ✓      |              | tests/docs/                   |
-| T1.10     | Tuple homogeneous-type coverage (text/store/struct/vector)| S  | ✓      | T1.8a, T1.8b | PLANNING.md § T1.10           |
-| T1.11     | Tuple type constraints (struct fields + compound assign)  | XS | ✓      | T1.1, T1.2   | PLANNING.md § T1.11           |
-| A8        | Slicing & comprehension on `sorted` / `index`             | M  | ✓      |              | SORTED_SLICE.md               |
-| A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S  | ✓      |              | fields.rs, codegen_runtime.rs |
-| A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)            | XS | ✓      | A8.1         | fields.rs                     |
-| A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)     | M  | ✓      |              | fields.rs                     |
-| A8.4      | ↳ Comprehensions on key ranges                            | S  | ✓      | A8.1         | tests/docs/                   |
-| A8.5      | ↳ Reverse range iteration (`rev(col[lo..hi])`)            | S  | ✓      | A8.1         | fields.rs, objects.rs         |
-| A8.6      | ↳ `match` on collection results (tests + docs)            | S  | ✓      |              | tests/docs/                   |
+| A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)     | M  | ✓      |              | fields.rs + io.rs runtime     |
 | A14       | `par_light`: lightweight parallel loop                    | MH | ✓      |              | LIGHT_PAR.md                  |
 | A14.1     | ↳ `Store::borrow_locked_for_light_worker` + sentinel Drop | S  | ✓      |              | LIGHT_PAR.md § L1             |
 | A14.2     | ↳ `WorkerPool` struct                                     | S  | ✓      | A14.1        | LIGHT_PAR.md § L2             |
@@ -108,6 +91,8 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.13, W4    | WASM.md — Threading           |
+| I12       | Interfaces: factory methods (`fn zero() -> Self`) — phase 2 | S | ✓    | I5.1         | INTERFACES.md § Q4/Q6         |
+| I8.5      | Interfaces: left-side concrete operand (`concrete op T`)  | S  | ~      | I8.3         | INTERFACES.md § Phase 1 gaps  |
 | A12       | Lazy work-variable initialization                         | M  | ✓      |              | PLANNING.md § A12             |
 | O2        | Stack raw pointer cache                                   | H  | ✓      |              | PLANNING.md § O2              |
 | A4        | Spatial index operations                                  | H  | ✓      |              | PLANNING.md § A4              |

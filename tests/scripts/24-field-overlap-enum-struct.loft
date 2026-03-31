@@ -1,0 +1,107 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// S16: field-name overlap involving struct-enum variants.
+// Scenario A: two struct-enum variants share field `score` at different offsets.
+//   Circle { radius: float, score: integer } — score is field 1 (offset 4)
+//   Box    { score: integer, size:   integer } — score is field 0 (offset 0)
+// Scenario B: a struct-enum variant and a plain struct share field `key`.
+//   Item     { key: integer, label: text } — variant field
+//   RawEntry { key: integer, data:  text } — plain struct, same offset (field 0)
+// All operations that do NOT use range queries must use each type's OWN key offset.
+// Range queries on sorted<EnumVariant[field]> are tested in 25-sorted-enum-range.loft.
+
+enum Shape {
+  Circle { radius: float, score: integer },
+  Box    { score: integer, size:   integer }
+}
+
+struct ShapeDb {
+  circles: sorted < Circle[score] >,
+  boxes:   sorted < Box[score] >
+}
+
+enum Entry {
+  Item { key: integer, label: text }
+}
+
+// Plain struct: key is field 0 (offset 0) — same offset as Item.key.
+struct RawEntry {
+  key: integer,
+  data: text
+}
+
+struct EntryDb {
+  items: sorted < Item[key] >,
+  raws:  sorted < RawEntry[key] >
+}
+
+fn main() {
+  // === Scenario A: sorted<Circle[score]> and sorted<Box[score]> in same file ===
+  sdb = ShapeDb {
+    circles: [
+      Circle {radius: 1.0, score: 30},
+      Circle {radius: 2.0, score: 10},
+      Circle {radius: 3.0, score: 20}
+    ],
+    boxes: [
+      Box {score: 5, size: 50},
+      Box {score: 15, size: 100},
+      Box {score: 25, size: 150}
+    ]
+  };
+
+  // Full iteration on circles (sorted ascending by score).
+  circ_sum = 0;
+  for c in sdb.circles {
+    circ_sum += c.score;
+  }
+  assert(circ_sum == 60, "circles full iteration sum: {circ_sum}");
+
+  // Lookup on circles — score for Circle is at offset 4 (after radius:float).
+  assert(sdb.circles[10].radius == 2.0, "circle lookup score=10: {sdb.circles[10].radius}");
+
+  // Full iteration on boxes.
+  box_sum = 0;
+  for b in sdb.boxes {
+    box_sum += b.score;
+  }
+  assert(box_sum == 45, "boxes full iteration sum: {box_sum}");
+
+  // Lookup on boxes — score for Box is at offset 0.
+  // Must NOT use Circle's offset (4) for score.
+  assert(sdb.boxes[5].size == 50, "box lookup score=5 size: {sdb.boxes[5].size}");
+
+  // === Scenario B: sorted<Item[key]> and sorted<RawEntry[key]> in same file ===
+  edb = EntryDb {
+    items: [
+      Item {key: 1, label: "one"},
+      Item {key: 3, label: "three"},
+      Item {key: 2, label: "two"}
+    ],
+    raws: [
+      RawEntry {key: 10, data: "ten"},
+      RawEntry {key: 30, data: "thirty"},
+      RawEntry {key: 20, data: "twenty"}
+    ]
+  };
+
+  // Full iteration on items.
+  item_sum = 0;
+  for it in edb.items {
+    item_sum += it.key;
+  }
+  assert(item_sum == 6, "items full iteration sum: {item_sum}");
+
+  // Lookup on items.
+  assert(edb.items[2].label == "two", "item lookup key=2: {edb.items[2].label}");
+
+  // Full iteration on raws.
+  raw_sum = 0;
+  for r in edb.raws {
+    raw_sum += r.key;
+  }
+  assert(raw_sum == 60, "raws full iteration sum: {raw_sum}");
+
+  // Lookup on raws — key is also at offset 0.
+  assert(edb.raws[20].data == "twenty", "raw lookup key=20: {edb.raws[20].data}");
+}

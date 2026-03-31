@@ -79,6 +79,29 @@ their slot range, and their live intervals.
 
 ---
 
+## Debugging a Tricky Compiler Bug (use logging first)
+
+For non-obvious bugs — wrong use counts, unexpected variable lifetimes, closure leaks,
+dead-assignment warnings that fire or don't fire — **always add targeted debug logging
+before attempting a fix**.
+
+Reasoning alone about multi-pass parser/compiler state is unreliable; logging shows
+exactly what is happening.
+
+Pattern:
+1. Add `eprintln!` to the tracking function closest to the symptom (e.g. `in_use`,
+   `track_write`, slot-assignment helpers).
+2. Run the failing test and read the output to confirm your hypothesis.
+3. If the call site is still unclear, add `std::backtrace::Backtrace::capture()` at the
+   suspicious point and print it. This pinpoints the exact source location.
+4. Fix the root cause, then **remove all debug prints before committing**.
+
+Example: when investigating why a dead-assignment warning stopped firing, adding
+`eprintln!` to `in_use` and `track_write` immediately revealed an extra `uses` increment
+from a captured variable re-read, and the backtrace pointed to the exact `parse_var` call.
+
+---
+
 ## Debugging a Scope Analysis Bug
 
 Scope analysis bugs are the hardest to diagnose. The gap between the wrong IR

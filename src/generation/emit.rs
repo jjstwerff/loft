@@ -180,6 +180,10 @@ impl Output<'_> {
                     self.output_code_inner(w, inner)?;
                 }
             }
+            // A5.6-1: FnRef carries the d_nr (function index) for the fn-ref slot.
+            // In native code the fn-ref variable holds a u32 d_nr; the closure is stored
+            // separately. Emit only the d_nr constant; closure injection is done at the call site.
+            Value::FnRef(d_nr, _, _) => write!(w, "{d_nr}_u32")?,
         }
         Ok(())
     }
@@ -188,6 +192,8 @@ impl Output<'_> {
     /// The variable `v_nr` holds a `u32` definition number at runtime.
     /// We enumerate all reachable definitions with a matching signature and
     /// generate a `match` dispatch.
+    #[allow(clippy::unnecessary_map_or)]
+    #[allow(clippy::collapsible_if)]
     fn output_call_ref(
         &mut self,
         w: &mut dyn Write,
@@ -208,7 +214,8 @@ impl Output<'_> {
         // Only include native-callable functions (n_ / t_ prefix) in the reachable set;
         // bytecode ops (Op* prefix) are never callable via fn-refs in native mode.
         let n_defs = self.data.definitions();
-        let mut candidates: Vec<(u32, String)> = Vec::new();
+        // (d_nr, fn_name, has_closure): has_closure=true when the last attribute is __closure.
+        let mut candidates: Vec<(u32, String, bool)> = Vec::new();
         for d in 0..n_defs {
             if !self.reachable.is_empty() && !self.reachable.contains(&d) {
                 continue;
@@ -221,22 +228,32 @@ impl Output<'_> {
             if def.name.starts_with("Op") {
                 continue;
             }
-            // Total args = visible params + hidden args (closure record, work bufs).
-            // Match on args.len() so capturing lambdas are preferred over non-capturing
-            // ones that share the same visible signature.
-            if def.attributes.len() != args.len() {
+            // A5.6g: closure-capturing lambdas have a hidden __closure param as the last
+            // attribute. The closure is injected explicitly at the call site (in arg_exprs),
+            // so total arg count must equal the full attribute count.
+            let has_closure = def
+                .attributes
+                .last()
+                .map_or(false, |a| a.name == "__closure");
+            let visible_attr_count = if has_closure {
+                def.attributes.len() - 1
+            } else {
+                def.attributes.len()
+            };
+            // Visible arg count must equal args provided at call site (closure is injected separately).
+            if visible_attr_count != args.len() {
                 continue;
             }
-            // Compare visible parameter types only (hidden args are closure/work bufs
-            // that are always compatible and differ only by definition number).
-            let params_match =
-                def.attributes
-                    .iter()
-                    .zip(param_types.iter())
-                    .all(|(a, expected)| {
-                        rust_type(&a.typedef, &Context::Argument)
-                            == rust_type(expected, &Context::Argument)
-                    });
+            // Compare visible parameter types only (Type::Function excludes __closure).
+            let params_match = def
+                .attributes
+                .iter()
+                .take(visible_attr_count)
+                .zip(param_types.iter())
+                .all(|(a, expected)| {
+                    rust_type(&a.typedef, &Context::Argument)
+                        == rust_type(expected, &Context::Argument)
+                });
             if !params_match {
                 continue;
             }
@@ -244,7 +261,7 @@ impl Output<'_> {
             {
                 continue;
             }
-            candidates.push((d, def.name.clone()));
+            candidates.push((d, def.name.clone(), has_closure));
         }
         // Evaluate args into pre-eval bindings to avoid double-borrow.
         let mut arg_exprs: Vec<String> = Vec::new();
@@ -252,12 +269,20 @@ impl Output<'_> {
             let expr = self.generate_expr_buf(arg)?;
             arg_exprs.push(expr);
         }
+        // Look up the closure work-var for this fn-ref variable (if any).
+        let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
         // Generate a match dispatch on the fn-ref variable.
         write!(w, "match var_{var_name} {{")?;
-        for (d_nr, fn_name) in &candidates {
+        for (d_nr, fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
             for expr in &arg_exprs {
                 write!(w, ", {expr}")?;
+            }
+            if *has_closure {
+                if let Some(clos_nr) = closure_var_nr {
+                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
+                    write!(w, ", var_{clos_name}")?;
+                }
             }
             write!(w, "),")?;
         }

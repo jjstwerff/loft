@@ -58,7 +58,8 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Break(_)
         | Value::Continue(_)
         | Value::Keys(_)
-        | Value::TupleGet(_, _) => false,
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _) => false,
     }
 }
 
@@ -701,6 +702,31 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
         }
+        // T1.11b: compound assignment on a tuple LHS is not supported.
+        // (a, b) = expr is handled above; (a, b) += expr has no defined semantics.
+        // Return early in both passes to prevent downstream "No matching operator" errors.
+        // Consume the operator and RHS so the parser state stays clean after the early exit.
+        if matches!(code, Value::Tuple(_))
+            && ["+=", "-=", "*=", "%=", "/="]
+                .iter()
+                .any(|op| self.lexer.peek_token(op))
+        {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "compound assignment is not supported for tuple destructuring — use (a, b) = expr instead"
+                );
+            }
+            for op in ["+=", "-=", "*=", "%=", "/="] {
+                if self.lexer.has_token(op) {
+                    break;
+                }
+            }
+            let mut discard = Value::Null;
+            self.expression(&mut discard);
+            return Type::Void;
+        }
         let to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
@@ -730,6 +756,9 @@ use a separate collection or add after the loop"
                 let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
+                    // A5.6-2: store mapping in Function struct for native codegen.
+                    self.vars
+                        .set_closure_var_of(var_nr, self.last_closure_work_var);
                     self.last_closure_work_var = u16::MAX;
                 }
                 return result;
