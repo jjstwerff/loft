@@ -936,6 +936,22 @@ recursive walk.
 
 ---
 
+## Debug boundary checks (debug builds only)
+
+Three `debug_assert!` checks fire automatically in debug builds (`cargo test`)
+with no env-var needed.  They catch the most common runtime bug patterns at the
+point of first access, before corruption propagates:
+
+| Check | File | Catches |
+|---|---|---|
+| `store_nr < allocations.len()` | `src/keys.rs` `store()` / `mut_store()` | DbRef pointing to a non-existent store (e.g. light-worker borrow range too small) |
+| `fld + size ≤ record_size` | `src/store.rs` `addr()` / `addr_mut()` | Field access past the end of a claimed record (e.g. wrong `pos` in a returned DbRef) |
+| `stack.pos ≥ size_of::<T>()` | `src/database/mod.rs` `get<T>()` | Stack underflow from popping more bytes than were pushed (e.g. wrong native-function arg order) |
+
+All three are zero-cost in release builds.
+
+---
+
 ## See also
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs, limitations, workarounds, and fix plans
 - [CLAUDE.md](../../CLAUDE.md) — Project orientation: execution path, key data structures, branch policy, documentation index

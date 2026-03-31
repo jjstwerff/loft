@@ -27,6 +27,17 @@ All notable changes to the loft language and interpreter.
   fixed in the enablement: stack pop order in the native function, result DbRef
   `pos` field (4 not 8), and store borrow range (all stores, not just `[..max]`).
 
+### Debugging infrastructure
+
+- **Debug boundary checks for DbRef, record fields, and stack pops** —
+  Three `debug_assert!` additions (zero cost in release builds):
+  - `keys::store()` / `keys::mut_store()`: assert `store_nr < allocations.len()` with
+    clear message showing both values.
+  - `Store::addr()` / `Store::addr_mut()`: validate field offset against the record's
+    claimed size (first word of record header). Fires for `rec > 1, fld > 0`.
+  - `Stores::get<T>()`: assert `stack.pos >= size_of::<T>()` before decrement, catching
+    stack underflow from wrong native-function pop order.
+
 ### Safety fixes
 
 - **Coroutine store-mutation guard promoted to always-on** (CO1.9) — The generation
