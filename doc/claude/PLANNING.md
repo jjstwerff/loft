@@ -423,15 +423,37 @@ the recompile overhead that caching was designed to address)
 - **T1.6** — *(completed 0.8.3)* SC-8: `check_ref_mutations` emits WARNING (not error) for `RefVar(Tuple)` params never written; `find_written_vars` recognises `TuplePut`.
 - **T1.7** — *(completed 0.8.3)* SC-7: `Type::Integer` gains a `not_null: bool` third field; `parse_type` accepts `not null` suffix; null assigned to a `not null` tuple element is a compile error.
 
-- **T1.8** — Tuple function return convention + text elements (C20).
-  Two sub-issues remain after T1.1–T1.7:
+- **T1.8** — Tuple function return convention + struct-ref element lifetime tracking.
+  Three sub-issues remain after T1.1–T1.7:
 
   **T1.8a — Function return convention:** A function declared `-> (A, B)` must write its return value directly into the caller’s pre-allocated slot.  This requires (1) codegen to allocate the tuple on the caller’s stack before the call; (2) a `ReturnTuple` IR variant; (3) `OpReturnTuple(size)` that copies from the callee stack to the pre-allocated slot.
-  
+
   **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
 
+  **T1.8c — Struct-ref (DbRef) tuple elements: move vs copy semantics.**
+  The `tuple_struct_refs` test fails with use-after-free.  Root cause: `scopes.rs:578-587`
+  has a stub `continue` for tuple scope exit that emits **no** `OpFreeRef` for owned
+  elements.  After destructuring `(q1, q2) = two_points(p1, p2)`, the work-ref `tmp`
+  holds two DbRef copies of the same records as `q1` and `q2`.  The fix must decide:
+  - **Move semantics (preferred):** after destructuring, `tmp`’s elements are considered
+    moved.  The `continue` in scopes.rs is correct for `tmp` — no double-free.  Must verify
+    that `q1` and `q2` themselves have `Type::Reference` and that normal `OpFreeRef` fires
+    for them at their scope exit.  If not, the parser must propagate the element type to
+    the destructured variables.
+  - **Copy + null semantics:** after destructuring, null out `tmp`’s DbRef slots (set
+    store_nr to -1).  Then `OpFreeRef` on `tmp` is a no-op.  Requires a new opcode
+    `OpNullTupleElem(var, offset)` or explicit codegen at the destructuring site.
+
+  **Guards and debugging:**
+  - `debug_assert!` in `OpFreeRef` that the record is in the store’s claims set (catches
+    double-free immediately).
+  - `LOFT_LOG=scope_debug` already traces ref-variable decisions; extend it to log tuple
+    element ownership: "tuple var={v}: {n} owned elements, treating as moved".
+  - After destructuring, verify each destination variable’s type matches the tuple element
+    type so normal scope cleanup applies.
+
   **Effort:** Medium
-  **Target:** 1.1+
+  **Target:** 0.8.3
 
 - **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
 
@@ -1511,6 +1533,15 @@ green.
 | `src/parser/operators.rs` | `parse_part`: handle chained `(...)` on `Type::Function` |
 | `tests/expressions.rs` | Remove `#[ignore]` from `closure_capture_text` |
 
+**Guards and debugging:**
+- `fn_call_ref`: `debug_assert!(d_nr < self.fn_positions.len())` before indexing.
+- `OpStoreClosure`: `debug_assert!` that the fn_ref_var slot has 16 bytes allocated.
+- Strip internal text deps from the public fn-type: in `emit_lambda_code` (vectors.rs:667),
+  replace `Text(deps)` with `Text(vec![])` in the return type of the constructed
+  `Type::Function`.  Internal dependency tracking is for the lambda body, not the interface.
+- Add `LOFT_LOG=closure` mode that prints fn-ref slot contents (d_nr + DbRef) at call sites
+  in `fn_call_ref` — catches misaligned reads immediately.
+
 **Effort:** High (8 files, 2 new opcodes, 5 independently testable steps)
 **Depends on:** A5.6b.1 ✓, A5.6b.2 ✓, A5.6c ✓
 **Target:** 0.8.3
@@ -2534,6 +2565,86 @@ before the general `declared.contains` check (line ~85).
 **Tests:** Remove `"20-binary.loft"` from `SCRIPTS_NATIVE_SKIP` in `tests/native.rs`
 once fixed.
 **Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+### S-lexer  Fix 15-lexer.loft / 16-parser.loft "Unknown record" crash
+**Severity:** Medium — blocks `tests/docs/16-parser.loft` (the parser library test)
+**Description:** Running `16-parser.loft` panics with `Unknown record 2147483648` at
+`store.rs:897`.  The crash is on `main` too (not a regression).
+
+**Root cause:** The crash path is `io.rs:611` in the `on==2` (sorted) branch of `iterate()`:
+```
+io.rs:607  sorted_rec = get_int(data.rec, data.pos) as u32   → i32::MIN cast to u32
+io.rs:608  sorted_rec == 0?  No — 0x80000000 ≠ 0
+io.rs:611  get_int(sorted_rec=2147483648, 4)                  → panics: "Unknown record"
+```
+When a struct field has an unresolved or unknown type (type 0 or 6), `set_default_value()`
+in `database/structures.rs` writes `i32::MIN` instead of `0`.  When cast `as u32`, this
+becomes 2147483648 — a poison value that passes the `== 0` null check but is not a valid
+record number.  The `Parser` struct in `16-parser.loft` has hash/sorted collection fields;
+if any field's type isn't fully resolved, iteration over it hits this crash.
+
+**Fix path:**
+1. **Immediate guard (io.rs):** In the `on==2` sorted branch, check `sorted_rec_raw <= 0`
+   (not just `== 0`) before using it as a record number.  This catches both the `0`
+   (empty collection) and `i32::MIN` (unresolved type) sentinels:
+   ```rust
+   let sorted_rec_raw = all[data.store_nr as usize].get_int(data.rec, data.pos);
+   let sorted_rec = if sorted_rec_raw <= 0 { 0 } else { sorted_rec_raw as u32 };
+   ```
+   Apply the same guard to `on==1` (index) and `on>=4` (hash) branches.
+
+2. **Debug guard (io.rs):** Add a `debug_assert!(sorted_rec_raw >= 0, ...)` before the
+   cast so debug builds catch the root cause (unresolved type in set_default_value) rather
+   than silently treating it as empty.
+
+3. **Root-cause investigation:** Add a temporary `eprintln!` in `set_default_value()` when
+   type is 0 or 6 to identify which Parser field has the unresolved type.  Fix the type
+   resolution so the field gets a proper `0` default instead of `i32::MIN`.
+
+4. **Extend LOFT_ITERATE_TRACE:** Add trace output for the sorted branch (currently only
+   the index branch is traced).
+
+**Tests:** Remove `#[ignore]` from `last` in `tests/wrap.rs` once fixed.
+**Effort:** Small (guard) + Medium (root-cause fix in type resolution)
+**Target:** 0.8.3
+
+---
+
+### A7.2-par  Fix `load_one` heap corruption under parallel test execution
+**Severity:** Low — only affects test parallelism, not production
+**Description:** `load_one_registers_native_functions` in `tests/native_loader.rs` passes
+with `--test-threads=1` but crashes with "corrupted size vs. prev_size" or
+"munmap_chunk(): invalid pointer" when run in parallel with other tests.
+
+**Root cause:** `extensions::load_one()` calls `Library::new(path)` (wrapping `dlopen`)
+without synchronisation.  When multiple test threads call `dlopen` on the same `.so`
+simultaneously, the shared library's initialisation code and the `trampoline_register`
+callback allocate heap memory concurrently, causing corruption.  The `std::mem::forget(lib)`
+at the end prevents cleanup, compounding the issue.
+
+**Fix path:**
+1. **Mutex in `load_one`** (`src/extensions.rs`):
+   ```rust
+   static LOAD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+   pub fn load_one(state: &mut State, path: &str) {
+       let _guard = LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+       // ... existing code ...
+   }
+   ```
+   This serialises `dlopen` calls process-wide.  The lock only contends during library
+   loading (startup, not runtime).
+
+2. **Double-load prevention:** Track loaded library paths in a `HashSet<String>` behind
+   the same mutex.  If a library has already been loaded, skip `Library::new()` entirely.
+
+3. **Debugging:** Log at `load_one` entry/exit gated by `LOFT_LOG`:
+   `eprintln!("[extensions] loading {path}")`.
+
+**Tests:** Remove `#[ignore]` from `load_one_registers_native_functions` once fixed.
+**Effort:** Small
 **Target:** 0.8.3
 
 ---

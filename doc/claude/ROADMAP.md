@@ -22,10 +22,10 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
-| A5.6-text | Closure text work-ref type propagation                    | M  | ~      |              | src/parser/control.rs         |
-| T1.8      | DbRef lifetime tracking for tuple struct-ref elements     | M  | ~      |              | src/variables/                |
-| S-lexer   | Fix 15-lexer.loft / 16-parser.loft "Unknown record" crash | M  | —      |              | src/store.rs                  |
-| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | —      |              | tests/native_loader.rs        |
+| A5.6-text | Closure 16-byte fn-ref + chained call parsing             | H  | ✓      |              | PLANNING.md § A5.6            |
+| T1.8      | Tuple struct-ref element move semantics + scope cleanup    | M  | ✓      |              | PLANNING.md § T1.8            |
+| S-lexer   | Fix 16-parser.loft "Unknown record" sentinel crash         | S+M| ✓      |              | PLANNING.md § S-lexer         |
+| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | ✓      |              | PLANNING.md § A7.2-par        |
 
 ---
 
