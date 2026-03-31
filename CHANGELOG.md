@@ -27,6 +27,24 @@ All notable changes to the loft language and interpreter.
   fixed in the enablement: stack pop order in the native function, result DbRef
   `pos` field (4 not 8), and store borrow range (all stores, not just `[..max]`).
 
+### Sorted collection slicing (A8)
+
+- **Partial-key match iterator** (A8.3): `idx[k1]` on a multi-key index now iterates
+  all elements matching the first key. Parser detects `nr < key_types.len()` and emits
+  an inclusive range with `from = till = [k1]`. The existing `key_compare` zip-based
+  comparison treats partial prefixes as unconstrained on remaining fields.
+
+### WASM parallel infrastructure (W1.18)
+
+- **WASM Worker Thread infrastructure** (W1.18-1 through W1.18-5):
+  - W1.18-1: `#[cfg(all(feature = "wasm", feature = "threading"))]` branch in
+    `run_parallel_direct` dispatches to JS host via `parallel_run()`.
+  - W1.18-2: `worker_entry(fn_index, start, end)` exported via `#[wasm_bindgen]`.
+  - W1.18-3: `tests/wasm/worker.mjs` — Worker Thread park/wake loop.
+  - W1.18-4: `tests/wasm/parallel.mjs` — `LoftThreadPool` class.
+  - W1.18-5: `tests/wasm/harness.mjs` — `initThreaded()` for shared-memory WASM.
+  W1.18-6 (test enablement) deferred until wasm-threads build is available.
+
 ### Debugging infrastructure
 
 - **Debug boundary checks for DbRef, record fields, and stack pops** —

@@ -20,13 +20,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| W1.18     | WASM: `par()` via Node.js Worker Threads                  | H  | ✓      |              | WASM.md § W1.18               |
-| W1.18-1   | ↳ `#[cfg(wasm+threading)]` branch in `parallel.rs`       | S  | ✓      |              | src/parallel.rs               |
-| W1.18-2   | ↳ `worker_entry` exported via `#[wasm_bindgen]`           | S  | ✓      | W1.18-1      | src/lib.rs                    |
-| W1.18-3   | ↳ `worker.mjs` — park/wake loop + `worker_entry`          | S  | ✓      | W1.18-2      | tests/wasm/worker.mjs         |
-| W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
-| W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
-| W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
+| W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 
 ---
 
