@@ -95,17 +95,24 @@ fn test() {
 }
 ```
 
-**Impact:** memory leak (one store per reassignment).  Crashes in debug builds.
+**Impact:** SIGSEGV in debug builds; passes in release (leak only).  The crash
+is from the work-var system: two DbRef copies (fn-ref slot + closure work-var)
+point to the same store; freeing either one leaves the other dangling.
+**Test:** `closure_redefine_frees_old` (`#[ignore]` in `tests/expressions.rs`).
 **Workaround:** avoid reassigning lambda variables that capture values.
-**Planned fix:** A5.6 deferred item 1 in [PLANNING.md](PLANNING.md) (1.1+).
+**Planned fix:** A5.6 deferred item 1 in [PLANNING.md](PLANNING.md) (0.8.3).
+Requires rethinking closure ownership — either the fn-ref slot or the work-var
+should own the closure, not both.
 
 ---
 
 ## C31 — Closures in collections or struct fields not supported
 
 Storing a capturing lambda in a `vector<fn(...)>` or as a struct field
-may produce incorrect behaviour.  The 16-byte fn-ref layout (d_nr + closure
-DbRef) is not handled by collection element read/write operations.
+does not work.  Two issues: (1) `element_store_size` now correctly returns
+16 for `Type::Function` (fixed), but (2) the parser's vector literal code
+requires a database type for element registration, and `Type::Function` has
+no database type → assertion "Unknown type" at parse time.
 
 **Workaround:** pass closures as function arguments or return values, not
 through collections or struct fields.
