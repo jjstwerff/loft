@@ -339,11 +339,7 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6-text: cross-scope text-returning closure requires work-ref type propagation. \
-make_greeter declares '-> fn(text) -> text' (text([])) but the lambda produces text([1]); \
-the call site uses the declared return type so pushes wrong arg_size. \
-Fix: propagate actual fn_type from lambda through the declaring function's return type, \
-or have fn_call_ref look up work-ref count from the fn definition table. See CAVEATS.md."]
+#[ignore = "A5.6-text: work-ref type mismatch — fn(text)->text([]) vs lambda text([1])"]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(
@@ -940,7 +936,7 @@ fn tuple_store_text_fields() {
 
 /// T1.10-3: two struct-reference elements — adjacent DbRef slots in a tuple.
 #[test]
-#[ignore = "T1.10-3: struct-reference tuple elements trigger use-after-free — T1.8 lifetime tracking needed for DbRef tuple slots"]
+#[ignore = "T1.8: struct-ref tuple elements trigger use-after-free — needs DbRef lifetime tracking"]
 fn tuple_struct_refs() {
     code!(
         "struct Point { x: integer, y: integer }
@@ -1746,7 +1742,6 @@ fn index_open_end_range() {
 
 /// A8.5-idx: `rev(idx[lo..hi])` works on index collections.
 #[test]
-#[ignore = "A8.5-idx: reverse range on index — not yet verified"]
 fn index_reverse_range() {
     code!(
         "struct Elm { nr: integer, val: integer }

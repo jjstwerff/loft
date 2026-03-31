@@ -21,6 +21,10 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
+| W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
+| A5.6-text | Closure text work-ref type propagation                    | M  | ~      |              | src/parser/control.rs         |
+| T1.8      | DbRef lifetime tracking for tuple struct-ref elements     | M  | ~      |              | src/variables/                |
+| S-lexer   | Fix 15-lexer.loft / 16-parser.loft "Unknown record" crash | M  | —      |              | src/store.rs                  |
 
 ---
 
@@ -75,7 +79,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.13, W4    | WASM.md — Threading           |
 | I12       | Interfaces: factory methods (`fn zero() -> Self`) — phase 2 | S | ✓    | I5.1         | INTERFACES.md § Q4/Q6         |
 | I8.5      | Interfaces: left-side concrete operand (`concrete op T`)  | S  | ~      | I8.3         | INTERFACES.md § Phase 1 gaps  |
 | A12       | Lazy work-variable initialization                         | M  | ✓      |              | PLANNING.md § A12             |

@@ -554,18 +554,31 @@ impl State {
         let start;
         let finish;
         let all = &self.database.allocations;
+        let trace_iter = std::env::var("LOFT_ITERATE_TRACE").is_ok();
         match on & 63 {
             1 => {
                 // index points to the record position inside the store
                 if reverse {
-                    let t = tree::find(&data, ex, arg, all, &keys, &till);
+                    // A8.5-idx: for reverse, start must be ONE PAST the last
+                    // element to visit (so previous(start) = last element).
+                    // finish must be ONE BEFORE the first element to visit
+                    // (so when n == finish, iteration is done).
+                    // This mirrors the forward case where start is one before
+                    // the first and finish is the last to visit.
+                    let store = crate::keys::store(&data, all);
+                    let till_node = tree::find(&data, true, arg, all, &keys, &till);
+                    // till_node = previous(first_node >= till).
+                    // For exclusive [lo..hi), till_node IS the last element to visit.
+                    // We need start = next(till_node) so previous(start) = till_node.
                     start = if ex {
-                        t
+                        tree::next(store, &new_ref(&data, till_node, arg))
                     } else {
-                        tree::next(crate::keys::store(&data, all), &new_ref(&data, t, arg))
+                        // Inclusive: till_node = previous(till_match), need next of till_match
+                        let till_match = tree::find(&data, false, arg, all, &keys, &till);
+                        tree::next(store, &new_ref(&data, till_match, arg))
                     };
-                    let f = tree::find(&data, ex, arg, all, &keys, &from);
-                    finish = tree::next(crate::keys::store(&data, all), &new_ref(&data, f, arg));
+                    // finish = previous(first_from_node) — same as forward start
+                    finish = tree::find(&data, true, arg, all, &keys, &from);
                 } else {
                     start = tree::find(&data, true, arg, all, &keys, &from);
                     let t = tree::find(&data, ex, arg, all, &keys, &till);
@@ -579,6 +592,13 @@ impl State {
                         // exclusive case where finish means "stop before visiting".
                         tree::previous(crate::keys::store(&data, all), &new_ref(&data, t, arg))
                     };
+                }
+                if trace_iter {
+                    eprintln!(
+                        "[iterate] on=index reverse={reverse} ex={ex} start={start} finish={finish} from_keys={} till_keys={}",
+                        from.len(),
+                        till.len()
+                    );
                 }
             }
             2 => {
@@ -687,6 +707,12 @@ impl State {
                         tree::next(store, &rec)
                     };
                     self.put_var(state_var - 8, n);
+                    if std::env::var("LOFT_ITERATE_TRACE").is_ok() {
+                        eprintln!(
+                            "[step] on=index reverse={reverse} cur={cur} -> n={n} finish={finish} done={}",
+                            n == finish
+                        );
+                    }
                     if n == finish {
                         self.put_var(state_var - 12, u32::MAX);
                     }
