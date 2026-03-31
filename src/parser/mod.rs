@@ -261,10 +261,17 @@ impl Parser {
             let mut lexer = Lexer::default();
             data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));
         }
+        // C31: register "fn_ref" definition early so type_def_nr(Type::Function)
+        // can resolve during parsing (before fill_all runs).
+        let mut database = Stores::new();
+        {
+            let d = data.add_def("fn_ref", &pos.clone(), DefType::Struct);
+            data.definitions[d as usize].known_type = database.fn_ref();
+        }
         Parser {
             todo_files: Vec::new(),
             data,
-            database: Stores::new(),
+            database,
             lexer: Lexer::default(),
             in_loop: false,
             in_format_expr: false,
