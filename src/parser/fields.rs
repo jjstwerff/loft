@@ -355,29 +355,9 @@ impl Parser {
                 index_t.show(&self.data, &self.vars)
             );
         }
-        if matches!(etp, Type::Function(_, _)) {
-            // C31: read 16-byte fn-ref from vector element.  OpGetVector returns a
-            // DbRef to the element slot.  Read 4×4-byte words via OpGetInt to
-            // reconstruct the fn-ref on the stack.
-            let ref_tp = Type::Reference(elm_td, Vec::new());
-            let elm_ref = self.create_unique("__fn_elm_ref", &ref_tp);
-            self.vars.defined(elm_ref);
-            // C31: elm_ref borrows a position inside the vector store.
-            // Must not be freed at scope exit — freeing would destroy the vector.
-            self.vars.set_skip_free(elm_ref);
-            let get_vec = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
-            if !self.first_pass {
-                let mut ops = vec![crate::data::v_set(elm_ref, get_vec)];
-                for off in [0i32, 4, 8, 12] {
-                    ops.push(self.cl("OpGetInt", &[Value::Var(elm_ref), Value::Int(off)]));
-                }
-                *code = crate::data::v_block(ops, etp.clone(), "fn_ref_from_vec");
-            }
-        } else {
-            *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
-            if self.database.is_base(known) || self.database.is_linked(known) {
-                *code = self.get_val(etp, true, 0, code.clone());
-            }
+        *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
+        if self.database.is_base(known) || self.database.is_linked(known) {
+            *code = self.get_val(etp, true, 0, code.clone());
         }
         None
     }

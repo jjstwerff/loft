@@ -629,30 +629,28 @@ impl Parser {
     #[allow(clippy::similar_names)]
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
         let closure_rec_d = self.data.def(d_nr).closure_record;
-        // C30: create the closure work-var on BOTH passes for counter sync.
-        // Only emit the allocation/population code on pass 2.
-        #[allow(clippy::if_not_else)]
-        if closure_rec_d != u32::MAX {
+        if closure_rec_d != u32::MAX && !self.first_pass {
+            // A5.6-1/2 (16-byte fn-ref + embedded closure):
+            // Allocate and populate the closure record at lambda DEFINITION time.
+            // Embed the closure DbRef into a 16-byte fn-ref slot so the closure
+            // travels with the fn-ref even when it escapes its defining scope.
+            //
+            // Layout of the 16-byte fn-ref frame slot:
+            //   bytes  0.. 4: d_nr (i32, function definition number)
+            //   bytes  4..16: closure DbRef (12 bytes; null = no closure)
+            //
+            // w (___clos_N) is added to work_refs so parse_code inserts Set(w,Null)
+            // at the START of the enclosing function body, pre-reserving w's slot
+            // in the outer scope — FreeStack cannot clobber it.
+            //
+            // The fn_ref_var (__fn_ref_N) holds [d_nr, closure DbRef] as 16 bytes.
+            // At call sites, fn_call_ref reads the embedded DbRef and pushes it as
+            // the hidden __closure arg automatically — no explicit injection needed.
             let rec_tp = Type::Reference(closure_rec_d, vec![]);
-            // C30: reuse existing closure work-var on reassignment so OpDatabase
-            // clears and reclaims the same store instead of orphaning a new one.
-            #[allow(clippy::if_not_else)]
-            let w = if self.reuse_closure_work_var != u16::MAX {
-                let reused = self.reuse_closure_work_var;
-                self.reuse_closure_work_var = u16::MAX;
-                reused
-            } else {
-                let w = self.create_unique("__clos", &rec_tp);
-                self.vars.defined(w);
-                self.vars.add_to_work_refs(w);
-                w
-            };
-            if self.first_pass {
-                // Pass 1: work-var created for counter sync; code emitted on pass 2.
-                *code = Value::Int(d_nr as i32);
-                return;
-            }
-            // Pass 2: emit closure allocation and fn-ref construction.
+            let w = self.create_unique("__clos", &rec_tp);
+            self.vars.defined(w);
+            // Register w as a work-ref so parse_code inserts Set(w,Null) at fn start.
+            self.vars.add_to_work_refs(w);
             let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
             // Build fn_type for fn_ref_var: visible params (excluding __closure) + ret.
             let n_all_attrs = self.data.attributes(d_nr);
@@ -686,8 +684,6 @@ impl Parser {
                         Value::Var(w),
                         Value::Var(v_nr),
                     ));
-                    // A5.6-text: suppress "never read" without affecting dead-assignment.
-                    self.vars.set_captured(v_nr);
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;
@@ -695,13 +691,7 @@ impl Parser {
             // Together these 16 bytes constitute the fn-ref slot value.
             alloc_steps.push(Value::FnRef(d_nr as i32, w, Box::new(fn_type.clone())));
             *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
-            // A5.6-text: suppress scope-exit OpFreeRef on the closure work-var ONLY
-            // for cross-scope closures (function returns Function type).  The caller
-            // frees the closure via FreeFnRefClosure in the chained-call block.
-            // Same-scope closures keep normal freeing at function exit.
-            if matches!(self.data.def(self.context).returned, Type::Function(_, _)) {
-                self.vars.set_skip_free(w);
-            }
+            // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
             self.last_closure_alloc = None;
             // A5.6c: record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).
@@ -1318,35 +1308,6 @@ impl Parser {
                         Value::Int(i32::from(self.data.def(*inner_nr).known_type))
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
-                }
-            } else if matches!(in_t, Type::Function(_, _)) {
-                // C31: decompose 16-byte fn-ref into 4×4-byte OpSetInt writes.
-                // If p is a variable, read words via FnRefWord. Otherwise, store
-                // in a temp variable first.
-                let fn_var = if let Value::Var(v) = p {
-                    *v
-                } else {
-                    let tmp = self.create_unique("__fn_vec_tmp", in_t);
-                    self.vars.defined(tmp);
-                    ls.push(crate::data::v_set(tmp, p.clone()));
-                    tmp
-                };
-                // C31: when a capturing closure's fn-ref is stored in a vector,
-                // the closure work-var must survive until the vector is freed.
-                // Mark it skip_free so OpFreeRef at function exit doesn't destroy
-                // the closure while the vector still holds a reference to it.
-                if let Some(&clos_var) = self.closure_vars.get(&fn_var) {
-                    self.vars.set_skip_free(clos_var);
-                }
-                for off in [0u16, 4, 8, 12] {
-                    ls.push(self.cl(
-                        "OpSetInt",
-                        &[
-                            Value::Var(elm),
-                            Value::Int(i32::from(off)),
-                            Value::FnRefWord(fn_var, off),
-                        ],
-                    ));
                 }
             } else if let Value::Insert(steps) = p {
                 for l in steps {

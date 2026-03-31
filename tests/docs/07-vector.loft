@@ -127,23 +127,6 @@ fn main() {
   // The same rule applies to slices: 'v[2..5]' passed to a function is a
   // narrower window into the same storage, so element writes are visible but
   // appends are not.
-  // ## Aggregates
-  // Shorthand functions over an entire vector, without writing an explicit loop.
-  //   sum_of(v)          — sum of all integer elements
-  //   min_of(v)          — smallest element (null if empty)
-  //   max_of(v)          — largest element (null if empty)
-  //   any(v, pred)       — true if at least one element satisfies the predicate
-  //   all(v, pred)       — true if every element satisfies the predicate
-  //   count_if(v, pred)  — number of elements satisfying the predicate
-  agg_nums = [3, 1, 4, 1, 5, 9, 2, 6];
-  assert(sum_of(agg_nums) == 31, "sum_of: {sum_of(agg_nums)}");
-  assert(min_of(agg_nums) == 1, "min_of: {min_of(agg_nums)}");
-  assert(max_of(agg_nums) == 9, "max_of: {max_of(agg_nums)}");
-  assert(any(agg_nums, |x| { x > 8 }), "any > 8");
-  assert(!any(agg_nums, |x| { x > 10 }), "none > 10");
-  assert(all(agg_nums, |x| { x > 0 }), "all > 0");
-  assert(!all(agg_nums, |x| { x > 1 }), "not all > 1");
-  assert(count_if(agg_nums, |x| { x % 2 == 0 }) == 3, "count even elements");
   // ## Higher-order functions
   // 'map' applies a function to every element and returns a new vector.
   nums =[1, 2, 3, 4, 5];

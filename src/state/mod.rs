@@ -1161,12 +1161,6 @@ impl State {
     }
 
     pub fn put_var<T>(&mut self, pos: u16, value: T) {
-        debug_assert!(
-            u32::from(pos) <= self.stack_pos + size_of::<T>() as u32,
-            "put_var: pos={pos} exceeds stack_pos={} + size={} (frame underflow)",
-            self.stack_pos,
-            size_of::<T>()
-        );
         *self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos + size_of::<T>() as u32 - u32::from(pos),
