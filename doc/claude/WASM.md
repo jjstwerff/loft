@@ -2519,6 +2519,78 @@ The `parallel_run(fn_index, total)` and `parallel_wait()` calls from `fill.rs`
 
 ---
 
+### W1.18-6 — Build and test environment
+
+#### Prerequisites
+
+```bash
+# 1. Install wasm-pack (if not already)
+cargo install wasm-pack
+
+# 2. Add the WASM target
+rustup target add wasm32-unknown-unknown
+
+# 3. Node.js v16+ (for Worker Threads + SharedArrayBuffer)
+node --version   # must be >= 16
+```
+
+#### Building the threaded WASM module
+
+The threaded build requires atomics, bulk-memory, and mutable-globals target
+features.  These are passed via `RUSTFLAGS`:
+
+```bash
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+  wasm-pack build --target nodejs \
+    --out-dir tests/wasm/pkg-mt \
+    -- --features wasm-threads --no-default-features
+```
+
+This produces `tests/wasm/pkg-mt/loft_bg.wasm` with `SharedArrayBuffer`-backed
+memory support.  The build is separate from the single-threaded `pkg/` build
+(which uses `--features wasm` only).
+
+A Makefile target is provided for convenience:
+
+```bash
+make wasm-mt     # builds pkg-mt/
+```
+
+#### Running the threaded test
+
+Once `pkg-mt/` exists:
+
+```bash
+# Run the threading test through the WASM Worker Thread pool
+node tests/wasm/suite.mjs --threaded 19-threading.loft
+```
+
+Or remove `19-threading.loft` from `WASM_SKIP` in `tests/wrap.rs` and run:
+
+```bash
+cargo test --test wrap wasm_dir
+```
+
+#### CI integration
+
+The WASM threading test is optional in CI — it requires `wasm-pack` and a
+nightly Rust toolchain (for `-C target-feature=+atomics`).  The `WASM_SKIP` list
+ensures CI passes without the threaded build.  When the build environment is
+available, remove the entry to enable the test.
+
+#### Implementation status
+
+| Step | Status | File |
+|------|--------|------|
+| W1.18-1 | ✓ Done | `src/parallel.rs` — `#[cfg(wasm+threading)]` branch |
+| W1.18-2 | ✓ Done (stub) | `src/wasm.rs` — `worker_entry` export |
+| W1.18-3 | ✓ Done | `tests/wasm/worker.mjs` — park/wake loop |
+| W1.18-4 | ✓ Done | `tests/wasm/parallel.mjs` — `LoftThreadPool` |
+| W1.18-5 | ✓ Done | `tests/wasm/harness.mjs` — `initThreaded()` |
+| W1.18-6 | Pending | Remove from `WASM_SKIP` after `pkg-mt/` build verified |
+
+---
+
 ### Rust-side WASM host bridge additions (W1.18)
 
 Two new `extern "C"` imports are declared in `src/parallel.rs` under

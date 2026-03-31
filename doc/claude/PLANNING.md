@@ -1910,30 +1910,13 @@ All steps done.  Step 8 was completed earlier.  Step 10:
 
 ---
 
-### A14  `par_light`: lightweight parallel loop with pre-allocated stores
+### A14  `par_light`: lightweight parallel loop with pre-allocated stores *(completed 0.8.3)*
 
-**Sources:** [LIGHT_PAR.md](LIGHT_PAR.md)
+All 7 steps (L1–L7) implemented.  The compiler automatically selects the light
+path for eligible `par()` workers (primitive return, no recursive store allocation).
+No new syntax — `par(...)` is transparently optimized.
 
-**Description:** A `par_light(...)` loop clause that eliminates the per-thread
-`clone_for_worker()` deep copy.  Workers borrow the main thread's stores read-only
-(via shallow locked borrow, O(1) per store) and allocate from a pre-allocated per-thread
-store pool owned by the main thread.  Eligible workers are those that do not create
-stores inside any recursive function call — the compiler validates this by walking
-the call graph and rejecting if any cycle contains `OpNewRef`.
-
-**Speedup**: proportional to total active store bytes × thread count; no benefit for
-stores smaller than ~10 KB.
-
-Steps (see LIGHT_PAR.md for full criteria; LIGHT_PAR.md uses L1–L7 internally):
-- **A14.1** — `Store::borrow_locked_for_light_worker` + sentinel Drop
-- **A14.2** — `WorkerPool` struct
-- **A14.3** — `Stores::clone_for_light_worker`
-- **A14.4** — `run_parallel_light`
-- **A14.5** — Compiler call-graph analysis + `M` computation
-- **A14.6** — Parser: `par_light(...)` clause
-- **A14.7** — Performance benchmark
-
-**Target:** 0.8.3
+---
 
 ---
 
