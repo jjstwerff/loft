@@ -65,6 +65,15 @@ fn large_range(limit: integer) -> iterator<integer> {
   }
 }
 
+// ## Yield from inside a for-loop over a vector
+// The coroutine save/restore machinery works for any iterable — not just ranges.
+// Here the loop variable is a vector element; the generator suspends mid-loop.
+fn doubled_elems(src: vector<integer>) -> iterator<integer> {
+  for elem in src {
+    yield elem * 2;
+  }
+}
+
 fn main() {
   // ## Iterating with a for loop
   total = 0;
@@ -110,6 +119,16 @@ fn main() {
     yf_total += n;
   }
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
+
+  // ## Yield from inside a for-loop over a vector
+  // The generator suspends at 'yield' mid-way through the vector loop;
+  // the loop cursor and vector position are preserved across each resume.
+  de_src = [10, 20, 30];
+  de_total = 0;
+  for de_n in doubled_elems(de_src) {
+    de_total += de_n;
+  }
+  assert(de_total == 120, "doubled vector elements: {de_total}");
 
   // ## Early termination with break
   // Stop after the first 5 values from a 1000-element generator.

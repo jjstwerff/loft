@@ -23,6 +23,9 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | S-borrow  | Deep-copy struct returns from generics/vectors (C37 debug) | M  | ✓      |              | PLANNING.md § S-borrow        |
 | C30       | Lambda re-definition: move closure ownership to fn-ref     | M  | ✓      |              | PLANNING.md § C30             |
 | C31       | Closures in vectors: direct byte-copy for structural types | M  | ✓      |              | PLANNING.md § C31             |
+| S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
+| I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
+| I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
 
 ---
 

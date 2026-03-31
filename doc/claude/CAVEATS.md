@@ -58,31 +58,31 @@ may still reach the runtime panics.
 
 ---
 
-## C30 — Lambda re-definition leaks the old closure record
+## C17 — `stack_trace()` returns empty from parallel workers
 
-Reassigning a variable that holds a capturing lambda does not free the
-previous closure.  The old closure's store record is orphaned.
+`stack_trace()` called inside a `par(...)` worker body always returns an empty
+`vector<StackFrame>`.  The worker's `execute_at` entry point does not set
+`state.data_ptr` before dispatch, so the call-stack walker finds a null pointer
+and returns immediately.
 
 **Reproducer:**
 ```loft
+fn worker(i: integer) -> integer {
+    frames = stack_trace();
+    assert(len(frames) > 0, "expected non-empty trace in worker");
+    i * 2
+}
 fn test() {
-    x = 10;
-    f = fn(y: integer) -> integer { x + y };
-    // f now holds closure with x=10
-    x = 20;
-    f = fn(y: integer) -> integer { x + y };
-    // old closure leaked — new closure overwrites fn-ref slot
+    for i in 0..4 par(b = worker(i), 4) { results += [b] }
 }
 ```
 
-**Impact:** SIGSEGV in debug builds; passes in release (leak only).  The crash
-is from the work-var system: two DbRef copies (fn-ref slot + closure work-var)
-point to the same store; freeing either one leaves the other dangling.
-**Test:** `closure_redefine_frees_old` (`#[ignore]` in `tests/expressions.rs`).
-**Workaround:** avoid reassigning lambda variables that capture values.
-**Planned fix:** A5.6 deferred item 1 in [PLANNING.md](PLANNING.md) (0.8.3).
-Requires rethinking closure ownership — either the fn-ref slot or the work-var
-should own the closure, not both.
+**Impact:** debugging parallel code is significantly harder without stack traces.
+**Test:** `parallel_stack_trace_non_empty` (`tests/expressions.rs`) — passes when
+called from normal code, fails / skipped in a parallel worker.
+**Workaround:** log a manual trace (function name + argument values) from the worker.
+**Planned fix:** S21 — set `data_ptr` in `execute_at`/`execute_at_ref` before
+dispatch (`src/state/mod.rs`). Target: 0.8.3.
 
 ---
 
@@ -122,6 +122,144 @@ fn make_greeter(prefix: text) -> fn(text) -> text {
 capture happens before the overwrite, and the captured value is `"a"` not `"b"`).
 **Planned fix:** none — accepted as a language semantic.  Capture-at-definition
 is the intended behaviour and the dead-assignment warning is informative.
+
+---
+
+## C33 — Interfaces: factory methods (`fn zero() -> Self`) not supported
+
+An interface method without a `self` parameter (a factory/constructor) cannot be
+declared.  The parser requires at least one `Self`-typed `self` parameter in every
+interface method body.
+
+**Reproducer:**
+```loft
+interface Addable {
+    fn OpAdd(self: Self, other: Self) -> Self
+    fn zero() -> Self        // ERROR: factory method not yet supported
+}
+```
+
+**Impact:** `sum`-style generic functions that need an identity element must instead
+accept `zero: T` as an explicit argument (the workaround used in the stdlib).
+**Workaround:** pass the identity value as an extra parameter:
+```loft
+fn sum<T: Addable>(v: vector<T>, zero: T) -> T { ... }
+```
+**0.8.3 mitigation (I12.diag):** the compile error will be extended to include the
+workaround hint in its message.
+**Full fix:** I12 (factory-method restriction phase 2). Target: 1.1+.
+
+---
+
+## C34 — Interfaces: left-side concrete operand in binary operators not supported
+
+When a bounded generic `T` is the **right** operand of a binary operator and a
+concrete type is on the left (`3 * t`), the compiler does not resolve the operator
+through the interface.  Only `T op T` and `T op Concrete` (where `T` is on the
+left) work.
+
+**Reproducer:**
+```loft
+interface Scalable { fn scale(self: Self, factor: integer) -> Self }
+fn double<T: Scalable>(x: T) -> T { 2 * x }   // ERROR: 2 is concrete, x is T
+fn double<T: Scalable>(x: T) -> T { x.scale(2) }  // OK: method call workaround
+```
+
+**Impact:** expressions where a primitive literal or concrete value must be the
+left operand fail to compile inside a bounded generic.  Rewrite as a method call
+on the `T` value or put `T` on the left.
+**Workaround:** define and use the operator with `T` on the left: `x * 2` instead
+of `2 * x`; or use a named method (`x.scale(2)`).
+**0.8.3 mitigation (I8.5.diag):** the compiler will detect the concrete-left/generic-right
+pattern specifically and emit an error that names the ordering problem and suggests
+the workaround, replacing the generic "requires a concrete type" message.
+**Full fix:** I8.5 (mixed-type operator, concrete left side). Target: 1.1+.
+
+---
+
+## C35 — Bounded generic returning `text` from struct type causes memory violation
+
+A bounded generic function whose return type is `text` crashes at runtime with
+`unsafe precondition(s) violated: ptr::copy_nonoverlapping` when instantiated with
+a struct type.  The crash is in the generic specialisation's text-return path.
+
+**Reproducer:**
+```loft
+interface Describable { fn describe(self: Self) -> text }
+struct Temperature { celsius: float }
+fn describe(self: Temperature) -> text { "{self.celsius}C" }
+fn show<T: Describable>(item: T) -> text { describe(item) }
+fn main() {
+    t = Temperature { celsius: 37.0 };
+    s = show(t);   // crashes — text return from bounded generic on struct
+}
+```
+
+**Impact:** bounded generic functions that return `text` (e.g. `show<T: Printable>`)
+cannot be used with user-defined struct types.  Primitive types (`integer`, `float`,
+`boolean`) are unaffected.
+**Workaround:** call the concrete function directly: `describe(t)` instead of `show(t)`.
+**Planned fix:** needs investigation — likely in the generic specialisation's text
+return handling (`src/state/codegen.rs`).  No milestone assigned yet.
+
+---
+
+## C36 — Generic function with `for` loop: slot assignment panic on struct-type instantiation
+
+A bounded (or unbounded) generic function that contains a `for` loop panics with
+`variable 'X' never assigned a slot` when instantiated with a struct type.
+The slot assignment algorithm does not correctly handle struct-typed local variables
+inside generic specialisations that contain loops.
+
+**Reproducer:**
+```loft
+struct Score { value: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn largest<T: Ordered>(items: vector<T>) -> T {
+    best = items[0];
+    for i in 1..len(items) {
+        if best < items[i] { best = items[i]; }
+    }
+    best
+}
+fn main() {
+    scores = [Score{value: 3}, Score{value: 7}];
+    w = largest(scores);   // panics — 'best' never assigned a slot
+}
+```
+
+**Impact:** generic functions over struct types cannot contain `for` loops.
+Use direct index access where possible, or write separate concrete functions.
+**Workaround:** for two-element cases use a simple `if` comparison.
+For larger collections write a concrete (non-generic) function with the loop.
+**Planned fix:** needs investigation in slot assignment for generic specialisations
+(`src/state/codegen.rs` § slot assignment).  No milestone assigned yet.
+
+---
+
+## C37 — Calling the same generic function with two different struct-based types: slot conflict
+
+When the same generic function (e.g. `max_of<T: Ordered>`) is called with two
+different **struct** types in the same file, both specialisations share local variable
+names in the flat namespace.  The second specialisation's variables cannot be assigned
+slots and the runtime panics: `variable 'result' never assigned a slot`.
+
+**Reproducer:**
+```loft
+struct Score { value: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn main() {
+    a = max_of([4, 1, 9, 2]);              // max_of<integer> — OK alone
+    scores = [Score{value: 3}, Score{value: 7}];
+    b = max_of(scores);                    // max_of<Score> — slot conflict
+}
+```
+
+**Impact:** a generic function can only be instantiated with **one** concrete struct
+type per loft file.  Instantiation with two or more struct types in the same file panics.
+**Workaround:** write separate concrete wrapper functions for each struct type.
+**Planned fix:** needs investigation in flat-namespace slot assignment during generic
+specialisation (`src/state/codegen.rs`).  No milestone assigned yet.
 
 ---
 

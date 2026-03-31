@@ -45,7 +45,7 @@ All notable changes to the loft language and interpreter.
   - W1.18-5: `tests/wasm/harness.mjs` — `initThreaded()` for shared-memory WASM.
   W1.18-6 (test enablement) deferred until wasm-threads build is available.
 
-### Closures (A5.6-text)
+### Closures (A5.6-text, C30)
 
 - **Cross-scope text-capturing closures** — `make_greeter("Hello")("world")` now
   produces `"Hello world"`.  Three bugs fixed:
@@ -59,17 +59,34 @@ All notable changes to the loft language and interpreter.
     closure in the caller's chained-call block.
   - `Variable.captured` flag suppresses false "never read" warning for captured
     parameters without affecting dead-assignment analysis.
+- **Lambda re-definition no longer leaks or crashes** (C30) — reassigning a variable
+  that holds a capturing lambda (`f = fn(y) {...}; f = fn(y) {...}`) previously
+  created two closure work-vars that both owned the same store, causing a SIGSEGV in
+  debug builds and a store leak in release.  Fix: reuse the existing closure work-var
+  on reassignment (`skip_free` for all capturing closure work-vars; emit
+  `FreeFnRefClosure` before each `SetVar` on a `Function`-typed variable).  Also fixed
+  a SIGSEGV in the debug logger that crashed when printing `FreeFnRefClosure` and other
+  fn-ref opcodes.  Test: `closure_redefine_frees_old` (previously `#[ignore]`).
+- **`element_store_size` corrected for `Type::Function`** (C31 groundwork) —
+  previously returned 12 (falling through to the reference-sized arm); now returns
+  16 (4 B definition number + 12 B closure DbRef).  A `debug_assert!` guard on the
+  default arm catches any future unhandled type.  The full C31 fix (storing closures
+  in vectors) remains open.
 
 ### Debugging infrastructure
 
 - **Debug boundary checks for DbRef, record fields, and stack pops** —
-  Three `debug_assert!` additions (zero cost in release builds):
+  Five `debug_assert!` additions (zero cost in release builds):
   - `keys::store()` / `keys::mut_store()`: assert `store_nr < allocations.len()` with
     clear message showing both values.
   - `Store::addr()` / `Store::addr_mut()`: validate field offset against the record's
     claimed size (first word of record header). Fires for `rec > 1, fld > 0`.
   - `Stores::get<T>()`: assert `stack.pos >= size_of::<T>()` before decrement, catching
     stack underflow from wrong native-function pop order.
+  - `state::put_var`: assert slot index is within stack bounds before writing a
+    variable slot (catches off-by-one slot assignment errors).
+  - `collections::element_store_size`: assert all types are handled explicitly;
+    panics with a clear message if a new type is added without a corresponding arm.
 
 ### Safety fixes
 

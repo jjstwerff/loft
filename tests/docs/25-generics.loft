@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Generics
-// @TITLE: Generic functions
+// @TITLE: Generic functions and interfaces
 // A generic function uses a type variable to work with any type.
 // Write the function once; the compiler creates a specialised copy for each
 // concrete type you call it with.
@@ -9,7 +9,7 @@
 // Place a single type variable in angle brackets after the function name.
 // The type variable must appear in the first parameter (directly or as a
 // container element like vector<T>).
-fn identity<T>(x: T) -> T { x }
+fn identity<T>(val: T) -> T { val }
 // ## Calling a generic function
 // No special syntax at the call site — the compiler infers T from the first
 // argument's type and creates a specialised copy automatically.
@@ -21,26 +21,89 @@ fn test_identity() {
 }
 // ## Multiple parameters of the same type
 // Additional parameters can also use T.  They all share the same concrete type.
-fn pick_second<T>(a: T, b: T) -> T {
-  _x = a;
-  b
+fn pick_second<T>(pa: T, pb: T) -> T {
+  _ps = pa;
+  pb
 }
 fn test_pick_second() {
   assert(pick_second(1, 99) == 99);
   assert(pick_second("a", "b") == "b");
 }
-// ## Allowed operations on T
+// ## Allowed operations on T (unconstrained)
 // Inside a generic function you may only use operations that do not depend
 // on what T actually is: assign, return, and store in variables.
 // Type-specific operations like arithmetic, field access, and method calls
-// are compile-time errors.
-// ## Disallowed operations
+// are compile-time errors without an interface bound.
+// ## Disallowed operations on unconstrained T
 // The compiler rejects operations that require knowing what T is.
 // For example, `x + y` on two T values gives:
 //   "generic type T: operator '+' requires a concrete type"
 // Similarly, `x.field` gives:
 //   "generic type T: field access requires a concrete type"
+
+// ## Interfaces
+// An interface declares a set of operations that a type must support.
+// Once an interface is declared, a generic function can use '<T: Interface>'
+// to unlock those operations on T.
+// ## Declaring an interface
+// List the required method signatures inside the interface body.
+// Use 'Self' as a placeholder for the concrete satisfying type.
+// Any type that provides all listed methods satisfies the interface —
+// no explicit 'implements' keyword or registration is needed.
+// Example:
+//   interface Ordered {
+//     fn OpLt(self: Self, other: Self) -> boolean
+//     fn OpGt(self: Self, other: Self) -> boolean
+//   }
+// 'Ordered' (above) is already declared in the standard library.
+// The standard library also declares 'Equatable', 'Addable', 'Numeric',
+// and 'Printable', all satisfied automatically by the primitive types.
+// ## Using stdlib interfaces: Ordered, min_of, max_of, sum_of
+// All numeric primitives satisfy 'Ordered' out of the box.
+// 'max_of', 'min_of', and 'sum_of' are stdlib functions bounded by these interfaces.
+fn test_stdlib_bounded() {
+  // max_of and min_of work with integer (satisfies Ordered)
+  sb_best = max_of([4, 1, 9, 2]);
+  assert(sb_best == 9, "max_of integers: {sb_best}");
+  sb_least = min_of([4, 1, 9, 2]);
+  assert(sb_least == 1, "min_of integers: {sb_least}");
+  // sum_of works on any vector<integer>
+  sb_total = sum_of([1, 2, 3, 4, 5]);
+  assert(sb_total == 15, "sum_of: {sb_total}");
+}
+// ## Custom type satisfying a stdlib interface
+// Provide 'OpLt' and 'OpGt' and the type automatically satisfies 'Ordered'.
+// Then write a bounded generic function that uses those operators on T.
+// The compiler checks at the call site that the type satisfies the bound,
+// and reports which method is missing if it does not.
+struct Score {
+  value: integer
+}
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
+
+// A bounded generic using Ordered — can be called with Score or any Ordered type.
+// The compiler resolves 'left < right' to the Score implementation of OpLt.
+fn higher<T: Ordered>(left: T, right: T) -> T {
+  if left < right { right } else { left }
+}
+
+fn test_custom_ordered() {
+  a_score = Score{value: 3};
+  b_score = Score{value: 7};
+  co_winner = higher(a_score, b_score);
+  assert(co_winner.value == 7, "winner: {co_winner.value}");
+}
+// ## Multiple bounds
+// Use '+' to require more than one interface: '<T: Ordered + Printable>'.
+// ## Diagnostics
+// When a type does not satisfy the required interface, the compiler reports
+// which method is missing and its expected signature, for example:
+//   "Score does not satisfy Ordered: missing fn OpGt(Score, Score) -> boolean"
+
 fn main() {
   test_identity();
   test_pick_second();
+  test_stdlib_bounded();
+  test_custom_ordered();
 }
