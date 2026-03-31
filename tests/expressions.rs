@@ -1292,3 +1292,64 @@ fn stdlib_scalable_interface() {
     .expr("scaled(Weight{grams: 21}, 2)")
     .result(Value::Int(42));
 }
+
+// ── I9-stub — Interface stub naming collision fix ───────────────────────────
+
+/// I9-stub: two interfaces can declare the same operator without conflicting.
+/// Previously, both `Addable { op + }` and `Numeric { op * ; op - }` worked, but
+/// defining a third interface with `op +` would fail on "Cannot redefine OpAdd".
+#[test]
+#[ignore = "I9-stub: interface stub naming collision — not yet fixed"]
+fn two_interfaces_same_operator_no_conflict() {
+    code!(
+        "interface Summable { op + (self: Self, other: Self) -> Self }
+         struct Pair { x: integer, y: integer }
+         fn OpAdd(self: Pair, other: Pair) -> Pair {
+             Pair{x: self.x + other.x, y: self.y + other.y}
+         }
+         fn total<T: Summable>(a: T, b: T) -> T { a + b }"
+    )
+    .expr("total(Pair{x:1, y:2}, Pair{x:3, y:4}).x")
+    .result(Value::Int(4));
+}
+
+// ── I9.1 — Replace min_of/max_of with bounded generics ─────────────────────
+
+/// I9.1: stdlib `min_of` is now a bounded generic that works on any Ordered type.
+#[test]
+#[ignore = "I9.1: generic stdlib min_of — not yet implemented"]
+fn stdlib_min_of_generic() {
+    expr!("min_of([7, 3, 9, 1, 5])").result(Value::Int(1));
+}
+
+/// I9.1: stdlib `max_of` is now a bounded generic that works on any Ordered type.
+#[test]
+#[ignore = "I9.1: generic stdlib max_of — not yet implemented"]
+fn stdlib_max_of_generic() {
+    expr!("max_of([3, 9, 1, 7])").result(Value::Int(9));
+}
+
+// ── I9.2 — Generic sum with identity ────────────────────────────────────────
+
+/// I9.2: stdlib `sum` function with caller-supplied identity element.
+#[test]
+#[ignore = "I9.2: generic sum — not yet implemented"]
+fn stdlib_sum_generic() {
+    expr!("sum([10, 20, 12], 0)").result(Value::Int(42));
+}
+
+// ── I9-Pr — Printable interface ─────────────────────────────────────────────
+
+/// I9-Pr: `Printable` interface enables generic formatting.
+/// Uses `fn to_text(self) -> text` to convert any type to a string.
+#[test]
+#[ignore = "I9-Pr: Printable interface — not yet implemented"]
+fn stdlib_printable_interface() {
+    code!(
+        "struct Score { value: integer }
+         fn to_text(self: Score) -> text { \"{self.value}\" }
+         fn show<T: Printable>(v: T) -> text { v.to_text() }"
+    )
+    .expr("show(Score{value:42})")
+    .result(Value::Text("42".to_string()));
+}
