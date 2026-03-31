@@ -1240,16 +1240,49 @@ implemented.
 **A5.6 — Full closure semantics** *(completed 0.8.3)*:
 Cross-scope text-capturing closures now work: `make_greeter("Hello")("world")` →
 `"Hello world"`.  All A5.6 sub-items (a, b.1, b.2, c, d, e, f, 1–5, text) are done.
-Three edge cases remain deferred (1.1+):
+Three edge cases remain:
 
-1. **Lambda re-definition:** `f = fn(x) { ... }; f = fn(x) { ... }` — the old
-   closure record must be freed before overwriting the fn-ref slot.
-2. **Lambdas in collections / struct fields:** `OpVarFnRef` / store ops need to
-   handle the 16-byte size correctly for collection elements.
-3. **Concurrent sharing:** two parallel workers calling the same closure need
-   per-call copy or locking.
+**C30 — Lambda re-definition** (SIGSEGV in debug, leak in release):
+`f = fn(y) { x + y }; f = fn(y) { x + y }` creates two closure work-vars
+(`___clos_1`, `___clos_2`) that own separate stores.  Both are freed at function
+exit.  The SIGSEGV comes from `ConvRefFromNull` store allocation for both
+work-vars at function start creating stores that later conflict when
+`OpDatabase` clears and reclaims.
 
-**Effort:** deferred to 1.1+
+**Fix:** Move closure ownership from work-vars to fn-ref variables:
+1. `skip_free` ALL capturing closure work-vars (not just cross-scope)
+2. Add `Type::Function` → `FreeFnRefClosure(v)` in `get_free_vars` (scopes.rs)
+3. Emit `FreeFnRefClosure(v)` before `set_var` on Function reassignment (codegen.rs)
+4. Guard: `debug_assert!` in `put_fn_ref` that old closure DbRef is null
+
+**Files:** `vectors.rs`, `scopes.rs`, `codegen.rs`, `fill.rs`
+**Test:** `closure_redefine_frees_old` (`#[ignore]`)
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+**C31 — Closures in vectors** (parse-time assertion):
+`[f]` where `f: Type::Function` fails with "Unknown type" because
+`type_def_nr(Type::Function)` returns `u32::MAX` — Function is a structural
+type with no database definition.  `element_store_size` already returns 16
+(fixed).
+
+**Fix:** Bypass the record-based vector element path for structural types.
+For `Type::Function` elements in vector literals, skip `new_record` (which
+requires a database type) and use direct 16-byte memcpy into the vector
+storage.  Similarly, vector element access (`v[i]`) must read 16 raw bytes
+instead of going through `OpGetRecord`.
+
+**Files:** `vectors.rs` (skip new_record), `fields.rs` (element access)
+**Test:** `closure_in_vector` (`#[ignore]`)
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+3. **Concurrent sharing** — two parallel workers calling the same closure need
+   per-call copy or locking.  Deferred to 1.1+.
 
 ---
 
