@@ -26,6 +26,10 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
 | I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
 | I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
+| N-fnref   | Native: fn-ref arg padding for map/filter built-in calls   | S  | —      |              | codegen.rs § generate_call    |
+| C35       | Bounded generic text return from struct type crashes       | M  | —      |              | CAVEATS.md § C35              |
+| C36       | Generic function with for loop: slot panic on struct type  | M  | —      |              | CAVEATS.md § C36              |
+| C37       | Same generic with two struct types: slot conflict           | M  | —      |              | CAVEATS.md § C37              |
 
 ---
 
