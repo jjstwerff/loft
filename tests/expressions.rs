@@ -1047,7 +1047,6 @@ fn bounded_operator_in_generic_body() {
 /// correct concrete return type — here `pick_max` returns `T` (resolved to `Score`)
 /// whose `.value` field must be accessible on the result.
 #[test]
-#[ignore = "I8.2: return-type propagation — not yet verified"]
 fn bounded_operator_self_return_type() {
     code!(
         "interface Comparable {
@@ -1069,7 +1068,6 @@ fn bounded_operator_self_return_type() {
 /// compile inside a bounded generic body and produce the correct result.
 /// The interface declares a mixed-type signature: `self: Self, factor: integer -> integer`.
 #[test]
-#[ignore = "I8.3: mixed-type binary operators — not yet verified"]
 fn bounded_mixed_type_operator() {
     code!(
         "interface Measurable { op * (self: Self, factor: integer) -> integer }
@@ -1087,7 +1085,6 @@ fn bounded_mixed_type_operator() {
 /// when the bound declares the unary operator.  Uses `op -` (negation) which
 /// returns `integer` to avoid struct-return allocation tracking issues.
 #[test]
-#[ignore = "I8.4: unary operators on T — not yet verified"]
 fn bounded_unary_operator() {
     code!(
         "interface Measurable { op - (self: Self) -> integer }
