@@ -64,6 +64,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_set_store_lock", n_set_store_lock),
     ("n_parallel_for_int", n_parallel_for_int),
     ("n_parallel_for", n_parallel_for),
+    ("n_parallel_for_light", n_parallel_for_light),
     ("n_parallel_get_int", n_parallel_get_int),
     ("n_parallel_get_long", n_parallel_get_long),
     ("n_parallel_get_float", n_parallel_get_float),
@@ -703,6 +704,120 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         n_hidden_text,
     );
     stores.put(stack, result_ref);
+}
+
+/// A14.7: lightweight variant — borrows stores read-only instead of deep-copying.
+/// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
+fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
+    // Same stack layout as n_parallel_for: n_extra on top, then declared params.
+    // Pop order (LIFO): n_extra, extras..., func, threads, return_size, elem_size, input.
+    let n_extra = *stores.get::<i32>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i32>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i32>(stack);
+    let v_threads = *stores.get::<i32>(stack);
+    let v_return_size = *stores.get::<i32>(stack);
+    let v_element_size = *stores.get::<i32>(stack);
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_for_light called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_for_light: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let text_code = unsafe { Arc::clone(&*ctx.text_code) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                text_code,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+            },
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let return_size = v_return_size.clamp(1, 8) as u32;
+    let n_threads = (v_threads as usize).max(1);
+    let n = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
+    let pool_m: usize = 2;
+
+    // Allocate result vector using the same helper as n_parallel_for.
+    let result_ref = parallel_light_execute_and_collect(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        return_size,
+        n_threads,
+        &extra_args,
+        n,
+        pool_m,
+    );
+    stores.put(stack, result_ref);
+}
+
+/// A14.7: allocate result vector, create pool, dispatch light workers, collect.
+#[allow(clippy::too_many_arguments)]
+fn parallel_light_execute_and_collect(
+    stores: &mut Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    return_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    n: usize,
+    pool_m: usize,
+) -> DbRef {
+    let result_db = stores.null();
+    let vec_words = ((n as u32) * return_size + 15) / 8;
+    let vec_cr = stores.claim(&result_db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = stores.claim(&result_db, 1);
+    let header_rec = header_cr.rec;
+    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
+    stores
+        .store_mut(&result_db)
+        .set_int(header_rec, 4, vec_rec as i32);
+    let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
+
+    let mut pool = crate::parallel::WorkerPool::new(n_threads, pool_m, 256);
+    crate::parallel::run_parallel_light(
+        stores,
+        program,
+        fn_pos,
+        input,
+        element_size,
+        return_size,
+        n_threads,
+        extra_args,
+        out_ptr,
+        n,
+        &mut pool,
+    );
+    // Return with pos=4 (not pos=8 from claim) — parallel_get_int reads at v_ref.pos.
+    DbRef {
+        store_nr: result_db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
 }
 
 /// Allocate a result vector, dispatch workers, and collect results.

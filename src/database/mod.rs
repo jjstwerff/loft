@@ -446,6 +446,13 @@ impl Stores {
 
     #[must_use]
     pub fn get<T>(&mut self, stack: &mut DbRef) -> &T {
+        debug_assert!(
+            stack.pos >= size_of::<T>() as u32,
+            "Stack underflow in get<{}>: stack.pos={} but need {} bytes",
+            std::any::type_name::<T>(),
+            stack.pos,
+            size_of::<T>(),
+        );
         stack.pos -= size_of::<T>() as u32;
         self.store(stack).addr::<T>(stack.rec, stack.pos)
     }

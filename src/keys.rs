@@ -183,11 +183,23 @@ fn float_cmp(v1: f64, v2: f64) -> Ordering {
 
 #[must_use]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
+    debug_assert!(
+        (r.store_nr as usize) < stores.len(),
+        "DbRef store_nr {} out of bounds (allocations.len() = {})",
+        r.store_nr,
+        stores.len()
+    );
     &stores[r.store_nr as usize]
 }
 
 #[must_use]
 pub fn mut_store<'a>(r: &DbRef, stores: &'a mut [Store]) -> &'a mut Store {
+    debug_assert!(
+        (r.store_nr as usize) < stores.len(),
+        "DbRef store_nr {} out of bounds (allocations.len() = {})",
+        r.store_nr,
+        stores.len()
+    );
     &mut stores[r.store_nr as usize]
 }
 

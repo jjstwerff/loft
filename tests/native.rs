@@ -631,7 +631,6 @@ fn native_binary_script() -> std::io::Result<()> {
 /// N8a.3 is implemented.  This is a placeholder: un-ignored together with
 /// native_tuple_script when the updated script passes.
 #[test]
-#[ignore = "N8a.3: placeholder — enable together with native_tuple_script once 50-tuples.loft includes a tuple-returning function"]
 fn native_tuple_return_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");

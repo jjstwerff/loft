@@ -20,22 +20,12 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| W1.18     | WASM: `par()` via Node.js Worker Threads                  | H  | ✓      |              | WASM.md § W1.18               |
-| W1.18-1   | ↳ `#[cfg(wasm+threading)]` branch in `parallel.rs`       | S  | ✓      |              | src/parallel.rs               |
-| W1.18-2   | ↳ `worker_entry` exported via `#[wasm_bindgen]`           | S  | ✓      | W1.18-1      | src/lib.rs                    |
-| W1.18-3   | ↳ `worker.mjs` — park/wake loop + `worker_entry`          | S  | ✓      | W1.18-2      | tests/wasm/worker.mjs         |
-| W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
-| W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
-| W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
-| A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)     | M  | ✓      |              | fields.rs + io.rs runtime     |
-| A14       | `par_light`: lightweight parallel loop                    | MH | ✓      |              | LIGHT_PAR.md                  |
-| A14.1     | ↳ `Store::borrow_locked_for_light_worker` + sentinel Drop | S  | ✓      |              | LIGHT_PAR.md § L1             |
-| A14.2     | ↳ `WorkerPool` struct                                     | S  | ✓      | A14.1        | LIGHT_PAR.md § L2             |
-| A14.3     | ↳ `Stores::clone_for_light_worker`                        | S  | ✓      | A14.1, A14.2 | LIGHT_PAR.md § L3             |
-| A14.4     | ↳ `run_parallel_light`                                    | S  | ✓      | A14.3        | LIGHT_PAR.md § L4             |
-| A14.5     | ↳ Compiler call-graph analysis + `M` computation          | M  | ✓      |              | LIGHT_PAR.md § L5             |
-| A14.6     | ↳ Parser: `par_light(...)` clause                         | S  | ✓      | A14.4, A14.5 | LIGHT_PAR.md § L6             |
-| A14.7     | ↳ Performance benchmark                                   | S  | ✓      | A14.6        | LIGHT_PAR.md § L7             |
+| W1.18-6   | Remove `19-threading.loft` from `WASM_SKIP`               | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
+| W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
+| A5.6-text | Closure 16-byte fn-ref + chained call parsing             | H  | ✓      |              | PLANNING.md § A5.6            |
+| T1.8      | Tuple struct-ref element move semantics + scope cleanup    | M  | ✓      |              | PLANNING.md § T1.8            |
+| S-lexer   | Fix 16-parser.loft "Unknown record" sentinel crash         | S+M| ✓      |              | PLANNING.md § S-lexer         |
+| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | ✓      |              | PLANNING.md § A7.2-par        |
 
 ---
 
@@ -90,7 +80,6 @@ _W2 and W4 can be developed in parallel after W1; W3 and W5 can follow independe
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.13, W4    | WASM.md — Threading           |
 | I12       | Interfaces: factory methods (`fn zero() -> Self`) — phase 2 | S | ✓    | I5.1         | INTERFACES.md § Q4/Q6         |
 | I8.5      | Interfaces: left-side concrete operand (`concrete op T`)  | S  | ~      | I8.3         | INTERFACES.md § Phase 1 gaps  |
 | A12       | Lazy work-variable initialization                         | M  | ✓      |              | PLANNING.md § A12             |

@@ -531,6 +531,7 @@ impl State {
     # Panics
     When called on a not implemented data-structure
     */
+    #[allow(clippy::too_many_lines)]
     pub fn iterate(&mut self) {
         let on = *self.code::<u8>();
         let arg = *self.code::<u16>();
@@ -554,32 +555,64 @@ impl State {
         let start;
         let finish;
         let all = &self.database.allocations;
+        let trace_iter = std::env::var("LOFT_ITERATE_TRACE").is_ok();
         match on & 63 {
             1 => {
                 // index points to the record position inside the store
                 if reverse {
-                    let t = tree::find(&data, ex, arg, all, &keys, &till);
+                    // A8.5-idx: for reverse, start must be ONE PAST the last
+                    // element to visit (so previous(start) = last element).
+                    // finish must be ONE BEFORE the first element to visit
+                    // (so when n == finish, iteration is done).
+                    // This mirrors the forward case where start is one before
+                    // the first and finish is the last to visit.
+                    let store = crate::keys::store(&data, all);
+                    let till_node = tree::find(&data, true, arg, all, &keys, &till);
+                    // till_node = previous(first_node >= till).
+                    // For exclusive [lo..hi), till_node IS the last element to visit.
+                    // We need start = next(till_node) so previous(start) = till_node.
                     start = if ex {
-                        t
+                        tree::next(store, &new_ref(&data, till_node, arg))
                     } else {
-                        tree::next(crate::keys::store(&data, all), &new_ref(&data, t, arg))
+                        // Inclusive: till_node = previous(till_match), need next of till_match
+                        let till_match = tree::find(&data, false, arg, all, &keys, &till);
+                        tree::next(store, &new_ref(&data, till_match, arg))
                     };
-                    let f = tree::find(&data, ex, arg, all, &keys, &from);
-                    finish = tree::next(crate::keys::store(&data, all), &new_ref(&data, f, arg));
+                    // finish = previous(first_from_node) — same as forward start
+                    finish = tree::find(&data, true, arg, all, &keys, &from);
                 } else {
                     start = tree::find(&data, true, arg, all, &keys, &from);
                     let t = tree::find(&data, ex, arg, all, &keys, &till);
                     finish = if ex {
                         t
                     } else {
+                        // A8.3: inclusive — finish is the last matching node itself.
+                        // Step visits this node, then on the NEXT call advances past
+                        // it; the `n == 0` or natural tree-end terminates the loop.
+                        // We add 1 to distinguish "visit finish and stop" from the
+                        // exclusive case where finish means "stop before visiting".
                         tree::previous(crate::keys::store(&data, all), &new_ref(&data, t, arg))
                     };
+                }
+                if trace_iter {
+                    eprintln!(
+                        "[iterate] on=index reverse={reverse} ex={ex} start={start} finish={finish} from_keys={} till_keys={}",
+                        from.len(),
+                        till.len()
+                    );
                 }
             }
             2 => {
                 // sorted points to the position of the record inside the vector
                 // A8.1: empty from/till arrays signal "no constraint on this side".
-                let sorted_rec = all[data.store_nr as usize].get_int(data.rec, data.pos) as u32;
+                // S-lexer: get_int returns i32::MIN for unresolved-type fields;
+                // guard against negative values (0 = empty, i32::MIN = unresolved).
+                let sorted_rec_raw = all[data.store_nr as usize].get_int(data.rec, data.pos);
+                let sorted_rec = if sorted_rec_raw <= 0 {
+                    0
+                } else {
+                    sorted_rec_raw as u32
+                };
                 let vec_len = if sorted_rec == 0 {
                     0
                 } else {
@@ -611,6 +644,12 @@ impl State {
                         let (t, cmp) = vector::sorted_find(&data, ex, arg, all, &keys, &till);
                         if ex || cmp { t } else { t + 1 }
                     };
+                }
+                if trace_iter {
+                    eprintln!(
+                        "[iterate] on=sorted reverse={reverse} ex={ex} sorted_rec={sorted_rec} \
+                         vec_len={vec_len} start={start} finish={finish}"
+                    );
                 }
             }
             3 => {
@@ -682,6 +721,12 @@ impl State {
                         tree::next(store, &rec)
                     };
                     self.put_var(state_var - 8, n);
+                    if std::env::var("LOFT_ITERATE_TRACE").is_ok() {
+                        eprintln!(
+                            "[step] on=index reverse={reverse} cur={cur} -> n={n} finish={finish} done={}",
+                            n == finish
+                        );
+                    }
                     if n == finish {
                         self.put_var(state_var - 12, u32::MAX);
                     }

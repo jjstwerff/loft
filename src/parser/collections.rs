@@ -1127,7 +1127,24 @@ use #count instead"
             return;
         }
 
-        // parallel_for(input, elem_size, return_size, threads, fn_d_nr, extra1, ..., n_extra)
+        // A14.5/A14.6: auto-select light path for eligible workers.
+        let is_primitive_return = !matches!(
+            ret_type,
+            Type::Text(_) | Type::Reference(_, _) | Type::Unknown(_)
+        );
+        let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
+            self.check_light_eligible(fn_d_nr)
+        } else {
+            None
+        };
+        let actual_par_d_nr = if light_m.is_some() {
+            let d = self.data.def_nr("n_parallel_for_light");
+            if d == u32::MAX { par_for_d_nr } else { d }
+        } else {
+            par_for_d_nr
+        };
+
+        // parallel_for(input, elem_size, return_size, threads, fn_d_nr, [pool_m], extra1, ..., n_extra)
         // n_extra is pushed LAST so it's on top of the stack for popping first.
         let n_extra = extra_args.len();
         let mut pf_args = vec![
@@ -1137,9 +1154,11 @@ use #count instead"
             threads_expr,
             Value::Int(fn_d_nr as i32),
         ];
+        // pool_m is hardcoded in the native function (avoids stack-ordering complexity)
+        let _ = light_m;
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
-        let pf_call = Value::Call(par_for_d_nr, pf_args);
+        let pf_call = Value::Call(actual_par_d_nr, pf_args);
 
         // len(input_vec) — compute once before the loop.
         let len_call = self.cl("OpLengthVector", &[vec_expr]);

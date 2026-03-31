@@ -6,6 +6,56 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Parallel execution
+
+- **`par_light` runtime foundation** (A14.1–A14.4):
+  - A14.1: `Store::borrow_locked_for_light_worker` — O(1) read-only view sharing the
+    original's buffer pointer. `borrowed` field prevents double-free on Drop.
+  - A14.2: `WorkerPool` — pre-allocates `n_workers × M` stores, reused across invocations.
+  - A14.3: `Stores::clone_for_light_worker` — assembles worker view with shallow borrows
+    of main stores + fresh pool stores. Zero large buffer copies.
+  - A14.4: `run_parallel_light` — drop-in for `run_parallel_direct` using the pool.
+  - A14.5: `check_light_eligible` — DFS call-graph analysis validates no recursive store
+    allocation. Returns `M` (pool stores per worker) for eligible workers.
+  - A14.6: `build_parallel_for_ir` automatically selects `n_parallel_for_light` when
+    the worker qualifies (primitive return, no recursive allocation). No new syntax —
+    `par(...)` is transparently optimized.
+  - A14.7: `n_parallel_for_light` native function registered. Allocates result vector,
+    creates `WorkerPool`, dispatches via `run_parallel_light`.
+  Auto-selection is fully enabled: eligible `par()` workers (primitive return,
+  no recursive store allocation) transparently use the light path.  Three bugs
+  fixed in the enablement: stack pop order in the native function, result DbRef
+  `pos` field (4 not 8), and store borrow range (all stores, not just `[..max]`).
+
+### Sorted collection slicing (A8)
+
+- **Partial-key match iterator** (A8.3): `idx[k1]` on a multi-key index now iterates
+  all elements matching the first key. Parser detects `nr < key_types.len()` and emits
+  an inclusive range with `from = till = [k1]`. The existing `key_compare` zip-based
+  comparison treats partial prefixes as unconstrained on remaining fields.
+
+### WASM parallel infrastructure (W1.18)
+
+- **WASM Worker Thread infrastructure** (W1.18-1 through W1.18-5):
+  - W1.18-1: `#[cfg(all(feature = "wasm", feature = "threading"))]` branch in
+    `run_parallel_direct` dispatches to JS host via `parallel_run()`.
+  - W1.18-2: `worker_entry(fn_index, start, end)` exported via `#[wasm_bindgen]`.
+  - W1.18-3: `tests/wasm/worker.mjs` — Worker Thread park/wake loop.
+  - W1.18-4: `tests/wasm/parallel.mjs` — `LoftThreadPool` class.
+  - W1.18-5: `tests/wasm/harness.mjs` — `initThreaded()` for shared-memory WASM.
+  W1.18-6 (test enablement) deferred until wasm-threads build is available.
+
+### Debugging infrastructure
+
+- **Debug boundary checks for DbRef, record fields, and stack pops** —
+  Three `debug_assert!` additions (zero cost in release builds):
+  - `keys::store()` / `keys::mut_store()`: assert `store_nr < allocations.len()` with
+    clear message showing both values.
+  - `Store::addr()` / `Store::addr_mut()`: validate field offset against the record's
+    claimed size (first word of record header). Fires for `rec > 1, fld > 0`.
+  - `Stores::get<T>()`: assert `stack.pos >= size_of::<T>()` before decrement, catching
+    stack underflow from wrong native-function pop order.
+
 ### Safety fixes
 
 - **Coroutine store-mutation guard promoted to always-on** (CO1.9) — The generation

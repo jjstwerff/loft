@@ -339,11 +339,7 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6-text: cross-scope text-returning closure requires work-ref type propagation. \
-make_greeter declares '-> fn(text) -> text' (text([])) but the lambda produces text([1]); \
-the call site uses the declared return type so pushes wrong arg_size. \
-Fix: propagate actual fn_type from lambda through the declaring function's return type, \
-or have fn_call_ref look up work-ref count from the fn definition table. See CAVEATS.md."]
+#[ignore = "A5.6-text: work-ref type mismatch — fn(text)->text([]) vs lambda text([1])"]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(
@@ -656,6 +652,47 @@ fn parallel_for_thread_scope_results() {
     .result(Value::Int(30));
 }
 
+// ── A14 — par_light auto-selection ───────────────────────────────────────────
+
+/// A14: par() with a simple integer worker automatically uses the light path.
+#[test]
+fn par_light_auto_selected() {
+    code!(
+        "struct Num { value: integer }
+         struct NumList { items: vector<Num> }
+         fn tripled(n: const Num) -> integer { n.value * 3 }
+         fn run_par() -> integer {
+             lst = NumList {};
+             lst.items += [Num{value:1}, Num{value:2}, Num{value:3}, Num{value:4}, Num{value:5},
+                           Num{value:6}, Num{value:7}, Num{value:8}, Num{value:9}, Num{value:10}];
+             total = 0;
+             for a in lst.items par(b = tripled(a), 4) { total += b };
+             total
+         }"
+    )
+    .expr("run_par()")
+    .result(Value::Int(165));
+}
+
+/// A14: par with extra args uses the light path too.
+#[test]
+fn par_light_extra_args() {
+    code!(
+        "struct Num { value: integer }
+         struct NumList { items: vector<Num> }
+         fn scaled(n: const Num, factor: integer) -> integer { n.value * factor }
+         fn run_par() -> integer {
+             lst = NumList {};
+             lst.items += [Num { value: 2 }, Num { value: 5 }];
+             total = 0;
+             for a in lst.items par(b = scaled(a, 10), 2) { total += b };
+             total
+         }"
+    )
+    .expr("run_par()")
+    .result(Value::Int(70));
+}
+
 // ── S28 — debug generation counter for stale DbRef across coroutine yield ─────
 
 /// S28: Mutating a struct store between coroutine next() calls should fire the
@@ -899,7 +936,6 @@ fn tuple_store_text_fields() {
 
 /// T1.10-3: two struct-reference elements — adjacent DbRef slots in a tuple.
 #[test]
-#[ignore = "T1.10-3: struct-reference tuple elements trigger use-after-free — T1.8 lifetime tracking needed for DbRef tuple slots"]
 fn tuple_struct_refs() {
     code!(
         "struct Point { x: integer, y: integer }
@@ -1669,7 +1705,6 @@ fn sorted_reverse_range() {
 
 /// A8.3: `idx[k1]` on a multi-key index iterates all elements matching k1.
 #[test]
-#[ignore = "A8.3: partial-key match on index — not yet implemented"]
 fn index_partial_key_match() {
     code!(
         "struct Elm { nr: integer, key: text, val: integer }
@@ -1706,7 +1741,6 @@ fn index_open_end_range() {
 
 /// A8.5-idx: `rev(idx[lo..hi])` works on index collections.
 #[test]
-#[ignore = "A8.5-idx: reverse range on index — not yet verified"]
 fn index_reverse_range() {
     code!(
         "struct Elm { nr: integer, val: integer }

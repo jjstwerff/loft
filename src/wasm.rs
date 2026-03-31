@@ -34,6 +34,12 @@ fn host_call(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
         .unwrap_or(wasm_bindgen::JsValue::UNDEFINED)
 }
 
+/// W1.18-1: public version of `host_call` for use from `parallel.rs`.
+#[cfg(feature = "wasm")]
+pub fn host_call_raw(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
+    host_call(method, args)
+}
+
 // ── W1.7 / FS-A  File I/O host bridge ────────────────────────────────────────
 
 /// Check whether a path exists in the virtual filesystem.
@@ -743,6 +749,26 @@ pub fn output_push(text: &str) {
 /// Drain and return the accumulated output since the last call.
 pub fn output_take() -> String {
     OUTPUT.with(|buf| std::mem::take(&mut *buf.borrow_mut()))
+}
+
+// ── W1.18-2  Worker entry point for WASM threading ──────────────────────────
+
+/// W1.18-2: Entry point called by each Worker Thread.  The JS worker loop calls
+/// this with the function index and element range.  The worker reads from the
+/// shared WASM memory (Store heap) and writes results directly back.
+///
+/// This is a no-op stub until the wasm-threads feature build is available.
+/// The actual implementation needs access to the shared State, which requires
+/// the wasm-threads + atomics build flags.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn worker_entry(_fn_index: u32, _start: u32, _end: u32) {
+    // TODO(W1.18-2): implement when wasm-threads feature build is available.
+    // The worker needs to:
+    // 1. Access the shared Store heap via WASM linear memory
+    // 2. Create a lightweight State for bytecode execution
+    // 3. Loop from start..end, executing fn_index for each element
+    // 4. Write results directly to the shared output buffer
 }
 
 #[cfg(test)]

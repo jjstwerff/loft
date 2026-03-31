@@ -55,6 +55,12 @@ profile:
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
 
+wasm-mt:
+	RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+	wasm-pack build --target nodejs --out-dir tests/wasm/pkg-mt \
+	-- --features wasm-threads --no-default-features
+	@echo "Built tests/wasm/pkg-mt/ — run: node tests/wasm/suite.mjs --threaded 19-threading.loft"
+
 fill:
 	@cargo build --release -q
 	@echo "Regenerating src/fill.rs from default/*.loft ..."
