@@ -385,7 +385,6 @@ impl Parser {
             }
         }
 
-        // A5.4: on second pass, if closure record exists, add __closure as attribute+variable.
         // The codegen (line 40-46) reads definition attributes to assign argument positions.
         let outer_closure_param = self.closure_param;
         if !self.first_pass {
@@ -408,7 +407,6 @@ impl Parser {
             .variables
             .append(&mut self.vars);
 
-        // A5.2: synthesize closure record if any captures were detected.
         if !self.captured_names.is_empty() {
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
@@ -724,17 +722,6 @@ impl Parser {
                 self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
             }
         }
-
-        // Emit a diagnostic listing the record fields for test verification.
-        let fields: Vec<String> = captures.iter().map(|(n, t)| format!("{n}({t})")).collect();
-        let count = captures.len();
-        diagnostic!(
-            self.lexer,
-            Level::Debug,
-            "closure record '{record_name}' created with {count} {}: {}",
-            if count == 1 { "field" } else { "fields" },
-            fields.join(", ")
-        );
     }
 
     // <for-vector> ::= 'for' <id> 'in' <range> ['if' <cond>] '{' <expr> '}'

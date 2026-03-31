@@ -405,58 +405,11 @@ impl Parser {
             };
 
             if pattern_name == "_" {
-                // Wildcard arm — must be last.
-                // parse optional guard clause.
-                let guard_opt = if self.lexer.has_token("if") {
-                    let mut guard_code = Value::Null;
-                    let guard_type = self.expression(&mut guard_code);
-                    if !self.first_pass && guard_type != Type::Boolean {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "guard must be boolean, got {}",
-                            guard_type.name(&self.data)
-                        );
-                    }
-                    Some(guard_code)
-                } else {
-                    None
-                };
-                // Only mark exhaustive if wildcard has no guard.
-                if guard_opt.is_none() {
-                    has_wildcard = true;
-                }
-                self.lexer.token("=>");
-                let mut arm_code = Value::Null;
-                let arm_type = if self.lexer.peek_token("{") {
-                    self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-                } else {
-                    self.expression(&mut arm_code)
-                };
-                if result_type == Type::Void {
-                    result_type = arm_type.clone();
-                } else if !self.first_pass
-                    && arm_type != Type::Void
-                    && !result_type.is_same(&arm_type)
-                {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "cannot unify: {} and {}",
-                        result_type.name(&self.data),
-                        arm_type.name(&self.data)
-                    );
-                }
-                arms.push(EnumArm {
-                    discs: vec![],
-                    code: arm_code,
-                    tp: arm_type,
-                    guard: guard_opt,
-                    bindings: Vec::new(),
-                });
+                let (arm, is_exhaustive) = self.parse_match_wildcard_arm(&mut result_type);
+                has_wildcard = is_exhaustive;
+                arms.push(arm);
                 self.lexer.has_token(","); // optional trailing comma
                 if !has_wildcard {
-                    // Guarded wildcard — continue parsing more arms.
                     continue;
                 }
                 break;
@@ -477,84 +430,17 @@ impl Parser {
                         self.data.def(e_nr).name
                     );
                 }
-                // Parse field bindings and arm body.
-                // L2: fields may carry `:` sub-patterns that generate conditions.
-                let mut arm_stmts: Vec<Value> = Vec::new();
-                let mut field_conditions: Vec<Value> = Vec::new();
-                if self.lexer.peek_token("{") {
-                    self.lexer.token("{");
-                    while !self.lexer.peek_token("}") {
-                        if let Some(field_name) = self.lexer.has_identifier() {
-                            let attr_idx = self.data.attr(e_nr, &field_name);
-                            if attr_idx != usize::MAX {
-                                let field_val = self.get_field(e_nr, attr_idx, subject_val.clone());
-                                let field_type = self.data.attr_type(e_nr, attr_idx);
-                                if self.lexer.has_token(":") {
-                                    // L2: sub-pattern — generates a condition.
-                                    if let Some(cond) =
-                                        self.parse_field_sub_pattern(field_val, &field_type)
-                                    {
-                                        field_conditions.push(cond);
-                                    }
-                                } else {
-                                    // Plain binding — creates a local variable.
-                                    let v = self.create_var(&field_name, &field_type);
-                                    self.vars.defined(v);
-                                    // Hoist the binding before the if-chain so the
-                                    // codegen doesn't allocate inside the branch.
-                                    hoisted_bindings.push(v_set(v, field_val));
-                                }
-                            } else if !self.first_pass {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "unknown field '{}' on struct {}",
-                                    field_name,
-                                    self.data.def(e_nr).name
-                                );
-                            }
-                        }
-                        if !self.lexer.has_token(",") {
-                            break;
-                        }
-                    }
-                    self.lexer.token("}");
-                }
-                self.lexer.token("=>");
-                let mut arm_code = Value::Null;
-                let arm_type = if self.lexer.peek_token("{") {
-                    self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-                } else {
-                    self.expression(&mut arm_code)
-                };
-                arm_stmts.push(arm_code);
-                let block = v_block(arm_stmts, arm_type.clone(), "struct_match");
-                if result_type == Type::Void {
-                    result_type = arm_type;
-                }
-                // L2: if there are field sub-pattern conditions, fold them into a guard.
-                let guard = if field_conditions.is_empty() {
-                    has_wildcard = true; // no conditions → always matches
-                    None
-                } else {
-                    // AND all conditions together.
-                    let mut combined = field_conditions.remove(0);
-                    for c in field_conditions {
-                        combined = v_if(combined, c, Value::Boolean(false));
-                    }
-                    Some(combined)
-                };
-                arms.push(EnumArm {
-                    discs: vec![],
-                    code: block,
-                    tp: result_type.clone(),
-                    guard,
-                    bindings: Vec::new(),
-                });
+                let (arm, exhaustive) = self.parse_match_struct_arm(
+                    e_nr,
+                    &subject_val,
+                    &mut result_type,
+                    &mut hoisted_bindings,
+                );
+                has_wildcard = exhaustive;
+                arms.push(arm);
                 if has_wildcard {
                     break;
                 }
-                // With field sub-patterns, this arm may not match — continue parsing more arms.
                 self.lexer.has_token(",");
                 continue;
             }
@@ -656,103 +542,24 @@ impl Parser {
                 }
             }
 
-            // Parse optional field bindings for struct-enum arms: `{ field1, field2, ... }`.
-            // L2: fields may carry `:` sub-patterns that generate additional guard conditions.
-            // S15: each binding uses a unique variable so different arms can bind the same
-            // field name with different types without corrupting the variable's type/slot.
+            // Parse optional field bindings for struct-enum arms.
             let mut arm_stmts: Vec<Value> = Vec::new();
             let mut field_conditions: Vec<Value> = Vec::new();
             let mut name_aliases: Vec<(String, Option<u16>)> = Vec::new();
             if is_struct && self.lexer.peek_token("{") {
-                self.lexer.token("{");
-                let mut seen_fields: HashSet<String> = HashSet::new();
-                loop {
-                    let Some(field_name) = self.lexer.has_identifier() else {
-                        break;
-                    };
-                    if !self.first_pass && seen_fields.contains(&field_name) {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "duplicate field binding '{}' in match arm",
-                            field_name
-                        );
-                    }
-                    seen_fields.insert(field_name.clone());
-
-                    // Find the field in the variant's attributes (skip attr 0 = "enum" disc).
-                    let attr_idx_and_type = {
-                        let variant_def = self.data.def(variant_def_nr);
-                        variant_def.attributes[1..]
-                            .iter()
-                            .enumerate()
-                            .find(|(_, a)| a.name == field_name)
-                            .map(|(i, a)| (i + 1, a.typedef.clone()))
-                    };
-
-                    match attr_idx_and_type {
-                        Some((attr_idx, field_type)) => {
-                            let field_read =
-                                self.get_field(variant_def_nr, attr_idx, subject_val.clone());
-                            if self.lexer.has_token(":") {
-                                // L2: sub-pattern — generates a condition.
-                                if let Some(cond) =
-                                    self.parse_field_sub_pattern(field_read, &field_type)
-                                {
-                                    field_conditions.push(cond);
-                                }
-                            } else {
-                                // S15: use a unique variable per arm so that different
-                                // variant types get correctly-typed slots.
-                                let v_nr =
-                                    self.create_unique(&format!("mv_{field_name}"), &field_type);
-                                if v_nr != u16::MAX {
-                                    self.vars.defined(v_nr);
-                                    arm_stmts.push(v_set(v_nr, field_read));
-                                    // Alias the user-visible name to this unique var
-                                    // so the arm body can reference it by name.
-                                    let old = self.vars.set_name(&field_name, v_nr);
-                                    name_aliases.push((field_name.clone(), old));
-                                }
-                            }
-                        }
-                        None => {
-                            if !self.first_pass {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "variant {} has no field '{}'",
-                                    pattern_name,
-                                    field_name
-                                );
-                            }
-                        }
-                    }
-
-                    if !self.lexer.has_token(",") {
-                        break;
-                    }
-                }
-                self.lexer.token("}");
+                self.parse_match_enum_field_bindings(
+                    variant_def_nr,
+                    &pattern_name,
+                    &subject_val,
+                    &mut arm_stmts,
+                    &mut field_conditions,
+                    &mut name_aliases,
+                );
             }
 
             // parse optional guard clause after pattern + field bindings.
             // Field-bound variables are in scope for the guard expression.
-            let guard_opt = if self.lexer.has_token("if") {
-                let mut guard_code = Value::Null;
-                let guard_type = self.expression(&mut guard_code);
-                if !self.first_pass && guard_type != Type::Boolean {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "guard must be boolean, got {}",
-                        guard_type.name(&self.data)
-                    );
-                }
-                Some(guard_code)
-            } else {
-                None
-            };
+            let guard_opt = self.parse_optional_guard();
             // L2: combine field sub-pattern conditions with the explicit guard (if any).
             let guard_opt = if field_conditions.is_empty() {
                 guard_opt
@@ -937,6 +744,204 @@ impl Parser {
             chain
         };
         result_type
+    }
+
+    /// Parse a wildcard (`_`) arm in a match expression.
+    /// Returns the arm and whether it is exhaustive (no guard).
+    fn parse_match_wildcard_arm(&mut self, result_type: &mut Type) -> (EnumArm, bool) {
+        let guard_opt = self.parse_optional_guard();
+        let is_exhaustive = guard_opt.is_none();
+        self.lexer.token("=>");
+        let mut arm_code = Value::Null;
+        let arm_type = if self.lexer.peek_token("{") {
+            self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
+        } else {
+            self.expression(&mut arm_code)
+        };
+        if *result_type == Type::Void {
+            *result_type = arm_type.clone();
+        } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "cannot unify: {} and {}",
+                result_type.name(&self.data),
+                arm_type.name(&self.data)
+            );
+        }
+        let arm = EnumArm {
+            discs: vec![],
+            code: arm_code,
+            tp: arm_type,
+            guard: guard_opt,
+            bindings: Vec::new(),
+        };
+        (arm, is_exhaustive)
+    }
+
+    /// Parse a plain-struct match arm (field bindings + body).
+    /// Returns the arm and whether it is exhaustive.
+    fn parse_match_struct_arm(
+        &mut self,
+        e_nr: u32,
+        subject_val: &Value,
+        result_type: &mut Type,
+        hoisted_bindings: &mut Vec<Value>,
+    ) -> (EnumArm, bool) {
+        let mut field_conditions: Vec<Value> = Vec::new();
+        if self.lexer.peek_token("{") {
+            self.lexer.token("{");
+            while !self.lexer.peek_token("}") {
+                if let Some(field_name) = self.lexer.has_identifier() {
+                    let attr_idx = self.data.attr(e_nr, &field_name);
+                    if attr_idx != usize::MAX {
+                        let field_val = self.get_field(e_nr, attr_idx, subject_val.clone());
+                        let field_type = self.data.attr_type(e_nr, attr_idx);
+                        if self.lexer.has_token(":") {
+                            if let Some(cond) = self.parse_field_sub_pattern(field_val, &field_type)
+                            {
+                                field_conditions.push(cond);
+                            }
+                        } else {
+                            let v = self.create_var(&field_name, &field_type);
+                            self.vars.defined(v);
+                            hoisted_bindings.push(v_set(v, field_val));
+                        }
+                    } else if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "unknown field '{}' on struct {}",
+                            field_name,
+                            self.data.def(e_nr).name
+                        );
+                    }
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token("}");
+        }
+        self.lexer.token("=>");
+        let mut arm_code = Value::Null;
+        let arm_type = if self.lexer.peek_token("{") {
+            self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
+        } else {
+            self.expression(&mut arm_code)
+        };
+        let block = v_block(vec![arm_code], arm_type.clone(), "struct_match");
+        if *result_type == Type::Void {
+            *result_type = arm_type;
+        }
+        let (guard, exhaustive) = if field_conditions.is_empty() {
+            (None, true)
+        } else {
+            let mut combined = field_conditions.remove(0);
+            for c in field_conditions {
+                combined = v_if(combined, c, Value::Boolean(false));
+            }
+            (Some(combined), false)
+        };
+        let arm = EnumArm {
+            discs: vec![],
+            code: block,
+            tp: result_type.clone(),
+            guard,
+            bindings: Vec::new(),
+        };
+        (arm, exhaustive)
+    }
+
+    /// Parse field bindings for a struct-enum match arm.
+    fn parse_match_enum_field_bindings(
+        &mut self,
+        variant_def_nr: u32,
+        pattern_name: &str,
+        subject_val: &Value,
+        arm_stmts: &mut Vec<Value>,
+        field_conditions: &mut Vec<Value>,
+        name_aliases: &mut Vec<(String, Option<u16>)>,
+    ) {
+        self.lexer.token("{");
+        let mut seen_fields: HashSet<String> = HashSet::new();
+        loop {
+            let Some(field_name) = self.lexer.has_identifier() else {
+                break;
+            };
+            if !self.first_pass && seen_fields.contains(&field_name) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "duplicate field binding '{}' in match arm",
+                    field_name
+                );
+            }
+            seen_fields.insert(field_name.clone());
+
+            let attr_idx_and_type = {
+                let variant_def = self.data.def(variant_def_nr);
+                variant_def.attributes[1..]
+                    .iter()
+                    .enumerate()
+                    .find(|(_, a)| a.name == field_name)
+                    .map(|(i, a)| (i + 1, a.typedef.clone()))
+            };
+
+            match attr_idx_and_type {
+                Some((attr_idx, field_type)) => {
+                    let field_read = self.get_field(variant_def_nr, attr_idx, subject_val.clone());
+                    if self.lexer.has_token(":") {
+                        if let Some(cond) = self.parse_field_sub_pattern(field_read, &field_type) {
+                            field_conditions.push(cond);
+                        }
+                    } else {
+                        let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
+                        if v_nr != u16::MAX {
+                            self.vars.defined(v_nr);
+                            arm_stmts.push(v_set(v_nr, field_read));
+                            let old = self.vars.set_name(&field_name, v_nr);
+                            name_aliases.push((field_name.clone(), old));
+                        }
+                    }
+                }
+                None => {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "variant {} has no field '{}'",
+                            pattern_name,
+                            field_name
+                        );
+                    }
+                }
+            }
+
+            if !self.lexer.has_token(",") {
+                break;
+            }
+        }
+        self.lexer.token("}");
+    }
+
+    /// Parse an optional `if <expr>` guard clause.
+    fn parse_optional_guard(&mut self) -> Option<Value> {
+        if self.lexer.has_token("if") {
+            let mut guard_code = Value::Null;
+            let guard_type = self.expression(&mut guard_code);
+            if !self.first_pass && guard_type != Type::Boolean {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "guard must be boolean, got {}",
+                    guard_type.name(&self.data)
+                );
+            }
+            Some(guard_code)
+        } else {
+            None
+        }
     }
 
     /// Parse a sub-pattern in a match field position (L2).
