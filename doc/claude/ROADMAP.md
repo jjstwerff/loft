@@ -21,6 +21,8 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | S-borrow  | Deep-copy struct returns from generics/vectors (C37 debug) | M  | ✓      |              | PLANNING.md § S-borrow        |
+| C30       | Lambda re-definition: free old closure before overwrite    | S  | ~      |              | CAVEATS.md § C30              |
+| C31       | Closures in collections / struct fields                    | M  | ~      |              | CAVEATS.md § C31              |
 
 ---
 
