@@ -1480,7 +1480,6 @@ fn stdlib_printable_interface() {
 /// C36: generic function with for loop panics "variable never assigned a slot"
 /// when instantiated with a struct type.
 #[test]
-#[ignore = "C36: passes in release; debug store-lifetime assert on borrowed struct return"]
 fn generic_for_loop_struct_type() {
     code!(
         "struct Score { value: integer }
