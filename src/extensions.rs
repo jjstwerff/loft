@@ -77,7 +77,25 @@ pub fn load_all(_state: &mut State, _paths: Vec<String>) {}
 pub fn load_one(state: &mut State, path: &str) {
     use crate::state::Call;
     use libloading::{Library, Symbol};
+    use std::collections::HashSet;
     use std::ffi::CStr;
+    use std::sync::Mutex;
+
+    // A7.2-par: serialise dlopen calls to prevent heap corruption when multiple
+    // threads load shared libraries simultaneously (e.g. parallel test execution).
+    // Also tracks already-loaded paths to avoid double-loading the same library.
+    static LOAD_LOCK: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+    let canonical = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(path))
+        .to_string_lossy()
+        .into_owned();
+
+    let mut guard = LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loaded = guard.get_or_insert_with(HashSet::new);
+    if loaded.contains(&canonical) {
+        return;
+    }
 
     unsafe extern "C" fn trampoline_register(
         ctx: *mut LoftPluginCtx,
@@ -114,9 +132,12 @@ pub fn load_one(state: &mut State, path: &str) {
         state.static_fn(&name, call);
     }
 
+    loaded.insert(canonical);
+
     // Keep the library alive for the interpreter's lifetime.
     // Leak it intentionally — the process exits before cleanup matters.
     std::mem::forget(lib);
+    // Drop the lock guard after forget so the library handle is fully settled.
 }
 
 /// No-op stub when `native-extensions` feature is disabled.
