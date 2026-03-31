@@ -876,11 +876,12 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 | I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
 | I5  | Type resolution: validate interface bodies; factory-method restriction (phase 1) | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
 | I11 | gendoc stub/guard for `DefType::Interface` | XS | *(completed 0.8.3)* `src/gendoc.rs` |
-| I6  | Satisfaction checking at generic instantiation | M | `src/parser/definitions.rs` |
-| I7  | Allow bounded method calls on `T` inside generic bodies | S | `src/parser/control.rs` |
+| I6  | Satisfaction checking at generic instantiation | M | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I7  | Allow bounded method calls on `T` inside generic bodies | S | *(completed 0.8.3)* `src/parser/fields.rs` |
+| I8.1| Same-type binary operators (`T op T`) via bound | S | *(completed 0.8.3)* `src/parser/mod.rs` |
+| I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | *(completed 0.8.3)* `src/parser/mod.rs` |
 | I8  | Allow bounded operator use on `T` (`OpCamelCase` in bound) | S | `src/parser/operators.rs` |
 | I9  | Standard library interfaces + convert stdlib generics | M | `default/01_code.loft` |
-| I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | `src/diagnostics.rs` |
 
 **Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
 I2 is parallel with I1. I5 depends on I3. I10 depends on I6.

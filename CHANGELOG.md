@@ -58,6 +58,28 @@ All notable changes to the loft language and interpreter.
     declarations (previously `"const"`). `generate_stdlib_section` skips interface items gracefully.
     Unit test: `sig_kind_interface_returns_interface`.
 
+- **Interface subsystem — satisfaction checking, bounded method/operator calls** (I6, I7, I8.1, I10):
+  - I6 (`src/parser/mod.rs`): `check_satisfaction` verifies that a concrete type implements
+    every method declared in a bounded generic's interface constraints. Called from
+    `try_generic_instantiation` — emits `"'Type' does not satisfy interface 'Name': missing Method"`.
+    Tests: `satisfaction_check_passes_with_implementing_type`,
+    `satisfaction_check_fails_missing_method`.
+  - I7 (`src/parser/fields.rs`, `src/parser/definitions.rs`): T-parameterized method stubs
+    (e.g. `t_1T_label`) are created during second-pass bounds resolution. `field()` looks up
+    the T-stub via `find_fn` before reporting "field access requires a concrete type", enabling
+    `v.method()` inside generic bodies. `re_resolve_call` substitutes the concrete implementation
+    at specialization time.
+    Test: `bounded_method_call_in_generic_body`.
+  - I8.1 (`src/parser/mod.rs`): `call_op` looks up T-stubs for operators (e.g. `t_1T_OpLt`)
+    before erroring, enabling `a < b` inside bounded generic bodies. First-pass operator calls
+    on T now return `Type::Void` instead of erroring, allowing the second pass to proceed.
+    Test: `bounded_operator_in_generic_body`.
+  - I10: satisfaction diagnostics share the I6 implementation above.
+  - Supporting changes: `Data::children_of` iterates definitions by parent;
+    `field()` returns `Type::Unknown(0)` in the first pass for unknown-type field access
+    (previously errored); user-defined operator functions (e.g. `fn OpLt(self: Score, ...)`)
+    are now allowed in user code without a lowercase name error.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
