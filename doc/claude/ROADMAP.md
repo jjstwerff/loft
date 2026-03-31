@@ -25,6 +25,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | A5.6-text | Closure text work-ref type propagation                    | M  | ~      |              | src/parser/control.rs         |
 | T1.8      | DbRef lifetime tracking for tuple struct-ref elements     | M  | ~      |              | src/variables/                |
 | S-lexer   | Fix 15-lexer.loft / 16-parser.loft "Unknown record" crash | M  | —      |              | src/store.rs                  |
+| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | —      |              | tests/native_loader.rs        |
 
 ---
 
