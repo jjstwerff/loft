@@ -1040,3 +1040,77 @@ fn bounded_operator_in_generic_body() {
     .expr("pick_min(Score{value:7}, Score{value:3}).value")
     .result(Value::Int(3));
 }
+
+// ── I8.2 — Return-type propagation from interface signature ──────────────────
+
+/// I8.2: a bounded operator whose return type is `Self` must propagate the
+/// correct concrete return type — here `pick_max` returns `T` (resolved to `Score`)
+/// whose `.value` field must be accessible on the result.
+#[test]
+#[ignore = "I8.2: return-type propagation — not yet verified"]
+fn bounded_operator_self_return_type() {
+    code!(
+        "interface Comparable {
+             op < (self: Self, other: Self) -> boolean
+             op > (self: Self, other: Self) -> boolean
+         }
+         struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
+         fn pick_max<T: Comparable>(a: T, b: T) -> T { if a > b { a } else { b } }"
+    )
+    .expr("pick_max(Score{value:3}, Score{value:9}).value")
+    .result(Value::Int(9));
+}
+
+// ── I8.3 — Mixed-type binary operators (T op concrete) ──────────────────────
+
+/// I8.3: an operator with a concrete second parameter (`T * integer`) must
+/// compile inside a bounded generic body and produce the correct result.
+/// The interface declares a mixed-type signature: `self: Self, factor: integer -> integer`.
+#[test]
+#[ignore = "I8.3: mixed-type binary operators — not yet verified"]
+fn bounded_mixed_type_operator() {
+    code!(
+        "interface Measurable { op * (self: Self, factor: integer) -> integer }
+         struct Score { value: integer }
+         fn OpMul(self: Score, factor: integer) -> integer { self.value * factor }
+         fn scaled_measure<T: Measurable>(v: T, n: integer) -> integer { v * n }"
+    )
+    .expr("scaled_measure(Score{value:6}, 7)")
+    .result(Value::Int(42));
+}
+
+// ── I8.4 — Unary operators on T ─────────────────────────────────────────────
+
+/// I8.4: a unary operator (`-T`) inside a bounded generic body must compile
+/// when the bound declares the unary operator.  Uses `op -` (negation) which
+/// returns `integer` to avoid struct-return allocation tracking issues.
+#[test]
+#[ignore = "I8.4: unary operators on T — not yet verified"]
+fn bounded_unary_operator() {
+    code!(
+        "interface Measurable { op - (self: Self) -> integer }
+         struct Score { value: integer }
+         fn OpMin(self: Score) -> integer { -self.value }
+         fn neg_measure<T: Measurable>(v: T) -> integer { -v }"
+    )
+    .expr("neg_measure(Score{value:42})")
+    .result(Value::Int(-42));
+}
+
+// ── I9 — Standard library interface: Ordered ────────────────────────────────
+
+/// I9: the `Ordered` interface from the standard library enables bounded-generic
+/// functions that use `<` on user-defined types.
+#[test]
+#[ignore = "I9: stdlib Ordered interface — not yet implemented"]
+fn stdlib_ordered_interface() {
+    code!(
+        "struct Score { value: integer }
+         fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+         fn pick_min<T: Ordered>(a: T, b: T) -> T { if a < b { a } else { b } }"
+    )
+    .expr("pick_min(Score{value:7}, Score{value:3}).value")
+    .result(Value::Int(3));
+}
