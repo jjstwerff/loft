@@ -530,6 +530,12 @@ impl Output<'_> {
                     writeln!(w, "&mut var_{vname}")?;
                 } else {
                     let wrap_result = is_return_expr && is_text_result;
+                    // C31/A5.6: wrap Int fn-ref as (d_nr, null_DbRef) tuple
+                    // when the block result is Type::Function and the value is
+                    // a bare Int (non-capturing fn-ref).
+                    let wrap_fn_ref = is_return_expr
+                        && matches!(bl.result, Type::Function(_, _))
+                        && matches!(v, Value::Int(_));
                     let narrow_cast = if is_return_expr {
                         narrow_int_cast(&bl.result)
                     } else {
@@ -537,7 +543,7 @@ impl Output<'_> {
                     };
                     if wrap_result {
                         write!(w, "Str::new(")?;
-                    } else if narrow_cast.is_some() {
+                    } else if wrap_fn_ref || narrow_cast.is_some() {
                         write!(w, "(")?;
                     }
                     self.indent += 1;
@@ -545,6 +551,11 @@ impl Output<'_> {
                     self.indent -= 1;
                     if wrap_result {
                         write!(w, ")")?;
+                    } else if wrap_fn_ref {
+                        write!(
+                            w,
+                            " as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                        )?;
                     } else if let Some(cast) = narrow_cast {
                         write!(w, ") as {cast}")?;
                     }

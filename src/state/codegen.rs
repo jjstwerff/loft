@@ -1026,6 +1026,25 @@ impl State {
                     tps.push(a.typedef.clone());
                 } else {
                     tps.push(self.generate(&parameters[a_nr], stack, false));
+                    let pushed = stack.position - stack_before;
+                    // N-fnref: when a typed argument produces 0 bytes (Value::Null),
+                    // push the appropriate null value for the expected type.
+                    if pushed == 0 {
+                        let expected = size(&a.typedef, &Context::Argument);
+                        if expected == 12 {
+                            stack.add_op("OpNullRefSentinel", self);
+                        } else if expected == 16 {
+                            stack.add_op("OpConstInt", self);
+                            self.code_add(0i32);
+                            stack.add_op("OpNullRefSentinel", self);
+                        } else if expected == 4 {
+                            stack.add_op("OpConstInt", self);
+                            self.code_add(i32::MIN);
+                        } else if expected == 8 {
+                            stack.add_op("OpConstLong", self);
+                            self.code_add(i64::MIN);
+                        }
+                    }
                     // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).
                     // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
                     if matches!(a.typedef, Type::Function(_, _))
