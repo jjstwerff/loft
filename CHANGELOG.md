@@ -140,6 +140,19 @@ All notable changes to the loft language and interpreter.
     with `Numeric`.
     Test: `stdlib_scalable_interface`.
 
+- **Interface stub collision fix, generic min_of/max_of/sum** (I9-stub, I9.1, I9.2):
+  - I9-stub: interface method stubs now use `__iface_{d_nr}_{method}` naming instead of
+    `t_4Self_{method}`. Multiple interfaces can now declare the same operator without
+    collision. `has_bound_for_method` prevents T-stubs from leaking into unbound generics.
+  - I9.1: `min_of` and `max_of` replaced with bounded-generic versions using `Ordered`.
+    Now work on integer, float, and any user type satisfying `Ordered`. Unused helper
+    functions (`__min_int`, `__min_float`, `__max_int`, `__max_float`) removed.
+    Tests: `stdlib_min_of_generic`, `stdlib_max_of_generic`, `stdlib_min_of_float`,
+    `stdlib_max_of_float`.
+  - I9.2: `pub fn sum<T: Addable>(v: vector<T>, init: T) -> T` added. The caller supplies
+    the identity element. Integer-specific `sum_of(v)` kept for backward compatibility.
+    Test: `stdlib_sum_generic`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —

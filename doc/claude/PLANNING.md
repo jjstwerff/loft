@@ -890,7 +890,10 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 | I9+ | Stdlib `Numeric` interface (op *, op -) | S | *(completed 0.8.3)* `default/01_code.loft` |
 | I9-v2| Generic accumulator fix (skip ref_return for generic templates) | S | *(completed 0.8.3)* `src/parser/control.rs` |
 | I9-Sc| Stdlib `Scalable` interface (method-based) | XS | *(completed 0.8.3)* `default/01_code.loft` |
-| I9+r| Remaining stdlib interface (`Printable`) | XS | `default/01_code.loft` |
+| I9-st| Interface stub naming collision fix (__iface scoping) | S | *(completed 0.8.3)* `src/parser/definitions.rs`, `src/parser/mod.rs` |
+| I9.1| Generic min_of/max_of using Ordered | S | *(completed 0.8.3)* `default/01_code.loft` |
+| I9.2| Generic sum with Addable + identity | XS | *(completed 0.8.3)* `default/01_code.loft` |
+| I9+r| Remaining stdlib interface (`Printable`) — blocked by text-return hidden param | S | `default/01_code.loft` |
 
 **Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
 I2 is parallel with I1. I5 depends on I3. I10 depends on I6.
