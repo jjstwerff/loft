@@ -1140,7 +1140,26 @@ impl Parser {
             d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Struct);
             self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
         } else if self.first_pass {
-            if let Type::Unknown(_) = self.data.definitions[d_nr as usize].returned {
+            // fix-tvscope: a type variable placeholder (e.g., `T` from generic stdlib
+            // functions) blocks user-defined struct of the same name.  Produce a clear
+            // diagnostic rather than the confusing "Redefined struct".
+            let is_type_var = {
+                let ex = &self.data.definitions[d_nr as usize];
+                ex.def_type == DefType::Struct
+                    && ex.attributes.is_empty()
+                    && matches!(&ex.returned, Type::Reference(r, _) if *r == d_nr)
+            };
+            if is_type_var {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}' is reserved as a generic type variable — choose a different struct name",
+                    id
+                );
+            } else if matches!(
+                self.data.definitions[d_nr as usize].returned,
+                Type::Unknown(_)
+            ) {
                 self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());

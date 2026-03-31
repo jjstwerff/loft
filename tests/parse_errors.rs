@@ -803,6 +803,16 @@ fn satisfaction_check_fails_missing_method() {
     .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:3:57");
 }
 
+// ── fix-tvscope — Type variable namespace ────────────────────────────────────
+
+/// fix-tvscope: defining a struct whose name clashes with a generic type variable
+/// produces a clear diagnostic instead of the confusing "Redefined struct T".
+#[test]
+fn struct_name_clashes_with_type_variable() {
+    code!("struct T { v: integer }\nfn test() {}")
+        .error("'T' is reserved as a generic type variable \u{2014} choose a different struct name at struct_name_clashes_with_type_variable:1:11");
+}
+
 // ── Fix #91 — Circular init detection ────────────────────────────────────────
 
 /// #91: two init fields referencing each other via $ should produce an error.

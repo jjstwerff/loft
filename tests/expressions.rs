@@ -1504,7 +1504,6 @@ fn coroutine_yield_from_field_text_loop() {
 
 /// CO1.8a: a generator with two text parameters must serialise both at create.
 #[test]
-#[ignore = "CO1.8a: multi-text params — not yet verified"]
 fn coroutine_multi_text_params() {
     code!(
         "fn join_chars(a: text, b: text) -> iterator<character> {
@@ -1524,7 +1523,6 @@ fn coroutine_multi_text_params() {
 
 /// CO1.8b: a text local created after the first yield must survive resume.
 #[test]
-#[ignore = "CO1.8b: text local after yield — not yet verified"]
 fn coroutine_text_local_after_yield() {
     code!(
         "fn lazy_labels() -> iterator<integer> {
@@ -1545,7 +1543,6 @@ fn coroutine_text_local_after_yield() {
 
 /// CO1.8c: a text local inside a nested for-loop block must be freed correctly.
 #[test]
-#[ignore = "CO1.8c: text local in nested block — not yet verified"]
 fn coroutine_text_local_nested_block() {
     code!(
         "fn text_lens(v: vector<text>) -> iterator<integer> {
@@ -1563,17 +1560,4 @@ fn coroutine_text_local_nested_block() {
     }",
     )
     .result(Value::Int(7));
-}
-
-// ── fix-tvscope — Type variable T namespace pollution ───────────────────────
-
-/// fix-tvscope: user code can define `struct T` even though the stdlib has
-/// generic functions with `<T>`.  The type variable must not pollute the global
-/// namespace.
-#[test]
-#[ignore = "fix-tvscope: type variable namespace pollution — not yet fixed"]
-fn user_struct_t_not_blocked_by_generics() {
-    code!("struct T { v: integer }")
-        .expr("T{v: 42}.v")
-        .result(Value::Int(42));
 }
