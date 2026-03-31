@@ -148,6 +148,11 @@ impl Output<'_> {
                         write!(w, ", ")?;
                     }
                     self.output_code_inner(w, e)?;
+                    // Text literals in tuples need .to_string() since tuple
+                    // elements are String, not &str.
+                    if matches!(e, Value::Text(_)) {
+                        write!(w, ".to_string()")?;
+                    }
                 }
                 write!(w, ")")?;
             }
@@ -179,10 +184,16 @@ impl Output<'_> {
                     self.output_code_inner(w, inner)?;
                 }
             }
-            // A5.6-1: FnRef carries the d_nr (function index) for the fn-ref slot.
-            // In native code the fn-ref variable holds a u32 d_nr; the closure is stored
-            // separately. Emit only the d_nr constant; closure injection is done at the call site.
-            Value::FnRef(d_nr, _, _) => write!(w, "{d_nr}_u32")?,
+            // C31/A5.6: FnRef emits (d_nr, closure_dbref) tuple.
+            Value::FnRef(d_nr, clos_var, _) => {
+                let clos_name = sanitize(
+                    self.data
+                        .def(self.def_nr)
+                        .variables
+                        .name(*clos_var),
+                );
+                write!(w, "({d_nr}_u32, var_{clos_name})")?;
+            }
             Value::FreeFnRefClosure(_) | Value::FnRefWord(_, _) | Value::Line(_) => {}
         }
         Ok(())
@@ -282,6 +293,11 @@ impl Output<'_> {
                 if let Some(clos_nr) = closure_var_nr {
                     let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
                     write!(w, ", var_{clos_name}")?;
+                } else {
+                    // C31/A5.6: fn-ref variable has no closure_var_of mapping
+                    // (e.g. fn-ref from vector element or chained call).  Pass a
+                    // null DbRef so the function signature matches.
+                    write!(w, ", loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}")?;
                 }
             }
             write!(w, "),")?;
