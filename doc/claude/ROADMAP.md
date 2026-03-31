@@ -29,10 +29,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
 | A8.3      | ↳ Partial-key match iterator (`col[k1]` on multi-key)     | M  | ✓      |              | fields.rs + io.rs runtime     |
 | A14       | `par_light`: lightweight parallel loop                    | MH | ✓      |              | LIGHT_PAR.md                  |
-| A14.1     | ↳ `Store::borrow_locked_for_light_worker` + sentinel Drop | S  | ✓      |              | LIGHT_PAR.md § L1             |
-| A14.2     | ↳ `WorkerPool` struct                                     | S  | ✓      | A14.1        | LIGHT_PAR.md § L2             |
-| A14.3     | ↳ `Stores::clone_for_light_worker`                        | S  | ✓      | A14.1, A14.2 | LIGHT_PAR.md § L3             |
-| A14.4     | ↳ `run_parallel_light`                                    | S  | ✓      | A14.3        | LIGHT_PAR.md § L4             |
 | A14.5     | ↳ Compiler call-graph analysis + `M` computation          | M  | ✓      |              | LIGHT_PAR.md § L5             |
 | A14.6     | ↳ Parser: `par_light(...)` clause                         | S  | ✓      | A14.4, A14.5 | LIGHT_PAR.md § L6             |
 | A14.7     | ↳ Performance benchmark                                   | S  | ✓      | A14.6        | LIGHT_PAR.md § L7             |

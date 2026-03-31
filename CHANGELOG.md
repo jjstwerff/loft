@@ -6,6 +6,16 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Parallel execution
+
+- **`par_light` runtime foundation** (A14.1–A14.4):
+  - A14.1: `Store::borrow_locked_for_light_worker` — O(1) read-only view sharing the
+    original's buffer pointer. `borrowed` field prevents double-free on Drop.
+  - A14.2: `WorkerPool` — pre-allocates `n_workers × M` stores, reused across invocations.
+  - A14.3: `Stores::clone_for_light_worker` — assembles worker view with shallow borrows
+    of main stores + fresh pool stores. Zero large buffer copies.
+  - A14.4: `run_parallel_light` — drop-in for `run_parallel_direct` using the pool.
+
 ### Safety fixes
 
 - **Coroutine store-mutation guard promoted to always-on** (CO1.9) — The generation
