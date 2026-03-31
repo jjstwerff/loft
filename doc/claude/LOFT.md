@@ -17,6 +17,7 @@ and can emit Rust code for host integration.
 - [String formatting](#string-formatting)
 - [Control flow](#control-flow)
 - [Variables](#variables)
+- [Tuples](#tuples)
 - [Vectors](#vectors)
 - [Key-based collections (hash / index / sorted)](#key-based-collections-hash--index--sorted)
 - [Structs and record initialization](#structs-and-record-initialization)
@@ -24,6 +25,9 @@ and can emit Rust code for host integration.
 - [Assertions](#assertions)
 - [Sizeof](#sizeof)
 - [Polymorphism / dynamic dispatch](#polymorphism--dynamic-dispatch)
+- [Coroutines / generators](#coroutines--generators)
+- [Generic functions](#generic-functions)
+- [Interfaces and bounded generics](#interfaces-and-bounded-generics)
 - [File structure](#file-structure)
 - [External function annotations (`#rust`, `#iterator`)](#external-function-annotations-rust-iterator)
 - [Operator definitions (internal)](#operator-definitions-internal)
@@ -103,12 +107,13 @@ i32   // integer (explicit 32-bit)
 
 | Type syntax                        | Description                                           |
 |------------------------------------|-------------------------------------------------------|
+| `(T1, T2, ...)`                    | Tuple: stack-allocated compound value, 2+ elements   |
 | `vector<T>`                        | Dynamic array of `T`                                  |
 | `hash<T[field1, field2]>`          | Hash-indexed collection of `T` on the given fields    |
 | `index<T[field1, -field2]>`        | B-tree index (ascending/descending)                   |
 | `sorted<T[field]>`                 | Sorted vector on the given fields                     |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
-| `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
+| `iterator<T>`                      | Generator / coroutine that yields values of type `T`  |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
 
 The key fields are declared **inside** the angle brackets with the element type.
@@ -315,6 +320,7 @@ for e in user#errors { log_warn(e); }
 | Boolean          | `true`, `false`                     |
 | Null             | `null`                              |
 | String           | `"hello world"`                     |
+| Tuple            | `(1, "hello")`, `(x, y, z)`         |
 | Function ref     | `fn double_score`                   |
 | Lambda (long)    | `fn(x: integer) -> integer { x * 2 }` |
 | Lambda (short)   | `\|x\| { x * 2 }`                    |
@@ -383,6 +389,41 @@ for a in items par(b=double(a), 4) { results += [b] }
 **`reduce(v, init, fn f) -> U`** — left-folds: starts from `init`, applies `f(acc, elm)` for each element in order.
 
 See [THREADING.md](THREADING.md) § fn Expression for how function references are used with `par(...)`.
+
+### Closures (capturing lambdas)
+
+A lambda that references a variable from its enclosing function captures it by value
+at the point of lambda creation.  The captured values are stored in a hidden closure
+record allocated on the heap.
+
+```loft
+fn make_greeter(prefix: text) -> fn(text) -> text {
+    fn(name: text) -> text { "{prefix} {name}" }
+}
+
+greet = make_greeter("Hello");
+println(greet("world"));    // prints "Hello world"
+```
+
+The closure captures `prefix` at the time `make_greeter` is called.  Later calls to
+the returned lambda see the captured value regardless of how the enclosing scope has
+changed.
+
+**Mutable captures** — a captured variable can be mutated inside the lambda; the
+mutation is written back to the closure record and visible in subsequent calls to the
+same lambda instance.
+
+**Reassignment** — assigning a new lambda to a variable that already holds a capturing
+lambda frees the previous closure and creates a fresh one:
+```loft
+x = 10;
+f = fn(y: integer) -> integer { x + y };
+f = fn(y: integer) -> integer { x * y };   // old closure freed; new one created
+```
+
+**Current limitation (C31):** storing a capturing lambda in a `vector<fn(...)>` or as
+a struct field is not yet supported.  Pass closures as function arguments or return
+values instead.
 
 ---
 
@@ -501,6 +542,32 @@ for v in x if v % 3 != 0 {
 }
 ```
 
+**Field iteration** — `for f in s#fields` iterates over a struct's stored primitive
+fields at compile time (the loop is unrolled by the parser; no runtime allocation):
+
+```loft
+struct Config { host: text, port: integer not null, debug: boolean }
+c = Config{ host: "localhost", port: 8080, debug: true };
+
+for f in c#fields {
+    match f.value {
+        FvText { v } => println("{f.name} = '{v}'"),
+        FvInt  { v } => println("{f.name} = {v}"),
+        FvBool { v } => println("{f.name} = {v}"),
+        _            => {}
+    }
+}
+```
+
+The loop variable has type `Field` with:
+- `f.name: text` — the field name (compile-time constant)
+- `f.value: FieldValue` — a struct-enum wrapping the typed value
+  (`FvBool{v}`, `FvInt{v}`, `FvLong{v}`, `FvFloat{v}`, `FvSingle{v}`, `FvChar{v}`, `FvText{v}`)
+
+Reference, collection, and nested-struct fields are skipped silently.
+The source expression must be a plain identifier; for complex expressions assign a
+temporary first: `tmp = get_config(); for f in tmp#fields { ... }`.
+
 **Mutation guard:** Appending to a collection while iterating over it is a compile error:
 
 ```
@@ -555,6 +622,20 @@ match shape {
 }
 ```
 
+**Nested field sub-patterns** (L2) — a field position in a struct arm can itself carry
+a pattern instead of just a binding name.  Supported sub-patterns: enum variant name,
+scalar literal, wildcard `_`, or or-pattern (`A | B`):
+
+```
+enum Status { Pending, Paid, Refunded }
+struct Order { status: Status, amount: integer }
+
+match order {
+    Order { status: Paid, amount } => charge(amount),
+    _                              => 0,
+}
+```
+
 **Scalar match:** the subject is an integer, text, float, boolean, or character. Arms
 are literal values, ranges, `null`, or `_`:
 
@@ -565,6 +646,18 @@ match score {
     80..90   => "B",
     1 | 2 | 3 => "low",
     _        => "other"
+}
+```
+
+**Tuple match** (T1.9) — a tuple subject can be matched with element-level patterns.
+Each element position may be a binding, a literal, or a wildcard:
+
+```
+pair = (3, "hello");
+match pair {
+    (0, _)    => "starts at zero",
+    (n, "hi") => "greeting at {n}",
+    (n, s)    => "got {n} and {s}",
 }
 ```
 
@@ -604,6 +697,56 @@ data = configuration as Program
 
 ---
 
+## Tuples
+
+Tuples are stack-allocated compound values containing two or more elements of
+potentially different types.  They are created with parenthesised expression lists:
+
+```loft
+pair = (42, "hello")              // type: (integer, text)
+triple = (1, 2.0, true)           // type: (integer, float, boolean)
+```
+
+**Type annotation:**
+```loft
+fn min_max(v: vector<integer>) -> (integer, integer) {
+    // ...
+}
+```
+
+**Element access** uses `.0`, `.1`, … (zero-based):
+```loft
+p = (10, 20);
+x = p.0           // 10
+y = p.1           // 20
+p.0 = 99          // element assignment
+```
+
+**LHS destructuring** unpacks all elements in one assignment:
+```loft
+(a, b) = pair(3, 7)
+(lo, hi) = min_max(nums)
+```
+
+**`not null` elements** — tuple element types accept the `not null` modifier;
+assigning a nullable value to such an element is a compile-time error:
+```loft
+p: (integer not null, integer not null) = (0, 0)
+```
+
+**Ref-param tuples** — passing a tuple by `&` reference lets the callee write back
+individual elements to the caller.  A `&tuple` parameter that is never written
+produces a warning (not an error), consistent with other ref-param checks.
+
+**Current limitations:**
+- Tuples may not be stored as struct fields.
+- Functions returning a tuple cannot yet be called in tail position from another
+  function (T1.8 open item).
+- Struct-reference (`DbRef`) elements inside tuples have known lifetime issues
+  after destructuring (T1.8c); prefer primitive and text elements.
+
+---
+
 ## Vectors
 
 ```
@@ -622,6 +765,29 @@ v[..end]                    // open-start slice from 0 to end (exclusive)
 ```
 
 To remove elements while iterating, use `v#remove` inside a filtered loop (see [For loops](#for-loops)).
+
+### Vector aggregates
+
+Reduction functions over `vector<integer>`:
+```loft
+sum_of(nums)            // sum of all elements
+min_of(nums)            // minimum element (null if empty)
+max_of(nums)            // maximum element (null if empty)
+```
+
+Predicate aggregates (short-circuit; work with any `vector<T>` and a predicate lambda):
+```loft
+any(nums, |x| { x > 0 })           // true if at least one element satisfies pred
+all(nums, |x| { x > 0 })           // true if every element satisfies pred
+count_if(nums, |x| { x > 0 })      // count of elements satisfying pred
+```
+
+Generic bounded versions (usable with any type satisfying `Ordered` or `Addable`):
+```loft
+min_of(scores)          // works if Score satisfies Ordered
+max_of(scores)          // works if Score satisfies Ordered
+sum(scores, zero)       // works if Score satisfies Addable; zero is the identity value
+```
 
 ---
 
@@ -792,6 +958,64 @@ two functions with the same name and different non-variant parameter types are a
 
 ---
 
+## Coroutines / generators
+
+A function declared with return type `iterator<T>` is a **generator**.  Instead of
+computing all values and returning a collection, it suspends at each `yield` and
+resumes on the next call to `next()`.
+
+```loft
+fn count_up(n: integer) -> iterator<integer> {
+    for i in 0..n {
+        yield i;
+    }
+}
+```
+
+**Consuming a generator with `for`:**
+```loft
+for x in count_up(5) {
+    println(x);           // prints 0 1 2 3 4
+}
+```
+
+**Consuming manually with `next()` and `exhausted()`:**
+```loft
+gen = count_up(3);
+v = next(gen);
+for i in 0..1000000 {
+    if exhausted(gen) { break; }
+    println(v);
+    v = next(gen);
+}
+```
+
+Or more idiomatically, just use `for x in gen()` — the for-loop handles `next()` and
+exhaustion automatically.
+
+`next(gen)` returns the next yielded value, or `null` when the generator is exhausted.
+`exhausted(gen)` returns `true` once the generator body has returned.
+
+**`yield from`** delegates to a sub-generator, forwarding each of its values:
+```loft
+fn flatten(outer: vector<vector<integer>>) -> iterator<integer> {
+    for inner in outer {
+        yield from each_of(inner);   // each_of is another generator
+    }
+}
+```
+
+**Text and struct parameters** survive across `yield`/resume: the serialisation
+layer copies text values and struct-ref cursors into the generator frame.
+
+**Nested helper calls** between yields are supported: the full call stack is saved
+and restored on each yield/resume cycle.
+
+**`e#remove` inside a generator for-loop** is a compile error — the iterator
+position cannot be adjusted across yield boundaries.
+
+---
+
 ## Generic functions
 
 A single type variable `<T>` lets you write a function body once for any type:
@@ -807,9 +1031,9 @@ fn pick_second<T>(a: T, b: T) -> T { _x = a; b }
 - At the call site, T is inferred from the first argument's concrete type.
 - The compiler creates a specialised copy per concrete type automatically.
 
-**Allowed on T:** assign, return, store in variables.
+**Allowed on T (unconstrained):** assign, return, store in variables.
 
-**Disallowed on T (compile-time errors):**
+**Disallowed on T without a bound (compile-time errors):**
 - Arithmetic: `x + y` → *"generic type T: operator '+' requires a concrete type"*
 - Field access: `x.field` → *"generic type T: field access requires a concrete type"*
 - Method calls: `x.method()` → *"generic type T: method call requires a concrete type"*
@@ -820,6 +1044,95 @@ identity(42)      // T = integer → returns 42
 identity("hi")    // T = text → returns "hi"
 ```
 
+To allow operations on `T`, add an interface bound — see the next section.
+
+---
+
+## Interfaces and bounded generics
+
+Interfaces declare a set of operations that a type must support.  A generic function
+can then require `<T: InterfaceName>` to use those operations on `T`.
+
+### Declaring an interface
+
+```loft
+interface Ordered {
+    fn OpLt(self: Self, other: Self) -> boolean
+    fn OpGt(self: Self, other: Self) -> boolean
+}
+```
+
+`Self` inside an interface body refers to the concrete satisfying type.
+
+### Satisfying an interface
+
+A type satisfies an interface **implicitly** — no declaration is needed.  It just
+needs the required methods or operators:
+
+```loft
+struct Score { value: integer }
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
+
+// Score now satisfies Ordered automatically.
+```
+
+Built-in types (`integer`, `long`, `float`, `text`, …) satisfy the standard
+interfaces automatically.
+
+### Bounded generic functions
+
+```loft
+fn max_of<T: Ordered>(v: vector<T>) -> T {
+    result = v[0];
+    for item in v {
+        if result < item { result = item; }
+    }
+    result
+}
+
+best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);  // Score{value:7}
+best_int = max_of([4, 1, 9, 2]);    // 9
+```
+
+Multiple bounds use `+`: `<T: Ordered + Printable>`.
+
+### Standard library interfaces
+
+Declared in `default/01_code.loft`:
+
+| Interface   | Required methods                                      | Example types              |
+|-------------|-------------------------------------------------------|----------------------------|
+| `Ordered`   | `OpLt(Self, Self) -> boolean`, `OpGt(...)`            | `integer`, `long`, `float`, `text` |
+| `Equatable` | `OpEq(Self, Self) -> boolean`, `OpNe(...)`            | all primitives             |
+| `Addable`   | `OpAdd(Self, Self) -> Self`                           | `integer`, `long`, `float` |
+| `Scalable`  | `scale(Self, integer) -> Self`                        | custom types               |
+| `Numeric`   | `OpMul`, `OpSub` in addition to `Addable`             | `integer`, `long`, `float` |
+| `Printable` | `to_text(Self) -> text`                               | all types with `to_text`   |
+
+Generic stdlib functions using these bounds:
+```loft
+min_of<T: Ordered>(v: vector<T>) -> T
+max_of<T: Ordered>(v: vector<T>) -> T
+sum<T: Addable>(v: vector<T>, zero: T) -> T
+```
+
+### Diagnostics
+
+When a type is used as a bounded generic but does not satisfy the interface, the
+compiler reports which method is missing and what its expected signature is:
+```
+Score does not satisfy Ordered: missing fn OpLt(Score, Score) -> boolean
+```
+
+### Design notes
+
+- **Static dispatch only** — interfaces are generic constraints, not types.
+  `x: Ordered` as a variable type is a compile error; there are no vtables.
+- **Single bound per type parameter** — consistent with the single `<T>` restriction.
+- **Op-sugar** — inside an interface body, `op < (self: Self, other: Self) -> boolean`
+  is shorthand for `fn OpLt(self: Self, other: Self) -> boolean`.
+
 ---
 
 ## File structure
@@ -829,6 +1142,7 @@ A loft file may contain (in any order):
 - `pub` / non-`pub` function definitions
 - Struct definitions
 - Enum definitions
+- Interface definitions
 - Type aliases
 - Top-level constants
 
@@ -872,8 +1186,11 @@ fn main() { ... }
 ```
 file         ::= { use_decl } { top_level_decl }
 use_decl     ::= 'use' identifier ';'
-top_level    ::= [ 'pub' ] ( fn_decl | struct_decl | enum_decl | type_decl | constant )
-fn_decl      ::= 'fn' ident '(' args ')' [ '->' type ] ( ';' | block )
+top_level    ::= [ 'pub' ] ( fn_decl | struct_decl | enum_decl | type_decl | constant | iface_decl )
+fn_decl      ::= 'fn' ident [ '<' T ':' iface_list '>' ] '(' args ')' [ '->' type ] ( ';' | block )
+iface_decl   ::= 'interface' CamelIdent '{' { iface_method } '}'
+iface_method ::= 'fn' ident '(' iface_args ')' [ '->' type ]
+iface_list   ::= CamelIdent { '+' CamelIdent }
 struct_decl  ::= 'struct' CamelIdent '{' field { ',' field } [ ',' ] '}'
 enum_decl    ::= 'enum' CamelIdent '{' variant { ',' variant } '}'
 variant      ::= CamelIdent [ '{' field { ',' field } '}' ]
@@ -881,22 +1198,38 @@ field        ::= ident ':' type { field_mod }
 field_mod    ::= 'limit' '(' expr ',' expr ')'
                | 'not' 'null'
                | 'default' '(' expr ')' | '=' expr
+               | 'init' '(' expr ')'
+               | 'computed' '(' expr ')'
                | 'virtual' '(' expr ')'
 type_decl    ::= 'type' CamelIdent '=' type ';'
 constant     ::= UPPER_IDENT '=' expr ';'
+type         ::= primitive_type | CamelIdent | 'fn' '(' types ')' '->' type
+               | 'vector' '<' type '>'
+               | 'hash' '<' type '[' fields ']' '>'
+               | 'iterator' '<' type '>'
+               | '(' type ',' type { ',' type } ')'   // tuple type
 block        ::= '{' { stmt } '}'
 stmt         ::= expr [ ';' ]
-expr         ::= for_expr | match_expr | 'continue' | 'break' | 'return' [ expr ]
+expr         ::= for_expr | match_expr | 'yield' expr | 'yield' 'from' expr
+               | 'continue' | 'break' | 'return' [ expr ]
                | assignment
 match_expr   ::= 'match' expr '{' match_arm { ',' match_arm } '}'
 match_arm    ::= pattern { '|' pattern } [ 'if' expr ] '=>' expr
-pattern      ::= '_' | 'null' | literal | range | CamelIdent [ '{' field_bind '}' ]
+pattern      ::= '_' | 'null' | literal | range
+               | CamelIdent [ '{' field_bind { ',' field_bind } '}' ]
+               | '(' elem_pat { ',' elem_pat } ')'        // tuple pattern
+field_bind   ::= ident [ ':' sub_pattern ]                // L2 sub-pattern
+sub_pattern  ::= '_' | literal | CamelIdent { '|' CamelIdent }
+elem_pat     ::= '_' | ident | literal
 assignment   ::= operators [ ( '=' | '+=' | '-=' | '*=' | '/=' | '%=' ) operators ]
+               | '(' ident { ',' ident } ')' '=' operators   // tuple destructuring
 operators    ::= single { '.' ident [ '(' args ')' ] | '[' index ']' | '#' ident }
                { op operators }
-single       ::= '!' single | '-' single | '(' expr ')' | block | '[' vector_lit ']'
+single       ::= '!' single | '-' single | '(' expr { ',' expr } ')' | block
+               | '[' vector_lit ']'
                | 'if' expr block [ 'else' ( single | block ) ]
                | 'for' ident 'in' range_expr [ 'if' expr ] block
+               | 'for' ident 'in' ident '#' 'fields' block   // field iteration
                | CamelIdent [ '{' field_init { ',' field_init } '}' ]
                | ident | integer | long | float | single | string | character
                | 'true' | 'false' | 'null'
@@ -1012,6 +1345,28 @@ if [ $? -ne 0 ] || echo "$out" | grep -q "^Error:\|panicked"; then
     echo "FAILED: $out"
 fi
 ```
+
+### Tuples: struct-reference elements and function return
+
+Tuple elements of struct-reference type (`DbRef`) have known lifetime issues after
+destructuring; avoid them until T1.8 is resolved.  Functions that return a tuple
+cannot yet be called in tail position from another tuple-returning function.
+
+### Closures: no collection storage
+
+A capturing lambda (`fn(y: integer) -> integer { x + y }`) cannot be stored in a
+`vector<fn(...)>` or as a struct field (C31 — open issue).  Pass closures as
+function arguments or return values instead.
+
+### Coroutines: `e#remove` not available
+
+`v#remove` is not available inside a generator for-loop body.  Use a post-processing
+step or collect into a vector first.
+
+### Integer null sentinel
+
+Arithmetic that produces exactly `i32::MIN` (-2 147 483 648) is indistinguishable
+from `null`.  Use `long` or mark fields `not null` when the full 32-bit range is needed.
 
 ---
 
