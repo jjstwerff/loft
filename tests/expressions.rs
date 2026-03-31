@@ -1645,3 +1645,79 @@ fn sorted_nullable_lookup() {
     .expr("lookup_val(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}]}, 2)")
     .result(Value::Int(20));
 }
+
+// ── A8.5 — Reverse range iteration ──────────────────────────────────────────
+
+/// A8.5: `rev(col[lo..hi])` iterates a range in reverse key order.
+#[test]
+#[ignore = "A8.5: reverse range on sorted — not yet implemented"]
+fn sorted_reverse_range() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn rev_sum(db: Db) -> integer {
+           result = 0;
+           for e in rev(db.map[1..3]) { result = result * 100 + e.val };
+           result
+         }"
+    )
+    .expr("rev_sum(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]})")
+    .result(Value::Int(2010));
+}
+
+// ── A8.3 — Partial-key match iterator ───────────────────────────────────────
+
+/// A8.3: `idx[k1]` on a multi-key index iterates all elements matching k1.
+#[test]
+#[ignore = "A8.3: partial-key match on index — not yet implemented"]
+fn index_partial_key_match() {
+    code!(
+        "struct Elm { nr: integer, key: text, val: integer }
+         struct Db { idx: index<Elm[nr, -key]> }
+         fn sum_by_nr(db: Db, n: integer) -> integer {
+           total = 0;
+           for e in db.idx[n] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_by_nr(Db{idx:[Elm{nr:1,key:\"a\",val:10}, Elm{nr:1,key:\"b\",val:20}, Elm{nr:2,key:\"c\",val:30}]}, 1)")
+    .result(Value::Int(30));
+}
+
+// ── A8.1-idx — Open-ended bounds on index ───────────────────────────────────
+
+/// A8.1-idx: open-ended bounds work on index collections too.
+#[test]
+#[ignore = "A8.1-idx: open-ended on index — not yet verified"]
+fn index_open_end_range() {
+    code!(
+        "struct Elm { nr: integer, val: integer }
+         struct Db { idx: index<Elm[nr]> }
+         fn sum_from(db: Db, lo: integer) -> integer {
+           total = 0;
+           for e in db.idx[lo..] { total = total + e.val };
+           total
+         }"
+    )
+    .expr("sum_from(Db{idx:[Elm{nr:1,val:10}, Elm{nr:2,val:20}, Elm{nr:3,val:30}]}, 2)")
+    .result(Value::Int(50));
+}
+
+// ── A8.5-idx — Reverse range on index ───────────────────────────────────────
+
+/// A8.5-idx: `rev(idx[lo..hi])` works on index collections.
+#[test]
+#[ignore = "A8.5-idx: reverse range on index — not yet verified"]
+fn index_reverse_range() {
+    code!(
+        "struct Elm { nr: integer, val: integer }
+         struct Db { idx: index<Elm[nr]> }
+         fn rev_sum(db: Db) -> integer {
+           result = 0;
+           for e in rev(db.idx[1..3]) { result = result * 100 + e.val };
+           result
+         }"
+    )
+    .expr("rev_sum(Db{idx:[Elm{nr:1,val:10}, Elm{nr:2,val:20}, Elm{nr:3,val:30}]})")
+    .result(Value::Int(2010));
+}
