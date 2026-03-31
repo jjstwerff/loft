@@ -27,8 +27,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | W1.18-4   | ↳ `parallel.mjs` — `LoftThreadPool` spawn/terminate       | S  | ✓      | W1.18-3      | tests/wasm/parallel.mjs       |
 | W1.18-5   | ↳ `harness.mjs` — `initThreaded()` + `@threaded` routing  | S  | ✓      | W1.18-4      | tests/wasm/harness.mjs        |
 | W1.18-6   | ↳ Remove `19-threading.loft` from `WASM_SKIP`             | S  | ✓      | W1.18-5      | tests/wrap.rs                 |
-| CO1.7     | Coroutines: yield from inside for-loops                   | M  | ✓      | CO1.1–CO1.6  | PLANNING.md § CO1.7           |
-| CO1.8     | ↳ Multi-text parameters + nested-block safety             | S  | ✓      | CO1.3d       | PLANNING.md § CO1.8           |
 | A8        | Slicing & comprehension on `sorted` / `index`             | M  | ✓      |              | SORTED_SLICE.md               |
 | A8.1      | ↳ Open-ended bounds (`col[lo..]`, `col[..hi]`, `col[..]`) | S  | ✓      |              | fields.rs, codegen_runtime.rs |
 | A8.2      | ↳ Range slicing on `sorted` (`sorted[lo..hi]`)            | XS | ✓      | A8.1         | fields.rs                     |
@@ -44,7 +42,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | A14.5     | ↳ Compiler call-graph analysis + `M` computation          | M  | ✓      |              | LIGHT_PAR.md § L5             |
 | A14.6     | ↳ Parser: `par_light(...)` clause                         | S  | ✓      | A14.4, A14.5 | LIGHT_PAR.md § L6             |
 | A14.7     | ↳ Performance benchmark                                   | S  | ✓      | A14.6        | LIGHT_PAR.md § L7             |
-| CO1.8     | ↳ Multi-text parameters + nested-block safety             | S  | ✓      | CO1.3d       | PLANNING.md § CO1.8           |
 
 ---
 

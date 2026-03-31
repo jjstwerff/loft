@@ -173,6 +173,17 @@ All notable changes to the loft language and interpreter.
   Tests: `coroutine_yield_from_text_loop`, `coroutine_character_iterator_exhausts`,
   `coroutine_yield_from_struct_vector_loop`, `coroutine_yield_from_field_text_loop`.
 
+- **CO1.8 complete: multi-text coroutine safety** — Verified all three CO1.8 sub-items
+  pass without code changes: (a) multiple text parameters serialised correctly,
+  (b) text locals after first yield survive resume, (c) text locals in nested blocks
+  freed correctly. Tests: `coroutine_multi_text_params`, `coroutine_text_local_after_yield`,
+  `coroutine_text_local_nested_block`.
+
+- **fix-tvscope: clear diagnostic for type variable name clash** — Defining `struct T`
+  when `T` is a generic type variable (from stdlib generics) now produces
+  `"'T' is reserved as a generic type variable"` instead of a confusing
+  "Redefined struct" message or a runtime crash.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
