@@ -327,6 +327,65 @@ impl Stores {
         })
     }
 
+    /// A14.3: produce a light-worker view — main stores borrowed read-only,
+    /// pool stores provide allocation capacity.
+    ///
+    /// # Safety
+    /// `pool_slice` must remain valid and exclusively owned by this worker.
+    /// The original `Stores` must outlive the worker (guaranteed by `thread::scope`).
+    pub unsafe fn clone_for_light_worker(&self, pool_slice: &mut [Store]) -> WorkerStores {
+        let mut allocations: Vec<Store> = self.allocations[..self.max as usize]
+            .iter()
+            .map(|s| {
+                if s.free {
+                    Store::new_freed_sentinel()
+                } else {
+                    unsafe { s.borrow_locked_for_light_worker() }
+                }
+            })
+            .collect();
+        // Append pool stores as free slots for the worker's own allocations.
+        for store in pool_slice.iter_mut() {
+            store.init();
+            store.free = true;
+            // Take the store's buffer into the worker via a borrow with owned semantics.
+            // The pool store keeps its buffer; after the scope the worker's stores are dropped
+            // (borrowed flag prevents double-free for main stores; pool stores are NOT borrowed).
+            allocations.push(Store::new(store.byte_capacity() as u32 / 8));
+        }
+        // Build free_bits: main-thread freed slots + all pool slots.
+        let mut free_bits: Vec<u64> = Vec::new();
+        for (i, s) in allocations.iter().enumerate() {
+            if s.free {
+                let word = i / 64;
+                let bit = i % 64;
+                while free_bits.len() <= word {
+                    free_bits.push(0);
+                }
+                free_bits[word] |= 1u64 << bit;
+            }
+        }
+        WorkerStores::new(Stores {
+            types: self.types.clone(),
+            names: self.names.clone(),
+            allocations,
+            files: Vec::new(),
+            max: self.max + pool_slice.len() as u16,
+            free_bits,
+            scratch: Vec::new(),
+            last_parse_errors: Vec::new(),
+            parallel_ctx: None,
+            logger: self.logger.clone(),
+            had_fatal: false,
+            #[cfg(not(feature = "wasm"))]
+            start_time: self.start_time,
+            #[cfg(feature = "wasm")]
+            start_time_ms: self.start_time_ms,
+            call_stack_snapshot: Vec::new(),
+            closure_map: std::collections::HashMap::new(),
+        })
+    }
+
     #[must_use]
     pub fn store_nr(&self, nr: u16) -> &Store {
         &self.allocations[nr as usize]

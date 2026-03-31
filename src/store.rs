@@ -55,6 +55,8 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
+    /// A14.1: when true, this Store borrows another's buffer — `Drop` must NOT dealloc.
+    borrowed: bool,
 }
 
 impl Debug for Store {
@@ -71,6 +73,10 @@ impl PartialEq for Store {
 
 impl Drop for Store {
     fn drop(&mut self) {
+        // A14.1: borrowed stores share another Store's buffer — do not free.
+        if self.borrowed {
+            return;
+        }
         #[cfg(feature = "mmap")]
         if self.file.is_some() {
             return;
@@ -99,6 +105,7 @@ impl Store {
             file: None,
             free: true,
             locked: false,
+            borrowed: false,
             free_root: 0,
             generation: 0,
         };
@@ -133,6 +140,7 @@ impl Store {
             locked: false,
             free_root: 0,
             generation: 0,
+            borrowed: false,
         };
         if init {
             store.init();
@@ -426,6 +434,7 @@ impl Store {
             locked: true,
             free_root: 0, // workers never claim/delete; no free tree needed
             generation: self.generation,
+            borrowed: false,
         }
     }
 
@@ -446,7 +455,38 @@ impl Store {
             locked: true,
             free_root: 0,
             generation: self.generation,
+            borrowed: false,
         }
+    }
+
+    /// A14.1: create a read-only view that shares the original's buffer pointer.
+    /// The borrow is `locked = true` (writes panic/discard) and `borrowed = true`
+    /// (Drop does NOT free the buffer — the main thread owns it).
+    ///
+    /// # Safety
+    /// The original `Store` must outlive all threads that hold the borrow.
+    /// Guaranteed by `thread::scope` in `run_parallel_light`.
+    pub unsafe fn borrow_locked_for_light_worker(&self) -> Store {
+        Store {
+            ptr: self.ptr,
+            claims: HashSet::new(),
+            size: self.size,
+            #[cfg(feature = "mmap")]
+            file: None,
+            free: false,
+            locked: true,
+            free_root: self.free_root,
+            generation: self.generation,
+            borrowed: true,
+        }
+    }
+
+    /// A14.1: create a sentinel for a freed main-thread slot.
+    /// Tiny allocation, no data — just a placeholder so the worker's slot indices align.
+    pub fn new_freed_sentinel() -> Store {
+        let mut s = Store::new(4);
+        s.free = true;
+        s
     }
 
     // ---- LLRB free-space tree ------------------------------------------------
@@ -1216,5 +1256,44 @@ mod tests {
         let rec = store.claim(8);
         store.lock();
         let _: &mut u8 = store.addr_mut::<u8>(rec, 4);
+    }
+
+    /// A14.1: borrowed store reads return the same data as the original.
+    #[test]
+    fn borrow_locked_reads_original_data() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let rec = store.claim(4);
+        *store.addr_mut::<i32>(rec, 0) = 42;
+        let borrow = unsafe { store.borrow_locked_for_light_worker() };
+        assert_eq!(*borrow.addr::<i32>(rec, 0), 42);
+        assert!(borrow.locked);
+        assert!(borrow.borrowed);
+        // Drop of borrow must NOT free the original's buffer.
+        drop(borrow);
+        assert_eq!(
+            *store.addr::<i32>(rec, 0),
+            42,
+            "original intact after borrow dropped"
+        );
+    }
+
+    /// A14.1: writing to a borrowed store panics.
+    #[test]
+    #[should_panic(expected = "Write to locked store")]
+    fn borrow_locked_write_panics() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let rec = store.claim(4);
+        let mut borrow = unsafe { store.borrow_locked_for_light_worker() };
+        // This must panic because the borrow is locked.
+        let _: &mut u8 = borrow.addr_mut::<u8>(rec, 0);
+    }
+
+    /// A14.1: freed sentinel is a minimal store.
+    #[test]
+    fn freed_sentinel_is_free() {
+        let sentinel = Store::new_freed_sentinel();
+        assert!(sentinel.free);
     }
 }
