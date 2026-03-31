@@ -2568,24 +2568,26 @@ affects:
 - C35/C36/C37: generic functions returning struct types from vector elements
 - Any function returning a struct reference obtained via `OpGetVector`
 
-**Fix:** At the return site, when the return type is `Type::Reference` and the
-value was obtained from a vector element, emit `OpCopyRecord` to deep-copy the
-struct into an independent store.  This mirrors the T1.8c fix for tuple
-destructuring.
+**Root cause:** The callee's return type has `Type::Reference(d, dep)` with
+non-empty dep (borrowed from parameter).  The callee's scope analysis skips
+freeing it.  But the caller receives `Type::Reference(d, [])` with NO dep
+info → treats it as owned → frees it → double-free with the source vector.
 
-The detection: in `generate_set` or `gen_return`, when assigning/returning a
-Reference value that came from an `OpGetVector` result, the DbRef points inside
-the vector's store (not an independent store).  The codegen should check if the
-source is a vector element and, if so, allocate a new store and copy.
+**Fix (in `scopes.rs free_vars`):** When `is_return == true` and the return
+variable has `Type::Reference(d, dep)` with `!dep.is_empty()`:
+1. Create a work variable `__ret_copy` of type `Type::Reference(d, [])` (owned)
+2. Emit `Set(__ret_copy, Null)` → allocates an independent store
+3. Emit `OpCopyRecord(ret_var, __ret_copy, tp)` → deep-copies the struct
+4. Return `Value::Return(Value::Var(__ret_copy))` instead of `Value::Var(ret_var)`
 
-Alternatively: in `scopes::check`, when the return variable's value chain
-traces back to an `OpGetVector`, insert an `OpCopyRecord` before the return.
+The returned copy is OWNED by the caller.  The original borrowed ref stays
+in `ret_var` and is not freed (dep is non-empty).  Mirrors T1.8c tuple fix.
 
-**Guard:** `debug_assert!` in `fn_return` or `copy_result` that the returned
-DbRef's store is NOT the same as any input parameter's store (catches borrowed
-returns).
+**Guard:** `debug_assert!` in `copy_result` that the returned DbRef is not
+in the same store as any input parameter.  `LOFT_LOG=scope_debug` trace when
+a borrowed return is deep-copied.
 
-**Files:** `src/state/codegen.rs` (gen_return or generate_set), `src/scopes.rs`
+**Files:** `src/scopes.rs` (free_vars), `src/variables/mod.rs` (work variable)
 **Tests:** C35/C36/C37 tests (currently `#[ignore]` for debug assertion)
 **Effort:** Medium
 **Target:** 0.8.3
