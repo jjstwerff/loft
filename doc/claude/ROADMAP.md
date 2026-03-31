@@ -44,7 +44,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 | A14.5     | ↳ Compiler call-graph analysis + `M` computation          | M  | ✓      |              | LIGHT_PAR.md § L5             |
 | A14.6     | ↳ Parser: `par_light(...)` clause                         | S  | ✓      | A14.4, A14.5 | LIGHT_PAR.md § L6             |
 | A14.7     | ↳ Performance benchmark                                   | S  | ✓      | A14.6        | LIGHT_PAR.md § L7             |
-| I9        | Interfaces: remaining stdlib interface (`Printable`) — blocked by text-return hidden param | S | ✓ | I9 | default/01_code.loft |
+| CO1.7     | Coroutines: yield from text loops (range + vector verified) | M  | ✓ | CO1.1–CO1.6  | src/state/mod.rs              |
 
 ---
 

@@ -153,6 +153,16 @@ All notable changes to the loft language and interpreter.
     the identity element. Integer-specific `sum_of(v)` kept for backward compatibility.
     Test: `stdlib_sum_generic`.
 
+- **Text-returning interface methods, Printable, coroutine yield-from-loop** (I9-text, I9-Pr, CO1.7):
+  - I9-text: T-stub creation adds hidden `__work_1: RefVar(Text)` parameter for
+    text-returning interface methods. Matches the hidden param from `text_return` so
+    `re_resolve_call` finds the correct argument count.
+    Test: `generic_text_returning_method`.
+  - I9-Pr: `pub interface Printable { fn to_text(self: Self) -> text }` added to stdlib.
+    Test: `stdlib_printable_interface`.
+  - CO1.7 (partial): coroutine yield from range-based and vector for-loops verified.
+    Tests: `coroutine_yield_from_range_loop`, `coroutine_yield_from_vector_loop`.
+
 ### Coroutine safety documentation
 
 - **Coroutine text arg `Str` serialised at create; pointer-patched on resume** (S25.1, S25.2) —
