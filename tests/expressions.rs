@@ -1210,3 +1210,82 @@ fn stdlib_numeric_interface() {
         .expr("square(6)")
         .result(Value::Int(36));
 }
+
+// ── I9-var — Intermediate variables in generic bodies ───────────────────────
+
+/// I9-var: a generic function body can assign a vector element to a local
+/// variable and return it.  Previously, ref_return promoted the local to a
+/// hidden parameter (because T looked like a Reference), causing a codegen crash
+/// when T was specialized to a value type.
+#[test]
+#[ignore = "I9-var: intermediate variables in generic bodies — not yet implemented"]
+fn generic_intermediate_variable() {
+    code!(
+        "fn first_of<T: Ordered>(v: vector<T>) -> T {
+           result = v[0]; result
+         }"
+    )
+    .expr("first_of([7, 3, 9])")
+    .result(Value::Int(7));
+}
+
+/// I9-var: a for-loop accumulator pattern inside a bounded-generic body.
+#[test]
+#[ignore = "I9-var: for-loop accumulator — not yet implemented"]
+fn generic_for_loop_accumulator() {
+    code!(
+        "fn find_min<T: Ordered>(v: vector<T>) -> T {
+           result = v[0];
+           for i in 1..v.len() { if v[i] < result { result = v[i] } };
+           result
+         }"
+    )
+    .expr("find_min([7, 3, 9, 1, 5])")
+    .result(Value::Int(1));
+}
+
+// ── I9.1 — Generic min_of/max_of ───────────────────────────────────────────
+
+/// I9.1: a generic `find_max` using a for-loop accumulator on `vector<T>`.
+#[test]
+#[ignore = "I9.1: generic max on vector — not yet implemented"]
+fn generic_max_on_integer_vector() {
+    code!(
+        "fn find_max<T: Ordered>(v: vector<T>) -> T {
+           result = v[0];
+           for i in 1..v.len() { if result < v[i] { result = v[i] } };
+           result
+         }"
+    )
+    .expr("find_max([3, 9, 1, 7, 5])")
+    .result(Value::Int(9));
+}
+
+// ── I9.2 — Generic sum with identity ────────────────────────────────────────
+
+/// I9.2: a generic `vec_sum` with caller-supplied identity element, using
+/// a for-loop accumulator on `vector<T>`.
+#[test]
+#[ignore = "I9.2: generic sum with identity — not yet implemented"]
+fn generic_sum_with_identity() {
+    code!(
+        "fn vec_sum<T: Addable>(v: vector<T>, init: T) -> T {
+           result = init;
+           for i in 0..v.len() { result = result + v[i] };
+           result
+         }"
+    )
+    .expr("vec_sum([10, 20, 12], 0)")
+    .result(Value::Int(42));
+}
+
+// ── I9-Sc — Scalable interface ──────────────────────────────────────────────
+
+/// I9-Sc: `Scalable` interface with `op * (self: Self, factor: integer) -> Self`.
+#[test]
+#[ignore = "I9-Sc: Scalable interface — not yet implemented"]
+fn stdlib_scalable_interface() {
+    code!("fn double<T: Scalable>(v: T) -> T { v * 2 }")
+        .expr("double(21)")
+        .result(Value::Int(42));
+}
