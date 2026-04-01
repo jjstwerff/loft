@@ -149,18 +149,15 @@ Only text reuse saves stack space (24 bytes per reuse).
 
 ---
 
-## C46 — Zone-2 slot reuse: top-of-stack restriction limits effectiveness
+## C46 — Zone-2 text reuse: top-of-stack restriction removed *(fixed)*
 
-The top-of-stack filter (`slot + v_size == *tos`) means only the LAST-placed
-zone-2 text variable can be reused.  If two text variables die sequentially
-but a non-text variable is placed between them, neither dead text slot is
-reusable.
+**Fixed.** The top-of-stack filter was removed; the full conflict scan in
+`find_reusable_zone2_slot` is sufficient to prevent overlaps.  Non-consecutive
+text reuse now works (e.g., text, reference, text — the second text reuses
+the first's slot).
 
-**Impact:** reuse only occurs when consecutive text variables have
-non-overlapping lifetimes.  Interleaved text/non-text variables don't
-benefit.
-**Fix path:** sort zone-2 text variables by `first_def` before placement
-(like zone-1 does), or maintain a dead-slot free list.
+**Test:** `zone2_text_reuse_non_consecutive` (unit).
+**Fixed by:** C46 — removed `.filter(|&slot| slot + v_size == *tos)`.
 
 ---
 

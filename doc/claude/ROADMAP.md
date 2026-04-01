@@ -16,14 +16,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.3 — Release polish
-
-| ID        | Title                                                     | E  | Design | Depends on   | Source                        |
-|-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| C46       | Zone-2 text reuse: remove top-of-stack restriction        | S  | —      |              | CAVEATS.md § C46              |
-
----
-
 ## 0.8.4 — HTTP client
 
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
