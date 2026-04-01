@@ -181,10 +181,22 @@ fn place_large_and_recurse(
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
                 if v_size > 8 {
-                    let v_slot = *tos;
+                    // C43.2: try reusing the top-of-stack dead slot.
+                    // Only reuse the slot immediately below *tos to avoid
+                    // holes that interact with zone-1 or future zone-2 vars.
+                    let reuse_slot = find_reusable_zone2_slot(function, v, scope)
+                        .filter(|&slot| slot + v_size == *tos);
+                    let (v_slot, reused) = if let Some(slot) = reuse_slot {
+                        (slot, true)
+                    } else {
+                        let s = *tos;
+                        *tos += v_size;
+                        (s, false)
+                    };
                     if function.logging {
+                        let tag = if reused { "zone2-reuse" } else { "zone2" };
                         eprintln!(
-                            "[assign_slots]   zone2  '{}' scope={scope} size={v_size}B → slot={v_slot}  \
+                            "[assign_slots]   {tag}  '{}' scope={scope} size={v_size}B → slot={v_slot}  \
                              inner={}",
                             function.variables[v].name,
                             match inner.as_ref() {
@@ -196,7 +208,6 @@ fn place_large_and_recurse(
                     }
                     function.variables[v].stack_pos = v_slot;
                     function.variables[v].pre_assigned_pos = v_slot;
-                    *tos += v_size;
                     // Block-return pattern: Set(v, Block([..., Var(inner_result)])).
                     // For non-Text types, generate_block is called with `to = v.stack_pos`,
                     // so at runtime the block's frame starts at v's slot (v is not yet live).
@@ -268,8 +279,14 @@ fn place_large_and_recurse(
 /// Returns `Some(slot)` if a conflict-free candidate exists, `None` otherwise.
 /// Guards: same size, same type discriminant, dead (`last_use` < `first_def`),
 /// no spatial+temporal overlap with any other assigned variable.
-#[allow(dead_code)] // C43.2 will wire this in
 fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
+    // C43: only reuse Text-to-Text slots.  Other zone-2 types (Reference, Vector)
+    // have complex interactions with IR-walk-order placement that cause partial
+    // overlaps.  Text is safe because gen_set_first_text emits OpText before the
+    // block runs, so there's no block-return frame-sharing to worry about.
+    if !matches!(function.variables[v].type_def, Type::Text(_)) {
+        return None;
+    }
     let v_size = size(&function.variables[v].type_def, &Context::Variable);
     let v_first = function.variables[v].first_def;
     let v_last = function.variables[v].last_use;
@@ -930,7 +947,6 @@ mod tests {
     /// Before A12, `can_reuse = var_size <= 8` prevented Text (24 B) from
     /// reusing dead same-type slots.
     #[test]
-    #[ignore = "A12: can_reuse not yet extended to Text (assign_slots)"]
     fn assign_slots_sequential_text_reuse() {
         let text_tp = Type::Text(Vec::new());
         let mut f = Function::new("f", "test");
