@@ -435,10 +435,10 @@ assert(shift(5) == 15, "shift");
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
-// Cross-scope: returning a capturing lambda is not yet supported:
-// fn make_adder(n: integer) - fn(integer) - integer {
-//     fn(x: integer) - integer { x + n }  // A5.6: planned
-// }
+// Cross-scope: returning a capturing lambda works:
+fn make_adder(n: integer) -> fn(integer) -> integer {
+    fn(x: integer) -> integer { x + n }
+}
 ```
 
 ```rust
@@ -460,7 +460,7 @@ fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
 
 Upside Same-scope capture works for integers, text, and mutable variables — no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, no lifetime annotations. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
 
-Downside Capturing lambdas can only be called directly by name in the same scope — passing them to map/filter/reduce or returning them from a function is not yet supported (planned as A5.6). Rust's Fn/FnMut/FnOnce traits give full flexibility: closures can be stored in structs, returned from functions, and passed freely across scopes.
+Downside Capture is always by value (like Rust move). Rust's Fn/FnMut/FnOnce traits give more flexibility: closures can borrow by reference, be stored in structs, and passed freely across scopes. Loft captures at definition time only — no borrow-based captures.
 
 === Generic functions — pass-through only, no trait bounds
 
@@ -766,8 +766,9 @@ assert(shift(5) == 15, "shift");
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
-// Passing a capturing lambda to map/filter is not yet supported:
-// shifted = map(nums, |x| { x + offset });  // workaround: pass offset explicitly
+// Capturing lambda with map:
+offset = 10;
+shifted = map(nums, fn(x: integer) -> integer { x + offset });
 ```
 
 ```python
@@ -785,7 +786,7 @@ shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> n
 
 Upside Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
 
-Downside Capturing lambdas can only be called directly by name in the same scope — passing them to map/filter/reduce or returning them from a function is not yet supported. Any extra context must be embedded in the element struct or passed as an explicit parameter. Python's lambda and nested def close over surrounding variables naturally in any context, and list comprehensions (\[x + offset for x in v\]) are shorter than the loft workaround.
+Downside Capture is by value at definition time — later mutations to the original variable do not affect the lambda (and vice versa). Python's lambda and nested def close over variables by reference, so mutations are shared. Python's list comprehensions (\[x + offset for x in v\]) are shorter than map(v, fn(x) { x + offset }).
 
 === No exception handling — file errors use FileResult
 
@@ -5908,9 +5909,9 @@ Loft is under active development. Everything documented on the language pages wo
 
 === In progress — 0.8.3
 
-==== Cross-scope closures (A5.6)
+==== Cross-scope closures (A5.6) — completed
 
-Same-scope capture (integers, text, mutable) works. One restriction remains: a capturing lambda returned from a function and called from a different scope does not yet work. The fix requires extending `Type::Function` to carry the closure DbRef alongside the definition number.
+Cross-scope closures now work: a function can return a capturing lambda and the caller can invoke it. The closure record (captured values) travels with the fn-ref as a 16-byte slot. Capture is by value at definition time.
 
 ==== WASM threading (W1.18)
 

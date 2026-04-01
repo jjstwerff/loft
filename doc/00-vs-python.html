@@ -245,8 +245,9 @@ shift = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.htm
 doubled = <span class="fn-call">map</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
 evens   = <span class="fn-call">filter</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>], |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
 
-<span class="cm">// Passing a capturing lambda to map/filter is not yet supported:</span>
-<span class="cm">// shifted = map(nums, |x| { x + offset });  // workaround: pass offset explicitly</span></code></pre>
+<span class="cm">// Capturing lambda with map:</span>
+offset = <span class="nm">10</span>;
+shifted = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + offset });</code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
@@ -264,7 +265,7 @@ shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> n
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported. Named function references (<code>fn name</code>) are compile-checked. Higher-order functions (<code>map</code>, <code>filter</code>, <code>reduce</code>) accept both lambdas and fn-refs.</p>
-<p class="down"><strong>Downside</strong> Capturing lambdas can only be called directly by name in the same scope — passing them to <code>map</code>/<code>filter</code>/<code>reduce</code> or returning them from a function is not yet supported. Any extra context must be embedded in the element struct or passed as an explicit parameter. Python's <code>lambda</code> and nested <code>def</code> close over surrounding variables naturally in any context, and list comprehensions (<code>[x + offset for x in v]</code>) are shorter than the loft workaround.</p>
+<p class="down"><strong>Downside</strong> Capture is by value at definition time — later mutations to the original variable do not affect the lambda (and vice versa). Python's <code>lambda</code> and nested <code>def</code> close over variables by reference, so mutations are shared. Python's list comprehensions (<code>[x + offset for x in v]</code>) are shorter than <code>map(v, fn(x) { x + offset })</code>.</p>
 </div>
 
 <h2 id="exceptions">9. No exception handling — file errors use <code>FileResult</code></h2>

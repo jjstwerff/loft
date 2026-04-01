@@ -382,6 +382,40 @@ for a in items par(b=double(a), 4) { results += [b] }
 
 **`reduce(v, init, fn f) -> U`** — left-folds: starts from `init`, applies `f(acc, elm)` for each element in order.
 
+### Closures
+
+A lambda that references variables from the enclosing scope is a **closure**.
+The captured values are **copied into the closure record at definition time**
+(value semantics, like Rust `move` closures).
+
+```loft
+greeting = "Hello"
+greet = fn(name: text) -> text { "{greeting}, {name}!" }
+greeting = "Bye"       // does NOT affect the closure
+greet("world")         // "Hello, world!" — captured at definition time
+```
+
+**Cross-scope closures** — a function can return a closure to its caller.
+The captured values travel with the lambda:
+
+```loft
+fn make_adder(n: integer) -> fn(integer) -> integer {
+    fn(x: integer) -> integer { n + x }
+}
+add5 = make_adder(5)
+add5(10)               // 15
+```
+
+**Capture rules:**
+- Integers, floats, booleans: copied by value.
+- Text: deep-copied (independent of original after capture).
+- Struct references: the DbRef is copied (both point to the same store record while both are alive).
+- Mutation inside the closure does not affect the outer variable (and vice versa).
+
+**Limitations:**
+- Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
+- `spacial<T>` collections cannot store closures.
+
 See [THREADING.md](THREADING.md) § fn Expression for how function references are used with `par(...)`.
 
 ---

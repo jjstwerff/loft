@@ -419,7 +419,23 @@ positive = filter(nums, fn is_pos);      // only positive elements
 total    = reduce(nums, 0, fn add);      // sum of all elements
 ```
 
-All three require a compile-time function reference (`fn <name>`). The function reference must be a named top-level function — lambda expressions are not yet supported (P1).
+All three accept either a named function reference (`fn <name>`) or a lambda expression:
+
+```loft
+doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+evens   = filter(nums, fn(x: integer) -> boolean { x % 2 == 0 });
+total   = reduce(nums, 0, fn(acc: integer, x: integer) -> integer { acc + x });
+```
+
+Lambdas that capture variables from the enclosing scope (closures) also work:
+
+```loft
+factor = 3;
+scaled = map(nums, fn(x: integer) -> integer { x * factor });
+```
+
+Capture is by value at definition time — later changes to `factor` do not
+affect the lambda.  See [LOFT.md § Closures](LOFT.md) for details.
 
 ---
 

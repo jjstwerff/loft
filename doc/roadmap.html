@@ -14,8 +14,8 @@
 
 <h2 id="pending-083">In progress — 0.8.3</h2>
 
-<h3 id="cross-scope-closures">Cross-scope closures (A5.6)</h3>
-<p>Same-scope capture (integers, text, mutable) works. One restriction remains: a capturing lambda returned from a function and called from a different scope does not yet work. The fix requires extending <code>Type::Function</code> to carry the closure DbRef alongside the definition number.</p>
+<h3 id="cross-scope-closures">Cross-scope closures (A5.6) — completed</h3>
+<p>Cross-scope closures now work: a function can return a capturing lambda and the caller can invoke it. Captured values are copied at definition time and travel with the lambda. See <a href="26-closures.html">Closures</a>.</p>
 
 <h3 id="wasm-threading">WASM threading (W1.18)</h3>
 <p><code>par(...)</code> loops are currently sequential in the WASM build. Threading support requires a Web Worker pool, which is planned as a follow-on item.</p>

@@ -285,10 +285,10 @@ shift = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.htm
 doubled = <span class="fn-call">map</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>], <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
 evens   = <span class="fn-call">filter</span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>], |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
 
-<span class="cm">// Cross-scope: returning a capturing lambda is not yet supported:</span>
-<span class="cm">// fn make_adder(n: integer) -> fn(integer) -> integer {</span>
-<span class="cm">//     fn(x: integer) -> integer { x + n }  // A5.6: planned</span>
-<span class="cm">// }</span></code></pre>
+<span class="cm">// Cross-scope: returning a capturing lambda works:</span>
+<span class="kw">fn</span> <span class="fn-call">make_adder</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+    <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + n }
+}</code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
@@ -310,7 +310,7 @@ fn make_adder(n: i32) -&gt; impl Fn(i32) -&gt; i32 {
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Same-scope capture works for integers, text, and mutable variables — no capture modes (<code>move</code> vs borrow), no <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> trait bounds, no lifetime annotations. Both long-form (<code>fn(x: integer) -&gt; integer { x * 2 }</code>) and short-form (<code>|x| { x * 2 }</code>) lambdas are supported. Named function references (<code>fn name</code>) are compile-checked.</p>
-<p class="down"><strong>Downside</strong> Capturing lambdas can only be called directly by name in the same scope — passing them to <code>map</code>/<code>filter</code>/<code>reduce</code> or returning them from a function is not yet supported (planned as A5.6). Rust's <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> traits give full flexibility: closures can be stored in structs, returned from functions, and passed freely across scopes.</p>
+<p class="down"><strong>Downside</strong> Capture is always by value (like Rust <code>move</code>). Rust's <code>Fn</code>/<code>FnMut</code>/<code>FnOnce</code> traits give more flexibility: closures can borrow by reference, be stored in structs, and passed freely across scopes. Loft captures at definition time only — no borrow-based captures.</p>
 </div>
 
 <h2 id="generics">12. Generic functions — pass-through only, no trait bounds</h2>
