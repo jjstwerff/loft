@@ -161,71 +161,57 @@ the first's slot).
 
 ---
 
-## C47 — Native codegen: CallRef dispatch doesn't pass `__closure`
+## C47 — Native codegen: cross-scope closures *(fixed)*
 
-The native codegen's `output_call_ref` in `src/generation/emit.rs` generates a
-`match var_f.0 { d_nr => fn_name(stores, args...) }` dispatch.  When the
-matched function has a `__closure` parameter, the dispatch doesn't pass
-`var_f.1` (the closure DbRef) as the last argument.
+**Fixed.** Five sub-issues resolved: FnRef emits closure DbRef, CallRef passes
+`.1` as `__closure`, scope bounds check, `last_closure_work_var` reset after
+function body, FnRef added to reachable set via `collect_fn_ref_literals`.
 
-**Impact:** cross-scope closures (functions returning capturing lambdas) and
-capturing closures passed to `map`/`filter`/`reduce` crash in `--native` mode
-with "this function takes N arguments but N-1 were supplied".
-
-**Reproducer:**
-```loft
-fn make_adder(n: integer) -> fn(integer) -> integer {
-    fn(x: integer) -> integer { n + x }
-}
-make_adder(5)(10)   // works in interpreter, fails in --native
-```
-
-**Fix path:** in `output_call_ref` (`emit.rs:~276`), when a candidate has
-`has_closure == true`, emit `var_{fn_ref_name}.1` as the last argument:
-```rust
-if *has_closure {
-    write!(w, ", {var_name}.1")?;  // pass closure DbRef from fn-ref tuple
-}
-```
-
-**Test:** cross-scope closure doc example should pass in `native_dir`.
-**Docs:** [LIFETIME.md](LIFETIME.md) § Caller-side closure free.
+**Test:** `make_adder` in `26-closures.loft` passes in both interpreter and native.
 
 ---
 
-## C48 — Capturing closures with map/filter/reduce
+## C48 — Capturing closures with map/filter *(fixed)*
 
-Capturing closures cannot be passed directly to `map`, `filter`, or `reduce`
-in either the interpreter or native codegen.  The error is "function reference
-must be a compile-time constant (use fn <name>)".
+**Fixed.** `map()` and `filter()` accept capturing lambdas.  The collections
+parser stores the fn-ref in a local variable and emits `CallRef` in the
+desugared loop body.
+
+**Test:** `map_with_capturing_closure` in `tests/expressions.rs`.
+
+---
+
+## C49 — Libraries: no wildcard or selective import
+
+`use mylib::*` and `use mylib::Point` do not work.  All library references
+must use the full `libname::Name` prefix.
 
 **Reproducer:**
 ```loft
-factor = 3
-scaled = map([1, 2, 3], fn(x: integer) -> integer { x * factor })
-// Error: function reference must be a compile-time constant
+use testlib::*;
+fn main() { assert(MAX_SIZE == 100, ""); }  // Error: Unknown variable
 ```
 
-**Root cause:** `map`/`filter`/`reduce` are implemented as built-in operators
-that take a `fn <name>` reference, not a fn-ref variable.  The parser
-(`parse_call` in `control.rs`) rejects lambda expressions in the function
-argument position of these builtins.
+**Workaround:** always write the prefix: `testlib::MAX_SIZE`, `testlib::Point {}`.
 
-**Fix path:** change `map`/`filter`/`reduce` to accept fn-ref variables
-(CallRef) in addition to named function references.  This requires:
-1. Parser: allow fn-ref variables in the function argument position
-2. Codegen: emit CallRef dispatch instead of static Call for the callback
-3. Native: use the `output_call_ref` dispatch (requires C47 first)
+---
 
-**Workaround:** store the closure in a variable and call it manually in a loop:
-```loft
-factor = 3
-result = vector<integer>{};
-for x in [1, 2, 3] { result += [x * factor] }
-```
+## C50 — Libraries: no visibility control
 
-**Test:** once fixed, `map(nums, fn(x: integer) -> integer { x * factor })`
-should work in both interpreter and native.
+All library definitions are visible to importers.  `pub` on top-level `struct`
+or `fn` is accepted but has no effect.  `pub` on struct fields is silently
+ignored (not a parse error, despite what older docs claimed).  There is no way
+to mark a definition as internal/private.
+
+---
+
+## C51 — Libraries: no native extension loading
+
+Libraries are pure `.loft` files.  The `loft.toml` manifest `native = "..."`
+field is parsed but native shared libraries (`.so`/`.dylib`/`.dll`) are not
+loaded at runtime.  Native extensions only work via the interpreter's built-in
+`--lib` flag or `LOFT_LIB` environment variable pointing to a directory with
+pre-compiled extensions.
 
 ---
 

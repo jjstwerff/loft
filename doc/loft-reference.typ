@@ -3328,21 +3328,15 @@ If the interpreter version is below the stated minimum, loading the library prod
 
 === Limitations
 
-These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error:
+Current rough edges to keep in mind.
 
-```
-fn foo() {}
-use testlib;   // ERROR: Syntax error
-```
+\*\*`use` must appear before all definitions.\*\* If you write a function first and then a `use`, the compiler reports a syntax error.
 
-By default, names from a library must be written with the `name::` prefix. You can avoid the prefix by importing specific names or everything:
+\*\*All names require the `name::` prefix.\*\* There is no wildcard import (`use mylib::\*`) or selective import (`use mylib::Point`) yet. Every reference to a library type, function, or constant must use the full `libname::Name` prefix.
 
-```
-use mylib::Point, add;     import specific names
-use mylib::*;              import all names from mylib
-```
+\*\*No visibility control.\*\* All library definitions are always visible to importers. `pub` on a top-level `struct` or `fn` is accepted but has no effect. `pub` on struct fields is silently ignored.
 
-After a wildcard or selective import, `Point {}` and `add(1, 2)` work without the prefix. Local definitions shadow imported names silently. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
+\*\*No native extension loading.\*\* Libraries are pure `.loft` files. Native Rust extensions (`loft.toml` with `native = "..."`) are planned for a future release.
 
 ```rust
 }
