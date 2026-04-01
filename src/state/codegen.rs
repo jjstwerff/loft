@@ -841,10 +841,18 @@ impl State {
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
             self.gen_set_first_tuple_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {
-            // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
-            // gen_fn_ref_value ensures every branch (including if-else) reaches the
-            // join point with a full 16-byte slot.
-            self.gen_fn_ref_value(value, stack);
+            if *value == Value::Null {
+                // A5.6-text: pre-init a fn-ref slot with 16 null bytes.
+                // d_nr = i32::MIN (integer null sentinel) + closure = null DbRef.
+                stack.add_op("OpConstInt", self);
+                self.code_add(i32::MIN);
+                stack.add_op("OpNullRefSentinel", self);
+            } else {
+                // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
+                // gen_fn_ref_value ensures every branch (including if-else) reaches the
+                // join point with a full 16-byte slot.
+                self.gen_fn_ref_value(value, stack);
+            }
         } else {
             self.generate(value, stack, false);
         }
@@ -974,6 +982,21 @@ impl State {
             && let Some(Value::Var(v)) = parameters.first()
             && stack.function.is_skip_free(*v)
         {
+            return Type::Void;
+        }
+        // A5.6-text: free the closure DbRef embedded at offset+4 in a 16-byte fn-ref
+        // slot.  OpFreeRef normally reads from offset+0, but the fn-ref layout is
+        // [d_nr 4B][closure DbRef 12B], so the closure is at var_pos - 4.
+        // OpNullRefSentinel produces store_nr=u16::MAX; database.free() is a no-op
+        // for that sentinel, so non-capturing lambdas are safe.
+        if stack.data.def(op).name == "OpFreeRef"
+            && let Some(Value::Var(v)) = parameters.first()
+            && matches!(stack.function.tp(*v), Type::Function(_, _, _))
+        {
+            let var_pos = stack.position - stack.function.stack(*v);
+            stack.add_op("OpVarRef", self);
+            self.code_add(var_pos - 4);
+            stack.add_op("OpFreeRef", self);
             return Type::Void;
         }
         // try destination-passing optimisation for text-producing natives.

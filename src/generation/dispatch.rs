@@ -323,6 +323,18 @@ impl Output<'_> {
                         write!(w, "()")?;
                         return Ok(());
                     }
+                    // A5.6-text: skip closure free for fn-ref variables in native codegen.
+                    // The interpreter handles this via a codegen special case (OpVarRef at
+                    // offset+4), but native codegen does not yet support it.
+                    if let Value::Var(v) = db_val
+                        && matches!(
+                            self.data.def(self.def_nr).variables.tp(*v),
+                            Type::Function(_, _, _)
+                        )
+                    {
+                        write!(w, "()")?;
+                        return Ok(());
+                    }
                     let var_name = if let Value::Var(v) = db_val {
                         format!(
                             "var_{}",
