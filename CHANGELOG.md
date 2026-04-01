@@ -15,6 +15,22 @@ All notable changes to the loft language and interpreter.
   16 bytes), and closure record leak at caller scope exit.  Test:
   `closure_capture_text`.
 
+### Native codegen
+
+- **Fn-ref `(u32, DbRef)` tuple type** (C39) — Fn-ref variables in native-compiled
+  code are now `(u32, DbRef)` tuples instead of plain `u32`.  Closure records are
+  correctly freed via `.1` destructuring when fn-ref variables go out of scope.
+  Non-capturing lambdas use the null sentinel and are safely skipped.
+
+### Bug fixes
+
+- **C41** — Struct-enum local variable leak (Problem #85) confirmed fixed; regression
+  test `struct_enum_local_freed` added.
+- **C42** — Undefined variable diagnostic confirmed working; test
+  `unknown_variable_error` added.
+- **C40** — Debug logger fn-ref opcode guard documented with WARNING comments in
+  `02_images.loft` to prevent accidental removal.
+
 ### Parallel execution
 
 - **`par_light` runtime foundation** (A14.1–A14.4):

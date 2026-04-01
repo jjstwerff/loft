@@ -3345,9 +3345,9 @@ design — the two-pass architecture needs it for forward references.
 
 ---
 
-## C39 — Native codegen: fn-ref `(u32, DbRef)` tuple + closure free
+## C39 — Native codegen: fn-ref `(u32, DbRef)` tuple + closure free *(fixed)*
 
-**Problem:** The native codegen has two interrelated issues:
+**Problem:** The native codegen had two interrelated issues:
 1. `src/generation/mod.rs:300` declares fn-ref variables as `u32` instead of
    `(u32, DbRef)`.  The `(u32, DbRef)` declaration existed on the A5.6-text branch
    but was lost during the `-X theirs` rebase.
@@ -3419,7 +3419,7 @@ Update `Value::FnRef` in `emit.rs` to emit `(d_nr_u32, DbRef { ... })`.
 
 ---
 
-## C44 — Native codegen: `external` crate reference unresolved
+## C44 — Native codegen: `external` crate reference unresolved *(fixed)*
 
 **Problem:** The random number extension uses an `external` FFI crate that is not
 included in the native codegen output.  `21-random.loft` fails to compile natively
@@ -3447,7 +3447,7 @@ Run `cargo test --test native native_scripts` and confirm `21-random.loft` passe
 
 ---
 
-## C40 — Debug logger: fn-ref opcode type mismatch (root cause)
+## C40 — Debug logger: fn-ref opcode type mismatch *(documented)*
 
 **Problem:** `OpVarFnRef` and `OpPutFnRef` are declared with `-> text` and
 `_fnref: text` in `default/02_images.loft`, but the actual data is 16 bytes
@@ -3559,48 +3559,63 @@ mechanism at all.
 
 **Files:** `src/variables/slots.rs`
 
-### Step 1 — Add zone-2 dead-slot tracking
+### Implementation attempt (reverted)
 
-In `place_large_and_recurse`, before placing a variable at `*tos`, check
-if any previously-placed zone-2 variable in the same scope is dead
-(its `last_use < current first_def`) and has matching size:
+A naive same-type same-size reuse was attempted: before placing at `*tos`,
+scan already-assigned zone-2 variables for a dead one with matching size and
+type discriminant.  This caused slot conflicts in `46-caveats.loft`:
+
+```
+Variables 'nums' (slot [40, 52), live [13, 113]) and '_map_result_5'
+(slot [44, 56), live [108, 149]) share a stack slot
+```
+
+**Root cause of failure:** the reuse check only compares the candidate against
+one dead variable.  It does not verify that the reused slot is free of ALL
+other zone-2 variables whose live intervals overlap.  In the failing case,
+`_map_result_5` reused a dead variable's slot at 44, but `nums` at [40, 52)
+was still live — partial overlap at bytes 44–52.
+
+### Step 1 — Full conflict scan for zone-2 reuse
+
+The reuse candidate must be checked against ALL assigned zone-2 variables
+(same pattern as zone-1's inner loop at `slots.rs:105-127`):
 
 ```rust
-// In place_large_and_recurse, when v_size > 8:
-let reuse_slot = find_dead_zone2_slot(function, scope, v_size, first_def);
-if let Some(slot) = reuse_slot {
-    function.variables[v].stack_pos = slot;
-    function.variables[v].pre_assigned_pos = slot;
-} else {
-    function.variables[v].stack_pos = *tos;
-    function.variables[v].pre_assigned_pos = *tos;
-    *tos += v_size;
+fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
+    let v_size = size(&function.variables[v].type_def, &Context::Variable);
+    let v_first = function.variables[v].first_def;
+    let v_last = function.variables[v].last_use;
+    for (j, jv) in function.variables.iter().enumerate() {
+        if j == v || jv.stack_pos == u16::MAX || jv.scope != scope { continue; }
+        let j_size = size(&jv.type_def, &Context::Variable);
+        if j_size != v_size { continue; }
+        if std::mem::discriminant(&jv.type_def)
+            != std::mem::discriminant(&function.variables[v].type_def) { continue; }
+        if jv.last_use >= v_first { continue; } // still live — skip
+        // Candidate found — now verify no OTHER variable conflicts:
+        let slot = jv.stack_pos;
+        let conflict = function.variables.iter().enumerate().any(|(k, kv)| {
+            k != v && k != j && kv.stack_pos != u16::MAX
+                && kv.stack_pos < slot + v_size && slot < kv.stack_pos + size(&kv.type_def, &Context::Variable)
+                && kv.first_def <= v_last && kv.last_use >= v_first
+        });
+        if !conflict { return Some(slot); }
+    }
+    None
 }
 ```
 
-The helper `find_dead_zone2_slot` scans already-assigned zone-2 variables
-for one with matching size, non-overlapping live interval, and same scope.
+### Step 2 — Enable the ignored test
 
-### Step 2 — Guard against cross-type reuse
+Remove `#[ignore]` from `assign_slots_sequential_text_reuse` in `slots.rs`.
 
-Only allow text-to-text reuse (both 24 bytes).  Do NOT allow a 12-byte
-Reference to reuse part of a dead 24-byte text slot — this was the
-original Problem #69 bug.
+### Step 3 — Verify
 
-### Step 3 — Enable the ignored test
+`make ci` — verify no slot conflicts, especially `46-caveats.loft` which
+triggered the original failure.
 
-Remove `#[ignore]` from `assign_slots_sequential_text_reuse` in `slots.rs:894`.
-The test creates two sequential text variables and asserts they share a slot.
-
-### Step 4 — Verify
-
-`make ci` — verify no slot conflicts across all tests, especially text-heavy
-tests like `closure_capture_text_loop`, `format_*`, and `append_fn`.
-
-**Effort:** Medium–High (zone-2 reuse is new infrastructure)
-**Depends on:** P70 may be needed if the TOS-override fires for reused text slots.
-In practice, text-to-text same-size reuse should not trigger the override because
-the reused slot is at the same position as the original — no movement occurs.
+**Effort:** Medium–High (full conflict scan required)
 **Target:** 0.8.3
 
 ---

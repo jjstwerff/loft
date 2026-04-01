@@ -89,89 +89,50 @@ reference-counting or borrow-checking scheme.
 
 ---
 
-## C39 — Native codegen: closure records not freed for fn-ref variables
+## C39 — Native codegen: fn-ref `(u32, DbRef)` tuple + closure free *(fixed)*
 
-The `--native` backend skips `OpFreeRef` for `Type::Function` variables
-(`src/generation/dispatch.rs`).  The interpreter correctly frees closure
-records at offset+4 in the fn-ref slot via a codegen special case, but the
-native codegen does not yet replicate this logic.
+**Fixed.** Fn-ref variables in native-compiled code are now `(u32, DbRef)`
+tuples.  `OpFreeRef` destructures `.1` and frees the closure if non-null.
+The `fn_ref_context` flag ensures if-else branches with bare Int values
+produce correct tuples.
 
-**Impact:** closure store records leak in native-compiled programs when fn-ref
-variables go out of scope.  For short-lived programs or chained calls
-(`make_greeter("Hello")("world")`) the impact is negligible.
-
-**Workaround:** use the interpreter for programs with many stored fn-refs.
-**Planned fix:** extend native codegen to emit `(u32, DbRef)` destructuring
-and explicit `OpFreeRef` for the closure component.
-**Docs:** [LIFETIME.md](LIFETIME.md) § Caller-side closure free.
+**Test:** all 5 native tests pass (`cargo test --test native`).
+**Fixed by:** C39 — coordinated changes across dispatch.rs, mod.rs, emit.rs,
+calls.rs, pre_eval.rs.
 
 ---
 
-## C40 — Debug logger: fn-ref opcodes require C30 guard
+## C40 — Debug logger: fn-ref opcode type mismatch *(documented)*
 
 `OpPutFnRef` and `OpVarFnRef` declare their mutable attribute as `text` in
 `02_images.loft`, but the stack holds 16 bytes of fn-ref data (`[d_nr:i32]
-[closure:DbRef]`).  The debug logger's `log_step` would interpret these bytes
-as a `Str` pointer and SIGSEGV.  A guard in `log_step` skips text-typed
-mutable attributes for these opcodes.
+[closure:DbRef]`).  A guard in `log_step` skips text-typed mutable attributes
+for these opcodes, preventing SIGSEGV.  WARNING comments added to the opcode
+declarations in `02_images.loft` reference the guard.
 
-**Risk:** if new fn-ref opcodes are added without updating the guard, the
-SIGSEGV will return.  The root cause (type mismatch in opcode declarations)
-remains unfixed.
 **Guard location:** `src/state/debug.rs` — `log_step`, mutable-attribute loop.
-**History:** originally fixed in C30 (commit f0b6362), accidentally removed in
-commit 9420be9, restored in the A5.6-text branch.
-
----
-
-## C41 — Struct-enum local variable leaks stack space *(fixed)*
-
-**Fixed.** Prior scope analysis fixes resolved the leak.  The struct-enum local
-is now correctly freed at scope exit.
-
-**Test:** `struct_enum_local_freed` in `tests/expressions.rs`.
-**Fixed by:** scope analysis improvements on the A5.6-text branch.
-
----
-
-## C42 — `Type::Unknown(0)` silently created for unresolved names *(fixed)*
-
-**Fixed.** The second parser pass already emits a clear "Unknown variable" error
-for undefined names.  The first-pass silent creation is by design (forward
-references require tolerating unknown names during pass 1).
-
-**Test:** `unknown_variable_error` in `tests/parse_errors.rs`.
-**Fixed by:** existing second-pass validation (no code change needed).
+**Fixed by:** C40 — documentation + WARNING comments in `02_images.loft`.
 
 ---
 
 ## C43 — Text slot reuse disabled (Problem #69, A12)
 
-Extending `can_reuse` in the slot allocator to allow text-slot reuse caused
-overlapping live intervals between variables of different sizes sharing a
-dead 24-byte text slot.  Text slot reuse is disabled; sequential text
-variables each get their own 24-byte slot.
+Text variables (24 bytes) are placed by zone 2 in `assign_slots`, which
+assigns slots sequentially at TOS without dead-slot reuse.  Sequential text
+variables each get their own 24-byte slot, wasting stack space.
+
+A naive same-size reuse attempt caused slot conflicts: the reused slot
+can partially overlap with other zone-2 variables placed by the same
+`place_large_and_recurse` pass, because the reuse check only compares
+against the candidate variable — not all previously assigned variables.
+Zone-2 needs the same full conflict scan that zone-1 uses.
 
 **Impact:** wastes stack space when many short-lived text variables are used
 sequentially.  No correctness issue.
 
 **Test:** `assign_slots_sequential_text_reuse` in `src/variables/slots.rs`
 (`#[ignore]` — A12).
-**Blocked by:** Problem #70 (text TOS override).  Problem #68 is fixed
-(`inline_ref_set_in` now handles Block/Loop nodes).
-**Docs:** [PROBLEMS.md](PROBLEMS.md) § Issues 68–70.
-
----
-
-## C44 — Native codegen: `external` crate reference unresolved (Problem #79)
-
-The `--native` backend does not resolve the `external` FFI crate used by
-the random number extension.  `21-random.loft` fails to compile natively.
-
-**Reproducer:** `cargo run --bin loft -- --native tests/docs/21-random.loft`
-**Impact:** `--native` only; interpreter works correctly.
-**Fix path:** bundle FFI in `codegen_runtime` or emit `extern` block.
-**Docs:** [PROBLEMS.md](PROBLEMS.md) § Issue 79.
+**Docs:** [PLANNING.md](PLANNING.md) § C43, [PROBLEMS.md](PROBLEMS.md) § Issues 69–70.
 
 ---
 

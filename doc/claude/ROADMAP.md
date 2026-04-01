@@ -20,9 +20,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| C39       | Native codegen: fn-ref `(u32, DbRef)` tuple + closure free | M  | ✓      |              | PLANNING.md § C39             |
-| C44       | Native codegen: `external` crate reference unresolved (#79)| S | ✓      |              | PLANNING.md § C44             |
-| C40       | Debug logger: fn-ref opcode type mismatch (root cause)    | S  | ✓      |              | PLANNING.md § C40             |
 | C43       | Text slot reuse: zone-2 dead-slot tracking (#69)          | MH | ✓      | P70          | PLANNING.md § C43             |
 | P70       | Text in `generate_set` TOS-override causes SIGSEGV (#70)  | M  | ✓      |              | PLANNING.md § P70             |
 
