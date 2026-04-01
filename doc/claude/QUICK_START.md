@@ -220,6 +220,7 @@ default/03_text.loft    — text utilities
 | [NATIVE.md](NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [BYTECODE_CACHE.md](BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred — superseded by native codegen) |
+| [LIFETIME.md](LIFETIME.md) | Dependency tracking and scope-based freeing — dep field, Text vs Reference, closures |
 | [DEBUG.md](DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](WEB_IDE.md) | Web IDE integration design notes |
@@ -238,6 +239,7 @@ default/03_text.loft    — text utilities
 | Understand the parallel execution model | [THREADING.md](THREADING.md), then [INTERNALS.md](INTERNALS.md) § Parallel Execution |
 | Set up logging in a loft program | `STDLIB.md § Logging`, then [LOGGER.md](LOGGER.md) |
 | Understand the heap / memory model | [DATABASE.md](DATABASE.md), then `INTERMEDIATE.md § DbRef` |
+| Understand variable lifetimes / dep tracking | [LIFETIME.md](LIFETIME.md) → [DATABASE.md](DATABASE.md) |
 | Improve the test suite | [TESTING.md](TESTING.md), then `tests/scripts/` and `tests/docs/` |
 | Debug slot conflicts / understand stack layout | [SLOTS.md](SLOTS.md) — two-zone design, `validate_slots`, `LOFT_ASSIGN_LOG` |
 | Format a loft source file | [FORMATTER.md](FORMATTER.md) — `loft --format`; rules and golden tests |
