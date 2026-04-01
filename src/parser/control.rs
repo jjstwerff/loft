@@ -2054,7 +2054,7 @@ impl Parser {
             // Check for zero-argument fn-ref call
             if self.vars.name_exists(name) {
                 let v_nr = self.vars.var(name);
-                if let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone()
+                if let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
                     // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
@@ -2130,7 +2130,7 @@ impl Parser {
                 && arg_idx < self.data.attributes(d_nr)
             {
                 let expected = self.data.attr_type(d_nr, arg_idx);
-                if matches!(expected, Type::Function(_, _)) {
+                if matches!(expected, Type::Function(_, _, _)) {
                     self.lambda_hint = expected;
                 }
             }
@@ -2142,15 +2142,16 @@ impl Parser {
             {
                 let elem = *elm.clone();
                 let hint = match (name, arg_idx) {
-                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem))),
+                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem), vec![])),
                     ("filter" | "any" | "all" | "count_if", 1) => {
-                        Some(Type::Function(vec![elem], Box::new(Type::Boolean)))
+                        Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![]))
                     }
                     ("reduce", 2) => {
                         let init_tp = types.get(1).cloned().unwrap_or(elem.clone());
                         Some(Type::Function(
                             vec![init_tp.clone(), elem],
                             Box::new(init_tp),
+                            vec![],
                         ))
                     }
                     _ => None,
@@ -2247,7 +2248,7 @@ impl Parser {
             return None;
         }
         let v_nr = self.vars.var(name);
-        let Type::Function(param_types, ret_type) = self.vars.tp(v_nr).clone() else {
+        let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone() else {
             return None;
         };
         // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
@@ -2370,7 +2371,7 @@ impl Parser {
             return Type::Unknown(0);
         };
         let acc_type = types[1].clone();
-        let (fn_param_types, _fn_ret_type) = if let Type::Function(params, ret) = &types[2] {
+        let (fn_param_types, _fn_ret_type) = if let Type::Function(params, ret, _) = &types[2] {
             (params.clone(), *ret.clone())
         } else {
             diagnostic!(

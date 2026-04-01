@@ -42,6 +42,8 @@
   radius: <span class="ty"><a href="stdlib-types.html">float</a></span>,
   area: <span class="ty"><a href="stdlib-types.html">float</a></span> <span class="fn-call">computed</span>(<span class="nm">3.14159265</span> * $.radius * $.radius)
 }</code></pre>
+<h2 id="field-iteration">Field iteration</h2>
+<p><code>for f in s#fields</code> visits every stored primitive field of a struct. The parser unrolls this loop at compile time — no runtime allocation is needed. The loop variable has two accessible parts: <code>f.name</code>  — the field name as text <code>f.value</code> — a FieldValue enum wrapping the actual value Match on <code>f.value</code> using the FvInt, FvFloat, FvBool, FvText, and other variants. Reference, collection, and nested-struct fields are skipped silently.</p>
 <h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
 <p><code>Area</code> uses smaller integer types to save memory: <code>u16</code> holds values 0–65535, and <code>u8</code> holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Area</span> {
@@ -89,6 +91,20 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{map[3]}"</span> == <span class="st">"{{height:0,terrain:1,water:1,direction:1}}"</span>, <span class="st">"tile record"</span>);
   map[<span class="nm">3</span>].height = <span class="nm">200</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(map[<span class="nm">3</span>].height == <span class="nm">200</span>, <span class="st">"individual tile update"</span>);</code></pre>
+<h2 id="field-iteration">Field iteration</h2>
+<p>Iterate over each primitive field of a struct to inspect its name and value. This is useful for building generic display or serialisation routines without repeating each field name manually.</p>
+<pre><code>  fi_col = <span class="en">Colour</span> {r: <span class="nm">64</span>, g: <span class="nm">128</span>, b: <span class="nm">255</span> };
+  fi_parts = <span class="st">""</span>;
+  <span class="kw">for</span> fi_f <span class="kw">in</span> fi_col#fields {
+    <span class="kw">if</span> fi_parts != <span class="st">""</span> { fi_parts += <span class="st">","</span>; }
+    fi_parts += fi_f.name;
+    fi_parts += <span class="st">"="</span>;
+    match fi_f.value {
+      <span class="en">FvInt</span> { v } =&gt; { fi_parts += <span class="st">"{v}"</span>; },
+      _ =&gt; {}
+    }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fi_parts == <span class="st">"r=64,g=128,b=255"</span>, <span class="st">"field iteration: {fi_parts}"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">4</span>, <span class="st">"integer: 4 bytes"</span>);

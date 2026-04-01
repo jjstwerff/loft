@@ -463,7 +463,7 @@ impl Output<'_> {
                             let param_is_fnref = idx < self.data.def(*d_nr).attributes.len()
                                 && matches!(
                                     self.data.def(*d_nr).attributes[idx].typedef,
-                                    Type::Function(_, _) | Type::Routine(_)
+                                    Type::Function(_, _, _) | Type::Routine(_)
                                 );
                             if param_is_fnref && matches!(val, Value::Int(_)) {
                                 write!(w, "{arg_code} as u32")?;

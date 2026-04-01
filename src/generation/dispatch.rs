@@ -143,8 +143,10 @@ impl Output<'_> {
                 self.output_code_inner(w, to)?;
                 if needs_to_string {
                     write!(w, ".to_string()")?;
-                } else if matches!(variables.tp(var), Type::Function(_, _) | Type::Routine(_))
-                    && !matches!(to, Value::Null)
+                } else if matches!(
+                    variables.tp(var),
+                    Type::Function(_, _, _) | Type::Routine(_)
+                ) && !matches!(to, Value::Null)
                 {
                     // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
                     // Also covers if-expressions that return fn-ref literals.

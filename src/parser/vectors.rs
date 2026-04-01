@@ -320,7 +320,7 @@ impl Parser {
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        Type::Function(arg_types, Box::new(ret_type))
+        Type::Function(arg_types, Box::new(ret_type), vec![])
     }
 
     // <lambda> ::= 'fn' '(' [<params>] ')' ['->' <type>] '{' <body> '}'
@@ -429,7 +429,7 @@ impl Parser {
         // Neither should appear in the public Function type — only declared params do.
         let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        Type::Function(arg_types, Box::new(ret_type))
+        Type::Function(arg_types, Box::new(ret_type), vec![])
     }
 
     // <short-lambda> ::= '||' ['->' type] block              (expect_close=false)
@@ -447,7 +447,7 @@ impl Parser {
 
         // Capture hint types before entering the new context.
         let hint_params_ret = self.lambda_hint.clone();
-        let hint_params: Vec<Type> = if let Type::Function(pts, _) = &hint_params_ret {
+        let hint_params: Vec<Type> = if let Type::Function(pts, _, _) = &hint_params_ret {
             pts.clone()
         } else {
             Vec::new()
@@ -552,7 +552,7 @@ impl Parser {
                  use fn(…) -> <ret> {{ ... }} instead"
             );
             self.parse_type_full(d_nr, true).unwrap_or(Type::Void)
-        } else if let Type::Function(_, ret) = &hint_params_ret {
+        } else if let Type::Function(_, ret, _) = &hint_params_ret {
             *ret.clone()
         } else {
             Type::Void
@@ -619,7 +619,7 @@ impl Parser {
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        Type::Function(arg_types, Box::new(ret_type))
+        Type::Function(arg_types, Box::new(ret_type), vec![])
     }
 
     // A5.3-complete: emit the lambda value — plain Int(d_nr) for non-capturing
@@ -663,7 +663,10 @@ impl Parser {
                 .map(|aid| self.data.attr_type(d_nr, aid).clone())
                 .collect();
             let ret_tp = self.data.def(d_nr).returned.clone();
-            let fn_type = Type::Function(visible_params, Box::new(ret_tp));
+            // A5.6-text: fn-ref depends on closure work var `w` so that
+            // get_free_vars does not emit OpFreeRef for the closure record
+            // before the fn-ref escapes the defining scope.
+            let fn_type = Type::Function(visible_params, Box::new(ret_tp), vec![w]);
             let mut alloc_steps: Vec<Value> = Vec::new();
             // Allocate and populate the closure record w.
             alloc_steps.push(crate::data::v_set(w, Value::Null));
@@ -675,6 +678,10 @@ impl Parser {
                 let v_nr = self.vars.var(&cap_name);
                 if v_nr != u16::MAX {
                     captured_var_nrs.push(v_nr);
+                    // A5.6-text: mark as captured so test_used does not emit
+                    // a false "never read" warning.  Do NOT call var_usages —
+                    // that would interfere with the dead-assignment check.
+                    self.vars.set_captured(v_nr);
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
@@ -691,6 +698,18 @@ impl Parser {
             *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
             // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
             self.last_closure_alloc = None;
+            // A5.6-text: propagate the closure dep to the enclosing function's
+            // declared return type so that free_vars at Return knows not to free
+            // the closure work var when the fn-ref escapes.
+            if matches!(
+                self.data.def(self.context).returned,
+                Type::Function(_, _, _)
+            ) {
+                self.data.definitions[self.context as usize].returned = self.data.definitions
+                    [self.context as usize]
+                    .returned
+                    .depending(w);
+            }
             // A5.6c: record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).
             self.last_closure_work_var = w;

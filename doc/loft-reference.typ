@@ -1943,6 +1943,31 @@ fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT s
 
 The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.
 
+=== Aggregates
+
+Shorthand functions over an entire vector, without writing an explicit loop.
+
+```
+sum_of(v)          — sum of all integer elements
+min_of(v)          — smallest element (null if empty)
+max_of(v)          — largest element (null if empty)
+any(v, pred)       — true if at least one element satisfies the predicate
+all(v, pred)       — true if every element satisfies the predicate
+count_if(v, pred)  — number of elements satisfying the predicate
+```
+
+```rust
+  agg_nums = [3, 1, 4, 1, 5, 9, 2, 6];
+  assert(sum_of(agg_nums) == 31, "sum_of: {sum_of(agg_nums)}");
+  assert(min_of(agg_nums) == 1, "min_of: {min_of(agg_nums)}");
+  assert(max_of(agg_nums) == 9, "max_of: {max_of(agg_nums)}");
+  assert(any(agg_nums, |x| { x > 8 }), "any > 8");
+  assert(!any(agg_nums, |x| { x > 10 }), "none > 10");
+  assert(all(agg_nums, |x| { x > 0 }), "all > 0");
+  assert(!all(agg_nums, |x| { x > 1 }), "not all > 1");
+  assert(count_if(agg_nums, |x| { x % 2 == 0 }) == 3, "count even elements");
+```
+
 === Higher-order functions
 
 'map' applies a function to every element and returns a new vector.
@@ -2037,6 +2062,17 @@ struct Circle {
   area: float computed(3.14159265 * $.radius * $.radius)
 }
 ```
+
+=== Field iteration
+
+'for f in s\#fields' visits every stored primitive field of a struct. The parser unrolls this loop at compile time — no runtime allocation is needed. The loop variable has two accessible parts:
+
+```
+'f.name'  — the field name as text
+'f.value' — a FieldValue enum wrapping the actual value
+```
+
+Match on 'f.value' using the FvInt, FvFloat, FvBool, FvText, and other variants. Reference, collection, and nested-struct fields are skipped silently.
 
 === Storing many structs in a vector
 
@@ -2137,6 +2173,25 @@ Fill a vector with copies of the same struct using '; count' syntax. This create
   assert(map[3].height == 200, "individual tile update");
 ```
 
+=== Field iteration
+
+Iterate over each primitive field of a struct to inspect its name and value. This is useful for building generic display or serialisation routines without repeating each field name manually.
+
+```rust
+  fi_col = Colour {r: 64, g: 128, b: 255 };
+  fi_parts = "";
+  for fi_f in fi_col#fields {
+    if fi_parts != "" { fi_parts += ","; }
+    fi_parts += fi_f.name;
+    fi_parts += "=";
+    match fi_f.value {
+      FvInt { v } => { fi_parts += "{v}"; },
+      _ => {}
+    }
+  }
+  assert(fi_parts == "r=64,g=128,b=255", "field iteration: {fi_parts}");
+```
+
 === sizeof
 
 'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.
@@ -2220,6 +2275,25 @@ fn opposite(self: Direction) -> Direction {
   } else {
     East
   }
+}
+```
+
+=== Nested field sub-patterns in match
+
+Inside a struct-enum arm, each field position can carry a sub-pattern instead of just a binding name. Supported sub-patterns: enum variant name, scalar literal, wildcard '_', or or-pattern ('A | B'). This lets you match on a field's value and bind others in a single arm, without a nested match or an if-guard.
+
+```rust
+enum Status {
+  Pending,
+  Paid,
+  Refunded
+}
+```
+
+```rust
+struct Order {
+  status: Status,
+  amount: integer
 }
 ```
 
@@ -2360,6 +2434,39 @@ Character literals work in match arms.
     _ => false
   };
   assert(vowel, "character or-pattern");
+```
+
+=== Nested field sub-patterns
+
+An arm for a struct-enum variant can constrain a field to a specific value and still bind other fields in the same arm. Here: match an Order on its status field, binding amount only when Paid. A top-level '_' wildcard covers all other status values.
+
+```rust
+  paid_order = Order { status: Paid, amount: 5000 };
+  charge = match paid_order {
+    Order { status: Paid, amount } => amount,
+    _ => 0
+  };
+  assert(charge == 5000, "paid order charged: {charge}");
+```
+
+```rust
+  pending_order = Order { status: Pending, amount: 200 };
+  charge2 = match pending_order {
+    Order { status: Paid, amount } => amount,
+    _ => 0
+  };
+  assert(charge2 == 0, "pending order not charged: {charge2}");
+```
+
+Or-patterns in a field sub-pattern match multiple variant values in one arm.
+
+```rust
+  refunded_order = Order { status: Refunded, amount: 300 };
+  is_inactive = match refunded_order {
+    Order { status: Pending | Refunded } => true,
+    _ => false
+  };
+  assert(is_inactive, "pending|refunded matches or-pattern");
 }
 ```
 
@@ -4347,7 +4454,7 @@ A generic function uses a type variable to work with any type. Write the functio
 Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector\<T\>).
 
 ```rust
-fn identity<T>(x: T) -> T { x }
+fn identity<T>(val: T) -> T { val }
 ```
 
 === Calling a generic function
@@ -4368,9 +4475,9 @@ fn test_identity() {
 Additional parameters can also use T.  They all share the same concrete type.
 
 ```rust
-fn pick_second<T>(a: T, b: T) -> T {
-  _x = a;
-  b
+fn pick_second<T>(pa: T, pb: T) -> T {
+  _ps = pa;
+  pb
 }
 fn test_pick_second() {
   assert(pick_second(1, 99) == 99);
@@ -4378,11 +4485,11 @@ fn test_pick_second() {
 }
 ```
 
-=== Allowed operations on T
+=== Allowed operations on T (unconstrained)
 
-Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.
+Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors without an interface bound.
 
-=== Disallowed operations
+=== Disallowed operations on unconstrained T
 
 The compiler rejects operations that require knowing what T is. For example, `x + y` on two T values gives:
 
@@ -4396,10 +4503,95 @@ Similarly, `x.field` gives:
 "generic type T: field access requires a concrete type"
 ```
 
+=== Interfaces
+
+An interface declares a set of operations that a type must support. Once an interface is declared, a generic function can use '\<T: Interface\>' to unlock those operations on T.
+
+=== Declaring an interface
+
+List the required method signatures inside the interface body. Use 'Self' as a placeholder for the concrete satisfying type. Any type that provides all listed methods satisfies the interface — no explicit 'implements' keyword or registration is needed. Example:
+
+```
+interface Ordered {
+  fn OpLt(self: Self, other: Self) -> boolean
+  fn OpGt(self: Self, other: Self) -> boolean
+}
+```
+
+'Ordered' (above) is already declared in the standard library. The standard library also declares 'Equatable', 'Addable', 'Numeric', and 'Printable', all satisfied automatically by the primitive types.
+
+=== Using stdlib interfaces: Ordered, min_of, max_of, sum_of
+
+All numeric primitives satisfy 'Ordered' out of the box. 'max_of', 'min_of', and 'sum_of' are stdlib functions bounded by these interfaces.
+
+```rust
+fn test_stdlib_bounded() {
+```
+
+max_of and min_of work with integer (satisfies Ordered)
+
+```rust
+  sb_best = max_of([4, 1, 9, 2]);
+  assert(sb_best == 9, "max_of integers: {sb_best}");
+  sb_least = min_of([4, 1, 9, 2]);
+  assert(sb_least == 1, "min_of integers: {sb_least}");
+```
+
+sum_of works on any vector\<integer\>
+
+```rust
+  sb_total = sum_of([1, 2, 3, 4, 5]);
+  assert(sb_total == 15, "sum_of: {sb_total}");
+}
+```
+
+=== Custom type satisfying a stdlib interface
+
+Provide 'OpLt' and 'OpGt' and the type automatically satisfies 'Ordered'. Then write a bounded generic function that uses those operators on T. The compiler checks at the call site that the type satisfies the bound, and reports which method is missing if it does not.
+
+```rust
+struct Score {
+  value: integer
+}
+fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
+fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
+```
+
+A bounded generic using Ordered — can be called with Score or any Ordered type. The compiler resolves 'left \< right' to the Score implementation of OpLt.
+
+```rust
+fn higher<T: Ordered>(left: T, right: T) -> T {
+  if left < right { right } else { left }
+}
+```
+
+```rust
+fn test_custom_ordered() {
+  a_score = Score{value: 3};
+  b_score = Score{value: 7};
+  co_winner = higher(a_score, b_score);
+  assert(co_winner.value == 7, "winner: {co_winner.value}");
+}
+```
+
+=== Multiple bounds
+
+Use '+' to require more than one interface: '\<T: Ordered + Printable\>'.
+
+=== Diagnostics
+
+When a type does not satisfy the required interface, the compiler reports which method is missing and its expected signature, for example:
+
+```
+"Score does not satisfy Ordered: missing fn OpGt(Score, Score) -> boolean"
+```
+
 ```rust
 fn main() {
   test_identity();
   test_pick_second();
+  test_stdlib_bounded();
+  test_custom_ordered();
 }
 ```
 
@@ -4414,7 +4606,7 @@ A lambda may read any integer variable in scope at the call site. Store the lamb
 
 === Multiple integer captures
 
-A lambda can read more than one outer variable at once. All are captured at the moment the lambda is called.
+A lambda can read more than one outer variable at once. All are captured at the moment the lambda is written.
 
 === Text capture
 
@@ -4422,11 +4614,21 @@ Text values are captured by deep-copy, so they are independent of the original v
 
 === Capture timing
 
-Loft captures variables at the moment the lambda is called, not at the moment the lambda is written.  If a variable changes between writing and calling the lambda, the lambda sees the updated value.
+Loft captures variables at the moment the lambda is written (definition time), not at the moment it is called.  If a variable changes between writing and calling the lambda, the lambda sees the value it had when it was written.
 
-=== Current limitation: captured lambdas and higher-order functions
+=== Cross-scope closures
 
-Captured closures only work when called directly by name in the same scope. Passing a capturing lambda as an argument to map, filter, reduce, or a user-defined higher-order function is not yet supported — the hidden closure record is not forwarded through the call. Workaround: pass the extra value as an explicit extra argument instead. Non-capturing lambdas (those that only use their own parameters) work fine with all higher-order functions.
+A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references.
+
+=== Current limitation (C31): closures in collections and struct fields
+
+A capturing lambda cannot be stored in a 'vector\<fn(...)\>' or as a struct field.  Pass closures as function arguments or return values instead. Non-capturing lambdas (those that only use their own parameters) work fine as elements of function vectors and with higher-order functions.
+
+```rust
+fn make_adder(base_val: integer) -> fn(integer) -> integer {
+  fn(n: integer) -> integer { base_val + n }
+}
+```
 
 ```rust
 fn main() {
@@ -4472,6 +4674,18 @@ Closures capture at definition time. 'base' is 10 when the lambda is written; re
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
+```
+
+=== Cross-scope closures
+
+make_adder returns a lambda that captured base_val from its parameter. The captured value is preserved after make_adder returns.
+
+```rust
+  add10 = make_adder(10);
+  add100 = make_adder(100);
+  assert(add10(5) == 15, "add10(5): {add10(5)}");
+  assert(add100(5) == 105, "add100(5): {add100(5)}");
+  assert(add10(0) == 10, "add10(0): {add10(0)}");
 ```
 
 === Non-capturing lambdas with higher-order functions
@@ -4574,6 +4788,18 @@ fn large_range(limit: integer) -> iterator<integer> {
 }
 ```
 
+=== Yield from inside a for-loop over a vector
+
+The coroutine save/restore machinery works for any iterable — not just ranges. Here the loop variable is a vector element; the generator suspends mid-loop.
+
+```rust
+fn doubled_elems(src: vector<integer>) -> iterator<integer> {
+  for elem in src {
+    yield elem * 2;
+  }
+}
+```
+
 ```rust
 fn main() {
 ```
@@ -4642,6 +4868,19 @@ One extra advance past the last element; exhausted() is true after that.
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
+=== Yield from inside a for-loop over a vector
+
+The generator suspends at 'yield' mid-way through the vector loop; the loop cursor and vector position are preserved across each resume.
+
+```rust
+  de_src = [10, 20, 30];
+  de_total = 0;
+  for de_n in doubled_elems(de_src) {
+    de_total += de_n;
+  }
+  assert(de_total == 120, "doubled vector elements: {de_total}");
+```
+
 === Early termination with break
 
 Stop after the first 5 values from a 1000-element generator.
@@ -4684,6 +4923,10 @@ A function can return a tuple to give back more than one value at once.
 === Destructuring
 
 Assign a tuple to multiple names in one step using the '(a, b) = expr' form. This is concise when a function returns a tuple and you need both values.
+
+=== Matching tuples
+
+A tuple can be used as the subject of a 'match' expression. Each element position can be a literal, a binding name, or a wildcard '_'. This lets you branch on the combination of values in a single expression.
 
 === Three or more elements
 
@@ -4772,6 +5015,29 @@ Already in order
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
+```
+
+=== Matching tuples
+
+Match on a pair: bind 'n' when the second element is a specific text, or bind both as 'n' and 's' for the general case.
+
+```rust
+  tm_pair = (3, "hello");
+  tm_result = match tm_pair {
+    (0, _) => "starts at zero",
+    (n, "hi") => "greeting at {n}",
+    (n, s) => "got {n} and {s}"
+  };
+  assert(tm_result == "got 3 and hello", "tuple match: {tm_result}");
+```
+
+```rust
+  tm_pair2 = (0, "anything");
+  tm_result2 = match tm_pair2 {
+    (0, _) => "starts at zero",
+    (n, s) => "got {n} and {s}"
+  };
+  assert(tm_result2 == "starts at zero", "wildcard match: {tm_result2}");
 ```
 
 === Three or more elements

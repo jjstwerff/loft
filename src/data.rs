@@ -183,8 +183,9 @@ pub enum Type {
     Spacial(u32, Vec<String>, Vec<u16>),
     /// A hash table towards other records. The second is the hash function per [field name].
     Hash(u32, Vec<String>, Vec<u16>),
-    /// A function reference allowing for closures. Argument types and results.
-    Function(Vec<Type>, Box<Type>),
+    /// A function reference allowing for closures. Argument types, result, and deps.
+    /// The dep list tracks ownership of the closure record embedded in the fn-ref slot.
+    Function(Vec<Type>, Box<Type>, Vec<u16>),
     /// A rewritten type into append statements (mostly Text or structures)
     Rewritten(Box<Type>),
     /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
@@ -259,6 +260,12 @@ impl Type {
                 }
                 Type::Vector(Box::new(*t.clone()), v)
             }
+            Type::Function(params, ret, dep) => {
+                if !v.contains(&on) {
+                    v.append(&mut dep.clone());
+                }
+                Type::Function(params.clone(), ret.clone(), v)
+            }
             Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
             _ => self.clone(),
         }
@@ -275,7 +282,8 @@ impl Type {
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
-            | Type::Vector(_, dep) => v.append(&mut dep.clone()),
+            | Type::Vector(_, dep)
+            | Type::Function(_, _, dep) => v.append(&mut dep.clone()),
             Type::RefVar(tp) => return tp.depend(),
             _ => {}
         }
@@ -316,6 +324,11 @@ impl Type {
             | (Type::Spacial(r, rf, _), Type::Spacial(o, of, _)) => return r == o && rf == of,
             (Type::Sorted(r, rf, _), Type::Sorted(o, of, _))
             | (Type::Index(r, rf, _), Type::Index(o, of, _)) => return r == o && rf == of,
+            (Type::Function(sp, sr, _), Type::Function(op, or, _)) => {
+                return sp.len() == op.len()
+                    && sp.iter().zip(op.iter()).all(|(a, b)| a.is_equal(b))
+                    && sr.is_equal(or);
+            }
             // T1.7: tuple equality ignores `not_null` on Integer elements (runtime type is same).
             (Type::Tuple(se), Type::Tuple(oe)) => {
                 return se.len() == oe.len()
@@ -467,7 +480,7 @@ impl Type {
 pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _) | Type::Character => 4,
+        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _, _) | Type::Character => 4,
         Type::Long | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)
@@ -1551,7 +1564,7 @@ impl Data {
             Type::Index(d_nr, _, _) => format!("index<{}>", self.def(*d_nr).name),
             Type::Hash(d_nr, _, _) => format!("hash<{}>", self.def(*d_nr).name),
             Type::Routine(_) => "fn".to_string(),
-            Type::Function(args, ret) => {
+            Type::Function(args, ret, _) => {
                 let args_s: Vec<String> = args.iter().map(|a| self.type_name_str(a)).collect();
                 format!("fn({}) -> {}", args_s.join(", "), self.type_name_str(ret))
             }

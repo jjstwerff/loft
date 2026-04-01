@@ -203,7 +203,7 @@ impl Output<'_> {
         let variables = &self.data.def(self.def_nr).variables;
         let var_name = sanitize(variables.name(v_nr));
         let fn_type = variables.tp(v_nr).clone();
-        let (param_types, ret_type) = if let Type::Function(p, r) = &fn_type {
+        let (param_types, ret_type) = if let Type::Function(p, r, _) = &fn_type {
             (p.clone(), *r.clone())
         } else {
             // Not a function type — fall back to debug print.

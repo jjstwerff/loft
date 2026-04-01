@@ -31,7 +31,7 @@ impl Output<'_> {
                 let param_is_fnref = idx < def_fn.attributes.len()
                     && matches!(
                         def_fn.attributes[idx].typedef,
-                        Type::Function(_, _) | Type::Routine(_)
+                        Type::Function(_, _, _) | Type::Routine(_)
                     );
                 if param_is_fnref && matches!(v, Value::Int(_)) {
                     let mut buf = Vec::new();

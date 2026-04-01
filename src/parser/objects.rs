@@ -93,6 +93,9 @@ impl Parser {
             let fnr = self.data.attr(closure_d_nr, name);
             *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
             t = self.data.attr_type(closure_d_nr, fnr);
+            // A5.6-text: closure record is a struct — add __closure as dep so the
+            // store allocation stays alive while derived text/references are in use.
+            t = t.depending(self.closure_param);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
             if self.lexer.has_token("#") {
@@ -168,6 +171,8 @@ impl Parser {
             } else {
                 *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
                 t = self.data.attr_type(closure_d_nr, fnr);
+                // A5.6-text: closure record is a struct — add __closure as dep.
+                t = t.depending(self.closure_param);
             }
         } else if self.data.def_nr(name) != u32::MAX {
             let dnr = self.data.def_nr(name);
@@ -218,7 +223,7 @@ impl Parser {
                     .map(|a| self.data.attr_type(fn_d_nr, a))
                     .collect();
                 let ret_type = self.data.def(fn_d_nr).returned.clone();
-                t = Type::Function(arg_types, Box::new(ret_type));
+                t = Type::Function(arg_types, Box::new(ret_type), vec![]);
             } else if !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
                 t = Type::Unknown(0);

@@ -339,7 +339,7 @@ fn closure_capture_multiple() {
 }
 
 #[test]
-#[ignore = "A5.6-text: work-ref type mismatch — fn(text)->text([]) vs lambda text([1])"]
+#[ignore = "A5.6-text: cross-scope closure — ___clos_N freed at function return before fn-ref escapes"]
 fn closure_capture_text() {
     // Captured text is deep-copied — independent of the original after capture.
     code!(

@@ -291,7 +291,7 @@ impl Parser {
             );
             return Type::Unknown(0);
         }
-        let (worker_arg_types, worker_ret_type) = if let Type::Function(args, ret) = &types[0] {
+        let (worker_arg_types, worker_ret_type) = if let Type::Function(args, ret, _) = &types[0] {
             (args.clone(), (**ret).clone())
         } else {
             diagnostic!(
