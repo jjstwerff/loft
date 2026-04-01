@@ -3711,79 +3711,62 @@ fn text_slot_reuse_sequential() {
 
 ## C47 — Native codegen: cross-scope closure CallRef dispatch
 
-**Problem:** Three sub-issues prevent cross-scope closures from working in `--native`:
+**Status:** Interpreter cross-scope closures work.  Native codegen has two
+remaining issues.
 
-1. **`Value::FnRef` emitted null sentinel** — `emit.rs` always emitted
-   `(d_nr, null_DbRef)`.  *(Fixed)* — now emits `(d_nr, var___clos_N)` when
-   a closure work variable exists.
+**Sub-issues fixed:**
+1. *(Fixed)* `Value::FnRef` emits `(d_nr, var___clos_N)` when closure exists.
+2. *(Fixed)* CallRef dispatch passes `var_f.1` as `__closure` for cross-scope.
+3. *(Fixed)* Scope analysis bounds check: deps from callee variable space
+   (d >= function.count()) are skipped in Set registration and check_ref_leaks.
 
-2. **CallRef dispatch didn't pass `__closure`** — when `closure_var_of` returned
-   `None` (cross-scope case), no closure argument was emitted.  *(Fixed)* — now
-   emits `var_{fn_ref_name}.1` as fallback.
+**Sub-issues remaining:**
 
-3. **Reachable set doesn't include cross-scope lambdas** — `reachable_functions`
-   in `src/generation/mod.rs:163` traces `Call` and `FnRef(Int)` literals but
-   NOT fn-ref return values from called functions.  When `make_adder` returns
-   d_nr 511, the lambda at 511 is never added to the reachable set.  The
-   generated `match` dispatch has no arm for 511 → `unreachable!` at runtime.
+**C47.3a — Broad CallRef match dispatch** — `output_call_ref` includes ALL
+functions with matching parameter/return types, not just lambdas that could
+actually be stored in the fn-ref.  For `fn(integer) -> integer`, the match
+includes `abs()`, `len()`, and every other `integer -> integer` function.
+Non-closure candidates have no `__closure` parameter, so the emitted
+`var_f.1` argument causes "cannot find value `var_`" compile errors.
 
-**Root cause of sub-issue 3:** `collect_fn_ref_literals` scans for:
-- `Set(var, Int(n))` where var is `Type::Function` — catches `f = fn double_it`
-- `Call(d, args)` where args contain `Int(n)` in Function param position
+**Root cause:** The dispatch is a static match on d_nr.  Without a closed
+set of possible values, it must conservatively include all type-compatible
+functions.  Same-scope fn-refs work because `closure_var_of` returns a valid
+closure variable name for the specific `has_closure` arms.
 
-But NOT:
-- `Call(d, args)` where `d` returns `Type::Function` — the returned fn-ref's d_nr
-  is only known at runtime; the reachable set is static
+**Fix approach:** When emitting the `__closure` argument in the cross-scope
+path, only emit `var_{fn_ref_name}.1` for candidates that `has_closure`.
+For non-closure candidates in the same match, omit the closure argument
+(they don't need one).  This is already handled — each arm checks
+`*has_closure` independently.
 
-**Fix approach for sub-issue 3:**
+The real problem: the `has_closure` arm IS emitting for `abs()` etc., but
+`abs` doesn't have `has_closure = true`, so it emits without the closure
+arg.  That's correct.  The compile error `var_??` suggests the fn-ref
+variable's name is empty — a separate bug in how temporary fn-ref variables
+are named.
 
-The lambda d_nr IS known statically — it's embedded in `Value::FnRef(d_nr, w, tp)`
-inside `make_adder`'s code.  `collect_fn_ref_literals` already finds it and adds
-it to `make_adder`'s call set.  The problem is that `make_adder` IS in the
-reachable set (it's called from `main`), so its lambda SHOULD be transitively
-reachable.
+**Investigation:** trace which CallRef variable has an empty name and fix
+the temporary naming.
 
-**Investigation needed:** verify that `collect_fn_ref_literals` handles
-`Value::FnRef` (not just `Value::Int` inside `Set`).  The current code at
-`mod.rs:~73` has `collect_int_fn_refs` which looks for `Value::Int(n)` and
-`Value::FnRef(d_nr, _, _)`:
+**Files:** `src/generation/emit.rs`, `src/generation/mod.rs`
 
-```rust
-fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
-    match val {
-        Value::Int(n) if *n >= 0 => { calls.insert(*n as u32); }
-        Value::FnRef(d_nr, _, _) => { calls.insert(*d_nr as u32); }
-        ...
-    }
-}
-```
+### Step 1 — Fix temporary fn-ref variable naming
 
-If this is correct, then the issue is in the scanning path — `FnRef` may be
-nested inside a `Block` that `collect_fn_ref_literals` doesn't descend into.
+Find where temporary fn-ref variables (from chained calls like
+`make_adder(5)(10)`) get created without a name.  Ensure all fn-ref
+variables have a valid sanitized name.
 
-**Files:** `src/generation/mod.rs`, `src/generation/emit.rs`
+### Step 2 — Test with named variables only
 
-### Step 1 — Add debug tracing to reachable_functions
-
-Run with `LOFT_LOG=variables` and print the reachable set.  Verify whether
-d_nr 511 appears.  If not, trace why `collect_fn_ref_literals` misses it
-inside `make_adder`'s code.
-
-### Step 2 — Fix collect_fn_ref_literals to descend into Block/FnRef
-
-If `FnRef` is nested inside a `Block` result (the `fn_ref_with_closure` block),
-ensure the recursive scan descends into it.  The `collect_fn_ref_literals` match
-must handle `Value::Block(bl)` by iterating `bl.operators`.
+Test `add5 = make_adder(5); add5(10)` in native mode (avoids the
+temporary naming issue).
 
 ### Step 3 — Enable cross-scope doc test
 
-Uncomment the `make_adder` example in `26-closures.loft`.  Run `make ci`.
+Add `make_adder` example back to `26-closures.loft`.  Run `make ci`.
 
-### Step 4 — Verify all native tests
-
-`cargo test --test native` — all 5 tests pass including `26-closures`.
-
-**Effort:** Small (likely a missing `Block` descent in the reachable scan)
+**Effort:** Small–Medium
 **Target:** 0.8.3
 
 ---
