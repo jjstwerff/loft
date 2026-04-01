@@ -22,6 +22,19 @@ All notable changes to the loft language and interpreter.
   correctly freed via `.1` destructuring when fn-ref variables go out of scope.
   Non-capturing lambdas use the null sentinel and are safely skipped.
 
+### Closures — native parity
+
+- **Native cross-scope closures** (C47) — Functions that return closures now
+  work in `--native` mode.  Five fixes: FnRef emits closure DbRef, CallRef
+  passes `.1` as `__closure`, scope analysis skips cross-function deps,
+  `last_closure_work_var` reset after function body, FnRef added to reachable
+  set.  Doc test `26-closures.loft` now includes cross-scope `make_adder`.
+
+- **Capturing closures with map/filter** (C48) — `map(v, fn(x) { x * factor })`
+  and `filter(v, fn(x) { x > threshold })` now work with capturing lambdas.
+  The collections parser accepts fn-ref variables and emits CallRef in the
+  desugared loop body.
+
 ### Slot assignment
 
 - **Text slot reuse** (C43) — Sequential text variables with non-overlapping lifetimes
