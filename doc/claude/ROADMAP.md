@@ -22,32 +22,48 @@ All 0.8.4 features are implemented as **loft libraries** that work across all th
 backends (interpreter, `--native` codegen, WASM).  The design follows the existing
 cross-backend pattern established by the standard library:
 
-**Architecture:**
-- **Pure-loft types and logic** in `.loft` files — parsed identically by all backends.
-- **Native ops** (Rust functions) only for operations loft cannot express: HTTP sockets,
-  PNG I/O, GPU context creation, font rasterization.
-- **Platform bridge** via the existing `#[cfg(feature)]` pattern in `src/wasm.rs`:
-  interpreter/native use Rust crates directly; WASM calls JavaScript host functions.
-- **Library packaging** via `loft.toml` manifests (EXTERNAL_LIBS.md Phase 1) so users
-  `import "graphics"` or `import "web"` without knowing which backend runs underneath.
+**How library compilation works — all three backends:**
 
-| Layer | HTTP (H4) | Graphics (GL0–GL4) | Desktop GL (GL5) | WebGL (GL6) |
-|-------|-----------|-------------------|-------------------|-------------|
-| **Loft types** | `HttpResponse` in `default/04_web.loft` | `Rgba`, `Canvas`, `Mesh`, `Scene` in `lib/graphics/*.loft` | reuses GL4 types | reuses GL4 types |
-| **Loft logic** | JSON via `{v:j}` / `Type.parse()` | blend, line, Bezier, fill, GLB writer — all in loft | — | — |
-| **Native ops** | `ureq` HTTP calls | `save_png` (existing), `fontdue` glyph raster | `glutin` window + `glow` GL calls | — |
-| **WASM bridge** | `fetch()` via `host_http_get` etc. | `save_png` via host bridge | N/A (no desktop GL) | `<canvas>` WebGL2 context via JS |
-| **Cargo feature** | `http` (new) | `png` (existing) + `fontdue` (new) | `opengl` (new, optional) | `wasm` (existing) |
+Loft library functions are compiled identically to user functions on every backend.
+There is no special "library mode" — a `.loft` file loaded via `use` goes through
+the same parse → scope-analysis → bytecode/native pipeline as the main script.
 
-**Interpreter:** loads `.loft` files via `parse_dir`; native ops registered in
-`src/native.rs`; extension crates loaded via `load_one` if `native-extensions` enabled.
+The compilation path for a library function `fn blend_pixel(...)`:
 
-**Native codegen:** same `.loft` files parsed; `#rust` annotations emit inline Rust;
-native ops compiled directly into the generated binary via `codegen_runtime`.
+| Step | Interpreter | `--native` | WASM |
+|------|-------------|-----------|------|
+| **Load** | `parse_dir("lib/")` reads `.loft` from filesystem | same | `include_str!` from embedded VirtFS |
+| **Parse** | Two-pass parser produces IR (`Value` tree) | same | same |
+| **Scope** | `scopes::check` emits free ops, slot analysis | same | same |
+| **Compile** | `compile::byte_code` → opcode stream per function | `generation::output_native` → Rust source per function | same as interpreter |
+| **Execute** | `State::execute` interprets opcodes | `rustc` compiles generated `.rs` → native binary | `State::execute` interprets opcodes |
 
-**WASM:** `.loft` files embedded as `include_str!` in `src/wasm.rs`; native ops bridged
-to JavaScript host functions; GL5 is N/A (no desktop GL in browser), GL6 uses WebGL2
-via `web-sys` bindings.
+**Pure-loft functions** (no `#rust`) — this is ALL library logic (blend, Bezier,
+GLB writer, HTTP parsing, text layout): compiled to bytecode for interpreter/WASM,
+emitted as Rust for `--native`.  No Cargo features needed.
+
+**Native ops** (`#rust` annotation) — only for operations loft cannot express:
+HTTP sockets, PNG I/O, GPU context, font rasterization.  These are declared in
+`default/*.loft` with inline Rust, compiled into `fill.rs` dispatch table for
+interpreter/WASM, and into `codegen_runtime` for `--native`.
+
+**Platform bridge** — native ops that differ between desktop and browser use
+`#[cfg(feature)]` in their Rust implementation:
+- Desktop: calls Rust crates (`ureq`, `glutin`, `fontdue`) directly
+- WASM: calls JavaScript host functions via `wasm_bindgen`
+
+**New 0.8.4 libraries follow this existing pattern:**
+
+| Library | Pure loft (all backends) | Native ops (Cargo feature) | WASM bridge |
+|---------|------------------------|---------------------------|-------------|
+| HTTP | `HttpResponse` struct, JSON parsing | `http_get`/`post` via `ureq` (`http`) | `fetch()` via `host_http_*` |
+| Graphics | `Rgba`, `Canvas`, blend, line, fill, GLB | `save_png` (`png`), `fontdue` glyph | `save_png` host bridge |
+| OpenGL | — | `glutin` + `glow` (`opengl`) | N/A |
+| WebGL | — | — | `web-sys` WebGL2 (`wasm`) |
+
+No changes to the compilation pipeline are needed.  Library functions are
+automatically compiled for all backends by writing them in pure loft.  Only
+platform I/O requires native ops with Cargo feature gates.
 
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
 are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
