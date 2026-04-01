@@ -4415,7 +4415,7 @@ Loft captures variables at the moment the lambda is written (definition time), n
 
 === Cross-scope closures
 
-A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references. (Example in interpreter only — native codegen for cross-scope closures is tracked as a follow-on item.)
+A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references. (Native codegen: cross-scope dispatch needs reachability fix — C47.)
 
 ```loft fn make_adder(n: integer) -\> fn(integer) -\> integer {
 

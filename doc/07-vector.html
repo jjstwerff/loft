@@ -86,17 +86,6 @@
 fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does NOT see the append
 </code></pre>
 <p>The same rule applies to slices: <code>v[2..5]</code> passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.</p>
-<h2 id="aggregates">Aggregates</h2>
-<p>Shorthand functions over an entire vector, without writing an explicit loop. sum_of(v)          — sum of all integer elements min_of(v)          — smallest element (null if empty) max_of(v)          — largest element (null if empty) any(v, pred)       — true if at least one element satisfies the predicate all(v, pred)       — true if every element satisfies the predicate count_if(v, pred)  — number of elements satisfying the predicate</p>
-<pre><code>  agg_nums = [<span class="nm">3</span>, <span class="nm">1</span>, <span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">5</span>, <span class="nm">9</span>, <span class="nm">2</span>, <span class="nm">6</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-vector-aggregates.html">sum_of</a></span>(agg_nums) == <span class="nm">31</span>, <span class="st">"sum_of: {sum_of(agg_nums)}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-vector-aggregates.html">min_of</a></span>(agg_nums) == <span class="nm">1</span>, <span class="st">"min_of: {min_of(agg_nums)}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-vector-aggregates.html">max_of</a></span>(agg_nums) == <span class="nm">9</span>, <span class="st">"max_of: {max_of(agg_nums)}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">any</span>(agg_nums, |x| { x &gt; <span class="nm">8</span> }), <span class="st">"any &gt; 8"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">any</span>(agg_nums, |x| { x &gt; <span class="nm">10</span> }), <span class="st">"none &gt; 10"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">all</span>(agg_nums, |x| { x &gt; <span class="nm">0</span> }), <span class="st">"all &gt; 0"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">all</span>(agg_nums, |x| { x &gt; <span class="nm">1</span> }), <span class="st">"not all &gt; 1"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">count_if</span>(agg_nums, |x| { x % <span class="nm">2</span> == <span class="nm">0</span> }) == <span class="nm">3</span>, <span class="st">"count even elements"</span>);</code></pre>
 <h2 id="higher-order-functions">Higher-order functions</h2>
 <p><code>map</code> applies a function to every element and returns a new vector.</p>
 <pre><code>  nums =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];

@@ -52,13 +52,6 @@
     yield i;
   }
 }</code></pre>
-<h2 id="yield-from-inside-a-for-loop-over-a-vector">Yield from inside a for-loop over a vector</h2>
-<p>The coroutine save/restore machinery works for any iterable — not just ranges. Here the loop variable is a vector element; the generator suspends mid-loop.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">doubled_elems</span>(src: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
-  <span class="kw">for</span> elem <span class="kw">in</span> src {
-    yield elem * <span class="nm">2</span>;
-  }
-}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
 <pre><code>  total = <span class="nm">0</span>;
@@ -99,14 +92,6 @@
     yf_total += n;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
-<h2 id="yield-from-inside-a-for-loop-over-a-vector">Yield from inside a for-loop over a vector</h2>
-<p>The generator suspends at <code>yield</code> mid-way through the vector loop; the loop cursor and vector position are preserved across each resume.</p>
-<pre><code>  de_src = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>];
-  de_total = <span class="nm">0</span>;
-  <span class="kw">for</span> de_n <span class="kw">in</span> <span class="fn-call">doubled_elems</span>(de_src) {
-    de_total += de_n;
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(de_total == <span class="nm">120</span>, <span class="st">"doubled vector elements: {de_total}"</span>);</code></pre>
 <h2 id="early-termination-with-break">Early termination with break</h2>
 <p>Stop after the first 5 values from a 1000-element generator.</p>
 <pre><code>  limit_total = <span class="nm">0</span>;

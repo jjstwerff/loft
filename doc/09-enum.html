@@ -51,17 +51,6 @@
     <span class="en">East</span>
   }
 }</code></pre>
-<h2 id="nested-field-sub-patterns-in-match">Nested field sub-patterns in match</h2>
-<p>Inside a struct-enum arm, each field position can carry a sub-pattern instead of just a binding name. Supported sub-patterns: enum variant name, scalar literal, wildcard <code>_</code>, or or-pattern (<code>A | B</code>). This lets you match on a field's value and bind others in a single arm, without a nested match or an if-guard.</p>
-<pre><code><span class="kw">enum</span> <span class="en">Status</span> {
-  <span class="en">Pending</span>,
-  <span class="en">Paid</span>,
-  <span class="en">Refunded</span>
-}</code></pre>
-<pre><code><span class="kw">struct</span> <span class="en">Order</span> {
-  status: <span class="en">Status</span>,
-  amount: <span class="ty"><a href="stdlib-types.html">integer</a></span>
-}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Plain enum values are ordered by declaration position. North comes first (smallest), West comes last (greatest).</p>
 <pre><code>  d = <span class="en">East</span>;
@@ -134,28 +123,7 @@
     <span class="ch">'a'</span> | <span class="ch">'e'</span> | <span class="ch">'i'</span> | <span class="ch">'o'</span> | <span class="ch">'u'</span> =&gt; <span class="kw">true</span>,
     _ =&gt; <span class="kw">false</span>
   };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(vowel, <span class="st">"character or-pattern"</span>);</code></pre>
-<h2 id="nested-field-sub-patterns">Nested field sub-patterns</h2>
-<p>An arm for a struct-enum variant can constrain a field to a specific value and still bind other fields in the same arm. Here: match an Order on its status field, binding amount only when Paid. A top-level <code>_</code> wildcard covers all other status values.</p>
-<pre><code>  paid_order = <span class="en">Order</span> { status: <span class="en">Paid</span>, amount: <span class="nm">5000</span> };
-  charge = match paid_order {
-    <span class="en">Order</span> { status: <span class="en">Paid</span>, amount } =&gt; amount,
-    _ =&gt; <span class="nm">0</span>
-  };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(charge == <span class="nm">5000</span>, <span class="st">"paid order charged: {charge}"</span>);</code></pre>
-<pre><code>  pending_order = <span class="en">Order</span> { status: <span class="en">Pending</span>, amount: <span class="nm">200</span> };
-  charge2 = match pending_order {
-    <span class="en">Order</span> { status: <span class="en">Paid</span>, amount } =&gt; amount,
-    _ =&gt; <span class="nm">0</span>
-  };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(charge2 == <span class="nm">0</span>, <span class="st">"pending order not charged: {charge2}"</span>);</code></pre>
-<p>Or-patterns in a field sub-pattern match multiple variant values in one arm.</p>
-<pre><code>  refunded_order = <span class="en">Order</span> { status: <span class="en">Refunded</span>, amount: <span class="nm">300</span> };
-  is_inactive = match refunded_order {
-    <span class="en">Order</span> { status: <span class="en">Pending</span> | <span class="en">Refunded</span> } =&gt; <span class="kw">true</span>,
-    _ =&gt; <span class="kw">false</span>
-  };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(is_inactive, <span class="st">"pending|refunded matches or-pattern"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(vowel, <span class="st">"character or-pattern"</span>);
 }</code></pre>
 
   </article>

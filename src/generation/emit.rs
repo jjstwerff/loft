@@ -190,12 +190,24 @@ impl Output<'_> {
                     self.output_code_inner(w, inner)?;
                 }
             }
-            // C39: FnRef emits a (u32, DbRef) tuple — d_nr + null closure sentinel.
-            // Capturing lambdas replace the closure via the allocation block.
-            Value::FnRef(d_nr, _, _) => write!(
-                w,
-                "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-            )?,
+            // C39/C47: FnRef emits a (u32, DbRef) tuple.
+            // If closure_var (w) is a real variable, pass its DbRef; otherwise null sentinel.
+            Value::FnRef(d_nr, closure_var, _) => {
+                let clos_name = if *closure_var == u16::MAX {
+                    None
+                } else {
+                    let variables = &self.data.def(self.def_nr).variables;
+                    Some(sanitize(variables.name(*closure_var)))
+                };
+                if let Some(name) = clos_name {
+                    write!(w, "({d_nr}_u32, var_{name})")?;
+                } else {
+                    write!(
+                        w,
+                        "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -292,8 +304,12 @@ impl Output<'_> {
             }
             if *has_closure {
                 if let Some(clos_nr) = closure_var_nr {
+                    // Same-scope closure: pass the local ___clos_N variable.
                     let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
                     write!(w, ", var_{clos_name}")?;
+                } else {
+                    // C47: cross-scope closure — pass .1 from the fn-ref tuple.
+                    write!(w, ", var_{var_name}.1")?;
                 }
             }
             write!(w, "),")?;
