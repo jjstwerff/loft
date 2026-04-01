@@ -20,8 +20,11 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| C47       | Native codegen: pass `__closure` in CallRef dispatch      | S  | ✓      |              | CAVEATS.md § C47              |
-| C48       | Interpreter: capturing closures with map/filter/reduce    | M  | —      | C47          | CAVEATS.md § C48              |
+| C47.1     | ✓ FnRef emits closure DbRef (not null sentinel)           | S  | ✓      |              | PLANNING.md § C47             |
+| C47.2     | ✓ CallRef dispatch passes var_f.1 as `__closure`          | S  | ✓      | C47.1        | PLANNING.md § C47             |
+| C47.3     | Fix reachable set: trace FnRef inside Block results       | S  | ✓      | C47.2        | PLANNING.md § C47             |
+| C47.4     | Enable cross-scope closure doc test in native_dir          | XS | ✓      | C47.3        | PLANNING.md § C47             |
+| C48       | Interpreter: capturing closures with map/filter/reduce    | M  | ✓      | C47          | PLANNING.md § C48             |
 
 ---
 

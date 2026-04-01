@@ -3709,6 +3709,128 @@ fn text_slot_reuse_sequential() {
 
 ---
 
+## C47 — Native codegen: cross-scope closure CallRef dispatch
+
+**Problem:** Three sub-issues prevent cross-scope closures from working in `--native`:
+
+1. **`Value::FnRef` emitted null sentinel** — `emit.rs` always emitted
+   `(d_nr, null_DbRef)`.  *(Fixed)* — now emits `(d_nr, var___clos_N)` when
+   a closure work variable exists.
+
+2. **CallRef dispatch didn't pass `__closure`** — when `closure_var_of` returned
+   `None` (cross-scope case), no closure argument was emitted.  *(Fixed)* — now
+   emits `var_{fn_ref_name}.1` as fallback.
+
+3. **Reachable set doesn't include cross-scope lambdas** — `reachable_functions`
+   in `src/generation/mod.rs:163` traces `Call` and `FnRef(Int)` literals but
+   NOT fn-ref return values from called functions.  When `make_adder` returns
+   d_nr 511, the lambda at 511 is never added to the reachable set.  The
+   generated `match` dispatch has no arm for 511 → `unreachable!` at runtime.
+
+**Root cause of sub-issue 3:** `collect_fn_ref_literals` scans for:
+- `Set(var, Int(n))` where var is `Type::Function` — catches `f = fn double_it`
+- `Call(d, args)` where args contain `Int(n)` in Function param position
+
+But NOT:
+- `Call(d, args)` where `d` returns `Type::Function` — the returned fn-ref's d_nr
+  is only known at runtime; the reachable set is static
+
+**Fix approach for sub-issue 3:**
+
+The lambda d_nr IS known statically — it's embedded in `Value::FnRef(d_nr, w, tp)`
+inside `make_adder`'s code.  `collect_fn_ref_literals` already finds it and adds
+it to `make_adder`'s call set.  The problem is that `make_adder` IS in the
+reachable set (it's called from `main`), so its lambda SHOULD be transitively
+reachable.
+
+**Investigation needed:** verify that `collect_fn_ref_literals` handles
+`Value::FnRef` (not just `Value::Int` inside `Set`).  The current code at
+`mod.rs:~73` has `collect_int_fn_refs` which looks for `Value::Int(n)` and
+`Value::FnRef(d_nr, _, _)`:
+
+```rust
+fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
+    match val {
+        Value::Int(n) if *n >= 0 => { calls.insert(*n as u32); }
+        Value::FnRef(d_nr, _, _) => { calls.insert(*d_nr as u32); }
+        ...
+    }
+}
+```
+
+If this is correct, then the issue is in the scanning path — `FnRef` may be
+nested inside a `Block` that `collect_fn_ref_literals` doesn't descend into.
+
+**Files:** `src/generation/mod.rs`, `src/generation/emit.rs`
+
+### Step 1 — Add debug tracing to reachable_functions
+
+Run with `LOFT_LOG=variables` and print the reachable set.  Verify whether
+d_nr 511 appears.  If not, trace why `collect_fn_ref_literals` misses it
+inside `make_adder`'s code.
+
+### Step 2 — Fix collect_fn_ref_literals to descend into Block/FnRef
+
+If `FnRef` is nested inside a `Block` result (the `fn_ref_with_closure` block),
+ensure the recursive scan descends into it.  The `collect_fn_ref_literals` match
+must handle `Value::Block(bl)` by iterating `bl.operators`.
+
+### Step 3 — Enable cross-scope doc test
+
+Uncomment the `make_adder` example in `26-closures.loft`.  Run `make ci`.
+
+### Step 4 — Verify all native tests
+
+`cargo test --test native` — all 5 tests pass including `26-closures`.
+
+**Effort:** Small (likely a missing `Block` descent in the reachable scan)
+**Target:** 0.8.3
+
+---
+
+## C48 — Capturing closures with map/filter/reduce
+
+**Problem:** The interpreter rejects capturing lambdas passed to `map`, `filter`,
+`reduce` with "function reference must be a compile-time constant".
+
+**Root cause:** `map`/`filter`/`reduce` are parsed by `parse_for_each_call` in
+`src/parser/collections.rs`.  The callback argument is resolved as a static
+`fn <name>` reference (d_nr known at parse time).  Lambda expressions produce
+a `Type::Function` value via `emit_lambda_code`, but the collections parser
+doesn't accept fn-ref variables or lambda expressions in the callback position.
+
+**Fix approach:**
+
+The interpreter's `map`/`filter`/`reduce` implementation (`src/parser/collections.rs`)
+unrolls the callback into a for-loop internally.  For a fn-ref variable or lambda,
+the unrolled loop should use `CallRef` instead of `Call`:
+
+```loft
+// map(v, |x| { x * factor }) desugars to:
+result = vector<T>{};
+for x in v {
+    result += [CallRef(fn_ref_var, x)]
+}
+```
+
+This requires:
+1. Parser: detect when the callback argument is a fn-ref variable or lambda
+   (not a static `fn <name>`)
+2. Collections: emit `Value::CallRef` in the unrolled loop body instead of
+   `Value::Call`
+3. The fn-ref variable must be in scope during loop execution
+
+**Alternative (simpler):** reject the error only when the callback is a
+*non-function* type.  If the callback is a `Type::Function` variable, accept
+it and emit CallRef.  This doesn't require changing the collections desugaring
+— just the argument validation.
+
+**Depends on:** C47 (for native codegen parity)
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
 ## Quick Reference
 
 See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by milestone.
