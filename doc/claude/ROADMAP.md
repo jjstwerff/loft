@@ -18,6 +18,37 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.4 — HTTP client + OpenGL library
 
+All 0.8.4 features are implemented as **loft libraries** that work across all three
+backends (interpreter, `--native` codegen, WASM).  The design follows the existing
+cross-backend pattern established by the standard library:
+
+**Architecture:**
+- **Pure-loft types and logic** in `.loft` files — parsed identically by all backends.
+- **Native ops** (Rust functions) only for operations loft cannot express: HTTP sockets,
+  PNG I/O, GPU context creation, font rasterization.
+- **Platform bridge** via the existing `#[cfg(feature)]` pattern in `src/wasm.rs`:
+  interpreter/native use Rust crates directly; WASM calls JavaScript host functions.
+- **Library packaging** via `loft.toml` manifests (EXTERNAL_LIBS.md Phase 1) so users
+  `import "graphics"` or `import "web"` without knowing which backend runs underneath.
+
+| Layer | HTTP (H4) | Graphics (GL0–GL4) | Desktop GL (GL5) | WebGL (GL6) |
+|-------|-----------|-------------------|-------------------|-------------|
+| **Loft types** | `HttpResponse` in `default/04_web.loft` | `Rgba`, `Canvas`, `Mesh`, `Scene` in `lib/graphics/*.loft` | reuses GL4 types | reuses GL4 types |
+| **Loft logic** | JSON via `{v:j}` / `Type.parse()` | blend, line, Bezier, fill, GLB writer — all in loft | — | — |
+| **Native ops** | `ureq` HTTP calls | `save_png` (existing), `fontdue` glyph raster | `glutin` window + `glow` GL calls | — |
+| **WASM bridge** | `fetch()` via `host_http_get` etc. | `save_png` via host bridge | N/A (no desktop GL) | `<canvas>` WebGL2 context via JS |
+| **Cargo feature** | `http` (new) | `png` (existing) + `fontdue` (new) | `opengl` (new, optional) | `wasm` (existing) |
+
+**Interpreter:** loads `.loft` files via `parse_dir`; native ops registered in
+`src/native.rs`; extension crates loaded via `load_one` if `native-extensions` enabled.
+
+**Native codegen:** same `.loft` files parsed; `#rust` annotations emit inline Rust;
+native ops compiled directly into the generated binary via `codegen_runtime`.
+
+**WASM:** `.loft` files embedded as `include_str!` in `src/wasm.rs`; native ops bridged
+to JavaScript host functions; GL5 is N/A (no desktop GL in browser), GL6 uses WebGL2
+via `web-sys` bindings.
+
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
 are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
 
@@ -25,16 +56,16 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | H4        | HTTP client stdlib + `HttpResponse` (ureq)                | M  | ✓      |              | WEB_SERVICES.md               |
 | H4.1      | ↳ `HttpResponse` struct + `ok()` method                   | S  | ✓      |              | default/04_web.loft           |
-| H4.2      | ↳ `http_get`, `http_post`, `http_put`, `http_delete`      | M  | ✓      | H4.1         | native_http.rs                |
-| H4.3      | ↳ Header support (`http_get_h`, `http_post_h`)            | S  | ✓      | H4.2         | native_http.rs                |
+| H4.2      | ↳ `http_get` / `http_post` / `http_put` / `http_delete`   | M  | ✓      | H4.1         | native_http.rs + wasm bridge  |
+| H4.3      | ↳ Header support (`http_get_h`, `http_post_h`)            | S  | ✓      | H4.2         | native_http.rs + wasm bridge  |
 | H4.4      | ↳ Documentation + integration tests                       | S  | ✓      | H4.2         | tests/docs/                   |
-| GL0       | OpenGL library scaffolding (files, stubs, fontdue dep)    | S  | ✓      |              | OPENGL_IMPL.md Phase 0       |
+| GL0       | Graphics library scaffolding (files, stubs, fontdue dep)  | S  | ✓      |              | OPENGL_IMPL.md Phase 0       |
 | GL1       | Canvas: Rgba, Canvas struct, pixel ops, blend, save_png   | M  | ✓      | GL0          | OPENGL_IMPL.md Phase 1       |
 | GL2       | Drawing primitives: line, rect, circle, Bezier, fill      | MH | ✓      | GL1          | OPENGL_IMPL.md Phase 2       |
 | GL3       | Text rendering: fontdue glyph raster, draw_text           | M  | ✓      | GL1          | OPENGL_IMPL.md Phase 3       |
 | GL4       | GLB export: mesh, scene, material → binary glTF file      | H  | ✓      | GL1          | OPENGL_IMPL.md Phase 4       |
-| GL5       | OpenGL desktop: window, shader, render loop               | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 5       |
-| GL6       | WebGL browser: canvas context, WASM shader bridge         | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 6       |
+| GL5       | OpenGL desktop: window, shader, render loop (optional)    | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 5       |
+| GL6       | WebGL browser: canvas WebGL2 context via web-sys           | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 6       |
 
 ---
 
