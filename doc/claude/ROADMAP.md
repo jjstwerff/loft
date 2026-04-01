@@ -18,13 +18,47 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## 0.8.3 — Native parity + closure completeness
 
-| ID        | Title                                                     | E  | Design | Depends on   | Source                        |
-|-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| C47.1     | ✓ FnRef emits closure DbRef (not null sentinel)           | S  | ✓      |              | PLANNING.md § C47             |
-| C47.2     | ✓ CallRef dispatch passes var_f.1 as `__closure`          | S  | ✓      | C47.1        | PLANNING.md § C47             |
-| C47.3     | Fix reachable set: trace FnRef inside Block results       | S  | ✓      | C47.2        | PLANNING.md § C47             |
-| C47.4     | Enable cross-scope closure doc test in native_dir          | XS | ✓      | C47.3        | PLANNING.md § C47             |
-| C48       | Interpreter: capturing closures with map/filter/reduce    | M  | ✓      | C47          | PLANNING.md § C48             |
+### C47 — Native cross-scope closures
+
+| ID        | Title                                                     | E  | Design | Status       |
+|-----------|-----------------------------------------------------------|----|--------|--------------|
+| C47.1     | FnRef emits closure DbRef (not null sentinel)             | S  | ✓      | done         |
+| C47.2     | CallRef dispatch passes `var_f.1` as `__closure`          | S  | ✓      | done         |
+| C47.3     | Scope bounds check: skip cross-function deps              | S  | ✓      | done         |
+| C47.4     | Fix temp fn-ref variable naming in `output_call_ref`      | S  | ✓      |              |
+| C47.5     | Enable cross-scope closure in `26-closures.loft` doc test | XS | ✓      | C47.4        |
+
+C47.4 root cause: chained calls like `make_adder(5)(10)` create a temporary
+fn-ref variable with no name.  `sanitize("")` produces `??`, causing `var_??`
+in generated Rust → compile error.
+
+**Verify C47.4:** in `src/generation/emit.rs:output_call_ref`, check
+`variables.name(v_nr)` — if empty, assign a synthetic name like `_fnref_tmp`.
+Test: `cargo test --test native native_dir` with cross-scope example enabled.
+
+**Verify C47.5:** uncomment `make_adder` in `26-closures.loft`, run `make ci`.
+
+### C48 — Capturing closures with map/filter/reduce
+
+| ID        | Title                                                     | E  | Design | Status       |
+|-----------|-----------------------------------------------------------|----|--------|--------------|
+| C48.1     | Parser: accept fn-ref variable in map/filter/reduce       | S  | ✓      |              |
+| C48.2     | Collections: emit CallRef in desugared loop body          | S  | ✓      | C48.1        |
+| C48.3     | Test: capturing closure with map in interpreter           | XS | ✓      | C48.2        |
+| C48.4     | Test: capturing closure with map in native codegen        | XS | ✓      | C48.3, C47.4 |
+
+C48.1: in `src/parser/collections.rs`, `parse_for_each_call` resolves the
+callback as a static `fn <name>`.  Change: when the argument is a
+`Type::Function` variable, accept it and store the variable number instead
+of the static d_nr.
+
+C48.2: in the desugared loop body, emit `Value::CallRef(fn_ref_var, [elem])`
+instead of `Value::Call(static_d_nr, [elem])`.
+
+**Verify C48.3:** `map([1,2,3], fn(x: integer) -> integer { x * factor })`
+with `factor = 3` produces `[3, 6, 9]` in interpreter.
+
+**Verify C48.4:** same test passes in `cargo test --test native`.
 
 ---
 
