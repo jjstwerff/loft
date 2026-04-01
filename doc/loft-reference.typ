@@ -3469,27 +3469,20 @@ get_store_lock() is the function form of the \#lock attribute. Both return the s
 
 = Parallel execution
 
-The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body. Use it when you have a large collection and a CPU-intensive per-element calculation: the work is spread across the requested number of threads and the results come back in the original order.
+The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.
 
-The full syntax is:
-
-```
-for a in <vector> par(b=<worker_call>, <threads>) { body }
-```
-
-Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument:
+Full syntax:
 
 ```
-for a in items par(b=my_func(a), 4) { ... }
+`for a in vec par(b=func(a), N) { body }`
 ```
 
-Form 2 calls a method on the element itself:
+Two call forms:
 
-```
-for a in items par(b=a.my_method(), 4) { ... }
-```
+- \*\*Form 1\*\* — global function: `par(b=my_func(a), 4)`
+- \*\*Form 2\*\* — method on element: `par(b=a.my_method(), 4)`
 
-The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a value (integer, long, float, single, boolean, enum, text, or a struct). Extra context arguments are forwarded to each worker: `par(b=scale(a, mult), N)`. ── Shared struct definitions ────────────────────────────────────────────────
+The worker function takes a read-only (`const`) reference to the element and returns a value (integer, float, boolean, text, or a struct). Results are delivered in the original order regardless of thread count. Extra arguments are forwarded: `par(b=scale(a, mult), N)`.
 
 ```rust
 struct Score {
@@ -3504,48 +3497,15 @@ struct ScoreList {
 ```
 
 ```rust
-struct Range {
-  lo: integer,
-  hi: integer
+struct DoubledScore {
+  label: text,
+  doubled: integer
 }
 ```
-
-```rust
-struct RangeList {
-  items: vector < Range >
-}
-```
-
-── Worker functions ───────────────────────────────────────────────────────── Global functions (Form 1)
 
 ```rust
 fn double_score(r: const Score) -> integer {
   r.value * 2
-}
-```
-
-```rust
-fn span(r: const Range) -> integer {
-  r.hi - r.lo
-}
-```
-
-```rust
-fn score_as_float(r: const Score) -> float {
-  r.value as float
-}
-```
-
-```rust
-fn score_positive(r: const Score) -> boolean {
-  r.value > 0
-}
-```
-
-```rust
-struct DoubledScore {
-  label: text,
-  doubled: integer
 }
 ```
 
@@ -3555,21 +3515,11 @@ fn make_doubled(r: const Score) -> DoubledScore {
 }
 ```
 
-Methods on Score (Form 2)
-
 ```rust
 fn get_value(self: const Score) -> integer {
   self.value
 }
 ```
-
-```rust
-fn is_positive(self: const Score) -> boolean {
-  self.value > 0
-}
-```
-
-── Helpers ──────────────────────────────────────────────────────────────────
 
 ```rust
 fn make_scores() -> ScoreList {
@@ -3580,138 +3530,59 @@ fn make_scores() -> ScoreList {
 ```
 
 ```rust
-fn make_ranges() -> RangeList {
-  q = RangeList { };
-  q.items +=[Range {lo: 0, hi: 10 }, Range {lo: 5, hi: 12 }, Range {lo: -3, hi: 7 }];
-  q
-}
-```
-
-```rust
 fn main() {
 ```
 
-=== Running a Global Function in Parallel
+=== Global Function (Form 1)
 
-Each Score's value is doubled by `double_score`. With 1 thread the work is sequential; with 4 threads it runs concurrently. Both must produce the same total because results are delivered in the original order.
+Each Score's value is doubled by `double_score` across 4 threads.
 
 ```rust
   q = make_scores();
   sum = 0;
-  for a in q.items par(b = double_score(a), 1) {
+  for a in q.items par(b = double_score(a), 4) {
     sum += b;
   }
-  assert(sum == 120, "form-1 integer (1 thread): sum == 120");
+  assert(sum == 120, "parallel double: sum == 120");
 ```
 
-integer return, 4 threads
+=== Struct Return
+
+Workers can return a struct. Text fields are deep-copied automatically.
 
 ```rust
   q2 = make_scores();
-  sum2 = 0;
-  for a in q2.items par(b = double_score(a), 4) {
-    sum2 += b;
+  labels = "";
+  for sa in q2.items par(ds = make_doubled(sa), 1) {
+    labels += "{ds.label},";
   }
-  assert(sum2 == 120, "form-1 integer (4 threads): sum == 120");
+  assert(labels == "v10,v20,v30,", "struct return: {labels}");
 ```
 
-`span` works on a two-field struct. The element size is inferred from the struct layout so you do not need to specify it.
+=== Method Call (Form 2)
 
-```rust
-  r = make_ranges();
-  span_sum = 0;
-  for a in r.items par(b = span(a), 2) {
-    span_sum += b;
-  }
-  assert(span_sum == 27, "form-1 Range span: sum == 27");
-```
-
-Workers can return float. Here we just count iterations to confirm every element was processed.
+`b=a.get_value()` dispatches the method on each element in parallel.
 
 ```rust
   q3 = make_scores();
-  fcount = 0;
-  for a in q3.items par(b = score_as_float(a), 1) {
-    fcount += 1;
+  total = 0;
+  for a in q3.items par(b = a.get_value(), 4) {
+    total += b;
   }
-  assert(fcount == 3, "form-1 float return: 3 elements processed");
+  assert(total == 60, "method call: total == 60");
 ```
 
-Workers can return boolean. Use `if b` in the body to act on the result.
+=== Empty Vector
 
-```rust
-  q4 = make_scores();
-  pos = 0;
-  for a in q4.items par(b = score_positive(a), 1) {
-    if b {
-      pos += 1;
-    }
-  }
-  assert(pos == 3, "form-1 boolean: all 3 positive");
-```
-
-An empty vector is safe: the loop body simply never executes.
+An empty vector is safe — the loop body never executes.
 
 ```rust
   empty = ScoreList { };
-  empty_sum = 0;
+  n = 0;
   for a in empty.items par(b = double_score(a), 1) {
-    empty_sum += b;
+    n += 1;
   }
-  assert(empty_sum == 0, "form-1 empty: body executes 0 times");
-```
-
-=== Returning a Struct from a Parallel Worker
-
-Workers can return a struct. Each worker creates its own struct instance and the runtime deep-copies the result (including text fields) into a shared result vector so field access works in the loop body.
-
-```rust
-  q8 = make_scores();
-  dtotal = 0;
-  dlabels = "";
-  for sa in q8.items par(ds = make_doubled(sa), 1) {
-    dtotal += ds.doubled;
-    dlabels += "{ds.label},";
-  }
-  assert(dtotal == 120, "form-1 struct return: dtotal == 120");
-  assert(dlabels == "v10,v20,v30,", "form-1 struct labels: {dlabels}");
-```
-
-=== Running a Method in Parallel
-
-Form 2 calls the worker as a method on each element. The syntax `b=a.get_value()` tells the compiler to dispatch `get_value` on every element in parallel and bind each result to `b` in the loop body.
-
-```rust
-  q5 = make_scores();
-  sum3 = 0;
-  for a in q5.items par(b = a.get_value(), 1) {
-    sum3 += b;
-  }
-  assert(sum3 == 60, "form-2 integer (1 thread): sum == 60");
-```
-
-integer return, 4 threads
-
-```rust
-  q6 = make_scores();
-  sum4 = 0;
-  for a in q6.items par(b = a.get_value(), 4) {
-    sum4 += b;
-  }
-  assert(sum4 == 60, "form-2 integer (4 threads): sum == 60");
-```
-
-boolean return — count positives via method
-
-```rust
-  q7 = make_scores();
-  pos2 = 0;
-  for a in q7.items par(b = a.is_positive(), 1) {
-    if b {
-      pos2 += 1;
-    }
-  }
-  assert(pos2 == 3, "form-2 boolean: all 3 positive");
+  assert(n == 0, "empty: 0 iterations");
 }
 ```
 
