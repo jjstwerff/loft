@@ -109,7 +109,10 @@ fn collect_fn_ref_literals(
 ) {
     match val {
         Value::Set(var, inner) => {
-            if matches!(variables.tp(*var), Type::Function(_, _, _) | Type::Routine(_)) {
+            if matches!(
+                variables.tp(*var),
+                Type::Function(_, _, _) | Type::Routine(_)
+            ) {
                 collect_int_fn_refs(inner, calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls);
