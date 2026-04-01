@@ -166,6 +166,7 @@ Not included in default features or WASM builds.
 | C52       | Stdlib name clash: warning + `std::` prefix               | M  | ✓      |              | PLANNING.md § C52             |
 | C53       | Match arms: library enums + bare variant names            | M  | ✓      |              | PLANNING.md § C53             |
 | W-warn    | Developer warnings (Clippy-inspired)                      | M  | —      |              | see below                     |
+| AOT       | Auto-compile libraries to native shared libs for interpreter | H | ✓   |              | PLANNING.md § AOT             |
 | P2        | REPL / interactive mode                                   | H  | ✓      | L1           | PLANNING.md § P2              |
 | P2.1      | ↳ Input completeness detection                            | S  | ✓      |              | new repl.rs                   |
 | P2.2      | ↳ Single-statement execution                              | M  | ✓      | P2.1         | main.rs, repl.rs              |

@@ -3781,6 +3781,51 @@ variant names.  It needs the same `::` and `children_of` resolution.
 
 ---
 
+## AOT — Ahead-of-time compiled libraries called from interpreter
+
+**Problem:** Library functions like `blend_pixel`, `wu_line`, `scanline_fill`
+are compute-intensive.  The interpreter runs them ~10–50x slower than native.
+Users want library code at native speed while the main script runs in the
+interpreter (for rapid iteration and REPL use).
+
+**Design: auto-compile library to shared library, load via dlopen:**
+
+When the interpreter loads a library via `use graphics;`:
+1. Check cache: `lib/graphics/.loft/graphics.so` exists and source hash matches
+2. If stale: emit Rust via `output_native`, compile with `rustc --crate-type cdylib -O`
+3. Load shared library via `extensions::load_one`
+4. Library functions dispatch through native code, not bytecode
+
+The interpreter still parses `.loft` source for types and scope analysis.
+Only bytecode execution is replaced by the native version.
+
+```
+User script: interpreted bytecode
+    ↓ calls blend_pixel(canvas, x, y, color)
+Library fn:  native compiled (loaded via dlopen)
+    ↓ returns
+User script: continues interpreting
+```
+
+**Cache:** `lib/<name>/.loft/` stores `.so` + source hash + generated `.rs`.
+Recompile only when hash changes (~1–3s rustc cost on first run).
+
+**WASM:** cannot dlopen — library functions stay interpreted.  The native
+compilation is a transparent optimization, not a requirement.
+
+**Steps:**
+1. `output_native_library(lib_source)` — emit only library functions as cdylib
+2. Compile with `rustc --crate-type cdylib -O --extern loft=...`
+3. Load via `extensions::load_one` — registers functions via C-ABI
+4. Cache with source hash in `.loft/` directory
+5. WASM fallback: skip, use bytecode
+
+**Cargo feature:** `native-libs` (includes `native-extensions` + rustc)
+**Effort:** High
+**Target:** 0.9.0
+
+---
+
 ## Quick Reference
 
 See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by milestone.
