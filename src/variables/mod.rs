@@ -66,6 +66,9 @@ pub struct Variable {
     /// Set by `clean_work_refs` for work-ref temporaries that have been re-purposed
     /// and must not be freed at scope exit (A14 replacement for type-mutation hack).
     pub skip_free: bool,
+    /// A5.6-text: variable is captured by a closure.  Suppresses the "never read"
+    /// warning in `test_used` without affecting the dead-assignment uses counter.
+    pub captured: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
     pub first_def: u32,
     /// Sequence number of the last `Value::Var` (or implicit `OpFreeText`/`OpFreeRef`) for this variable.
@@ -675,6 +678,7 @@ impl Function {
             const_param: self.variables[var as usize].const_param,
             stack_allocated: false,
             skip_free: false,
+            captured: false,
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
@@ -701,6 +705,7 @@ impl Function {
             const_param: false,
             stack_allocated: false,
             skip_free: false,
+            captured: false,
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
@@ -725,6 +730,7 @@ impl Function {
             const_param: false,
             stack_allocated: false,
             skip_free: false,
+            captured: false,
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
@@ -820,7 +826,7 @@ impl Function {
             if var.name.starts_with('_') || var.name.contains('#') {
                 continue;
             }
-            if var.uses == 0 && data.def_nr(&var.name) == u32::MAX {
+            if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);
                 diagnostic!(
                     lexer,
@@ -936,6 +942,12 @@ impl Function {
     /// into the result vector store).
     pub fn set_skip_free(&mut self, v: u16) {
         self.variables[v as usize].skip_free = true;
+    }
+
+    /// A5.6-text: mark a variable as captured by a closure.
+    /// Suppresses the "never read" warning without affecting dead-assignment tracking.
+    pub fn set_captured(&mut self, v: u16) {
+        self.variables[v as usize].captured = true;
     }
 
     /// Register an existing variable as a work-reference so that `parse_code`

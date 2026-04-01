@@ -589,8 +589,9 @@ impl Scopes {
             if matches!(function.tp(v), Type::Text(_)) {
                 ls.push(call("OpFreeText", v, data));
             }
-            if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
-                function.tp(v)
+            if let Type::Reference(_, dep)
+                | Type::Vector(_, dep)
+                | Type::Enum(_, true, dep) = function.tp(v)
             {
                 let emit = dep.is_empty() && !tp.depend().contains(&v) && !function.is_skip_free(v);
                 if scope_debug && !emit {

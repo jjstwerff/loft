@@ -109,10 +109,7 @@ fn collect_fn_ref_literals(
 ) {
     match val {
         Value::Set(var, inner) => {
-            if matches!(
-                variables.tp(*var),
-                Type::Function(_, _, _) | Type::Routine(_)
-            ) {
+            if matches!(variables.tp(*var), Type::Function(_, _, _) | Type::Routine(_)) {
                 collect_int_fn_refs(inner, calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls);
@@ -297,7 +294,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
         | Type::Iterator(_, _) => "DbRef",
-        Type::Routine(_) | Type::Function(_, _) => "u32",
+        Type::Routine(_) | Type::Function(_, _, _) => "u32",
         Type::Unknown(_) => "??",
         Type::Keys => "&[Key]",
         Type::Void => "()",

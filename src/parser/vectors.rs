@@ -701,14 +701,9 @@ impl Parser {
             // A5.6-text: propagate the closure dep to the enclosing function's
             // declared return type so that free_vars at Return knows not to free
             // the closure work var when the fn-ref escapes.
-            if matches!(
-                self.data.def(self.context).returned,
-                Type::Function(_, _, _)
-            ) {
-                self.data.definitions[self.context as usize].returned = self.data.definitions
-                    [self.context as usize]
-                    .returned
-                    .depending(w);
+            if matches!(self.data.def(self.context).returned, Type::Function(_, _, _)) {
+                self.data.definitions[self.context as usize].returned =
+                    self.data.definitions[self.context as usize].returned.depending(w);
             }
             // A5.6c: record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).

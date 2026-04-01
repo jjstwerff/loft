@@ -152,9 +152,7 @@ impl Parser {
                 let elem = *elm.clone();
                 let hint = match (method, m_arg_idx) {
                     ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem), vec![])),
-                    ("filter", 1) => {
-                        Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![]))
-                    }
+                    ("filter", 1) => Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![])),
                     ("reduce", 1) => Some(Type::Function(
                         vec![elem.clone(), elem.clone()],
                         Box::new(elem),
