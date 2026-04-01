@@ -3810,19 +3810,53 @@ User script: continues interpreting
 **Cache:** `lib/<name>/.loft/` stores `.so` + source hash + generated `.rs`.
 Recompile only when hash changes (~1–3s rustc cost on first run).
 
-**WASM:** cannot dlopen — library functions stay interpreted.  The native
-compilation is a transparent optimization, not a requirement.
-
-**Steps:**
+**Steps (desktop — dlopen):**
 1. `output_native_library(lib_source)` — emit only library functions as cdylib
 2. Compile with `rustc --crate-type cdylib -O --extern loft=...`
 3. Load via `extensions::load_one` — registers functions via C-ABI
 4. Cache with source hash in `.loft/` directory
-5. WASM fallback: skip, use bytecode
+
+**WASM — shared-memory cross-module calls (Approach B):**
+
+WASM cannot dlopen, but can achieve the same result: compile each library
+to its own `.wasm` module, share `WebAssembly.Memory` between modules, and
+call library functions directly — no data serialization needed.
+
+```
+main.wasm ──shared memory──► graphics.wasm
+    │                             │
+    │  blend_pixel(dbref, x, y)   │
+    ├────► JS import bridge ─────►│  runs native WASM blend
+    │◄──── JS import bridge ◄────┤
+    │                             │
+    Stores heap: shared           │
+```
+
+How it works:
+1. Compile each library to a separate `.wasm` via `rustc --target wasm32`
+2. All modules share one `WebAssembly.Memory` instance (requires COOP/COEP
+   headers for `SharedArrayBuffer`)
+3. The `Stores` heap lives in shared memory — both modules read/write the
+   same byte array.  `DbRef` values (store_nr + rec + pos) work across
+   module boundaries without copying.
+4. JS glue auto-generated from `.loft` type info: scalar args pass directly;
+   `DbRef` args pass as three integers; text args pass as `(ptr, len)` into
+   shared memory.
+5. Cache: `lib/<name>/.loft/<name>.wasm` + source hash, same as desktop.
+
+**Why shared memory works for loft:** the `Stores` allocator is a flat byte
+array addressed by `(store_nr, rec, pos)`.  When two WASM modules share the
+same memory, a `DbRef` allocated by the main module is directly readable by
+the library module — same bytes, same offsets.  No marshalling needed for
+struct or vector arguments.
+
+**Fallback:** if `SharedArrayBuffer` is unavailable (no COOP/COEP headers),
+library functions stay interpreted in the main module (Approach A — single
+WASM, works today).
 
 **Cargo feature:** `native-libs` (includes `native-extensions` + rustc)
 **Effort:** High
-**Target:** 0.9.0
+**Target:** 0.9.0 (desktop dlopen), 1.0+ (WASM shared memory)
 
 ---
 
