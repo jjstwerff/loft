@@ -16,17 +16,6 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.3 — Bug fixes before release
-
-| ID         | Title                                                    | E  | Design | Depends on   | Source                        |
-|------------|----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| C43.1      | Zone-2 dead-slot finder with full conflict scan          | S  | ✓      |              | PLANNING.md § C43             |
-| C43.2      | Wire zone-2 reuse into `place_large_and_recurse`         | S  | ✓      | C43.1        | PLANNING.md § C43             |
-| C43.3      | Enable `assign_slots_sequential_text_reuse` test         | XS | ✓      | C43.2        | PLANNING.md § C43             |
-| C43.4      | Integration test: text-heavy script with slot validation | S  | ✓      | C43.3        | PLANNING.md § C43             |
-
----
-
 ## 0.8.4 — HTTP client
 
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)

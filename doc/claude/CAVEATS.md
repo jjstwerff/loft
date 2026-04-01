@@ -115,24 +115,52 @@ declarations in `02_images.loft` reference the guard.
 
 ---
 
-## C43 — Text slot reuse disabled (Problem #69, A12)
+## C43 — Text slot reuse *(fixed)*
 
-Text variables (24 bytes) are placed by zone 2 in `assign_slots`, which
-assigns slots sequentially at TOS without dead-slot reuse.  Sequential text
-variables each get their own 24-byte slot, wasting stack space.
+**Fixed.** Zone-2 text-to-text slot reuse is now enabled.  Sequential text
+variables with non-overlapping lifetimes share the same 24-byte slot.
+Restricted to Text-only reuse at the top-of-stack position to avoid
+partial overlap with Reference/Vector variables (discovered during
+implementation).
 
-A naive same-size reuse attempt caused slot conflicts: the reused slot
-can partially overlap with other zone-2 variables placed by the same
-`place_large_and_recurse` pass, because the reuse check only compares
-against the candidate variable — not all previously assigned variables.
-Zone-2 needs the same full conflict scan that zone-1 uses.
+**Tests:** `assign_slots_sequential_text_reuse` (unit), `text_slot_reuse_sequential` (integration).
+**Fixed by:** C43.1–C43.4 — `find_reusable_zone2_slot` + top-of-stack filter.
 
-**Impact:** wastes stack space when many short-lived text variables are used
-sequentially.  No correctness issue.
+---
 
-**Test:** `assign_slots_sequential_text_reuse` in `src/variables/slots.rs`
-(`#[ignore]` — A12).
-**Docs:** [PLANNING.md](PLANNING.md) § C43, [PROBLEMS.md](PROBLEMS.md) § Issues 69–70.
+## C45 — Zone-2 slot reuse limited to Text-only + top-of-stack
+
+Zone-2 slot reuse (C43) is restricted to `Type::Text` variables and only
+the slot immediately below `*tos`.  Reference and Vector variables cannot
+reuse dead zone-2 slots because:
+
+1. **IR-walk ordering** — zone-2 assigns in IR-walk order, not live-interval
+   order.  The conflict scan only sees already-assigned variables, missing
+   future assignments that may overlap the reused slot.
+2. **Block-return frame sharing** — non-Text zone-2 variables (Reference,
+   Vector) use the block-return pattern where the child scope's zone-1
+   frame starts at the variable's slot.  Reusing such slots would break
+   the frame layout.
+
+**Impact:** Reference and Vector variables still get sequential slots.
+Only text reuse saves stack space (24 bytes per reuse).
+**Workaround:** none needed — correctness is preserved.
+**Docs:** [PLANNING.md](PLANNING.md) § C43.
+
+---
+
+## C46 — Zone-2 slot reuse: top-of-stack restriction limits effectiveness
+
+The top-of-stack filter (`slot + v_size == *tos`) means only the LAST-placed
+zone-2 text variable can be reused.  If two text variables die sequentially
+but a non-text variable is placed between them, neither dead text slot is
+reusable.
+
+**Impact:** reuse only occurs when consecutive text variables have
+non-overlapping lifetimes.  Interleaved text/non-text variables don't
+benefit.
+**Fix path:** sort zone-2 text variables by `first_def` before placement
+(like zone-1 does), or maintain a dead-slot free list.
 
 ---
 

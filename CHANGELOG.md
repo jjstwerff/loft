@@ -22,6 +22,13 @@ All notable changes to the loft language and interpreter.
   correctly freed via `.1` destructuring when fn-ref variables go out of scope.
   Non-capturing lambdas use the null sentinel and are safely skipped.
 
+### Slot assignment
+
+- **Text slot reuse** (C43) — Sequential text variables with non-overlapping lifetimes
+  now share the same 24-byte zone-2 slot.  Uses a full conflict scan
+  (`find_reusable_zone2_slot`) restricted to Text-only reuse at the top-of-stack
+  position.  Tests: `assign_slots_sequential_text_reuse`, `text_slot_reuse_sequential`.
+
 ### Bug fixes
 
 - **C41** — Struct-enum local variable leak (Problem #85) confirmed fixed; regression
