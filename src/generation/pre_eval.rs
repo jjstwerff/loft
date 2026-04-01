@@ -365,6 +365,7 @@ impl Output<'_> {
     /// Use this instead of `output_code_inner` when `pre_evals` is non-empty.
     /// Without substitution the same expression would be emitted twice, causing a second
     /// mutable borrow of `stores`.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn output_code_with_subst(
         &mut self,
         w: &mut dyn Write,
@@ -459,13 +460,23 @@ impl Output<'_> {
                                     arg_code = arg_code.replacen(pcode.as_str(), pname.as_str(), 1);
                                 }
                             }
-                            // When the parameter type is a fn-ref, cast i32 literal to u32.
+                            // C39: set fn_ref_context for fn-ref parameter evaluation.
                             let param_is_fnref = idx < self.data.def(*d_nr).attributes.len()
                                 && matches!(
                                     self.data.def(*d_nr).attributes[idx].typedef,
-                                    Type::Function(_, _, _) | Type::Routine(_)
+                                    Type::Function(_, _, _)
+                                );
+                            let param_is_routine = idx < self.data.def(*d_nr).attributes.len()
+                                && matches!(
+                                    self.data.def(*d_nr).attributes[idx].typedef,
+                                    Type::Routine(_)
                                 );
                             if param_is_fnref && matches!(val, Value::Int(_)) {
+                                write!(
+                                    w,
+                                    "({arg_code} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                                )?;
+                            } else if param_is_routine && matches!(val, Value::Int(_)) {
                                 write!(w, "{arg_code} as u32")?;
                             } else {
                                 write!(w, "{arg_code}")?;

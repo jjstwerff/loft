@@ -300,6 +300,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            fn_ref_context: false,
         };
         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)?;
     }

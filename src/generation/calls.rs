@@ -27,13 +27,20 @@ impl Output<'_> {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
             } else {
-                // When the parameter type is a fn-ref (u32), cast i32 literal to u32.
+                // C39: wrap i32 literal into (u32, null_DbRef) for fn-ref params.
                 let param_is_fnref = idx < def_fn.attributes.len()
-                    && matches!(
-                        def_fn.attributes[idx].typedef,
-                        Type::Function(_, _, _) | Type::Routine(_)
-                    );
+                    && matches!(def_fn.attributes[idx].typedef, Type::Function(_, _, _));
+                let param_is_routine = idx < def_fn.attributes.len()
+                    && matches!(def_fn.attributes[idx].typedef, Type::Routine(_));
                 if param_is_fnref && matches!(v, Value::Int(_)) {
+                    let mut buf = Vec::new();
+                    self.output_code_inner(&mut buf, v)?;
+                    let s = String::from_utf8(buf).unwrap();
+                    write!(
+                        w,
+                        "({s} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                    )?;
+                } else if param_is_routine && matches!(v, Value::Int(_)) {
                     let mut buf = Vec::new();
                     self.output_code_inner(&mut buf, v)?;
                     let s = String::from_utf8(buf).unwrap();

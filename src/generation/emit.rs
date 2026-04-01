@@ -25,7 +25,17 @@ impl Output<'_> {
                 write!(w, "{txt:?}")?;
             }
             Value::Long(v) => write!(w, "{v}_i64")?,
-            Value::Int(v) => write!(w, "{v}_i32")?,
+            Value::Int(v) => {
+                if self.fn_ref_context {
+                    // C39: in fn-ref context (if-else branch), emit tuple.
+                    write!(
+                        w,
+                        "({v}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                    )?;
+                } else {
+                    write!(w, "{v}_i32")?;
+                }
+            }
             Value::Enum(v, _) => write!(w, "{v}_u8")?,
             Value::Boolean(v) => write!(w, "{v}")?,
             Value::Float(v) => write!(w, "{v}_f64")?,
@@ -180,10 +190,12 @@ impl Output<'_> {
                     self.output_code_inner(w, inner)?;
                 }
             }
-            // A5.6-1: FnRef carries the d_nr (function index) for the fn-ref slot.
-            // In native code the fn-ref variable holds a u32 d_nr; the closure is stored
-            // separately. Emit only the d_nr constant; closure injection is done at the call site.
-            Value::FnRef(d_nr, _, _) => write!(w, "{d_nr}_u32")?,
+            // C39: FnRef emits a (u32, DbRef) tuple — d_nr + null closure sentinel.
+            // Capturing lambdas replace the closure via the allocation block.
+            Value::FnRef(d_nr, _, _) => write!(
+                w,
+                "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+            )?,
         }
         Ok(())
     }
@@ -271,8 +283,8 @@ impl Output<'_> {
         }
         // Look up the closure work-var for this fn-ref variable (if any).
         let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
-        // Generate a match dispatch on the fn-ref variable.
-        write!(w, "match var_{var_name} {{")?;
+        // C39: match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
+        write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
             for expr in &arg_exprs {
@@ -288,7 +300,7 @@ impl Output<'_> {
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}) }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
         )?;
         Ok(())
     }
@@ -355,7 +367,11 @@ impl Output<'_> {
             write!(w, " {{")?;
         }
         self.indent += u32::from(!b_true);
+        // C39: save/restore fn_ref_context — Call arguments inside the branch
+        // must NOT inherit it (OpDatabase int args would be misinterpreted).
+        let saved_ctx = self.fn_ref_context;
         self.output_code_inner(w, true_v)?;
+        self.fn_ref_context = saved_ctx;
         self.indent -= u32::from(!b_true);
         if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
