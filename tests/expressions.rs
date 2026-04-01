@@ -170,6 +170,19 @@ fn stacktrace_argvalue_construct() {
 }
 
 #[test]
+fn struct_enum_local_freed() {
+    // C41: creating a struct-enum as a local and returning a scalar must not leak.
+    code!(
+        "fn check() -> integer {
+             v = IntVal { n: 42 };
+             match v { IntVal { n } => n, _ => 0 }
+         }"
+    )
+    .expr("check()")
+    .result(Value::Int(42));
+}
+
+#[test]
 fn stacktrace_arginfo_field() {
     // Verify ArgInfo struct is visible and fields are accessible.
     code!("fn get_name(info: ArgInfo) -> text { info.name }")
