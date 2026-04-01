@@ -2903,6 +2903,33 @@ Read the count, then use it to read exactly that many floats directly into a str
   b.data = f#read(n * sizeof(single));
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
+```
+
+=== Error handling
+
+File operations that can fail return a `FileResult` enum. Call `.ok()` to check success. The program does not crash on failure — you decide what to do.
+
+```rust
+  result = delete("this_file_does_not_exist.txt");
+  assert(!result.ok(), "delete missing file returns not-ok");
+```
+
+Reading a non-existent file produces an empty result, not a crash.
+
+```rust
+  ghost = file("no_such_file.txt");
+  assert(ghost#format == NotExists, "non-existent file has NotExists format");
+```
+
+`move` refuses paths outside the project directory.
+
+```rust
+  assert(!move("any.txt", "../escape.txt").ok(), "move outside project fails");
+```
+
+Writing to a read-only or invalid path also returns a FileResult. Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir_all`.
+
+```rust
 }
 ```
 
