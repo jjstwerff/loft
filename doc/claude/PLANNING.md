@@ -3325,6 +3325,316 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 
 ---
 
+## C41 — Struct-enum local variable leaks store record
+
+**Problem:** Creating a struct-enum variant as a local variable and returning a scalar
+triggers "Stack not correctly cleared" (debug) or silently leaks (release).  The
+12-byte DbRef is never freed at scope exit.
+
+**Root cause:** `get_free_vars` in `scopes.rs` already matches `Type::Enum(_, true, dep)`.
+The issue is that the enum variable's scope registration or the return-type dep check
+prevents `OpFreeRef` from firing.
+
+**Files:** `src/scopes.rs`, `tests/expressions.rs`
+
+### Step 1 — Add ignored test
+
+```rust
+#[test]
+#[ignore = "C41: struct-enum local variable leaks store record"]
+fn struct_enum_local_freed() {
+    code!(
+        "enum Value { IntVal(n: integer), FloatVal(f: float) }
+         fn check() -> integer {
+             v = IntVal { n: 42 }
+             match v { IntVal { n } => n, _ => 0 }
+         }"
+    )
+    .expr("check()")
+    .result(Value::Int(42));
+}
+```
+
+### Step 2 — Diagnose with scope_debug
+
+Run `LOFT_LOG=scope_debug cargo test struct_enum_local_freed -- --ignored`.
+Check whether `v` appears in the `get_free_vars` output.  The most likely cause:
+`v` is in scope 1 but `convert` calls `free_vars` with `bl.result = Type::Integer`
+whose `depend()` is empty — so the dep check passes, but `v` may not be collected
+by `variables(to_scope)` if it's registered at the wrong scope level.
+
+### Step 3 — Fix and enable test
+
+Based on diagnosis, either:
+- Fix scope registration so `v` is in the correct scope chain, or
+- Ensure `get_free_vars` processes `v` and emits `OpFreeRef`
+
+Remove `#[ignore]`, run `make ci`.
+
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+## C42 — Silent `Type::Unknown(0)` on unresolved names
+
+**Problem:** In the first parser pass, undefined names silently create
+`Type::Unknown(0)` variables (`src/parser/objects.rs:231`).  The second pass
+emits an error, but the silent first-pass creation can mask issues in
+single-pass contexts and confuse diagnostics.
+
+**Root cause:** The two-pass design needs forward references (functions
+declared after use), so the first pass must tolerate unknown names.  But
+true typos (names that are never defined in either pass) should be caught.
+
+**Files:** `src/parser/objects.rs`, `src/variables/mod.rs`, `tests/parse_errors.rs`
+
+### Step 1 — Add ignored test
+
+```rust
+#[test]
+#[ignore = "C42: typo produces silent Unknown(0) instead of diagnostic"]
+fn undefined_variable_error() {
+    expr!("reuslt = 42; result")
+        .error("Unknown variable 'result'");
+}
+```
+
+### Step 2 — Add post-parse validation
+
+After the second pass completes in `parse_str` (`src/parser/mod.rs:436`),
+scan all variables in the current function.  For each variable that still
+has `Type::Unknown(0)` and was not resolved to a real type, emit a
+diagnostic:
+
+```rust
+// After second-pass parse_file():
+for d_nr in from..self.data.definitions() {
+    if !matches!(self.data.def_type(d_nr), DefType::Function) { continue; }
+    for v in 0..self.data.def(d_nr).variables.count() {
+        if self.data.def(d_nr).variables.tp(v).is_unknown() {
+            // Variable was never resolved — likely a typo
+            diagnostic!(self.lexer, Level::Error,
+                "Variable '{}' has unresolved type",
+                self.data.def(d_nr).variables.name(v));
+        }
+    }
+}
+```
+
+### Step 3 — Enable test, run `make ci`
+
+Remove `#[ignore]`.  Fix any false positives (e.g., generic type parameters
+that legitimately remain `Unknown` until instantiation).
+
+**Effort:** Medium (false-positive handling for generics)
+**Target:** 0.8.3
+
+---
+
+## C39 — Native codegen: closure records not freed for fn-refs
+
+**Problem:** `src/generation/dispatch.rs` skips `OpFreeRef` for `Type::Function`
+variables, leaking closure store records in native-compiled programs.
+
+**Root cause:** The interpreter uses a codegen special case (`OpVarRef(var_pos - 4)`
++ `OpFreeRef`) to read the closure DbRef at offset+4 in the fn-ref slot.  The native
+codegen declares fn-ref variables as `(u32, DbRef)` but the `OpFreeRef` handler
+doesn't destructure the tuple.
+
+**Files:** `src/generation/dispatch.rs`, `src/generation/mod.rs`
+
+### Step 1 — Change the skip to an emit
+
+In `dispatch.rs`, replace the `()` skip with proper closure free code:
+
+```rust
+if let Value::Var(v) = db_val
+    && matches!(self.data.def(self.def_nr).variables.tp(*v), Type::Function(_, _, _))
+{
+    let var_name = format!("var_{}", sanitize(...));
+    // Free the closure component (second element of the (u32, DbRef) tuple).
+    write!(w, "{{ let (_d, c) = {var_name}; \
+               if c.store_nr != u16::MAX {{ OpFreeRef(stores, c, \"{var_name}.1\"); }} }}")?;
+    return Ok(());
+}
+```
+
+### Step 2 — Verify with native tests
+
+Run `cargo test --test native` — all native tests should still pass, and
+closure-using scripts should no longer leak store records.
+
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+## C44 — Native codegen: `external` crate reference unresolved
+
+**Problem:** The random number extension uses an `external` FFI crate that is not
+included in the native codegen output.  `21-random.loft` fails to compile natively
+with `error[E0433]: use of unresolved module external`.
+
+**Files:** `src/generation/mod.rs`, `tests/native.rs`
+
+### Step 1 — Check current skip status
+
+Verify whether `21-random.loft` is in `SCRIPTS_NATIVE_SKIP` or `NATIVE_SKIP`.
+If already skipped, the fix is to make it work, not just to skip it.
+
+### Step 2 — Emit `extern crate` in generated code
+
+In `src/generation/mod.rs`, when emitting the generated file preamble, check if
+the program uses extension functions.  If so, add `extern crate` declarations
+for any extension crates that were loaded via `load_one`.
+
+### Step 3 — Test
+
+Run `cargo test --test native native_scripts` and confirm `21-random.loft` passes.
+
+**Effort:** Small
+**Target:** 0.8.3
+
+---
+
+## C40 — Debug logger: fn-ref opcode type mismatch (root cause)
+
+**Problem:** `OpVarFnRef` and `OpPutFnRef` are declared with `-> text` and
+`_fnref: text` in `default/02_images.loft`, but the actual data is 16 bytes
+`[i32; 4]`.  A guard in `debug.rs:log_step` prevents SIGSEGV, but the root
+cause (type mismatch) is unfixed.  Adding new fn-ref opcodes without updating
+the guard would reintroduce the crash.
+
+**Files:** `default/02_images.loft`, `src/state/debug.rs`
+
+### Step 1 — Investigate feasibility of correct type declaration
+
+The loft type system has no 16-byte primitive.  Options:
+- Use a custom struct type (e.g., `FnRefSlot(d_nr: integer, closure: reference)`)
+- Keep `text` but add a size annotation
+- Leave as-is and document the guard requirement
+
+### Step 2 — If a struct type works
+
+Define `FnRefSlot` in `01_code.loft` or `02_images.loft`, then change:
+```loft
+fn OpVarFnRef(pos: const u16) -> FnRefSlot;
+fn OpPutFnRef(pos: const u16, _fnref: FnRefSlot);
+```
+
+The debug logger would then read `FnRefSlot` fields instead of interpreting
+bytes as a Str pointer.  Remove the C30 guard.
+
+### Step 3 — If not feasible, document the guard
+
+Add a code comment in `02_images.loft` near the declarations explaining why
+`text` is used and that the C30 guard in `debug.rs` is mandatory.
+
+**Effort:** Small (investigation + either fix or documentation)
+**Target:** 0.8.3
+
+---
+
+## P70 — Text in `generate_set` TOS-override causes SIGSEGV
+
+**Problem:** Adding `Type::Text(_)` to the large-type TOS-override in
+`generate_set` (`codegen.rs`) causes `append_fn` to crash.  When a text
+variable's slot is bumped from a pre-assigned position to TOS, `OpFreeText`
+still uses the original slot offset, freeing wrong memory.
+
+**Root cause:** `set_stack_pos` updates the variable's slot, but `OpFreeText`
+was already emitted with the old position by scope analysis (which runs
+before codegen).
+
+**Files:** `src/state/codegen.rs`
+
+### Step 1 — Add test
+
+```rust
+#[test]
+#[ignore = "P70: text TOS-override SIGSEGV"]
+fn text_reuse_no_sigsegv() {
+    code!(
+        "fn append_fn(a: text, b: text) -> text { a + b }"
+    )
+    .expr("append_fn(\"hello\", \" world\")")
+    .result(Value::str("hello world"));
+}
+```
+
+Verify this test already passes (it should — the workaround is in place).
+
+### Step 2 — Understand the constraint
+
+The text TOS-override is disabled (line ~689 in `codegen.rs`).  The fix
+requires that when `set_stack_pos` moves a variable, any already-emitted
+`OpFreeText` referencing the old position is updated.  This is complex
+because scope analysis runs before codegen.
+
+### Step 3 — Assess if enabling is safe
+
+If text slot reuse (C43) is enabled, the TOS-override path would only fire
+for text variables whose pre-assigned slot was claimed by another variable.
+The fix: emit `OpFreeText` during codegen (not scope analysis) for text
+variables that might be moved.  This is a larger refactor — defer if C43
+can work without it.
+
+**Effort:** Small (investigation) to Medium (if refactor needed)
+**Target:** 0.8.3
+
+---
+
+## C43 — Text slot reuse: enable after prerequisites
+
+**Problem:** Text variables (24 bytes each) cannot reuse dead slots, wasting
+stack space when many short-lived text variables are used sequentially.
+
+**Root cause:** `can_reuse` in `src/variables/slots.rs` enforces exact size
+matching.  Extending it to allow 24-byte text slot reuse caused overlapping
+live intervals (Problem #69) because smaller variables could claim parts of
+the dead 24-byte region.
+
+**Files:** `src/variables/slots.rs`
+
+### Step 1 — Enable same-size text reuse only
+
+In `assign_slots` zone-1 processing (`slots.rs:~122`), the size check
+already enforces `v_size == j_size`.  For text-to-text reuse this is
+satisfied (both are 24 bytes).  The blocker was that the `can_reuse`
+extension also allowed non-text variables to reuse text slots.
+
+Add text-to-text reuse: when the dead variable is `Type::Text` AND the
+new variable is also `Type::Text`, allow reuse:
+
+```rust
+if v_size != j_size {
+    candidate = js + j_size;
+    continue 'retry;
+}
+// Additional guard: only reuse text slots for other text variables
+if matches!(function.variables[j].type_def, Type::Text(_))
+    && !matches!(function.variables[i].type_def, Type::Text(_))
+{
+    candidate = js + j_size;
+    continue 'retry;
+}
+```
+
+### Step 2 — Enable the ignored test
+
+Remove `#[ignore]` from `assign_slots_sequential_text_reuse` in `slots.rs:894`.
+
+### Step 3 — Run full test suite
+
+`make ci` — verify no slot conflicts arise from text-to-text reuse.
+
+**Effort:** Medium (careful testing across all text-heavy tests)
+**Depends on:** P70 (must not regress the TOS-override path)
+**Target:** 0.8.3
+
+---
+
 ## Quick Reference
 
 See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by milestone.

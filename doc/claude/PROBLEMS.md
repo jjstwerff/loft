@@ -117,9 +117,12 @@ exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arm
 ---
 
 
-### 68. `first_set_in` does not descend into `Block` nodes — work-ref lazy init places null after first use
+### 68. `first_set_in` does not descend into `Block` nodes *(fixed)*
 
-**Severity:** High — causes `add_const` overflow (subtract with overflow panic) or wrong
+**Fixed.** The function was renamed to `inline_ref_set_in` and now handles `Block`
+and `Loop` nodes (plus all other Value variants exhaustively).
+
+**Severity:** High (was) — causes `add_const` overflow (subtract with overflow panic) or wrong
 slot computation for reference variables whose first use is inside a nested block.
 
 **Location:** `src/parser/expressions.rs` — `first_set_in` helper; `parse_code` insertion

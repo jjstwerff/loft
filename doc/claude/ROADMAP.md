@@ -16,20 +16,17 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.3 — Language completeness + parallel safety
+## 0.8.3 — Bug fixes before release
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| S-borrow  | Deep-copy struct returns from generics/vectors (C37 debug) | M  | ✓      |              | PLANNING.md § S-borrow        |
-| C30       | Lambda re-definition: move closure ownership to fn-ref     | M  | ✓      |              | PLANNING.md § C30             |
-| C31       | Closures in vectors: direct byte-copy for structural types | M  | ✓      |              | PLANNING.md § C31             |
-| S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
-| I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
-| I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
-| A5.6-text | Closure 16-byte fn-ref + chained call parsing             | H  | ✓      |              | PLANNING.md § A5.6            |
-| T1.8      | Tuple struct-ref element move semantics + scope cleanup    | M  | ✓      |              | PLANNING.md § T1.8            |
-| S-lexer   | Fix 16-parser.loft "Unknown record" sentinel crash         | S+M| ✓      |              | PLANNING.md § S-lexer         |
-| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | ✓      |              | PLANNING.md § A7.2-par        |
+| C41       | Struct-enum local variable leaks store record (#85)       | S  | ✓      |              | PLANNING.md § C41             |
+| C42       | Silent `Type::Unknown(0)` on unresolved names (#58)       | M  | ✓      |              | PLANNING.md § C42             |
+| C39       | Native codegen: closure records not freed for fn-refs     | S  | ✓      |              | PLANNING.md § C39             |
+| C44       | Native codegen: `external` crate reference unresolved (#79)| S | ✓      |              | PLANNING.md § C44             |
+| C40       | Debug logger: fn-ref opcode type mismatch (root cause)    | S  | ✓      |              | PLANNING.md § C40             |
+| C43       | Text slot reuse: fix prerequisites and enable (#69)       | M  | ✓      | P70          | PLANNING.md § C43             |
+| P70       | Text in `generate_set` TOS-override causes SIGSEGV (#70)  | S  | ✓      |              | PLANNING.md § P70             |
 
 ---
 
