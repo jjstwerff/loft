@@ -76,7 +76,7 @@ fn double_field_name() {
 #[test]
 fn incorrect_name() {
     code!("type something;\nfn something(a: integer) {}")
-        .error("Cannot redefine Type something from incorrect_name:1:16 at incorrect_name:2:27")
+        .error("Cannot redefine 'something' (already defined at incorrect_name:1:16) at incorrect_name:2:27")
         .error("Expect type definitions to be in camel case style at incorrect_name:1:16");
 }
 
@@ -586,7 +586,7 @@ fn test() {
 fn keyword_sizeof_as_fn() {
     code!("fn sizeof() {}\nfn test() {}")
         .error("Expect name in function definition at keyword_sizeof_as_fn:1:10")
-        .error("Syntax error: unexpected Token(\"sizeof\") at keyword_sizeof_as_fn:1:10");
+        .error("Syntax error: unexpected 'sizeof' at keyword_sizeof_as_fn:1:10");
 }
 
 // A10: `fields` is no longer a keyword — it can be used as a function name.
@@ -595,23 +595,21 @@ fn keyword_sizeof_as_fn() {
 fn keyword_debug_assert_as_fn() {
     code!("fn debug_assert() {}\nfn test() {}")
         .error("Expect name in function definition at keyword_debug_assert_as_fn:1:16")
-        .error(
-            "Syntax error: unexpected Token(\"debug_assert\") at keyword_debug_assert_as_fn:1:16",
-        );
+        .error("Syntax error: unexpected 'debug_assert' at keyword_debug_assert_as_fn:1:16");
 }
 
 #[test]
 fn keyword_assert_as_fn() {
     code!("fn assert() {}\nfn test() {}")
         .error("Expect name in function definition at keyword_assert_as_fn:1:10")
-        .error("Syntax error: unexpected Token(\"assert\") at keyword_assert_as_fn:1:10");
+        .error("Syntax error: unexpected 'assert' at keyword_assert_as_fn:1:10");
 }
 
 #[test]
 fn keyword_panic_as_fn() {
     code!("fn panic() {}\nfn test() {}")
         .error("Expect name in function definition at keyword_panic_as_fn:1:9")
-        .error("Syntax error: unexpected Token(\"panic\") at keyword_panic_as_fn:1:9");
+        .error("Syntax error: unexpected 'panic' at keyword_panic_as_fn:1:9");
 }
 
 /// P5.3: operator on generic type T produces a generic-specific error.
@@ -735,7 +733,7 @@ fn interface_with_method_parses() {
 #[test]
 fn interface_duplicate_name_rejected() {
     code!("interface Foo {}\ninterface Foo {}\nfn test() {}")
-        .error("Redefined interface Foo at interface_duplicate_name_rejected:2:16");
+        .error("Cannot redefine interface 'Foo' at interface_duplicate_name_rejected:2:16");
 }
 
 // ── I3.1 — op-sugar in interface bodies ──────────────────────────────────────

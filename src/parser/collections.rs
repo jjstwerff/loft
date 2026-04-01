@@ -494,7 +494,11 @@ use #count instead"
                 *t = Type::Boolean;
             }
         } else {
-            diagnostic!(self.lexer, Level::Error, "Incorrect # variable on {}", name);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Unknown loop attribute '#{name}'; use #index, #count, #first, #last, or #break"
+            );
             *t = Type::Unknown(0);
         }
     }

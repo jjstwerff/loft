@@ -1169,7 +1169,7 @@ impl Parser {
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
             } else {
-                diagnostic!(self.lexer, Level::Error, "Redefined struct {}", id);
+                diagnostic!(self.lexer, Level::Error, "Cannot redefine struct '{id}'");
             }
         }
         let context = self.context;
@@ -1246,7 +1246,7 @@ impl Parser {
                 d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Interface);
             }
         } else if self.first_pass {
-            diagnostic!(self.lexer, Level::Error, "Redefined interface {}", id);
+            diagnostic!(self.lexer, Level::Error, "Cannot redefine interface '{id}'");
         }
         // I3: register 'Self' as a type placeholder for method signature parsing.
         // 'Self' resolves to its own definition (like a generic type variable) so

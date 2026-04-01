@@ -134,7 +134,7 @@ impl Parser {
         name: &str,
         args: &[Value],
         code: Value,
-        op: &str,
+        _op: &str,
     ) -> Value {
         match name {
             "OpGetInt" => self.cl("OpSetInt", &[args[0].clone(), args[1].clone(), code]),
@@ -183,7 +183,11 @@ impl Parser {
             }
             _ => {
                 if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Error, "Unknown {op} for {name}");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot assign to attribute on type '{name}'"
+                    );
                 }
                 Value::Null
             }
