@@ -240,6 +240,25 @@ back to `children_of` for bare names, update or-pattern loop.
 
 ---
 
+## C54 — `file.lines()` returns empty for files without trailing newline
+
+`lines()` splits by newline. A file with content but no trailing `\n`
+returns 0 lines instead of 1 line.
+
+**Reproducer:**
+```loft
+{f = file("test.txt"); f += "hello"; }
+lines = file("test.txt").lines();
+assert(lines.len() == 1, "should have 1 line");  // FAILS: len() == 0
+```
+
+Adding a newline works: `f += "hello\n"` → `lines.len() == 1`.
+
+**Fix path:** `lines()` should return the last segment even without a
+trailing newline — matching Python's `readlines()` and Rust's `lines()`.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
