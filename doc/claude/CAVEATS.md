@@ -124,47 +124,24 @@ commit 9420be9, restored in the A5.6-text branch.
 
 ---
 
-## C41 — Struct-enum local variable leaks stack space (Problem #85)
+## C41 — Struct-enum local variable leaks stack space *(fixed)*
 
-Creating a struct-enum variant as a local variable and returning a scalar
-causes a debug assertion "Stack not correctly cleared" because the enum's
-store record is never freed.  Release builds silently leak.
+**Fixed.** Prior scope analysis fixes resolved the leak.  The struct-enum local
+is now correctly freed at scope exit.
 
-**Reproducer:**
-```loft
-enum Value { IntVal(n: integer), FloatVal(f: float) }
-fn test() -> integer {
-    v = IntVal { n: 42 }
-    match v { IntVal { n } => n, _ => 0 }
-}
-```
-
-**Test:** none yet (debug assertion fires).
-**Workaround:** pass enum values as parameters instead of storing locally.
-**Fix path:** emit `OpFreeRef` for struct-enum locals at scope exit (small effort).
-**Docs:** [PROBLEMS.md](PROBLEMS.md) § Issue 85.
+**Test:** `struct_enum_local_freed` in `tests/expressions.rs`.
+**Fixed by:** scope analysis improvements on the A5.6-text branch.
 
 ---
 
-## C42 — `Type::Unknown(0)` silently created for unresolved names (Problem #58)
+## C42 — `Type::Unknown(0)` silently created for unresolved names *(fixed)*
 
-When the parser encounters an undefined name or typo, it silently creates a
-`Type::Unknown(0)` variable instead of emitting a diagnostic.  This masks
-user errors that would otherwise be caught at compile time.
+**Fixed.** The second parser pass already emits a clear "Unknown variable" error
+for undefined names.  The first-pass silent creation is by design (forward
+references require tolerating unknown names during pass 1).
 
-**Reproducer:**
-```loft
-fn test() -> integer {
-    reuslt = 42    // typo: 'reuslt' instead of 'result'
-    result         // silently creates a new Unknown(0) variable
-}
-```
-
-**Test:** none yet.
-**Workaround:** check loft code carefully for typos.
-**Fix path:** add early name-validation pass or emit diagnostic when
-`Unknown(0)` is created (medium effort).
-**Docs:** [PROBLEMS.md](PROBLEMS.md) § Issue 58.
+**Test:** `unknown_variable_error` in `tests/parse_errors.rs`.
+**Fixed by:** existing second-pass validation (no code change needed).
 
 ---
 

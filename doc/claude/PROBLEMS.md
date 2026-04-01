@@ -239,7 +239,7 @@ necessary `extern` block in the generated file.
 
 
 
-### 85. Struct-enum local variable leaks stack space (debug assertion)
+### 85. Struct-enum local variable leaks stack space *(fixed, C41)*
 
 **Symptom:** Constructing a struct-enum variant as a local variable and returning a
 scalar from the function triggers a debug-mode assertion in `fn_return`:
