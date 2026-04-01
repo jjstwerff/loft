@@ -2936,31 +2936,64 @@ Writing to a read-only or invalid path also returns a FileResult. Always check `
 
 = Image
 
-Loft has a built-in Image type for loading PNG files and inspecting their pixels. Loading a PNG takes one function call; after that you can read every pixel, check the dimensions, and iterate over the whole image with a for loop.
+Loft can load PNG files and access every pixel. Loading takes one function call; after that you can read dimensions, iterate pixels, and examine individual channels.
 
 === Loading an Image
 
-Pass a File handle to the 'png()' function to load a PNG into memory. The entire file is read and decoded at this point. After the call you can access pixels as many times as you like with no further I/O.
+Call `file(path).png()` to load a PNG into memory. The entire file is decoded at this point.
 
-=== Checking Dimensions
+=== Dimensions and Name
 
-Once loaded, 'img.width' and 'img.height' give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.
+`img.width` and `img.height` give the pixel dimensions. `img.name` is the file name without the directory path.
 
-=== Accessing Individual Pixels
+=== Pixel Access
 
-Pixel data is stored in the 'data' field as a vector\<Pixel\>. Each Pixel has r, g, b fields (0–255). A pixel from outside the image bounds is null.
+`img.data` is a `vector\<Pixel\>`. Each Pixel has `r`, `g`, `b` fields (0–255). Access by index: `img.data\[y \* img.width + x\]`. Iterate with a for loop to scan every pixel.
 
-=== Note
+=== Error Handling
 
-Pixel iteration requires S12 completion — only dimension access is currently verified by this test.
+`png()` returns null when the file does not exist or cannot be decoded.
 
 ```rust
 fn main() {
-  f = file("tests/example/map.png");
-  img = f.png();
+```
+
+=== Loading an Image
+
+```rust
+  img = file("tests/example/map.png").png();
   assert(img.width == 256, "width={img.width}");
   assert(img.height == 256, "height={img.height}");
   assert(img.name == "map.png", "name={img.name}");
+```
+
+=== Pixel Access
+
+Total pixels = width \* height.
+
+```rust
+  assert(img.data.len() == img.width * img.height, "pixel count");
+```
+
+Read the top-left pixel.
+
+```rust
+  px = img.data[0];
+  assert(px.r >= 0 and px.r <= 255, "r in range");
+```
+
+Read a pixel at (x=128, y=128) — the center.
+
+```rust
+  center = img.data[128 * img.width + 128];
+  assert(center.r >= 0, "center pixel r valid");
+```
+
+=== Error Handling
+
+```rust
+  bad = file("no_such_image.png").png();
+  assert(bad == null, "png of missing file is null");
 }
 ```
 
