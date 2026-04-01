@@ -1291,11 +1291,11 @@ loft = "&gt;=1.0"        minimum interpreter version required
 entry = "src/mylib.loft"   override the default entry path
 </code></pre>
 <p>If the interpreter version is below the stated minimum, loading the library produces a fatal compile error describing the version mismatch. If no manifest is present, the default entry <code>src/&lt;name&gt;.loft</code> is used.</p>
+<h2 id="wildcard-and-selective-imports">Wildcard and Selective Imports</h2>
+<p>By default, library names require the <code>libname::</code> prefix. You can import names directly into your namespace with <code>use lib::*</code> (wildcard) or <code>use lib::Name, Other</code> (selective). Only <code>pub</code>-marked definitions in the library are imported this way. Non-pub definitions remain accessible via the <code>lib::name</code> prefix.</p>
 <h2 id="limitations">Limitations</h2>
-<p>Current rough edges to keep in mind.</p>
 <p><strong>`use` must appear before all definitions.</strong> If you write a function first and then a <code>use</code>, the compiler reports a syntax error.</p>
-<p><strong>All names require the `name::` prefix.</strong> There is no wildcard import (<code>use mylib::*</code>) or selective import (<code>use mylib::Point</code>) yet. Every reference to a library type, function, or constant must use the full <code>libname::Name</code> prefix.</p>
-<p><strong>No visibility control.</strong> All library definitions are always visible to importers. <code>pub</code> on a top-level <code>struct</code> or <code>fn</code> is accepted but has no effect. <code>pub</code> on struct fields is silently ignored.</p>
+<p><strong>`pub` controls import visibility.</strong> Only <code>pub</code>-marked definitions are available via wildcard (<code>use lib::*</code>) or selective import. Non-pub definitions are still accessible with the <code>lib::name</code> prefix.</p>
 <p><strong>No native extension loading.</strong> Libraries are pure <code>.loft</code> files. Native Rust extensions (<code>loft.toml</code> with <code>native = "..."</code>) are planned for a future release.</p>
 <pre><code>}</code></pre>
 </section>

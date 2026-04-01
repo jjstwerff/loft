@@ -181,27 +181,25 @@ desugared loop body.
 
 ---
 
-## C49 — Libraries: no wildcard or selective import
+## C49 — Libraries: wildcard and selective import *(fixed)*
 
-`use mylib::*` and `use mylib::Point` do not work.  All library references
-must use the full `libname::Name` prefix.
+**Fixed.** `use lib::*` and `use lib::Name, Other` now work.  Only `pub`-marked
+definitions are imported into the namespace.  Non-pub definitions remain
+accessible via `lib::name` prefix.
 
-**Reproducer:**
-```loft
-use testlib::*;
-fn main() { assert(MAX_SIZE == 100, ""); }  // Error: Unknown variable
-```
+The fix: add `pub` to library definitions.  The import machinery was already
+implemented but testlib.loft lacked `pub` markers.
 
-**Workaround:** always write the prefix: `testlib::MAX_SIZE`, `testlib::Point {}`.
+**Test:** `17-libraries.loft` doc test.
 
 ---
 
-## C50 — Libraries: no visibility control
+## C50 — Libraries: `pub` controls import visibility *(fixed)*
 
-All library definitions are visible to importers.  `pub` on top-level `struct`
-or `fn` is accepted but has no effect.  `pub` on struct fields is silently
-ignored (not a parse error, despite what older docs claimed).  There is no way
-to mark a definition as internal/private.
+**Fixed.** `pub` on library definitions controls which names are importable
+via wildcard (`use lib::*`) or selective import.  Non-pub definitions are
+NOT imported but remain accessible with the `lib::name` prefix.  This gives
+library authors control over their public API surface.
 
 ---
 
