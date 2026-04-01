@@ -264,6 +264,45 @@ fn place_large_and_recurse(
     }
 }
 
+/// C43.1: find a dead zone-2 variable whose slot can be reused by variable `v`.
+/// Returns `Some(slot)` if a conflict-free candidate exists, `None` otherwise.
+/// Guards: same size, same type discriminant, dead (`last_use` < `first_def`),
+/// no spatial+temporal overlap with any other assigned variable.
+#[allow(dead_code)] // C43.2 will wire this in
+fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
+    let v_size = size(&function.variables[v].type_def, &Context::Variable);
+    let v_first = function.variables[v].first_def;
+    let v_last = function.variables[v].last_use;
+    let v_disc = std::mem::discriminant(&function.variables[v].type_def);
+    for (j, jv) in function.variables.iter().enumerate() {
+        if j == v || jv.stack_pos == u16::MAX || jv.scope != scope {
+            continue;
+        }
+        let j_size = size(&jv.type_def, &Context::Variable);
+        if j_size != v_size || std::mem::discriminant(&jv.type_def) != v_disc {
+            continue;
+        }
+        if jv.last_use >= v_first {
+            continue;
+        }
+        let slot = jv.stack_pos;
+        let conflict = function.variables.iter().enumerate().any(|(k, kv)| {
+            if k == v || k == j || kv.stack_pos == u16::MAX {
+                return false;
+            }
+            let ks = kv.stack_pos;
+            let ke = ks + size(&kv.type_def, &Context::Variable);
+            let spatial = slot < ke && ks < slot + v_size;
+            let temporal = v_first <= kv.last_use && v_last >= kv.first_def;
+            spatial && temporal
+        });
+        if !conflict {
+            return Some(slot);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,5 +1018,36 @@ mod tests {
         let mut f = Function::new("f", "test");
         let mut seq = 0u32;
         compute_intervals(&v, &mut f, u32::MAX, u32::MAX, &mut seq, 0);
+    }
+
+    // ── C43.1: zone-2 dead-slot reuse with full conflict scan ───────────────
+
+    /// Three 24-byte text variables: v1 (live 0–10), v2 (live 5–15, overlaps v1),
+    /// v3 (live 11–20, does not overlap v1).  v3 should reuse v1's slot.
+    /// v2 must NOT reuse v1 (temporal overlap).
+    #[test]
+    fn zone2_reuse_conflict_free() {
+        let text_tp = Type::Text(Vec::new());
+        let mut f = Function::new("f", "test");
+        let v1 = f.add_unique("v1", &text_tp, 0);
+        f.variables[v1 as usize].first_def = 0;
+        f.variables[v1 as usize].last_use = 10;
+        let v2 = f.add_unique("v2", &text_tp, 0);
+        f.variables[v2 as usize].first_def = 5;
+        f.variables[v2 as usize].last_use = 15;
+        let v3 = f.add_unique("v3", &text_tp, 0);
+        f.variables[v3 as usize].first_def = 11;
+        f.variables[v3 as usize].last_use = 20;
+        // Simulate zone-2 placement: v1 at 0, v2 at 24.
+        f.variables[v1 as usize].stack_pos = 0;
+        f.variables[v2 as usize].stack_pos = 24;
+        // v3 should reuse v1's slot (v1 dead at 10, v3 starts at 11).
+        let slot = find_reusable_zone2_slot(&f, v3 as usize, 0);
+        assert_eq!(slot, Some(0), "v3 should reuse v1's slot");
+        // v2 should NOT find a reusable slot (overlaps v1 temporally).
+        f.variables[v3 as usize].stack_pos = u16::MAX; // reset
+        f.variables[v2 as usize].stack_pos = u16::MAX; // reset
+        let slot2 = find_reusable_zone2_slot(&f, v2 as usize, 0);
+        assert_eq!(slot2, None, "v2 must not reuse v1 (temporal overlap)");
     }
 }
