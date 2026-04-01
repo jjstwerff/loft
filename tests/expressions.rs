@@ -170,6 +170,22 @@ fn stacktrace_argvalue_construct() {
 }
 
 #[test]
+fn text_slot_reuse_sequential() {
+    // C43.4: sequential text variables with non-overlapping lifetimes.
+    code!(
+        "fn check() -> text {
+             a = \"hello\";
+             b = a + \" world\";
+             c = \"goodbye\";
+             d = c + \" world\";
+             d
+         }"
+    )
+    .expr("check()")
+    .result(Value::str("goodbye world"));
+}
+
+#[test]
 fn struct_enum_local_freed() {
     // C41: creating a struct-enum as a local and returning a scalar must not leak.
     code!(
