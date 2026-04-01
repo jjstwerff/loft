@@ -137,7 +137,7 @@ Not included in default features or WASM builds.
 
 ---
 
-## 0.9.0 — Standalone executable
+## 0.9.0 — Standalone executable + developer warnings
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
@@ -147,11 +147,41 @@ Not included in default features or WASM builds.
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`            | S  | ✓      |              | 01_code.loft                  |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision             | MH | ✓      | A2.2         | control.rs, main.rs           |
 | A2.4      | ↳ `--debug` per-type safety logging                       | M  | ✓      | A2.2         | fill.rs, native.rs            |
+| C52       | Stdlib name clash: warning + `std::` prefix               | M  | ✓      |              | PLANNING.md § C52             |
+| W-warn    | Developer warnings (Clippy-inspired)                      | M  | —      |              | see below                     |
 | P2        | REPL / interactive mode                                   | H  | ✓      | L1           | PLANNING.md § P2              |
 | P2.1      | ↳ Input completeness detection                            | S  | ✓      |              | new repl.rs                   |
 | P2.2      | ↳ Single-statement execution                              | M  | ✓      | P2.1         | main.rs, repl.rs              |
 | P2.3      | ↳ Automatic value output                                  | S  | ✓      | P2.2         | repl.rs                       |
 | P2.4      | ↳ Error recovery in session                               | M  | ✓      | P2.2, L1     | repl.rs, parser.rs            |
+
+### W-warn — Developer warnings
+
+Loft currently emits 6 warnings.  The following additional warnings would
+catch common mistakes earlier, inspired by Rust's compiler and Clippy:
+
+**Existing warnings (0.8.3):**
+- Dead assignment — variable overwritten before read
+- Variable never read — assigned but never used
+- Parameter never read — function parameter unused
+- Unreachable code — code after return/break/continue
+- Format specifier mismatch — `:x` on text, `:05` on boolean
+- Unnecessary const — `const` parameter never modified
+
+**Proposed new warnings (0.9.0):**
+
+| Warning | Rust/Clippy equivalent | Example |
+|---------|----------------------|---------|
+| Comparison always true/false | `clippy::absurd_extreme_comparisons` | `x >= 0` when x is `integer not null` |
+| Unnecessary parentheses | `clippy::unnecessary_parens` | `if (x > 0) { ... }` |
+| Empty loop/if body | `clippy::empty_loop` | `for x in v { }` |
+| Single-element vector literal | `clippy::single_element_loop` | `for x in [42] { ... }` |
+| Shadowed variable in same scope | `clippy::shadow_unrelated` | `x = 1; x = "hello"` (type change) |
+| Unused import | `unused_imports` | `use lib;` but no `lib::` references |
+| Identical if/else branches | `clippy::if_same_then_else` | `if c { x } else { x }` |
+| Division by literal zero | compile-time div-by-zero | `x / 0` |
+| Infinite loop without break | `clippy::empty_loop` | `while true { }` without break |
+| Stdlib name shadow | C52 | `fn len(t: text)` shadows stdlib |
 
 ---
 
