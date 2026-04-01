@@ -16,6 +16,15 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
+## 0.8.3 — Native parity + closure completeness
+
+| ID        | Title                                                     | E  | Design | Depends on   | Source                        |
+|-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
+| C47       | Native codegen: pass `__closure` in CallRef dispatch      | S  | ✓      |              | CAVEATS.md § C47              |
+| C48       | Interpreter: capturing closures with map/filter/reduce    | M  | —      | C47          | CAVEATS.md § C48              |
+
+---
+
 ## 0.8.4 — HTTP client + OpenGL library
 
 All 0.8.4 features are implemented as **loft libraries** that work across all three
