@@ -66,6 +66,74 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | GL4       | GLB export: mesh, scene, material → binary glTF file      | H  | ✓      | GL1          | OPENGL_IMPL.md Phase 4       |
 | GL5       | OpenGL desktop: window, shader, render loop (optional)    | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 5       |
 | GL6       | WebGL browser: canvas WebGL2 context via web-sys           | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 6       |
+| TS        | Test server: embedded Rust HTTP server for H4 integration | M  | ✓      |              | PLANNING.md § TS              |
+| TS.1      | ↳ `loft serve app.loft` — tiny HTTP server binary         | S  | ✓      |              | src/serve.rs                  |
+| TS.2      | ↳ Route dispatch: loft `fn handle(r: Request) -> Response`| M  | ✓      | TS.1         | src/serve.rs                  |
+| TS.3      | ↳ H4 integration tests against local test server          | S  | ✓      | TS.2, H4.2   | tests/web/                    |
+
+**Test server design (TS):**
+
+A minimal Rust HTTP server (`src/serve.rs`, new binary `loft-serve`) that loads a
+loft script and calls a user-defined `fn handle(request: Request) -> Response` for
+each incoming HTTP request.  Purpose: provide a local test target for H4 integration
+tests without depending on external services.
+
+```
+loft serve app.loft --port 8080
+```
+
+**How it works:**
+1. `src/serve.rs` uses `tiny_http` (small, no async, no tokio) to accept connections.
+2. For each request, it constructs a loft `Request` struct (method, path, headers, body)
+   and calls `fn handle(r: Request) -> Response` in the loaded loft script.
+3. The loft function returns a `Response` struct (status, content_type, body).
+4. The Rust server writes the HTTP response back to the client.
+
+**Loft types** (in `default/04_web.loft`):
+```loft
+struct Request {
+    method: text
+    path: text
+    body: text
+}
+
+struct Response {
+    status: integer init(200)
+    content_type: text init("text/plain")
+    body: text
+}
+```
+
+**Example loft script** (`examples/hello_server.loft`):
+```loft
+import "web"
+
+fn handle(r: Request) -> Response {
+    if r.path == "/hello" {
+        Response { body: "Hello, {r.method}!" }
+    } else if r.path == "/json" {
+        data = MyData { name: "test", value: 42 };
+        Response { content_type: "application/json", body: "{data:j}" }
+    } else {
+        Response { status: 404, body: "not found" }
+    }
+}
+```
+
+**H4 integration test** (`tests/web/`):
+```rust
+// 1. Start loft-serve with tests/web/test_server.loft on a random port
+// 2. Use http_get/http_post from the loft H4 client to hit localhost
+// 3. Assert response status, body, content-type
+// 4. Shut down server
+```
+
+This tests the full round-trip: loft HTTP client → Rust TCP → loft request handler
+→ Rust TCP → loft HTTP response parsing.  No external dependencies, fully offline,
+deterministic.
+
+**Cargo feature:** `serve` (new, optional) — gates `tiny_http` dependency.
+Not included in default features or WASM builds.
 
 ---
 
