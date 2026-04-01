@@ -436,8 +436,8 @@ doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
 // Cross-scope: returning a capturing lambda works:
-fn make_adder(n: integer) -> fn(integer) -> integer {
-    fn(x: integer) -> integer { x + n }
+fn make_adder(n: integer) - fn(integer) - integer {
+    fn(x: integer) - integer { x + n }
 }
 ```
 
@@ -768,7 +768,7 @@ evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
 // Capturing lambda with map:
 offset = 10;
-shifted = map(nums, fn(x: integer) -> integer { x + offset });
+shifted = map(nums, fn(x: integer) - integer { x + offset });
 ```
 
 ```python
@@ -1722,20 +1722,13 @@ Pass function references as arguments to higher-order functions.
   assert(apply_fn(negate_it, 3) == -3, "fn-ref as arg (negate)");
 ```
 
-Full-form lambda with fn(...) syntax.
+Lambdas with map, filter, and reduce. Use |...| short form — types are inferred from the call site.
 
 ```rust
   nums = [1, 2, 3, 4, 5];
-  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  doubled = map(nums, |x| { x * 2 });
   assert(doubled[0] == 2, "lambda map first element");
   assert(doubled[4] == 10, "lambda map last element");
-```
-
-Short-form lambda with |...| syntax — types are inferred from the call site.
-
-```rust
-  tripled = map(nums, |x| { x * 3 });
-  assert(tripled[0] == 3, "short lambda map first element");
 ```
 
 filter keeps only elements where the lambda returns true.
@@ -1753,17 +1746,12 @@ reduce collapses the whole list into one value. The lambda receives the running 
   assert(total == 15, "reduce sum: {total}");
 ```
 
-A lambda can also be stored in a variable and called later.
+Use fn(...) long form when you need explicit types — for example when storing a lambda in a variable or passing it without call-site context.
 
 ```rust
   negate = fn(x: integer) -> integer { -x };
   assert(negate(7) == -7, "stored lambda: {negate(7)}");
-```
-
-A lambda passed to your own higher-order function (same as apply_fn above).
-
-```rust
-  assert(apply_fn(fn(x: integer) -> integer { x * x }, 6) == 36, "lambda as arg: 6^2");
+  assert(apply_fn(|x| { x * x }, 6) == 36, "lambda as arg: 6^2");
 ```
 
 --- Named arguments ---
@@ -1944,31 +1932,6 @@ fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT s
 
 The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.
 
-=== Aggregates
-
-Shorthand functions over an entire vector, without writing an explicit loop.
-
-```
-sum_of(v)          — sum of all integer elements
-min_of(v)          — smallest element (null if empty)
-max_of(v)          — largest element (null if empty)
-any(v, pred)       — true if at least one element satisfies the predicate
-all(v, pred)       — true if every element satisfies the predicate
-count_if(v, pred)  — number of elements satisfying the predicate
-```
-
-```rust
-  agg_nums = [3, 1, 4, 1, 5, 9, 2, 6];
-  assert(sum_of(agg_nums) == 31, "sum_of: {sum_of(agg_nums)}");
-  assert(min_of(agg_nums) == 1, "min_of: {min_of(agg_nums)}");
-  assert(max_of(agg_nums) == 9, "max_of: {max_of(agg_nums)}");
-  assert(any(agg_nums, |x| { x > 8 }), "any > 8");
-  assert(!any(agg_nums, |x| { x > 10 }), "none > 10");
-  assert(all(agg_nums, |x| { x > 0 }), "all > 0");
-  assert(!all(agg_nums, |x| { x > 1 }), "not all > 1");
-  assert(count_if(agg_nums, |x| { x % 2 == 0 }) == 3, "count even elements");
-```
-
 === Higher-order functions
 
 'map' applies a function to every element and returns a new vector.
@@ -2063,17 +2026,6 @@ struct Circle {
   area: float computed(3.14159265 * $.radius * $.radius)
 }
 ```
-
-=== Field iteration
-
-'for f in s\#fields' visits every stored primitive field of a struct. The parser unrolls this loop at compile time — no runtime allocation is needed. The loop variable has two accessible parts:
-
-```
-'f.name'  — the field name as text
-'f.value' — a FieldValue enum wrapping the actual value
-```
-
-Match on 'f.value' using the FvInt, FvFloat, FvBool, FvText, and other variants. Reference, collection, and nested-struct fields are skipped silently.
 
 === Storing many structs in a vector
 
@@ -2174,25 +2126,6 @@ Fill a vector with copies of the same struct using '; count' syntax. This create
   assert(map[3].height == 200, "individual tile update");
 ```
 
-=== Field iteration
-
-Iterate over each primitive field of a struct to inspect its name and value. This is useful for building generic display or serialisation routines without repeating each field name manually.
-
-```rust
-  fi_col = Colour {r: 64, g: 128, b: 255 };
-  fi_parts = "";
-  for fi_f in fi_col#fields {
-    if fi_parts != "" { fi_parts += ","; }
-    fi_parts += fi_f.name;
-    fi_parts += "=";
-    match fi_f.value {
-      FvInt { v } => { fi_parts += "{v}"; },
-      _ => {}
-    }
-  }
-  assert(fi_parts == "r=64,g=128,b=255", "field iteration: {fi_parts}");
-```
-
 === sizeof
 
 'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.
@@ -2276,25 +2209,6 @@ fn opposite(self: Direction) -> Direction {
   } else {
     East
   }
-}
-```
-
-=== Nested field sub-patterns in match
-
-Inside a struct-enum arm, each field position can carry a sub-pattern instead of just a binding name. Supported sub-patterns: enum variant name, scalar literal, wildcard '_', or or-pattern ('A | B'). This lets you match on a field's value and bind others in a single arm, without a nested match or an if-guard.
-
-```rust
-enum Status {
-  Pending,
-  Paid,
-  Refunded
-}
-```
-
-```rust
-struct Order {
-  status: Status,
-  amount: integer
 }
 ```
 
@@ -2435,39 +2349,6 @@ Character literals work in match arms.
     _ => false
   };
   assert(vowel, "character or-pattern");
-```
-
-=== Nested field sub-patterns
-
-An arm for a struct-enum variant can constrain a field to a specific value and still bind other fields in the same arm. Here: match an Order on its status field, binding amount only when Paid. A top-level '_' wildcard covers all other status values.
-
-```rust
-  paid_order = Order { status: Paid, amount: 5000 };
-  charge = match paid_order {
-    Order { status: Paid, amount } => amount,
-    _ => 0
-  };
-  assert(charge == 5000, "paid order charged: {charge}");
-```
-
-```rust
-  pending_order = Order { status: Pending, amount: 200 };
-  charge2 = match pending_order {
-    Order { status: Paid, amount } => amount,
-    _ => 0
-  };
-  assert(charge2 == 0, "pending order not charged: {charge2}");
-```
-
-Or-patterns in a field sub-pattern match multiple variant values in one arm.
-
-```rust
-  refunded_order = Order { status: Refunded, amount: 300 };
-  is_inactive = match refunded_order {
-    Order { status: Pending | Refunded } => true,
-    _ => false
-  };
-  assert(is_inactive, "pending|refunded matches or-pattern");
 }
 ```
 
@@ -4455,7 +4336,7 @@ A generic function uses a type variable to work with any type. Write the functio
 Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector\<T\>).
 
 ```rust
-fn identity<T>(val: T) -> T { val }
+fn identity<T>(x: T) -> T { x }
 ```
 
 === Calling a generic function
@@ -4476,9 +4357,9 @@ fn test_identity() {
 Additional parameters can also use T.  They all share the same concrete type.
 
 ```rust
-fn pick_second<T>(pa: T, pb: T) -> T {
-  _ps = pa;
-  pb
+fn pick_second<T>(a: T, b: T) -> T {
+  _x = a;
+  b
 }
 fn test_pick_second() {
   assert(pick_second(1, 99) == 99);
@@ -4486,11 +4367,11 @@ fn test_pick_second() {
 }
 ```
 
-=== Allowed operations on T (unconstrained)
+=== Allowed operations on T
 
-Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors without an interface bound.
+Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.
 
-=== Disallowed operations on unconstrained T
+=== Disallowed operations
 
 The compiler rejects operations that require knowing what T is. For example, `x + y` on two T values gives:
 
@@ -4504,95 +4385,10 @@ Similarly, `x.field` gives:
 "generic type T: field access requires a concrete type"
 ```
 
-=== Interfaces
-
-An interface declares a set of operations that a type must support. Once an interface is declared, a generic function can use '\<T: Interface\>' to unlock those operations on T.
-
-=== Declaring an interface
-
-List the required method signatures inside the interface body. Use 'Self' as a placeholder for the concrete satisfying type. Any type that provides all listed methods satisfies the interface — no explicit 'implements' keyword or registration is needed. Example:
-
-```
-interface Ordered {
-  fn OpLt(self: Self, other: Self) -> boolean
-  fn OpGt(self: Self, other: Self) -> boolean
-}
-```
-
-'Ordered' (above) is already declared in the standard library. The standard library also declares 'Equatable', 'Addable', 'Numeric', and 'Printable', all satisfied automatically by the primitive types.
-
-=== Using stdlib interfaces: Ordered, min_of, max_of, sum_of
-
-All numeric primitives satisfy 'Ordered' out of the box. 'max_of', 'min_of', and 'sum_of' are stdlib functions bounded by these interfaces.
-
-```rust
-fn test_stdlib_bounded() {
-```
-
-max_of and min_of work with integer (satisfies Ordered)
-
-```rust
-  sb_best = max_of([4, 1, 9, 2]);
-  assert(sb_best == 9, "max_of integers: {sb_best}");
-  sb_least = min_of([4, 1, 9, 2]);
-  assert(sb_least == 1, "min_of integers: {sb_least}");
-```
-
-sum_of works on any vector\<integer\>
-
-```rust
-  sb_total = sum_of([1, 2, 3, 4, 5]);
-  assert(sb_total == 15, "sum_of: {sb_total}");
-}
-```
-
-=== Custom type satisfying a stdlib interface
-
-Provide 'OpLt' and 'OpGt' and the type automatically satisfies 'Ordered'. Then write a bounded generic function that uses those operators on T. The compiler checks at the call site that the type satisfies the bound, and reports which method is missing if it does not.
-
-```rust
-struct Score {
-  value: integer
-}
-fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
-fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
-```
-
-A bounded generic using Ordered — can be called with Score or any Ordered type. The compiler resolves 'left \< right' to the Score implementation of OpLt.
-
-```rust
-fn higher<T: Ordered>(left: T, right: T) -> T {
-  if left < right { right } else { left }
-}
-```
-
-```rust
-fn test_custom_ordered() {
-  a_score = Score{value: 3};
-  b_score = Score{value: 7};
-  co_winner = higher(a_score, b_score);
-  assert(co_winner.value == 7, "winner: {co_winner.value}");
-}
-```
-
-=== Multiple bounds
-
-Use '+' to require more than one interface: '\<T: Ordered + Printable\>'.
-
-=== Diagnostics
-
-When a type does not satisfy the required interface, the compiler reports which method is missing and its expected signature, for example:
-
-```
-"Score does not satisfy Ordered: missing fn OpGt(Score, Score) -> boolean"
-```
-
 ```rust
 fn main() {
   test_identity();
   test_pick_second();
-  test_stdlib_bounded();
-  test_custom_ordered();
 }
 ```
 
@@ -4607,7 +4403,7 @@ A lambda may read any integer variable in scope at the call site. Store the lamb
 
 === Multiple integer captures
 
-A lambda can read more than one outer variable at once. All are captured at the moment the lambda is written.
+A lambda can read more than one outer variable at once. All are captured at the moment the lambda is called.
 
 === Text capture
 
@@ -4615,21 +4411,11 @@ Text values are captured by deep-copy, so they are independent of the original v
 
 === Capture timing
 
-Loft captures variables at the moment the lambda is written (definition time), not at the moment it is called.  If a variable changes between writing and calling the lambda, the lambda sees the value it had when it was written.
+Loft captures variables at the moment the lambda is called, not at the moment the lambda is written.  If a variable changes between writing and calling the lambda, the lambda sees the updated value.
 
-=== Cross-scope closures
+=== Current limitation: captured lambdas and higher-order functions
 
-A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references.
-
-=== Current limitation (C31): closures in collections and struct fields
-
-A capturing lambda cannot be stored in a 'vector\<fn(...)\>' or as a struct field.  Pass closures as function arguments or return values instead. Non-capturing lambdas (those that only use their own parameters) work fine as elements of function vectors and with higher-order functions.
-
-```rust
-fn make_adder(base_val: integer) -> fn(integer) -> integer {
-  fn(n: integer) -> integer { base_val + n }
-}
-```
+Captured closures only work when called directly by name in the same scope. Passing a capturing lambda as an argument to map, filter, reduce, or a user-defined higher-order function is not yet supported — the hidden closure record is not forwarded through the call. Workaround: pass the extra value as an explicit extra argument instead. Non-capturing lambdas (those that only use their own parameters) work fine with all higher-order functions.
 
 ```rust
 fn main() {
@@ -4675,18 +4461,6 @@ Closures capture at definition time. 'base' is 10 when the lambda is written; re
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
-```
-
-=== Cross-scope closures
-
-make_adder returns a lambda that captured base_val from its parameter. The captured value is preserved after make_adder returns.
-
-```rust
-  add10 = make_adder(10);
-  add100 = make_adder(100);
-  assert(add10(5) == 15, "add10(5): {add10(5)}");
-  assert(add100(5) == 105, "add100(5): {add100(5)}");
-  assert(add10(0) == 10, "add10(0): {add10(0)}");
 ```
 
 === Non-capturing lambdas with higher-order functions
@@ -4789,18 +4563,6 @@ fn large_range(limit: integer) -> iterator<integer> {
 }
 ```
 
-=== Yield from inside a for-loop over a vector
-
-The coroutine save/restore machinery works for any iterable — not just ranges. Here the loop variable is a vector element; the generator suspends mid-loop.
-
-```rust
-fn doubled_elems(src: vector<integer>) -> iterator<integer> {
-  for elem in src {
-    yield elem * 2;
-  }
-}
-```
-
 ```rust
 fn main() {
 ```
@@ -4869,19 +4631,6 @@ One extra advance past the last element; exhausted() is true after that.
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
-=== Yield from inside a for-loop over a vector
-
-The generator suspends at 'yield' mid-way through the vector loop; the loop cursor and vector position are preserved across each resume.
-
-```rust
-  de_src = [10, 20, 30];
-  de_total = 0;
-  for de_n in doubled_elems(de_src) {
-    de_total += de_n;
-  }
-  assert(de_total == 120, "doubled vector elements: {de_total}");
-```
-
 === Early termination with break
 
 Stop after the first 5 values from a 1000-element generator.
@@ -4924,10 +4673,6 @@ A function can return a tuple to give back more than one value at once.
 === Destructuring
 
 Assign a tuple to multiple names in one step using the '(a, b) = expr' form. This is concise when a function returns a tuple and you need both values.
-
-=== Matching tuples
-
-A tuple can be used as the subject of a 'match' expression. Each element position can be a literal, a binding name, or a wildcard '_'. This lets you branch on the combination of values in a single expression.
 
 === Three or more elements
 
@@ -5016,29 +4761,6 @@ Already in order
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
-```
-
-=== Matching tuples
-
-Match on a pair: bind 'n' when the second element is a specific text, or bind both as 'n' and 's' for the general case.
-
-```rust
-  tm_pair = (3, "hello");
-  tm_result = match tm_pair {
-    (0, _) => "starts at zero",
-    (n, "hi") => "greeting at {n}",
-    (n, s) => "got {n} and {s}"
-  };
-  assert(tm_result == "got 3 and hello", "tuple match: {tm_result}");
-```
-
-```rust
-  tm_pair2 = (0, "anything");
-  tm_result2 = match tm_pair2 {
-    (0, _) => "starts at zero",
-    (n, s) => "got {n} and {s}"
-  };
-  assert(tm_result2 == "starts at zero", "wildcard match: {tm_result2}");
 ```
 
 === Three or more elements
@@ -5905,23 +5627,51 @@ Returns microseconds elapsed since program start (monotonic clock). Unaffected b
 
 = Roadmap
 
-Loft is under active development. Everything documented on the language pages works today.
+Loft is under active development. Everything documented on the language pages works today. This page describes what is planned for upcoming releases.
 
-=== In progress — 0.8.3
+=== Current release — 0.8.3
 
-==== Cross-scope closures (A5.6) — completed
+0.8.3 focuses on language completeness and correctness. All items below are implemented and will ship with the next release.
 
-Cross-scope closures now work: a function can return a capturing lambda and the caller can invoke it. The closure record (captured values) travels with the fn-ref as a 16-byte slot. Capture is by value at definition time.
+==== Closures
 
-==== WASM threading (W1.18)
+Lambdas can capture variables from the surrounding scope. Captured values are copied at definition time (value semantics). A function can return a closure to its caller — the captured values travel with the lambda. See Closures.
 
-`par(...)` loops are currently sequential in the WASM build. Threading support requires a Web Worker pool, which is planned as a follow-on item.
+```
+fn make_adder(n: integer) - fn(integer) - integer {
+    fn(x: integer) - integer { n + x }
+}
+add5 = make_adder(5);
+add5(10)   // 15
+```
 
-=== Coming next
+==== Coroutines and generators
+
+Functions can `yield` values lazily. Consumers iterate with a normal `for` loop — the generator suspends and resumes automatically. See Coroutines.
+
+==== Tuples
+
+Functions can return multiple values as tuples. Destructuring assignment unpacks them at the call site. See Tuples.
+
+==== Generics and interfaces
+
+Generic functions and interface-bounded type parameters. See Generics.
+
+==== Native compilation
+
+Compile loft programs to standalone native executables via `loft --native app.loft`. Generates Rust code, compiles with `rustc`. All language features are supported including closures, coroutines, tuples, and generics.
+
+==== Parallel execution
+
+Data-parallel `for` loops with the `par(...)` clause. The runtime splits work across CPU cores automatically. See Parallel execution.
+
+=== Next — 0.8.4
+
+0.8.4 adds networking, graphics, and a test server. All features are designed as libraries that work across the interpreter, native codegen, and WASM backends.
 
 ==== HTTP client
 
-Built-in HTTP requests using `ureq`:
+Built-in HTTP requests. JSON parsing already works via `Type.parse(text)` and the `:j` format specifier — only the transport layer is new.
 
 ```
 struct User { name: text, age: integer }
@@ -5933,11 +5683,45 @@ if resp.ok() {
 }
 ```
 
-JSON parsing and serialisation already work today via `Type.parse(text)` and the `:j` format specifier. The remaining work is the HTTP transport layer.
+Works on all backends: the interpreter and native codegen use `ureq`; the WASM build bridges to the browser's `fetch()` API.
 
-==== Interactive mode
+==== Test server
 
-Running `loft` with no arguments will start an interactive session:
+A minimal HTTP server built in Rust that loads a loft script and calls a user-defined `fn handle(Request) - Response` for each incoming request.
+
+```
+$ loft serve app.loft --port 8080
+```
+
+```
+fn handle(r: Request) - Response {
+    if r.path == "/hello" {
+        Response { body: "Hello, {r.method}!" }
+    } else {
+        Response { status: 404, body: "not found" }
+    }
+}
+```
+
+Primary purpose: provide a local test target for HTTP client integration tests without depending on external services. Also useful for rapid prototyping of web APIs in loft.
+
+==== Graphics library
+
+A 2D/3D graphics library with the rasterizer and math written entirely in loft. Rust provides only platform I/O (PNG files, GPU context, font loading).
+
+- *2D canvas* — RGBA pixel buffer with blend, line, rectangle, circle, Bezier curve, and scanline fill — all implemented in loft.
+- *Text rendering* — Glyph rasterization via `fontdue`; layout and drawing in loft.
+- *GLB export* — Write 3D meshes, scenes, and materials to binary glTF files. Pure loft implementation using binary file I/O.
+- *OpenGL desktop* — Real-time rendering window using `glutin` + `glow`. Optional feature (`--features opengl`).
+- *WebGL browser* — Render to a `<canvas>` element via WebGL2 in WASM builds.
+
+The graphics workloads (pixel blending, Bezier subdivision, matrix math) also serve as a real-world performance benchmark for the loft interpreter.
+
+=== 0.9.0 — Standalone executable
+
+==== Interactive mode (REPL)
+
+Running `loft` with no arguments starts an interactive session. Definitions persist across lines. Syntax errors discard the failed line and continue.
 
 ```
 $ loft
@@ -5950,25 +5734,33 @@ $ loft
 3.0
 ```
 
-Definitions persist across lines. A syntax error discards the failed line and continues.
+==== Error recovery
+
+The parser currently stops at the first error. 0.9.0 will recover from token-level failures, report multiple errors in a single pass, and continue parsing after bad statements.
+
+==== Logger improvements
+
+Hot-reloadable log levels, `--release` flag for eliding `debug_assert` calls, `--debug` flag for per-type safety logging (null-origin tracking, division-by-zero source locations).
+
+=== 1.0.0 — IDE + stability contract
 
 ==== Web IDE
 
-A browser-based IDE that runs the full Loft interpreter as WebAssembly — no installation, no server:
+A browser-based IDE running the full loft interpreter as WebAssembly — no installation, no server.
 
 - Syntax highlighting and error markers (CodeMirror 6)
 - Run button with console output
 - Go-to-definition and find-usages
 - Multiple projects stored locally (IndexedDB)
 - Documentation browser built in
-- Works offline (PWA)
+- Works offline (PWA with export/import ZIP)
 
-=== Version 1.0 — stability contract
+==== Stability contract
 
 Version 1.0 means: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language syntax, type system, standard library, and command-line flags are frozen. Until then, breaking changes are possible between minor versions.
 
 === Following progress
 
-Development is tracked in the GitHub repository.
+Development is tracked in the GitHub repository. The full internal roadmap with effort estimates and designs is in the repository's `doc/claude/ROADMAP.md`.
 
 

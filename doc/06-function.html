@@ -90,14 +90,11 @@
 <p>Pass function references as arguments to higher-order functions.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);</code></pre>
-<p>Full-form lambda with fn(...) syntax.</p>
+<p>Lambdas with map, filter, and reduce. Use |...| short form — types are inferred from the call site.</p>
 <pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
-  doubled = <span class="fn-call">map</span>(nums, <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * <span class="nm">2</span> });
+  doubled = <span class="fn-call">map</span>(nums, |x| { x * <span class="nm">2</span> });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"lambda map first element"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">4</span>] == <span class="nm">10</span>, <span class="st">"lambda map last element"</span>);</code></pre>
-<p>Short-form lambda with |...| syntax — types are inferred from the call site.</p>
-<pre><code>  tripled = <span class="fn-call">map</span>(nums, |x| { x * <span class="nm">3</span> });
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tripled[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"short lambda map first element"</span>);</code></pre>
 <p>filter keeps only elements where the lambda returns true.</p>
 <pre><code>  evens = <span class="fn-call">filter</span>(nums, |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"filter evens first"</span>);
@@ -105,11 +102,10 @@
 <p>reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).</p>
 <pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc, x| { acc + x });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);</code></pre>
-<p>A lambda can also be stored in a variable and called later.</p>
+<p>Use fn(...) long form when you need explicit types — for example when storing a lambda in a variable or passing it without call-site context.</p>
 <pre><code>  negate = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">negate</span>(<span class="nm">7</span>) == -<span class="nm">7</span>, <span class="st">"stored lambda: {negate(7)}"</span>);</code></pre>
-<p>A lambda passed to your own higher-order function (same as apply_fn above).</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(<span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">negate</span>(<span class="nm">7</span>) == -<span class="nm">7</span>, <span class="st">"stored lambda: {negate(7)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(|x| { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);</code></pre>
 <p>--- Named arguments ---</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>) == <span class="st">"example.com:8080:true"</span>, <span class="st">"all defaults"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"skip port"</span>);
