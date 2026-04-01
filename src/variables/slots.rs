@@ -181,11 +181,12 @@ fn place_large_and_recurse(
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
                 if v_size > 8 {
-                    // C43.2: try reusing the top-of-stack dead slot.
-                    // Only reuse the slot immediately below *tos to avoid
-                    // holes that interact with zone-1 or future zone-2 vars.
-                    let reuse_slot = find_reusable_zone2_slot(function, v, scope)
-                        .filter(|&slot| slot + v_size == *tos);
+                    // C43.2/C46: try reusing any dead same-type zone-2 slot.
+                    // The full conflict scan in find_reusable_zone2_slot guards
+                    // against spatial+temporal overlaps with all assigned variables.
+                    // Text-only restriction (inside the finder) prevents the
+                    // Reference/Vector IR-walk-order issues (C45).
+                    let reuse_slot = find_reusable_zone2_slot(function, v, scope);
                     let (v_slot, reused) = if let Some(slot) = reuse_slot {
                         (slot, true)
                     } else {
@@ -1065,5 +1066,32 @@ mod tests {
         f.variables[v2 as usize].stack_pos = u16::MAX; // reset
         let slot2 = find_reusable_zone2_slot(&f, v2 as usize, 0);
         assert_eq!(slot2, None, "v2 must not reuse v1 (temporal overlap)");
+    }
+
+    /// C46: text reuse works even when a non-text variable is placed between
+    /// the dead text and the new one (no top-of-stack restriction).
+    #[test]
+    fn zone2_text_reuse_non_consecutive() {
+        let text_tp = Type::Text(Vec::new());
+        let ref_tp = Type::Reference(0, Vec::new());
+        let mut f = Function::new("f", "test");
+        // t1: text, live 0–10
+        let t1 = f.add_unique("t1", &text_tp, 0);
+        f.variables[t1 as usize].first_def = 0;
+        f.variables[t1 as usize].last_use = 10;
+        // r: reference (12 bytes), live 5–25 — sits between the two texts
+        let r = f.add_unique("r", &ref_tp, 0);
+        f.variables[r as usize].first_def = 5;
+        f.variables[r as usize].last_use = 25;
+        // t2: text, live 11–20 — should reuse t1's slot (not blocked by r)
+        let t2 = f.add_unique("t2", &text_tp, 0);
+        f.variables[t2 as usize].first_def = 11;
+        f.variables[t2 as usize].last_use = 20;
+        run_assign_slots(&mut f, 0);
+        assert_eq!(
+            f.variables[t1 as usize].stack_pos, f.variables[t2 as usize].stack_pos,
+            "t2 should reuse t1's slot despite r being placed in between"
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 }
