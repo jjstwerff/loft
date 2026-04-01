@@ -23,6 +23,8 @@
 <p>A function can return a tuple to give back more than one value at once.</p>
 <h2 id="destructuring">Destructuring</h2>
 <p>Assign a tuple to multiple names in one step using the <code>(a, b) = expr</code> form. This is concise when a function returns a tuple and you need both values.</p>
+<h2 id="matching-tuples">Matching tuples</h2>
+<p>A tuple can be used as the subject of a <code>match</code> expression. Each element position can be a literal, a binding name, or a wildcard <code>_</code>. This lets you branch on the combination of values in a single expression.</p>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <p>Tuples can have any number of elements.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">min_max</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
@@ -69,6 +71,21 @@
 <pre><code>  (lo, hi) = <span class="fn-call">min_max</span>(<span class="nm">8</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lo == <span class="nm">3</span>, <span class="st">"destructured lo: {lo}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hi == <span class="nm">8</span>, <span class="st">"destructured hi: {hi}"</span>);</code></pre>
+<h2 id="matching-tuples">Matching tuples</h2>
+<p>Match on a pair: bind <code>n</code> when the second element is a specific text, or bind both as <code>n</code> and <code>s</code> for the general case.</p>
+<pre><code>  tm_pair = (<span class="nm">3</span>, <span class="st">"hello"</span>);
+  tm_result = match tm_pair {
+    (<span class="nm">0</span>, _) =&gt; <span class="st">"starts at zero"</span>,
+    (n, <span class="st">"hi"</span>) =&gt; <span class="st">"greeting at {n}"</span>,
+    (n, s) =&gt; <span class="st">"got {n} and {s}"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tm_result == <span class="st">"got 3 and hello"</span>, <span class="st">"tuple match: {tm_result}"</span>);</code></pre>
+<pre><code>  tm_pair2 = (<span class="nm">0</span>, <span class="st">"anything"</span>);
+  tm_result2 = match tm_pair2 {
+    (<span class="nm">0</span>, _) =&gt; <span class="st">"starts at zero"</span>,
+    (n, s) =&gt; <span class="st">"got {n} and {s}"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tm_result2 == <span class="st">"starts at zero"</span>, <span class="st">"wildcard match: {tm_result2}"</span>);</code></pre>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <pre><code>  u = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u.<span class="nm">0</span> + u.<span class="nm">1</span> + u.<span class="nm">2</span> == <span class="nm">6</span>, <span class="st">"triple sum: {u.0}+{u.1}+{u.2}"</span>);</code></pre>

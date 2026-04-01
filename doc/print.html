@@ -43,7 +43,7 @@
 <li><a href="#22-time">Time</a> — <span class="toc-desc">Wall-clock time and elapsed time</span></li>
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
 <li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
-<li><a href="#25-generics">Generics</a> — <span class="toc-desc">Generic functions</span></li>
+<li><a href="#25-generics">Generics</a> — <span class="toc-desc">Generic functions and interfaces</span></li>
 <li><a href="#26-closures">Closures</a> — <span class="toc-desc">Capturing variables from the surrounding scope</span></li>
 <li><a href="#27-coroutines">Coroutines</a> — <span class="toc-desc">Lazy sequences with generators and yield</span></li>
 <li><a href="#28-tuples">Tuples</a> — <span class="toc-desc">Grouping values without defining a struct</span></li>
@@ -526,6 +526,17 @@
 fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does NOT see the append
 </code></pre>
 <p>The same rule applies to slices: <code>v[2..5]</code> passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.</p>
+<h2 id="aggregates">Aggregates</h2>
+<p>Shorthand functions over an entire vector, without writing an explicit loop. sum_of(v)          — sum of all integer elements min_of(v)          — smallest element (null if empty) max_of(v)          — largest element (null if empty) any(v, pred)       — true if at least one element satisfies the predicate all(v, pred)       — true if every element satisfies the predicate count_if(v, pred)  — number of elements satisfying the predicate</p>
+<pre><code>  agg_nums = [<span class="nm">3</span>, <span class="nm">1</span>, <span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">5</span>, <span class="nm">9</span>, <span class="nm">2</span>, <span class="nm">6</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-vector-aggregates.html">sum_of</a></span>(agg_nums) == <span class="nm">31</span>, <span class="st">"sum_of: {sum_of(agg_nums)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-vector-aggregates.html">min_of</a></span>(agg_nums) == <span class="nm">1</span>, <span class="st">"min_of: {min_of(agg_nums)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-vector-aggregates.html">max_of</a></span>(agg_nums) == <span class="nm">9</span>, <span class="st">"max_of: {max_of(agg_nums)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">any</span>(agg_nums, |x| { x &gt; <span class="nm">8</span> }), <span class="st">"any &gt; 8"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">any</span>(agg_nums, |x| { x &gt; <span class="nm">10</span> }), <span class="st">"none &gt; 10"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">all</span>(agg_nums, |x| { x &gt; <span class="nm">0</span> }), <span class="st">"all &gt; 0"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">all</span>(agg_nums, |x| { x &gt; <span class="nm">1</span> }), <span class="st">"not all &gt; 1"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">count_if</span>(agg_nums, |x| { x % <span class="nm">2</span> == <span class="nm">0</span> }) == <span class="nm">3</span>, <span class="st">"count even elements"</span>);</code></pre>
 <h2 id="higher-order-functions">Higher-order functions</h2>
 <p><code>map</code> applies a function to every element and returns a new vector.</p>
 <pre><code>  nums =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
@@ -578,6 +589,8 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   radius: <span class="ty"><a href="stdlib-types.html">float</a></span>,
   area: <span class="ty"><a href="stdlib-types.html">float</a></span> <span class="fn-call">computed</span>(<span class="nm">3.14159265</span> * $.radius * $.radius)
 }</code></pre>
+<h2 id="field-iteration">Field iteration</h2>
+<p><code>for f in s#fields</code> visits every stored primitive field of a struct. The parser unrolls this loop at compile time — no runtime allocation is needed. The loop variable has two accessible parts: <code>f.name</code>  — the field name as text <code>f.value</code> — a FieldValue enum wrapping the actual value Match on <code>f.value</code> using the FvInt, FvFloat, FvBool, FvText, and other variants. Reference, collection, and nested-struct fields are skipped silently.</p>
 <h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
 <p><code>Area</code> uses smaller integer types to save memory: <code>u16</code> holds values 0–65535, and <code>u8</code> holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Area</span> {
@@ -625,6 +638,20 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{map[3]}"</span> == <span class="st">"{{height:0,terrain:1,water:1,direction:1}}"</span>, <span class="st">"tile record"</span>);
   map[<span class="nm">3</span>].height = <span class="nm">200</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(map[<span class="nm">3</span>].height == <span class="nm">200</span>, <span class="st">"individual tile update"</span>);</code></pre>
+<h2 id="field-iteration">Field iteration</h2>
+<p>Iterate over each primitive field of a struct to inspect its name and value. This is useful for building generic display or serialisation routines without repeating each field name manually.</p>
+<pre><code>  fi_col = <span class="en">Colour</span> {r: <span class="nm">64</span>, g: <span class="nm">128</span>, b: <span class="nm">255</span> };
+  fi_parts = <span class="st">""</span>;
+  <span class="kw">for</span> fi_f <span class="kw">in</span> fi_col#fields {
+    <span class="kw">if</span> fi_parts != <span class="st">""</span> { fi_parts += <span class="st">","</span>; }
+    fi_parts += fi_f.name;
+    fi_parts += <span class="st">"="</span>;
+    match fi_f.value {
+      <span class="en">FvInt</span> { v } =&gt; { fi_parts += <span class="st">"{v}"</span>; },
+      _ =&gt; {}
+    }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fi_parts == <span class="st">"r=64,g=128,b=255"</span>, <span class="st">"field iteration: {fi_parts}"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">4</span>, <span class="st">"integer: 4 bytes"</span>);
@@ -676,6 +703,17 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   } <span class="kw">else</span> {
     <span class="en">East</span>
   }
+}</code></pre>
+<h2 id="nested-field-sub-patterns-in-match">Nested field sub-patterns in match</h2>
+<p>Inside a struct-enum arm, each field position can carry a sub-pattern instead of just a binding name. Supported sub-patterns: enum variant name, scalar literal, wildcard <code>_</code>, or or-pattern (<code>A | B</code>). This lets you match on a field's value and bind others in a single arm, without a nested match or an if-guard.</p>
+<pre><code><span class="kw">enum</span> <span class="en">Status</span> {
+  <span class="en">Pending</span>,
+  <span class="en">Paid</span>,
+  <span class="en">Refunded</span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Order</span> {
+  status: <span class="en">Status</span>,
+  amount: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Plain enum values are ordered by declaration position. North comes first (smallest), West comes last (greatest).</p>
@@ -749,7 +787,28 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
     <span class="ch">'a'</span> | <span class="ch">'e'</span> | <span class="ch">'i'</span> | <span class="ch">'o'</span> | <span class="ch">'u'</span> =&gt; <span class="kw">true</span>,
     _ =&gt; <span class="kw">false</span>
   };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(vowel, <span class="st">"character or-pattern"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(vowel, <span class="st">"character or-pattern"</span>);</code></pre>
+<h2 id="nested-field-sub-patterns">Nested field sub-patterns</h2>
+<p>An arm for a struct-enum variant can constrain a field to a specific value and still bind other fields in the same arm. Here: match an Order on its status field, binding amount only when Paid. A top-level <code>_</code> wildcard covers all other status values.</p>
+<pre><code>  paid_order = <span class="en">Order</span> { status: <span class="en">Paid</span>, amount: <span class="nm">5000</span> };
+  charge = match paid_order {
+    <span class="en">Order</span> { status: <span class="en">Paid</span>, amount } =&gt; amount,
+    _ =&gt; <span class="nm">0</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(charge == <span class="nm">5000</span>, <span class="st">"paid order charged: {charge}"</span>);</code></pre>
+<pre><code>  pending_order = <span class="en">Order</span> { status: <span class="en">Pending</span>, amount: <span class="nm">200</span> };
+  charge2 = match pending_order {
+    <span class="en">Order</span> { status: <span class="en">Paid</span>, amount } =&gt; amount,
+    _ =&gt; <span class="nm">0</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(charge2 == <span class="nm">0</span>, <span class="st">"pending order not charged: {charge2}"</span>);</code></pre>
+<p>Or-patterns in a field sub-pattern match multiple variant values in one arm.</p>
+<pre><code>  refunded_order = <span class="en">Order</span> { status: <span class="en">Refunded</span>, amount: <span class="nm">300</span> };
+  is_inactive = match refunded_order {
+    <span class="en">Order</span> { status: <span class="en">Pending</span> | <span class="en">Refunded</span> } =&gt; <span class="kw">true</span>,
+    _ =&gt; <span class="kw">false</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(is_inactive, <span class="st">"pending|refunded matches or-pattern"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="10-sorted">
@@ -1834,7 +1893,7 @@ for e in data#errors { log_warn(e) }
 <p>A generic function uses a type variable to work with any type. Write the function once; the compiler creates a specialised copy for each concrete type you call it with.</p>
 <h2 id="declaring-a-generic-function">Declaring a generic function</h2>
 <p>Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector&lt;T&gt;).</p>
-<pre><code><span class="kw">fn</span> identity&lt;<span class="en">T</span>&gt;(x: <span class="en">T</span>) -&gt; <span class="en">T</span> { x }</code></pre>
+<pre><code><span class="kw">fn</span> identity&lt;<span class="en">T</span>&gt;(val: <span class="en">T</span>) -&gt; <span class="en">T</span> { val }</code></pre>
 <h2 id="calling-a-generic-function">Calling a generic function</h2>
 <p>No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">test_identity</span>() {
@@ -1845,21 +1904,60 @@ for e in data#errors { log_warn(e) }
 }</code></pre>
 <h2 id="multiple-parameters-of-the-same-type">Multiple parameters of the same type</h2>
 <p>Additional parameters can also use T.  They all share the same concrete type.</p>
-<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(a: <span class="en">T</span>, b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
-  _x = a;
-  b
+<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(pa: <span class="en">T</span>, pb: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  _ps = pa;
+  pb
 }
 <span class="kw">fn</span> <span class="fn-call">test_pick_second</span>() {
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>);
 }</code></pre>
-<h2 id="allowed-operations-on-t">Allowed operations on T</h2>
-<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.</p>
-<h2 id="disallowed-operations">Disallowed operations</h2>
+<h2 id="allowed-operations-on-t-unconstrained">Allowed operations on T (unconstrained)</h2>
+<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors without an interface bound.</p>
+<h2 id="disallowed-operations-on-unconstrained-t">Disallowed operations on unconstrained T</h2>
 <p>The compiler rejects operations that require knowing what T is. For example, <code>x + y</code> on two T values gives: "generic type T: operator <code>+</code> requires a concrete type" Similarly, <code>x.field</code> gives: "generic type T: field access requires a concrete type"</p>
+<h2 id="interfaces">Interfaces</h2>
+<p>An interface declares a set of operations that a type must support. Once an interface is declared, a generic function can use <code>&lt;T: Interface&gt;</code> to unlock those operations on T.</p>
+<h2 id="declaring-an-interface">Declaring an interface</h2>
+<p>List the required method signatures inside the interface body. Use <code>Self</code> as a placeholder for the concrete satisfying type. Any type that provides all listed methods satisfies the interface — no explicit <code>implements</code> keyword or registration is needed. Example: interface Ordered { fn OpLt(self: Self, other: Self) -&gt; boolean fn OpGt(self: Self, other: Self) -&gt; boolean } <code>Ordered</code> (above) is already declared in the standard library. The standard library also declares <code>Equatable</code>, <code>Addable</code>, <code>Numeric</code>, and <code>Printable</code>, all satisfied automatically by the primitive types.</p>
+<h2 id="using-stdlib-interfaces-ordered-min-of-max-of-sum-of">Using stdlib interfaces: Ordered, min_of, max_of, sum_of</h2>
+<p>All numeric primitives satisfy <code>Ordered</code> out of the box. <code>max_of</code>, <code>min_of</code>, and <code>sum_of</code> are stdlib functions bounded by these interfaces.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">test_stdlib_bounded</span>() {</code></pre>
+<p>max_of and min_of work with integer (satisfies Ordered)</p>
+<pre><code>  sb_best = <span class="fn-call"><a href="stdlib-vector-aggregates.html">max_of</a></span>([<span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">9</span>, <span class="nm">2</span>]);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sb_best == <span class="nm">9</span>, <span class="st">"max_of integers: {sb_best}"</span>);
+  sb_least = <span class="fn-call"><a href="stdlib-vector-aggregates.html">min_of</a></span>([<span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">9</span>, <span class="nm">2</span>]);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sb_least == <span class="nm">1</span>, <span class="st">"min_of integers: {sb_least}"</span>);</code></pre>
+<p>sum_of works on any vector&lt;integer&gt;</p>
+<pre><code>  sb_total = <span class="fn-call"><a href="stdlib-vector-aggregates.html">sum_of</a></span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>]);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sb_total == <span class="nm">15</span>, <span class="st">"sum_of: {sb_total}"</span>);
+}</code></pre>
+<h2 id="custom-type-satisfying-a-stdlib-interface">Custom type satisfying a stdlib interface</h2>
+<p>Provide <code>OpLt</code> and <code>OpGt</code> and the type automatically satisfies <code>Ordered</code>. Then write a bounded generic function that uses those operators on T. The compiler checks at the call site that the type satisfies the bound, and reports which method is missing if it does not.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Score</span> {
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}
+<span class="kw">fn</span> <span class="en">OpLt</span>(self: <span class="en">Score</span>, other: <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.value &lt; other.value }
+<span class="kw">fn</span> <span class="en">OpGt</span>(self: <span class="en">Score</span>, other: <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.value &gt; other.value }</code></pre>
+<p>A bounded generic using Ordered — can be called with Score or any Ordered type. The compiler resolves <code>left &lt; right</code> to the Score implementation of OpLt.</p>
+<pre><code><span class="kw">fn</span> higher&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(left: <span class="en">T</span>, right: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  <span class="kw">if</span> left &lt; right { right } <span class="kw">else</span> { left }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">test_custom_ordered</span>() {
+  a_score = <span class="en">Score</span>{value: <span class="nm">3</span>};
+  b_score = <span class="en">Score</span>{value: <span class="nm">7</span>};
+  co_winner = <span class="fn-call">higher</span>(a_score, b_score);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(co_winner.value == <span class="nm">7</span>, <span class="st">"winner: {co_winner.value}"</span>);
+}</code></pre>
+<h2 id="multiple-bounds">Multiple bounds</h2>
+<p>Use <code>+</code> to require more than one interface: <code>&lt;T: Ordered + Printable&gt;</code>.</p>
+<h2 id="diagnostics">Diagnostics</h2>
+<p>When a type does not satisfy the required interface, the compiler reports which method is missing and its expected signature, for example: "Score does not satisfy Ordered: missing fn OpGt(Score, Score) -&gt; boolean"</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call">test_identity</span>();
   <span class="fn-call">test_pick_second</span>();
+  <span class="fn-call">test_stdlib_bounded</span>();
+  <span class="fn-call">test_custom_ordered</span>();
 }</code></pre>
 </section>
 <section class="print-section" id="26-closures">
@@ -1868,13 +1966,18 @@ for e in data#errors { log_warn(e) }
 <h2 id="integer-capture">Integer capture</h2>
 <p>A lambda may read any integer variable in scope at the call site. Store the lambda, then call it by name.</p>
 <h2 id="multiple-integer-captures">Multiple integer captures</h2>
-<p>A lambda can read more than one outer variable at once. All are captured at the moment the lambda is called.</p>
+<p>A lambda can read more than one outer variable at once. All are captured at the moment the lambda is written.</p>
 <h2 id="text-capture">Text capture</h2>
 <p>Text values are captured by deep-copy, so they are independent of the original variable after the call.</p>
 <h2 id="capture-timing">Capture timing</h2>
-<p>Loft captures variables at the moment the lambda is called, not at the moment the lambda is written.  If a variable changes between writing and calling the lambda, the lambda sees the updated value.</p>
-<h2 id="current-limitation-captured-lambdas-and-higher-order-functions">Current limitation: captured lambdas and higher-order functions</h2>
-<p>Captured closures only work when called directly by name in the same scope. Passing a capturing lambda as an argument to map, filter, reduce, or a user-defined higher-order function is not yet supported — the hidden closure record is not forwarded through the call. Workaround: pass the extra value as an explicit extra argument instead. Non-capturing lambdas (those that only use their own parameters) work fine with all higher-order functions.</p>
+<p>Loft captures variables at the moment the lambda is written (definition time), not at the moment it is called.  If a variable changes between writing and calling the lambda, the lambda sees the value it had when it was written.</p>
+<h2 id="cross-scope-closures">Cross-scope closures</h2>
+<p>A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references.</p>
+<h2 id="current-limitation-c31-closures-in-collections-and-struct-fields">Current limitation (C31): closures in collections and struct fields</h2>
+<p>A capturing lambda cannot be stored in a <code>vector&lt;fn(...)&gt;</code> or as a struct field.  Pass closures as function arguments or return values instead. Non-capturing lambdas (those that only use their own parameters) work fine as elements of function vectors and with higher-order functions.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">make_adder</span>(base_val: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="kw">fn</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { base_val + n }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="integer-capture">Integer capture</h2>
 <pre><code>  offset = <span class="nm">100</span>;
@@ -1901,6 +2004,13 @@ for e in data#errors { log_warn(e) }
   add_base = <span class="kw">fn</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { base + n };
   base = <span class="nm">20</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add_base</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"sees base=10 at definition time: {add_base(5)}"</span>);</code></pre>
+<h2 id="cross-scope-closures">Cross-scope closures</h2>
+<p>make_adder returns a lambda that captured base_val from its parameter. The captured value is preserved after make_adder returns.</p>
+<pre><code>  add10 = <span class="fn-call">make_adder</span>(<span class="nm">10</span>);
+  add100 = <span class="fn-call">make_adder</span>(<span class="nm">100</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add10</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"add10(5): {add10(5)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add100</span>(<span class="nm">5</span>) == <span class="nm">105</span>, <span class="st">"add100(5): {add100(5)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add10</span>(<span class="nm">0</span>) == <span class="nm">10</span>, <span class="st">"add10(0): {add10(0)}"</span>);</code></pre>
 <h2 id="non-capturing-lambdas-with-higher-order-functions">Non-capturing lambdas with higher-order functions</h2>
 <p>No capture needed here — the lambda uses only its own parameter.</p>
 <pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
@@ -1957,6 +2067,13 @@ for e in data#errors { log_warn(e) }
     yield i;
   }
 }</code></pre>
+<h2 id="yield-from-inside-a-for-loop-over-a-vector">Yield from inside a for-loop over a vector</h2>
+<p>The coroutine save/restore machinery works for any iterable — not just ranges. Here the loop variable is a vector element; the generator suspends mid-loop.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">doubled_elems</span>(src: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> elem <span class="kw">in</span> src {
+    yield elem * <span class="nm">2</span>;
+  }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
 <pre><code>  total = <span class="nm">0</span>;
@@ -1997,6 +2114,14 @@ for e in data#errors { log_warn(e) }
     yf_total += n;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
+<h2 id="yield-from-inside-a-for-loop-over-a-vector">Yield from inside a for-loop over a vector</h2>
+<p>The generator suspends at <code>yield</code> mid-way through the vector loop; the loop cursor and vector position are preserved across each resume.</p>
+<pre><code>  de_src = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>];
+  de_total = <span class="nm">0</span>;
+  <span class="kw">for</span> de_n <span class="kw">in</span> <span class="fn-call">doubled_elems</span>(de_src) {
+    de_total += de_n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(de_total == <span class="nm">120</span>, <span class="st">"doubled vector elements: {de_total}"</span>);</code></pre>
 <h2 id="early-termination-with-break">Early termination with break</h2>
 <p>Stop after the first 5 values from a 1000-element generator.</p>
 <pre><code>  limit_total = <span class="nm">0</span>;
@@ -2022,6 +2147,8 @@ for e in data#errors { log_warn(e) }
 <p>A function can return a tuple to give back more than one value at once.</p>
 <h2 id="destructuring">Destructuring</h2>
 <p>Assign a tuple to multiple names in one step using the <code>(a, b) = expr</code> form. This is concise when a function returns a tuple and you need both values.</p>
+<h2 id="matching-tuples">Matching tuples</h2>
+<p>A tuple can be used as the subject of a <code>match</code> expression. Each element position can be a literal, a binding name, or a wildcard <code>_</code>. This lets you branch on the combination of values in a single expression.</p>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <p>Tuples can have any number of elements.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">min_max</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
@@ -2068,6 +2195,21 @@ for e in data#errors { log_warn(e) }
 <pre><code>  (lo, hi) = <span class="fn-call">min_max</span>(<span class="nm">8</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lo == <span class="nm">3</span>, <span class="st">"destructured lo: {lo}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hi == <span class="nm">8</span>, <span class="st">"destructured hi: {hi}"</span>);</code></pre>
+<h2 id="matching-tuples">Matching tuples</h2>
+<p>Match on a pair: bind <code>n</code> when the second element is a specific text, or bind both as <code>n</code> and <code>s</code> for the general case.</p>
+<pre><code>  tm_pair = (<span class="nm">3</span>, <span class="st">"hello"</span>);
+  tm_result = match tm_pair {
+    (<span class="nm">0</span>, _) =&gt; <span class="st">"starts at zero"</span>,
+    (n, <span class="st">"hi"</span>) =&gt; <span class="st">"greeting at {n}"</span>,
+    (n, s) =&gt; <span class="st">"got {n} and {s}"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tm_result == <span class="st">"got 3 and hello"</span>, <span class="st">"tuple match: {tm_result}"</span>);</code></pre>
+<pre><code>  tm_pair2 = (<span class="nm">0</span>, <span class="st">"anything"</span>);
+  tm_result2 = match tm_pair2 {
+    (<span class="nm">0</span>, _) =&gt; <span class="st">"starts at zero"</span>,
+    (n, s) =&gt; <span class="st">"got {n} and {s}"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tm_result2 == <span class="st">"starts at zero"</span>, <span class="st">"wildcard match: {tm_result2}"</span>);</code></pre>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <pre><code>  u = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u.<span class="nm">0</span> + u.<span class="nm">1</span> + u.<span class="nm">2</span> == <span class="nm">6</span>, <span class="st">"triple sum: {u.0}+{u.1}+{u.2}"</span>);</code></pre>
