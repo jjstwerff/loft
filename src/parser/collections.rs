@@ -1275,7 +1275,7 @@ use #count instead"
             );
             return placeholder;
         };
-        let (fn_param_types, fn_ret_type) = if let Type::Function(params, ret) = &types[1] {
+        let (fn_param_types, fn_ret_type) = if let Type::Function(params, ret, _) = &types[1] {
             (params.clone(), *ret.clone())
         } else {
             diagnostic!(
@@ -1388,7 +1388,7 @@ use #count instead"
             );
             return Err(placeholder);
         };
-        let (fn_param_types, fn_ret_type) = if let Type::Function(params, ret) = &types[1] {
+        let (fn_param_types, fn_ret_type) = if let Type::Function(params, ret, _) = &types[1] {
             (params.clone(), *ret.clone())
         } else {
             diagnostic!(
@@ -1747,7 +1747,7 @@ use #count instead"
             }
             return None;
         };
-        if let Type::Function(params, ret) = &types[1] {
+        if let Type::Function(params, ret, _) = &types[1] {
             if params.len() != 1 && !self.first_pass {
                 diagnostic!(
                     self.lexer,

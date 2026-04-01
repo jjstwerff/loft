@@ -863,7 +863,7 @@ impl Parser {
         {
             r_type = tp2;
         }
-        Type::Function(args, Box::new(r_type))
+        Type::Function(args, Box::new(r_type), vec![])
     }
 
     // <type> ::= <identifier> [::<identifier>] [ '<' ( <sub_type> | <type> ) '>' ] [ <depend> ]

@@ -109,7 +109,7 @@ fn collect_fn_ref_literals(
 ) {
     match val {
         Value::Set(var, inner) => {
-            if matches!(variables.tp(*var), Type::Function(_, _) | Type::Routine(_)) {
+            if matches!(variables.tp(*var), Type::Function(_, _, _) | Type::Routine(_)) {
                 collect_int_fn_refs(inner, calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls);
@@ -120,7 +120,7 @@ fn collect_fn_ref_literals(
                 if idx < callee.attributes.len()
                     && matches!(
                         callee.attributes[idx].typedef,
-                        Type::Function(_, _) | Type::Routine(_)
+                        Type::Function(_, _, _) | Type::Routine(_)
                     )
                 {
                     collect_int_fn_refs(a, calls);
@@ -294,7 +294,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
         | Type::Iterator(_, _) => "DbRef",
-        Type::Routine(_) | Type::Function(_, _) => "u32",
+        Type::Routine(_) | Type::Function(_, _, _) => "u32",
         Type::Unknown(_) => "??",
         Type::Keys => "&[Key]",
         Type::Void => "()",
@@ -318,7 +318,7 @@ fn default_native_value(tp: &Type) -> String {
         Type::Long => "0_i64".into(),
         Type::Boolean => "false".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
-        Type::Routine(_) | Type::Function(_, _) => "0_u32".into(),
+        Type::Routine(_) | Type::Function(_, _, _) => "0_u32".into(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)

@@ -277,7 +277,7 @@ impl Parser {
         let mut t = self.parse_single(var_tp, code, parent_tp);
         while self.lexer.peek_token(".")
             || self.lexer.peek_token("[")
-            || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _)))
+            || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
         {
             if !self.first_pass && t.is_unknown() && matches!(code, Value::Var(_)) {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable");
@@ -368,8 +368,8 @@ impl Parser {
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
                 // A5.6-4: chained call on a Type::Function expression — expr(args).
-                if let Type::Function(param_types, ret_type) = t.clone() {
-                    let fn_type = Type::Function(param_types.clone(), ret_type.clone());
+                if let Type::Function(param_types, ret_type, _) = t.clone() {
+                    let fn_type = Type::Function(param_types.clone(), ret_type.clone(), vec![]);
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);

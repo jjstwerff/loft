@@ -655,6 +655,18 @@ impl Parser {
             {
                 return true;
             }
+            // A5.6-text: Text types with different dep lists are structurally compatible.
+            if matches!((test_type, should), (Type::Text(_), Type::Text(_))) {
+                return true;
+            }
+            // A5.6-text: Function types with compatible params and return type.
+            if let (Type::Function(tp, tr, _), Type::Function(sp, sr, _)) = (test_type, should)
+                && tp.len() == sp.len()
+                && tp.iter().zip(sp.iter()).all(|(a, b)| a.is_equal(b))
+                && tr.is_equal(sr)
+            {
+                return true;
+            }
             false
         } else {
             true

@@ -239,7 +239,7 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     match &elem_tp {
-                        Type::Integer(_, _, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpGetInt", self);
                         }
                         Type::Long => stack.add_op("OpGetLong", self),
@@ -266,7 +266,7 @@ impl State {
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
                 match &elem_tp {
-                    Type::Integer(_, _, _) | Type::Function(_, _) => {
+                    Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                         stack.add_op("OpVarInt", self);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
@@ -312,7 +312,7 @@ impl State {
                     self.code_add(var_pos);
                     self.generate(value, stack, false);
                     match &elem_tp {
-                        Type::Integer(_, _, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
                         }
                         Type::Long => stack.add_op("OpSetLong", self),
@@ -338,7 +338,7 @@ impl State {
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 match &elem_tp {
-                    Type::Integer(_, _, _) | Type::Function(_, _) => {
+                    Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                         stack.add_op("OpPutInt", self);
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
@@ -577,7 +577,7 @@ impl State {
         };
         for elem in &elems {
             match elem {
-                Type::Integer(_, _, _) | Type::Function(_, _) => {
+                Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
                     self.code_add(0i32);
                 }
@@ -840,7 +840,7 @@ impl State {
             self.gen_set_first_vector_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
             self.gen_set_first_tuple_null(stack, v);
-        } else if matches!(stack.function.tp(v), Type::Function(_, _)) {
+        } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {
             // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
             // gen_fn_ref_value ensures every branch (including if-else) reaches the
             // join point with a full 16-byte slot.
@@ -999,7 +999,7 @@ impl State {
                     tps.push(self.generate(&parameters[a_nr], stack, false));
                     // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).
                     // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
-                    if matches!(a.typedef, Type::Function(_, _))
+                    if matches!(a.typedef, Type::Function(_, _, _))
                         && stack.position - stack_before < 16
                     {
                         stack.add_op("OpNullRefSentinel", self);
@@ -1264,7 +1264,7 @@ impl State {
         v_nr: u16,
         args: &[Value],
     ) -> Type {
-        let Type::Function(param_types, ret_type) = stack.function.tp(v_nr).clone() else {
+        let Type::Function(param_types, ret_type, _) = stack.function.tp(v_nr).clone() else {
             panic!("generate_call_ref: variable is not Type::Function");
         };
         let ret_type = *ret_type;
@@ -1312,7 +1312,7 @@ impl State {
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
             Type::Integer(_, _, _) => stack.add_op("OpVarInt", self),
-            Type::Function(_, _) => stack.add_op("OpVarFnRef", self),
+            Type::Function(_, _, _) => stack.add_op("OpVarFnRef", self),
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
@@ -1359,7 +1359,7 @@ impl State {
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
                     match elem_tp {
-                        Type::Integer(_, _, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpVarInt", self);
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
@@ -1467,7 +1467,7 @@ impl State {
                 stack.add_op("OpFreeStack", self);
                 self.code_add(size as u8);
                 self.code_add(stack.position - to);
-            } else if matches!(&block.result, Type::Function(_, _)) && stack.position < after {
+            } else if matches!(&block.result, Type::Function(_, _, _)) && stack.position < after {
                 // A5.6-2: a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
                 // If the block only pushed 4 bytes (d_nr via OpConstInt), pad to 16 with
                 // OpNullRefSentinel so both branches of an if-else reach the join point with
@@ -1630,7 +1630,7 @@ impl State {
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
             Type::Integer(_, _, _) => stack.add_op("OpPutInt", self),
-            Type::Function(_, _) => stack.add_op("OpPutFnRef", self),
+            Type::Function(_, _, _) => stack.add_op("OpPutFnRef", self),
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
@@ -1661,7 +1661,7 @@ impl State {
                     // After popping previous elements, adjust position.
                     let pos = stack.position - elem_abs;
                     match &elems[i] {
-                        Type::Integer(_, _, _) | Type::Function(_, _) => {
+                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpPutInt", self);
                         }
                         Type::Boolean => stack.add_op("OpPutBool", self),
