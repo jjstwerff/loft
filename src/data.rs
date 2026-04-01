@@ -1157,8 +1157,8 @@ impl Data {
             diagnostic!(
                 lexer,
                 Level::Error,
-                "Cannot redefine {:?} {fn_name} from {}",
-                self.def_type(o_nr),
+                "Cannot redefine '{}' (already defined at {})",
+                fn_name.strip_prefix("n_").unwrap_or(fn_name),
                 self.def(o_nr).position
             );
         }
@@ -1167,8 +1167,8 @@ impl Data {
             diagnostic!(
                 lexer,
                 Level::Error,
-                "Cannot redefine {:?} {fn_name}",
-                self.def_type(d_nr)
+                "Cannot redefine '{}'",
+                fn_name.strip_prefix("n_").unwrap_or(fn_name)
             );
             return u32::MAX;
         }

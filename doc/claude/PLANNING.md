@@ -3324,6 +3324,541 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 **Target:** 1.0.0
 
 ---
+## P70 — Text in `generate_set` TOS-override causes SIGSEGV
+
+**Problem:** Adding `Type::Text(_)` to the large-type TOS-override in
+`generate_set` (`codegen.rs:~689`) causes `append_fn` to crash.  When a text
+variable's slot is bumped from a pre-assigned position to TOS, `OpFreeText`
+still uses the original slot offset, freeing wrong memory.
+
+**Root cause:** Scope analysis emits `OpFreeText(v)` using the variable's slot
+position at scan time.  Codegen runs later and may move the variable to TOS
+via `set_stack_pos`.  The `OpFreeText` operand is a stack offset baked into
+the IR — it does not update when the variable moves.
+
+**Status:** The TOS-override excludes `Type::Text` (workaround in place).
+The workaround is safe: text variables always land at their pre-assigned
+zone-2 slot, and `OpFreeText` addresses are always correct.
+
+**Files:** `src/state/codegen.rs`, `src/scopes.rs`
+
+### Step 1 — Confirm workaround is stable
+
+The workaround (`Type::Text` excluded from the `pos < stack.position`
+branch at `codegen.rs:~689`) has been in place since Issue 70 was
+discovered.  No regressions have been observed.  The only cost: text
+variables cannot benefit from the TOS-override optimization, but this
+only matters if C43 text slot reuse is enabled.
+
+### Step 2 — Design the real fix (deferred to C43)
+
+The proper fix: change `OpFreeText` to use a variable number instead of
+a raw stack offset, so codegen can resolve the final position at emit time.
+This requires:
+- `scopes.rs`: emit `Value::Call("OpFreeText", [Value::Var(v)])` instead
+  of a pre-resolved offset
+- `codegen.rs`: resolve `v` to `stack.position - stack.function.stack(v)`
+  at bytecode emission time (same as other var-referencing opcodes)
+
+This is the same pattern as `OpFreeRef` which already uses `Value::Var(v)`.
+The refactor is safe but touches the hot path of scope exit for every text
+variable.
+
+### Step 3 — Implement (only if C43 needs it)
+
+If C43 text slot reuse can work without the TOS-override (text-to-text
+same-size reuse in zone 2), P70 is not blocking and can be deferred.
+
+**Effort:** Medium (touches OpFreeText emission across scopes.rs + codegen.rs)
+**Target:** 0.8.3 (only if needed for C43)
+
+---
+
+## C43 — Text slot reuse: zone-2 dead-slot tracking
+
+**Problem:** Text variables (24 bytes each) cannot reuse dead slots, wasting
+stack space when many short-lived text variables are used sequentially.
+
+**Root cause:** Text variables are placed by zone 2 (`place_large_and_recurse`
+in `slots.rs`), which assigns slots sequentially at TOS without dead-slot
+reuse.  Zone 1 has dead-slot reuse but only handles variables ≤ 8 bytes.
+
+**Failed attempt:** A naive same-type reuse check caused slot conflicts
+because it only compared against one dead variable, not ALL assigned
+variables.  `nums` at [40,52) was still live when `_map_result_5` reused
+slot 44.  Full conflict scan (like zone-1) is required.
+
+**Files:** `src/variables/slots.rs`
+
+P70 (text TOS-override) is NOT blocking: text-to-text same-size reuse
+places the variable at the dead slot's existing position — no movement
+occurs, so the `generate_set` TOS-override path is never triggered.
+
+---
+
+### C43.1 — Zone-2 dead-slot finder with full conflict scan
+
+**Goal:** A standalone `find_reusable_zone2_slot` function that returns a
+safe reuse slot or `None`.
+
+**File:** `src/variables/slots.rs`
+
+**Implementation:**
+```rust
+/// Find a dead zone-2 variable whose slot can be reused by variable `v`.
+/// Returns `Some(slot)` if a conflict-free candidate exists, `None` otherwise.
+/// Guards: same size, same type discriminant, dead (last_use < v.first_def),
+/// no spatial+temporal overlap with any other assigned variable.
+fn find_reusable_zone2_slot(
+    function: &Function,
+    v: usize,
+    scope: u16,
+) -> Option<u16> {
+    let v_size = size(&function.variables[v].type_def, &Context::Variable);
+    let v_first = function.variables[v].first_def;
+    let v_last = function.variables[v].last_use;
+    let v_disc = std::mem::discriminant(&function.variables[v].type_def);
+    for (j, jv) in function.variables.iter().enumerate() {
+        if j == v || jv.stack_pos == u16::MAX || jv.scope != scope {
+            continue;
+        }
+        let j_size = size(&jv.type_def, &Context::Variable);
+        // Same size + same type family (e.g., text-to-text only).
+        if j_size != v_size || std::mem::discriminant(&jv.type_def) != v_disc {
+            continue;
+        }
+        // Dead: candidate's last use is before our first definition.
+        if jv.last_use >= v_first {
+            continue;
+        }
+        // Full conflict scan: verify no other variable overlaps both
+        // spatially (byte range) and temporally (live interval).
+        let slot = jv.stack_pos;
+        let conflict = function.variables.iter().enumerate().any(|(k, kv)| {
+            if k == v || k == j || kv.stack_pos == u16::MAX {
+                return false;
+            }
+            let ks = kv.stack_pos;
+            let ke = ks + size(&kv.type_def, &Context::Variable);
+            // Spatial overlap: [slot, slot+v_size) ∩ [ks, ke) ≠ ∅
+            let spatial = slot < ke && ks < slot + v_size;
+            // Temporal overlap: [v_first, v_last] ∩ [k_first, k_last] ≠ ∅
+            let temporal = v_first <= kv.last_use && v_last >= kv.first_def;
+            spatial && temporal
+        });
+        if !conflict {
+            return Some(slot);
+        }
+    }
+    None
+}
+```
+
+**Debug guard:** When `function.logging` is true, emit:
+```
+[assign_slots]   zone2-reuse '{}' reuses dead '{}' at slot={}
+```
+
+**Verification:**
+1. Add a unit test `zone2_reuse_conflict_free` that creates three 24-byte
+   variables: v1 (live 0–10), v2 (live 5–15, overlaps v1), v3 (live 11–20,
+   does not overlap v1).  Assert v3 reuses v1's slot but v2 does not.
+2. `cargo test --lib assign_slots` — all slot tests pass.
+
+---
+
+### C43.2 — Wire zone-2 reuse into `place_large_and_recurse`
+
+**Goal:** Call `find_reusable_zone2_slot` before advancing `*tos`.
+
+**File:** `src/variables/slots.rs`, function `place_large_and_recurse`
+
+**Change:** In the `if v_size > 8` block (line ~183), before `let v_slot = *tos`:
+```rust
+let v_slot = if let Some(slot) = find_reusable_zone2_slot(function, v, scope) {
+    slot
+} else {
+    let s = *tos;
+    *tos += v_size;
+    s
+};
+```
+
+Remove the existing `*tos += v_size` after `pre_assigned_pos = v_slot`.
+
+**Debug guard:** `function.logging` message distinguishes "zone2" (new slot)
+from "zone2-reuse" (reused slot).
+
+**Verification:**
+1. `cargo test --lib assign_slots` — all unit tests pass including the new
+   `zone2_reuse_conflict_free` from C43.1.
+2. `cargo test warning_only_program` — the `46-caveats.loft` script that
+   triggered the original failure must pass (the full conflict scan prevents
+   the `nums` / `_map_result_5` partial overlap).
+
+---
+
+### C43.3 — Enable `assign_slots_sequential_text_reuse` test
+
+**Goal:** Remove `#[ignore]` from the existing test.
+
+**File:** `src/variables/slots.rs`, line ~915
+
+**Change:** Remove `#[ignore = "A12: can_reuse not yet extended to Text (assign_slots)"]`.
+
+**Verification:** `cargo test --lib assign_slots_sequential_text_reuse` passes.
+
+---
+
+### C43.4 — Integration test: text-heavy script with slot validation
+
+**Goal:** Verify text slot reuse works end-to-end in a loft program.
+
+**File:** `tests/expressions.rs`
+
+**Test:**
+```rust
+#[test]
+fn text_slot_reuse_sequential() {
+    // Two sequential text variables with non-overlapping lifetimes
+    // should not cause stack corruption.
+    code!(
+        "fn check() -> text {
+             a = \"hello\";
+             b = a + \" world\";
+             c = \"goodbye\";
+             d = c + \" world\";
+             d
+         }"
+    )
+    .expr("check()")
+    .result(Value::str("goodbye world"));
+}
+```
+
+**Verification:** `make ci` — zero failures across all test suites.
+
+---
+
+## C47 — Native codegen: cross-scope closure CallRef dispatch
+
+**Status:** Interpreter cross-scope closures work.  Native codegen has two
+remaining issues.
+
+**Sub-issues fixed:**
+1. *(Fixed)* `Value::FnRef` emits `(d_nr, var___clos_N)` when closure exists.
+2. *(Fixed)* CallRef dispatch passes `var_f.1` as `__closure` for cross-scope.
+3. *(Fixed)* Scope analysis bounds check: deps from callee variable space
+   (d >= function.count()) are skipped in Set registration and check_ref_leaks.
+
+**Sub-issues remaining:**
+
+**C47.3a — Broad CallRef match dispatch** — `output_call_ref` includes ALL
+functions with matching parameter/return types, not just lambdas that could
+actually be stored in the fn-ref.  For `fn(integer) -> integer`, the match
+includes `abs()`, `len()`, and every other `integer -> integer` function.
+Non-closure candidates have no `__closure` parameter, so the emitted
+`var_f.1` argument causes "cannot find value `var_`" compile errors.
+
+**Root cause:** The dispatch is a static match on d_nr.  Without a closed
+set of possible values, it must conservatively include all type-compatible
+functions.  Same-scope fn-refs work because `closure_var_of` returns a valid
+closure variable name for the specific `has_closure` arms.
+
+**Fix approach:** When emitting the `__closure` argument in the cross-scope
+path, only emit `var_{fn_ref_name}.1` for candidates that `has_closure`.
+For non-closure candidates in the same match, omit the closure argument
+(they don't need one).  This is already handled — each arm checks
+`*has_closure` independently.
+
+The real problem: the `has_closure` arm IS emitting for `abs()` etc., but
+`abs` doesn't have `has_closure = true`, so it emits without the closure
+arg.  That's correct.  The compile error `var_??` suggests the fn-ref
+variable's name is empty — a separate bug in how temporary fn-ref variables
+are named.
+
+**Investigation:** trace which CallRef variable has an empty name and fix
+the temporary naming.
+
+**Files:** `src/generation/emit.rs`, `src/generation/mod.rs`
+
+### Step 1 — Fix temporary fn-ref variable naming
+
+Find where temporary fn-ref variables (from chained calls like
+`make_adder(5)(10)`) get created without a name.  Ensure all fn-ref
+variables have a valid sanitized name.
+
+### Step 2 — Test with named variables only
+
+Test `add5 = make_adder(5); add5(10)` in native mode (avoids the
+temporary naming issue).
+
+### Step 3 — Enable cross-scope doc test
+
+Add `make_adder` example back to `26-closures.loft`.  Run `make ci`.
+
+**Effort:** Small–Medium
+**Target:** 0.8.3
+
+---
+
+## C48 — Capturing closures with map/filter/reduce
+
+**Problem:** The interpreter rejects capturing lambdas passed to `map`, `filter`,
+`reduce` with "function reference must be a compile-time constant".
+
+**Root cause:** `map`/`filter`/`reduce` are parsed by `parse_for_each_call` in
+`src/parser/collections.rs`.  The callback argument is resolved as a static
+`fn <name>` reference (d_nr known at parse time).  Lambda expressions produce
+a `Type::Function` value via `emit_lambda_code`, but the collections parser
+doesn't accept fn-ref variables or lambda expressions in the callback position.
+
+**Fix approach:**
+
+The interpreter's `map`/`filter`/`reduce` implementation (`src/parser/collections.rs`)
+unrolls the callback into a for-loop internally.  For a fn-ref variable or lambda,
+the unrolled loop should use `CallRef` instead of `Call`:
+
+```loft
+// map(v, |x| { x * factor }) desugars to:
+result = vector<T>{};
+for x in v {
+    result += [CallRef(fn_ref_var, x)]
+}
+```
+
+This requires:
+1. Parser: detect when the callback argument is a fn-ref variable or lambda
+   (not a static `fn <name>`)
+2. Collections: emit `Value::CallRef` in the unrolled loop body instead of
+   `Value::Call`
+3. The fn-ref variable must be in scope during loop execution
+
+**Alternative (simpler):** reject the error only when the callback is a
+*non-function* type.  If the callback is a `Type::Function` variable, accept
+it and emit CallRef.  This doesn't require changing the collections desugaring
+— just the argument validation.
+
+**Depends on:** C47 (for native codegen parity)
+**Effort:** Medium
+**Target:** 0.8.3
+
+---
+
+## C52 — Stdlib name clash: inconsistent behavior
+
+**Problem:** User-defined names that collide with stdlib names behave
+inconsistently:
+
+| Collision | Current behavior |
+|-----------|-----------------|
+| `fn len(text)` | Silently ignored — stdlib wins, user fn is dead code |
+| `fn println(text)` | Hard error: "Cannot redefine Function" |
+| `struct File` | Hard error: "Redefined struct" |
+
+The inconsistency arises because some stdlib functions are registered via
+`#rust` annotations (native ops — hard error on redefine) while others use
+method dispatch on specific types (type-specific overload resolution —
+stdlib variant wins by being first in the lookup chain).
+
+**Design — emit a warning, never silently shadow:**
+
+1. **All collisions produce a warning** — never silently ignore the user's
+   definition.  The message should be:
+   `Warning: 'len' shadows a standard library function`
+
+2. **User definition wins** — local definitions shadow stdlib, matching
+   the convention of most languages (Python, JavaScript, Rust).  The user
+   explicitly chose to define this name.
+
+3. **Stdlib accessible via `std::name`** — add a virtual `std` source for
+   the default library, so the user can write `std::len("hello")` to access
+   the original.  This reuses the existing `source::name` import mechanism.
+
+4. **No names are forbidden** — the user can redefine anything, including
+   `assert`, `println`, `len`.  The warning is informational.
+
+**Implementation steps:**
+
+### Step 1 — Emit warning on stdlib name collision
+
+In `src/parser/definitions.rs`, when `add_fn` or `add_def` encounters a name
+that already exists in source 0 (the default stdlib source), emit:
+```
+Warning: 'name' shadows a standard library function/type
+```
+Instead of the hard error "Cannot redefine".
+
+### Step 2 — Make user definition win
+
+Change name resolution order: when a name exists in both the current source
+and source 0, prefer the current source.  This is already the behavior for
+type-dispatched methods; extend it to global functions.
+
+### Step 3 — Register stdlib as `std` source
+
+In `src/parser/mod.rs`, after loading `default/*.loft`, register source 0
+with the name `std`.  Then `std::len`, `std::println`, `std::File` work
+via the existing `source::name` resolution path.
+
+### Step 4 — Tests
+
+- `fn len(t: text) -> integer { 42 }` → warning + user fn called
+- `std::len("hello")` → returns 5 (stdlib version)
+- `struct File { x: integer }` → warning + user struct used
+- `std::File` → accesses stdlib File
+
+**Effort:** Medium
+**Target:** 0.9.0 (not blocking 0.8.3/0.8.4)
+
+---
+
+## C53 — Match arms: library enums and bare variant names
+
+**Problem:** Match arms cannot use library enum variants at all — neither
+prefixed (`testlib::Ok`) nor bare (`Ok`).  The match arm parser at
+`control.rs:396` reads one identifier then expects `{`, `=>`, or `|`.
+It does not handle the `::` namespace separator.
+
+**Investigation findings:**
+
+1. `has_identifier()` at line 396 reads `testlib`, not `testlib::Ok`.
+   The `::` is then unexpected → parse error.
+
+2. Even if `::` were consumed, the discriminant lookup at line 497 uses
+   `pattern_name` (which would be `testlib`, not `Ok`) in `attr_names`.
+
+3. Bare variant names (`Ok` without prefix) fail during first pass because
+   `def_nr("Ok")` returns `u32::MAX` (library variant not in local scope)
+   and `children_of(e_nr)` may not find it if the enum children aren't
+   indexed by name.
+
+4. Same-file enums already work because their variants ARE in global scope.
+
+**Three fixes needed:**
+
+### Fix 1 — Handle `::` in match arm identifier (line 396)
+
+After `has_identifier()`, check for `::`.  If present, read the second
+identifier.  Use `data.source_nr(source, variant_name)` to resolve the
+variant.  Track the resolved variant name separately from `pattern_name`
+for the discriminant lookup at line 497.
+
+```rust
+let (resolved_name, variant_def_nr) = if self.lexer.has_token("::") {
+    let source = self.data.get_source(&pattern_name);
+    if let Some(vname) = self.lexer.has_identifier() {
+        (vname.clone(), self.data.source_nr(source, &vname))
+    } else { (pattern_name.clone(), u32::MAX) }
+} else {
+    (pattern_name.clone(), self.data.def_nr(&pattern_name))
+};
+```
+
+### Fix 2 — Use `resolved_name` for discriminant lookup (line 497)
+
+Replace `pattern_name` with `resolved_name` in
+`self.data.def(e_nr).attr_names.get(&resolved_name)`.
+
+### Fix 3 — Bare variant fallback via `children_of` (line 419)
+
+When `def_nr` fails and `e_nr` is known, search the enum's children:
+```rust
+if variant_def_nr == u32::MAX && e_nr != u32::MAX {
+    variant_def_nr = self.data.children_of(e_nr)
+        .find(|&c| self.data.def(c).name == resolved_name)
+        .unwrap_or(u32::MAX);
+}
+```
+
+### Fix 4 — Update or-pattern `|` to also handle `::` and bare names
+
+The `while self.lexer.has_token("|")` loop at line 511 reads additional
+variant names.  It needs the same `::` and `children_of` resolution.
+
+**Effort:** Medium (4 changes in `parse_match`, all in `control.rs`)
+**Target:** 0.9.0
+
+---
+
+## AOT — Ahead-of-time compiled libraries called from interpreter
+
+**Problem:** Library functions like `blend_pixel`, `wu_line`, `scanline_fill`
+are compute-intensive.  The interpreter runs them ~10–50x slower than native.
+Users want library code at native speed while the main script runs in the
+interpreter (for rapid iteration and REPL use).
+
+**Design: auto-compile library to shared library, load via dlopen:**
+
+When the interpreter loads a library via `use graphics;`:
+1. Check cache: `lib/graphics/.loft/graphics.so` exists and source hash matches
+2. If stale: emit Rust via `output_native`, compile with `rustc --crate-type cdylib -O`
+3. Load shared library via `extensions::load_one`
+4. Library functions dispatch through native code, not bytecode
+
+The interpreter still parses `.loft` source for types and scope analysis.
+Only bytecode execution is replaced by the native version.
+
+```
+User script: interpreted bytecode
+    ↓ calls blend_pixel(canvas, x, y, color)
+Library fn:  native compiled (loaded via dlopen)
+    ↓ returns
+User script: continues interpreting
+```
+
+**Cache:** `lib/<name>/.loft/` stores `.so` + source hash + generated `.rs`.
+Recompile only when hash changes (~1–3s rustc cost on first run).
+
+**Steps (desktop — dlopen):**
+1. `output_native_library(lib_source)` — emit only library functions as cdylib
+2. Compile with `rustc --crate-type cdylib -O --extern loft=...`
+3. Load via `extensions::load_one` — registers functions via C-ABI
+4. Cache with source hash in `.loft/` directory
+
+**WASM — shared-memory cross-module calls (Approach B):**
+
+WASM cannot dlopen, but can achieve the same result: compile each library
+to its own `.wasm` module, share `WebAssembly.Memory` between modules, and
+call library functions directly — no data serialization needed.
+
+```
+main.wasm ──shared memory──► graphics.wasm
+    │                             │
+    │  blend_pixel(dbref, x, y)   │
+    ├────► JS import bridge ─────►│  runs native WASM blend
+    │◄──── JS import bridge ◄────┤
+    │                             │
+    Stores heap: shared           │
+```
+
+How it works:
+1. Compile each library to a separate `.wasm` via `rustc --target wasm32`
+2. All modules share one `WebAssembly.Memory` instance (requires COOP/COEP
+   headers for `SharedArrayBuffer`)
+3. The `Stores` heap lives in shared memory — both modules read/write the
+   same byte array.  `DbRef` values (store_nr + rec + pos) work across
+   module boundaries without copying.
+4. JS glue auto-generated from `.loft` type info: scalar args pass directly;
+   `DbRef` args pass as three integers; text args pass as `(ptr, len)` into
+   shared memory.
+5. Cache: `lib/<name>/.loft/<name>.wasm` + source hash, same as desktop.
+
+**Why shared memory works for loft:** the `Stores` allocator is a flat byte
+array addressed by `(store_nr, rec, pos)`.  When two WASM modules share the
+same memory, a `DbRef` allocated by the main module is directly readable by
+the library module — same bytes, same offsets.  No marshalling needed for
+struct or vector arguments.
+
+**Fallback:** if `SharedArrayBuffer` is unavailable (no COOP/COEP headers),
+library functions stay interpreted in the main module (Approach A — single
+WASM, works today).
+
+**Cargo feature:** `native-libs` (includes `native-extensions` + rustc)
+**Effort:** High
+**Target:** 0.9.0 (desktop dlopen), 1.0+ (WASM shared memory)
+
+---
 
 ## Quick Reference
 

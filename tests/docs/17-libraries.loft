@@ -108,21 +108,22 @@ fn main() {
   // If the interpreter version is below the stated minimum, loading the
   // library produces a fatal compile error describing the version mismatch.
   // If no manifest is present, the default entry `src/<name>.loft` is used.
+  // ## Wildcard and Selective Imports
+  // By default, library names require the `libname::` prefix. You can
+  // import names directly into your namespace with `use lib::*` (wildcard)
+  // or `use lib::Name, Other` (selective). Only `pub`-marked definitions
+  // in the library are imported this way. Non-pub definitions remain
+  // accessible via the `lib::name` prefix.
   // ## Limitations
-  // These are the current rough edges to keep in mind.
-  // `use` must appear before all definitions. If you write a function first
-  // and then a `use`, the compiler reports a syntax error:
-  //   fn foo() {}
-  //   use testlib;   // ERROR: Syntax error
-  // By default, names from a library must be written with the `name::` prefix.
-  // You can avoid the prefix by importing specific names or everything:
-  //   use mylib::Point, add;     import specific names
-  //   use mylib::*;              import all names from mylib
-  // After a wildcard or selective import, `Point {}` and `add(1, 2)` work
-  // without the prefix. Local definitions shadow imported names silently.
-  // `pub` on struct fields is not supported and causes a parse error.
-  // Writing `pub` on a top-level `struct` or `fn` is accepted but has no
-  // effect — all library definitions are always visible to importers.
-  // No remaining limitations for vector field append — `+= [elem]`, `+= var`,
-  // and `+= other_vector` all work, including on default-initialised structs.
+  //
+  // **`use` must appear before all definitions.** If you write a function
+  // first and then a `use`, the compiler reports a syntax error.
+  //
+  // **`pub` controls import visibility.** Only `pub`-marked definitions
+  // are available via wildcard (`use lib::*`) or selective import.
+  // Non-pub definitions are still accessible with the `lib::name` prefix.
+  //
+  // **No native extension loading.** Libraries are pure `.loft` files.
+  // Native Rust extensions (`loft.toml` with `native = "..."`) are planned
+  // for a future release.
 }

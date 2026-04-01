@@ -170,6 +170,51 @@ fn stacktrace_argvalue_construct() {
 }
 
 #[test]
+fn map_with_capturing_closure() {
+    // C48: capturing closures work with map and filter.
+    code!(
+        "fn check() -> integer {
+             factor = 3;
+             scaled = map([1, 2, 3, 4, 5], fn(x: integer) -> integer { x * factor });
+             threshold = 3;
+             big = filter([1, 2, 3, 4, 5], fn(x: integer) -> boolean { x > threshold });
+             scaled[2] + big[0]
+         }"
+    )
+    .expr("check()")
+    .result(Value::Int(13)); // scaled[2]=9, big[0]=4 → 13
+}
+
+#[test]
+fn text_slot_reuse_sequential() {
+    // C43.4: sequential text variables with non-overlapping lifetimes.
+    code!(
+        "fn check() -> text {
+             a = \"hello\";
+             b = a + \" world\";
+             c = \"goodbye\";
+             d = c + \" world\";
+             d
+         }"
+    )
+    .expr("check()")
+    .result(Value::str("goodbye world"));
+}
+
+#[test]
+fn struct_enum_local_freed() {
+    // C41: creating a struct-enum as a local and returning a scalar must not leak.
+    code!(
+        "fn check() -> integer {
+             v = IntVal { n: 42 };
+             match v { IntVal { n } => n, _ => 0 }
+         }"
+    )
+    .expr("check()")
+    .result(Value::Int(42));
+}
+
+#[test]
 fn stacktrace_arginfo_field() {
     // Verify ArgInfo struct is visible and fields are accessible.
     code!("fn get_name(info: ArgInfo) -> text { info.name }")

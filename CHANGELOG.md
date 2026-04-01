@@ -15,6 +15,42 @@ All notable changes to the loft language and interpreter.
   16 bytes), and closure record leak at caller scope exit.  Test:
   `closure_capture_text`.
 
+### Native codegen
+
+- **Fn-ref `(u32, DbRef)` tuple type** (C39) — Fn-ref variables in native-compiled
+  code are now `(u32, DbRef)` tuples instead of plain `u32`.  Closure records are
+  correctly freed via `.1` destructuring when fn-ref variables go out of scope.
+  Non-capturing lambdas use the null sentinel and are safely skipped.
+
+### Closures — native parity
+
+- **Native cross-scope closures** (C47) — Functions that return closures now
+  work in `--native` mode.  Five fixes: FnRef emits closure DbRef, CallRef
+  passes `.1` as `__closure`, scope analysis skips cross-function deps,
+  `last_closure_work_var` reset after function body, FnRef added to reachable
+  set.  Doc test `26-closures.loft` now includes cross-scope `make_adder`.
+
+- **Capturing closures with map/filter** (C48) — `map(v, fn(x) { x * factor })`
+  and `filter(v, fn(x) { x > threshold })` now work with capturing lambdas.
+  The collections parser accepts fn-ref variables and emits CallRef in the
+  desugared loop body.
+
+### Slot assignment
+
+- **Text slot reuse** (C43) — Sequential text variables with non-overlapping lifetimes
+  now share the same 24-byte zone-2 slot.  Uses a full conflict scan
+  (`find_reusable_zone2_slot`) restricted to Text-only reuse at the top-of-stack
+  position.  Tests: `assign_slots_sequential_text_reuse`, `text_slot_reuse_sequential`.
+
+### Bug fixes
+
+- **C41** — Struct-enum local variable leak (Problem #85) confirmed fixed; regression
+  test `struct_enum_local_freed` added.
+- **C42** — Undefined variable diagnostic confirmed working; test
+  `unknown_variable_error` added.
+- **C40** — Debug logger fn-ref opcode guard documented with WARNING comments in
+  `02_images.loft` to prevent accidental removal.
+
 ### Parallel execution
 
 - **`par_light` runtime foundation** (A14.1–A14.4):

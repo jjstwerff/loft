@@ -435,10 +435,10 @@ assert(shift(5) == 15, "shift");
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
-// Cross-scope: returning a capturing lambda is not yet supported:
-// fn make_adder(n: integer) - fn(integer) - integer {
-//     fn(x: integer) - integer { x + n }  // A5.6: planned
-// }
+// Cross-scope: returning a capturing lambda works:
+fn make_adder(n: integer) - fn(integer) - integer {
+    fn(x: integer) - integer { x + n }
+}
 ```
 
 ```rust
@@ -460,7 +460,7 @@ fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
 
 Upside Same-scope capture works for integers, text, and mutable variables — no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, no lifetime annotations. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
 
-Downside Capturing lambdas can only be called directly by name in the same scope — passing them to map/filter/reduce or returning them from a function is not yet supported (planned as A5.6). Rust's Fn/FnMut/FnOnce traits give full flexibility: closures can be stored in structs, returned from functions, and passed freely across scopes.
+Downside Capture is always by value (like Rust move). Rust's Fn/FnMut/FnOnce traits give more flexibility: closures can borrow by reference, be stored in structs, and passed freely across scopes. Loft captures at definition time only — no borrow-based captures.
 
 === Generic functions — pass-through only, no trait bounds
 
@@ -766,8 +766,9 @@ assert(shift(5) == 15, "shift");
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
-// Passing a capturing lambda to map/filter is not yet supported:
-// shifted = map(nums, |x| { x + offset });  // workaround: pass offset explicitly
+// Capturing lambda with map:
+offset = 10;
+shifted = map(nums, fn(x: integer) - integer { x + offset });
 ```
 
 ```python
@@ -785,7 +786,7 @@ shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> n
 
 Upside Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
 
-Downside Capturing lambdas can only be called directly by name in the same scope — passing them to map/filter/reduce or returning them from a function is not yet supported. Any extra context must be embedded in the element struct or passed as an explicit parameter. Python's lambda and nested def close over surrounding variables naturally in any context, and list comprehensions (\[x + offset for x in v\]) are shorter than the loft workaround.
+Downside Capture is by value at definition time — later mutations to the original variable do not affect the lambda (and vice versa). Python's lambda and nested def close over variables by reference, so mutations are shared. Python's list comprehensions (\[x + offset for x in v\]) are shorter than map(v, fn(x) { x + offset }).
 
 === No exception handling — file errors use FileResult
 
@@ -1721,20 +1722,13 @@ Pass function references as arguments to higher-order functions.
   assert(apply_fn(negate_it, 3) == -3, "fn-ref as arg (negate)");
 ```
 
-Full-form lambda with fn(...) syntax.
+Lambdas with map, filter, and reduce. Use |...| short form — types are inferred from the call site.
 
 ```rust
   nums = [1, 2, 3, 4, 5];
-  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  doubled = map(nums, |x| { x * 2 });
   assert(doubled[0] == 2, "lambda map first element");
   assert(doubled[4] == 10, "lambda map last element");
-```
-
-Short-form lambda with |...| syntax — types are inferred from the call site.
-
-```rust
-  tripled = map(nums, |x| { x * 3 });
-  assert(tripled[0] == 3, "short lambda map first element");
 ```
 
 filter keeps only elements where the lambda returns true.
@@ -1752,17 +1746,12 @@ reduce collapses the whole list into one value. The lambda receives the running 
   assert(total == 15, "reduce sum: {total}");
 ```
 
-A lambda can also be stored in a variable and called later.
+Use fn(...) long form when you need explicit types — for example when storing a lambda in a variable or passing it without call-site context.
 
 ```rust
   negate = fn(x: integer) -> integer { -x };
   assert(negate(7) == -7, "stored lambda: {negate(7)}");
-```
-
-A lambda passed to your own higher-order function (same as apply_fn above).
-
-```rust
-  assert(apply_fn(fn(x: integer) -> integer { x * x }, 6) == 36, "lambda as arg: 6^2");
+  assert(apply_fn(|x| { x * x }, 6) == 36, "lambda as arg: 6^2");
 ```
 
 --- Named arguments ---
@@ -1943,31 +1932,6 @@ fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT s
 
 The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.
 
-=== Aggregates
-
-Shorthand functions over an entire vector, without writing an explicit loop.
-
-```
-sum_of(v)          — sum of all integer elements
-min_of(v)          — smallest element (null if empty)
-max_of(v)          — largest element (null if empty)
-any(v, pred)       — true if at least one element satisfies the predicate
-all(v, pred)       — true if every element satisfies the predicate
-count_if(v, pred)  — number of elements satisfying the predicate
-```
-
-```rust
-  agg_nums = [3, 1, 4, 1, 5, 9, 2, 6];
-  assert(sum_of(agg_nums) == 31, "sum_of: {sum_of(agg_nums)}");
-  assert(min_of(agg_nums) == 1, "min_of: {min_of(agg_nums)}");
-  assert(max_of(agg_nums) == 9, "max_of: {max_of(agg_nums)}");
-  assert(any(agg_nums, |x| { x > 8 }), "any > 8");
-  assert(!any(agg_nums, |x| { x > 10 }), "none > 10");
-  assert(all(agg_nums, |x| { x > 0 }), "all > 0");
-  assert(!all(agg_nums, |x| { x > 1 }), "not all > 1");
-  assert(count_if(agg_nums, |x| { x % 2 == 0 }) == 3, "count even elements");
-```
-
 === Higher-order functions
 
 'map' applies a function to every element and returns a new vector.
@@ -2062,17 +2026,6 @@ struct Circle {
   area: float computed(3.14159265 * $.radius * $.radius)
 }
 ```
-
-=== Field iteration
-
-'for f in s\#fields' visits every stored primitive field of a struct. The parser unrolls this loop at compile time — no runtime allocation is needed. The loop variable has two accessible parts:
-
-```
-'f.name'  — the field name as text
-'f.value' — a FieldValue enum wrapping the actual value
-```
-
-Match on 'f.value' using the FvInt, FvFloat, FvBool, FvText, and other variants. Reference, collection, and nested-struct fields are skipped silently.
 
 === Storing many structs in a vector
 
@@ -2173,25 +2126,6 @@ Fill a vector with copies of the same struct using '; count' syntax. This create
   assert(map[3].height == 200, "individual tile update");
 ```
 
-=== Field iteration
-
-Iterate over each primitive field of a struct to inspect its name and value. This is useful for building generic display or serialisation routines without repeating each field name manually.
-
-```rust
-  fi_col = Colour {r: 64, g: 128, b: 255 };
-  fi_parts = "";
-  for fi_f in fi_col#fields {
-    if fi_parts != "" { fi_parts += ","; }
-    fi_parts += fi_f.name;
-    fi_parts += "=";
-    match fi_f.value {
-      FvInt { v } => { fi_parts += "{v}"; },
-      _ => {}
-    }
-  }
-  assert(fi_parts == "r=64,g=128,b=255", "field iteration: {fi_parts}");
-```
-
 === sizeof
 
 'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.
@@ -2275,25 +2209,6 @@ fn opposite(self: Direction) -> Direction {
   } else {
     East
   }
-}
-```
-
-=== Nested field sub-patterns in match
-
-Inside a struct-enum arm, each field position can carry a sub-pattern instead of just a binding name. Supported sub-patterns: enum variant name, scalar literal, wildcard '_', or or-pattern ('A | B'). This lets you match on a field's value and bind others in a single arm, without a nested match or an if-guard.
-
-```rust
-enum Status {
-  Pending,
-  Paid,
-  Refunded
-}
-```
-
-```rust
-struct Order {
-  status: Status,
-  amount: integer
 }
 ```
 
@@ -2434,39 +2349,6 @@ Character literals work in match arms.
     _ => false
   };
   assert(vowel, "character or-pattern");
-```
-
-=== Nested field sub-patterns
-
-An arm for a struct-enum variant can constrain a field to a specific value and still bind other fields in the same arm. Here: match an Order on its status field, binding amount only when Paid. A top-level '_' wildcard covers all other status values.
-
-```rust
-  paid_order = Order { status: Paid, amount: 5000 };
-  charge = match paid_order {
-    Order { status: Paid, amount } => amount,
-    _ => 0
-  };
-  assert(charge == 5000, "paid order charged: {charge}");
-```
-
-```rust
-  pending_order = Order { status: Pending, amount: 200 };
-  charge2 = match pending_order {
-    Order { status: Paid, amount } => amount,
-    _ => 0
-  };
-  assert(charge2 == 0, "pending order not charged: {charge2}");
-```
-
-Or-patterns in a field sub-pattern match multiple variant values in one arm.
-
-```rust
-  refunded_order = Order { status: Refunded, amount: 300 };
-  is_inactive = match refunded_order {
-    Order { status: Pending | Refunded } => true,
-    _ => false
-  };
-  assert(is_inactive, "pending|refunded matches or-pattern");
 }
 ```
 
@@ -3021,37 +2903,97 @@ Read the count, then use it to read exactly that many floats directly into a str
   b.data = f#read(n * sizeof(single));
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
+```
+
+=== Error handling
+
+File operations that can fail return a `FileResult` enum. Call `.ok()` to check success. The program does not crash on failure — you decide what to do.
+
+```rust
+  result = delete("this_file_does_not_exist.txt");
+  assert(!result.ok(), "delete missing file returns not-ok");
+```
+
+Reading a non-existent file produces an empty result, not a crash.
+
+```rust
+  ghost = file("no_such_file.txt");
+  assert(ghost#format == NotExists, "non-existent file has NotExists format");
+```
+
+`move` refuses paths outside the project directory.
+
+```rust
+  assert(!move("any.txt", "../escape.txt").ok(), "move outside project fails");
+```
+
+Writing to a read-only or invalid path also returns a FileResult. Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir_all`.
+
+```rust
 }
 ```
 
 
 = Image
 
-Loft has a built-in Image type for loading PNG files and inspecting their pixels. Loading a PNG takes one function call; after that you can read every pixel, check the dimensions, and iterate over the whole image with a for loop.
+Loft can load PNG files and access every pixel. Loading takes one function call; after that you can read dimensions, iterate pixels, and examine individual channels.
 
 === Loading an Image
 
-Pass a File handle to the 'png()' function to load a PNG into memory. The entire file is read and decoded at this point. After the call you can access pixels as many times as you like with no further I/O.
+Call `file(path).png()` to load a PNG into memory. The entire file is decoded at this point.
 
-=== Checking Dimensions
+=== Dimensions and Name
 
-Once loaded, 'img.width' and 'img.height' give you the pixel dimensions. These are read-only attributes — you cannot resize an image by writing to them.
+`img.width` and `img.height` give the pixel dimensions. `img.name` is the file name without the directory path.
 
-=== Accessing Individual Pixels
+=== Pixel Access
 
-Pixel data is stored in the 'data' field as a vector\<Pixel\>. Each Pixel has r, g, b fields (0–255). A pixel from outside the image bounds is null.
+`img.data` is a `vector\<Pixel\>`. Each Pixel has `r`, `g`, `b` fields (0–255). Access by index: `img.data\[y \* img.width + x\]`. Iterate with a for loop to scan every pixel.
 
-=== Note
+=== Error Handling
 
-Pixel iteration requires S12 completion — only dimension access is currently verified by this test.
+`png()` returns null when the file does not exist or cannot be decoded.
 
 ```rust
 fn main() {
-  f = file("tests/example/map.png");
-  img = f.png();
+```
+
+=== Loading an Image
+
+```rust
+  img = file("tests/example/map.png").png();
   assert(img.width == 256, "width={img.width}");
   assert(img.height == 256, "height={img.height}");
   assert(img.name == "map.png", "name={img.name}");
+```
+
+=== Pixel Access
+
+Total pixels = width \* height.
+
+```rust
+  assert(img.data.len() == img.width * img.height, "pixel count");
+```
+
+Read the top-left pixel.
+
+```rust
+  px = img.data[0];
+  assert(px.r >= 0 and px.r <= 255, "r in range");
+```
+
+Read a pixel at (x=128, y=128) — the center.
+
+```rust
+  center = img.data[128 * img.width + 128];
+  assert(center.r >= 0, "center pixel r valid");
+```
+
+=== Error Handling
+
+```rust
+  bad = file("no_such_image.png").png();
+  assert(bad == null, "png of missing file is null");
 }
 ```
 
@@ -3384,23 +3326,17 @@ entry = "src/mylib.loft"   override the default entry path
 
 If the interpreter version is below the stated minimum, loading the library produces a fatal compile error describing the version mismatch. If no manifest is present, the default entry `src/\<name\>.loft` is used.
 
+=== Wildcard and Selective Imports
+
+By default, library names require the `libname::` prefix. You can import names directly into your namespace with `use lib::\*` (wildcard) or `use lib::Name, Other` (selective). Only `pub`-marked definitions in the library are imported this way. Non-pub definitions remain accessible via the `lib::name` prefix.
+
 === Limitations
 
-These are the current rough edges to keep in mind. `use` must appear before all definitions. If you write a function first and then a `use`, the compiler reports a syntax error:
+\*\*`use` must appear before all definitions.\*\* If you write a function first and then a `use`, the compiler reports a syntax error.
 
-```
-fn foo() {}
-use testlib;   // ERROR: Syntax error
-```
+\*\*`pub` controls import visibility.\*\* Only `pub`-marked definitions are available via wildcard (`use lib::\*`) or selective import. Non-pub definitions are still accessible with the `lib::name` prefix.
 
-By default, names from a library must be written with the `name::` prefix. You can avoid the prefix by importing specific names or everything:
-
-```
-use mylib::Point, add;     import specific names
-use mylib::*;              import all names from mylib
-```
-
-After a wildcard or selective import, `Point {}` and `add(1, 2)` work without the prefix. Local definitions shadow imported names silently. `pub` on struct fields is not supported and causes a parse error. Writing `pub` on a top-level `struct` or `fn` is accepted but has no effect — all library definitions are always visible to importers. No remaining limitations for vector field append — `+= \[elem\]`, `+= var`, and `+= other_vector` all work, including on default-initialised structs.
+\*\*No native extension loading.\*\* Libraries are pure `.loft` files. Native Rust extensions (`loft.toml` with `native = "..."`) are planned for a future release.
 
 ```rust
 }
@@ -3533,27 +3469,20 @@ get_store_lock() is the function form of the \#lock attribute. Both return the s
 
 = Parallel execution
 
-The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body. Use it when you have a large collection and a CPU-intensive per-element calculation: the work is spread across the requested number of threads and the results come back in the original order.
+The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.
 
-The full syntax is:
-
-```
-for a in <vector> par(b=<worker_call>, <threads>) { body }
-```
-
-Two worker call forms are supported. Form 1 calls a global or user-defined function with the loop element as its argument:
+Full syntax:
 
 ```
-for a in items par(b=my_func(a), 4) { ... }
+`for a in vec par(b=func(a), N) { body }`
 ```
 
-Form 2 calls a method on the element itself:
+Two call forms:
 
-```
-for a in items par(b=a.my_method(), 4) { ... }
-```
+- \*\*Form 1\*\* — global function: `par(b=my_func(a), 4)`
+- \*\*Form 2\*\* — method on element: `par(b=a.my_method(), 4)`
 
-The worker function must take a read-only reference to the element type (marked `const` to tell the compiler the function will not modify the element) and return a value (integer, long, float, single, boolean, enum, text, or a struct). Extra context arguments are forwarded to each worker: `par(b=scale(a, mult), N)`. ── Shared struct definitions ────────────────────────────────────────────────
+The worker function takes a read-only (`const`) reference to the element and returns a value (integer, float, boolean, text, or a struct). Results are delivered in the original order regardless of thread count. Extra arguments are forwarded: `par(b=scale(a, mult), N)`.
 
 ```rust
 struct Score {
@@ -3568,48 +3497,15 @@ struct ScoreList {
 ```
 
 ```rust
-struct Range {
-  lo: integer,
-  hi: integer
+struct DoubledScore {
+  label: text,
+  doubled: integer
 }
 ```
-
-```rust
-struct RangeList {
-  items: vector < Range >
-}
-```
-
-── Worker functions ───────────────────────────────────────────────────────── Global functions (Form 1)
 
 ```rust
 fn double_score(r: const Score) -> integer {
   r.value * 2
-}
-```
-
-```rust
-fn span(r: const Range) -> integer {
-  r.hi - r.lo
-}
-```
-
-```rust
-fn score_as_float(r: const Score) -> float {
-  r.value as float
-}
-```
-
-```rust
-fn score_positive(r: const Score) -> boolean {
-  r.value > 0
-}
-```
-
-```rust
-struct DoubledScore {
-  label: text,
-  doubled: integer
 }
 ```
 
@@ -3619,21 +3515,11 @@ fn make_doubled(r: const Score) -> DoubledScore {
 }
 ```
 
-Methods on Score (Form 2)
-
 ```rust
 fn get_value(self: const Score) -> integer {
   self.value
 }
 ```
-
-```rust
-fn is_positive(self: const Score) -> boolean {
-  self.value > 0
-}
-```
-
-── Helpers ──────────────────────────────────────────────────────────────────
 
 ```rust
 fn make_scores() -> ScoreList {
@@ -3644,138 +3530,59 @@ fn make_scores() -> ScoreList {
 ```
 
 ```rust
-fn make_ranges() -> RangeList {
-  q = RangeList { };
-  q.items +=[Range {lo: 0, hi: 10 }, Range {lo: 5, hi: 12 }, Range {lo: -3, hi: 7 }];
-  q
-}
-```
-
-```rust
 fn main() {
 ```
 
-=== Running a Global Function in Parallel
+=== Global Function (Form 1)
 
-Each Score's value is doubled by `double_score`. With 1 thread the work is sequential; with 4 threads it runs concurrently. Both must produce the same total because results are delivered in the original order.
+Each Score's value is doubled by `double_score` across 4 threads.
 
 ```rust
   q = make_scores();
   sum = 0;
-  for a in q.items par(b = double_score(a), 1) {
+  for a in q.items par(b = double_score(a), 4) {
     sum += b;
   }
-  assert(sum == 120, "form-1 integer (1 thread): sum == 120");
+  assert(sum == 120, "parallel double: sum == 120");
 ```
 
-integer return, 4 threads
+=== Struct Return
+
+Workers can return a struct. Text fields are deep-copied automatically.
 
 ```rust
   q2 = make_scores();
-  sum2 = 0;
-  for a in q2.items par(b = double_score(a), 4) {
-    sum2 += b;
+  labels = "";
+  for sa in q2.items par(ds = make_doubled(sa), 1) {
+    labels += "{ds.label},";
   }
-  assert(sum2 == 120, "form-1 integer (4 threads): sum == 120");
+  assert(labels == "v10,v20,v30,", "struct return: {labels}");
 ```
 
-`span` works on a two-field struct. The element size is inferred from the struct layout so you do not need to specify it.
+=== Method Call (Form 2)
 
-```rust
-  r = make_ranges();
-  span_sum = 0;
-  for a in r.items par(b = span(a), 2) {
-    span_sum += b;
-  }
-  assert(span_sum == 27, "form-1 Range span: sum == 27");
-```
-
-Workers can return float. Here we just count iterations to confirm every element was processed.
+`b=a.get_value()` dispatches the method on each element in parallel.
 
 ```rust
   q3 = make_scores();
-  fcount = 0;
-  for a in q3.items par(b = score_as_float(a), 1) {
-    fcount += 1;
+  total = 0;
+  for a in q3.items par(b = a.get_value(), 4) {
+    total += b;
   }
-  assert(fcount == 3, "form-1 float return: 3 elements processed");
+  assert(total == 60, "method call: total == 60");
 ```
 
-Workers can return boolean. Use `if b` in the body to act on the result.
+=== Empty Vector
 
-```rust
-  q4 = make_scores();
-  pos = 0;
-  for a in q4.items par(b = score_positive(a), 1) {
-    if b {
-      pos += 1;
-    }
-  }
-  assert(pos == 3, "form-1 boolean: all 3 positive");
-```
-
-An empty vector is safe: the loop body simply never executes.
+An empty vector is safe — the loop body never executes.
 
 ```rust
   empty = ScoreList { };
-  empty_sum = 0;
+  n = 0;
   for a in empty.items par(b = double_score(a), 1) {
-    empty_sum += b;
+    n += 1;
   }
-  assert(empty_sum == 0, "form-1 empty: body executes 0 times");
-```
-
-=== Returning a Struct from a Parallel Worker
-
-Workers can return a struct. Each worker creates its own struct instance and the runtime deep-copies the result (including text fields) into a shared result vector so field access works in the loop body.
-
-```rust
-  q8 = make_scores();
-  dtotal = 0;
-  dlabels = "";
-  for sa in q8.items par(ds = make_doubled(sa), 1) {
-    dtotal += ds.doubled;
-    dlabels += "{ds.label},";
-  }
-  assert(dtotal == 120, "form-1 struct return: dtotal == 120");
-  assert(dlabels == "v10,v20,v30,", "form-1 struct labels: {dlabels}");
-```
-
-=== Running a Method in Parallel
-
-Form 2 calls the worker as a method on each element. The syntax `b=a.get_value()` tells the compiler to dispatch `get_value` on every element in parallel and bind each result to `b` in the loop body.
-
-```rust
-  q5 = make_scores();
-  sum3 = 0;
-  for a in q5.items par(b = a.get_value(), 1) {
-    sum3 += b;
-  }
-  assert(sum3 == 60, "form-2 integer (1 thread): sum == 60");
-```
-
-integer return, 4 threads
-
-```rust
-  q6 = make_scores();
-  sum4 = 0;
-  for a in q6.items par(b = a.get_value(), 4) {
-    sum4 += b;
-  }
-  assert(sum4 == 60, "form-2 integer (4 threads): sum == 60");
-```
-
-boolean return — count positives via method
-
-```rust
-  q7 = make_scores();
-  pos2 = 0;
-  for a in q7.items par(b = a.is_positive(), 1) {
-    if b {
-      pos2 += 1;
-    }
-  }
-  assert(pos2 == 3, "form-2 boolean: all 3 positive");
+  assert(n == 0, "empty: 0 iterations");
 }
 ```
 
@@ -4454,7 +4261,7 @@ A generic function uses a type variable to work with any type. Write the functio
 Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector\<T\>).
 
 ```rust
-fn identity<T>(val: T) -> T { val }
+fn identity<T>(x: T) -> T { x }
 ```
 
 === Calling a generic function
@@ -4475,9 +4282,9 @@ fn test_identity() {
 Additional parameters can also use T.  They all share the same concrete type.
 
 ```rust
-fn pick_second<T>(pa: T, pb: T) -> T {
-  _ps = pa;
-  pb
+fn pick_second<T>(a: T, b: T) -> T {
+  _x = a;
+  b
 }
 fn test_pick_second() {
   assert(pick_second(1, 99) == 99);
@@ -4485,11 +4292,11 @@ fn test_pick_second() {
 }
 ```
 
-=== Allowed operations on T (unconstrained)
+=== Allowed operations on T
 
-Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors without an interface bound.
+Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.
 
-=== Disallowed operations on unconstrained T
+=== Disallowed operations
 
 The compiler rejects operations that require knowing what T is. For example, `x + y` on two T values gives:
 
@@ -4503,106 +4310,21 @@ Similarly, `x.field` gives:
 "generic type T: field access requires a concrete type"
 ```
 
-=== Interfaces
-
-An interface declares a set of operations that a type must support. Once an interface is declared, a generic function can use '\<T: Interface\>' to unlock those operations on T.
-
-=== Declaring an interface
-
-List the required method signatures inside the interface body. Use 'Self' as a placeholder for the concrete satisfying type. Any type that provides all listed methods satisfies the interface — no explicit 'implements' keyword or registration is needed. Example:
-
-```
-interface Ordered {
-  fn OpLt(self: Self, other: Self) -> boolean
-  fn OpGt(self: Self, other: Self) -> boolean
-}
-```
-
-'Ordered' (above) is already declared in the standard library. The standard library also declares 'Equatable', 'Addable', 'Numeric', and 'Printable', all satisfied automatically by the primitive types.
-
-=== Using stdlib interfaces: Ordered, min_of, max_of, sum_of
-
-All numeric primitives satisfy 'Ordered' out of the box. 'max_of', 'min_of', and 'sum_of' are stdlib functions bounded by these interfaces.
-
-```rust
-fn test_stdlib_bounded() {
-```
-
-max_of and min_of work with integer (satisfies Ordered)
-
-```rust
-  sb_best = max_of([4, 1, 9, 2]);
-  assert(sb_best == 9, "max_of integers: {sb_best}");
-  sb_least = min_of([4, 1, 9, 2]);
-  assert(sb_least == 1, "min_of integers: {sb_least}");
-```
-
-sum_of works on any vector\<integer\>
-
-```rust
-  sb_total = sum_of([1, 2, 3, 4, 5]);
-  assert(sb_total == 15, "sum_of: {sb_total}");
-}
-```
-
-=== Custom type satisfying a stdlib interface
-
-Provide 'OpLt' and 'OpGt' and the type automatically satisfies 'Ordered'. Then write a bounded generic function that uses those operators on T. The compiler checks at the call site that the type satisfies the bound, and reports which method is missing if it does not.
-
-```rust
-struct Score {
-  value: integer
-}
-fn OpLt(self: Score, other: Score) -> boolean { self.value < other.value }
-fn OpGt(self: Score, other: Score) -> boolean { self.value > other.value }
-```
-
-A bounded generic using Ordered — can be called with Score or any Ordered type. The compiler resolves 'left \< right' to the Score implementation of OpLt.
-
-```rust
-fn higher<T: Ordered>(left: T, right: T) -> T {
-  if left < right { right } else { left }
-}
-```
-
-```rust
-fn test_custom_ordered() {
-  a_score = Score{value: 3};
-  b_score = Score{value: 7};
-  co_winner = higher(a_score, b_score);
-  assert(co_winner.value == 7, "winner: {co_winner.value}");
-}
-```
-
-=== Multiple bounds
-
-Use '+' to require more than one interface: '\<T: Ordered + Printable\>'.
-
-=== Diagnostics
-
-When a type does not satisfy the required interface, the compiler reports which method is missing and its expected signature, for example:
-
-```
-"Score does not satisfy Ordered: missing fn OpGt(Score, Score) -> boolean"
-```
-
 ```rust
 fn main() {
   test_identity();
   test_pick_second();
-  test_stdlib_bounded();
-  test_custom_ordered();
 }
 ```
 
 
 = Closures
 
-\#warn Dead assignment — 'base' is overwritten before being read \@TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.
+\#warn Dead assignment — 'base' is overwritten before being read \@TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.
 
 === Integer capture
 
-A lambda may read any integer variable in scope at the call site. Store the lambda, then call it by name.
+A lambda may read any integer variable in scope. Store the lambda, then call it by name.
 
 === Multiple integer captures
 
@@ -4610,19 +4332,23 @@ A lambda can read more than one outer variable at once. All are captured at the 
 
 === Text capture
 
-Text values are captured by deep-copy, so they are independent of the original variable after the call.
+Text values are captured by deep-copy, so they are independent of the original variable after capture.
 
 === Capture timing
 
-Loft captures variables at the moment the lambda is written (definition time), not at the moment it is called.  If a variable changes between writing and calling the lambda, the lambda sees the value it had when it was written.
+Loft captures variables at the moment the lambda is written (definition time), not when it is called.  If a variable changes after the lambda is written, the lambda still sees the original value.
 
 === Cross-scope closures
 
 A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references.
 
-=== Current limitation (C31): closures in collections and struct fields
+=== Closures with higher-order functions
 
-A capturing lambda cannot be stored in a 'vector\<fn(...)\>' or as a struct field.  Pass closures as function arguments or return values instead. Non-capturing lambdas (those that only use their own parameters) work fine as elements of function vectors and with higher-order functions.
+A capturing closure stored in a variable can be called directly.
+
+=== Non-capturing lambdas with higher-order functions
+
+Lambdas that use only their own parameters (no capture) also work fine.
 
 ```rust
 fn make_adder(base_val: integer) -> fn(integer) -> integer {
@@ -4678,14 +4404,22 @@ Closures capture at definition time. 'base' is 10 when the lambda is written; re
 
 === Cross-scope closures
 
-make_adder returns a lambda that captured base_val from its parameter. The captured value is preserved after make_adder returns.
+make_adder returns a lambda that captured base_val from its parameter.
 
 ```rust
   add10 = make_adder(10);
   add100 = make_adder(100);
   assert(add10(5) == 15, "add10(5): {add10(5)}");
   assert(add100(5) == 105, "add100(5): {add100(5)}");
-  assert(add10(0) == 10, "add10(0): {add10(0)}");
+```
+
+=== Closures with higher-order functions
+
+```rust
+  factor = 3;
+  scale = fn(x: integer) -> integer { x * factor };
+  assert(scale(5) == 15, "scale(5): {scale(5)}");
+  assert(scale(10) == 30, "scale(10): {scale(10)}");
 ```
 
 === Non-capturing lambdas with higher-order functions
@@ -4694,20 +4428,15 @@ No capture needed here — the lambda uses only its own parameter.
 
 ```rust
   nums = [1, 2, 3, 4, 5];
-  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  doubled = map(nums, |x| { x * 2 });
   assert(doubled[0] == 2, "doubled[0]: {doubled[0]}");
   assert(doubled[4] == 10, "doubled[4]: {doubled[4]}");
 ```
 
 ```rust
-  evens = filter(nums, fn(x: integer) -> boolean { x % 2 == 0 });
+  evens = filter(nums, |x| { x % 2 == 0 });
   assert(evens[0] == 2, "evens[0]: {evens[0]}");
   assert(evens[1] == 4, "evens[1]: {evens[1]}");
-```
-
-Workaround for captured value + higher-order function: pass the extra value as an explicit argument to a named helper.
-
-```rust
 }
 ```
 
@@ -4788,18 +4517,6 @@ fn large_range(limit: integer) -> iterator<integer> {
 }
 ```
 
-=== Yield from inside a for-loop over a vector
-
-The coroutine save/restore machinery works for any iterable — not just ranges. Here the loop variable is a vector element; the generator suspends mid-loop.
-
-```rust
-fn doubled_elems(src: vector<integer>) -> iterator<integer> {
-  for elem in src {
-    yield elem * 2;
-  }
-}
-```
-
 ```rust
 fn main() {
 ```
@@ -4868,19 +4585,6 @@ One extra advance past the last element; exhausted() is true after that.
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
-=== Yield from inside a for-loop over a vector
-
-The generator suspends at 'yield' mid-way through the vector loop; the loop cursor and vector position are preserved across each resume.
-
-```rust
-  de_src = [10, 20, 30];
-  de_total = 0;
-  for de_n in doubled_elems(de_src) {
-    de_total += de_n;
-  }
-  assert(de_total == 120, "doubled vector elements: {de_total}");
-```
-
 === Early termination with break
 
 Stop after the first 5 values from a 1000-element generator.
@@ -4923,10 +4627,6 @@ A function can return a tuple to give back more than one value at once.
 === Destructuring
 
 Assign a tuple to multiple names in one step using the '(a, b) = expr' form. This is concise when a function returns a tuple and you need both values.
-
-=== Matching tuples
-
-A tuple can be used as the subject of a 'match' expression. Each element position can be a literal, a binding name, or a wildcard '_'. This lets you branch on the combination of values in a single expression.
 
 === Three or more elements
 
@@ -5015,29 +4715,6 @@ Already in order
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
-```
-
-=== Matching tuples
-
-Match on a pair: bind 'n' when the second element is a specific text, or bind both as 'n' and 's' for the general case.
-
-```rust
-  tm_pair = (3, "hello");
-  tm_result = match tm_pair {
-    (0, _) => "starts at zero",
-    (n, "hi") => "greeting at {n}",
-    (n, s) => "got {n} and {s}"
-  };
-  assert(tm_result == "got 3 and hello", "tuple match: {tm_result}");
-```
-
-```rust
-  tm_pair2 = (0, "anything");
-  tm_result2 = match tm_pair2 {
-    (0, _) => "starts at zero",
-    (n, s) => "got {n} and {s}"
-  };
-  assert(tm_result2 == "starts at zero", "wildcard match: {tm_result2}");
 ```
 
 === Three or more elements
@@ -5904,23 +5581,51 @@ Returns microseconds elapsed since program start (monotonic clock). Unaffected b
 
 = Roadmap
 
-Loft is under active development. Everything documented on the language pages works today.
+Loft is under active development. Everything documented on the language pages works today. This page describes what is planned for upcoming releases.
 
-=== In progress — 0.8.3
+=== Current release — 0.8.3
 
-==== Cross-scope closures (A5.6)
+0.8.3 focuses on language completeness and correctness. All items below are implemented and will ship with the next release.
 
-Same-scope capture (integers, text, mutable) works. One restriction remains: a capturing lambda returned from a function and called from a different scope does not yet work. The fix requires extending `Type::Function` to carry the closure DbRef alongside the definition number.
+==== Closures
 
-==== WASM threading (W1.18)
+Lambdas can capture variables from the surrounding scope. Captured values are copied at definition time (value semantics). A function can return a closure to its caller — the captured values travel with the lambda. See Closures.
 
-`par(...)` loops are currently sequential in the WASM build. Threading support requires a Web Worker pool, which is planned as a follow-on item.
+```
+fn make_adder(n: integer) - fn(integer) - integer {
+    fn(x: integer) - integer { n + x }
+}
+add5 = make_adder(5);
+add5(10)   // 15
+```
 
-=== Coming next
+==== Coroutines and generators
+
+Functions can `yield` values lazily. Consumers iterate with a normal `for` loop — the generator suspends and resumes automatically. See Coroutines.
+
+==== Tuples
+
+Functions can return multiple values as tuples. Destructuring assignment unpacks them at the call site. See Tuples.
+
+==== Generics and interfaces
+
+Generic functions and interface-bounded type parameters. See Generics.
+
+==== Native compilation
+
+Compile loft programs to standalone native executables via `loft --native app.loft`. Generates Rust code, compiles with `rustc`. All language features are supported including closures, coroutines, tuples, and generics.
+
+==== Parallel execution
+
+Data-parallel `for` loops with the `par(...)` clause. The runtime splits work across CPU cores automatically. See Parallel execution.
+
+=== Next — 0.8.4
+
+0.8.4 adds networking, graphics, and a test server. All features are designed as libraries that work across the interpreter, native codegen, and WASM backends.
 
 ==== HTTP client
 
-Built-in HTTP requests using `ureq`:
+Built-in HTTP requests. JSON parsing already works via `Type.parse(text)` and the `:j` format specifier — only the transport layer is new.
 
 ```
 struct User { name: text, age: integer }
@@ -5932,11 +5637,45 @@ if resp.ok() {
 }
 ```
 
-JSON parsing and serialisation already work today via `Type.parse(text)` and the `:j` format specifier. The remaining work is the HTTP transport layer.
+Works on all backends: the interpreter and native codegen use `ureq`; the WASM build bridges to the browser's `fetch()` API.
 
-==== Interactive mode
+==== Test server
 
-Running `loft` with no arguments will start an interactive session:
+A minimal HTTP server built in Rust that loads a loft script and calls a user-defined `fn handle(Request) - Response` for each incoming request.
+
+```
+$ loft serve app.loft --port 8080
+```
+
+```
+fn handle(r: Request) - Response {
+    if r.path == "/hello" {
+        Response { body: "Hello, {r.method}!" }
+    } else {
+        Response { status: 404, body: "not found" }
+    }
+}
+```
+
+Primary purpose: provide a local test target for HTTP client integration tests without depending on external services. Also useful for rapid prototyping of web APIs in loft.
+
+==== Graphics library
+
+A 2D/3D graphics library with the rasterizer and math written entirely in loft. Rust provides only platform I/O (PNG files, GPU context, font loading).
+
+- *2D canvas* — RGBA pixel buffer with blend, line, rectangle, circle, Bezier curve, and scanline fill — all implemented in loft.
+- *Text rendering* — Glyph rasterization via `fontdue`; layout and drawing in loft.
+- *GLB export* — Write 3D meshes, scenes, and materials to binary glTF files. Pure loft implementation using binary file I/O.
+- *OpenGL desktop* — Real-time rendering window using `glutin` + `glow`. Optional feature (`--features opengl`).
+- *WebGL browser* — Render to a `<canvas>` element via WebGL2 in WASM builds.
+
+The graphics workloads (pixel blending, Bezier subdivision, matrix math) also serve as a real-world performance benchmark for the loft interpreter.
+
+=== 0.9.0 — Standalone executable
+
+==== Interactive mode (REPL)
+
+Running `loft` with no arguments starts an interactive session. Definitions persist across lines. Syntax errors discard the failed line and continue.
 
 ```
 $ loft
@@ -5949,25 +5688,33 @@ $ loft
 3.0
 ```
 
-Definitions persist across lines. A syntax error discards the failed line and continues.
+==== Error recovery
+
+The parser currently stops at the first error. 0.9.0 will recover from token-level failures, report multiple errors in a single pass, and continue parsing after bad statements.
+
+==== Logger improvements
+
+Hot-reloadable log levels, `--release` flag for eliding `debug_assert` calls, `--debug` flag for per-type safety logging (null-origin tracking, division-by-zero source locations).
+
+=== 1.0.0 — IDE + stability contract
 
 ==== Web IDE
 
-A browser-based IDE that runs the full Loft interpreter as WebAssembly — no installation, no server:
+A browser-based IDE running the full loft interpreter as WebAssembly — no installation, no server.
 
 - Syntax highlighting and error markers (CodeMirror 6)
 - Run button with console output
 - Go-to-definition and find-usages
 - Multiple projects stored locally (IndexedDB)
 - Documentation browser built in
-- Works offline (PWA)
+- Works offline (PWA with export/import ZIP)
 
-=== Version 1.0 — stability contract
+==== Stability contract
 
 Version 1.0 means: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language syntax, type system, standard library, and command-line flags are frozen. Until then, breaking changes are possible between minor versions.
 
 === Following progress
 
-Development is tracked in the GitHub repository.
+Development is tracked in the GitHub repository. The full internal roadmap with effort estimates and designs is in the repository's `doc/claude/ROADMAP.md`.
 
 

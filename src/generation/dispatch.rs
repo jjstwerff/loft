@@ -140,16 +140,31 @@ impl Output<'_> {
                     )?;
                 }
             } else {
+                // C39: wrap plain Int or If-with-Int values assigned to Function vars.
+                let is_fn_ref_var = matches!(variables.tp(var), Type::Function(_, _, _));
+                let wrap_fn_ref = is_fn_ref_var && matches!(to, Value::Int(_));
+                if wrap_fn_ref {
+                    write!(w, "(")?;
+                }
+                // C39: set fn_ref_context so if-else branches with bare Int
+                // values produce (u32, null_DbRef) tuples.  Cleared inside
+                // Call argument processing to avoid wrapping OpDatabase args.
+                let prev_ctx = self.fn_ref_context;
+                if is_fn_ref_var && !wrap_fn_ref {
+                    self.fn_ref_context = true;
+                }
                 self.output_code_inner(w, to)?;
+                self.fn_ref_context = prev_ctx;
                 if needs_to_string {
                     write!(w, ".to_string()")?;
-                } else if matches!(
-                    variables.tp(var),
-                    Type::Function(_, _, _) | Type::Routine(_)
-                ) && !matches!(to, Value::Null)
+                } else if wrap_fn_ref {
+                    write!(
+                        w,
+                        " as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                    )?;
+                } else if matches!(variables.tp(var), Type::Routine(_))
+                    && !matches!(to, Value::Null)
                 {
-                    // fn-ref variables are u32, but Value::Int emits _i32 suffix — cast it.
-                    // Also covers if-expressions that return fn-ref literals.
                     write!(w, " as u32")?;
                 } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
                     // Variable is a narrow integer type (stored as i32), but the RHS expression
@@ -214,6 +229,22 @@ impl Output<'_> {
     /// differs structurally from both a regular call and a template substitution.
     #[allow(clippy::too_many_lines)] // large opcode dispatch — splitting would lose context
     pub(super) fn output_call(
+        &mut self,
+        w: &mut dyn Write,
+        def_nr: u32,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
+        // C39: clear fn_ref_context inside calls — arguments like OpDatabase's
+        // type number are plain integers, not fn-ref d_nr values.
+        let saved_ctx = self.fn_ref_context;
+        self.fn_ref_context = false;
+        let result = self.output_call_inner(w, def_nr, vals);
+        self.fn_ref_context = saved_ctx;
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn output_call_inner(
         &mut self,
         w: &mut dyn Write,
         def_nr: u32,
@@ -323,16 +354,24 @@ impl Output<'_> {
                         write!(w, "()")?;
                         return Ok(());
                     }
-                    // A5.6-text: skip closure free for fn-ref variables in native codegen.
-                    // The interpreter handles this via a codegen special case (OpVarRef at
-                    // offset+4), but native codegen does not yet support it.
+                    // C39: free the closure component of fn-ref (u32, DbRef) variables.
+                    // Non-capturing lambdas have store_nr = u16::MAX (null sentinel).
                     if let Value::Var(v) = db_val
                         && matches!(
                             self.data.def(self.def_nr).variables.tp(*v),
                             Type::Function(_, _, _)
                         )
                     {
-                        write!(w, "()")?;
+                        let vn = format!(
+                            "var_{}",
+                            sanitize(self.data.def(self.def_nr).variables.name(*v))
+                        );
+                        write!(
+                            w,
+                            "if {vn}.1.store_nr != u16::MAX {{ \
+                             OpFreeRef(stores, {vn}.1, \"{vn}.1\"); \
+                             {vn}.1.store_nr = u16::MAX }}"
+                        )?;
                         return Ok(());
                     }
                     let var_name = if let Value::Var(v) = db_val {

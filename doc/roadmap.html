@@ -7,23 +7,48 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <span class="cur">Roadmap</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <span class="cur">Roadmap</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Roadmap</h1>
 <article>
-<p>Loft is under active development. Everything documented on the language pages works today.</p>
+<p>Loft is under active development. Everything documented on the language pages works today. This page describes what is planned for upcoming releases.</p>
 
-<h2 id="pending-083">In progress — 0.8.3</h2>
+<!-- ── 0.8.3 ────────────────────────────────────────────────────────────── -->
 
-<h3 id="cross-scope-closures">Cross-scope closures (A5.6)</h3>
-<p>Same-scope capture (integers, text, mutable) works. One restriction remains: a capturing lambda returned from a function and called from a different scope does not yet work. The fix requires extending <code>Type::Function</code> to carry the closure DbRef alongside the definition number.</p>
+<h2 id="current-083">Current release — 0.8.3</h2>
 
-<h3 id="wasm-threading">WASM threading (W1.18)</h3>
-<p><code>par(...)</code> loops are currently sequential in the WASM build. Threading support requires a Web Worker pool, which is planned as a follow-on item.</p>
+<p>0.8.3 focuses on language completeness and correctness. All items below are implemented and will ship with the next release.</p>
 
-<h2 id="planned">Coming next</h2>
+<h3 id="closures">Closures</h3>
+<p>Lambdas can capture variables from the surrounding scope. Captured values are copied at definition time (value semantics). A function can return a closure to its caller — the captured values travel with the lambda. See <a href="26-closures.html">Closures</a>.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">make_adder</span>(n: <span class="ty">integer</span>) -> <span class="kw">fn</span>(<span class="ty">integer</span>) -> <span class="ty">integer</span> {
+    <span class="kw">fn</span>(x: <span class="ty">integer</span>) -> <span class="ty">integer</span> { n + x }
+}
+add5 = <span class="fn-call">make_adder</span>(<span class="nm">5</span>);
+<span class="fn-call">add5</span>(<span class="nm">10</span>)   <span class="cm">// 15</span></code></pre>
+
+<h3 id="coroutines">Coroutines and generators</h3>
+<p>Functions can <code>yield</code> values lazily. Consumers iterate with a normal <code>for</code> loop — the generator suspends and resumes automatically. See <a href="27-coroutines.html">Coroutines</a>.</p>
+
+<h3 id="tuples">Tuples</h3>
+<p>Functions can return multiple values as tuples. Destructuring assignment unpacks them at the call site. See <a href="28-tuples.html">Tuples</a>.</p>
+
+<h3 id="generics">Generics and interfaces</h3>
+<p>Generic functions and interface-bounded type parameters. See <a href="25-generics.html">Generics</a>.</p>
+
+<h3 id="native-codegen">Native compilation</h3>
+<p>Compile loft programs to standalone native executables via <code>loft --native app.loft</code>. Generates Rust code, compiles with <code>rustc</code>. All language features are supported including closures, coroutines, tuples, and generics.</p>
+
+<h3 id="parallel">Parallel execution</h3>
+<p>Data-parallel <code>for</code> loops with the <code>par(...)</code> clause. The runtime splits work across CPU cores automatically. See <a href="19-threading.html">Parallel execution</a>.</p>
+
+<!-- ── 0.8.4 ────────────────────────────────────────────────────────────── -->
+
+<h2 id="next-084">Next — 0.8.4</h2>
+
+<p>0.8.4 adds networking, graphics, and a test server. All features are designed as libraries that work across the interpreter, native codegen, and WASM backends.</p>
 
 <h3 id="http">HTTP client</h3>
-<p>Built-in HTTP requests using <code>ureq</code>:</p>
+<p>Built-in HTTP requests. JSON parsing already works via <code>Type.parse(text)</code> and the <code>:j</code> format specifier — only the transport layer is new.</p>
 <pre><code><span class="kw">struct</span> User { name: <span class="ty">text</span>, age: <span class="ty">integer</span> }
 
 resp = <span class="fn-call">http_get</span>(<span class="st">"https://api.example.com/users/1"</span>);
@@ -31,10 +56,37 @@ resp = <span class="fn-call">http_get</span>(<span class="st">"https://api.examp
     user = User.<span class="fn-call">parse</span>(resp.body);
     <span class="fn-call">println</span>(<span class="st">"{user.name} is {user.age}"</span>);
 }</code></pre>
-<p>JSON parsing and serialisation already work today via <code>Type.parse(text)</code> and the <code>:j</code> format specifier. The remaining work is the HTTP transport layer.</p>
+<p>Works on all backends: the interpreter and native codegen use <code>ureq</code>; the WASM build bridges to the browser's <code>fetch()</code> API.</p>
 
-<h3 id="repl">Interactive mode</h3>
-<p>Running <code>loft</code> with no arguments will start an interactive session:</p>
+<h3 id="test-server">Test server</h3>
+<p>A minimal HTTP server built in Rust that loads a loft script and calls a user-defined <code>fn handle(Request) -> Response</code> for each incoming request.</p>
+<pre><code>$ loft serve app.loft --port 8080</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">handle</span>(r: Request) -> Response {
+    <span class="kw">if</span> r.path == <span class="st">"/hello"</span> {
+        Response { body: <span class="st">"Hello, {r.method}!"</span> }
+    } <span class="kw">else</span> {
+        Response { status: <span class="nm">404</span>, body: <span class="st">"not found"</span> }
+    }
+}</code></pre>
+<p>Primary purpose: provide a local test target for HTTP client integration tests without depending on external services. Also useful for rapid prototyping of web APIs in loft.</p>
+
+<h3 id="graphics">Graphics library</h3>
+<p>A 2D/3D graphics library with the rasterizer and math written entirely in loft. Rust provides only platform I/O (PNG files, GPU context, font loading).</p>
+<ul>
+<li><strong>2D canvas</strong> — RGBA pixel buffer with blend, line, rectangle, circle, Bezier curve, and scanline fill — all implemented in loft.</li>
+<li><strong>Text rendering</strong> — Glyph rasterization via <code>fontdue</code>; layout and drawing in loft.</li>
+<li><strong>GLB export</strong> — Write 3D meshes, scenes, and materials to binary glTF files. Pure loft implementation using binary file I/O.</li>
+<li><strong>OpenGL desktop</strong> — Real-time rendering window using <code>glutin</code> + <code>glow</code>. Optional feature (<code>--features opengl</code>).</li>
+<li><strong>WebGL browser</strong> — Render to a <code>&lt;canvas&gt;</code> element via WebGL2 in WASM builds.</li>
+</ul>
+<p>The graphics workloads (pixel blending, Bezier subdivision, matrix math) also serve as a real-world performance benchmark for the loft interpreter.</p>
+
+<!-- ── 0.9.0 ────────────────────────────────────────────────────────────── -->
+
+<h2 id="planned-09">0.9.0 — Standalone executable</h2>
+
+<h3 id="repl">Interactive mode (REPL)</h3>
+<p>Running <code>loft</code> with no arguments starts an interactive session. Definitions persist across lines. Syntax errors discard the failed line and continue.</p>
 <pre><code>$ loft
 &gt; x = 42
 &gt; "{x * 2}"
@@ -43,24 +95,35 @@ resp = <span class="fn-call">http_get</span>(<span class="st">"https://api.examp
 &gt; p = Point { x: 1.0, y: 2.0 }
 &gt; p.x + p.y
 3.0</code></pre>
-<p>Definitions persist across lines. A syntax error discards the failed line and continues.</p>
+
+<h3 id="error-recovery">Error recovery</h3>
+<p>The parser currently stops at the first error. 0.9.0 will recover from token-level failures, report multiple errors in a single pass, and continue parsing after bad statements.</p>
+
+<h3 id="logger">Logger improvements</h3>
+<p>Hot-reloadable log levels, <code>--release</code> flag for eliding <code>debug_assert</code> calls, <code>--debug</code> flag for per-type safety logging (null-origin tracking, division-by-zero source locations).</p>
+
+<!-- ── 1.0.0 ────────────────────────────────────────────────────────────── -->
+
+<h2 id="planned-10">1.0.0 — IDE + stability contract</h2>
 
 <h3 id="web-ide">Web IDE</h3>
-<p>A browser-based IDE that runs the full Loft interpreter as WebAssembly — no installation, no server:</p>
+<p>A browser-based IDE running the full loft interpreter as WebAssembly — no installation, no server.</p>
 <ul>
 <li>Syntax highlighting and error markers (CodeMirror 6)</li>
 <li>Run button with console output</li>
 <li>Go-to-definition and find-usages</li>
 <li>Multiple projects stored locally (IndexedDB)</li>
 <li>Documentation browser built in</li>
-<li>Works offline (PWA)</li>
+<li>Works offline (PWA with export/import ZIP)</li>
 </ul>
 
-<h2 id="stability">Version 1.0 — stability contract</h2>
+<h3 id="stability-contract">Stability contract</h3>
 <p>Version 1.0 means: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language syntax, type system, standard library, and command-line flags are frozen. Until then, breaking changes are possible between minor versions.</p>
 
+<!-- ── Following ────────────────────────────────────────────────────────── -->
+
 <h2 id="following">Following progress</h2>
-<p>Development is tracked in the <a href="https://github.com/jjstwerff/loft">GitHub repository</a>.</p>
+<p>Development is tracked in the <a href="https://github.com/jjstwerff/loft">GitHub repository</a>. The full internal roadmap with effort estimates and designs is in the repository's <code>doc/claude/ROADMAP.md</code>.</p>
 </article>
 <script src="search-index.js"></script>
 <script src="search.js"></script>

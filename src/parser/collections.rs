@@ -494,7 +494,11 @@ use #count instead"
                 *t = Type::Boolean;
             }
         } else {
-            diagnostic!(self.lexer, Level::Error, "Incorrect # variable on {}", name);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Unknown loop attribute '#{name}'; use #index, #count, #first, #last, or #break"
+            );
             *t = Type::Unknown(0);
         }
     }
@@ -1241,6 +1245,7 @@ use #count instead"
     // Called after '(' has already been consumed, so this drains to ')'.
     /// Compiler special-case for `map(v: vector<T>, f: fn(T) -> U) -> vector<U>`.
     /// Generates inline bytecode equivalent to `[for elm in v { f(elm) }]`.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_map(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
         let placeholder = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
         // On first pass, return the concrete output vector type derived from the function's
@@ -1293,16 +1298,19 @@ use #count instead"
             );
             return placeholder;
         }
-        // Extract the compile-time d_nr from the fn-ref value (always Value::Int(d_nr)).
+        // C48: accept both static fn-refs (Value::Int) and fn-ref variables/lambdas.
         let fn_d_nr = if let Value::Int(d) = &list[1] {
-            *d as u32
+            Some(*d as u32)
         } else {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "map: function reference must be a compile-time constant (use fn <name>)"
-            );
-            return placeholder;
+            None // fn-ref variable or lambda — will use CallRef
+        };
+        // For CallRef path, store the fn-ref value in a local variable.
+        let fn_ref_var = if fn_d_nr.is_none() {
+            let v = self.create_unique("map_fn", &types[1]);
+            self.vars.defined(v);
+            Some(v)
+        } else {
+            None
         };
 
         let mut in_type = types[0].clone();
@@ -1329,11 +1337,17 @@ use #count instead"
         self.vars.finish_loop(loop_nr);
         let for_next = v_set(for_var, iter_next);
 
-        let fill = v_set(vec_copy_var, list[0].clone());
+        let mut fill = v_set(vec_copy_var, list[0].clone());
+        // C48: for CallRef path, assign the fn-ref value before the loop.
+        if let Some(fv) = fn_ref_var {
+            fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
+        }
 
-        // Use Value::Call(d_nr, args) directly — avoids a fn_ref_var local variable
-        // that would share a stack slot with iter_var (validate_slots violation).
-        let body = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let body = if let Some(d) = fn_d_nr {
+            Value::Call(d, vec![Value::Var(for_var)])
+        } else {
+            Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
+        };
 
         self.data.vector_def(&mut self.lexer, &out_elem);
 
@@ -1368,7 +1382,7 @@ use #count instead"
         &mut self,
         list: &[Value],
         types: &[Type],
-    ) -> Result<(Type, u32), Type> {
+    ) -> Result<(Type, Option<u32>), Type> {
         let placeholder = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
         if list.len() != 2 {
             diagnostic!(
@@ -1414,15 +1428,11 @@ use #count instead"
             );
             return Err(placeholder);
         }
+        // C48: accept both static fn-refs and fn-ref variables/lambdas.
         let fn_d_nr = if let Value::Int(d) = &list[1] {
-            *d as u32
+            Some(*d as u32)
         } else {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "filter: predicate must be a compile-time constant (use fn <name>)"
-            );
-            return Err(placeholder);
+            None
         };
         Ok((in_elem_type, fn_d_nr))
     }
@@ -1441,6 +1451,14 @@ use #count instead"
         let (in_elem_type, fn_d_nr) = match self.parse_filter_validate(list, types) {
             Ok(v) => v,
             Err(t) => return t,
+        };
+        // C48: for CallRef path, store the fn-ref value in a local variable.
+        let fn_ref_var = if fn_d_nr.is_none() {
+            let v = self.create_unique("filter_fn", &types[1]);
+            self.vars.defined(v);
+            Some(v)
+        } else {
+            None
         };
 
         let mut in_type = types[0].clone();
@@ -1467,11 +1485,16 @@ use #count instead"
         self.vars.finish_loop(loop_nr);
         let for_next = v_set(for_var, iter_next);
 
-        let fill = v_set(vec_copy_var, list[0].clone());
+        let mut fill = v_set(vec_copy_var, list[0].clone());
+        if let Some(fv) = fn_ref_var {
+            fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
+        }
 
-        // build_comprehension_code: v_if(if_step, null, Continue) → proceed when if_step truthy.
-        // Use Value::Call(d_nr, ...) directly — avoids a fn_ref_var local that would conflict.
-        let if_step = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let if_step = if let Some(d) = fn_d_nr {
+            Value::Call(d, vec![Value::Var(for_var)])
+        } else {
+            Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
+        };
 
         let body = Value::Var(for_var);
 

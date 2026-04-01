@@ -109,6 +109,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            fn_ref_context: false,
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }

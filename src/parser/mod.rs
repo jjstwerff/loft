@@ -1459,7 +1459,11 @@ impl Parser {
     fn cl(&mut self, op: &str, list: &[Value]) -> Value {
         let d_nr = self.data.def_nr(op);
         if d_nr == u32::MAX {
-            diagnostic!(self.lexer, Level::Error, "Call to unknown {op}");
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Internal error: missing built-in operation (report this as a bug)"
+            );
             Value::Null
         } else {
             Value::Call(d_nr, list.to_vec())
@@ -1905,7 +1909,13 @@ impl Parser {
                     "use statements must appear before all definitions"
                 );
             } else {
-                let token = format!("{:?}", res.has);
+                let token = match &res.has {
+                    crate::lexer::LexItem::Token(s) | crate::lexer::LexItem::Identifier(s) => {
+                        format!("'{s}'")
+                    }
+                    crate::lexer::LexItem::CString(s) => format!("\"{s}\""),
+                    other => format!("{other:?}"),
+                };
                 diagnostic!(self.lexer, Level::Error, "Syntax error: unexpected {token}");
             }
         }

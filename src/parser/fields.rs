@@ -347,7 +347,7 @@ impl Parser {
                     Box::new(Type::Null),
                 ));
             }
-            diagnostic!(self.lexer, Level::Error, "Malformed iterator in IR");
+            diagnostic!(self.lexer, Level::Error, "Invalid iterator expression");
             return None;
         }
         if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {

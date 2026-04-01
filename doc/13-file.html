@@ -105,8 +105,18 @@
   n = f#<span class="fn-call">read</span>(<span class="nm">4</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">i32</a></span>;
   b.data = f#<span class="fn-call">read</span>(n * <span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">single</a></span>));
  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin."</span>);
-}</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin."</span>);</code></pre>
+<h2 id="error-handling">Error handling</h2>
+<p>File operations that can fail return a <code>FileResult</code> enum. Call <code>.ok()</code> to check success. The program does not crash on failure — you decide what to do.</p>
+<pre><code>  result = <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"this_file_does_not_exist.txt"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);</code></pre>
+<p>Reading a non-existent file produces an empty result, not a crash.</p>
+<pre><code>  ghost = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_file.txt"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ghost#format == <span class="en">NotExists</span>, <span class="st">"non-existent file has NotExists format"</span>);</code></pre>
+<p><code>move</code> refuses paths outside the project directory.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"any.txt"</span>, <span class="st">"../escape.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"move outside project fails"</span>);</code></pre>
+<p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
+<pre><code>}</code></pre>
 
   </article>
 <script src="search-index.js"></script>

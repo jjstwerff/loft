@@ -947,6 +947,7 @@ fn n1_native_pipeline_trivial_program() {
         loop_stack: Vec::new(),
         next_format_count: 0,
         yield_collect: false,
+        fn_ref_context: false,
     };
     out.output_native_reachable(&mut f, start_def, end_def, &[main_nr])
         .expect("output_native_reachable");

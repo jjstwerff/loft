@@ -16,24 +16,54 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.3 — Language completeness + parallel safety
+## 0.8.4 — HTTP client + OpenGL library
 
-| ID        | Title                                                     | E  | Design | Depends on   | Source                        |
-|-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| S-borrow  | Deep-copy struct returns from generics/vectors (C37 debug) | M  | ✓      |              | PLANNING.md § S-borrow        |
-| C30       | Lambda re-definition: move closure ownership to fn-ref     | M  | ✓      |              | PLANNING.md § C30             |
-| C31       | Closures in vectors: direct byte-copy for structural types | M  | ✓      |              | PLANNING.md § C31             |
-| S21       | `stack_trace()` works in parallel workers (C17)           | S  | ✓      |              | PLANNING.md § S21             |
-| I12.diag  | Factory-method diagnostic: suggest workaround (C33)       | XS | ✓      |              | PLANNING.md § I12.diag        |
-| I8.5.diag | Left-side concrete operand diagnostic (C34)               | XS | ✓      |              | PLANNING.md § I8.5.diag       |
-| A5.6-text | Closure 16-byte fn-ref + chained call parsing             | H  | ✓      |              | PLANNING.md § A5.6            |
-| T1.8      | Tuple struct-ref element move semantics + scope cleanup    | M  | ✓      |              | PLANNING.md § T1.8            |
-| S-lexer   | Fix 16-parser.loft "Unknown record" sentinel crash         | S+M| ✓      |              | PLANNING.md § S-lexer         |
-| A7.2-par  | Fix `load_one` heap corruption under parallel test execution | S  | ✓      |              | PLANNING.md § A7.2-par        |
+All 0.8.4 features are implemented as **loft libraries** that work across all three
+backends (interpreter, `--native` codegen, WASM).  The design follows the existing
+cross-backend pattern established by the standard library:
 
----
+**How library compilation works — all three backends:**
 
-## 0.8.4 — HTTP client
+Loft library functions are compiled identically to user functions on every backend.
+There is no special "library mode" — a `.loft` file loaded via `use` goes through
+the same parse → scope-analysis → bytecode/native pipeline as the main script.
+
+The compilation path for a library function `fn blend_pixel(...)`:
+
+| Step | Interpreter | `--native` | WASM |
+|------|-------------|-----------|------|
+| **Load** | `parse_dir("lib/")` reads `.loft` from filesystem | same | `include_str!` from embedded VirtFS |
+| **Parse** | Two-pass parser produces IR (`Value` tree) | same | same |
+| **Scope** | `scopes::check` emits free ops, slot analysis | same | same |
+| **Compile** | `compile::byte_code` → opcode stream per function | `generation::output_native` → Rust source per function | same as interpreter |
+| **Execute** | `State::execute` interprets opcodes | `rustc` compiles generated `.rs` → native binary | `State::execute` interprets opcodes |
+
+**Pure-loft functions** (no `#rust`) — this is ALL library logic (blend, Bezier,
+GLB writer, HTTP parsing, text layout): compiled to bytecode for interpreter/WASM,
+emitted as Rust for `--native`.  No Cargo features needed.
+
+**Native ops** (`#rust` annotation) — only for operations loft cannot express:
+HTTP sockets, PNG I/O, GPU context, font rasterization.  These are declared in
+`default/*.loft` with inline Rust, compiled into `fill.rs` dispatch table for
+interpreter/WASM, and into `codegen_runtime` for `--native`.
+
+**Platform bridge** — native ops that differ between desktop and browser use
+`#[cfg(feature)]` in their Rust implementation:
+- Desktop: calls Rust crates (`ureq`, `glutin`, `fontdue`) directly
+- WASM: calls JavaScript host functions via `wasm_bindgen`
+
+**New 0.8.4 libraries follow this existing pattern:**
+
+| Library | Pure loft (all backends) | Native ops (Cargo feature) | WASM bridge |
+|---------|------------------------|---------------------------|-------------|
+| HTTP | `HttpResponse` struct, JSON parsing | `http_get`/`post` via `ureq` (`http`) | `fetch()` via `host_http_*` |
+| Graphics | `Rgba`, `Canvas`, blend, line, fill, GLB | `save_png` (`png`), `fontdue` glyph | `save_png` host bridge |
+| OpenGL | — | `glutin` + `glow` (`opengl`) | N/A |
+| WebGL | — | — | `web-sys` WebGL2 (`wasm`) |
+
+No changes to the compilation pipeline are needed.  Library functions are
+automatically compiled for all backends by writing them in pure loft.  Only
+platform I/O requires native ops with Cargo feature gates.
 
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
 are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
@@ -42,13 +72,88 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | H4        | HTTP client stdlib + `HttpResponse` (ureq)                | M  | ✓      |              | WEB_SERVICES.md               |
 | H4.1      | ↳ `HttpResponse` struct + `ok()` method                   | S  | ✓      |              | default/04_web.loft           |
-| H4.2      | ↳ `http_get`, `http_post`, `http_put`, `http_delete`      | M  | ✓      | H4.1         | native_http.rs                |
-| H4.3      | ↳ Header support (`http_get_h`, `http_post_h`)            | S  | ✓      | H4.2         | native_http.rs                |
+| H4.2      | ↳ `http_get` / `http_post` / `http_put` / `http_delete`   | M  | ✓      | H4.1         | native_http.rs + wasm bridge  |
+| H4.3      | ↳ Header support (`http_get_h`, `http_post_h`)            | S  | ✓      | H4.2         | native_http.rs + wasm bridge  |
 | H4.4      | ↳ Documentation + integration tests                       | S  | ✓      | H4.2         | tests/docs/                   |
+| GL0       | Graphics library scaffolding (files, stubs, fontdue dep)  | S  | ✓      |              | OPENGL_IMPL.md Phase 0       |
+| GL1       | Canvas: Rgba, Canvas struct, pixel ops, blend, save_png   | M  | ✓      | GL0          | OPENGL_IMPL.md Phase 1       |
+| GL2       | Drawing primitives: line, rect, circle, Bezier, fill      | MH | ✓      | GL1          | OPENGL_IMPL.md Phase 2       |
+| GL3       | Text rendering: fontdue glyph raster, draw_text           | M  | ✓      | GL1          | OPENGL_IMPL.md Phase 3       |
+| GL4       | GLB export: mesh, scene, material → binary glTF file      | H  | ✓      | GL1          | OPENGL_IMPL.md Phase 4       |
+| GL5       | OpenGL desktop: window, shader, render loop (optional)    | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 5       |
+| GL6       | WebGL browser: canvas WebGL2 context via web-sys           | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 6       |
+| TS        | Test server: embedded Rust HTTP server for H4 integration | M  | ✓      |              | PLANNING.md § TS              |
+| TS.1      | ↳ `loft serve app.loft` — tiny HTTP server binary         | S  | ✓      |              | src/serve.rs                  |
+| TS.2      | ↳ Route dispatch: loft `fn handle(r: Request) -> Response`| M  | ✓      | TS.1         | src/serve.rs                  |
+| TS.3      | ↳ H4 integration tests against local test server          | S  | ✓      | TS.2, H4.2   | tests/web/                    |
+
+**Test server design (TS):**
+
+A minimal Rust HTTP server (`src/serve.rs`, new binary `loft-serve`) that loads a
+loft script and calls a user-defined `fn handle(request: Request) -> Response` for
+each incoming HTTP request.  Purpose: provide a local test target for H4 integration
+tests without depending on external services.
+
+```
+loft serve app.loft --port 8080
+```
+
+**How it works:**
+1. `src/serve.rs` uses `tiny_http` (small, no async, no tokio) to accept connections.
+2. For each request, it constructs a loft `Request` struct (method, path, headers, body)
+   and calls `fn handle(r: Request) -> Response` in the loaded loft script.
+3. The loft function returns a `Response` struct (status, content_type, body).
+4. The Rust server writes the HTTP response back to the client.
+
+**Loft types** (in `default/04_web.loft`):
+```loft
+struct Request {
+    method: text
+    path: text
+    body: text
+}
+
+struct Response {
+    status: integer init(200)
+    content_type: text init("text/plain")
+    body: text
+}
+```
+
+**Example loft script** (`examples/hello_server.loft`):
+```loft
+import "web"
+
+fn handle(r: Request) -> Response {
+    if r.path == "/hello" {
+        Response { body: "Hello, {r.method}!" }
+    } else if r.path == "/json" {
+        data = MyData { name: "test", value: 42 };
+        Response { content_type: "application/json", body: "{data:j}" }
+    } else {
+        Response { status: 404, body: "not found" }
+    }
+}
+```
+
+**H4 integration test** (`tests/web/`):
+```rust
+// 1. Start loft-serve with tests/web/test_server.loft on a random port
+// 2. Use http_get/http_post from the loft H4 client to hit localhost
+// 3. Assert response status, body, content-type
+// 4. Shut down server
+```
+
+This tests the full round-trip: loft HTTP client → Rust TCP → loft request handler
+→ Rust TCP → loft HTTP response parsing.  No external dependencies, fully offline,
+deterministic.
+
+**Cargo feature:** `serve` (new, optional) — gates `tiny_http` dependency.
+Not included in default features or WASM builds.
 
 ---
 
-## 0.9.0 — Standalone executable
+## 0.9.0 — Standalone executable + developer warnings
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
@@ -58,11 +163,43 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | A2.2      | ↳ `is_production()` + `is_debug()` + `RunMode`            | S  | ✓      |              | 01_code.loft                  |
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision             | MH | ✓      | A2.2         | control.rs, main.rs           |
 | A2.4      | ↳ `--debug` per-type safety logging                       | M  | ✓      | A2.2         | fill.rs, native.rs            |
+| C52       | Stdlib name clash: warning + `std::` prefix               | M  | ✓      |              | PLANNING.md § C52             |
+| C53       | Match arms: library enums + bare variant names            | M  | ✓      |              | PLANNING.md § C53             |
+| W-warn    | Developer warnings (Clippy-inspired)                      | M  | —      |              | see below                     |
+| AOT       | Auto-compile libraries to native shared libs for interpreter | H | ✓   |              | PLANNING.md § AOT             |
 | P2        | REPL / interactive mode                                   | H  | ✓      | L1           | PLANNING.md § P2              |
 | P2.1      | ↳ Input completeness detection                            | S  | ✓      |              | new repl.rs                   |
 | P2.2      | ↳ Single-statement execution                              | M  | ✓      | P2.1         | main.rs, repl.rs              |
 | P2.3      | ↳ Automatic value output                                  | S  | ✓      | P2.2         | repl.rs                       |
 | P2.4      | ↳ Error recovery in session                               | M  | ✓      | P2.2, L1     | repl.rs, parser.rs            |
+
+### W-warn — Developer warnings
+
+Loft currently emits 6 warnings.  The following additional warnings would
+catch common mistakes earlier, inspired by Rust's compiler and Clippy:
+
+**Existing warnings (0.8.3):**
+- Dead assignment — variable overwritten before read
+- Variable never read — assigned but never used
+- Parameter never read — function parameter unused
+- Unreachable code — code after return/break/continue
+- Format specifier mismatch — `:x` on text, `:05` on boolean
+- Unnecessary const — `const` parameter never modified
+
+**Proposed new warnings (0.9.0):**
+
+| Warning | Rust/Clippy equivalent | Example |
+|---------|----------------------|---------|
+| Comparison always true/false | `clippy::absurd_extreme_comparisons` | `x >= 0` when x is `integer not null` |
+| Unnecessary parentheses | `clippy::unnecessary_parens` | `if (x > 0) { ... }` |
+| Empty loop/if body | `clippy::empty_loop` | `for x in v { }` |
+| Single-element vector literal | `clippy::single_element_loop` | `for x in [42] { ... }` |
+| Shadowed variable in same scope | `clippy::shadow_unrelated` | `x = 1; x = "hello"` (type change) |
+| Unused import | `unused_imports` | `use lib;` but no `lib::` references |
+| Identical if/else branches | `clippy::if_same_then_else` | `if c { x } else { x }` |
+| Division by literal zero | compile-time div-by-zero | `x / 0` |
+| Infinite loop without break | `clippy::empty_loop` | `while true { }` without break |
+| Stdlib name shadow | C52 | `fn len(t: text)` shadows stdlib |
 
 ---
 

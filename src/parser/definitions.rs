@@ -691,6 +691,11 @@ impl Parser {
                 }
             }
             self.parse_code();
+            // C47.4: reset transient closure state after each function body.
+            // Without this, a lambda inside make_adder leaks last_closure_work_var
+            // into the next function parsed (main), causing closure_var_of to
+            // return a stale value for add5 = make_adder(5).
+            self.last_closure_work_var = u16::MAX;
             if !self.first_pass {
                 self.check_ref_mutations(&arguments);
             }
@@ -1164,7 +1169,7 @@ impl Parser {
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
             } else {
-                diagnostic!(self.lexer, Level::Error, "Redefined struct {}", id);
+                diagnostic!(self.lexer, Level::Error, "Cannot redefine struct '{id}'");
             }
         }
         let context = self.context;
@@ -1241,7 +1246,7 @@ impl Parser {
                 d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Interface);
             }
         } else if self.first_pass {
-            diagnostic!(self.lexer, Level::Error, "Redefined interface {}", id);
+            diagnostic!(self.lexer, Level::Error, "Cannot redefine interface '{id}'");
         }
         // I3: register 'Self' as a type placeholder for method signature parsing.
         // 'Self' resolves to its own definition (like a generic type variable) so

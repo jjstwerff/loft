@@ -131,15 +131,12 @@ fn main() {
   assert(apply_fn(double_it, 7) == 14, "fn-ref as arg (double)");
   assert(apply_fn(negate_it, 3) == -3, "fn-ref as arg (negate)");
 
-  // Full-form lambda with fn(...) syntax.
+  // Lambdas with map, filter, and reduce.
+  // Use |...| short form — types are inferred from the call site.
   nums = [1, 2, 3, 4, 5];
-  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  doubled = map(nums, |x| { x * 2 });
   assert(doubled[0] == 2, "lambda map first element");
   assert(doubled[4] == 10, "lambda map last element");
-
-  // Short-form lambda with |...| syntax — types are inferred from the call site.
-  tripled = map(nums, |x| { x * 3 });
-  assert(tripled[0] == 3, "short lambda map first element");
 
   // filter keeps only elements where the lambda returns true.
   evens = filter(nums, |x| { x % 2 == 0 });
@@ -151,12 +148,11 @@ fn main() {
   total = reduce(nums, 0, |acc, x| { acc + x });
   assert(total == 15, "reduce sum: {total}");
 
-  // A lambda can also be stored in a variable and called later.
+  // Use fn(...) long form when you need explicit types — for example
+  // when storing a lambda in a variable or passing it without call-site context.
   negate = fn(x: integer) -> integer { -x };
   assert(negate(7) == -7, "stored lambda: {negate(7)}");
-
-  // A lambda passed to your own higher-order function (same as apply_fn above).
-  assert(apply_fn(fn(x: integer) -> integer { x * x }, 6) == 36, "lambda as arg: 6^2");
+  assert(apply_fn(|x| { x * x }, 6) == 36, "lambda as arg: 6^2");
 
   // --- Named arguments ---
   assert(connect("example.com") == "example.com:8080:true", "all defaults");

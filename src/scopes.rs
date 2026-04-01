@@ -394,6 +394,11 @@ impl Scopes {
         // remember the scope of the variable
         let mut depend = Vec::new();
         for d in function.tp(v).depend() {
+            // Skip deps that reference variables from another function's scope
+            // (e.g., closure work vars embedded in a fn-ref return type).
+            if d >= function.count() {
+                continue;
+            }
             if !self.var_scope.contains_key(&d) {
                 depend.push(d);
                 self.var_scope.insert(d, self.scope);
@@ -914,6 +919,9 @@ fn check_ref_leaks(
     for (&v, &scope) in var_scope {
         if scope == 0 {
             continue; // function parameter — caller frees
+        }
+        if (v as usize) >= function.count() as usize {
+            continue; // variable belongs to outer scope — not our problem
         }
         if function.is_skip_free(v) {
             continue;

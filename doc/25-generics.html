@@ -13,7 +13,7 @@
 <p>A generic function uses a type variable to work with any type. Write the function once; the compiler creates a specialised copy for each concrete type you call it with.</p>
 <h2 id="declaring-a-generic-function">Declaring a generic function</h2>
 <p>Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector&lt;T&gt;).</p>
-<pre><code><span class="kw">fn</span> identity&lt;<span class="en">T</span>&gt;(val: <span class="en">T</span>) -&gt; <span class="en">T</span> { val }</code></pre>
+<pre><code><span class="kw">fn</span> identity&lt;<span class="en">T</span>&gt;(x: <span class="en">T</span>) -&gt; <span class="en">T</span> { x }</code></pre>
 <h2 id="calling-a-generic-function">Calling a generic function</h2>
 <p>No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">test_identity</span>() {
@@ -24,60 +24,21 @@
 }</code></pre>
 <h2 id="multiple-parameters-of-the-same-type">Multiple parameters of the same type</h2>
 <p>Additional parameters can also use T.  They all share the same concrete type.</p>
-<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(pa: <span class="en">T</span>, pb: <span class="en">T</span>) -&gt; <span class="en">T</span> {
-  _ps = pa;
-  pb
+<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(a: <span class="en">T</span>, b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  _x = a;
+  b
 }
 <span class="kw">fn</span> <span class="fn-call">test_pick_second</span>() {
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>);
 }</code></pre>
-<h2 id="allowed-operations-on-t-unconstrained">Allowed operations on T (unconstrained)</h2>
-<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors without an interface bound.</p>
-<h2 id="disallowed-operations-on-unconstrained-t">Disallowed operations on unconstrained T</h2>
+<h2 id="allowed-operations-on-t">Allowed operations on T</h2>
+<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.</p>
+<h2 id="disallowed-operations">Disallowed operations</h2>
 <p>The compiler rejects operations that require knowing what T is. For example, <code>x + y</code> on two T values gives: "generic type T: operator <code>+</code> requires a concrete type" Similarly, <code>x.field</code> gives: "generic type T: field access requires a concrete type"</p>
-<h2 id="interfaces">Interfaces</h2>
-<p>An interface declares a set of operations that a type must support. Once an interface is declared, a generic function can use <code>&lt;T: Interface&gt;</code> to unlock those operations on T.</p>
-<h2 id="declaring-an-interface">Declaring an interface</h2>
-<p>List the required method signatures inside the interface body. Use <code>Self</code> as a placeholder for the concrete satisfying type. Any type that provides all listed methods satisfies the interface — no explicit <code>implements</code> keyword or registration is needed. Example: interface Ordered { fn OpLt(self: Self, other: Self) -&gt; boolean fn OpGt(self: Self, other: Self) -&gt; boolean } <code>Ordered</code> (above) is already declared in the standard library. The standard library also declares <code>Equatable</code>, <code>Addable</code>, <code>Numeric</code>, and <code>Printable</code>, all satisfied automatically by the primitive types.</p>
-<h2 id="using-stdlib-interfaces-ordered-min-of-max-of-sum-of">Using stdlib interfaces: Ordered, min_of, max_of, sum_of</h2>
-<p>All numeric primitives satisfy <code>Ordered</code> out of the box. <code>max_of</code>, <code>min_of</code>, and <code>sum_of</code> are stdlib functions bounded by these interfaces.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">test_stdlib_bounded</span>() {</code></pre>
-<p>max_of and min_of work with integer (satisfies Ordered)</p>
-<pre><code>  sb_best = <span class="fn-call"><a href="stdlib-vector-aggregates.html">max_of</a></span>([<span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">9</span>, <span class="nm">2</span>]);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sb_best == <span class="nm">9</span>, <span class="st">"max_of integers: {sb_best}"</span>);
-  sb_least = <span class="fn-call"><a href="stdlib-vector-aggregates.html">min_of</a></span>([<span class="nm">4</span>, <span class="nm">1</span>, <span class="nm">9</span>, <span class="nm">2</span>]);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sb_least == <span class="nm">1</span>, <span class="st">"min_of integers: {sb_least}"</span>);</code></pre>
-<p>sum_of works on any vector&lt;integer&gt;</p>
-<pre><code>  sb_total = <span class="fn-call"><a href="stdlib-vector-aggregates.html">sum_of</a></span>([<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>]);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sb_total == <span class="nm">15</span>, <span class="st">"sum_of: {sb_total}"</span>);
-}</code></pre>
-<h2 id="custom-type-satisfying-a-stdlib-interface">Custom type satisfying a stdlib interface</h2>
-<p>Provide <code>OpLt</code> and <code>OpGt</code> and the type automatically satisfies <code>Ordered</code>. Then write a bounded generic function that uses those operators on T. The compiler checks at the call site that the type satisfies the bound, and reports which method is missing if it does not.</p>
-<pre><code><span class="kw">struct</span> <span class="en">Score</span> {
-  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
-}
-<span class="kw">fn</span> <span class="en">OpLt</span>(self: <span class="en">Score</span>, other: <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.value &lt; other.value }
-<span class="kw">fn</span> <span class="en">OpGt</span>(self: <span class="en">Score</span>, other: <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.value &gt; other.value }</code></pre>
-<p>A bounded generic using Ordered — can be called with Score or any Ordered type. The compiler resolves <code>left &lt; right</code> to the Score implementation of OpLt.</p>
-<pre><code><span class="kw">fn</span> higher&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(left: <span class="en">T</span>, right: <span class="en">T</span>) -&gt; <span class="en">T</span> {
-  <span class="kw">if</span> left &lt; right { right } <span class="kw">else</span> { left }
-}</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">test_custom_ordered</span>() {
-  a_score = <span class="en">Score</span>{value: <span class="nm">3</span>};
-  b_score = <span class="en">Score</span>{value: <span class="nm">7</span>};
-  co_winner = <span class="fn-call">higher</span>(a_score, b_score);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(co_winner.value == <span class="nm">7</span>, <span class="st">"winner: {co_winner.value}"</span>);
-}</code></pre>
-<h2 id="multiple-bounds">Multiple bounds</h2>
-<p>Use <code>+</code> to require more than one interface: <code>&lt;T: Ordered + Printable&gt;</code>.</p>
-<h2 id="diagnostics">Diagnostics</h2>
-<p>When a type does not satisfy the required interface, the compiler reports which method is missing and its expected signature, for example: "Score does not satisfy Ordered: missing fn OpGt(Score, Score) -&gt; boolean"</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call">test_identity</span>();
   <span class="fn-call">test_pick_second</span>();
-  <span class="fn-call">test_stdlib_bounded</span>();
-  <span class="fn-call">test_custom_ordered</span>();
 }</code></pre>
 
   </article>

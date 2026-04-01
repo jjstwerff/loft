@@ -152,6 +152,12 @@ fn collect_fn_ref_literals(
             collect_fn_ref_literals(next, data, variables, calls);
             collect_fn_ref_literals(extra, data, variables, calls);
         }
+        // C47.3: FnRef inside a Block result (closure allocation block).
+        Value::FnRef(d_nr, _, _) => {
+            if *d_nr >= 0 {
+                calls.insert((*d_nr).cast_unsigned());
+            }
+        }
         _ => {}
     }
 }
@@ -203,6 +209,10 @@ pub struct Output<'a> {
     /// instead of `yield expr`.  Used in the eager-collect factory function
     /// for `ForLoopBody` coroutine segments.
     pub yield_collect: bool,
+    /// C39: when true, `Value::Int` emits a `(d_nr_u32, null_DbRef)` tuple
+    /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
+    /// if-else branches produce the correct tuple type.
+    pub fn_ref_context: bool,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -297,7 +307,9 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
         | Type::Iterator(_, _) => "DbRef",
-        Type::Routine(_) | Type::Function(_, _, _) => "u32",
+        Type::Routine(_) => "u32",
+        // C39/A5.6: fn-ref carries d_nr + closure DbRef as a tuple.
+        Type::Function(_, _, _) => "(u32, DbRef)",
         Type::Unknown(_) => "??",
         Type::Keys => "&[Key]",
         Type::Void => "()",
