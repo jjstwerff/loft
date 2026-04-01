@@ -561,6 +561,7 @@ impl Scopes {
         ls
     }
 
+    #[allow(clippy::too_many_lines)]
     fn get_free_vars(
         &mut self,
         function: &mut Function,
@@ -592,15 +593,20 @@ impl Scopes {
             if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
                 function.tp(v)
             {
-                let emit = dep.is_empty() && !tp.depend().contains(&v) && !function.is_skip_free(v);
+                // A5.6-text: check both the block result type (tp) and the function's
+                // declared return type.  When a closure escapes via implicit return,
+                // the block result type may lack the dep that was propagated to the
+                // function's declared return type (vectors.rs:704-711).
+                let in_ret =
+                    tp.depend().contains(&v) || data.def(self.d_nr).returned.depend().contains(&v);
+                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
-                         dep_empty={} in_ret={} skip_free={}",
+                         dep_empty={} in_ret={in_ret} skip_free={}",
                         function.name(v),
                         self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
                         dep.is_empty(),
-                        tp.depend().contains(&v),
                         function.is_skip_free(v),
                     );
                 }
@@ -608,6 +614,24 @@ impl Scopes {
                     if scope_debug {
                         eprintln!(
                             "[scope_debug] freeing '{}' (var={v}, scope={})",
+                            function.name(v),
+                            self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
+                        );
+                    }
+                    ls.push(call("OpFreeRef", v, data));
+                }
+            }
+            // A5.6-text: free the closure DbRef embedded at offset+4 in a fn-ref slot.
+            // The 16-byte fn-ref stack slot is reclaimed by FreeStack, but the closure
+            // store record at offset+4 must be explicitly freed via OpFreeRef.
+            if let Type::Function(_, _, dep) = function.tp(v) {
+                let in_ret =
+                    tp.depend().contains(&v) || data.def(self.d_nr).returned.depend().contains(&v);
+                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
+                if emit {
+                    if scope_debug {
+                        eprintln!(
+                            "[scope_debug] freeing closure of fn-ref '{}' (var={v}, scope={})",
                             function.name(v),
                             self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
                         );

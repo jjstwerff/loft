@@ -43,11 +43,11 @@ same type.  Called whenever a value is **derived from** another variable:
 
 ```rust
 // Reading a variable produces a value that depends on that variable.
-// src/parser/objects.rs:135
+// src/parser/objects.rs:138
 t = self.vars.tp(v_nr).depending(v_nr);
 
 // Accessing a field inherits the parent's deps plus the parent variable.
-// src/parser/fields.rs:58-61
+// src/parser/fields.rs:55-62
 for on in dep { t = t.depending(on); }
 t = t.depending(*nr);  // nr = the struct variable
 
@@ -56,7 +56,7 @@ t = t.depending(*nr);  // nr = the struct variable
 in_type = in_type.depending(vec_var);
 ```
 
-### Text exception — `src/parser/objects.rs:112-113`
+### Text exception — `src/parser/objects.rs:115-119`
 
 When reading a `Text` variable, the type is cloned **without** adding the self-dep:
 
@@ -72,7 +72,7 @@ This is because text lives on the stack frame (as a `Str` pointer+length), not i
 store.  A text value IS the variable — there is no separate heap allocation that the
 variable "points to" and could outlive.
 
-### `Function::depend(var_nr, on)` — `src/variables/mod.rs:499`
+### `Function::depend(var_nr, on)` — `src/variables/mod.rs:502`
 
 Mutates a variable's type in-place to add a dep.  Used when the parser discovers
 that `var_nr` borrows from `on` (e.g. a vector element assigned to a local).
@@ -84,7 +84,7 @@ that `var_nr` borrows from `on` (e.g. a vector element assigned to a local).
 When a scope ends (block exit, function return, loop iteration boundary), the scope
 analysis emits free operations for variables registered in that scope.
 
-### Step 1: Collect variables — `variables(to_scope)` — `src/scopes.rs:503-534`
+### Step 1: Collect variables — `variables(to_scope)` — `src/scopes.rs:503-533`
 
 Walk the scope stack from the current scope back to `to_scope`.  Collect all variables
 whose `var_scope` is in this range.  Variables are returned in **reverse insertion
@@ -141,6 +141,12 @@ Three conditions must ALL be true to emit `OpFreeRef`:
    flag is set by `clean_work_refs` for work-ref temporaries that are re-purposed
    after use (A14), and by `set_skip_free` for borrowed references like par-loop
    result variables.
+
+#### Function (`Type::Function`) — NOT YET HANDLED
+
+`Type::Function` does not appear in the `get_free_vars` match.  The closure DbRef
+embedded at offset+4 in the 16-byte fn-ref slot is never explicitly freed.  See
+"Implementation path" below.
 
 ---
 
@@ -205,7 +211,7 @@ if let Value::Var(nr) = code {
 }
 ```
 
-For a text field on a struct variable `p`, this produces `Type::Text([v_p])` — the
+For a text field on struct variable `p`, this produces `Type::Text([v_p])` — the
 text depends on variable `p`.
 
 ### Why this matters for freeing
@@ -302,7 +308,7 @@ chain on the return type the only thing keeping the structs alive.
 ### Text-to-text: no dep added
 
 When reading a text *variable* (not a struct field), no self-dep is added
-(`src/parser/objects.rs:112-113`).  This is correct because text lives on the stack
+(`src/parser/objects.rs:115-119`).  This is correct because text lives on the stack
 frame — there is no separate store allocation to protect.  The text variable IS the
 value, so the `ret_var` identity check is sufficient.
 
@@ -319,7 +325,7 @@ This means text read from a closure record should follow the exact same dep chai
 rules as text read from a regular struct: the text must depend on the closure record
 variable, and that dep must keep the closure store allocation alive.
 
-### Closure record allocation — `src/parser/vectors.rs:628-700`
+### Closure record allocation — `src/parser/vectors.rs:628-712`
 
 - Anonymous struct `__closure_N` with fields matching each captured variable
 - Allocated at lambda **definition time** via `OpDatabase`
@@ -332,7 +338,7 @@ variable, and that dep must keep the closure store allocation alive.
 When parsing the lambda body, the compiler adds a hidden `__closure` parameter:
 
 ```rust
-// src/parser/vectors.rs:393-399
+// src/parser/vectors.rs:391-399
 let closure_tp = Type::Reference(closure_rec, vec![]);
 self.data.add_attribute(&mut self.lexer, d_nr, "__closure", closure_tp.clone());
 let v_nr = self.create_var("__closure", &closure_tp);
@@ -348,18 +354,20 @@ function argument (scope 0, never freed by `get_free_vars`).
 When the lambda body references a captured variable like `prefix`, the parser redirects
 it to a field read from the closure record.  There are two code paths:
 
-**Path 1** — known closure variable (`src/parser/objects.rs:91-95`):
+**Path 1** — known closure variable (`src/parser/objects.rs:91-98`):
 ```rust
 let closure_d_nr = self.data.def(self.context).closure_record;
 let fnr = self.data.attr(closure_d_nr, name);
 *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
 t = self.data.attr_type(closure_d_nr, fnr);
+t = t.depending(self.closure_param);   // A5.6-text: add __closure as dep
 ```
 
-**Path 2** — capture_context variable (`src/parser/objects.rs:168-170`):
+**Path 2** — capture_context variable (`src/parser/objects.rs:172-175`):
 ```rust
 *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
 t = self.data.attr_type(closure_d_nr, fnr);
+t = t.depending(self.closure_param);   // A5.6-text: add __closure as dep
 ```
 
 ### The analogy to regular struct field access
@@ -380,284 +388,294 @@ Normal field access adds the struct variable (and its deps) to the result type.
 For a text field on struct `p`, this produces `Type::Text([v_p])` — the text depends
 on `p`, which prevents `p` from being freed while the text escapes.
 
-### Closure field reads now add `__closure` as dep — `objects.rs:94-97, 169-173`
-
-Both closure field-read paths now add `self.closure_param` as a dependency after
-reading the field type, matching the pattern for normal struct field access:
-
-```rust
-*code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
-t = self.data.attr_type(closure_d_nr, fnr);
-t = t.depending(self.closure_param);   // A5.6-text: add __closure as dep
-```
-
-This produces `Type::Text([v___closure])` for a text field read from a closure,
-matching the `Type::Text([v_p])` produced by `p.name` for a regular struct.  The
-dep keeps the closure record alive while derived text is in use.
-
-### The cross-scope crash: `___clos_N` freed before the fn-ref escapes
-
-The cross-scope test (`closure_capture_text`) demonstrates the issue:
-
-```loft
-fn make_greeter(prefix: text) -> fn(text) -> text {
-    fn(name: text) -> text { "{prefix} {name}" }
-}
-make_greeter("Hello")("world")
-```
-
-`___clos_1` has `Type::Reference(closure_d_nr, [])` — owned, empty deps.  At
-function return, `get_free_vars` uses `tp = data.def(d_nr).returned` (the declared
-return type).  Even though the fn-ref block's computed type carries `dep=[___clos_1]`,
-the declared return type's deps are what `get_free_vars` sees.
-
-### Implemented fix: deps on `Type::Function`
-
-`Type::Function` now carries a `Vec<u16>` dep field:
-```rust
-Function(Vec<Type>, Box<Type>, Vec<u16>)  // params, return, deps
-```
-
-In `emit_lambda_code` (`src/parser/vectors.rs`), the fn-ref type is built with the
-closure work variable as a dep: `Function(params, ret, vec![w])`.  Additionally,
-`emit_lambda_code` propagates this dep to the enclosing function's declared return
-type so that `free_vars` at the Return statement sees `tp.depend()` containing `w`.
-
-Supporting changes (all implemented):
-- `depending()`/`depend()`/`is_equal()` in `data.rs` handle Function deps
-- `can_convert` in `mod.rs` accepts Text with different deps and Function with
-  compatible params/return (ignoring deps)
-- ~60 match sites updated from `Function(_, _)` to `Function(_, _, _)`
-
-### Current status
-
-**Same-scope closures**: all pass.  `___clos_N` and the fn-ref live in the same
-function scope; `get_free_vars` doesn't run between closure allocation and fn-ref use.
-
-**Cross-scope closures** (ignored test `closure_capture_text`): the declared return
-type now carries the dep `[w]`, but `___clos_1` is still freed at function return.
-The `free_vars` Return handler uses `self.scope` (the function body scope) as
-`to_scope`, and `___clos_1` is registered at that scope (via work_refs init).  The
-dep on the return type should suppress the free, but the variable is collected and
-freed before the return type check can protect it.  This requires further
-investigation into the scope/free ordering at function return boundaries.
-
-### Remaining issue: closure record cleanup at the caller
-
-The closure DbRef is embedded in the fn-ref's 16-byte slot (bytes 4-16).  At the
-caller, the fn-ref variable has `Function(params, ret, [])` (empty deps — call
-results are owned).  `get_free_vars` does not match `Type::Function` for freeing.
-The 16-byte fn-ref slot is stack memory (reclaimed by `FreeStack`), but the closure
-store record at offset+4 is never explicitly freed.
-
-For chained calls (`make_greeter("Hello")("world")`), the leak is negligible.
-For stored fn-refs, the closure record leaks until program exit.  Fixing this
-requires `get_free_vars` to emit an `OpFreeRef` targeting the DbRef at offset+4
-within the fn-ref slot — a separate enhancement.
-
-### Same-scope closures: why they work
-
-The passing tests (`closure_capture_text_return`, `closure_capture_text_loop`) use
-same-scope closures where the closure is defined and called within one function:
-
-```loft
-greeting = "hello";
-f = fn(name: text) -> text { "{greeting}, {name}!" };
-f("world")
-```
-
-Here `___clos_N` and the fn-ref variable `f` live in the **same** function scope.
-`___clos_N` is registered at the function body scope (via work_refs init).  The
-fn_ref_with_closure block has its own inner scope, but `___clos_N` is not in that
-scope.  At the inner block's scope exit, `___clos_N` is not collected.  At the outer
-function scope exit, `___clos_N` is freed after the fn-ref call has completed.
+Both closure field-read paths add `self.closure_param` as a dependency after reading
+the field type, matching the pattern for normal struct field access.  This produces
+`Type::Text([v___closure])` for a text field read from a closure, matching the
+`Type::Text([v_p])` produced by `p.name` for a regular struct.  The dep keeps the
+closure record alive while derived text is in use.
 
 ---
 
-## Why Function is different from Reference — and how to unify them
+## The 16-byte fn-ref slot layout
 
-### The asymmetry
+A `Type::Function` variable occupies 16 bytes on the stack:
 
-A `Type::Reference` variable is a 12-byte `DbRef` on the stack pointing to a store
-record.  `get_free_vars` handles it directly: check deps, emit `OpFreeRef`, done.
-The variable IS the store pointer — freeing it means freeing what it points to.
+```
+bytes  0.. 4: d_nr       (i32, function definition number)
+bytes  4..16: closure     (DbRef, 12 bytes; null sentinel if no closure)
+```
 
-A `Type::Function` variable is a 16-byte fn-ref on the stack: `[d_nr (4B)][closure
-DbRef (12B)]`.  The variable is **not** a store pointer — it's a compound value that
-**contains** a store pointer at offset+4.  `OpFreeRef` reads a 12-byte DbRef from the
-stack, so it cannot be pointed at a Function variable directly.
+### Key codegen paths
 
-This is why Function is excluded from the `get_free_vars` Reference/Vector/Enum match:
-emitting `OpFreeRef(fn_var)` would read 12 bytes starting at the fn-ref's base — the
-d_nr (4B) plus the first 8 bytes of the DbRef — producing a garbage DbRef.
+| Component | Location | Role |
+|-----------|----------|------|
+| `gen_set_first_at_tos` | `codegen.rs:843-847` | Delegates to `gen_fn_ref_value` for Function vars |
+| `gen_fn_ref_value` | `codegen.rs:466-490` | Ensures every if-else branch produces 16B |
+| `OpVarFnRef` | `02_images.loft:350` | Push 16B fn-ref from frame variable |
+| `OpPutFnRef` | `02_images.loft:354` | Pop 16B fn-ref into frame variable |
+| `OpNullRefSentinel` | `01_code.loft:733` | Pads non-capturing lambdas (4B d_nr → 16B) |
+| `fn_call_ref` | `state/mod.rs:221-249` | Reads d_nr at offset 0, closure at offset+4 |
 
-### The two-variable design
-
-Currently, a capturing lambda produces two variables:
-
-| Variable | Type | Size | Owns the store record? |
-|----------|------|------|----------------------|
-| `___clos_N` | `Reference(closure_d_nr, [])` | 12B | Yes — standard owned ref |
-| fn-ref var | `Function(params, ret, [___clos_N])` | 16B | No — borrows from `___clos_N` |
-
-The fn-ref embeds a **copy** of the closure DbRef (bytes 4-16 match `___clos_N`'s
-DbRef), but the dep `[___clos_N]` marks the fn-ref as a borrower.  Freeing is
-delegated to `___clos_N` via the normal Reference path.
-
-This design works for same-scope closures but fails when the fn-ref escapes via return:
-`___clos_N` is freed at the defining function's scope exit because the declared return
-type's `tp.depend()` check cannot always reach it in time.
-
-### How Function could be treated like Reference
-
-The fundamental issue is that the closure DbRef lives at a non-zero offset within the
-fn-ref slot.  Two approaches to unify Function with Reference freeing:
-
-#### Approach A: codegen special case for `OpFreeRef` on Function variables
-
-Add Function to the `get_free_vars` match alongside Reference/Vector/Enum.  In
-codegen (`generate_call`), when `OpFreeRef` is called on a `Type::Function` variable,
-emit `OpVarRef(var_pos - 4)` instead of the normal `generate_var` which would emit
-`OpVarFnRef` (16 bytes):
+### fn-ref type carries closure dep — `vectors.rs:666-669`
 
 ```rust
-// In generate_call, after the skip_free check:
+// A5.6-text: fn-ref depends on closure work var `w` so that
+// get_free_vars does not emit OpFreeRef for the closure record
+// before the fn-ref escapes the defining scope.
+let fn_type = Type::Function(visible_params, Box::new(ret_tp), vec![w]);
+```
+
+### Return type dep propagation — `vectors.rs:701-711`
+
+When the enclosing function returns a fn-ref, the closure dep `w` is propagated to
+the declared return type so `get_free_vars` at the Return statement sees
+`tp.depend()` containing `w`:
+
+```rust
+if matches!(self.data.def(self.context).returned, Type::Function(_, _, _)) {
+    self.data.definitions[self.context as usize].returned =
+        self.data.definitions[self.context as usize].returned.depending(w);
+}
+```
+
+---
+
+## Current status of closure freeing
+
+### Same-scope closures: WORKING
+
+All same-scope closure tests pass.  `___clos_N` and the fn-ref live in the same
+function scope; `get_free_vars` doesn't run between closure allocation and fn-ref use.
+
+**Passing tests** (tests/expressions.rs):
+- `closure_capture_integer` (line 317)
+- `closure_capture_after_change` (line 323)
+- `closure_capture_multiple` (line 335)
+- `closure_capture_text_integer_return` (line 355)
+- `closure_capture_text_return` (line 364)
+- `closure_capture_struct_ref` (line 375)
+- `closure_capture_vector_elem` (line 390)
+- `closure_capture_text_loop` (line 406)
+
+### Cross-scope closures: WORKING
+
+**`closure_capture_text`** (tests/expressions.rs:343) now passes.
+
+Four bugs were fixed:
+
+1. **Free suppression** — `get_free_vars` used only the block result type (`tp`) for
+   the dep check, but the block result type doesn't carry the closure dep that was
+   propagated to the function's declared return type.  Fix: also check
+   `data.def(self.d_nr).returned.depend()`.
+
+2. **Work-buffer propagation** — the declared `fn(text) -> text` return type didn't
+   encode the lambda's work-buffer deps.  `try_fn_ref_call` created zero work buffers,
+   so the lambda's `__work_1` parameter received garbage.  Fix: `emit_lambda_code`
+   replaces the inner return type with the lambda's actual return type.
+
+3. **fn-ref null pre-init** — `gen_set_first_at_tos` emitted only `NullRefSentinel`
+   (12 bytes) for Function variables, but fn-ref slots are 16 bytes.  `PutFnRef`
+   overwrote 4 bytes of the next variable.  Fix: emit `ConstInt(i32::MIN)` +
+   `NullRefSentinel` for a full 16-byte null slot.
+
+4. **Caller-side closure free** — `get_free_vars` had no `Type::Function` branch.
+   The closure DbRef at offset+4 leaked when fn-ref variables went out of scope.
+   Fix: add a `Type::Function` arm with a codegen special case that reads the
+   closure via `OpVarRef(var_pos - 4)` before `OpFreeRef`.  Same-scope fn-refs
+   carry `dep=[w]` (the closure work var), so the free is suppressed — `___clos_N`
+   already handles it.
+
+### Caller-side closure free: native codegen NOT YET SUPPORTED
+
+The interpreter correctly frees closure records via the codegen special case.
+The native codegen (`src/generation/dispatch.rs`) skips `OpFreeRef` for
+`Type::Function` variables until full fn-ref support lands.
+
+---
+
+## Implementation path — small verifiable steps
+
+The two open issues are (A) cross-scope closure freeing and (B) caller-side closure
+cleanup.  They share a root cause: `get_free_vars` does not handle `Type::Function`.
+
+### Recommended approach: Approach A — codegen special case
+
+Add `Type::Function` to the `get_free_vars` match with a codegen special case that
+reads the closure DbRef from offset+4 within the fn-ref slot.  This is the smallest
+change that fixes both issues.
+
+The alternative (Approach B: split the 16B slot into separate d_nr + Reference
+variables) is cleaner long-term but requires changing the fn-ref calling convention,
+`OpCallRef`, `fn_call_ref`, `gen_fn_ref_value`, and all fn-ref opcodes — a much
+larger refactor.
+
+---
+
+### Step 1: Diagnose the cross-scope free ordering bug
+
+**Goal**: understand why `tp.depend().contains(&___clos_1)` does not suppress the
+`OpFreeRef` for `___clos_1` in `make_greeter`.
+
+**How to verify**:
+1. Run the ignored test with `LOFT_LOG=scope_debug`:
+   ```
+   LOFT_LOG=scope_debug cargo test closure_capture_text -- --ignored 2>&1
+   ```
+2. Read `tests/dumps/expressions_closure_capture_text.txt` — look for the
+   `[scope_debug]` lines for `___clos_1`.
+3. Check whether `tp.depend()` contains `___clos_1` at the point where
+   `get_free_vars` processes it.  If it does NOT, the dep propagation
+   (vectors.rs:701-711) is not reaching the right return type.
+4. Check the variable collection order — `___clos_1` might be collected at a
+   scope level where the return type is not yet available.
+
+**Expected output**: a clear diagnosis of whether the bug is in dep propagation
+(the return type does not carry the dep) or in scope ordering (the variable is
+collected before the return type is consulted).
+
+**Done when**: you can state which of these two causes applies, with evidence
+from the dump file.
+
+---
+
+### Step 2: Fix the cross-scope free suppression
+
+**Goal**: make `___clos_1` survive function return when the fn-ref escapes.
+
+**Depends on**: Step 1 diagnosis.
+
+**If the dep is missing from the return type**:
+- Trace why `vectors.rs:701-711` does not fire.  The `if matches!(...)` guard
+  requires the enclosing function's `.returned` to already be `Type::Function`.
+  Check whether the declared return type is set before `emit_lambda_code` runs.
+
+**If the dep is present but the free fires anyway**:
+- The variable collection in `get_free_vars` may process `___clos_1` at a scope
+  where `tp` is not the function return type.  Check which `tp` is used when
+  `___clos_1` is evaluated — it should be `data.def(d_nr).returned` for function
+  return, but may be a block-level type instead.
+
+**How to verify**:
+1. Un-ignore `closure_capture_text` test.
+2. Run `cargo test closure_capture_text` — it should pass.
+3. Run `make ci` — no regressions.
+
+**Done when**: `closure_capture_text` passes and `make ci` is green.
+
+---
+
+### Step 3: Add `Type::Function` to `get_free_vars`
+
+**Goal**: emit `OpFreeRef` for the closure DbRef when a fn-ref variable goes out of
+scope at the caller.
+
+**Where**: `src/scopes.rs`, in the `get_free_vars` match after the
+`Reference/Vector/Enum` arm.
+
+**What to add**:
+```rust
+if let Type::Function(_, _, dep) = function.tp(v) {
+    let emit = dep.is_empty()
+        && !tp.depend().contains(&v)
+        && !function.is_skip_free(v);
+    if emit {
+        ls.push(call("OpFreeClosureRef", v, data));
+    }
+}
+```
+
+This mirrors the Reference logic.  The new opcode `OpFreeClosureRef` reads the
+closure DbRef from offset+4 of the fn-ref slot (not offset 0).
+
+**How to verify**:
+1. Add `LOFT_LOG=scope_debug` to a same-scope closure test and confirm the new
+   `Type::Function` arm fires and emits the free.
+2. Run `make ci` — all existing closure tests still pass.
+
+**Done when**: `get_free_vars` handles `Type::Function` and all tests pass.
+
+---
+
+### Step 4: Implement `OpFreeClosureRef`
+
+**Goal**: a new opcode that frees the closure DbRef embedded at offset+4 in a
+16-byte fn-ref slot.
+
+**Where**: define in `default/01_code.loft` (or `02_images.loft` near `OpVarFnRef`),
+implement in `src/fill.rs`.
+
+**Behaviour**:
+```rust
+fn op_free_closure_ref(s: &mut State) {
+    let pos = *s.code::<u16>();                 // stack slot of fn-ref variable
+    let closure = *s.get_var::<DbRef>(pos - 4); // read bytes 4..16
+    if closure.store_nr != u16::MAX {           // skip null sentinel
+        s.database.free(&closure);
+    }
+}
+```
+
+**Alternative**: instead of a new opcode, emit the offset adjustment in codegen.
+In `generate_call` (codegen.rs), when `OpFreeRef` is called on a `Type::Function`
+variable, emit `OpVarRef(var_pos - 4)` then `OpFreeRef`:
+
+```rust
+// In generate_call, special case for Function:
 if stack.data.def(op).name == "OpFreeRef"
     && let Some(Value::Var(v)) = parameters.first()
     && matches!(stack.function.tp(*v), Type::Function(_, _, _))
 {
     let var_pos = stack.position - stack.function.stack(*v);
-    stack.add_op("OpVarRef", self);     // push 12B DbRef
-    self.code_add(var_pos - 4u16);      // read from offset+4 (skip d_nr)
-    stack.add_op("OpFreeRef", self);    // pop and free the DbRef
+    stack.add_op("OpVarRef", self);     // push 12B DbRef from offset+4
+    self.code_add(var_pos - 4u16);
+    stack.add_op("OpFreeRef", self);    // free the closure record
     return Type::Void;
 }
 ```
 
-`OpVarRef(var_pos - 4)` reads 12 bytes starting 4 bytes into the fn-ref slot —
-exactly the closure DbRef.  For non-capturing lambdas, this reads the
-`OpNullRefSentinel` (store_nr = u16::MAX), and `database.free()` is a no-op for null
-sentinels.
+This avoids adding a new opcode but hardcodes the +4 offset.
 
-**Advantage**: minimal change — Function joins the existing free logic, codegen handles
-the offset.
+**How to verify**:
+1. Write a test that stores a fn-ref in a variable, lets it go out of scope,
+   and checks no store leak (e.g. `database.store_count()` before/after).
+2. Run `make ci`.
 
-**Complication**: `dep.is_empty()` means "owned, should free" for Reference, but for
-Function variables assigned from expressions (e.g. `f = fn(...) {...}`), the variable
-type often has `dep=[]` even when the fn-ref block's computed type had `dep=[w]`.
-Variable types are set at registration time and may not reflect expression deps.  This
-caused false frees in testing — all closure tests broke because non-owning fn-ref
-variables were treated as owners.
+**Done when**: closure store records are freed when fn-ref variables go out of scope.
 
-#### Approach B: eliminate `___clos_N` — store closure as a standalone Reference
+---
 
-Instead of two variables (work ref + fn-ref), make the fn-ref variable carry only the
-d_nr (4B) and store the closure record in a separate Reference variable that follows
-the standard lifetime rules.  At call sites, push both the d_nr and the closure DbRef
-from their respective variables.
+### Step 5: Non-capturing lambda — verify no false free
 
-This would make closures fully standard: the closure is a Reference with normal
-dep/free semantics, and the d_nr is a plain integer.  No special-case codegen needed.
+**Goal**: confirm that non-capturing lambdas (which have `OpNullRefSentinel` padding)
+are not incorrectly freed.
 
-**Advantage**: completely uniform — no special offset logic, standard Reference freeing.
+**Risk**: the null sentinel has `store_nr = u16::MAX`.  `database.free()` must be
+a no-op for this sentinel (confirmed: `allocation.rs:81`).
 
-**Disadvantage**: changes the fn-ref slot layout (currently 16B compound), call site
-codegen, and how `CallRef` reads the closure — a larger refactor.
+**How to verify**:
+1. Run all fn-ref tests that use non-capturing lambdas:
+   `fn_ref_basic_call`, `fn_ref_two_args`, `fn_ref_conditional_call`,
+   `fn_ref_as_parameter`.
+2. Add `LOFT_LOG=scope_debug` and confirm `OpFreeClosureRef` (or the codegen
+   special case) fires but `database.free` skips the null sentinel.
+3. `make ci` passes.
 
-#### Approach C: make the fn-ref variable a Reference to a record containing both d_nr and closure
+**Done when**: non-capturing lambda fn-refs go through the free path without error.
 
-Allocate a store record with fields `[d_nr: integer, closure: Reference]`.  The fn-ref
-variable becomes a standard `Type::Reference` to this record.  Standard Reference
-freeing deallocates the record, which in turn should cascade-free the closure.
+---
 
-**Advantage**: fn-ref becomes a plain Reference — fully uniform freeing.
+### Step 6: Un-ignore `closure_capture_text` and final validation
 
-**Disadvantage**: adds a store allocation per fn-ref (overhead), requires cascade-free
-for nested references (not currently implemented), and changes the calling convention.
+**Goal**: all closure tests pass, including cross-scope.
 
-### Brittleness evaluation
+**How to verify**:
+1. Remove `#[ignore]` from `closure_capture_text` in tests/expressions.rs:343.
+2. `make ci` passes.
+3. Run with `LOFT_LOG=scope_debug` and verify:
+   - `___clos_1` is NOT freed at `make_greeter` return (dep suppression works).
+   - The fn-ref's closure IS freed at the caller's scope exit.
 
-The core tension: opcodes work on fixed sizes (4B int, 12B ref, 16B fn-ref).  The
-16-byte fn-ref is the only compound stack slot — two values packed together.  Any
-approach that requires special-case offset logic for this compound is inherently
-brittle because it breaks the invariant that each stack slot is one typed value.
-
-**Approach A is the most brittle**.  `OpVarRef(var_pos - 4)` hardcodes knowledge that
-the DbRef starts 4 bytes into the fn-ref slot.  If the fn-ref layout ever changes
-(different d_nr size, additional metadata), every offset calculation breaks silently.
-It also requires a codegen special case that no other type needs, making the free
-path non-uniform.  The dep propagation issue (variable types not reflecting expression
-deps) adds another fragile layer — if any code path creates a Function variable
-without proper deps, the free logic misbehaves.
-
-**Approach C (store record containing both d_nr and closure) is also brittle** because
-it requires cascade-free for nested references — freeing the wrapper record should
-also free the closure record inside it.  Cascade-free is not implemented and is a
-significant addition to the store allocator.
-
-**Approach B (separate variables) is the least brittle** because it eliminates the
-compound slot entirely.  Each value uses standard-sized opcodes with no offset tricks:
-
-| Value | Type | Size | Freed by |
-|-------|------|------|----------|
-| d_nr | `Integer` | 4B | Nothing (integer, no heap) |
-| closure | `Reference(closure_d_nr, [])` | 12B | Standard `OpFreeRef` |
-
-The closure record is a plain Reference that participates in the normal dep/free
-lifecycle.  No special codegen, no offset calculations, no dep propagation worries.
-
-### Approach B — concrete design
-
-**At definition time** (`emit_lambda_code`):
-- Allocate closure record into `___clos_N` (Reference) — already happens today
-- Build fn-ref as `Value::FnRef(d_nr, ___clos_N)` — already happens today
-- Variable type: instead of `Function(params, ret, [w])` (16B compound), store two
-  pieces: the d_nr in the Function type itself (it already has the d_nr in the FnRef
-  IR node), and the closure in the separate Reference variable
-
-**At the call site** (`fn_call_ref`):
-- Currently reads `d_nr = get_var::<i32>(fn_var)` and `closure = get_var::<DbRef>(fn_var - 4)`
-  from the compound 16B slot
-- With Approach B: read d_nr from one stack position, closure DbRef from another
-- `OpCallRef` bytecode already takes `fn_var` (distance to fn-ref) and `arg_size`;
-  it could read the closure from the argument list instead of the fn-ref slot
-
-**The key insight from `fn_call_ref`**: it already treats the 16B slot as two separate
-reads (`get_var::<i32>` then `get_var::<DbRef>`).  The compound slot is a parsing-time
-convenience, not a runtime necessity.  At runtime, `fn_call_ref` can just as easily
-read d_nr from one variable and closure from another — or from the argument stack
-where the closure is already pushed.
-
-**Freeing**: `___clos_N` is a standard Reference.  For same-scope closures, it's freed
-at scope exit by the normal Reference path.  For cross-scope closures (returned fn-ref),
-the dep system protects it: the fn-ref expression type carries `dep=[___clos_N]`, and
-`tp.depend().contains(___clos_N)` suppresses the free.  At the caller, the closure
-travels as a regular function argument — `__closure` is a Reference parameter that the
-callee receives and the caller's scope frees when done.
-
-**Non-capturing lambdas**: d_nr is just an integer constant.  No closure variable
-exists, no Reference to free.  The fn-ref is `Value::Int(d_nr)` — 4 bytes, same as
-today minus the 12-byte null sentinel padding.
-
-### Migration path from the current 16B layout to Approach B
-
-The 16B fn-ref layout is used in:
-1. `OpVarFnRef` / `OpPutFnRef` — push/store 16 bytes (`[i32; 4]`)
-2. `OpCallRef` / `fn_call_ref` — reads d_nr at offset 0, closure at offset+4
-3. `gen_fn_ref_value` — ensures every if-else branch fills a full 16B slot
-4. `OpNullRefSentinel` — pads non-capturing lambdas to 16B
-
-With Approach B, all four simplify:
-1. fn-ref variable is 4B integer (d_nr) → use `OpVarInt` / `OpPutInt`
-2. `OpCallRef` reads d_nr from the fn-ref variable, closure from the argument list
-   (already pushed by the codegen as the last hidden arg)
-3. No 16B padding needed — if-else branches produce matching 4B integers
-4. No null sentinel needed — non-capturing lambdas have no closure argument
-
-The closure DbRef is pushed as a regular argument at the call site, just like it was
-before A5.6 embedded it in the fn-ref slot.  The difference: with Approach B, the
-closure is a proper Reference variable with standard lifetime, not bytes embedded in
-a compound slot.
+**Done when**: `make ci` green with no ignored closure tests.
 
 ---
 

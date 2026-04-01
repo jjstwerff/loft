@@ -6,6 +6,15 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Closures
+
+- **Cross-scope text-capturing closures** (A5.6-text) — Functions that return
+  closures (`fn make_greeter(prefix: text) -> fn(text) -> text`) now work correctly.
+  Four interrelated bugs fixed: premature closure free at function return, missing
+  work buffer for text-returning fn-ref calls, 12-byte fn-ref pre-init (should be
+  16 bytes), and closure record leak at caller scope exit.  Test:
+  `closure_capture_text`.
+
 ### Parallel execution
 
 - **`par_light` runtime foundation** (A14.1–A14.4):

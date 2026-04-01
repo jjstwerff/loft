@@ -429,7 +429,15 @@ impl Parser {
         // Neither should appear in the public Function type — only declared params do.
         let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        Type::Function(arg_types, Box::new(ret_type), vec![])
+        // A5.6-text: include the closure work var dep so that get_free_vars knows
+        // a local ___clos_N variable owns the closure (and will free it).  Without
+        // this dep, the Function arm in get_free_vars would emit a duplicate free.
+        let dep = if self.last_closure_work_var == u16::MAX {
+            vec![]
+        } else {
+            vec![self.last_closure_work_var]
+        };
+        Type::Function(arg_types, Box::new(ret_type), dep)
     }
 
     // <short-lambda> ::= '||' ['->' type] block              (expect_close=false)
@@ -619,7 +627,13 @@ impl Parser {
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        Type::Function(arg_types, Box::new(ret_type), vec![])
+        // A5.6-text: include closure work var dep (same as fn-form lambda).
+        let dep = if self.last_closure_work_var == u16::MAX {
+            vec![]
+        } else {
+            vec![self.last_closure_work_var]
+        };
+        Type::Function(arg_types, Box::new(ret_type), dep)
     }
 
     // A5.3-complete: emit the lambda value — plain Int(d_nr) for non-capturing
@@ -666,7 +680,7 @@ impl Parser {
             // A5.6-text: fn-ref depends on closure work var `w` so that
             // get_free_vars does not emit OpFreeRef for the closure record
             // before the fn-ref escapes the defining scope.
-            let fn_type = Type::Function(visible_params, Box::new(ret_tp), vec![w]);
+            let fn_type = Type::Function(visible_params, Box::new(ret_tp.clone()), vec![w]);
             let mut alloc_steps: Vec<Value> = Vec::new();
             // Allocate and populate the closure record w.
             alloc_steps.push(crate::data::v_set(w, Value::Null));
@@ -698,17 +712,18 @@ impl Parser {
             *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
             // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
             self.last_closure_alloc = None;
-            // A5.6-text: propagate the closure dep to the enclosing function's
-            // declared return type so that free_vars at Return knows not to free
-            // the closure work var when the fn-ref escapes.
-            if matches!(
-                self.data.def(self.context).returned,
-                Type::Function(_, _, _)
-            ) {
-                self.data.definitions[self.context as usize].returned = self.data.definitions
-                    [self.context as usize]
-                    .returned
-                    .depending(w);
+            // A5.6-text: propagate closure dep and work-buffer info to the
+            // enclosing function's declared return type.  Two things are needed:
+            // 1. The closure work var `w` in the Function dep list, so
+            //    get_free_vars does not emit OpFreeRef for the closure record.
+            // 2. The lambda's actual return type (with work-buffer deps), so
+            //    try_fn_ref_call at the call site creates the right number of
+            //    work buffers.  Without this, cross-scope fn-ref calls to
+            //    text-returning lambdas crash because the work buffer is missing.
+            if let Type::Function(ref params, _, _) = self.data.def(self.context).returned {
+                let params = params.clone();
+                self.data.definitions[self.context as usize].returned =
+                    Type::Function(params, Box::new(ret_tp), vec![w]);
             }
             // A5.6c: record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).
