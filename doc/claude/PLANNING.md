@@ -3882,6 +3882,74 @@ via the existing `source::name` resolution path.
 
 ---
 
+## C53 — Match arms: library enums and bare variant names
+
+**Problem:** Match arms cannot use library enum variants at all — neither
+prefixed (`testlib::Ok`) nor bare (`Ok`).  The match arm parser at
+`control.rs:396` reads one identifier then expects `{`, `=>`, or `|`.
+It does not handle the `::` namespace separator.
+
+**Investigation findings:**
+
+1. `has_identifier()` at line 396 reads `testlib`, not `testlib::Ok`.
+   The `::` is then unexpected → parse error.
+
+2. Even if `::` were consumed, the discriminant lookup at line 497 uses
+   `pattern_name` (which would be `testlib`, not `Ok`) in `attr_names`.
+
+3. Bare variant names (`Ok` without prefix) fail during first pass because
+   `def_nr("Ok")` returns `u32::MAX` (library variant not in local scope)
+   and `children_of(e_nr)` may not find it if the enum children aren't
+   indexed by name.
+
+4. Same-file enums already work because their variants ARE in global scope.
+
+**Three fixes needed:**
+
+### Fix 1 — Handle `::` in match arm identifier (line 396)
+
+After `has_identifier()`, check for `::`.  If present, read the second
+identifier.  Use `data.source_nr(source, variant_name)` to resolve the
+variant.  Track the resolved variant name separately from `pattern_name`
+for the discriminant lookup at line 497.
+
+```rust
+let (resolved_name, variant_def_nr) = if self.lexer.has_token("::") {
+    let source = self.data.get_source(&pattern_name);
+    if let Some(vname) = self.lexer.has_identifier() {
+        (vname.clone(), self.data.source_nr(source, &vname))
+    } else { (pattern_name.clone(), u32::MAX) }
+} else {
+    (pattern_name.clone(), self.data.def_nr(&pattern_name))
+};
+```
+
+### Fix 2 — Use `resolved_name` for discriminant lookup (line 497)
+
+Replace `pattern_name` with `resolved_name` in
+`self.data.def(e_nr).attr_names.get(&resolved_name)`.
+
+### Fix 3 — Bare variant fallback via `children_of` (line 419)
+
+When `def_nr` fails and `e_nr` is known, search the enum's children:
+```rust
+if variant_def_nr == u32::MAX && e_nr != u32::MAX {
+    variant_def_nr = self.data.children_of(e_nr)
+        .find(|&c| self.data.def(c).name == resolved_name)
+        .unwrap_or(u32::MAX);
+}
+```
+
+### Fix 4 — Update or-pattern `|` to also handle `::` and bare names
+
+The `while self.lexer.has_token("|")` loop at line 511 reads additional
+variant names.  It needs the same `::` and `children_of` resolution.
+
+**Effort:** Medium (4 changes in `parse_match`, all in `control.rs`)
+**Target:** 0.9.0
+
+---
+
 ## Quick Reference
 
 See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by milestone.

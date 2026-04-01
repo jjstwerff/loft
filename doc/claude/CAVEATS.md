@@ -213,6 +213,33 @@ pre-compiled extensions.
 
 ---
 
+## C53 — Match arms cannot use library enum variants
+
+Match arms do not support namespaced variant names (`testlib::Ok`) or
+bare variant names (`Ok`) for library enums.  Only same-file enum variants
+work in match patterns.
+
+**Reproducer:**
+```loft
+use testlib;
+fn check(s: testlib::Status) -> text {
+  match s { testlib::Ok => "ok", _ => "other" }
+  // Error: unexpected '::'
+}
+```
+
+**Workaround:** use if-else chains with `==` comparisons:
+```loft
+if s == testlib::Ok { "ok" } else { "other" }
+```
+
+**Fix path:** 4 changes in `src/parser/control.rs:parse_match` — handle
+`::` in arm identifier, use resolved name for discriminant lookup, fall
+back to `children_of` for bare names, update or-pattern loop.
+**Docs:** [PLANNING.md](PLANNING.md) § C53.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths

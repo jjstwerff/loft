@@ -148,6 +148,7 @@ Not included in default features or WASM builds.
 | A2.3      | ↳ `--release` flag + `debug_assert()` elision             | MH | ✓      | A2.2         | control.rs, main.rs           |
 | A2.4      | ↳ `--debug` per-type safety logging                       | M  | ✓      | A2.2         | fill.rs, native.rs            |
 | C52       | Stdlib name clash: warning + `std::` prefix               | M  | ✓      |              | PLANNING.md § C52             |
+| C53       | Match arms: library enums + bare variant names            | M  | ✓      |              | PLANNING.md § C53             |
 | W-warn    | Developer warnings (Clippy-inspired)                      | M  | —      |              | see below                     |
 | P2        | REPL / interactive mode                                   | H  | ✓      | L1           | PLANNING.md § P2              |
 | P2.1      | ↳ Input completeness detection                            | S  | ✓      |              | new repl.rs                   |
