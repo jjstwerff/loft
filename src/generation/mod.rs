@@ -152,6 +152,12 @@ fn collect_fn_ref_literals(
             collect_fn_ref_literals(next, data, variables, calls);
             collect_fn_ref_literals(extra, data, variables, calls);
         }
+        // C47.3: FnRef inside a Block result (closure allocation block).
+        Value::FnRef(d_nr, _, _) => {
+            if *d_nr >= 0 {
+                calls.insert((*d_nr).cast_unsigned());
+            }
+        }
         _ => {}
     }
 }

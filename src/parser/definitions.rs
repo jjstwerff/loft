@@ -691,6 +691,11 @@ impl Parser {
                 }
             }
             self.parse_code();
+            // C47.4: reset transient closure state after each function body.
+            // Without this, a lambda inside make_adder leaks last_closure_work_var
+            // into the next function parsed (main), causing closure_var_of to
+            // return a stale value for add5 = make_adder(5).
+            self.last_closure_work_var = u16::MAX;
             if !self.first_pass {
                 self.check_ref_mutations(&arguments);
             }

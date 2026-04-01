@@ -4415,7 +4415,7 @@ Loft captures variables at the moment the lambda is written (definition time), n
 
 === Cross-scope closures
 
-A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references. (Native codegen: broad CallRef dispatch emits misnamed closure vars — C47.3.)
+A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references.
 
 === Closures with higher-order functions
 
@@ -4424,6 +4424,12 @@ A capturing closure stored in a variable can be called directly.
 === Non-capturing lambdas with higher-order functions
 
 Lambdas that use only their own parameters (no capture) also work fine.
+
+```rust
+fn make_adder(base_val: integer) -> fn(integer) -> integer {
+  fn(n: integer) -> integer { base_val + n }
+}
+```
 
 ```rust
 fn main() {
@@ -4469,6 +4475,17 @@ Closures capture at definition time. 'base' is 10 when the lambda is written; re
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
+```
+
+=== Cross-scope closures
+
+make_adder returns a lambda that captured base_val from its parameter.
+
+```rust
+  add10 = make_adder(10);
+  add100 = make_adder(100);
+  assert(add10(5) == 15, "add10(5): {add10(5)}");
+  assert(add100(5) == 105, "add100(5): {add100(5)}");
 ```
 
 === Closures with higher-order functions

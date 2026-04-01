@@ -20,11 +20,14 @@
 <h2 id="capture-timing">Capture timing</h2>
 <p>Loft captures variables at the moment the lambda is written (definition time), not when it is called.  If a variable changes after the lambda is written, the lambda still sees the original value.</p>
 <h2 id="cross-scope-closures">Cross-scope closures</h2>
-<p>A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references. (Native codegen: broad CallRef dispatch emits misnamed closure vars — C47.3.)</p>
+<p>A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references.</p>
 <h2 id="closures-with-higher-order-functions">Closures with higher-order functions</h2>
 <p>A capturing closure stored in a variable can be called directly.</p>
 <h2 id="non-capturing-lambdas-with-higher-order-functions">Non-capturing lambdas with higher-order functions</h2>
 <p>Lambdas that use only their own parameters (no capture) also work fine.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">make_adder</span>(base_val: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="kw">fn</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { base_val + n }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="integer-capture">Integer capture</h2>
 <pre><code>  offset = <span class="nm">100</span>;
@@ -51,6 +54,12 @@
   add_base = <span class="kw">fn</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { base + n };
   base = <span class="nm">20</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add_base</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"sees base=10 at definition time: {add_base(5)}"</span>);</code></pre>
+<h2 id="cross-scope-closures">Cross-scope closures</h2>
+<p>make_adder returns a lambda that captured base_val from its parameter.</p>
+<pre><code>  add10 = <span class="fn-call">make_adder</span>(<span class="nm">10</span>);
+  add100 = <span class="fn-call">make_adder</span>(<span class="nm">100</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add10</span>(<span class="nm">5</span>) == <span class="nm">15</span>, <span class="st">"add10(5): {add10(5)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add100</span>(<span class="nm">5</span>) == <span class="nm">105</span>, <span class="st">"add100(5): {add100(5)}"</span>);</code></pre>
 <h2 id="closures-with-higher-order-functions">Closures with higher-order functions</h2>
 <pre><code>  factor = <span class="nm">3</span>;
   scale = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x * factor };
