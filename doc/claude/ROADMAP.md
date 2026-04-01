@@ -16,7 +16,7 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.4 — HTTP client
+## 0.8.4 — HTTP client + OpenGL library
 
 JSON serialisation (`{value:j}`) and deserialisation (`Type.parse(text)`, `vector<T>.parse()`)
 are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md](WEB_SERVICES.md).
@@ -28,6 +28,13 @@ are already implemented.  No `#json` annotation needed — see [WEB_SERVICES.md]
 | H4.2      | ↳ `http_get`, `http_post`, `http_put`, `http_delete`      | M  | ✓      | H4.1         | native_http.rs                |
 | H4.3      | ↳ Header support (`http_get_h`, `http_post_h`)            | S  | ✓      | H4.2         | native_http.rs                |
 | H4.4      | ↳ Documentation + integration tests                       | S  | ✓      | H4.2         | tests/docs/                   |
+| GL0       | OpenGL library scaffolding (files, stubs, fontdue dep)    | S  | ✓      |              | OPENGL_IMPL.md Phase 0       |
+| GL1       | Canvas: Rgba, Canvas struct, pixel ops, blend, save_png   | M  | ✓      | GL0          | OPENGL_IMPL.md Phase 1       |
+| GL2       | Drawing primitives: line, rect, circle, Bezier, fill      | MH | ✓      | GL1          | OPENGL_IMPL.md Phase 2       |
+| GL3       | Text rendering: fontdue glyph raster, draw_text           | M  | ✓      | GL1          | OPENGL_IMPL.md Phase 3       |
+| GL4       | GLB export: mesh, scene, material → binary glTF file      | H  | ✓      | GL1          | OPENGL_IMPL.md Phase 4       |
+| GL5       | OpenGL desktop: window, shader, render loop               | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 5       |
+| GL6       | WebGL browser: canvas context, WASM shader bridge         | H  | ✓      | GL4          | OPENGL_IMPL.md Phase 6       |
 
 ---
 
