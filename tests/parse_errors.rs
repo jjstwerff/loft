@@ -822,3 +822,13 @@ fn circular_init_error() {
         .error("circular init dependency: a -> b -> a at circular_init_error:5:3")
         .error("circular init dependency: b -> a -> b at circular_init_error:5:3");
 }
+
+// ── C42 — Unknown variable diagnostic ───────────────────────────────────────
+
+/// C42: using an undefined variable name produces a clear error.
+#[test]
+fn unknown_variable_error() {
+    code!("fn test() -> integer { reuslt = 42; result }")
+        .error("Unknown variable 'result' at unknown_variable_error:1:45")
+        .warning("Variable reuslt is never read at unknown_variable_error:1:32");
+}
