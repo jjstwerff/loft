@@ -3814,6 +3814,74 @@ it and emit CallRef.  This doesn't require changing the collections desugaring
 
 ---
 
+## C52 — Stdlib name clash: inconsistent behavior
+
+**Problem:** User-defined names that collide with stdlib names behave
+inconsistently:
+
+| Collision | Current behavior |
+|-----------|-----------------|
+| `fn len(text)` | Silently ignored — stdlib wins, user fn is dead code |
+| `fn println(text)` | Hard error: "Cannot redefine Function" |
+| `struct File` | Hard error: "Redefined struct" |
+
+The inconsistency arises because some stdlib functions are registered via
+`#rust` annotations (native ops — hard error on redefine) while others use
+method dispatch on specific types (type-specific overload resolution —
+stdlib variant wins by being first in the lookup chain).
+
+**Design — emit a warning, never silently shadow:**
+
+1. **All collisions produce a warning** — never silently ignore the user's
+   definition.  The message should be:
+   `Warning: 'len' shadows a standard library function`
+
+2. **User definition wins** — local definitions shadow stdlib, matching
+   the convention of most languages (Python, JavaScript, Rust).  The user
+   explicitly chose to define this name.
+
+3. **Stdlib accessible via `std::name`** — add a virtual `std` source for
+   the default library, so the user can write `std::len("hello")` to access
+   the original.  This reuses the existing `source::name` import mechanism.
+
+4. **No names are forbidden** — the user can redefine anything, including
+   `assert`, `println`, `len`.  The warning is informational.
+
+**Implementation steps:**
+
+### Step 1 — Emit warning on stdlib name collision
+
+In `src/parser/definitions.rs`, when `add_fn` or `add_def` encounters a name
+that already exists in source 0 (the default stdlib source), emit:
+```
+Warning: 'name' shadows a standard library function/type
+```
+Instead of the hard error "Cannot redefine".
+
+### Step 2 — Make user definition win
+
+Change name resolution order: when a name exists in both the current source
+and source 0, prefer the current source.  This is already the behavior for
+type-dispatched methods; extend it to global functions.
+
+### Step 3 — Register stdlib as `std` source
+
+In `src/parser/mod.rs`, after loading `default/*.loft`, register source 0
+with the name `std`.  Then `std::len`, `std::println`, `std::File` work
+via the existing `source::name` resolution path.
+
+### Step 4 — Tests
+
+- `fn len(t: text) -> integer { 42 }` → warning + user fn called
+- `std::len("hello")` → returns 5 (stdlib version)
+- `struct File { x: integer }` → warning + user struct used
+- `std::File` → accesses stdlib File
+
+**Effort:** Medium
+**Target:** 0.9.0 (not blocking 0.8.3/0.8.4)
+
+---
+
 ## Quick Reference
 
 See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by milestone.
