@@ -4395,27 +4395,43 @@ fn main() {
 
 = Closures
 
-\#warn Dead assignment — 'base' is overwritten before being read \@TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. Store the lambda in a variable and call it directly in the same scope; the captured values are injected at that call.
+\#warn Dead assignment — 'base' is overwritten before being read \@TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.
 
 === Integer capture
 
-A lambda may read any integer variable in scope at the call site. Store the lambda, then call it by name.
+A lambda may read any integer variable in scope. Store the lambda, then call it by name.
 
 === Multiple integer captures
 
-A lambda can read more than one outer variable at once. All are captured at the moment the lambda is called.
+A lambda can read more than one outer variable at once. All are captured at the moment the lambda is written.
 
 === Text capture
 
-Text values are captured by deep-copy, so they are independent of the original variable after the call.
+Text values are captured by deep-copy, so they are independent of the original variable after capture.
 
 === Capture timing
 
-Loft captures variables at the moment the lambda is called, not at the moment the lambda is written.  If a variable changes between writing and calling the lambda, the lambda sees the updated value.
+Loft captures variables at the moment the lambda is written (definition time), not when it is called.  If a variable changes after the lambda is written, the lambda still sees the original value.
 
-=== Current limitation: captured lambdas and higher-order functions
+=== Cross-scope closures
 
-Captured closures only work when called directly by name in the same scope. Passing a capturing lambda as an argument to map, filter, reduce, or a user-defined higher-order function is not yet supported — the hidden closure record is not forwarded through the call. Workaround: pass the extra value as an explicit extra argument instead. Non-capturing lambdas (those that only use their own parameters) work fine with all higher-order functions.
+A function can return a capturing lambda to the caller. The captured values travel with the lambda — no dangling references. (Example in interpreter only — native codegen for cross-scope closures is tracked as a follow-on item.)
+
+```loft fn make_adder(n: integer) -\> fn(integer) -\> integer {
+
+```
+  fn(x: integer) -> integer { n + x }
+```
+
+} add5 = make_adder(5); add5(10)   // 15 ```
+
+=== Closures with higher-order functions
+
+A capturing closure stored in a variable can be called directly.
+
+=== Non-capturing lambdas with higher-order functions
+
+Lambdas that use only their own parameters (no capture) also work fine.
 
 ```rust
 fn main() {
@@ -4463,26 +4479,30 @@ Closures capture at definition time. 'base' is 10 when the lambda is written; re
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
 ```
 
+=== Closures with higher-order functions
+
+```rust
+  factor = 3;
+  scale = fn(x: integer) -> integer { x * factor };
+  assert(scale(5) == 15, "scale(5): {scale(5)}");
+  assert(scale(10) == 30, "scale(10): {scale(10)}");
+```
+
 === Non-capturing lambdas with higher-order functions
 
 No capture needed here — the lambda uses only its own parameter.
 
 ```rust
   nums = [1, 2, 3, 4, 5];
-  doubled = map(nums, fn(x: integer) -> integer { x * 2 });
+  doubled = map(nums, |x| { x * 2 });
   assert(doubled[0] == 2, "doubled[0]: {doubled[0]}");
   assert(doubled[4] == 10, "doubled[4]: {doubled[4]}");
 ```
 
 ```rust
-  evens = filter(nums, fn(x: integer) -> boolean { x % 2 == 0 });
+  evens = filter(nums, |x| { x % 2 == 0 });
   assert(evens[0] == 2, "evens[0]: {evens[0]}");
   assert(evens[1] == 4, "evens[1]: {evens[1]}");
-```
-
-Workaround for captured value + higher-order function: pass the extra value as an explicit argument to a named helper.
-
-```rust
 }
 ```
 
