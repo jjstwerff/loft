@@ -183,6 +183,7 @@ states that are harder to debug than the original problem.
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
+| [PACKAGES.md](doc/claude/PACKAGES.md) | Unified package format — native Rust + WASM + loft; OpenGL case study |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |

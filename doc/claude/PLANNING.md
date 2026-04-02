@@ -113,7 +113,7 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 **JSON primitive stdlib (H2):**
 - **H2** — Add `serde_json`-backed extraction functions: `json_text`, `json_int`,
   `json_long`, `json_float`, `json_bool`, `json_items`, `json_nested`.
-  Declared in `default/04_web.loft`; implemented in new `src/native_http.rs`.
+  Declared in `default/06_web.loft`; implemented in new `src/native_http.rs`.
 
 **JSON deserialization codegen — scalars (H3):**
 - **H3** — For each `#json` struct with primitive fields only, synthesise
@@ -2874,7 +2874,7 @@ If `to_json` is called on a struct without `#json`, emit a compile error:
 
 ### H2  JSON primitive extraction stdlib
 **Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B; CODE.md § Dependencies
-**Description:** Add a new stdlib module `default/04_web.loft` with JSON field-extraction
+**Description:** Add a new stdlib module `default/06_web.loft` with JSON field-extraction
 functions.  Functions extract a single typed value from a JSON object body supplied as
 a `text` string.  No `serde_json` dependency — the existing parsing primitives in
 `src/database/structures.rs` are sufficient; a new `src/database/json.rs` module adds
@@ -2919,7 +2919,7 @@ are `fn` (module-private) because they are only called by `parsing()` within the
 module.  Rather than widening their visibility, `json.rs` keeps its own small copies
 to preserve the clean boundary between schema-driven and schema-free parsing.
 
-**Step 3 — Loft declarations** (`default/04_web.loft`):
+**Step 3 — Loft declarations** (`default/06_web.loft`):
 ```loft
 // Extract primitive values from a JSON object body.
 // Returns zero/empty/null-sentinel if the key is absent or type does not match.
@@ -3011,12 +3011,12 @@ Verify that `Type.from_json` resolves as a callable fn-ref with type
 
 ### H4  HTTP client stdlib and `HttpResponse`
 **Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, stdlib additions; PROBLEMS #55
-**Description:** Add blocking HTTP functions to `default/04_web.loft` backed by `ureq`.
+**Description:** Add blocking HTTP functions to `default/06_web.loft` backed by `ureq`.
 All functions return `HttpResponse` — a plain struct — so there is no thread-local status
 state and the API is parallel-safe (see PROBLEMS #55).
 **Fix path:**
 
-**Step 1 — `HttpResponse` struct** (`default/04_web.loft`):
+**Step 1 — `HttpResponse` struct** (`default/06_web.loft`):
 ```loft
 pub struct HttpResponse {
     status: integer
@@ -3046,7 +3046,7 @@ process(file("local/data.txt").lines());
 process(http_get("https://example.com/data").lines());
 ```
 
-**Step 2 — HTTP functions declaration** (`default/04_web.loft`):
+**Step 2 — HTTP functions declaration** (`default/06_web.loft`):
 ```loft
 // Body-less requests
 pub fn http_get(url: text) -> HttpResponse;
