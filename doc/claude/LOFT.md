@@ -962,23 +962,13 @@ Similarly for JSON format output:
 assert("{o:j}" == "{{\"key\":1}}", "json format");
 ```
 
-### Unique field names across all structs in one file
+### ~~Unique field names across all structs in one file~~ (resolved)
 
-When two structs in the same file share a field name at different positions, the
-compiler can confuse them when resolving collection key fields. This causes wrong
-results or "Unknown field" errors in sorted/index range iteration.
-
-Use distinct field names per struct, or isolate conflicting structs in separate files:
-
-```loft
-// RISKY — both structs have a 'key' field but at different positions
-struct SortElm { key: text, value: integer }
-struct IdxElm  { nr: integer, key: text, value: integer }
-
-// SAFE — field names are unique
-struct SortElm { s_key: text, s_value: integer }
-struct IdxElm  { i_nr: integer, i_key: text, i_value: integer }
-```
+Field lookups are type-scoped: `determine_keys()` and `position()` receive the
+struct type number and search only within that struct's field list. Two structs
+in the same file **may** share a field name at different byte offsets without
+causing errors. Verified by `tests/scripts/23-field-overlap-structs.loft` and
+`tests/scripts/24-field-overlap-enum-struct.loft`.
 
 ### Ref-param vector append
 

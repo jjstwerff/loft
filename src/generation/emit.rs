@@ -437,6 +437,10 @@ impl Output<'_> {
             bl.result
                 .show(self.data, &self.data.def(self.def_nr).variables)
         )?;
+        // Inject shadow call stack instrumentation if set by output_function().
+        if let Some(prefix) = self.call_stack_prefix.take() {
+            writeln!(w, "{prefix}")?;
+        }
         let is_void_block = matches!(bl.result, Type::Void);
         let is_text_result = wrap_text && matches!(bl.result, Type::Text(_));
         // Fix "hoisted return value" pattern from scopes::free_vars before iterating.

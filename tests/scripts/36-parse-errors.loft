@@ -222,4 +222,26 @@ fn test_spacial_not_implemented() {
   _w = PEWorld { pts: [] };
 }
 
+// --- Yield inside par() rejected (P2-R6) ---
+
+fn pe_par_double(pe_x: integer) -> integer { pe_x * 2 }
+
+// @EXPECT_ERROR: yield is not allowed inside a par
+fn pe_yield_in_par(items: vector<integer>) -> iterator<integer> {
+  for pe_a in items par(pe_b = pe_par_double(pe_a), 1) {
+    yield pe_b;
+  }
+}
+
+// --- Partial-key null assignment ---
+
+struct PEIdxElm { pe_id: integer, pe_cat: text, pe_score: integer }
+struct PEIdxDb { pe_map: index<PEIdxElm[pe_id, -pe_cat]> }
+
+// @EXPECT_ERROR: Cannot assign null to a partial-key lookup
+fn test_partial_key_null_assign() {
+  db = PEIdxDb { pe_map: [PEIdxElm{pe_id:1,pe_cat:"a",pe_score:10}] };
+  db.pe_map[1] = null;
+}
+
 // --- Return path warnings ---

@@ -82,9 +82,8 @@ loft structurally cannot express:
 
 ## File layout
 
-Field names must be unique across all structs within a single `.loft` file (see
-[QUICK_START.md](QUICK_START.md) § Key gotchas). The library uses separate files, each
-with its own field namespace:
+Field lookups are type-scoped, so field name overlap across structs is safe.
+The library uses separate files for modularity:
 
 ```
 lib/graphics/
@@ -1508,7 +1507,10 @@ fn main() {
 
 ## Implementation constraints
 
-### Field uniqueness per file
+### ~~Field uniqueness per file~~ (resolved)
+
+Field lookups are type-scoped — struct field names may overlap safely.
+The prefixed naming in the table below is retained for readability, not necessity.
 
 | Struct | Prefix | Example fields |
 |---|---|---|

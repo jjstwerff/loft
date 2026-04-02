@@ -38,6 +38,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
 | 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
+| 98 | Index range query returns only first element | Medium | Use full iteration with for-loop filter |
 
 ---
 
@@ -435,6 +436,43 @@ destructuring" diagnostic.
 targeted diagnostic.
 
 **Discovered:** 2026-03-26, during T1.2 regression evaluation.
+
+---
+
+### 98. Index range query wrong results with descending key
+
+**Symptom:** Range iteration on `index<T[-key]>` (descending primary key) yields wrong
+elements.  Ascending-key indexes work correctly.
+
+```loft
+struct Item { cat: text, score: integer }
+struct Db { idx: index<Item[-cat]> }
+
+db = Db { idx: [Item{cat:"a", score:1}, Item{cat:"b", score:2}, Item{cat:"c", score:3}] };
+sum = 0;
+for e in db.idx["a".."c"] { sum += e.score; }
+// Expected: sum == 3 (a + b), Actual: sum == 1 (only "a")
+```
+
+Ascending-key indexes (`index<T[key]>`) and sorted collections are not affected.
+
+**Impact:** Medium — descending-key index range queries produce silently wrong results.
+
+**Root cause:** The `iterate()` function in `src/state/io.rs:583` computes `start` and
+`finish` tree nodes using `tree::find(before, key)`.  For ascending keys, `find(true, from)`
+returns `previous(from)` in tree-order, which is correct — the tree walk via `next()` then
+starts at `from`.  For descending keys, the tree in-order is reversed from user-logical
+order: "c" > "b" > "a".  `find(true, "a")` returns `previous("a")` = "b" in tree order,
+causing the walk to start at "b" and only reach "a" before the tree ends.
+
+**Fix path:** In `fill_iter` (`src/parser/fields.rs:575`), detect when the index's primary
+key is descending (`Keys[0].type_nr < 0`) and XOR the reverse bit (64) into the `on` byte.
+This makes the `step()` function use `previous()` instead of `next()` for the tree walk,
+and makes `iterate()` use the existing reverse-path logic (lines 562–582) which already
+swaps from/till correctly.  When the user also applies `rev()`, the XOR cancels out,
+restoring the ascending walk direction — which is correct for a reversed descending key.
+
+**Discovered:** 2026-04-02, during test coverage gap analysis.
 
 ---
 

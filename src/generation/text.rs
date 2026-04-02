@@ -154,6 +154,12 @@ impl Output<'_> {
                 && matches!(self.data.def(*d).returned, Type::Text(_))
             {
                 format!("&*({val_expr})")
+            } else if let Value::CallRef(v_nr, _) = val
+                && let Type::Function(_, ret, _) =
+                    self.data.def(self.def_nr).variables.tp(*v_nr)
+                && matches!(**ret, Type::Text(_))
+            {
+                format!("&*({val_expr})")
             } else {
                 val_expr
             };

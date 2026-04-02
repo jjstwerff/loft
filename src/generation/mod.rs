@@ -213,6 +213,9 @@ pub struct Output<'a> {
     /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
     /// if-else branches produce the correct tuple type.
     pub fn_ref_context: bool,
+    /// When set, `output_block` inserts this code right after the opening `{`.
+    /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
+    pub call_stack_prefix: Option<String>,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -333,7 +336,10 @@ fn default_native_value(tp: &Type) -> String {
         Type::Long => "0_i64".into(),
         Type::Boolean => "false".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
-        Type::Routine(_) | Type::Function(_, _, _) => "0_u32".into(),
+        Type::Routine(_) => "0_u32".into(),
+        Type::Function(_, _, _) => {
+            "(0_u32, DbRef { store_nr: u16::MAX, rec: 0, pos: 0 })".into()
+        }
         Type::Reference(_, _)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
@@ -812,6 +818,7 @@ extern crate loft;"
             "n_parallel_for_ref_native",
             "n_parallel_get_ref",
             "n_path_sep",
+            "n_stack_trace",
         ];
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
@@ -853,6 +860,12 @@ extern crate loft;"
         for arg_nr in def.variables.arguments() {
             self.declared.insert(arg_nr);
         }
+        // Determine the user-visible loft name for the shadow call stack.
+        let loft_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
+        let loft_file = &def.position.file;
+        let loft_line = def.position.line;
+        // Only instrument user-defined functions (Block body, n_ prefix).
+        let instrument = matches!(&def.code, Value::Block(_)) && def.name.starts_with("n_");
         let returns_text = matches!(def.returned, Type::Text(_));
         if let Value::Block(bl) = &def.code {
             // An empty-body loft function (explicit stub) has no operators and result Void,
@@ -863,6 +876,16 @@ extern crate loft;"
                 writeln!(w, "{{")?;
                 writeln!(w, "  {}", default_native_value(&def.returned))?;
                 writeln!(w, "}}")?;
+            } else if instrument {
+                // Emit shadow call stack instrumentation before the block body.
+                // The CallGuard drop ensures cr_call_pop on all exit paths (including early return).
+                // We emit the push/guard as a prefix inside the block's opening `{`.
+                self.call_stack_prefix = Some(format!(
+                    "  cr_call_push(\"{loft_name}\", \"{loft_file}\", {loft_line});\n  \
+                     let _call_guard = codegen_runtime::CallGuard;"
+                ));
+                self.output_block(w, bl, returns_text)?;
+                self.call_stack_prefix = None;
             } else {
                 self.output_block(w, bl, returns_text)?;
             }

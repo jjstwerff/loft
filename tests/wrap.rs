@@ -110,6 +110,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            call_stack_prefix: None,
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }
@@ -355,6 +356,15 @@ script_test!(
     sorted_enum_variant_range,
     "tests/scripts/25-sorted-enum-variant-range.loft"
 );
+
+// Logging functions compile and run as no-ops without a log.conf.
+script_test!(logging_script, "tests/scripts/53-logging.loft");
+
+// Implicit type widening in mixed integer/long/float expressions.
+script_test!(auto_convert, "tests/scripts/54-auto-convert.loft");
+
+// stack_trace() introspection returns frames from nested calls.
+script_test!(stack_trace_script, "tests/scripts/55-stack-trace.loft");
 
 /// Quick iteration test: run only the final suite file (`16-parser.loft`) without
 /// regenerating documentation.  Use this during active development on the parser

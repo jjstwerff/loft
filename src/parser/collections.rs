@@ -203,25 +203,35 @@ impl Parser {
         val: &Value,
         op: &str,
     ) -> Option<Value> {
-        if !self.first_pass
-            && *val == Value::Null
-            && op == "="
-            && let Value::Call(get_nr, get_args) = to
-            && self.data.def(*get_nr).name == "OpGetRecord"
-            && let Some(Value::Int(db_tp_val)) = get_args.get(1)
-            && (*db_tp_val as usize) < self.database.types.len()
-            && matches!(
-                self.database.types[*db_tp_val as usize].parts,
-                Parts::Hash(_, _) | Parts::Index(_, _, _) | Parts::Sorted(_, _)
-            )
-        {
-            let db_tp = *db_tp_val;
-            let get_args = get_args.clone();
-            let get_rec = self.cl("OpGetRecord", &get_args);
-            return Some(self.cl(
-                "OpHashRemove",
-                &[get_args[0].clone(), get_rec, Value::Int(db_tp)],
-            ));
+        if !self.first_pass && *val == Value::Null && op == "=" {
+            // Partial-key lookup produces an iteration (Value::Iter), not a single record.
+            // Assigning null to an iteration has no defined semantics — require all key fields.
+            if matches!(to, Value::Iter(..)) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot assign null to a partial-key lookup — \
+                     provide all key fields to remove a single entry"
+                );
+                return Some(Value::Null);
+            }
+            if let Value::Call(get_nr, get_args) = to
+                && self.data.def(*get_nr).name == "OpGetRecord"
+                && let Some(Value::Int(db_tp_val)) = get_args.get(1)
+                && (*db_tp_val as usize) < self.database.types.len()
+                && matches!(
+                    self.database.types[*db_tp_val as usize].parts,
+                    Parts::Hash(_, _) | Parts::Index(_, _, _) | Parts::Sorted(_, _)
+                )
+            {
+                let db_tp = *db_tp_val;
+                let get_args = get_args.clone();
+                let get_rec = self.cl("OpGetRecord", &get_args);
+                return Some(self.cl(
+                    "OpHashRemove",
+                    &[get_args[0].clone(), get_rec, Value::Int(db_tp)],
+                ));
+            }
         }
         None
     }

@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Logging functions: log_info, log_warn, log_error, log_fatal.
+// Without a log.conf these are no-ops — this test verifies they compile and
+// run without crashing, and that format-string interpolation is accepted.
+fn main() {
+  // --- Basic calls (no log.conf → no output, no crash) ---
+  log_info("starting test");
+  log_warn("a warning");
+  log_error("an error");
+  log_fatal("a fatal message");
+
+  // --- Format string interpolation in log messages ---
+  val = 42;
+  name = "widget";
+  log_info("processing {name} with value {val}");
+  log_warn("unexpected value: {val * 2}");
+  log_error("failed on {name}");
+
+  // --- Logging inside control flow ---
+  for lg_i in 0..3 {
+    log_info("iteration {lg_i}");
+  }
+
+  if val > 0 {
+    log_info("positive");
+  } else {
+    log_warn("non-positive");
+  }
+
+  // --- Logging with computed expressions ---
+  items = [10, 20, 30];
+  log_info("item count: {len(items)}");
+
+  println("logging test passed");
+}

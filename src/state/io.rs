@@ -586,11 +586,6 @@ impl State {
                     finish = if ex {
                         t
                     } else {
-                        // A8.3: inclusive — finish is the last matching node itself.
-                        // Step visits this node, then on the NEXT call advances past
-                        // it; the `n == 0` or natural tree-end terminates the loop.
-                        // We add 1 to distinguish "visit finish and stop" from the
-                        // exclusive case where finish means "stop before visiting".
                         tree::previous(crate::keys::store(&data, all), &new_ref(&data, t, arg))
                     };
                 }

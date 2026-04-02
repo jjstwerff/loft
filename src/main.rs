@@ -397,6 +397,7 @@ fn main() {
                 next_format_count: 0,
                 yield_collect: false,
                 fn_ref_context: false,
+                call_stack_prefix: None,
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -477,6 +478,7 @@ fn main() {
                 next_format_count: 0,
                 yield_collect: false,
                 fn_ref_context: false,
+                call_stack_prefix: None,
             };
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");

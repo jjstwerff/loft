@@ -776,9 +776,9 @@ A name is defined twice in the same scope.  Common triggers:
 - **Nested format string with escaped quotes**: `"outer {\"inner\"}"` — previously the
   lexer treated `\"` as ending the outer string. This was fixed in 2026-03-14 via the
   `in_format_expr` flag in `src/lexer.rs`; `\"` inside `{...}` now works correctly.
-- **Two struct definitions with the same field name in the same file**: when two structs
-  both have a field called e.g. `key`, the parser may confuse their field numbers during
-  type resolution.  Rename one field or split the structs into separate test files.
+- **Two struct definitions with the same field name**: this is now safe — field lookups
+  are type-scoped. Verified by `tests/scripts/23-field-overlap-structs.loft` and
+  `24-field-overlap-enum-struct.loft`.
 - **Re-declaring a function with identical parameter types**: loft allows overloading by
   type; identical signatures are an error.
 

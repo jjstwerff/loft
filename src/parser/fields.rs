@@ -513,7 +513,10 @@ impl Parser {
             let iter = self.create_unique("iter", &Type::Long);
             let mut ls = Vec::new();
             if !self.first_pass {
+                // fill_iter calls set_loop which requires an active loop context.
+                let loop_nr = self.vars.start_loop();
                 self.fill_iter(&mut ls, code, typedef, true, inclusive);
+                self.vars.finish_loop(loop_nr);
                 ls.push(Value::Int(nr as i32));
                 let from_key = key.clone();
                 ls.append(&mut key);
@@ -523,7 +526,11 @@ impl Parser {
             }
             let start = v_set(iter, self.cl("OpIterate", &ls));
             let mut ls = vec![Value::Var(iter)];
-            self.fill_iter(&mut ls, code, typedef, false, inclusive);
+            {
+                let loop_nr = self.vars.start_loop();
+                self.fill_iter(&mut ls, code, typedef, false, inclusive);
+                self.vars.finish_loop(loop_nr);
+            }
             let elem_type = match typedef {
                 Type::Sorted(el, _, dep) | Type::Index(el, _, dep) => {
                     Type::Reference(*el, dep.clone())

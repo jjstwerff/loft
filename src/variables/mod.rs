@@ -84,7 +84,7 @@ pub struct Function {
     pub name: String,
     pub file: String,
     unique: u16,
-    current_loop: u16,
+    pub(crate) current_loop: u16,
     loops: Vec<Iterator>,
     variables: Vec<Variable>,
     work_text: u16,
@@ -796,7 +796,7 @@ impl Function {
     }
 
     pub fn is_argument(&self, var_nr: u16) -> bool {
-        self.variables[var_nr as usize].argument
+        (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
     }
 
     pub fn set_const_param(&mut self, var_nr: u16) {

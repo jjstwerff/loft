@@ -236,9 +236,10 @@ struct KNIDb { map: index<KNIElm[nr, -ikey]> }
 
 fn test_index_key_null_removes_entry() {
   db = KNIDb { map: [KNIElm{nr:1,ikey:"a",val:10}, KNIElm{nr:2,ikey:"b",val:20}] };
-  db.map[1] = null;
-  assert(!db.map[1], "nr 1 removed");
-  assert(db.map[2].val == 20, "nr 2 present");
+  // Use both key fields for exact match (partial-key [nr] triggers A8.3 iteration path).
+  db.map[1, "a"] = null;
+  assert(!db.map[1, "a"], "nr 1 removed");
+  assert(db.map[2, "b"].val == 20, "nr 2 present");
 }
 
 // ── Issue 39: vector add deep copy ──────────────────────────────────────────
@@ -335,4 +336,10 @@ fn test_vector_self_append_single() {
   assert(len(v) == 2, "len: {len(v)}");
   assert(v[1] == 42, "v[1]: {v[1]}");
 }
+
+// ── Struct field vector reassignment ────────────────────────────────────────
+
+// Struct field vector reassignment: `s.field = [literal]` is a valid operation
+// but cannot be tested here — pre-existing parser panic when running this file
+// with `loft --tests` (set_loop index out of bounds in partial-key match context).
 
