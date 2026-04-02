@@ -129,6 +129,25 @@ impl Parser {
             // start of the function body (after work-variable initialisations).
             // Applies in all build profiles so that writes to const parameters panic in
             // release builds too (S22 — previously guarded by #[cfg(debug_assertions)]).
+            // P58: detect variables that remain Unknown(0) after the second pass.
+            // These are names from the first pass that were never resolved — likely typos.
+            if !self.first_pass {
+                let n_vars = self.vars.next_var();
+                for v_nr in 0..n_vars {
+                    if self.vars.tp(v_nr).is_unknown()
+                        && !self.vars.is_argument(v_nr)
+                        && self.vars.is_defined(v_nr)
+                        && !self.vars.name(v_nr).starts_with('_')
+                    {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Variable '{}' has unknown type — possible typo or missing definition",
+                            self.vars.name(v_nr)
+                        );
+                    }
+                }
+            }
             if !self.first_pass {
                 let n_vars = self.vars.next_var();
                 let lock_fn = self.data.def_nr("n_set_store_lock");
