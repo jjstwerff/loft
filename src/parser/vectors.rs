@@ -1111,6 +1111,27 @@ impl Parser {
         if self.vars.tp(vec).depend().is_empty() {
             ls.extend(self.vector_db(in_t, vec));
         }
+        // O8.1a: pre-allocate vector capacity when the element count is known
+        // at compile time.  This eliminates resize calls in vector_append.
+        if !self.first_pass && !res.is_empty() && vec != u16::MAX {
+            let ed_nr = self.data.type_def_nr(in_t);
+            if ed_nr != u32::MAX {
+                let known = self.data.def(ed_nr).known_type;
+                if known != u16::MAX {
+                    let elem_size = self.database.size(known);
+                    if elem_size > 0 {
+                        ls.push(self.cl(
+                            "OpPreAllocVector",
+                            &[
+                                Value::Var(vec),
+                                Value::Int(res.len() as i32),
+                                Value::Int(i32::from(elem_size)),
+                            ],
+                        ));
+                    }
+                }
+            }
+        }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
         if !self.first_pass
             && vec != u16::MAX

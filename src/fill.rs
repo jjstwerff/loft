@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 256] = &[
+pub const OPERATORS: &[fn(&mut State); 257] = &[
     goto,
     goto_word,
     goto_false,
@@ -203,6 +203,7 @@ pub const OPERATORS: &[fn(&mut State); 256] = &[
     set_text,
     var_vector,
     length_vector,
+    pre_alloc_vector,
     clear_vector,
     get_vector,
     vector_ref,
@@ -1625,6 +1626,18 @@ fn length_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = vector::length_vector(&v_r, &s.database.allocations) as i32;
     s.put_stack(new_value);
+}
+
+fn pre_alloc_vector(s: &mut State) {
+    let v_capacity = *s.code::<u16>();
+    let v_elem_size = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    vector::pre_alloc_vector(
+        &v_r,
+        u32::from(v_capacity),
+        u32::from(v_elem_size),
+        &mut s.database.allocations,
+    );
 }
 
 fn clear_vector(s: &mut State) {
