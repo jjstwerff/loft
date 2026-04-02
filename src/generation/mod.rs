@@ -880,8 +880,9 @@ extern crate loft;"
                 // Emit shadow call stack instrumentation before the block body.
                 // The CallGuard drop ensures cr_call_pop on all exit paths (including early return).
                 // We emit the push/guard as a prefix inside the block's opening `{`.
+                let escaped_file = loft_file.replace('\\', "\\\\");
                 self.call_stack_prefix = Some(format!(
-                    "  cr_call_push(\"{loft_name}\", \"{loft_file}\", {loft_line});\n  \
+                    "  cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;"
                 ));
                 self.output_block(w, bl, returns_text)?;
