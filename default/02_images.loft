@@ -137,7 +137,7 @@ pub fn lines(self: File) -> vector < text > {
     }
     prev_cr = ch == '\r';
   }
-  if p > 0 {
+  if p < c.len() {
     result +=[c[p..c.len()]];
   }
   result

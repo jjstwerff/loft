@@ -77,12 +77,12 @@ Only same-file enum variants work in match patterns.
 
 ---
 
-## C54 — `file.lines()` drops content without trailing newline
+## C54 — `file.lines()` drops content without trailing newline *(fixed)*
 
-A file with content but no trailing `\n` returns 0 lines from `lines()`.
+Fixed in `default/02_images.loft`: changed `if p > 0` to `if p < c.len()` so
+trailing content without a `\n` is included as the last line.
 
-**Workaround:** ensure files end with `\n`, or use `f#read(n) as text`.
-**Test:** `tests/scripts/71-caveats-problems.loft::test_c54_file_lines_no_trailing_newline` (`@EXPECT_FAIL`).
+**Test:** `tests/scripts/71-caveats-problems.loft::test_c54_file_lines_no_trailing_newline` (passes).
 
 ---
 

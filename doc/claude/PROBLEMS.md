@@ -38,7 +38,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 93 | T1.1 tuple-in-struct-field rejection *(fixed)* | — | Clear error emitted |
 | 97 | T1.2 `(a, b) += expr` *(fixed)* | — | Clear error emitted |
-| 98 | Index range query returns only first element | Medium | Use full iteration with for-loop filter |
+| 98 | Index range query with descending key *(fixed)* | — | XOR reverse bit for desc primary key |
 | 103 | Two inline vector function calls in one expression produce wrong result | Medium | Use separate variables for intermediate results |
 
 ---
@@ -444,7 +444,7 @@ targeted diagnostic.
 
 ---
 
-### 98. Index range query wrong results with descending key
+### 98. Index range query wrong results with descending key *(fixed)*
 
 **Symptom:** Range iteration on `index<T[-key]>` (descending primary key) yields wrong
 elements.  Ascending-key indexes work correctly.
@@ -477,7 +477,7 @@ and makes `iterate()` use the existing reverse-path logic (lines 562–582) whic
 swaps from/till correctly.  When the user also applies `rev()`, the XOR cancels out,
 restoring the ascending walk direction — which is correct for a reversed descending key.
 
-**Test:** `tests/scripts/71-caveats-problems.loft::test_p98_index_range_descending_key` (`@EXPECT_FAIL`).
+**Test:** `tests/scripts/71-caveats-problems.loft::test_p98_index_range_descending_key` (passes).
 
 **Discovered:** 2026-04-02, during test coverage gap analysis.
 

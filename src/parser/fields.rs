@@ -606,8 +606,17 @@ pair the hash with a vector to iterate in insertion order"
         if inclusive {
             on += 128;
         }
-        if self.reverse_iterator {
+        // P98: for index collections with a descending primary key, the tree
+        // in-order is reversed from user-logical order.  XOR the reverse bit
+        // so that step() uses previous() instead of next(), matching user order.
+        // When the user also applies rev(), the XOR cancels out.
+        let desc_primary = on & 63 == 1
+            && !self.database.types[known as usize].keys.is_empty()
+            && self.database.types[known as usize].keys[0].type_nr < 0;
+        if self.reverse_iterator ^ desc_primary {
             on += 64;
+        }
+        if self.reverse_iterator {
             // Do not reset here — `iterator()` calls fill_iter twice and resets after both.
         }
         ls.push(code.clone());

@@ -1,12 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Runtime reproducers for known CAVEATS and PROBLEMS entries.
-// @EXPECT_FAIL tests will pass once the underlying bug is fixed.
+// Failing tests are annotated so they pass once the underlying bug is fixed.
 // Parse-error tests are in 72-parse-error-caveats.loft (separate file).
 
 // --- C54: file.lines() drops content without trailing newline ---
 
-// @EXPECT_FAIL: C54 file.lines
 fn test_c54_file_lines_no_trailing_newline() {
   {c54_f = file("test_c54.txt"); c54_f += "no trailing newline";}
   c54_lines = file("test_c54.txt").lines();
@@ -51,7 +50,6 @@ fn test_p91_circular_init_detection() {
 struct P98Item { cat: text, score: integer }
 struct P98Db { idx: index<P98Item[-cat]> }
 
-// @EXPECT_FAIL: P98 descending key range
 fn test_p98_index_range_descending_key() {
   p98_db = P98Db { idx: [
     P98Item { cat: "a", score: 1 },
