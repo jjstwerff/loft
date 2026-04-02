@@ -342,10 +342,11 @@ impl State {
         let token = *self.code::<u8>();
         let plus = *self.code::<bool>();
         let note = *self.code::<bool>();
+        let dir = *self.code::<i8>();
         let width = *self.get_stack::<i32>();
         let val = *self.get_stack::<i64>();
         let s = self.string_mut(pos - 12);
-        ops::format_long(s, val, radix, width, token, plus, note);
+        ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
     pub fn format_stack_long(&mut self) {
@@ -354,46 +355,51 @@ impl State {
         let token = *self.code::<u8>();
         let plus = *self.code::<bool>();
         let note = *self.code::<bool>();
+        let dir = *self.code::<i8>();
         let width = *self.get_stack::<i32>();
         let val = *self.get_stack::<i64>();
         let s = self.string_ref_mut(pos - 12);
-        ops::format_long(s, val, radix, width, token, plus, note);
+        ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
     pub fn format_float(&mut self) {
         let pos = *self.code::<u16>();
+        let dir = *self.code::<i8>();
         let precision = *self.get_stack::<i32>();
         let width = *self.get_stack::<i32>();
         let val = *self.get_stack::<f64>();
         let s = self.string_mut(pos - 16);
-        ops::format_float(s, val, width, precision);
+        ops::format_float(s, val, width, precision, dir);
     }
 
     pub fn format_stack_float(&mut self) {
         let pos = *self.code::<u16>();
+        let dir = *self.code::<i8>();
         let precision = *self.get_stack::<i32>();
         let width = *self.get_stack::<i32>();
         let val = *self.get_stack::<f64>();
         let s = self.string_ref_mut(pos - 16); // f64(8)+i32(4)+i32(4) = 16 bytes popped
-        ops::format_float(s, val, width, precision);
+        ops::format_float(s, val, width, precision, dir);
     }
 
     pub fn format_single(&mut self) {
         let pos = *self.code::<u16>();
+        let dir = *self.code::<i8>();
         let precision = *self.get_stack::<i32>();
         let width = *self.get_stack::<i32>();
         let val = *self.get_stack::<f32>();
         let s = self.string_mut(pos - 12);
-        ops::format_single(s, val, width, precision);
+        ops::format_single(s, val, width, precision, dir);
     }
 
     pub fn format_stack_single(&mut self) {
         let pos = *self.code::<u16>();
+        let dir = *self.code::<i8>();
         let precision = *self.get_stack::<i32>();
         let width = *self.get_stack::<i32>();
         let val = *self.get_stack::<f32>();
         let s = self.string_ref_mut(pos - 12);
-        ops::format_single(s, val, width, precision);
+        ops::format_single(s, val, width, precision, dir);
     }
 
     pub fn format_text(&mut self) {

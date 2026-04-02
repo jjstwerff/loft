@@ -762,6 +762,7 @@ impl Parser {
     }
 
     // range ::= rev(<expr> '..' ['='] <expr>) | <expr> [ '..' ['='] <expr> ]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_in_range_body(
         &mut self,
         expr: &mut Value,
@@ -771,6 +772,8 @@ impl Parser {
         reverse: bool,
     ) -> Type {
         let incl = self.lexer.has_token("=");
+        // O8.5: capture range bounds for const-unroll detection.
+        self.last_range_from = Some(expr.clone());
         let mut till = Value::Null;
         let till_tp = if self.lexer.peek_token("]") {
             till = if *data == Value::Null {
@@ -782,6 +785,18 @@ impl Parser {
         } else {
             self.expression(&mut till)
         };
+        // O8.5: store till value (adjusted for inclusive ranges).
+        if incl {
+            // 0..=9 means till is 9, but the range includes 9.
+            // Store till+1 so the unroller can use from..till_exclusive.
+            if let Value::Int(t) = &till {
+                self.last_range_till = Some(Value::Int(t + 1));
+            } else {
+                self.last_range_till = None;
+            }
+        } else {
+            self.last_range_till = Some(till.clone());
+        }
         let ivar = if name == "$" {
             self.create_unique("index", &in_type.clone())
         } else {
@@ -861,6 +876,7 @@ impl Parser {
         );
         if reverse {
             self.lexer.token(")");
+            self.reverse_iterator = false;
         }
         Type::Iterator(Box::new(in_type), Box::new(Type::Null))
     }
@@ -895,14 +911,17 @@ impl Parser {
                     return in_type;
                 }
                 // rev() wrapping a bare collection (not a range subscript).
-                if matches!(in_type, Type::Sorted(_, _, _) | Type::Index(_, _, _)) {
-                    // reverse_iterator already set above
+                if matches!(
+                    in_type,
+                    Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Vector(_, _)
+                ) {
+                    // reverse_iterator stays set; consumed and reset by iterator()
                 } else if !matches!(in_type, Type::Null) {
                     self.reverse_iterator = false;
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "rev() on a non-range expression must wrap a sorted or index collection"
+                        "rev() on a non-range expression must wrap a sorted, index, or vector collection"
                     );
                 }
                 self.lexer.token(")");

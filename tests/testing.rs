@@ -361,6 +361,7 @@ impl Test {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            call_stack_prefix: None,
         };
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.

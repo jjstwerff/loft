@@ -170,7 +170,7 @@ x = if !fallback { default_val } else { fallback };
 
 ### Key gotchas
 - **Format strings**: every `{...}` in a string literal is interpolation — escape literal braces as `{{` / `}}`
-- **Field uniqueness**: field names must be unique across all structs in a single file; duplicate names at different offsets cause "Unknown field" errors in collections
+- **Field names may overlap**: field lookups are type-scoped, so two structs can share field names (verified by `23-field-overlap-structs.loft`)
 - **Vector append ref**: `v += [item]` inside a function only propagates to the caller if the param is `&vector<T>`; without `&`, append is local
 - **Integer null sentinel**: `i32::MIN` is `null` — arithmetic that produces that exact value becomes null; use `long` or `not null` fields for full 32-bit range
 - **`use` ordering**: all `use` declarations must appear before any other top-level declaration in a file

@@ -26,6 +26,7 @@ mod store;
 pub mod tree;
 mod typedef;
 
+pub mod const_eval;
 pub mod create;
 pub mod fill;
 pub mod parallel;

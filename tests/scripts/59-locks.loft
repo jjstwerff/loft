@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Store locks: #lock attribute, get_store_lock(), const parameters and locals.
+
+struct LCounter { val: integer }
+
+fn lk_read(self: const LCounter) -> integer {
+  self.val
+}
+
+fn test_const_param_readable() {
+  c = LCounter { val: 42 };
+  assert(lk_read(c) == 42, "const param: {lk_read(c)}");
+}
+
+fn test_const_local() {
+  const limit = 100;
+  assert(limit == 100, "const local: {limit}");
+  const cfg = LCounter { val: 7 };
+  assert(lk_read(cfg) == 7, "const struct: {lk_read(cfg)}");
+}
+
+fn test_lock_attribute() {
+  d = LCounter { val: 5 };
+  assert(!d#lock, "starts unlocked");
+  d#lock = true;
+  assert(d#lock, "locked after assignment");
+  // Reading from locked store is allowed.
+  assert(lk_read(d) == 5, "locked still readable");
+}
+
+fn test_get_store_lock_function() {
+  e = LCounter { val: 99 };
+  assert(get_store_lock(e) == e#lock, "function matches attribute before lock");
+  e#lock = true;
+  assert(get_store_lock(e), "function returns true after lock");
+}

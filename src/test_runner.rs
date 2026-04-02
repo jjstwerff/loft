@@ -760,6 +760,7 @@ pub(crate) fn run_tests(
                             next_format_count: 0,
                             yield_collect: false,
                             fn_ref_context: false,
+                            call_stack_prefix: None,
                         };
                         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
                             .expect("native codegen write");

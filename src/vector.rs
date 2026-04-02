@@ -57,6 +57,26 @@ Claim more space in a vector to allow for new records. Return the next reference
 records though do not increase the length yet as we might want to iterate the vector before the
 actual change.
 */
+/// O8.1a: Pre-allocate a vector record with capacity for `count` elements.
+/// Sets the vector pointer and length=0.  Subsequent `vector_append` calls
+/// will find enough space and never call `store.resize`.
+pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [Store]) {
+    let store = keys::mut_store(db, stores);
+    if db.rec == 0 {
+        return;
+    }
+    let vec_rec = store.get_int(db.rec, db.pos) as u32;
+    if vec_rec != 0 {
+        return; // already allocated — don't overwrite
+    }
+    // Match vector_append's minimum of 11 elements to avoid OOB on remove/shift.
+    let alloc_count = count.max(11);
+    let words = (alloc_count * elem_size + 15) / 8;
+    let new_rec = store.claim(words);
+    store.set_int(db.rec, db.pos, new_rec as i32);
+    store.set_int(new_rec, 4, 0); // length = 0
+}
+
 pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     let store = keys::mut_store(db, stores);
     if db.rec == 0 {

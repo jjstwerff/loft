@@ -241,7 +241,7 @@ pub const OPERATORS: &[fn(&mut State); 256] = &[
     si_load2_cmp_branch,
     si_load_const_mul_store,
     si_load2_mul_store,
-    nop,
+    pre_alloc_vector,
     get_file,
     get_dir,
     get_png_image,
@@ -1816,8 +1816,16 @@ fn si_load2_mul_store(s: &mut State) {
     s.si_load2_mul_store();
 }
 
-fn nop(s: &mut State) {
-    s.nop();
+fn pre_alloc_vector(s: &mut State) {
+    let v_capacity = *s.code::<u16>();
+    let v_elem_size = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    vector::pre_alloc_vector(
+        &v_r,
+        u32::from(v_capacity),
+        u32::from(v_elem_size),
+        &mut s.database.allocations,
+    );
 }
 
 fn get_file(s: &mut State) {

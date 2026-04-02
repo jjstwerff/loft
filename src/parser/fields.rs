@@ -513,7 +513,10 @@ impl Parser {
             let iter = self.create_unique("iter", &Type::Long);
             let mut ls = Vec::new();
             if !self.first_pass {
+                // fill_iter calls set_loop which requires an active loop context.
+                let loop_nr = self.vars.start_loop();
                 self.fill_iter(&mut ls, code, typedef, true, inclusive);
+                self.vars.finish_loop(loop_nr);
                 ls.push(Value::Int(nr as i32));
                 let from_key = key.clone();
                 ls.append(&mut key);
@@ -523,7 +526,11 @@ impl Parser {
             }
             let start = v_set(iter, self.cl("OpIterate", &ls));
             let mut ls = vec![Value::Var(iter)];
-            self.fill_iter(&mut ls, code, typedef, false, inclusive);
+            {
+                let loop_nr = self.vars.start_loop();
+                self.fill_iter(&mut ls, code, typedef, false, inclusive);
+                self.vars.finish_loop(loop_nr);
+            }
             let elem_type = match typedef {
                 Type::Sorted(el, _, dep) | Type::Index(el, _, dep) => {
                     Type::Reference(*el, dep.clone())
@@ -599,8 +606,17 @@ pair the hash with a vector to iterate in insertion order"
         if inclusive {
             on += 128;
         }
-        if self.reverse_iterator {
+        // P98: for index collections with a descending primary key, the tree
+        // in-order is reversed from user-logical order.  XOR the reverse bit
+        // so that step() uses previous() instead of next(), matching user order.
+        // When the user also applies rev(), the XOR cancels out.
+        let desc_primary = on & 63 == 1
+            && !self.database.types[known as usize].keys.is_empty()
+            && self.database.types[known as usize].keys[0].type_nr < 0;
+        if self.reverse_iterator ^ desc_primary {
             on += 64;
+        }
+        if self.reverse_iterator {
             // Do not reset here — `iterator()` calls fill_iter twice and resets after both.
         }
         ls.push(code.clone());

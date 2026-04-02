@@ -137,7 +137,7 @@ item = Item { name: "foo", count: 0 };
 item.count += 1;
 ```
 
-**Field uniqueness rule:** Field names must be unique across **all structs in the same file**. Two structs with a field of the same name at different offsets cause "Unknown field" errors in collections.
+**Field names may overlap across structs.** Field lookups are type-scoped, so two structs can share a field name even at different byte offsets. Confirmed by `tests/scripts/23-field-overlap-structs.loft` and `24-field-overlap-enum-struct.loft`.
 
 ---
 
@@ -410,7 +410,7 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] Hash collections are struct fields, not standalone locals
 - [ ] No `arr[lo..hi]` passed as `vector<T>` argument — use index bounds
 - [ ] `len`, `sorted`, `ticks`, `round`, `map`, `filter`, `reduce` not used as variable names
-- [ ] Struct field names are unique across all structs in the file
+- [ ] ~~Struct field names unique~~ (no longer required — field lookups are type-scoped)
 - [ ] All `use` imports appear before any other declarations
 - [ ] Long literals use `l` suffix where needed (`0l`, `1000l`)
 - [ ] `--path` ends with `/` in CLI calls

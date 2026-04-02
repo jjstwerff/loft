@@ -364,12 +364,32 @@ let config = LogConfig {
 `run_test(path, debug)` is the core of every test in `tests/wrap.rs`:
 
 1. Creates a `Parser`, loads the default library, parses the given `.loft` file.
-2. **Fails immediately** if `p.diagnostics` is non-empty — any warning, error, or info
-   message causes the test to return `Err(InvalidData)`.  This means `for _ in x` loop
-   variables that are never read will fail a test via the "Variable never read" warning.
-3. Runs `scopes::check`, `byte_code`, then `state.execute("main", ...)`.
-4. In debug builds, writes a bytecode dump to `tests/dumps/<filename>.txt` first.
+2. Checks diagnostics against `// #warn`, `@EXPECT_ERROR`, and `@EXPECT_WARNING`
+   annotations.  Unexpected errors fail the test; unexpected warnings are logged
+   but tolerated.
+3. If the file has `@EXPECT_ERROR` annotations, execution is skipped (the compiler
+   can't produce valid bytecode for a file with intentional parse errors).
+4. Runs `scopes::check` and `byte_code` inside `catch_unwind`.  If the compiler
+   panics and the file has `@EXPECT_FAIL` annotations, the panic is tolerated.
+5. Discovers all zero-parameter user functions as entry points.  If `main` exists,
+   only `main` is called.  Otherwise all `fn test_*()` functions run individually
+   with `catch_unwind`.  Functions annotated `@EXPECT_FAIL` tolerate panics.
+6. In debug builds, writes a bytecode dump to `tests/dumps/<filename>.txt` first.
    If `debug = true`, also writes an execution trace using `execute_log`.
+
+### Annotations supported by `wrap.rs`
+
+| Annotation | Scope | Effect |
+|---|---|---|
+| `// #warn <text>` | File | Warning must appear; missing → fail |
+| `// @EXPECT_ERROR: <text>` | Per-function or file header | Parse error containing `<text>` is expected |
+| `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` is expected |
+| `// @EXPECT_FAIL: <text>` | Per-function (before `fn`) or file header | Runtime panic is tolerated |
+
+**Annotation placement rules** (same as `test_runner.rs`):
+- An annotation directly before a `fn` line (no blank lines between) binds to that function.
+- An annotation in the file header (before any `fn`/`struct`/`enum`) is file-level.
+- A blank line between the annotation and the `fn` clears the pending annotation.
 
 `LOFT_LOG` is respected: `LogConfig::from_env()` is called in `run_test` exactly as in `testing.rs`.
 
@@ -378,7 +398,7 @@ Named test entrypoints in `tests/wrap.rs`:
 | Test name | What it runs | Notes |
 |---|---|---|
 | `dir` | All `tests/docs/*.loft` files + HTML doc regeneration | Skips files listed in `SUITE_SKIP` |
-| `loft_suite` | All `tests/scripts/*.loft` files | — |
+| `loft_suite` | All `tests/scripts/*.loft` files | Runs all entry points; skips files in `ignored_scripts()` |
 | `integers` … `stress` | One `tests/scripts/` file each (16 tests) | See `script_test!` table below |
 | `last` | `tests/docs/16-parser.loft` | — |
 | `threading` | `tests/docs/19-threading.loft` | — |
@@ -776,9 +796,9 @@ A name is defined twice in the same scope.  Common triggers:
 - **Nested format string with escaped quotes**: `"outer {\"inner\"}"` — previously the
   lexer treated `\"` as ending the outer string. This was fixed in 2026-03-14 via the
   `in_format_expr` flag in `src/lexer.rs`; `\"` inside `{...}` now works correctly.
-- **Two struct definitions with the same field name in the same file**: when two structs
-  both have a field called e.g. `key`, the parser may confuse their field numbers during
-  type resolution.  Rename one field or split the structs into separate test files.
+- **Two struct definitions with the same field name**: this is now safe — field lookups
+  are type-scoped. Verified by `tests/scripts/23-field-overlap-structs.loft` and
+  `24-field-overlap-enum-struct.loft`.
 - **Re-declaring a function with identical parameter types**: loft allows overloading by
   type; identical signatures are an error.
 

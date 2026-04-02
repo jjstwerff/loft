@@ -114,20 +114,41 @@ impl Parser {
                     for d in dep {
                         tp = tp.depending(*d);
                     }
+                    let reverse = self.reverse_iterator;
+                    let step = if reverse {
+                        // Decrement, but clamp at i32::MIN to prevent negative-index wrap.
+                        // When iter reaches -1, set it to i32::MIN so GetVector returns null.
+                        let decremented = self.op("Min", i.clone(), Value::Int(1), I32.clone());
+                        let cond = self.op("Le", Value::Int(1), i.clone(), I32.clone());
+                        v_block(
+                            vec![Value::If(
+                                Box::new(cond),
+                                Box::new(decremented),
+                                Box::new(Value::Int(i32::MIN)),
+                            )],
+                            I32.clone(),
+                            "rev step",
+                        )
+                    } else {
+                        self.op("Add", i.clone(), Value::Int(1), I32.clone())
+                    };
                     let next = v_block(
-                        vec![
-                            v_set(
-                                iter_var,
-                                self.op("Add", i.clone(), Value::Int(1), I32.clone()),
-                            ),
-                            ref_expr,
-                        ],
+                        vec![v_set(iter_var, step), ref_expr],
                         *vtp.clone(),
                         "iter next",
                     );
                     self.vars
                         .set_loop(0, self.data.def(vec_tp).known_type, code);
-                    *code = v_set(iter_var, Value::Int(-1));
+                    if reverse {
+                        // Start at length; the first step gives len-1 (last element).
+                        *code = v_set(
+                            iter_var,
+                            self.cl("OpLengthVector", std::slice::from_ref(code)),
+                        );
+                    } else {
+                        *code = v_set(iter_var, Value::Int(-1));
+                    }
+                    self.reverse_iterator = false;
                     return next;
                 }
                 Type::Sorted(_, _, _)
@@ -203,25 +224,35 @@ impl Parser {
         val: &Value,
         op: &str,
     ) -> Option<Value> {
-        if !self.first_pass
-            && *val == Value::Null
-            && op == "="
-            && let Value::Call(get_nr, get_args) = to
-            && self.data.def(*get_nr).name == "OpGetRecord"
-            && let Some(Value::Int(db_tp_val)) = get_args.get(1)
-            && (*db_tp_val as usize) < self.database.types.len()
-            && matches!(
-                self.database.types[*db_tp_val as usize].parts,
-                Parts::Hash(_, _) | Parts::Index(_, _, _) | Parts::Sorted(_, _)
-            )
-        {
-            let db_tp = *db_tp_val;
-            let get_args = get_args.clone();
-            let get_rec = self.cl("OpGetRecord", &get_args);
-            return Some(self.cl(
-                "OpHashRemove",
-                &[get_args[0].clone(), get_rec, Value::Int(db_tp)],
-            ));
+        if !self.first_pass && *val == Value::Null && op == "=" {
+            // Partial-key lookup produces an iteration (Value::Iter), not a single record.
+            // Assigning null to an iteration has no defined semantics — require all key fields.
+            if matches!(to, Value::Iter(..)) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot assign null to a partial-key lookup — \
+                     provide all key fields to remove a single entry"
+                );
+                return Some(Value::Null);
+            }
+            if let Value::Call(get_nr, get_args) = to
+                && self.data.def(*get_nr).name == "OpGetRecord"
+                && let Some(Value::Int(db_tp_val)) = get_args.get(1)
+                && (*db_tp_val as usize) < self.database.types.len()
+                && matches!(
+                    self.database.types[*db_tp_val as usize].parts,
+                    Parts::Hash(_, _) | Parts::Index(_, _, _) | Parts::Sorted(_, _)
+                )
+            {
+                let db_tp = *db_tp_val;
+                let get_args = get_args.clone();
+                let get_rec = self.cl("OpGetRecord", &get_args);
+                return Some(self.cl(
+                    "OpHashRemove",
+                    &[get_args[0].clone(), get_rec, Value::Int(db_tp)],
+                ));
+            }
         }
         None
     }
@@ -505,7 +536,7 @@ use #count instead"
 
     pub(crate) fn append_data_fp(state: OutputState, fmt: Value) -> (Value, Value, Value) {
         let mut a_width = state.width;
-        let mut p_rec = Value::Int(0);
+        let mut p_rec = Value::Int(-1); // -1 = no precision specified; 0 = :.0
         if let Value::Float(w) = a_width {
             let s = format!("{w}");
             let mut split = s.split('.');
@@ -537,6 +568,7 @@ use #count instead"
                 Value::Int(i32::from(state.token.as_bytes()[0])),
                 Value::Boolean(state.plus),
                 Value::Boolean(state.note),
+                Value::Int(state.dir),
             ],
         ));
     }
@@ -616,12 +648,20 @@ use #count instead"
                 list.push(self.cl("OpAppendCharacter", &[var, format.clone()]));
             }
             Type::Float => {
+                let dir = Value::Int(state.dir);
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
-                list.push(self.cl(&(start.to_owned() + "Float"), &[var, fmt, a_width, p_rec]));
+                list.push(self.cl(
+                    &(start.to_owned() + "Float"),
+                    &[var, fmt, a_width, p_rec, dir],
+                ));
             }
             Type::Single => {
+                let dir = Value::Int(state.dir);
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
-                list.push(self.cl(&(start.to_owned() + "Single"), &[var, fmt, a_width, p_rec]));
+                list.push(self.cl(
+                    &(start.to_owned() + "Single"),
+                    &[var, fmt, a_width, p_rec, dir],
+                ));
             }
             Type::Vector(cont, _) => {
                 let fmt = format.clone();
@@ -1357,6 +1397,7 @@ use #count instead"
         *val = Value::Null;
         self.build_comprehension_code(
             result_vec,
+            &Value::Var(result_vec),
             elm,
             &out_elem,
             &in_type,
@@ -1505,6 +1546,7 @@ use #count instead"
         *val = Value::Null;
         self.build_comprehension_code(
             result_vec,
+            &Value::Var(result_vec),
             elm,
             &out_elem,
             &in_type,

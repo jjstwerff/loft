@@ -86,6 +86,9 @@ pub struct Parser {
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
+    /// O8.5: range bounds captured by `parse_in_range_body` for const-unroll detection.
+    pub(crate) last_range_from: Option<Value>,
+    pub(crate) last_range_till: Option<Value>,
     vars: Function,
     /// Last seen line inside the source code, an increase inserts it in the internal code.
     line: u32,
@@ -178,7 +181,7 @@ pub(crate) const OUTPUT_DEFAULT: OutputState = OutputState {
     token: " ",
     plus: false,
     note: false,
-    dir: -1,
+    dir: 2, // 2 = unset; text defaults to left (-1), numbers to right (1)
     float: false,
 };
 
@@ -271,6 +274,8 @@ impl Parser {
             context: u32::MAX,
             first_pass: true,
             reverse_iterator: false,
+            last_range_from: None,
+            last_range_till: None,
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),
@@ -316,6 +321,7 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            self.reverse_iterator = false;
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.switch(filename);

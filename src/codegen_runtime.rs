@@ -25,6 +25,7 @@ use crate::keys::{Content, DbRef, Key, Str};
 use crate::ops;
 use crate::tree;
 use crate::vector;
+use std::cell::RefCell;
 #[cfg(not(feature = "wasm"))]
 use std::fs::{File, OpenOptions};
 #[cfg(not(feature = "wasm"))]
@@ -338,14 +339,15 @@ pub fn OpIterate(
             let fields = arg as u16;
             let store = crate::keys::store(&data, all);
             if reverse {
-                let t = tree::find(&data, ex, fields, all, keys, till);
+                // A8.5-idx: start = one past last element, finish = one before first.
+                let till_node = tree::find(&data, true, fields, all, keys, till);
                 let start = if ex {
-                    t
+                    tree::next(store, &iter_ref(&data, till_node, fields))
                 } else {
-                    tree::next(store, &iter_ref(&data, t, fields))
+                    let till_match = tree::find(&data, false, fields, all, keys, till);
+                    tree::next(store, &iter_ref(&data, till_match, fields))
                 };
-                let f = tree::find(&data, ex, fields, all, keys, from);
-                let finish = tree::next(store, &iter_ref(&data, f, fields));
+                let finish = tree::find(&data, true, fields, all, keys, from);
                 pack_iter(start, finish)
             } else {
                 let start = tree::find(&data, true, fields, all, keys, from);
@@ -1704,4 +1706,70 @@ pub fn OpGetClosure(stores: &Stores, d_nr: u32) -> DbRef {
         rec: 0,
         pos: 0,
     })
+}
+
+// ── Shadow call stack for native stack_trace() ──────────────────────────────
+
+// Thread-local shadow call stack used by native-compiled loft code.
+// Each entry is (function_name, source_file, line_number).
+// Generated code calls `cr_call_push` / `cr_call_pop` around every function body.
+thread_local! {
+    static CALL_STACK: RefCell<Vec<(&'static str, &'static str, u32)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Push a frame onto the shadow call stack.  Called at the start of every
+/// generated function body.  The `&'static str` arguments are string literals
+/// embedded in the generated Rust code.
+#[inline]
+pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
+    CALL_STACK.with(|s| s.borrow_mut().push((name, file, line)));
+}
+
+/// Pop a frame from the shadow call stack.  Called at the end of every
+/// generated function body (including early returns via a drop guard).
+#[inline]
+pub fn cr_call_pop() {
+    CALL_STACK.with(|s| s.borrow_mut().pop());
+}
+
+/// RAII guard that pops the shadow call stack on drop, ensuring the stack
+/// stays balanced even when the function returns early.
+pub struct CallGuard;
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        cr_call_pop();
+    }
+}
+
+/// Native implementation of `stack_trace()`.
+/// Reads the thread-local shadow call stack and builds `vector<StackFrame>`
+/// using the same stores API as the interpreter implementation in `native.rs`.
+pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
+    let snapshot: Vec<(&str, &str, u32)> = CALL_STACK.with(|s| s.borrow().clone());
+
+    let sf_elm = stores.name("StackFrame");
+    let sf_size = u32::from(stores.size(sf_elm));
+    let vec = stores.database(sf_size);
+    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+
+    for (fn_name, file, line) in &snapshot {
+        let elm = crate::vector::vector_append(&vec, sf_size, &mut stores.allocations);
+        let fn_str = stores.store_mut(&vec).set_str(fn_name);
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos, fn_str as i32);
+        let file_str = stores.store_mut(&vec).set_str(file);
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos + 4, file_str as i32);
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos + 8, *line as i32);
+        // Zero the arguments and variables vector fields.
+        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
+        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
+        crate::vector::vector_finish(&vec, &mut stores.allocations);
+    }
+    vec
 }

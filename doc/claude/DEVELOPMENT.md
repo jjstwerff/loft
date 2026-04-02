@@ -593,15 +593,24 @@ debug than the original problem.
 
 **The correct approach for every regression:**
 
-1. Run the failing test with `LOFT_LOG=minimal cargo test --test <suite> <name>` and
+1. **Write a minimal `.loft` reproducer first** — create a short script in
+   `tests/scripts/` that triggers the bug.  Use `fn test_*()` entry points.
+   If the test fails, add `// @EXPECT_FAIL: <message>` directly above the
+   failing function so CI stays green while you work on the fix.  If it's a
+   parse error, use `// @EXPECT_ERROR: <message>` instead.
+2. Run the failing test with `LOFT_LOG=minimal cargo test --test <suite> <name>` and
    read `tests/dumps/<name>.txt` — the full IR, bytecode, and execution trace are there.
-2. If the trace is too long, use `LOFT_LOG=crash_tail:50` to see the last 50 steps
+3. If the trace is too long, use `LOFT_LOG=crash_tail:50` to see the last 50 steps
    before the panic.
-3. Read the 3–5 source files that the trace implicates.  Reason about the code path.
+4. Read the 3–5 source files that the trace implicates.  Reason about the code path.
    The root cause is almost always visible within one careful read.
-4. If you need to know what a recent commit changed, use `git show <sha>` or
+5. If you need to know what a recent commit changed, use `git show <sha>` or
    `git diff <sha>^ <sha>` — read the diff, do not re-run old code.
-5. Fix forward.  Do not revert; do not bisect.
+6. Fix forward.  Do not revert; do not bisect.
+7. **Remove the `@EXPECT_FAIL` / `@EXPECT_ERROR` annotation** once the fix is
+   verified.  The test must pass cleanly — `wrap.rs` will print `FIXED` for
+   functions that pass despite having `@EXPECT_FAIL`, confirming the annotation
+   can be removed.
 
 ---
 

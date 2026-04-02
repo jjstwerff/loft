@@ -164,6 +164,15 @@ fn main() {
   assert('Z'.is_alphabetic(), "char is_alphabetic: uppercase letter");
   assert(!'5'.is_alphabetic(), "char is_alphabetic: digit is false");
   assert(!' '.is_alphabetic(), "char is_alphabetic: space is false");
+  // --- Non-ASCII character predicates ---
+  assert('ä'.is_lowercase(), "char is_lowercase: non-ASCII lower");
+  assert(!'Ä'.is_lowercase(), "char is_lowercase: non-ASCII upper is false");
+  assert('Ñ'.is_uppercase(), "char is_uppercase: non-ASCII upper");
+  assert(!'ñ'.is_uppercase(), "char is_uppercase: non-ASCII lower is false");
+  assert('é'.is_alphabetic(), "char is_alphabetic: accented letter");
+  // --- to_uppercase / to_lowercase on non-ASCII ---
+  assert("café".to_uppercase() == "CAFÉ", "to_uppercase non-ASCII");
+  assert("CAFÉ".to_lowercase() == "café", "to_lowercase non-ASCII");
   // --- Text-to-float parse edge cases ---
   assert(!("abc" as float), "parse non-numeric text to float yields null");
   assert(!("" as float), "parse empty text to float yields null");

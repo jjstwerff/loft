@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Implicit type widening in mixed-type expressions.
+fn main() {
+  // --- integer * long → long ---
+  a = 10l;
+  b = 2;
+  r1 = a * b;
+  assert(r1 == 20l, "int * long: {r1}");
+
+  // --- long + integer → long ---
+  r2 = a + b;
+  assert(r2 == 12l, "long + int: {r2}");
+
+  // --- integer - long → long ---
+  r3 = b - a;
+  assert(r3 == -8l, "int - long: {r3}");
+
+  // --- integer + float → float ---
+  fi = 3;
+  ff = 1.5;
+  r4 = fi + ff;
+  assert(r4 == 4.5, "int + float: {r4}");
+
+  // --- integer * float → float ---
+  r5 = fi * ff;
+  assert(r5 == 4.5, "int * float: {r5}");
+
+  // --- long + float → float ---
+  lg = 100l;
+  r6 = lg + ff;
+  assert(r6 == 101.5, "long + float: {r6}");
+
+  // --- integer / float → float ---
+  r7 = 7 / 2.0;
+  assert(r7 == 3.5, "int / float: {r7}");
+
+  // --- Comparisons across types ---
+  assert(5 < 10l, "int < long");
+  assert(10l > 5, "long > int");
+  assert(3 == 3l, "int == long");
+  assert(2 < 2.5, "int < float");
+  assert(2.5 > 2, "float > int");
+
+  // --- Mixed in function arguments ---
+  assert(mixed_add(10, 5l) == 15l, "mixed_add");
+
+  // --- Chained mixed operations ---
+  r8 = 1 + 2l + 3;
+  assert(r8 == 6l, "chained mixed: {r8}");
+
+  // --- Precision loss: large long as float ---
+  big = 9007199254740993l;  // 2^53 + 1, not representable in f64
+  big_f = big as float;
+  // After round-trip, value may differ by 1 due to f64 precision limit.
+  assert(abs(big_f - 9007199254740993.0) <= 1.0, "i64 as float precision: {big_f}");
+
+  println("auto-convert test passed");
+}
+
+fn mixed_add(ac_a: integer, ac_b: long) -> long {
+  ac_a + ac_b
+}

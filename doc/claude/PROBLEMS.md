@@ -34,10 +34,12 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
-| 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
+| 91 | L7 `init(expr)` circular-init detection *(fixed)* / parameter form missing | Low | Parameter form: pass explicitly |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
-| 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
-| 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
+| 93 | T1.1 tuple-in-struct-field rejection *(fixed)* | — | Clear error emitted |
+| 97 | T1.2 `(a, b) += expr` *(fixed)* | — | Clear error emitted |
+| 98 | Index range query with descending key *(fixed)* | — | XOR reverse bit for desc primary key |
+| 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
 
 ---
 
@@ -241,6 +243,8 @@ necessary `extern` block in the generated file.
 
 ### 85. Struct-enum local variable leaks stack space *(fixed, C41)*
 
+**Test:** `tests/scripts/71-caveats-problems.loft::test_p85_struct_enum_local` (passes — guard).
+
 **Symptom:** Constructing a struct-enum variant as a local variable and returning a
 scalar from the function triggers a debug-mode assertion in `fn_return`:
 
@@ -381,6 +385,10 @@ explicitly.
    store the expression in `Attribute.value`; at the call site, emit the expression
    when no argument is supplied.
 
+**Circular detection:** Fixed — `= expr` shorthand now enables `init_field_tracking`,
+matching the `init(expr)` path.  **Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
+**Parameter form:** Still missing.
+
 **Discovered:** 2026-03-26, during L7 implementation.
 
 ---
@@ -403,11 +411,11 @@ sees `data_ptr.is_null()` and skips the snapshot.
 
 ---
 
-### 93. T1.1 missing tuple-in-struct-field rejection rule
+### 93. T1.1 tuple-in-struct-field rejection *(fixed)*
 
-**Symptom:** The TUPLES.md Phase 1 design specifies that `Type::Tuple` should be
-rejected in struct field positions and `Type::RefVar` in tuple element positions.
-These compile-time rejection rules are not implemented.
+The compiler now emits a clear error: *"struct field cannot have a tuple type"*.
+
+**Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
 
 **Impact:** Low — T1.2 parser support has landed, so users can now write tuple type
 notation.  The rejection rules should be added before T1.4 (codegen) to prevent
@@ -421,12 +429,12 @@ inside tuple elements.
 
 ---
 
-### 97. T1.2 compound assignment on tuple destructuring not rejected
+### 97. T1.2 compound assignment on tuple destructuring *(fixed)*
 
-**Symptom:** `(a, b) += expr` does not trigger the tuple destructuring path (which
-only checks for `=`).  It falls through to the regular assignment loop, which fails
-with a generic error instead of a clear "compound assignment not supported on tuple
-destructuring" diagnostic.
+The compiler now emits: *"compound assignment is not supported for tuple
+destructuring — use (a, b) = expr instead"*.
+
+**Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
 
 **Impact:** Low — confusing error message; no silent wrong behaviour.
 
@@ -435,6 +443,87 @@ destructuring" diagnostic.
 targeted diagnostic.
 
 **Discovered:** 2026-03-26, during T1.2 regression evaluation.
+
+---
+
+### 98. Index range query wrong results with descending key *(fixed)*
+
+**Symptom:** Range iteration on `index<T[-key]>` (descending primary key) yields wrong
+elements.  Ascending-key indexes work correctly.
+
+```loft
+struct Item { cat: text, score: integer }
+struct Db { idx: index<Item[-cat]> }
+
+db = Db { idx: [Item{cat:"a", score:1}, Item{cat:"b", score:2}, Item{cat:"c", score:3}] };
+sum = 0;
+for e in db.idx["a".."c"] { sum += e.score; }
+// Expected: sum == 3 (a + b), Actual: sum == 1 (only "a")
+```
+
+Ascending-key indexes (`index<T[key]>`) and sorted collections are not affected.
+
+**Impact:** Medium — descending-key index range queries produce silently wrong results.
+
+**Root cause:** The `iterate()` function in `src/state/io.rs:583` computes `start` and
+`finish` tree nodes using `tree::find(before, key)`.  For ascending keys, `find(true, from)`
+returns `previous(from)` in tree-order, which is correct — the tree walk via `next()` then
+starts at `from`.  For descending keys, the tree in-order is reversed from user-logical
+order: "c" > "b" > "a".  `find(true, "a")` returns `previous("a")` = "b" in tree order,
+causing the walk to start at "b" and only reach "a" before the tree ends.
+
+**Fix path:** In `fill_iter` (`src/parser/fields.rs:575`), detect when the index's primary
+key is descending (`Keys[0].type_nr < 0`) and XOR the reverse bit (64) into the `on` byte.
+This makes the `step()` function use `previous()` instead of `next()` for the tree walk,
+and makes `iterate()` use the existing reverse-path logic (lines 562–582) which already
+swaps from/till correctly.  When the user also applies `rev()`, the XOR cancels out,
+restoring the ascending walk direction — which is correct for a reversed descending key.
+
+**Test:** `tests/scripts/71-caveats-problems.loft::test_p98_index_range_descending_key` (passes).
+
+**Discovered:** 2026-04-02, during test coverage gap analysis.
+
+---
+
+### 99–102. Fixed
+
+- **99** Empty struct comprehension + hash types crash — field comprehensions used
+  `u16::MAX` as variable reference; now passes field expression.  **Test:** `69-ignored-empty-comprehension-hash.loft`.
+- **100** Format `:<`/`:^` ignored for numbers — added `dir` parameter to
+  `format_long`/`format_float`/`format_single`.  **Test:** `67-ignored-format-align.loft`.
+- **101** Float `:.0` precision ignored — changed sentinel from `0` to `-1` for
+  "no precision specified".  **Test:** `68-ignored-float-precision-zero.loft`.
+- **102** `rev(vector)` compile error — parser now accepts `Type::Vector` and emits
+  decrement-with-clamp loop.  **Test:** `66-ignored-rev-vector.loft`.
+
+---
+
+### 103. Inline vector concat in compound assignment expression *(mitigated)*
+
+**Symptom:** `result = f([1,2,3,4,5]) + 100 * f([1,2,3] + [4,5])` returns wrong
+value.  Each call works correctly in isolation.
+
+**Root cause:** The vector concat `[a] + [b]` creates a Block with `OpDatabase`
+that temporarily grows the stack.  When this Block appears inside an assignment
+expression, `gen_set_first_at_tos` / `OpFreeStack` miscomputes the stack offset,
+placing the result at the wrong position.
+
+**Mitigation:** A compile-time warning is now emitted when vector concatenation
+appears inline in an expression: *"vector concatenation in an expression creates
+a temporary; assign to a variable first for correct results in compound
+expressions"*.
+
+**Workaround:** Assign the concat result to a variable first:
+```loft
+combined = [1,2,3] + [4,5];
+result = f([1,2,3,4,5]) + 100 * f(combined);  // correct
+```
+
+**Test:** `tests/scripts/70-ignored-struct-method-bugs.loft::test_vector_combined_expression` (`@EXPECT_FAIL`).
+
+**Full fix path:** Restructure `generate_block` to account for function-scoped
+variable allocations (`__vdb_N`, `_vec_N`) inside expression Blocks, or hoist
+database allocation out of the Block into the function preamble.
 
 ---
 

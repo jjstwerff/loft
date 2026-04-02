@@ -28,7 +28,20 @@ impl Parser {
         let var_nr = if orig_var == u16::MAX {
             let vec = self.create_unique("vec", tp);
             let elm_tp = tp.content();
-            for l in self.vector_db(&elm_tp, vec) {
+            let db_ops = self.vector_db(&elm_tp, vec);
+            // P103: vector concat as an inline expression (not assigned to a variable)
+            // creates a temporary with database allocation that corrupts the stack when
+            // the result is used inside a compound assignment expression.
+            // Emit a warning so the user knows to assign to a variable first.
+            if !db_ops.is_empty() && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "vector concatenation in an expression creates a temporary; \
+                     assign to a variable first for correct results in compound expressions"
+                );
+            }
+            for l in db_ops {
                 ls.push(l);
             }
             ls.push(self.cl(
@@ -760,7 +773,7 @@ impl Parser {
 
     // <for-vector> ::= 'for' <id> 'in' <range> ['if' <cond>] '{' <expr> '}'
     // Implements [for n in range { body }] vector comprehensions.
-    #[allow(clippy::too_many_arguments)] // parser helper threading IR-construction params alongside &mut self; no sensible grouping reduces the count
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(crate) fn parse_vector_for(
         &mut self,
         vec: u16,
@@ -840,9 +853,35 @@ impl Parser {
         if self.first_pass {
             return tp;
         }
+        // O8.5: try const-unrolling for [for i in A..B [if cond] { expr(i) }].
+        // If the range bounds are const and the body folds for every i,
+        // emit a pre-computed literal vector instead of a runtime loop.
+        if matches!(in_t, Type::Integer(_, _, _))
+            && let Some(unrolled) =
+                self.try_const_unroll_comprehension(for_var, &create_iter, &body, &if_step, in_t)
+        {
+            let parent_tp = &Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+            let (tp, ls) = self.build_vector_list(
+                val, parent_tp, elm, vec, &unrolled, in_t, tp, is_var, is_field,
+            );
+            *val = if !is_var && !is_field {
+                v_block(ls, tp.clone(), "Const comprehension")
+            } else {
+                Value::Insert(ls)
+            };
+            return tp;
+        }
         // Second pass: build the append-in-loop bytecode.
+        // For field assignments (vec == u16::MAX), pass the original field expression
+        // so comprehension code can reference it instead of Value::Var(u16::MAX).
+        let vec_expr = if vec == u16::MAX {
+            val.clone()
+        } else {
+            Value::Var(vec)
+        };
         self.build_comprehension_code(
             vec,
+            &vec_expr,
             elm,
             in_t,
             &in_type,
@@ -868,6 +907,7 @@ impl Parser {
     pub(crate) fn build_comprehension_code(
         &mut self,
         vec: u16,
+        vec_expr: &Value,
         elm: u16,
         in_t: &Type,
         in_type: &Type,
@@ -915,13 +955,13 @@ impl Parser {
             elm,
             self.cl(
                 "OpNewRecord",
-                &[Value::Var(vec), known.clone(), fld.clone()],
+                &[vec_expr.clone(), known.clone(), fld.clone()],
             ),
         ));
         lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
         lp.push(self.cl(
             "OpFinishRecord",
-            &[Value::Var(vec), Value::Var(elm), known, fld],
+            &[vec_expr.clone(), Value::Var(elm), known, fld],
         ));
         let mut for_steps: Vec<Value> = Vec::new();
         if fill != Value::Null {
@@ -1089,6 +1129,27 @@ impl Parser {
         if self.vars.tp(vec).depend().is_empty() {
             ls.extend(self.vector_db(in_t, vec));
         }
+        // O8.1a: pre-allocate vector capacity when the element count is known
+        // at compile time.  This eliminates resize calls in vector_append.
+        if !self.first_pass && !res.is_empty() && vec != u16::MAX {
+            let ed_nr = self.data.type_def_nr(in_t);
+            if ed_nr != u32::MAX {
+                let known = self.data.def(ed_nr).known_type;
+                if known != u16::MAX {
+                    let elem_size = self.database.size(known);
+                    if elem_size > 0 {
+                        ls.push(self.cl(
+                            "OpPreAllocVector",
+                            &[
+                                Value::Var(vec),
+                                Value::Int(res.len() as i32),
+                                Value::Int(i32::from(elem_size)),
+                            ],
+                        ));
+                    }
+                }
+            }
+        }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
         if !self.first_pass
             && vec != u16::MAX
@@ -1108,6 +1169,49 @@ impl Parser {
             }
         }
         (tp, ls)
+    }
+
+    /// O8.5: try to const-unroll a comprehension into a literal vector.
+    /// Returns Some(vec of folded values) if successful, None to fall back to runtime loop.
+    fn try_const_unroll_comprehension(
+        &self,
+        for_var: u16,
+        _create_iter: &Value,
+        body: &Value,
+        if_step: &Value,
+        _in_t: &Type,
+    ) -> Option<Vec<Value>> {
+        use crate::const_eval::{const_eval, const_eval_with_var};
+        // Extract range bounds captured during parse_in_range_body.
+        let from = const_eval(self.last_range_from.as_ref()?, &self.data)?;
+        let till = const_eval(self.last_range_till.as_ref()?, &self.data)?;
+        let (from_i, till_i) = match (&from, &till) {
+            (Value::Int(a), Value::Int(b)) => (*a, *b),
+            _ => return None,
+        };
+        if from_i >= till_i {
+            return Some(Vec::new()); // empty range
+        }
+        let count = (till_i - from_i) as u32;
+        if count > 10_000 {
+            return None; // S7: size limit
+        }
+        let has_filter = *if_step != Value::Null;
+        let mut values = Vec::with_capacity(count as usize);
+        for i in from_i..till_i {
+            let iv = Value::Int(i);
+            // Check filter condition if present.
+            if has_filter {
+                match const_eval_with_var(if_step, for_var, &iv, &self.data) {
+                    Some(Value::Boolean(true)) => {}         // include
+                    Some(Value::Boolean(false)) => continue, // skip
+                    _ => return None,                        // filter not const-foldable
+                }
+            }
+            let folded = const_eval_with_var(body, for_var, &iv, &self.data)?;
+            values.push(folded);
+        }
+        Some(values)
     }
 
     pub(crate) fn vector_needs_db(&self, vec: u16, in_t: &Type, is_var: bool) -> bool {
@@ -1138,7 +1242,9 @@ impl Parser {
                 &was
             },
         );
-        self.vars.depend(elm, vec);
+        if vec != u16::MAX {
+            self.vars.depend(elm, vec);
+        }
         for on in parent_tp.depend() {
             self.vars.depend(elm, on);
         }

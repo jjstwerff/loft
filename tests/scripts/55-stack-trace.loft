@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// stack_trace() introspection: verify frames are returned from nested calls.
+
+fn st_inner() -> vector<StackFrame> {
+  stack_trace()
+}
+
+fn st_middle() -> vector<StackFrame> {
+  st_inner()
+}
+
+fn main() {
+  // --- Direct call: at least one frame ---
+  frames = stack_trace();
+  assert(len(frames) >= 1, "direct: at least 1 frame, got {len(frames)}");
+
+  // --- Nested call: should have multiple frames ---
+  nested = st_middle();
+  assert(len(nested) >= 3, "nested: at least 3 frames, got {len(nested)}");
+
+  // --- Frame fields are populated ---
+  for st_f in nested {
+    // function name should be non-empty text
+    assert(len(st_f.function) > 0, "frame function name non-empty");
+  }
+
+  // --- Verify function names appear in the trace ---
+  found_inner = false;
+  found_middle = false;
+  for st_fr in nested {
+    if st_fr.function == "st_inner" {
+      found_inner = true;
+    }
+    if st_fr.function == "st_middle" {
+      found_middle = true;
+    }
+  }
+  assert(found_inner, "st_inner in trace");
+  assert(found_middle, "st_middle in trace");
+
+  println("stack-trace test passed");
+}

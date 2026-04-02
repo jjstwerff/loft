@@ -137,7 +137,7 @@ pub fn lines(self: File) -> vector < text > {
     }
     prev_cr = ch == '\r';
   }
-  if p > 0 {
+  if p < c.len() {
     result +=[c[p..c.len()]];
   }
   result
@@ -356,5 +356,4 @@ fn OpVarFnRef(pos: const u16) -> text;
 // WARNING (C40): same type mismatch as OpVarFnRef above — see C30 guard.
 fn OpPutFnRef(pos: const u16, _fnref: text);
 #rust"{{ let v = *s.get_stack::<[i32; 4]>(); s.put_var(@pos, v); }}"
-
 

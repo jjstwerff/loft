@@ -231,8 +231,8 @@ fn OpLtLong(v1: long, v2: long) -> boolean;
 #rust"@v1 < @v2"
 fn OpLeLong(v1: long, v2: long) -> boolean;
 #rust"@v1 <= @v2"
-fn OpFormatLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean);
-fn OpFormatStackLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean);
+fn OpFormatLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+fn OpFormatStackLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
 // Single-precision (32-bit) floating-point math.
 // Choose single for performance-sensitive work such as graphics.
 fn OpConstSingle(val: const single) -> single;
@@ -354,8 +354,8 @@ fn OpLtSingle(v1: single, v2: single) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && @v1 <= @v2"
-fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer);
-fn OpFormatStackSingle(pos: const u16, val: single, width: integer, precision: integer);
+fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
+fn OpFormatStackSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
 // Double-precision (64-bit) floating-point math.
 // Choose float over single when precision matters.
 fn OpConstFloat(val: const float) -> float;
@@ -522,8 +522,8 @@ fn OpLtFloat(v1: float, v2: float) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && @v1 <= @v2"
-fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer);
-fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer);
+fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
+fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
 // --- min / max / clamp ---
 // Returns null if either argument is null (consistent with all binary arithmetic operations).
 // Smallest of two integer values.
@@ -955,7 +955,9 @@ fn OpSiLoadConstCmpBranch(a: const u16, k: const integer, off: const i16);
 fn OpSiLoad2CmpBranch(a: const u16, b: const u16, off: const i16);
 fn OpSiLoadConstMulStore(a: const u16, k: const integer, c: const u16);
 fn OpSiLoad2MulStore(a: const u16, b: const u16, c: const u16);
-fn OpNop();
+// O8.1a: Pre-allocate vector capacity so subsequent OpNewRecord calls never resize.
+fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
+#rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
 // --- Vector aggregates ---
 // Internal helpers for reduce-based aggregates.
 fn __add_int(a: integer, b: integer) -> integer { a + b }

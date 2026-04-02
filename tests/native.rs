@@ -301,6 +301,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            call_stack_prefix: None,
         };
         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)?;
     }
@@ -578,12 +579,18 @@ fn native_scripts() -> std::io::Result<()> {
             println!("skip {entry:?} (scripts native skip list — see SCRIPTS_NATIVE_SKIP)");
             continue;
         }
-        // Skip files with intentional compile errors.
-        if let Ok(src) = std::fs::read_to_string(&entry)
-            && src.contains("@EXPECT_ERROR")
-        {
-            println!("skip {entry:?} (has @EXPECT_ERROR)");
-            continue;
+        // Skip files with intentional compile errors or expected failures.
+        // Native mode compiles the whole file into one binary and can't
+        // tolerate per-function panics like the interpreter runner can.
+        if let Ok(src) = std::fs::read_to_string(&entry) {
+            if src.contains("@EXPECT_ERROR") {
+                println!("skip {entry:?} (has @EXPECT_ERROR)");
+                continue;
+            }
+            if src.contains("@EXPECT_FAIL") {
+                println!("skip {entry:?} (has @EXPECT_FAIL)");
+                continue;
+            }
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare_native_test(&entry)))
         {
