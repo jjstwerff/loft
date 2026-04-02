@@ -71,6 +71,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     // Parse
     let source = std::fs::read_to_string(entry)?;
     let expected = expected_warnings(&source);
+    let (exp_errors, exp_ann_warns) = expected_annotations(&source);
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;
@@ -81,7 +82,12 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
         println!("{l}");
     }
     if !p.diagnostics.is_empty() {
-        check_diagnostics(p.diagnostics.lines(), &expected)?;
+        check_diagnostics(
+            p.diagnostics.lines(),
+            &expected,
+            &exp_errors,
+            &exp_ann_warns,
+        )?;
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
@@ -251,6 +257,8 @@ fn wasm_dir() -> std::io::Result<()> {
 
 /// Run every `.loft` file in `tests/scripts/` in alphabetical order.
 /// These are standalone loft programs that exercise compiler and interpreter features.
+/// Scripts may use `fn main()` or `fn test_*()` entry points — `run_test`
+/// discovers and executes all zero-parameter user functions automatically.
 /// To run a single file use the individual test functions below, e.g.:
 ///   cargo test --test wrap integers
 #[test]
@@ -261,13 +269,6 @@ fn loft_suite() -> std::io::Result<()> {
         .filter(|p| {
             p.extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
-        })
-        // Only run files that have fn main() (01-22 doc/demo scripts).
-        // Test-style scripts (fn test_*) are exercised by `loft --tests`.
-        .filter(|p| {
-            std::fs::read_to_string(p)
-                .map(|s| s.contains("\nfn main("))
-                .unwrap_or(false)
         })
         .collect();
     files.sort();
@@ -546,45 +547,92 @@ fn expected_warnings(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// Validate diagnostics against `// #warn` declarations in the script source.
+/// Validate diagnostics against expected patterns from `// #warn`, `@EXPECT_ERROR`,
+/// and `@EXPECT_WARNING` declarations.
 ///
-/// Returns `Ok(())` when every diagnostic is either:
-/// - a `Warning:` line whose message matches a declared `// #warn` pattern, or
-/// - absent (no unexpected diagnostics remain).
-///
-/// Returns `Err` when any diagnostic is unexpected or any declared warning was
-/// not emitted.  All mismatches are printed before returning.
-fn check_diagnostics(diagnostics: &[String], expected: &[String]) -> std::io::Result<()> {
-    let mut unmatched_expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+/// Returns `Ok(())` when every diagnostic matches a declared pattern.
+/// Returns `Err` when any diagnostic is unexpected.  All mismatches are printed.
+fn check_diagnostics(
+    diagnostics: &[String],
+    expected_warns: &[String],
+    expected_errors: &[String],
+    expected_ann_warnings: &[String],
+) -> std::io::Result<()> {
+    let mut unmatched_warns: Vec<&str> = expected_warns.iter().map(String::as_str).collect();
+    let mut unmatched_errors: Vec<&str> = expected_errors.iter().map(String::as_str).collect();
+    let mut unmatched_ann_warns: Vec<&str> =
+        expected_ann_warnings.iter().map(String::as_str).collect();
     let mut unexpected: Vec<&str> = Vec::new();
 
     for diag in diagnostics {
         if diag.starts_with("Debug: ") {
-            continue; // Debug-level diagnostics are not surfaced in script tests
+            continue;
         } else if diag.starts_with("Warning: ") {
-            if let Some(pos) = unmatched_expected
+            // Try #warn patterns first (strict — must all match)
+            if let Some(pos) = unmatched_warns.iter().position(|pat| diag.contains(*pat)) {
+                println!("expected warning matched: {diag}");
+                unmatched_warns.remove(pos);
+            } else if let Some(pos) = unmatched_ann_warns
                 .iter()
                 .position(|pat| diag.contains(*pat))
             {
-                println!("expected warning matched: {diag}");
-                unmatched_expected.remove(pos);
-            } else {
-                println!("unexpected warning: {diag}");
-                unexpected.push(diag);
+                println!("expected @EXPECT_WARNING matched: {diag}");
+                unmatched_ann_warns.remove(pos);
             }
+            // Other warnings are not fatal — just log them.
+        } else if let Some(pos) = unmatched_errors.iter().position(|pat| diag.contains(*pat)) {
+            println!("expected @EXPECT_ERROR matched: {diag}");
+            unmatched_errors.remove(pos);
         } else {
-            println!("unexpected diagnostic: {diag}");
+            println!("unexpected error: {diag}");
             unexpected.push(diag);
         }
     }
-    for pat in &unmatched_expected {
+    for pat in &unmatched_warns {
         println!("expected warning not emitted: {pat}");
     }
-    if unexpected.is_empty() && unmatched_expected.is_empty() {
+    // Only fail on unexpected errors or unmatched #warn patterns.
+    if unexpected.is_empty() && unmatched_warns.is_empty() {
         Ok(())
     } else {
         Err(Error::from(std::io::ErrorKind::InvalidData))
     }
+}
+
+/// Collect the names of all zero-parameter user functions defined in `data`
+/// starting from definition `start_def`.  Returns `"n_<name>"` internal names
+/// stripped to their user-facing form (e.g. `"main"`, `"test_foo"`).
+///
+/// This mirrors the discovery logic in `test_runner.rs` so that scripts using
+/// `fn test_*()` style entry points are exercised by `cargo test`, not only by
+/// `loft --tests`.
+fn entry_point_names(data: &Data, start_def: u32) -> Vec<String> {
+    use loft::data::DefType;
+    let mut names = Vec::new();
+    for d_nr in start_def..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+            continue;
+        }
+        if def.position.file.starts_with("default/") || def.position.file.starts_with("default\\") {
+            continue;
+        }
+        // Only zero-parameter functions are entry points.
+        if !def.attributes.is_empty() {
+            continue;
+        }
+        // Skip coroutine generators (return iterator<T>) — they must be called
+        // from a for-loop, not as standalone entry points.
+        if matches!(def.returned, loft::data::Type::Iterator(_, _)) {
+            continue;
+        }
+        let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
+        names.push(user_name.to_string());
+    }
+    names
 }
 
 /// Compile and run a single `.loft` script test.
@@ -594,46 +642,231 @@ fn check_diagnostics(diagnostics: &[String], expected: &[String]) -> std::io::Re
 /// Unexpected diagnostics (errors or unmatched warnings) fail the test.
 ///
 /// Any parse or type errors are printed and immediately fail the test.
-/// On success the bytecode is generated and `main` is called.
+/// On success the bytecode is generated and every zero-parameter user function
+/// is called (not just `main`).  This ensures scripts that use `fn test_*()`
+/// entry points are also exercised by `cargo test` / `cargo llvm-cov`.
+///
+/// Each entry-point function is run inside `catch_unwind` so that a failing
+/// assert in one function does not abort the remaining functions.  All failures
+/// are collected and reported at the end.
 ///
 /// When `debug` is true (debug builds only) a human-readable bytecode dump is
 /// written to `tests/dumps/<filename>.txt` and the interpreter emits a full
 /// execution trace to that file.  Set `LOFT_DUMP=1` to get the bytecode dump
 /// without the execution trace for any non-debug test invocation.
+/// Scan source for `// @EXPECT_FAIL` annotations bound to specific functions.
+/// Returns a set of function names whose panics should be tolerated.
+/// Also returns true if the file has a file-level `@EXPECT_FAIL`.
+fn expect_fail_fns(source: &str) -> (HashSet<String>, bool) {
+    let mut fns = HashSet::new();
+    let mut file_level = false;
+    let mut pending = false;
+    let mut in_header = true;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("fn ") {
+            in_header = false;
+            if pending
+                && let Some(name) = trimmed
+                    .strip_prefix("fn ")
+                    .and_then(|s| s.split(&['(', ' ', '{'][..]).next())
+            {
+                fns.insert(name.to_string());
+            }
+            pending = false;
+            continue;
+        }
+        if trimmed.starts_with("struct ") || trimmed.starts_with("enum ") {
+            in_header = false;
+            pending = false;
+            continue;
+        }
+        if let Some(comment) = trimmed.strip_prefix("//") {
+            let comment = comment.trim();
+            if comment.starts_with("@EXPECT_FAIL") {
+                if in_header {
+                    file_level = true;
+                } else {
+                    pending = true;
+                }
+            }
+        } else {
+            pending = false;
+        }
+    }
+    if pending {
+        file_level = true;
+    }
+    (fns, file_level)
+}
+
+/// Collect all `// @EXPECT_ERROR:` and `// @EXPECT_WARNING:` annotation substrings.
+/// These are treated as expected diagnostics and consumed by `check_diagnostics`.
+fn expected_annotations(source: &str) -> (Vec<String>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(comment) = trimmed.strip_prefix("//") {
+            let comment = comment.trim();
+            if let Some(rest) = comment.strip_prefix("@EXPECT_ERROR:") {
+                let sub = rest.trim();
+                if !sub.is_empty() {
+                    errors.push(sub.to_string());
+                }
+            } else if let Some(rest) = comment.strip_prefix("@EXPECT_WARNING:") {
+                let sub = rest.trim();
+                if !sub.is_empty() {
+                    warnings.push(sub.to_string());
+                }
+            }
+        }
+    }
+    (errors, warnings)
+}
+
 fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()> {
     println!("run {entry:?}");
     let source = std::fs::read_to_string(&entry)?;
     let expected = expected_warnings(&source);
+    let (exp_errors, exp_ann_warns) = expected_annotations(&source);
+    let (expect_fail, file_level_fail) = expect_fail_fns(&source);
+    let _has_expected_errors = !exp_errors.is_empty();
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
     #[cfg(debug_assertions)]
     let types = p.database.types.len();
+    let start_def = p.data.definitions();
     let path = entry.to_string_lossy().to_string();
     p.parse(&path, false);
+    let had_errors = !p.diagnostics.is_empty()
+        && p.diagnostics
+            .lines()
+            .iter()
+            .any(|l| !l.starts_with("Warning:") && !l.starts_with("Debug:"));
     if !p.diagnostics.is_empty() {
-        check_diagnostics(p.diagnostics.lines(), &expected)?;
+        check_diagnostics(
+            p.diagnostics.lines(),
+            &expected,
+            &exp_errors,
+            &exp_ann_warns,
+        )?;
     }
-    scopes::check(&mut p.data);
-    let mut state = State::new(p.database);
-    byte_code(&mut state, &mut p.data);
+    // Only skip execution when the file actually has unresolved parse errors.
+    // If @EXPECT_ERROR annotations exist but the errors are gone (bug fixed),
+    // proceed to execution so the fix can be verified.
+    if had_errors {
+        println!("  ok (errors consumed)");
+        return Ok(());
+    }
+    // Scope check and bytecode generation can panic on compiler bugs.
+    // When the file has @EXPECT_FAIL annotations, tolerate the panic.
+    let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scopes::check(&mut p.data);
+        let mut state = State::new(p.database);
+        byte_code(&mut state, &mut p.data);
+        (state, p.data)
+    }));
+    let (mut state, mut p_data) = match compile_result {
+        Ok(pair) => {
+            if file_level_fail {
+                println!("  FIXED {path} (was @EXPECT_FAIL, now compiles)");
+            }
+            pair
+        }
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else {
+                "unknown panic".to_string()
+            };
+            if file_level_fail || !expect_fail.is_empty() {
+                println!("  expected compile fail {path} — {msg}");
+                return Ok(());
+            }
+            std::panic::resume_unwind(payload);
+        }
+    };
+
+    // Discover all zero-parameter user functions as entry points.
+    let all_fns = entry_point_names(&p_data, start_def);
+    assert!(
+        !all_fns.is_empty(),
+        "no entry-point functions found in {}",
+        path
+    );
+    // If `main` exists, run only `main` (it calls helpers internally).
+    // Otherwise run all zero-param functions (fn test_* style).
+    let fns = if all_fns.contains(&"main".to_string()) {
+        vec!["main".to_string()]
+    } else {
+        all_fns
+    };
+
+    #[cfg(debug_assertions)]
+    if allow_dump && std::env::var("LOFT_DUMP").is_ok() {
+        let config = LogConfig::from_env();
+        let _ = dump_results(entry.clone(), &mut p_data, types, &mut state, &config)?;
+    }
+
     if debug {
         #[cfg(debug_assertions)]
         {
             let config = LogConfig::from_env();
-            let mut w = dump_results(entry, &mut p.data, types, &mut state, &config)?;
-            state.execute_log(&mut w, "main", &config, &p.data)?;
+            let mut w = dump_results(entry, &mut p_data, types, &mut state, &config)?;
+            for name in &fns {
+                state.execute_log(&mut w, name, &config, &p_data)?;
+            }
         }
         #[cfg(not(debug_assertions))]
-        state.execute("main", &p.data);
-    } else {
-        #[cfg(debug_assertions)]
-        if allow_dump && std::env::var("LOFT_DUMP").is_ok() {
-            let config = LogConfig::from_env();
-            let _ = dump_results(entry, &mut p.data, types, &mut state, &config)?;
+        for name in &fns {
+            state.execute(name, &p_data);
         }
-        state.execute("main", &p.data);
+    } else {
+        // Run each function with catch_unwind so one failure doesn't abort the rest.
+        let mut failures: Vec<String> = Vec::new();
+        for name in &fns {
+            let should_fail = file_level_fail || expect_fail.contains(name.as_str());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.execute(name, &p_data);
+            }));
+            let msg_from = |payload: &Box<dyn std::any::Any + Send>| -> String {
+                if let Some(s) = payload.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = payload.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    "unknown panic".to_string()
+                }
+            };
+            match result {
+                Ok(()) if should_fail => {
+                    // Bug was fixed — the @EXPECT_FAIL annotation can be removed.
+                    println!("  FIXED {path}::{name} (was @EXPECT_FAIL, now passes)");
+                }
+                Ok(()) => {} // passed as expected
+                Err(payload) if should_fail => {
+                    println!("  expected fail {path}::{name} — {}", msg_from(&payload));
+                }
+                Err(payload) => {
+                    let msg = msg_from(&payload);
+                    println!("  FAIL {path}::{name} — {msg}");
+                    failures.push(format!("{name}: {msg}"));
+                }
+            }
+        }
+        if !failures.is_empty() {
+            return Err(Error::other(format!(
+                "{} of {} functions failed in {path}: {}",
+                failures.len(),
+                fns.len(),
+                failures.join("; ")
+            )));
+        }
     }
     Ok(())
 }

@@ -178,7 +178,7 @@ pub(crate) const OUTPUT_DEFAULT: OutputState = OutputState {
     token: " ",
     plus: false,
     note: false,
-    dir: -1,
+    dir: 2, // 2 = unset; text defaults to left (-1), numbers to right (1)
     float: false,
 };
 
@@ -316,6 +316,7 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            self.reverse_iterator = false;
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.switch(filename);

@@ -861,6 +861,7 @@ impl Parser {
         );
         if reverse {
             self.lexer.token(")");
+            self.reverse_iterator = false;
         }
         Type::Iterator(Box::new(in_type), Box::new(Type::Null))
     }
@@ -895,14 +896,17 @@ impl Parser {
                     return in_type;
                 }
                 // rev() wrapping a bare collection (not a range subscript).
-                if matches!(in_type, Type::Sorted(_, _, _) | Type::Index(_, _, _)) {
-                    // reverse_iterator already set above
+                if matches!(
+                    in_type,
+                    Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Vector(_, _)
+                ) {
+                    // reverse_iterator stays set; consumed and reset by iterator()
                 } else if !matches!(in_type, Type::Null) {
                     self.reverse_iterator = false;
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "rev() on a non-range expression must wrap a sorted or index collection"
+                        "rev() on a non-range expression must wrap a sorted, index, or vector collection"
                     );
                 }
                 self.lexer.token(")");

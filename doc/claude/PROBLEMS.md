@@ -36,9 +36,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 | 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
-| 93 | T1.1 missing tuple-in-struct-field rejection rule | Low | Add checks before T1.4 codegen |
-| 97 | T1.2 `(a, b) += expr` falls through to generic error | Low | Use separate assignment statements |
+| 93 | T1.1 tuple-in-struct-field rejection *(fixed)* | — | Clear error emitted |
+| 97 | T1.2 `(a, b) += expr` *(fixed)* | — | Clear error emitted |
 | 98 | Index range query returns only first element | Medium | Use full iteration with for-loop filter |
+| 103 | Two inline vector function calls in one expression produce wrong result | Medium | Use separate variables for intermediate results |
 
 ---
 
@@ -242,6 +243,8 @@ necessary `extern` block in the generated file.
 
 ### 85. Struct-enum local variable leaks stack space *(fixed, C41)*
 
+**Test:** `tests/scripts/71-caveats-problems.loft::test_p85_struct_enum_local` (passes — guard).
+
 **Symptom:** Constructing a struct-enum variant as a local variable and returning a
 scalar from the function triggers a debug-mode assertion in `fn_return`:
 
@@ -382,6 +385,8 @@ explicitly.
    store the expression in `Attribute.value`; at the call site, emit the expression
    when no argument is supplied.
 
+**Test:** `tests/scripts/71-caveats-problems.loft::test_p91_circular_init_detection` (`@EXPECT_FAIL`).
+
 **Discovered:** 2026-03-26, during L7 implementation.
 
 ---
@@ -404,11 +409,11 @@ sees `data_ptr.is_null()` and skips the snapshot.
 
 ---
 
-### 93. T1.1 missing tuple-in-struct-field rejection rule
+### 93. T1.1 tuple-in-struct-field rejection *(fixed)*
 
-**Symptom:** The TUPLES.md Phase 1 design specifies that `Type::Tuple` should be
-rejected in struct field positions and `Type::RefVar` in tuple element positions.
-These compile-time rejection rules are not implemented.
+The compiler now emits a clear error: *"struct field cannot have a tuple type"*.
+
+**Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
 
 **Impact:** Low — T1.2 parser support has landed, so users can now write tuple type
 notation.  The rejection rules should be added before T1.4 (codegen) to prevent
@@ -422,12 +427,12 @@ inside tuple elements.
 
 ---
 
-### 97. T1.2 compound assignment on tuple destructuring not rejected
+### 97. T1.2 compound assignment on tuple destructuring *(fixed)*
 
-**Symptom:** `(a, b) += expr` does not trigger the tuple destructuring path (which
-only checks for `=`).  It falls through to the regular assignment loop, which fails
-with a generic error instead of a clear "compound assignment not supported on tuple
-destructuring" diagnostic.
+The compiler now emits: *"compound assignment is not supported for tuple
+destructuring — use (a, b) = expr instead"*.
+
+**Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
 
 **Impact:** Low — confusing error message; no silent wrong behaviour.
 
@@ -472,7 +477,35 @@ and makes `iterate()` use the existing reverse-path logic (lines 562–582) whic
 swaps from/till correctly.  When the user also applies `rev()`, the XOR cancels out,
 restoring the ascending walk direction — which is correct for a reversed descending key.
 
+**Test:** `tests/scripts/71-caveats-problems.loft::test_p98_index_range_descending_key` (`@EXPECT_FAIL`).
+
 **Discovered:** 2026-04-02, during test coverage gap analysis.
+
+---
+
+### 99–102. Fixed
+
+- **99** Empty struct comprehension + hash types crash — field comprehensions used
+  `u16::MAX` as variable reference; now passes field expression.  **Test:** `69-ignored-empty-comprehension-hash.loft`.
+- **100** Format `:<`/`:^` ignored for numbers — added `dir` parameter to
+  `format_long`/`format_float`/`format_single`.  **Test:** `67-ignored-format-align.loft`.
+- **101** Float `:.0` precision ignored — changed sentinel from `0` to `-1` for
+  "no precision specified".  **Test:** `68-ignored-float-precision-zero.loft`.
+- **102** `rev(vector)` compile error — parser now accepts `Type::Vector` and emits
+  decrement-with-clamp loop.  **Test:** `66-ignored-rev-vector.loft`.
+
+---
+
+### 103. Two inline vector function calls in one expression produce wrong result
+
+**Symptom:** `f([1,2,3,4,5]) + 100 * f([1,2,3] + [4,5])` returns 121 instead of
+1515.  Each call works correctly in isolation.
+
+**Root cause:** Temporary vectors created for inline arguments of two separate
+function calls in the same expression share database state incorrectly — the
+second call's temporary overwrites or aliases the first.
+
+**Test:** `tests/scripts/70-ignored-struct-method-bugs.loft::test_vector_combined_expression` (`@EXPECT_FAIL`).
 
 ---
 

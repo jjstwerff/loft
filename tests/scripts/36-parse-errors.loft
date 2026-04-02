@@ -207,7 +207,8 @@ fn test_type_cycle_self() {
 struct PECycA { val: integer, b: PECycB }
 struct PECycB { val: integer, a: PECycA }
 
-// @EXPECT_ERROR: contains itself
+// @EXPECT_ERROR: 'PECycA' contains itself
+// @EXPECT_ERROR: 'PECycB' contains itself
 fn test_type_cycle_indirect() {
   _a = PECycA { val: 1 };
 }

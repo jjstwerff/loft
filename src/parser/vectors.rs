@@ -841,8 +841,16 @@ impl Parser {
             return tp;
         }
         // Second pass: build the append-in-loop bytecode.
+        // For field assignments (vec == u16::MAX), pass the original field expression
+        // so comprehension code can reference it instead of Value::Var(u16::MAX).
+        let vec_expr = if vec == u16::MAX {
+            val.clone()
+        } else {
+            Value::Var(vec)
+        };
         self.build_comprehension_code(
             vec,
+            &vec_expr,
             elm,
             in_t,
             &in_type,
@@ -868,6 +876,7 @@ impl Parser {
     pub(crate) fn build_comprehension_code(
         &mut self,
         vec: u16,
+        vec_expr: &Value,
         elm: u16,
         in_t: &Type,
         in_type: &Type,
@@ -915,13 +924,13 @@ impl Parser {
             elm,
             self.cl(
                 "OpNewRecord",
-                &[Value::Var(vec), known.clone(), fld.clone()],
+                &[vec_expr.clone(), known.clone(), fld.clone()],
             ),
         ));
         lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
         lp.push(self.cl(
             "OpFinishRecord",
-            &[Value::Var(vec), Value::Var(elm), known, fld],
+            &[vec_expr.clone(), Value::Var(elm), known, fld],
         ));
         let mut for_steps: Vec<Value> = Vec::new();
         if fill != Value::Null {
@@ -1138,7 +1147,9 @@ impl Parser {
                 &was
             },
         );
-        self.vars.depend(elm, vec);
+        if vec != u16::MAX {
+            self.vars.depend(elm, vec);
+        }
         for on in parent_tp.depend() {
             self.vars.depend(elm, on);
         }

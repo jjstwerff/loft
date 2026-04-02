@@ -1745,8 +1745,7 @@ impl Drop for CallGuard {
 /// Reads the thread-local shadow call stack and builds `vector<StackFrame>`
 /// using the same stores API as the interpreter implementation in `native.rs`.
 pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
-    let snapshot: Vec<(&str, &str, u32)> =
-        CALL_STACK.with(|s| s.borrow().clone());
+    let snapshot: Vec<(&str, &str, u32)> = CALL_STACK.with(|s| s.borrow().clone());
 
     let sf_elm = stores.name("StackFrame");
     let sf_size = u32::from(stores.size(sf_elm));

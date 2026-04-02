@@ -28,6 +28,7 @@ Web Worker pool (W1.18, targeted 1.1+).
 The spatial index collection type is declared but all operations panic at
 runtime.  A compile-time error is emitted for basic usage.
 
+**Test:** `tests/scripts/36-parse-errors.loft::test_spacial_type_error`.
 **Planned fix:** A4 (1.1+).
 
 ---
@@ -45,6 +46,8 @@ Runtime errors from `assert` and `panic` abort the program.  No `try`/`catch`.
 Captured values are copied into the closure at definition time.  Mutations
 after capture are not visible inside the lambda (and vice versa).  By design
 (value semantics, like Rust `move`).
+
+**Test:** `tests/scripts/56-closures.loft::test_capture_timing`.
 
 ---
 
@@ -69,6 +72,7 @@ Match arms do not support `testlib::Ok` or bare `Ok` for library enums.
 Only same-file enum variants work in match patterns.
 
 **Workaround:** use if-else with `==` comparisons.
+**Test:** `tests/imports.rs` (library enum tests).
 **Docs:** [PLANNING.md](PLANNING.md) § C53.
 
 ---
@@ -78,6 +82,16 @@ Only same-file enum variants work in match patterns.
 A file with content but no trailing `\n` returns 0 lines from `lines()`.
 
 **Workaround:** ensure files end with `\n`, or use `f#read(n) as text`.
+**Test:** `tests/scripts/71-caveats-problems.loft::test_c54_file_lines_no_trailing_newline` (`@EXPECT_FAIL`).
+
+---
+
+## C55–C58 — Fixed (2026-04-02)
+
+- **C55** `rev(vector)` now works — parser accepts plain vectors for reverse iteration.
+- **C56** Format `:<`/`:^` now works for integers, longs, and floats.
+- **C57** Float `:.0` precision now correctly rounds to zero decimals.
+- **C58** Empty struct comprehension no longer crashes the compiler.
 
 ---
 

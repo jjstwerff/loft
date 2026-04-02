@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Parse-error reproducers for PROBLEMS entries that are correctly rejected.
+// @EXPECT_ERROR: struct field cannot have a tuple type
+// @EXPECT_ERROR: compound assignment is not supported for tuple destructuring
+
+// --- P93: Tuple type in struct field — correctly rejected ---
+struct P93Bad { coord: (integer, integer) }
+
+// --- P97: Tuple compound assignment — correctly rejected ---
+fn test_p97_tuple_compound_assign() {
+  p97_a = 1;
+  p97_b = 2;
+  (p97_a, p97_b) += (10, 20);
+}

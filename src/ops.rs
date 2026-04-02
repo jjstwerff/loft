@@ -211,6 +211,8 @@ pub fn to_char(val: i32) -> char {
 
 #[inline]
 pub fn format_text(s: &mut String, val: &str, width: i32, dir: i8, token: u8) {
+    // dir=2 means "unset default"; text defaults to left-align (-1)
+    let dir = if dir == 2 { -1 } else { dir };
     let mut tokens = width as usize;
     for _ in val.chars() {
         if tokens == 0 {
@@ -687,6 +689,7 @@ Format a long integer.
 # Panics
 When unknown radix values are asked.
 */
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn format_long(
     s: &mut String,
@@ -696,9 +699,15 @@ pub fn format_long(
     token: u8,
     plus: bool,
     note: bool,
+    dir: i8,
 ) {
+    // Numbers default to right-align; dir=-1 means "unset" from the parser
+    // (left-align is the text default, but for numbers right-align is conventional).
+    // Explicit `<` sets dir=-1, `^` sets dir=0, `>` sets dir=1.
+    // We use dir=2 as "unset/default" from the parser, mapped to right-align here.
+    let dir = if dir == 2 { 1 } else { dir };
     if val == i64::MIN {
-        format_text(s, "null", width, 1, token);
+        format_text(s, "null", width, dir, token);
         return;
     }
     let mut res = String::new();
@@ -725,7 +734,7 @@ pub fn format_long(
                 // Sign before zeros: "-01" not "0-1"
                 *s += sign;
                 write!(res, "{}", val.abs()).unwrap();
-                format_text(s, &res, width - 1, 1, token);
+                format_text(s, &res, width - 1, dir, token);
                 return;
             }
             res += sign;
@@ -737,25 +746,31 @@ pub fn format_long(
         }
         _ => panic!("Unknown radix"),
     }
-    format_text(s, &res, width, 1, token);
+    format_text(s, &res, width, dir, token);
 }
 
 use std::fmt::Write as _;
 
-pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32) {
-    if precision != 0 {
-        write!(s, "{val:w$.p$}", w = width as usize, p = precision as usize,).unwrap();
+pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32, dir: i8) {
+    let dir = if dir == 2 { 1 } else { dir };
+    let mut res = String::new();
+    if precision >= 0 {
+        write!(res, "{val:.p$}", p = precision as usize).unwrap();
     } else {
-        write!(s, "{val:w$}", w = width as usize).unwrap();
+        write!(res, "{val}").unwrap();
     }
+    format_text(s, &res, width, dir, b' ');
 }
 
-pub fn format_single(s: &mut String, val: f32, width: i32, precision: i32) {
-    if precision != 0 {
-        write!(s, "{val:w$.p$}", w = width as usize, p = precision as usize,).unwrap();
+pub fn format_single(s: &mut String, val: f32, width: i32, precision: i32, dir: i8) {
+    let dir = if dir == 2 { 1 } else { dir };
+    let mut res = String::new();
+    if precision >= 0 {
+        write!(res, "{val:.p$}", p = precision as usize).unwrap();
     } else {
-        write!(s, "{val:w$}", w = width as usize).unwrap();
+        write!(res, "{val}").unwrap();
     }
+    format_text(s, &res, width, dir, b' ');
 }
 
 #[must_use]
@@ -811,7 +826,7 @@ mod test {
         format_int(&mut s, 0x1234, 16, 0, b' ', false, true);
         assert_eq!("0x1234", s);
         s.clear();
-        format_long(&mut s, 0x123_4567, 16, 0, b' ', false, true);
+        format_long(&mut s, 0x123_4567, 16, 0, b' ', false, true, 1);
         assert_eq!("0x1234567", s);
         s.clear();
         format_int(&mut s, -1, 10, 3, b'0', false, false);
@@ -820,7 +835,7 @@ mod test {
         format_int(&mut s, -1, 10, 4, b'0', false, false);
         assert_eq!("-001", s);
         s.clear();
-        format_long(&mut s, -1, 10, 3, b'0', false, false);
+        format_long(&mut s, -1, 10, 3, b'0', false, false, 1);
         assert_eq!("-01", s);
         s.clear();
         format_int(&mut s, 1, 10, 3, b'0', true, false);

@@ -155,8 +155,7 @@ impl Output<'_> {
             {
                 format!("&*({val_expr})")
             } else if let Value::CallRef(v_nr, _) = val
-                && let Type::Function(_, ret, _) =
-                    self.data.def(self.def_nr).variables.tp(*v_nr)
+                && let Type::Function(_, ret, _) = self.data.def(self.def_nr).variables.tp(*v_nr)
                 && matches!(**ret, Type::Text(_))
             {
                 format!("&*({val_expr})")
@@ -188,6 +187,7 @@ impl Output<'_> {
             Value::Int(token),
             Value::Boolean(plus),
             Value::Boolean(note),
+            Value::Int(dir),
         ] = vals
         {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
@@ -196,7 +196,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_long({prefix}var_{s_nr}, {val_expr}, {radix} as u8, {width_expr}, {token} as u8, {plus}, {note})"
+                "ops::format_long({prefix}var_{s_nr}, {val_expr}, {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
             )?;
             return Ok(());
         }
@@ -209,15 +209,16 @@ impl Output<'_> {
         vals: &[Value],
         stack: bool,
     ) -> std::io::Result<()> {
-        if let [Value::Var(nr), val, width, prec] = vals {
+        if let [Value::Var(nr), val, width, prec, dir] = vals {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prec_expr = self.generate_expr_buf(prec)?;
+            let dir_expr = self.generate_expr_buf(dir)?;
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_float({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr})"
+                "ops::format_float({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {dir_expr} as i8)"
             )?;
             return Ok(());
         }
@@ -231,15 +232,16 @@ impl Output<'_> {
         vals: &[Value],
         stack: bool,
     ) -> std::io::Result<()> {
-        if let [Value::Var(nr), val, width, prec] = vals {
+        if let [Value::Var(nr), val, width, prec, dir] = vals {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prec_expr = self.generate_expr_buf(prec)?;
+            let dir_expr = self.generate_expr_buf(dir)?;
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_single({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr})"
+                "ops::format_single({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {dir_expr} as i8)"
             )?;
             return Ok(());
         }

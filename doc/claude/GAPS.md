@@ -1,7 +1,7 @@
 # Test Coverage Gaps
 
-Last updated 2026-04-02.  Previous measurement (2026-03-20) with `cargo llvm-cov`:
-Overall: **70.8% line / 75.9% function**.
+Last updated 2026-04-02.  Measurement with `cargo llvm-cov --summary-only`:
+Overall: **71.3% line / 74.9% function** (previous: 70.8% / 75.9%).
 
 ---
 
@@ -28,6 +28,7 @@ The following gaps from the previous version are now covered by `tests/scripts/*
 | Auto type conversion | `54-auto-convert.loft`: int*long, int+float, long+float, comparisons, i64 precision loss |
 | Non-ASCII character predicates | `03-text.loft`: is_lowercase/is_uppercase/is_alphabetic on accented characters, to_uppercase/to_lowercase on non-ASCII text |
 | Yield inside par() rejected | `36-parse-errors.loft`: `@EXPECT_ERROR` for yield in par body |
+| `native.rs` critically low (~30%) | Now 78.1% line — 56 scripts compile through native backend |
 
 ---
 
@@ -35,9 +36,11 @@ The following gaps from the previous version are now covered by `tests/scripts/*
 
 | File | Reason | Action |
 |---|---|---|
-| `src/documentation.rs` | HTML doc generation | Covered by `gendoc` binary; no Rust unit tests |
-| `src/gendoc.rs` | HTML doc binary | Same as above |
-| `src/main.rs` | CLI entry point | No integration tests invoke the binary directly |
+| `src/documentation.rs` (1238 lines) | HTML doc generation | Covered by `gendoc` binary; no Rust unit tests |
+| `src/gendoc.rs` (1495 lines, 1.9%) | HTML doc binary | Same as above |
+| `src/main.rs` (622 lines, 20.1%) | CLI entry point | Exit-code tests cover parse-error path; most CLI flags untested |
+| `src/radix_tree.rs` (311 lines) | Planned feature, `#[allow(dead_code)]` | Iterator `.next()` is a stub (`None`); entire module unused — blocked on feature completion |
+| `src/test_runner.rs` (1226 lines) | Test harness infrastructure | Only used when running tests; not itself tested |
 
 ---
 
@@ -45,31 +48,67 @@ The following gaps from the previous version are now covered by `tests/scripts/*
 
 | File | Line cover | Function cover | Key gaps |
 |---|---|---|---|
-| `src/native.rs` | ~30% | ~35% | Many stdlib functions only exercised via native compilation, not interpreter coverage |
-| `src/database/allocation.rs` | 43.0% | 68.2% | Store growth paths, boundary conditions — see §Database below |
-| `src/logger.rs` | ~40% | ~55% | Production-mode paths, crash_tail logging |
+| `src/native_utils.rs` | 12.3% | 9.1% | WASM/installed-layout paths, rlib rebuild triggers, project root detection |
+| `src/database/allocation.rs` | 38.6% | 71.0% | Store growth paths, boundary conditions — see §Database below |
+| `src/logger.rs` | 39.3% | 52.0% | Production-mode paths, config reload, rotation, rate limiting — see §Logger below |
+| `src/extensions.rs` | 45.5% | 33.3% | Plugin dedup, library load/symbol failures, WASM feature gate |
+| `src/variables/validate.rs` | 45.6% | 85.7% | Scope cycle detection, sibling conflicts, diagnostic formatting |
+| `src/database/search.rs` | 46.5% | 57.9% | Multi-key range queries, zero-result ranges, index iteration — see §Database below |
+
+---
+
+## Per-file coverage snapshot
+
+Files above 50% with notable gaps or recent changes:
+
+| File | Line % | Func % | Notes |
+|---|---|---|---|
+| `src/parser/builtins.rs` | 56.0 | 78.6 | `par()` parsing covered; remaining: error recovery paths |
+| `src/database/mod.rs` | 60.6 | 80.0 | Database init/schema paths |
+| `src/keys.rs` | 63.5 | 55.2 | Float/enum key comparisons, offset arithmetic, NaN — see §DbRef |
+| `src/database/io.rs` | 66.2 | 73.7 | File I/O record ops |
+| `src/state/debug.rs` | 67.6 | 70.4 | Dump/trace helpers |
+| `src/vector.rs` | 67.8 | 64.0 | `reverse_vector()` 0 hits, 8-byte sort paths — see §Vector |
+| `src/log_config.rs` | 72.9 | 88.0 | |
+| `src/ops.rs` | 73.8 | 81.9 | |
+| `src/lexer.rs` | 74.8 | 89.9 | |
+| `src/parser/control.rs` | 74.9 | 90.5 | |
+| `src/state/codegen.rs` | 76.3 | 93.8 | |
+| `src/native.rs` | 78.1 | 85.9 | Major improvement from ~30%; 56 scripts pass native |
+| `src/fill.rs` | 86.5 | 84.4 | 233 opcodes; remaining: rarely-used ops |
 
 ---
 
 ## Remaining gap areas
 
-### 1. Database / store boundary conditions (`src/database/allocation.rs`, 43.0%)
+### 1. Database / store boundary conditions (`src/database/allocation.rs`, 38.6%)
 
-**Uncovered paths** — these are Rust-internal tests (`tests/issues.rs` or `tests/limits.rs`):
+**Uncovered paths** — Rust-internal tests (`tests/issues.rs` or `tests/limits.rs`):
 - Allocation just below `MAX_STORE_WORDS` — verify no panic
 - Two consecutive large allocations that together exceed `MAX_STORE_WORDS` — verify correct panic message
 - `vector<T>` with a very large number of elements (10,000+) — verify growth, iteration, and removal all work
 - `sorted<T>` with 10,000+ elements — exercises radix tree deep traversal
 
-**Store search paths** (`src/database/search.rs`, 49.7%):
+**Store search paths** (`src/database/search.rs`, 46.5%):
 - Range queries on `sorted<T[k1, k2]>` with multi-key bounds
 - Range queries returning zero results
 - Range queries where lower bound > upper bound
 - `index<T[id]>` range iteration
+- Hash/index remove paths
 
 ---
 
-### 2. Parser stress / error recovery (`src/parser/`)
+### 2. Vector operations (`src/vector.rs`, 67.8%)
+
+**Script-testable:**
+- `reverse_vector()` — 0 hits; needs a `.loft` script that calls vector reverse
+- `sort_vector()` 8-byte element paths (long/float sort) — 0 hits
+- `sort_vector()` 1-byte and 2-byte element paths — 0 hits
+- `vector_step()` forward single-step — related to iteration but different semantics
+
+---
+
+### 3. Parser stress / error recovery (`src/parser/`)
 
 Not feasible as `.loft` script tests (require Rust harness for cascade error checking):
 
@@ -79,26 +118,61 @@ Not feasible as `.loft` script tests (require Rust harness for cascade error che
 
 ---
 
-### 3. Logger (`src/logger.rs`)
+### 4. Logger (`src/logger.rs`, 39.3%)
 
-Partly addressed by `tests/logger_severity.rs` (Rust-internal) and `53-logging.loft` (script).
+Partly addressed by `tests/logger_severity.rs` and `53-logging.loft`.
 
 Still missing (Rust-internal only):
 - Production mode: `log_fatal` in production mode — verify `had_fatal` is set instead of panicking
 - `LOFT_LOG=crash_tail:N` env var — verify last N lines are flushed on panic
+- Config hot-reload path — rate limiting between `check_reload()` calls
+- File rotation: daily boundary detection, `max_files` cleanup
+- Per-file severity overrides (path prefix matching)
+- Rate-limit window reset notices
 
 ---
 
-### 4. Reference / DbRef operations (`src/keys.rs`, 74.3%)
+### 5. Native utilities (`src/native_utils.rs`, 12.3%)
+
+Rust-internal only:
+- `loft_lib_dir_for()` — WASM target lookups, installed-layout fallbacks
+- `ensure_rlib_fresh()` — cargo rebuild branch
+- `newest_mtime_in()` — directory walk error handling
+- `project_dir()` — platform detection branches
+
+---
+
+### 6. Reference / DbRef operations (`src/keys.rs`, 63.5%)
 
 Rust-internal tests only:
 - Null `DbRef` dereference — what error is produced?
 - `store_nr` out of range (index into a non-existent store)
 - Record offset beyond the allocated record size
+- Float/enum key comparisons — NaN/Infinity edge cases
+- `DbRef::plus()` / `DbRef::min()` offset arithmetic
 
 ---
 
-### 5. Collection mutation patterns
+### 7. Slot validation (`src/variables/validate.rs`, 45.6%)
+
+Rust-internal only:
+- Scope cycle detection (assertion path)
+- Sibling-scope conflict skipping
+- Work-variable aliasing with `skip_free` flag (S34 optimization)
+- Diagnostic formatting paths
+
+---
+
+### 8. Extensions / plugin loading (`src/extensions.rs`, 45.5%)
+
+Rust-internal only:
+- Plugin deduplication (`loaded.contains()` branch)
+- Library open/symbol lookup failures
+- WASM feature gate codepath
+
+---
+
+### 9. Collection mutation patterns
 
 **Script-testable but blocked by parser bugs:**
 - `s.field = [vector_literal]` — parser panic (index out of bounds); tracked in PROBLEMS.md
@@ -110,7 +184,32 @@ Rust-internal tests only:
 
 ---
 
-### 6. Features tested only in `tests/*.rs` (not reproducible as `.loft` scripts)
+## Resolved test infrastructure issues
+
+| Issue | Resolution |
+|---|---|
+| `tests/wrap.rs` only called `main()` — 20 scripts with `fn test_*()` were never executed by `cargo test` | `run_test` now discovers all zero-param user functions; `loft_suite` no longer filters on `fn main(`. Scripts 56–60 and 10–40 (test-style) now run during `cargo test` and contribute to `cargo llvm-cov`. |
+| `06-structs.loft` pre-existing failures (`test_colours`, `test_vector_argument`) | Annotated `@EXPECT_FAIL`; `wrap.rs` now respects `@EXPECT_FAIL`, `@EXPECT_ERROR`, `@EXPECT_WARNING` annotations |
+| `31-vectors.loft` undeclared parse errors | Added `@EXPECT_ERROR` annotations for slice-to-vector type errors |
+| `36-parse-errors.loft` missing `PECycB` error annotation | Added second `@EXPECT_ERROR: 'PECycB' contains itself` |
+
+## Known test issues
+
+| Test | Issue | Status |
+|---|---|---|
+| `exit_codes::warning_only_program_exits_zero` | Fails under `cargo llvm-cov` instrumentation (exits 101 instead of 0); passes under normal `cargo test` | Environment-specific; does not affect real coverage |
+
+---
+
+## Known native codegen limitations
+
+| Script | Issue | Status |
+|---|---|---|
+| `56-closures.loft` | Was blocked by two bugs: `default_native_value` for `Type::Function` emitted `0_u32` instead of tuple; `format_text` didn't wrap `Value::CallRef` text returns with `&*` | **Fixed** — both bugs resolved, all 56 scripts pass native |
+
+---
+
+## Features tested only in `tests/*.rs` (not reproducible as `.loft` scripts)
 
 These are inherently Rust-API tests. They don't need `.loft` script equivalents:
 
@@ -129,22 +228,18 @@ These are inherently Rust-API tests. They don't need `.loft` script equivalents:
 
 ---
 
-## Known native codegen limitations
-
-| Script | Issue | Status |
-|---|---|---|
-| `56-closures.loft` | Was blocked by two bugs: `default_native_value` for `Type::Function` emitted `0_u32` instead of tuple; `format_text` didn't wrap `Value::CallRef` text returns with `&*` | **Fixed** — both bugs resolved, all 56 scripts pass native |
-
----
-
 ## Priority order
 
-1. **Database store boundaries** — `limits.rs` or `issues.rs`; important for correctness under real workloads.
-2. **Parser stress / error recovery** — new `parser_stress.rs`; medium effort, high value for robustness.
-3. **Logger production mode** — low risk; add to existing `logger_severity.rs`.
-4. **DbRef edge cases** — add to `data_structures.rs`; low effort.
-5. **Sorted remove during iteration** — blocked until sort-iterate-remove is properly supported.
-6. **Struct field vector literal reassignment** — blocked by parser bug.
+1. **Vector reverse/sort** — `.loft` script test; low effort, closes `reverse_vector()` 0% gap.
+2. **Database store boundaries** — `limits.rs` or `issues.rs`; important for correctness under real workloads.
+3. **Database range queries** — `.loft` scripts with multi-key sorted collections; moderate effort.
+4. **Parser stress / error recovery** — new `parser_stress.rs`; medium effort, high value for robustness.
+5. **Logger production mode + rotation** — add to existing `logger_severity.rs`; low risk.
+6. **DbRef edge cases** — add to `data_structures.rs`; low effort.
+7. **Slot validation paths** — add synthetic IR tests to `tests/slots.rs`.
+8. **Native utils** — Rust unit tests with filesystem mocking; moderate effort.
+9. **Sorted remove during iteration** — blocked until sort-iterate-remove is properly supported.
+10. **Struct field vector literal reassignment** — blocked by parser bug.
 
 ---
 
