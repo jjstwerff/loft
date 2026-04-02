@@ -672,25 +672,34 @@ copies from the static into the mutable store.
 
 ## Implementation order
 
-| Phase | Item | Effort | Impact | Dependencies |
+| Phase | Item | Status | Effort | Impact |
 |---|---|---|---|---|
-| 0 | **`const_eval()`** | Small | — | Prerequisite for all below |
-| 1 | **O8.1** Bulk primitive vectors | Medium | High | `const_eval`, `State::code_ptr`, `Store::copy_from_code` |
-| 2 | **O8.3** Zero-fill struct defaults | Small | Medium | None (independent) |
-| 3 | **O8.2** Bulk struct vectors | Medium | Medium | O8.1 + `const_eval` |
-| 4 | **O8.5** Constant range comprehensions | Medium | Medium | O8.1 + `const_eval` |
-| 5 | **O8.4** Const text table | Medium | Low | None (independent) |
+| 0 | **`const_eval()`** | **Done** | Small | — |
+| O8.1a | **Pre-allocate vector capacity** | **Done** | Small | Medium |
+| O8.5 | **Constant range comprehensions** | **Done** | Medium | Medium |
+| O8.1b | Packed bytes in bytecode | Not started | Medium | High |
+| O8.3 | Zero-fill struct defaults | Not started | Small | Low-Medium |
+| O8.2 | Bulk struct vectors | Not started | Medium | Medium |
 
-Phase 0 (`const_eval`) is small — a single recursive function (~80 lines)
-that pattern-matches on Value nodes and evaluates known arithmetic operators.
-It unlocks all subsequent phases by recognising expressions like `2*3`,
-`PI*SCALE`, and `i*i` as compile-time constants.
+### Delivered
 
-O8.1 + `const_eval` is the highest-value combination: vector literals with
-arithmetic, constants, and casts all become single bulk-copy operations.
-O8.3 is an independent quick win (no new opcodes, no const_eval needed).
-O8.5 is the most ambitious — it evaluates comprehension bodies at compile
-time — but builds directly on O8.1 infrastructure.
+- **`const_eval()`** — 130-line module with 10 unit tests.  Folds
+  arithmetic, casts, comparisons, boolean ops across all numeric types.
+- **O8.1a** — `OpPreAllocVector(vec, capacity, elem_size)` eliminates
+  all `store.resize()` calls for known-size vector literals.
+- **O8.5** — `[for i in 0..N { expr(i) }]` unrolled at compile time when
+  bounds and body are const-evaluable.  Filtered comprehensions also
+  supported.  10,000-element safety limit.
+
+### Remaining
+
+- **O8.1b** — embed packed constant bytes in bytecode for one-memcpy
+  init.  Needs `Value::Bytes` IR variant and `State::code_ptr()`.
+  Would reduce 3N → 1 ops (currently 3N+1 with pre-alloc).
+- **O8.3** — `OpZeroFill` after `OpDatabase` to skip per-field zero
+  writes.  Low-medium value since most fields are explicitly set.
+- **O8.2** — pack numeric struct records for bulk init.  Needs
+  `const_eval` on struct field values + field offset layout.
 
 ---
 
