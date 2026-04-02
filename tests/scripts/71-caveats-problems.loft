@@ -34,16 +34,7 @@ fn test_p85_struct_enum_local() {
   assert(p85_result == 42, "P85 struct-enum local: {p85_result}");
 }
 
-// --- P91: Circular init fields not detected at compile time ---
-
-struct P91Circ { a: integer = $.b, b: integer = $.a }
-
-// @EXPECT_FAIL: P91 circular init
-fn test_p91_circular_init_detection() {
-  p91_c = P91Circ { };
-  // Circular defaults silently produce null; should be detected at compile time.
-  assert(p91_c.a != null || p91_c.b != null, "P91 circular init should be detected");
-}
+// --- P91: moved to 72-parse-error-caveats.loft (now a compile error) ---
 
 // --- P98: Index range query with descending key returns wrong results ---
 

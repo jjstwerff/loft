@@ -34,7 +34,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
-| 91 | L7 `init(expr)` missing circular-init detection and parameter form | Low | Avoid circular `$` references between init fields |
+| 91 | L7 `init(expr)` circular-init detection *(fixed)* / parameter form missing | Low | Parameter form: pass explicitly |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 93 | T1.1 tuple-in-struct-field rejection *(fixed)* | — | Clear error emitted |
 | 97 | T1.2 `(a, b) += expr` *(fixed)* | — | Clear error emitted |
@@ -385,7 +385,9 @@ explicitly.
    store the expression in `Attribute.value`; at the call site, emit the expression
    when no argument is supplied.
 
-**Test:** `tests/scripts/71-caveats-problems.loft::test_p91_circular_init_detection` (`@EXPECT_FAIL`).
+**Circular detection:** Fixed — `= expr` shorthand now enables `init_field_tracking`,
+matching the `init(expr)` path.  **Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
+**Parameter form:** Still missing.
 
 **Discovered:** 2026-03-26, during L7 implementation.
 

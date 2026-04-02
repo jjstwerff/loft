@@ -339,14 +339,15 @@ pub fn OpIterate(
             let fields = arg as u16;
             let store = crate::keys::store(&data, all);
             if reverse {
-                let t = tree::find(&data, ex, fields, all, keys, till);
+                // A8.5-idx: start = one past last element, finish = one before first.
+                let till_node = tree::find(&data, true, fields, all, keys, till);
                 let start = if ex {
-                    t
+                    tree::next(store, &iter_ref(&data, till_node, fields))
                 } else {
-                    tree::next(store, &iter_ref(&data, t, fields))
+                    let till_match = tree::find(&data, false, fields, all, keys, till);
+                    tree::next(store, &iter_ref(&data, till_match, fields))
                 };
-                let f = tree::find(&data, ex, fields, all, keys, from);
-                let finish = tree::next(store, &iter_ref(&data, f, fields));
+                let finish = tree::find(&data, true, fields, all, keys, from);
                 pack_iter(start, finish)
             } else {
                 let start = tree::find(&data, true, fields, all, keys, from);

@@ -198,7 +198,6 @@ fn value(self: CPoint) -> integer {
   self.r * 0x10000 + self.g * 0x100 + self.b
 }
 
-// @EXPECT_FAIL: colours
 fn test_colours() {
   points = [ CPoint { r: 128, b: 128 }, CPoint { b: 255 } ];
   result = "size:{sizeof(CPoint)} purple:{points[0]} value:{points[0].value():x} blue:{points[1]}";

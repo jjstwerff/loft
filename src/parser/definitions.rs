@@ -1441,7 +1441,12 @@ impl Parser {
                     a_type = tp;
                     // '= expr' shorthand for a field default value
                     if self.lexer.has_token("=") {
+                        // #91: enable dep tracking so $.field accesses are recorded
+                        // for circular-init detection (same as init(expr) path).
+                        self.init_field_tracking = true;
+                        self.init_field_deps.clear();
                         let tp = self.expression(&mut value);
+                        self.init_field_tracking = false;
                         if a_type.is_unknown() {
                             a_type = tp;
                         }
