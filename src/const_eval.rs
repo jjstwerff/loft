@@ -14,6 +14,38 @@
 
 use crate::data::{Data, Value};
 
+/// Substitute `Var(var_nr)` with `replacement` throughout the IR tree,
+/// then const-fold the result.  Used for O8.5 comprehension unrolling.
+#[must_use]
+pub fn const_eval_with_var(
+    val: &Value,
+    var_nr: u16,
+    replacement: &Value,
+    data: &Data,
+) -> Option<Value> {
+    let substituted = substitute_var(val, var_nr, replacement);
+    const_eval(&substituted, data)
+}
+
+fn substitute_var(val: &Value, var_nr: u16, replacement: &Value) -> Value {
+    match val {
+        Value::Var(v) if *v == var_nr => replacement.clone(),
+        Value::Call(op, args) => {
+            let new_args: Vec<Value> = args
+                .iter()
+                .map(|a| substitute_var(a, var_nr, replacement))
+                .collect();
+            Value::Call(*op, new_args)
+        }
+        Value::If(cond, then_val, else_val) => Value::If(
+            Box::new(substitute_var(cond, var_nr, replacement)),
+            Box::new(substitute_var(then_val, var_nr, replacement)),
+            Box::new(substitute_var(else_val, var_nr, replacement)),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// Try to evaluate `val` as a compile-time constant.
 ///
 /// Safety invariants:

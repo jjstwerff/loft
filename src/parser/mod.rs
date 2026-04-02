@@ -86,6 +86,9 @@ pub struct Parser {
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
+    /// O8.5: range bounds captured by `parse_in_range_body` for const-unroll detection.
+    pub(crate) last_range_from: Option<Value>,
+    pub(crate) last_range_till: Option<Value>,
     vars: Function,
     /// Last seen line inside the source code, an increase inserts it in the internal code.
     line: u32,
@@ -271,6 +274,8 @@ impl Parser {
             context: u32::MAX,
             first_pass: true,
             reverse_iterator: false,
+            last_range_from: None,
+            last_range_till: None,
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),

@@ -773,7 +773,7 @@ impl Parser {
 
     // <for-vector> ::= 'for' <id> 'in' <range> ['if' <cond>] '{' <expr> '}'
     // Implements [for n in range { body }] vector comprehensions.
-    #[allow(clippy::too_many_arguments)] // parser helper threading IR-construction params alongside &mut self; no sensible grouping reduces the count
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(crate) fn parse_vector_for(
         &mut self,
         vec: u16,
@@ -851,6 +851,24 @@ impl Parser {
         }
         let tp = Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
         if self.first_pass {
+            return tp;
+        }
+        // O8.5: try const-unrolling for [for i in A..B [if cond] { expr(i) }].
+        // If the range bounds are const and the body folds for every i,
+        // emit a pre-computed literal vector instead of a runtime loop.
+        if matches!(in_t, Type::Integer(_, _, _))
+            && let Some(unrolled) =
+                self.try_const_unroll_comprehension(for_var, &create_iter, &body, &if_step, in_t)
+        {
+            let parent_tp = &Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+            let (tp, ls) = self.build_vector_list(
+                val, parent_tp, elm, vec, &unrolled, in_t, tp, is_var, is_field,
+            );
+            *val = if !is_var && !is_field {
+                v_block(ls, tp.clone(), "Const comprehension")
+            } else {
+                Value::Insert(ls)
+            };
             return tp;
         }
         // Second pass: build the append-in-loop bytecode.
@@ -1151,6 +1169,49 @@ impl Parser {
             }
         }
         (tp, ls)
+    }
+
+    /// O8.5: try to const-unroll a comprehension into a literal vector.
+    /// Returns Some(vec of folded values) if successful, None to fall back to runtime loop.
+    fn try_const_unroll_comprehension(
+        &self,
+        for_var: u16,
+        _create_iter: &Value,
+        body: &Value,
+        if_step: &Value,
+        _in_t: &Type,
+    ) -> Option<Vec<Value>> {
+        use crate::const_eval::{const_eval, const_eval_with_var};
+        // Extract range bounds captured during parse_in_range_body.
+        let from = const_eval(self.last_range_from.as_ref()?, &self.data)?;
+        let till = const_eval(self.last_range_till.as_ref()?, &self.data)?;
+        let (from_i, till_i) = match (&from, &till) {
+            (Value::Int(a), Value::Int(b)) => (*a, *b),
+            _ => return None,
+        };
+        if from_i >= till_i {
+            return Some(Vec::new()); // empty range
+        }
+        let count = (till_i - from_i) as u32;
+        if count > 10_000 {
+            return None; // S7: size limit
+        }
+        let has_filter = *if_step != Value::Null;
+        let mut values = Vec::with_capacity(count as usize);
+        for i in from_i..till_i {
+            let iv = Value::Int(i);
+            // Check filter condition if present.
+            if has_filter {
+                match const_eval_with_var(if_step, for_var, &iv, &self.data) {
+                    Some(Value::Boolean(true)) => {}         // include
+                    Some(Value::Boolean(false)) => continue, // skip
+                    _ => return None,                        // filter not const-foldable
+                }
+            }
+            let folded = const_eval_with_var(body, for_var, &iv, &self.data)?;
+            values.push(folded);
+        }
+        Some(values)
     }
 
     pub(crate) fn vector_needs_db(&self, vec: u16, in_t: &Type, is_var: bool) -> bool {
