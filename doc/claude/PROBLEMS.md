@@ -39,7 +39,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 93 | T1.1 tuple-in-struct-field rejection *(fixed)* | — | Clear error emitted |
 | 97 | T1.2 `(a, b) += expr` *(fixed)* | — | Clear error emitted |
 | 98 | Index range query with descending key *(fixed)* | — | XOR reverse bit for desc primary key |
-| 103 | Two inline vector function calls in one expression produce wrong result | Medium | Use separate variables for intermediate results |
+| 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
 
 ---
 
@@ -498,16 +498,32 @@ restoring the ascending walk direction — which is correct for a reversed desce
 
 ---
 
-### 103. Two inline vector function calls in one expression produce wrong result
+### 103. Inline vector concat in compound assignment expression *(mitigated)*
 
-**Symptom:** `f([1,2,3,4,5]) + 100 * f([1,2,3] + [4,5])` returns 121 instead of
-1515.  Each call works correctly in isolation.
+**Symptom:** `result = f([1,2,3,4,5]) + 100 * f([1,2,3] + [4,5])` returns wrong
+value.  Each call works correctly in isolation.
 
-**Root cause:** Temporary vectors created for inline arguments of two separate
-function calls in the same expression share database state incorrectly — the
-second call's temporary overwrites or aliases the first.
+**Root cause:** The vector concat `[a] + [b]` creates a Block with `OpDatabase`
+that temporarily grows the stack.  When this Block appears inside an assignment
+expression, `gen_set_first_at_tos` / `OpFreeStack` miscomputes the stack offset,
+placing the result at the wrong position.
+
+**Mitigation:** A compile-time warning is now emitted when vector concatenation
+appears inline in an expression: *"vector concatenation in an expression creates
+a temporary; assign to a variable first for correct results in compound
+expressions"*.
+
+**Workaround:** Assign the concat result to a variable first:
+```loft
+combined = [1,2,3] + [4,5];
+result = f([1,2,3,4,5]) + 100 * f(combined);  // correct
+```
 
 **Test:** `tests/scripts/70-ignored-struct-method-bugs.loft::test_vector_combined_expression` (`@EXPECT_FAIL`).
+
+**Full fix path:** Restructure `generate_block` to account for function-scoped
+variable allocations (`__vdb_N`, `_vec_N`) inside expression Blocks, or hoist
+database allocation out of the Block into the function preamble.
 
 ---
 

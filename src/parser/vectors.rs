@@ -28,7 +28,20 @@ impl Parser {
         let var_nr = if orig_var == u16::MAX {
             let vec = self.create_unique("vec", tp);
             let elm_tp = tp.content();
-            for l in self.vector_db(&elm_tp, vec) {
+            let db_ops = self.vector_db(&elm_tp, vec);
+            // P103: vector concat as an inline expression (not assigned to a variable)
+            // creates a temporary with database allocation that corrupts the stack when
+            // the result is used inside a compound assignment expression.
+            // Emit a warning so the user knows to assign to a variable first.
+            if !db_ops.is_empty() && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "vector concatenation in an expression creates a temporary; \
+                     assign to a variable first for correct results in compound expressions"
+                );
+            }
+            for l in db_ops {
                 ls.push(l);
             }
             ls.push(self.cl(

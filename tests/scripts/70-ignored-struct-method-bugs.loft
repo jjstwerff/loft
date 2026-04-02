@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// P103: Pre-existing failures from 06-structs.loft discovered when wrap.rs
-// was updated to run all entry points (not just main()).
-// test_vector_inline_argument: "Unknown record" or assert panic — passing an
-// inline vector literal [1,2,3] + [4,5] as a function argument corrupts state.
+// P103: Inline vector concat as function argument produces wrong results
+// in compound assignment expressions.
+// #warn vector concatenation in an expression creates a temporary
+// #warn vector concatenation in an expression creates a temporary
 
 fn smb_vec_sum(r: vector<integer>) -> integer {
   total = 0;
