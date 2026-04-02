@@ -806,9 +806,6 @@ pub fn len(both: vector) -> integer {
   OpLengthVector(both)
 }
 
-// O8.1a: Pre-allocate vector capacity so subsequent OpNewRecord calls never resize.
-fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
-#rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
 fn OpClearVector(r: vector);
 #rust"vector::clear_vector(&@r, &mut s.database.allocations);"
 // Remove all elements from the vector, setting its length to 0.
@@ -958,7 +955,9 @@ fn OpSiLoadConstCmpBranch(a: const u16, k: const integer, off: const i16);
 fn OpSiLoad2CmpBranch(a: const u16, b: const u16, off: const i16);
 fn OpSiLoadConstMulStore(a: const u16, k: const integer, c: const u16);
 fn OpSiLoad2MulStore(a: const u16, b: const u16, c: const u16);
-fn OpNop();
+// O8.1a: Pre-allocate vector capacity so subsequent OpNewRecord calls never resize.
+fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
+#rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
 // --- Vector aggregates ---
 // Internal helpers for reduce-based aggregates.
 fn __add_int(a: integer, b: integer) -> integer { a + b }

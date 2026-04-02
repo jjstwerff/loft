@@ -357,4 +357,3 @@ fn OpVarFnRef(pos: const u16) -> text;
 fn OpPutFnRef(pos: const u16, _fnref: text);
 #rust"{{ let v = *s.get_stack::<[i32; 4]>(); s.put_var(@pos, v); }}"
 
-

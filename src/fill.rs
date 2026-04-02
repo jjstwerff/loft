@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 257] = &[
+pub const OPERATORS: &[fn(&mut State); 256] = &[
     goto,
     goto_word,
     goto_false,
@@ -203,7 +203,6 @@ pub const OPERATORS: &[fn(&mut State); 257] = &[
     set_text,
     var_vector,
     length_vector,
-    pre_alloc_vector,
     clear_vector,
     get_vector,
     vector_ref,
@@ -242,7 +241,7 @@ pub const OPERATORS: &[fn(&mut State); 257] = &[
     si_load2_cmp_branch,
     si_load_const_mul_store,
     si_load2_mul_store,
-    nop,
+    pre_alloc_vector,
     get_file,
     get_dir,
     get_png_image,
@@ -1628,18 +1627,6 @@ fn length_vector(s: &mut State) {
     s.put_stack(new_value);
 }
 
-fn pre_alloc_vector(s: &mut State) {
-    let v_capacity = *s.code::<u16>();
-    let v_elem_size = *s.code::<u16>();
-    let v_r = *s.get_stack::<DbRef>();
-    vector::pre_alloc_vector(
-        &v_r,
-        u32::from(v_capacity),
-        u32::from(v_elem_size),
-        &mut s.database.allocations,
-    );
-}
-
 fn clear_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     vector::clear_vector(&v_r, &mut s.database.allocations);
@@ -1829,8 +1816,16 @@ fn si_load2_mul_store(s: &mut State) {
     s.si_load2_mul_store();
 }
 
-fn nop(s: &mut State) {
-    s.nop();
+fn pre_alloc_vector(s: &mut State) {
+    let v_capacity = *s.code::<u16>();
+    let v_elem_size = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    vector::pre_alloc_vector(
+        &v_r,
+        u32::from(v_capacity),
+        u32::from(v_elem_size),
+        &mut s.database.allocations,
+    );
 }
 
 fn get_file(s: &mut State) {

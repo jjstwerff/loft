@@ -69,7 +69,9 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
     if vec_rec != 0 {
         return; // already allocated — don't overwrite
     }
-    let words = (count * elem_size + 8).div_ceil(8);
+    // Match vector_append's minimum of 11 elements to avoid OOB on remove/shift.
+    let alloc_count = count.max(11);
+    let words = (alloc_count * elem_size + 15) / 8;
     let new_rec = store.claim(words);
     store.set_int(db.rec, db.pos, new_rec as i32);
     store.set_int(new_rec, 4, 0); // length = 0
