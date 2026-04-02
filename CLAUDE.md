@@ -172,6 +172,7 @@ states that are harder to debug than the original problem.
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [OPTIMISATIONS.md](doc/claude/OPTIMISATIONS.md) | Planned and implemented runtime/compiler optimisations |
+| [CONST_DATA.md](doc/claude/CONST_DATA.md) | Bulk constant data initialisation — O8.1–O8.4 design |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmark results, root-cause analysis vs Python and Rust, improvement plan |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |

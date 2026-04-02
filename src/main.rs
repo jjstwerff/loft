@@ -7,6 +7,7 @@ pub mod diagnostics;
 mod calc;
 mod codegen_runtime;
 mod compile;
+mod const_eval;
 mod data;
 mod database;
 mod extensions;
