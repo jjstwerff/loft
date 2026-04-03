@@ -8,6 +8,10 @@
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
 pub struct Manifest {
+    /// Package name from `[package] name = "..."`.
+    pub name: Option<String>,
+    /// Package version from `[package] version = "..."`.
+    pub version: Option<String>,
     /// Entry `.loft` file path, relative to the package root.
     /// Defaults to `src/<name>.loft` when absent.
     pub entry: Option<String>,
@@ -18,6 +22,9 @@ pub struct Manifest {
     /// `None` for pure-loft packages.  The interpreter resolves this to the
     /// platform-correct filename (`lib<stem>.so` / `.dylib` / `.dll`).
     pub native: Option<String>,
+    /// PKG.3: package dependencies from `[dependencies]` section.
+    /// Key = package name, value = version requirement or path.
+    pub dependencies: Vec<(String, String)>,
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -37,9 +44,16 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
             let key = key.trim();
             let value = value.trim().trim_matches('"');
             match (section.as_str(), key) {
+                ("package", "name") => manifest.name = Some(value.to_string()),
+                ("package", "version") => manifest.version = Some(value.to_string()),
                 ("package", "loft") => manifest.loft_version = Some(value.to_string()),
                 ("library", "entry") => manifest.entry = Some(value.to_string()),
                 ("library", "native") => manifest.native = Some(value.to_string()),
+                ("dependencies", _) => {
+                    manifest
+                        .dependencies
+                        .push((key.to_string(), value.to_string()));
+                }
                 _ => {}
             }
         }
@@ -108,6 +122,33 @@ mod tests {
         assert!(check_version(">=1.0", "1.2.3"));
         assert!(check_version(">=0.1.0", "0.1.0"));
         assert!(check_version("", "0.1.0"));
+    }
+
+    #[test]
+    fn parses_package_name_and_version() {
+        let p = write_temp(
+            "pkg",
+            "[package]\nname = \"graphics\"\nversion = \"0.2.1\"\nloft = \">=0.8\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.name.as_deref(), Some("graphics"));
+        assert_eq!(m.version.as_deref(), Some("0.2.1"));
+        assert_eq!(m.loft_version.as_deref(), Some(">=0.8"));
+    }
+
+    #[test]
+    fn parses_dependencies() {
+        let p = write_temp(
+            "deps",
+            "[dependencies]\nmath = \">=0.2\"\nutils = \"../utils\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.dependencies.len(), 2);
+        assert_eq!(m.dependencies[0], ("math".to_string(), ">=0.2".to_string()));
+        assert_eq!(
+            m.dependencies[1],
+            ("utils".to_string(), "../utils".to_string())
+        );
     }
 
     #[test]
