@@ -35,9 +35,10 @@ fn test_scene_with_node() {
   sn_s = scene::scene("complete");
   sn_mi = sn_s.add_mesh(mesh::mesh("simple"));
   sn_mati = sn_s.add_material(scene::material("default"));
-  sn_n = scene::node("box1", sn_mi, sn_mati);
+  sn_n = scene::node("cube1", sn_mi, sn_mati);
   sn_s.add_node(sn_n);
   assert(sn_s.nodes.len() == 1, "one node");
+  assert(sn_s.nodes[0].name == "cube1", "node name");
 }
 
 fn test_camera() {

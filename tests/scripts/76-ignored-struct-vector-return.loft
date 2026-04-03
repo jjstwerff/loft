@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // P104 FIXED: test runner now filters library functions
-// P105: Nested struct field access on vector elements (open — needs deeper fix)
+// P105 FIXED: get_ref() claims check detects inline vector data
 // C54 FIXED: ** operator mapped to pow()
 
 struct SvMat {
@@ -20,7 +20,7 @@ fn test_p104_direct_return() {
   assert(svr_m.vals[3] == 1.0, "last is 1.0");
 }
 
-// P105 workaround: avoid deep chained access on vector elements
+// P105: nested struct field access on vector elements
 struct SvInner {
   ix: float not null,
   iy: float not null
@@ -30,11 +30,61 @@ struct SvOuter {
   items: vector<SvInner>
 }
 
-fn test_p105_workaround() {
+fn test_p105_nested_field() {
   svo = SvOuter { };
   svo.items += [SvInner { ix: 3.0, iy: 4.0 }];
-  assert(svo.items.len() == 1, "one item added");
-  // P105: svo.items[0].ix still crashes — needs deeper fix
+  assert(svo.items.len() == 1, "one item");
+  assert(svo.items[0].ix == 3.0, "nested ix");
+  assert(svo.items[0].iy == 4.0, "nested iy");
+}
+
+fn test_p105_multiple_elements() {
+  svo2 = SvOuter { };
+  svo2.items += [SvInner { ix: 1.0, iy: 2.0 }];
+  svo2.items += [SvInner { ix: 5.0, iy: 6.0 }];
+  assert(svo2.items[0].ix == 1.0, "first ix");
+  assert(svo2.items[1].ix == 5.0, "second ix");
+  assert(svo2.items[1].iy == 6.0, "second iy");
+}
+
+// P105: complex struct with text + nested struct ref
+struct SvComplex {
+  name: text,
+  val: integer
+}
+
+struct SvHolder {
+  items: vector<SvComplex>
+}
+
+fn test_p105_text_field() {
+  svh = SvHolder { };
+  svh.items += [SvComplex { name: "hello", val: 42 }];
+  assert(svh.items[0].name == "hello", "text field on vector element");
+  assert(svh.items[0].val == 42, "int field on vector element");
+}
+
+// P105: deeply nested — struct within struct within vector
+struct SvPoint {
+  px: float not null,
+  py: float not null
+}
+
+struct SvVertex {
+  pos: SvPoint,
+  color: integer not null
+}
+
+struct SvMesh {
+  verts: vector<SvVertex>
+}
+
+fn test_p105_deep_nested() {
+  sm = SvMesh { };
+  sm.verts += [SvVertex { pos: SvPoint { px: 1.5, py: 2.5 }, color: 255 }];
+  assert(sm.verts[0].color == 255, "color field");
+  assert(sm.verts[0].pos.px == 1.5, "deep nested pos.px");
+  assert(sm.verts[0].pos.py == 2.5, "deep nested pos.py");
 }
 
 // C54: ** operator works

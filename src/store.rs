@@ -889,6 +889,14 @@ impl Store {
         }
     }
 
+    /// P105: check whether a record number is currently allocated.
+    /// Used by `get_ref()` to detect inline data that was misinterpreted
+    /// as a record pointer.
+    #[must_use]
+    pub fn is_claimed(&self, rec: u32) -> bool {
+        self.claims.contains(&rec)
+    }
+
     /// Try to validate a record reference as much as possible.
     /// Complete validations are only done in 'test' mode.
     pub fn valid(&self, rec: u32, fld: u32) -> bool {

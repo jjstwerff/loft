@@ -17,6 +17,9 @@ fn test_mesh_add_vertex() {
   mv_i = mv_m.add_vertex(mv_v);
   assert(mv_i == 0, "first vertex index");
   assert(mv_m.vertices.len() == 1, "one vertex");
+  // P105 fixed: nested struct field access on vector elements
+  assert(mv_m.vertices[0].pos.x == 1.0, "pos x");
+  assert(mv_m.vertices[0].pos.y == 2.0, "pos y");
 }
 
 fn test_mesh_add_triangle() {
