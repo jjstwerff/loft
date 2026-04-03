@@ -231,6 +231,46 @@ fn main() {
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
+        } else if a == "test" {
+            // PKG.6: `loft test [target]` — run package tests.
+            // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
+            let mut test_target = "tests".to_string();
+            if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                // `loft test draw` → tests/draw.loft
+                // `loft test draw::test_foo` → tests/draw.loft::test_foo
+                let arg = &argv[i];
+                if arg.contains("::") {
+                    test_target = format!("tests/{arg}");
+                } else if arg.ends_with(".loft") {
+                    test_target = format!("tests/{arg}");
+                } else {
+                    test_target = format!("tests/{arg}.loft");
+                }
+                i += 1;
+            }
+            // Read loft.toml to find src/ directory.
+            let manifest_path = std::path::Path::new("loft.toml");
+            if manifest_path.exists() {
+                let manifest = crate::manifest::read_manifest("loft.toml").unwrap_or_default();
+                let entry = manifest.entry.unwrap_or_else(|| "src".to_string());
+                let src_dir = std::path::Path::new(&entry)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("src"));
+                let abs_src = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(src_dir)
+                    .to_string_lossy()
+                    .to_string();
+                lib_dirs.push(abs_src);
+            } else if std::path::Path::new("src").is_dir() {
+                let abs_src = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("src")
+                    .to_string_lossy()
+                    .to_string();
+                lib_dirs.push(abs_src);
+            }
+            tests_dir = Some(test_target);
         } else if a.starts_with('-') {
             println!("unknown option: {a}");
             println!("usage: loft [options] <file>");
