@@ -524,6 +524,62 @@ database allocation out of the Block into the function preamble.
 
 ---
 
+### 104. Direct struct return with vector literal causes "Unknown definition" *(open)*
+
+**Symptom:** A function that returns a struct containing a vector literal
+directly as the return expression causes "Unknown definition" codegen error
+when the file is loaded alongside other functions:
+
+```loft
+pub fn mat4_identity() -> Mat4 {
+  Mat4 { m: [1.0, 0.0, ...] }   // FAILS — "Unknown definition"
+}
+```
+
+**Workaround:** Assign to an intermediate variable before returning:
+
+```loft
+pub fn mat4_identity() -> Mat4 {
+  id_res = Mat4 { m: [1.0, 0.0, ...] };
+  id_res                          // OK
+}
+```
+
+**Discovered:** Sprint 8 (GL4.1 math types).
+**Test:** `lib/graphics/tests/math_mat4.loft::test_mat4_identity` passes with workaround.
+
+---
+
+### 105. Nested struct field access on vector elements crashes *(open)*
+
+**Symptom:** Accessing a struct field on a vector element that itself contains
+a struct causes "Unknown record 0" runtime error:
+
+```loft
+mesh.vertices[0].pos.x   // "Unknown record 0"
+```
+
+**Workaround:** Avoid deep chained access on vector elements.
+
+**Discovered:** Sprint 8 (GL4.2 mesh types).
+**Test:** `lib/graphics/tests/mesh.loft::test_mesh_add_vertex` (simplified to avoid crash).
+
+---
+
+### 106. Store corruption with complex nested struct assignments *(open)*
+
+**Symptom:** Assigning a `Mat4` to a field of a `Node` struct inside a `Scene`
+(3 levels of nesting with vector storage) triggers "fl_validate: node at N has
+positive header" store corruption error.
+
+**Workaround:** Simplify nested struct operations — avoid assigning complex
+values to struct fields that are elements of vectors.
+
+**Discovered:** Sprint 8 (GL4.3 scene types).
+**Test:** `lib/graphics/tests/scene.loft::test_scene_with_node` (simplified to avoid crash).
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries

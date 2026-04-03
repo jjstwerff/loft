@@ -77,6 +77,38 @@ Only same-file enum variants work in match patterns.
 
 ---
 
+## C54 — Exponentiation `** 0.5` causes codegen crash
+
+Using `** 0.5` to compute a square root causes a codegen assertion:
+*"generate_call: mutable arg expected 8B on stack but generate(Null) pushed 0B"*.
+
+**Workaround:** use `sqrt()` from stdlib instead of `** 0.5`.
+**Test:** `lib/graphics/src/math.loft` — `length3()` uses `sqrt()`.
+**Bug:** [PROBLEMS.md](PROBLEMS.md) — not yet filed as a numbered problem (low priority, stdlib `sqrt` is the idiomatic approach).
+
+---
+
+## C55 — Struct return with inline vector literal
+
+Returning a struct containing a vector literal directly as the return
+expression can cause "Unknown definition" codegen errors.  See P104.
+
+**Workaround:** assign to intermediate variable, then return it.
+**Test:** `lib/graphics/src/math.loft` — `mat4_identity()`.
+
+---
+
+## C56 — Flat namespace requires split test files for complex libraries
+
+Libraries with many functions (math.loft has 15+) cause flat-namespace
+collisions when all tests are in one file.  Loop variables in library
+functions interfere with test function codegen.
+
+**Workaround:** split tests across multiple `.loft` files.
+**Test:** `lib/graphics/tests/math.loft`, `math_mat4.loft`, `math_mul.loft`.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths

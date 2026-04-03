@@ -1,0 +1,106 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Scene graph types for the graphics package.
+// Represents a 3D scene with nodes, cameras, lights, and materials.
+use math;
+use mesh;
+
+// --- Materials ---
+
+// A simple PBR-like material.
+pub struct Material {
+  name: text,
+  base_color_r: float not null,
+  base_color_g: float not null,
+  base_color_b: float not null,
+  base_color_a: float not null,
+  metallic: float not null,
+  roughness: float not null
+}
+
+pub fn material(mname: text) -> Material {
+  Material {
+    name: mname,
+    base_color_r: 0.8, base_color_g: 0.8, base_color_b: 0.8, base_color_a: 1.0,
+    metallic: 0.0, roughness: 0.5
+  }
+}
+
+pub fn set_color(self: Material, scr: float, scg: float, scb: float) {
+  self.base_color_r = scr;
+  self.base_color_g = scg;
+  self.base_color_b = scb;
+}
+
+// --- Scene nodes ---
+
+// A node in the scene graph with a mesh, material, and transform.
+pub struct Node {
+  name: text,
+  mesh_idx: integer,
+  material_idx: integer,
+  transform: math::Mat4
+}
+
+pub fn node(nn: text, nm: integer, nmat: integer) -> Node {
+  Node { name: nn, mesh_idx: nm, material_idx: nmat, transform: math::mat4_identity() }
+}
+
+// --- Camera ---
+
+pub struct Camera {
+  name: text,
+  fov: float not null,
+  near: float not null,
+  far: float not null,
+  position: math::Vec3,
+  target: math::Vec3
+}
+
+pub fn camera(cname: text) -> Camera {
+  Camera {
+    name: cname,
+    fov: 60.0, near: 0.1, far: 100.0,
+    position: math::vec3(0.0, 0.0, 5.0),
+    target: math::vec3(0.0, 0.0, 0.0)
+  }
+}
+
+// --- Scene ---
+
+// A complete 3D scene.
+pub struct Scene {
+  name: text,
+  meshes: vector<mesh::Mesh>,
+  materials: vector<Material>,
+  nodes: vector<Node>,
+  cameras: vector<Camera>
+}
+
+pub fn scene(sn: text) -> Scene {
+  Scene { name: sn }
+}
+
+// Add a mesh to the scene and return its index.
+pub fn add_mesh(self: Scene, sm: mesh::Mesh) -> integer {
+  si = self.meshes.len();
+  self.meshes += [sm];
+  si
+}
+
+// Add a material to the scene and return its index.
+pub fn add_material(self: Scene, smat: Material) -> integer {
+  si = self.materials.len();
+  self.materials += [smat];
+  si
+}
+
+// Add a node to the scene.
+pub fn add_node(self: Scene, sn: Node) {
+  self.nodes += [sn];
+}
+
+// Add a camera to the scene.
+pub fn add_camera(self: Scene, sc: Camera) {
+  self.cameras += [sc];
+}

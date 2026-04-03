@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the math module.
+use math;
+
+fn test_vec3_create() {
+  mv = math::vec3(1.0, 2.0, 3.0);
+  assert(mv.x == 1.0, "x");
+  assert(mv.y == 2.0, "y");
+  assert(mv.z == 3.0, "z");
+}
+
+fn test_vec3_add() {
+  ma = math::vec3(1.0, 2.0, 3.0);
+  mb = math::vec3(4.0, 5.0, 6.0);
+  mc = math::add3(ma, mb);
+  assert(mc.x == 5.0, "add x");
+  assert(mc.y == 7.0, "add y");
+  assert(mc.z == 9.0, "add z");
+}
+
+fn test_vec3_dot() {
+  da = math::vec3(1.0, 0.0, 0.0);
+  db = math::vec3(0.0, 1.0, 0.0);
+  assert(math::dot3(da, db) == 0.0, "orthogonal dot");
+  dc = math::vec3(1.0, 0.0, 0.0);
+  assert(math::dot3(da, dc) == 1.0, "parallel dot");
+}
+
+fn test_vec3_cross() {
+  cx = math::vec3(1.0, 0.0, 0.0);
+  cy = math::vec3(0.0, 1.0, 0.0);
+  cz = math::cross(cx, cy);
+  assert(cz.x == 0.0, "cross x");
+  assert(cz.y == 0.0, "cross y");
+  assert(cz.z == 1.0, "cross z");
+}
+
+fn test_vec3_normalize() {
+  nv = math::vec3(3.0, 0.0, 0.0);
+  nn = math::normalize3(nv);
+  assert(nn.x == 1.0, "norm x");
+  assert(nn.y == 0.0, "norm y");
+  assert(nn.z == 0.0, "norm z");
+}
+
+// Mat4 tests in math_mat4.loft and math_mul.loft to avoid flat-namespace collision

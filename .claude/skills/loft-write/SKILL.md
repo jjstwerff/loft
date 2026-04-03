@@ -388,6 +388,10 @@ match shape {
 | `Too few parameters on n_<fn>` (any params, not just const) | Any `for` loop in a function that is called from a recursive function — flat namespace corrupts parameter count for the recursive caller | Replace the `for` loop in the helper with recursion, or inline the loop into the recursive function (see PROBLEMS.md #84) |
 | `<fn> is not found` for `say(...)` | `say()` does not exist in stdlib | Use `println()` |
 | Parse error on local type annotation | Complex generic annotation on local var | Drop the annotation; let type be inferred |
+| `Unknown definition` on struct return with vector | Returning `Struct { field: [literal] }` directly | Assign to intermediate variable, then return it (P104) |
+| `Unknown record 0` on nested field access | `vec[i].struct_field.nested` — deep chained access | Avoid deep chaining on vector elements (P105) |
+| `fl_validate: positive header` | Complex nested struct assignment (3+ levels) | Simplify nested struct operations (P106) |
+| `generate_call: mutable arg ... pushed 0B` | Using `** 0.5` for square root | Use `sqrt()` from stdlib instead (C54) |
 
 ---
 

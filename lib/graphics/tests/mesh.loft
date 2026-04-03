@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the mesh module.
+use math;
+use mesh;
+
+fn test_mesh_create() {
+  mc_m = mesh::mesh("test");
+  assert(mc_m.name == "test", "mesh name");
+  assert(mc_m.vertices.len() == 0, "empty verts");
+  assert(mc_m.triangles.len() == 0, "empty tris");
+}
+
+fn test_mesh_add_vertex() {
+  mv_m = mesh::mesh("v");
+  mv_v = mesh::vertex(math::vec3(1.0, 2.0, 3.0), math::vec3(0.0, 1.0, 0.0), math::vec2(0.5, 0.5));
+  mv_i = mv_m.add_vertex(mv_v);
+  assert(mv_i == 0, "first vertex index");
+  assert(mv_m.vertices.len() == 1, "one vertex");
+}
+
+fn test_mesh_add_triangle() {
+  mt_m = mesh::mesh("t");
+  mt_n = math::vec3(0.0, 0.0, 1.0);
+  mt_uv = math::vec2(0.0, 0.0);
+  mt_m.add_vertex(mesh::vertex(math::vec3(0.0, 0.0, 0.0), mt_n, mt_uv));
+  mt_m.add_vertex(mesh::vertex(math::vec3(1.0, 0.0, 0.0), mt_n, mt_uv));
+  mt_m.add_vertex(mesh::vertex(math::vec3(0.0, 1.0, 0.0), mt_n, mt_uv));
+  mt_m.add_triangle(0, 1, 2);
+  assert(mt_m.triangles.len() == 1, "one triangle");
+  assert(mt_m.triangles[0].a == 0, "tri a");
+  assert(mt_m.triangles[0].b == 1, "tri b");
+  assert(mt_m.triangles[0].c == 2, "tri c");
+}
+
+fn test_cube() {
+  cb = mesh::cube();
+  assert(cb.name == "cube", "cube name");
+  assert(cb.vertices.len() == 8, "cube has 8 verts");
+  assert(cb.triangles.len() == 4, "cube has 4 tris (2 faces)");
+}

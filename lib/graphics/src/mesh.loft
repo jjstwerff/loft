@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Mesh types for the graphics package.
+// Vertex and triangle data structures for 3D geometry.
+use math;
+
+// --- Vertex and mesh ---
+
+// A single vertex with position, normal, and texture coordinates.
+pub struct Vertex {
+  pos: math::Vec3,
+  normal: math::Vec3,
+  uv: math::Vec2
+}
+
+pub fn vertex(vp: math::Vec3, vn: math::Vec3, vuv: math::Vec2) -> Vertex {
+  Vertex { pos: vp, normal: vn, uv: vuv }
+}
+
+// A triangle defined by three vertex indices.
+pub struct Triangle {
+  a: integer not null,
+  b: integer not null,
+  c: integer not null
+}
+
+// A mesh: a collection of vertices and triangles.
+pub struct Mesh {
+  name: text,
+  vertices: vector<Vertex>,
+  triangles: vector<Triangle>
+}
+
+pub fn mesh(mn: text) -> Mesh {
+  Mesh { name: mn }
+}
+
+// Add a vertex to the mesh and return its index.
+pub fn add_vertex(self: Mesh, av: Vertex) -> integer {
+  idx = self.vertices.len();
+  self.vertices += [av];
+  idx
+}
+
+// Add a triangle by vertex indices.
+pub fn add_triangle(self: Mesh, ti0: integer, ti1: integer, ti2: integer) {
+  self.triangles += [Triangle { a: ti0, b: ti1, c: ti2 }];
+}
+
+// Build a simple quad (two triangles) from 4 vertices.
+// Vertices should be in counter-clockwise order.
+pub fn add_quad(self: Mesh, qi0: integer, qi1: integer, qi2: integer, qi3: integer) {
+  self.add_triangle(qi0, qi1, qi2);
+  self.add_triangle(qi0, qi2, qi3);
+}
+
+// --- Primitive builders ---
+
+// Create a unit cube centered at origin (side length 1).
+pub fn cube() -> Mesh {
+  cm = mesh("cube");
+  // Front face (z = 0.5)
+  cv0 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 0.0)));
+  cv1 = cm.add_vertex(vertex(math::vec3( 0.5, -0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 0.0)));
+  cv2 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 1.0)));
+  cv3 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv0, cv1, cv2, cv3);
+  // Back face (z = -0.5)
+  cv4 = cm.add_vertex(vertex(math::vec3( 0.5, -0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(0.0, 0.0)));
+  cv5 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(1.0, 0.0)));
+  cv6 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(1.0, 1.0)));
+  cv7 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv4, cv5, cv6, cv7);
+  cm
+}

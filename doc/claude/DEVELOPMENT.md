@@ -135,8 +135,8 @@ Run through this list before pushing.  Skip items that are clearly unaffected.
 | `CHANGELOG.md` | Always — add entries under `## Unreleased` for every user-visible change |
 | `doc/claude/ROADMAP.md` | Sprint items were completed or reprioritised |
 | `doc/claude/PLANNING.md` | Items were completed (remove) or new items discovered (add) |
-| `doc/claude/PROBLEMS.md` | Bugs were fixed (mark resolved) or new bugs found (add) |
-| `doc/claude/CAVEATS.md` | Edge cases were fixed or new ones discovered |
+| `doc/claude/PROBLEMS.md` | Bugs were fixed (mark resolved) or **any new bug found during the sprint** (add with reproducer) |
+| `doc/claude/CAVEATS.md` | Edge cases were fixed or **any new workaround discovered** (add with test reference) |
 | `doc/claude/GAPS.md` | Test coverage improved or new gaps identified |
 | `README.md` | New user-facing features, CLI commands, or examples added |
 | Feature design doc (e.g. `PACKAGES.md`, `OPENGL.md`) | Implementation diverged from design, or phases completed |
@@ -144,6 +144,11 @@ Run through this list before pushing.  Skip items that are clearly unaffected.
 | `doc/claude/LOFT.md` | Language syntax or semantics changed |
 | `doc/claude/INTERNALS.md` | New opcodes, state changes, or native functions added |
 | `.claude/skills/loft-write/SKILL.md` | New patterns, caveats, or conventions for writing `.loft` files |
+
+**Filing bugs is not optional.** Every workaround, test simplification, or
+failure encountered during the sprint — even if worked around — must be
+filed in PROBLEMS.md or CAVEATS.md with a reproducer.  Unfiled bugs get
+rediscovered in future sprints, wasting time.
 
 **Why this matters:** stale documentation causes wasted time in future
 sessions.  Claude reads these docs at session start — if they describe

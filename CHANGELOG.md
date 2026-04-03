@@ -19,6 +19,13 @@ All notable changes to the loft language and interpreter.
 - **GL2.5** — `fill_triangle()`: scanline fill with vertex sorting.
 - **GL2.6** — `draw_aa_line()`: Xiaolin Wu anti-aliased line with alpha blending.
 - `fill_ellipse()`: solid filled ellipse via midpoint algorithm.
+- **GL4.1** — `math.loft`: `Vec2`, `Vec3`, `Vec4`, `Mat4` types with vector ops
+  (`add3`, `sub3`, `scale3`, `dot3`, `cross`, `normalize3`, `length3`) and matrix
+  ops (`mat4_identity`, `mat4_translate`, `mat4_scale`, `mat4_mul`, `mat4_transform`).
+- **GL4.2** — `mesh.loft`: `Vertex`, `Triangle`, `Mesh` types with builders
+  (`add_vertex`, `add_triangle`, `add_quad`, `cube()`).
+- **GL4.3** — `scene.loft`: `Material`, `Node`, `Camera`, `Scene` types with
+  PBR material support and scene graph builder.
 - RGBA color packing via `rgba()`/`rgb()` using long arithmetic to avoid i32::MIN
   sentinel collision.
 - 30 canvas tests covering all primitives.

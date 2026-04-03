@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the scene module.
+use math;
+use mesh;
+use scene;
+
+fn test_scene_create() {
+  sc = scene::scene("test scene");
+  assert(sc.name == "test scene", "scene name");
+  assert(sc.meshes.len() == 0, "no meshes");
+  assert(sc.materials.len() == 0, "no materials");
+  assert(sc.nodes.len() == 0, "no nodes");
+}
+
+fn test_scene_add_mesh() {
+  sm_s = scene::scene("s");
+  sm_m = mesh::cube();
+  sm_i = sm_s.add_mesh(sm_m);
+  assert(sm_i == 0, "first mesh index");
+  assert(sm_s.meshes.len() == 1, "one mesh");
+}
+
+fn test_scene_add_material() {
+  smat_s = scene::scene("s");
+  smat_m = scene::material("red");
+  smat_m.set_color(1.0, 0.0, 0.0);
+  smat_i = smat_s.add_material(smat_m);
+  assert(smat_i == 0, "first material index");
+  assert(smat_s.materials[0].base_color_r == 1.0, "red");
+  assert(smat_s.materials[0].base_color_g == 0.0, "not green");
+}
+
+fn test_scene_with_node() {
+  sn_s = scene::scene("complete");
+  sn_mi = sn_s.add_mesh(mesh::mesh("simple"));
+  sn_mati = sn_s.add_material(scene::material("default"));
+  sn_n = scene::node("box1", sn_mi, sn_mati);
+  sn_s.add_node(sn_n);
+  assert(sn_s.nodes.len() == 1, "one node");
+}
+
+fn test_camera() {
+  cam = scene::camera("main");
+  assert(cam.fov == 60.0, "default fov");
+  assert(cam.near == 0.1, "default near");
+  cam.position = math::vec3(0.0, 5.0, 10.0);
+  assert(cam.position.y == 5.0, "camera y");
+}

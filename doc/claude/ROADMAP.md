@@ -42,11 +42,11 @@ Sprint 7: Package deps + docs ✓ (branch sprint-7-pkg-deps-math)
   loft doc subcommand ✓
   shapes test package ✓
 
-Sprint 8: GLB export (pure loft)
-  GL4.3   scene types
+Sprint 8: 3D types + GLB (branch sprint-8-glb-types)
+  GL4.1   Vec3/Mat4 math types ✓
+  GL4.2   mesh types ✓
+  GL4.3   scene types ✓
   GL4.4   GLB binary writer
-  GL4.5   accessor encoding
-  GL4.6   material encoding
 
 Sprint 9: Native codegen for packages
   PKG.4   native codegen --extern
@@ -83,9 +83,6 @@ Sprint 12: Graphics native (needs PKG.4)
 | H4.3      | Header support (http_get_h, http_post_h)                  | S  | ✓      | H4.2         | web/native/src/lib.rs         |
 | H4.5      | Package tests + documentation                             | S  | ✓      | H4.2         | web/tests/                    |
 | GL3       | Text rendering (fontdue native + pure loft layout)        | M  | ✓      | GL1, PKG.1   | graphics/src/text.loft        |
-| GL4.1     | Vec3/Mat4 types + basic matrix ops (pure loft)            | S  | ✓      |              | graphics/src/math.loft        |
-| GL4.2     | Vertex/Triangle/Mesh structs + mesh builder               | S  | ✓      | GL4.1        | graphics/src/mesh.loft        |
-| GL4.3     | Scene/Camera/Light/Material structs                       | S  | ✓      | GL4.2        | graphics/src/scene.loft       |
 | GL4.4     | GLB binary writer (header + JSON chunk + BIN chunk)       | M  | ✓      | GL4.2        | graphics/src/glb.loft         |
 | GL4.5     | GLB accessor/bufferView encoding for mesh data            | M  | ✓      | GL4.4        | graphics/src/glb.loft         |
 | GL4.6     | GLB material + texture + scene node encoding              | S  | ✓      | GL4.5        | graphics/src/glb.loft         |
