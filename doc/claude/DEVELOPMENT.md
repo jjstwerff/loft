@@ -79,12 +79,31 @@ Never branch from another feature branch.
    b. Implement the code change
    c. Remove annotations, verify tests pass
    d. Commit: "{ID}: {description}"
-5. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
-6. git push -u origin sprint-{N}-{description}
-7. gh pr create
-8. Wait for CI green on all 3 platforms
-9. gh pr merge --squash
+5. Update all relevant documentation (see checklist below)
+6. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
+7. git push -u origin sprint-{N}-{description}
+8. gh pr create
+9. Wait for CI green on all 3 platforms
+10. gh pr merge --squash
 ```
+
+### Announce each step — MANDATORY
+
+**State the name of every step as you start or finish it.**  This applies to
+both the numbered sprint workflow steps above and the individual items within
+step 4.
+
+Examples:
+- "Starting step 2: checkout main"
+- "Starting item GL2.2: Bresenham line drawing"
+- "Finished item GL2.2 — all 7 tests pass"
+- "Starting step 5: documentation updates"
+- "Finished step 6: CI green, 45 passed"
+
+**Why:** silent progress is invisible progress.  The user cannot see tool
+calls in real time — they only see text output.  Naming each step gives the
+user a running status line so they know where things stand, can interrupt
+early if the plan is wrong, and can resume efficiently if context runs out.
 
 **Why this matters:** branching from an unmerged feature branch creates
 a dependency chain.  If the earlier branch needs changes during review,
@@ -100,6 +119,37 @@ with fewer than 4 items is fine — never pad a sprint to reach the target.
 
 If an item turns out larger than expected, split the sprint: merge what's
 done, create a new branch for the remainder.
+
+### Documentation updates — MANDATORY per sprint
+
+**Every sprint must update all documentation affected by its changes before
+the PR is created.**  Documentation is not a follow-up task — it ships with
+the code.
+
+#### Checklist (step 5 in the sprint workflow)
+
+Run through this list before pushing.  Skip items that are clearly unaffected.
+
+| Document | Update when… |
+|---|---|
+| `CHANGELOG.md` | Always — add entries under `## Unreleased` for every user-visible change |
+| `doc/claude/ROADMAP.md` | Sprint items were completed or reprioritised |
+| `doc/claude/PLANNING.md` | Items were completed (remove) or new items discovered (add) |
+| `doc/claude/PROBLEMS.md` | Bugs were fixed (mark resolved) or new bugs found (add) |
+| `doc/claude/CAVEATS.md` | Edge cases were fixed or new ones discovered |
+| `doc/claude/GAPS.md` | Test coverage improved or new gaps identified |
+| `README.md` | New user-facing features, CLI commands, or examples added |
+| Feature design doc (e.g. `PACKAGES.md`, `OPENGL.md`) | Implementation diverged from design, or phases completed |
+| `doc/claude/STDLIB.md` | New stdlib functions or types added |
+| `doc/claude/LOFT.md` | Language syntax or semantics changed |
+| `doc/claude/INTERNALS.md` | New opcodes, state changes, or native functions added |
+| `.claude/skills/loft-write/SKILL.md` | New patterns, caveats, or conventions for writing `.loft` files |
+
+**Why this matters:** stale documentation causes wasted time in future
+sessions.  Claude reads these docs at session start — if they describe
+features that don't exist yet or omit features that do, the first 10 minutes
+of the next session are spent rediscovering the current state.  Keeping docs
+in sync with code is cheaper than reconstructing context later.
 
 ---
 

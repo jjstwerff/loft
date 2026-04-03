@@ -1,0 +1,249 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Graphics library — 2D pixel canvas with drawing primitives.
+
+// RGBA color packed as a single integer: 0xAARRGGBB.
+// Alpha: 255 = fully opaque, 0 = fully transparent.
+// Use rgba() to construct and r()/g()/b()/a() to extract channels.
+
+// Pack RGBA channels into a single integer using bitwise ops.
+// Layout: bits 24..31 = alpha, 16..23 = red, 8..15 = green, 0..7 = blue.
+// Note: loft integers are 32-bit signed, so the alpha channel uses the
+// sign bit region.  Bitwise ops work correctly on the raw bits.
+pub fn rgba(cr: integer, cg: integer, cb: integer, ca: integer) -> integer {
+  // Use long arithmetic to avoid i32::MIN null sentinel when alpha >= 128.
+  packed = ((ca & 255) as long << 24l) | ((cr & 255) as long << 16l) | ((cg & 255) as long << 8l) | (cb & 255) as long;
+  packed as integer
+}
+
+pub fn rgb(cr: integer, cg: integer, cb: integer) -> integer {
+  rgba(cr, cg, cb, 255)
+}
+
+pub fn color_r(color: integer) -> integer { (color >> 16) & 255 }
+pub fn color_g(color: integer) -> integer { (color >> 8) & 255 }
+pub fn color_b(color: integer) -> integer { color & 255 }
+pub fn color_a(color: integer) -> integer {
+  // Use long to avoid sign-extension from arithmetic right shift.
+  ((color as long & 0xFF000000l) >> 24l) as integer & 255
+}
+
+// A 2D pixel canvas backed by a flat vector of RGBA integers.
+// Pixels are stored row-major: data[y * width + x].
+
+pub struct Canvas {
+  width: integer not null,
+  height: integer not null,
+  data: vector<integer>
+}
+
+// Create a canvas filled with a solid color.
+pub fn canvas(cw: integer, ch: integer, fill_color: integer) -> Canvas {
+  result = Canvas { width: cw, height: ch };
+  result.data = [for _ in 0..cw * ch { fill_color }];
+  result
+}
+
+// Get pixel color at (x, y). Returns 0 if out of bounds.
+pub fn get_pixel(self: const Canvas, gx: integer, gy: integer) -> integer {
+  if gx < 0 or gx >= self.width or gy < 0 or gy >= self.height {
+    0
+  } else {
+    self.data[gy * self.width + gx]
+  }
+}
+
+// Set pixel color at (x, y). No-op if out of bounds.
+pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer) {
+  if sx >= 0 and sx < self.width and sy >= 0 and sy < self.height {
+    self.data[sy * self.width + sx] = color;
+  }
+}
+
+// Fill the entire canvas with a solid color.
+pub fn clear(self: Canvas, color: integer) {
+  for cl_i in 0..self.width * self.height {
+    self.data[cl_i] = color;
+  }
+}
+
+// Alpha-blend src over dst. Both are 0xAARRGGBB packed integers.
+// Uses standard "src over" compositing: out = src * alpha + dst * (1 - alpha).
+pub fn blend(dst: integer, src: integer) -> integer {
+  sa = color_a(src);
+  if sa == 255 { return src; }
+  if sa == 0 { return dst; }
+  inv = 255 - sa;
+  br = (color_r(src) * sa + color_r(dst) * inv) / 255;
+  bg = (color_g(src) * sa + color_g(dst) * inv) / 255;
+  bb = (color_b(src) * sa + color_b(dst) * inv) / 255;
+  ba = sa + (color_a(dst) * inv) / 255;
+  rgba(br, bg, bb, ba)
+}
+
+// Draw a pixel with alpha blending at (x, y).
+pub fn blend_pixel(self: Canvas, bx: integer, by: integer, color: integer) {
+  if bx >= 0 and bx < self.width and by >= 0 and by < self.height {
+    idx = by * self.width + bx;
+    self.data[idx] = blend(self.data[idx], color);
+  }
+}
+
+// Fill a rectangle with a solid color. Clipped to canvas bounds.
+pub fn fill_rect(self: Canvas, rx: integer, ry: integer, rw: integer, rh: integer, color: integer) {
+  x0 = if rx < 0 { 0 } else { rx };
+  y0 = if ry < 0 { 0 } else { ry };
+  x1 = if rx + rw > self.width { self.width } else { rx + rw };
+  y1 = if ry + rh > self.height { self.height } else { ry + rh };
+  for fr_y in y0..y1 {
+    for fr_x in x0..x1 {
+      self.data[fr_y * self.width + fr_x] = color;
+    }
+  }
+}
+
+// Draw a horizontal line from (x0, y) to (x1, y). Clipped.
+pub fn hline(self: Canvas, hx0: integer, hx1: integer, hy: integer, color: integer) {
+  if hy < 0 or hy >= self.height { return; }
+  left = if hx0 < 0 { 0 } else { hx0 };
+  right = if hx1 > self.width { self.width } else { hx1 };
+  for hl_x in left..right {
+    self.data[hy * self.width + hl_x] = color;
+  }
+}
+
+// Draw a vertical line from (x, y0) to (x, y1). Clipped.
+pub fn vline(self: Canvas, vx: integer, vy0: integer, vy1: integer, color: integer) {
+  if vx < 0 or vx >= self.width { return; }
+  top = if vy0 < 0 { 0 } else { vy0 };
+  bottom = if vy1 > self.height { self.height } else { vy1 };
+  for vl_y in top..bottom {
+    self.data[vl_y * self.width + vx] = color;
+  }
+}
+
+// Draw a rectangle outline (1px border). Clipped.
+pub fn draw_rect(self: Canvas, drx: integer, dry: integer, drw: integer, drh: integer, color: integer) {
+  self.hline(drx, drx + drw, dry, color);
+  self.hline(drx, drx + drw, dry + drh - 1, color);
+  self.vline(drx, dry, dry + drh, color);
+  self.vline(drx + drw - 1, dry, dry + drh, color);
+}
+
+// --- GL2.2: Bresenham line drawing ---
+
+// Draw a line from (x0, y0) to (x1, y1) using Bresenham's algorithm.
+// Handles all octants. Each pixel is set (no blending).
+pub fn draw_line(self: Canvas, lx0: integer, ly0: integer, lx1: integer, ly1: integer, color: integer) {
+  dx = if lx1 > lx0 { lx1 - lx0 } else { lx0 - lx1 };
+  dy = if ly1 > ly0 { ly1 - ly0 } else { ly0 - ly1 };
+  sx = if lx0 < lx1 { 1 } else { -1 };
+  sy = if ly0 < ly1 { 1 } else { -1 };
+  err = dx - dy;
+  cx = lx0;
+  cy = ly0;
+  for _ in 0..dx + dy + 1 {
+    self.set_pixel(cx, cy, color);
+    if cx == lx1 and cy == ly1 { break; }
+    e2 = 2 * err;
+    if e2 > -dy {
+      err -= dy;
+      cx += sx;
+    }
+    if e2 < dx {
+      err += dx;
+      cy += sy;
+    }
+  }
+}
+
+// --- GL2.3: Circle and ellipse ---
+
+// Draw a circle outline using the midpoint algorithm.
+// Center at (cx, cy) with the given radius. Clipped via set_pixel.
+pub fn draw_circle(self: Canvas, ccx: integer, ccy: integer, radius: integer, color: integer) {
+  cx = 0;
+  cy = radius;
+  d = 1 - radius;
+  for _ in 0..radius * 4 + 4 {
+    if cx > cy { break; }
+    // Draw all 8 octant-symmetric points.
+    self.set_pixel(ccx + cx, ccy + cy, color);
+    self.set_pixel(ccx - cx, ccy + cy, color);
+    self.set_pixel(ccx + cx, ccy - cy, color);
+    self.set_pixel(ccx - cx, ccy - cy, color);
+    self.set_pixel(ccx + cy, ccy + cx, color);
+    self.set_pixel(ccx - cy, ccy + cx, color);
+    self.set_pixel(ccx + cy, ccy - cx, color);
+    self.set_pixel(ccx - cy, ccy - cx, color);
+    if d < 0 {
+      d += 2 * cx + 3;
+    } else {
+      d += 2 * (cx - cy) + 5;
+      cy -= 1;
+    }
+    cx += 1;
+  }
+}
+
+// Fill a circle (solid disk). Center at (cx, cy), given radius.
+pub fn fill_circle(self: Canvas, fcx: integer, fcy: integer, radius: integer, color: integer) {
+  cx = 0;
+  cy = radius;
+  d = 1 - radius;
+  for _ in 0..radius * 4 + 4 {
+    if cx > cy { break; }
+    self.hline(fcx - cx, fcx + cx + 1, fcy + cy, color);
+    self.hline(fcx - cx, fcx + cx + 1, fcy - cy, color);
+    self.hline(fcx - cy, fcx + cy + 1, fcy + cx, color);
+    self.hline(fcx - cy, fcx + cy + 1, fcy - cx, color);
+    if d < 0 {
+      d += 2 * cx + 3;
+    } else {
+      d += 2 * (cx - cy) + 5;
+      cy -= 1;
+    }
+    cx += 1;
+  }
+}
+
+// Draw an axis-aligned ellipse outline. Center (cx, cy), radii (rx, ry).
+pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery: integer, color: integer) {
+  // Midpoint ellipse algorithm — two regions.
+  ex = 0;
+  ey = ery;
+  rx2 = erx * erx;
+  ry2 = ery * ery;
+  // Region 1: dy/dx > -1
+  d1 = ry2 - rx2 * ery + rx2 / 4;
+  for _ in 0..erx + ery + 1 {
+    if ry2 * ex > rx2 * ey { break; }
+    self.set_pixel(ecx + ex, ecy + ey, color);
+    self.set_pixel(ecx - ex, ecy + ey, color);
+    self.set_pixel(ecx + ex, ecy - ey, color);
+    self.set_pixel(ecx - ex, ecy - ey, color);
+    if d1 < 0 {
+      d1 += ry2 * (2 * ex + 3);
+    } else {
+      d1 += ry2 * (2 * ex + 3) + rx2 * (-2 * ey + 2);
+      ey -= 1;
+    }
+    ex += 1;
+  }
+  // Region 2: dy/dx <= -1
+  d2 = ry2 * (ex * 2 + 1) * (ex * 2 + 1) / 4 + rx2 * (ey - 1) * (ey - 1) - rx2 * ry2;
+  for _ in 0..erx + ery + 1 {
+    if ey < 0 { break; }
+    self.set_pixel(ecx + ex, ecy + ey, color);
+    self.set_pixel(ecx - ex, ecy + ey, color);
+    self.set_pixel(ecx + ex, ecy - ey, color);
+    self.set_pixel(ecx - ex, ecy - ey, color);
+    if d2 > 0 {
+      d2 += rx2 * (-2 * ey + 3);
+    } else {
+      d2 += ry2 * (2 * ex + 2) + rx2 * (-2 * ey + 3);
+      ex += 1;
+    }
+    ey -= 1;
+  }
+}

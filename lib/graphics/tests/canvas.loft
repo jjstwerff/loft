@@ -1,0 +1,201 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the graphics library canvas and pixel operations.
+use graphics;
+
+fn test_rgba_pack_unpack() {
+  c = graphics::rgba(255, 128, 0, 200);
+  assert(graphics::color_r(c) == 255, "r={graphics::color_r(c)}");
+  assert(graphics::color_g(c) == 128, "g={graphics::color_g(c)}");
+  assert(graphics::color_b(c) == 0, "b={graphics::color_b(c)}");
+  assert(graphics::color_a(c) == 200, "a={graphics::color_a(c)}");
+}
+
+fn test_rgb_shorthand() {
+  c = graphics::rgb(10, 20, 30);
+  assert(graphics::color_a(c) == 255, "rgb alpha is 255");
+  assert(graphics::color_r(c) == 10, "rgb r");
+  assert(graphics::color_g(c) == 20, "rgb g");
+  assert(graphics::color_b(c) == 30, "rgb b");
+}
+
+fn test_canvas_create() {
+  cv = graphics::canvas(10, 8, graphics::rgb(0, 0, 0));
+  assert(cv.width == 10, "width");
+  assert(cv.height == 8, "height");
+  assert(cv.data.len() == 80, "pixel count");
+  assert(cv.data[0] == graphics::rgb(0, 0, 0), "fill color");
+  assert(cv.data[79] == graphics::rgb(0, 0, 0), "last pixel");
+}
+
+fn test_set_get_pixel() {
+  cv = graphics::canvas(4, 4, 0);
+  red = graphics::rgb(255, 0, 0);
+  cv.set_pixel(2, 1, red);
+  assert(cv.get_pixel(2, 1) == red, "set then get");
+  assert(cv.get_pixel(0, 0) == 0, "untouched pixel");
+  assert(cv.get_pixel(-1, 0) == 0, "out of bounds left");
+  assert(cv.get_pixel(4, 0) == 0, "out of bounds right");
+}
+
+fn test_clear() {
+  cv = graphics::canvas(3, 3, graphics::rgb(1, 2, 3));
+  white = graphics::rgb(255, 255, 255);
+  cv.clear(white);
+  assert(cv.data[0] == white, "cleared first");
+  assert(cv.data[8] == white, "cleared last");
+}
+
+fn test_blend_opaque() {
+  dst = graphics::rgb(100, 100, 100);
+  src = graphics::rgb(200, 50, 50);
+  result = graphics::blend(dst, src);
+  assert(result == src, "opaque src replaces dst");
+}
+
+fn test_blend_transparent() {
+  dst = graphics::rgb(100, 100, 100);
+  src = graphics::rgba(200, 50, 50, 0);
+  result = graphics::blend(dst, src);
+  assert(result == dst, "transparent src leaves dst unchanged");
+}
+
+fn test_blend_semi() {
+  dst = graphics::rgb(0, 0, 0);
+  src = graphics::rgba(255, 0, 0, 128);
+  result = graphics::blend(dst, src);
+  // 255 * 128/255 ≈ 128
+  assert(graphics::color_r(result) >= 126, "semi-blend r: {graphics::color_r(result)}");
+  assert(graphics::color_r(result) <= 130, "semi-blend r upper");
+  assert(graphics::color_g(result) == 0, "semi-blend g");
+}
+
+fn test_fill_rect() {
+  cv = graphics::canvas(10, 10, 0);
+  blue = graphics::rgb(0, 0, 255);
+  cv.fill_rect(2, 3, 4, 2, blue);
+  assert(cv.get_pixel(2, 3) == blue, "top-left of rect");
+  assert(cv.get_pixel(5, 4) == blue, "bottom-right of rect");
+  assert(cv.get_pixel(1, 3) == 0, "left of rect");
+  assert(cv.get_pixel(6, 3) == 0, "right of rect");
+  assert(cv.get_pixel(2, 5) == 0, "below rect");
+}
+
+fn test_hline() {
+  cv = graphics::canvas(8, 8, 0);
+  green = graphics::rgb(0, 255, 0);
+  cv.hline(1, 6, 3, green);
+  assert(cv.data[3 * 8 + 1] == green, "hline start");
+  assert(cv.data[3 * 8 + 5] == green, "hline end");
+  assert(cv.data[3 * 8 + 0] == 0, "hline before");
+}
+
+fn test_vline() {
+  vv = graphics::canvas(8, 8, 0);
+  green = graphics::rgb(0, 255, 0);
+  vv.vline(4, 1, 6, green);
+  assert(vv.data[1 * 8 + 4] == green, "vline start");
+  assert(vv.data[5 * 8 + 4] == green, "vline end");
+}
+
+fn test_draw_rect() {
+  cv = graphics::canvas(10, 10, 0);
+  red = graphics::rgb(255, 0, 0);
+  cv.draw_rect(1, 1, 5, 4, red);
+  // top edge
+  assert(cv.get_pixel(1, 1) == red, "top-left corner");
+  assert(cv.get_pixel(5, 1) == red, "top-right corner");
+  // bottom edge
+  assert(cv.get_pixel(1, 4) == red, "bottom-left corner");
+  assert(cv.get_pixel(5, 4) == red, "bottom-right corner");
+  // interior should be empty
+  assert(cv.get_pixel(3, 2) == 0, "interior empty");
+}
+
+fn test_fill_rect_clipped() {
+  cv = graphics::canvas(5, 5, 0);
+  c = graphics::rgb(1, 1, 1);
+  cv.fill_rect(-2, -2, 4, 4, c);
+  assert(cv.get_pixel(0, 0) == c, "clipped top-left");
+  assert(cv.get_pixel(1, 1) == c, "clipped interior");
+  assert(cv.get_pixel(2, 2) == 0, "outside clipped rect");
+}
+
+// --- GL2.2: Bresenham line ---
+
+fn test_draw_line_horizontal() {
+  cv = graphics::canvas(10, 10, 0);
+  red = graphics::rgb(255, 0, 0);
+  cv.draw_line(1, 3, 7, 3, red);
+  assert(cv.data[3 * 10 + 1] == red, "line start");
+  assert(cv.data[3 * 10 + 7] == red, "line end");
+  assert(cv.data[3 * 10 + 0] == 0, "before line");
+}
+
+fn test_draw_line_vertical() {
+  cv = graphics::canvas(10, 10, 0);
+  blue = graphics::rgb(0, 0, 255);
+  cv.draw_line(4, 1, 4, 8, blue);
+  assert(cv.data[1 * 10 + 4] == blue, "vline start");
+  assert(cv.data[8 * 10 + 4] == blue, "vline end");
+  assert(cv.data[0 * 10 + 4] == 0, "above line");
+}
+
+fn test_draw_line_diagonal() {
+  cv = graphics::canvas(10, 10, 0);
+  green = graphics::rgb(0, 255, 0);
+  cv.draw_line(0, 0, 5, 5, green);
+  assert(cv.data[0 * 10 + 0] == green, "diagonal start");
+  assert(cv.data[5 * 10 + 5] == green, "diagonal end");
+  assert(cv.data[2 * 10 + 2] == green, "diagonal mid");
+}
+
+fn test_draw_line_reverse() {
+  cv = graphics::canvas(10, 10, 0);
+  white = graphics::rgb(255, 255, 255);
+  cv.draw_line(7, 7, 2, 2, white);
+  assert(cv.data[7 * 10 + 7] == white, "reverse start");
+  assert(cv.data[2 * 10 + 2] == white, "reverse end");
+}
+
+// --- GL2.3: Circle and ellipse ---
+
+fn test_draw_circle() {
+  cv = graphics::canvas(20, 20, 0);
+  red = graphics::rgb(255, 0, 0);
+  cv.draw_circle(10, 10, 5, red);
+  // Top of circle: (10, 5)
+  assert(cv.data[5 * 20 + 10] == red, "circle top");
+  // Bottom: (10, 15)
+  assert(cv.data[15 * 20 + 10] == red, "circle bottom");
+  // Left: (5, 10)
+  assert(cv.data[10 * 20 + 5] == red, "circle left");
+  // Right: (15, 10)
+  assert(cv.data[10 * 20 + 15] == red, "circle right");
+  // Center should be empty
+  assert(cv.data[10 * 20 + 10] == 0, "circle center empty");
+}
+
+fn test_fill_circle() {
+  cv = graphics::canvas(20, 20, 0);
+  blue = graphics::rgb(0, 0, 255);
+  cv.fill_circle(10, 10, 4, blue);
+  // Center should be filled
+  assert(cv.data[10 * 20 + 10] == blue, "filled center");
+  // Edge should be filled
+  assert(cv.data[10 * 20 + 14] == blue, "filled right edge");
+  // Outside should be empty
+  assert(cv.data[10 * 20 + 16] == 0, "outside circle");
+}
+
+fn test_draw_ellipse() {
+  cv = graphics::canvas(30, 20, 0);
+  green = graphics::rgb(0, 255, 0);
+  cv.draw_ellipse(15, 10, 10, 5, green);
+  // Rightmost point: (25, 10)
+  assert(cv.data[10 * 30 + 25] == green, "ellipse right");
+  // Topmost point: (15, 5)
+  assert(cv.data[5 * 30 + 15] == green, "ellipse top");
+  // Center should be empty (outline only)
+  assert(cv.data[10 * 30 + 15] == 0, "ellipse center empty");
+}

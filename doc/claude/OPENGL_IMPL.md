@@ -27,7 +27,33 @@ ensuring loft is fast enough for real compute workloads.
 
 ---
 
-## Phase 0 — Project scaffolding
+## Implementation status
+
+**Phases 0–2 were implemented as a pure-loft package** in `lib/graphics/` rather than
+as Rust-native code in `src/drawing.rs`.  The design doc below was the original plan;
+the actual implementation diverged:
+
+| Design step | Actual implementation | Location |
+|---|---|---|
+| Phase 0 scaffolding | `lib/graphics/loft.toml` + `src/graphics.loft` | `lib/graphics/` |
+| Phase 1 Canvas | `Canvas` struct, `rgba()`/`rgb()`, `get/set_pixel`, `clear`, `blend` | `graphics.loft` |
+| Phase 2.1–2.3 lines/rect | `hline`, `vline`, `fill_rect`, `draw_rect` | `graphics.loft` |
+| Phase 2.4 Bresenham | `draw_line()` — pure loft, all octants | `graphics.loft` |
+| Phase 2.6 circle | `draw_circle()`, `fill_circle()` — midpoint algorithm | `graphics.loft` |
+| Phase 2.8–2.9 ellipse | `draw_ellipse()` — midpoint two-region | `graphics.loft` |
+| Phase 2.5 AA line | Not yet implemented |  |
+| Phase 2.7–2.9 Bezier | Not yet implemented |  |
+| Phase 2.10–2.12 fill | Not yet implemented |  |
+
+Tests: `lib/graphics/tests/canvas.loft` — 20 tests covering all implemented primitives.
+Run with: `cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/canvas.loft`
+
+The original Rust-native design is preserved below for reference.  Future phases (text,
+GLB, OpenGL) will likely need native extensions via the `#native` mechanism.
+
+---
+
+## Phase 0 — Project scaffolding (original design)
 
 **0.1** Create `lib/graphics/` with empty placeholder files:
 `draw.loft`, `mesh.loft`, `scene.loft`, `texture.loft`, `text.loft`,
