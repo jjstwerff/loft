@@ -2940,19 +2940,37 @@ Loft can load PNG files and access every pixel. Loading takes one function call;
 
 === Loading an Image
 
-Call `file(path).png()` to load a PNG into memory. The entire file is decoded at this point.
+Call `file(path).png()` to load a PNG into memory. The entire file is decoded at this point — width, height, and a flat vector of Pixel records are all available immediately.
 
 === Dimensions and Name
 
 `img.width` and `img.height` give the pixel dimensions. `img.name` is the file name without the directory path.
 
+=== The Pixel Struct
+
+Each element of `img.data` is a `Pixel` with three fields:
+
+```
+r: integer limit(0, 255) not null — red channel
+g: integer limit(0, 255) not null — green channel
+b: integer limit(0, 255) not null — blue channel
+```
+
+Values range from 0 (no intensity) to 255 (full intensity).
+
 === Pixel Access
 
-`img.data` is a `vector\<Pixel\>`. Each Pixel has `r`, `g`, `b` fields (0–255). Access by index: `img.data\[y \* img.width + x\]`. Iterate with a for loop to scan every pixel.
+`img.data` is a `vector\<Pixel\>`. Access by coordinate:
+
+```
+img.data[y * img.width + x]
+```
+
+Iterate with a for loop to scan every pixel.
 
 === Error Handling
 
-`png()` returns null when the file does not exist or cannot be decoded.
+`png()` returns null when the file does not exist or cannot be decoded. Always check `!img` or `img == null` before accessing fields.
 
 ```rust
 fn main() {
@@ -2967,7 +2985,7 @@ fn main() {
   assert(img.name == "map.png", "name={img.name}");
 ```
 
-=== Pixel Access
+=== Pixel Count
 
 Total pixels = width \* height.
 
@@ -2975,11 +2993,15 @@ Total pixels = width \* height.
   assert(img.data.len() == img.width * img.height, "pixel count");
 ```
 
-Read the top-left pixel.
+=== Reading Individual Pixels
+
+The top-left pixel is at index 0.
 
 ```rust
   px = img.data[0];
   assert(px.r >= 0 and px.r <= 255, "r in range");
+  assert(px.g >= 0 and px.g <= 255, "g in range");
+  assert(px.b >= 0 and px.b <= 255, "b in range");
 ```
 
 Read a pixel at (x=128, y=128) — the center.
@@ -2987,6 +3009,40 @@ Read a pixel at (x=128, y=128) — the center.
 ```rust
   center = img.data[128 * img.width + 128];
   assert(center.r >= 0, "center pixel r valid");
+```
+
+=== Scanning Pixels
+
+Count pixels brighter than a threshold.  A simple brightness approximation: (r + g + b) / 3 \> threshold.
+
+```rust
+  bright_count = 0;
+  for img_px in img.data {
+    brightness = (img_px.r + img_px.g + img_px.b) / 3;
+    if brightness > 200 {
+      bright_count += 1;
+    }
+  }
+  assert(bright_count >= 0, "bright pixel count: {bright_count}");
+```
+
+=== Finding Dominant Channel
+
+Walk every pixel and find which channel has the highest total value.
+
+```rust
+  total_r = 0l;
+  total_g = 0l;
+  total_b = 0l;
+  for ch_px in img.data {
+    total_r += ch_px.r as long;
+    total_g += ch_px.g as long;
+    total_b += ch_px.b as long;
+  }
+  dominant = if total_r >= total_g and total_r >= total_b { "red" }
+    else if total_g >= total_b { "green" }
+    else { "blue" };
+  assert(dominant.len() > 0, "dominant channel: {dominant}");
 ```
 
 === Error Handling
@@ -3471,18 +3527,36 @@ get_store_lock() is the function form of the \#lock attribute. Both return the s
 
 The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.
 
-Full syntax:
+=== Why parallel loops?
+
+When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — `par()` splits the work across CPU cores automatically.  You write a normal for loop; adding `par(...)` makes it parallel with no other changes.
+
+=== Syntax
 
 ```
 `for a in vec par(b=func(a), N) { body }`
 ```
 
-Two call forms:
+- `a` — loop variable, read-only reference to the current element
+- `b` — result variable, holds the return value of `func(a)`
+- `func(a)` — worker function called on each element
+- `N` — number of threads (1 = sequential, 4 = typical)
+
+=== Two call forms
 
 - \*\*Form 1\*\* — global function: `par(b=my_func(a), 4)`
 - \*\*Form 2\*\* — method on element: `par(b=a.my_method(), 4)`
 
-The worker function takes a read-only (`const`) reference to the element and returns a value (integer, float, boolean, text, or a struct). Results are delivered in the original order regardless of thread count. Extra arguments are forwarded: `par(b=scale(a, mult), N)`.
+=== Worker function rules
+
+The worker function:
+
+- Takes a `const` reference to the element (read-only, no mutation)
+- Returns a value (integer, float, boolean, text, or a struct)
+- Must not use global state or I/O (no println, no file access)
+- Can accept extra arguments forwarded from the calling scope
+
+Results are delivered in the original order regardless of which thread finishes first.
 
 ```rust
 struct Score {
@@ -3504,14 +3578,20 @@ struct DoubledScore {
 ```
 
 ```rust
-fn double_score(r: const Score) -> integer {
-  r.value * 2
+fn double_score(thr_r: const Score) -> integer {
+  thr_r.value * 2
 }
 ```
 
 ```rust
-fn make_doubled(r: const Score) -> DoubledScore {
-  DoubledScore { label: "v{r.value}", doubled: r.value * 2 }
+fn scale_score(thr_r: const Score, thr_factor: integer) -> integer {
+  thr_r.value * thr_factor
+}
+```
+
+```rust
+fn make_doubled(thr_r: const Score) -> DoubledScore {
+  DoubledScore { label: "v{thr_r.value}", doubled: thr_r.value * 2 }
 }
 ```
 
@@ -3523,9 +3603,9 @@ fn get_value(self: const Score) -> integer {
 
 ```rust
 fn make_scores() -> ScoreList {
-  q = ScoreList { };
-  q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
-  q
+  thr_q = ScoreList { };
+  thr_q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
+  thr_q
 }
 ```
 
@@ -3535,54 +3615,91 @@ fn main() {
 
 === Global Function (Form 1)
 
-Each Score's value is doubled by `double_score` across 4 threads.
+Each Score's value is doubled by `double_score` across 4 threads. The loop body sees `b` with the doubled value, in original order.
 
 ```rust
   q = make_scores();
   sum = 0;
-  for a in q.items par(b = double_score(a), 4) {
-    sum += b;
+  for thr_a in q.items par(thr_b = double_score(thr_a), 4) {
+    sum += thr_b;
   }
+```
+
+10\*2 + 20\*2 + 30\*2 = 120
+
+```rust
   assert(sum == 120, "parallel double: sum == 120");
+```
+
+=== Extra Arguments
+
+The worker function can take extra arguments from the calling scope. Here `scale_score(a, factor)` passes `factor=3` to every worker.
+
+```rust
+  q1b = make_scores();
+  factor = 3;
+  scaled_sum = 0;
+  for thr_a in q1b.items par(thr_b = scale_score(thr_a, factor), 4) {
+    scaled_sum += thr_b;
+  }
+```
+
+10\*3 + 20\*3 + 30\*3 = 180
+
+```rust
+  assert(scaled_sum == 180, "extra arg: scaled sum == 180");
 ```
 
 === Struct Return
 
-Workers can return a struct. Text fields are deep-copied automatically.
+Workers can return a struct.  Text fields are deep-copied so they remain valid after the worker thread exits.
 
 ```rust
   q2 = make_scores();
   labels = "";
-  for sa in q2.items par(ds = make_doubled(sa), 1) {
-    labels += "{ds.label},";
+  for thr_sa in q2.items par(thr_ds = make_doubled(thr_sa), 1) {
+    labels += "{thr_ds.label},";
   }
   assert(labels == "v10,v20,v30,", "struct return: {labels}");
 ```
 
 === Method Call (Form 2)
 
-`b=a.get_value()` dispatches the method on each element in parallel.
+`b=a.get_value()` dispatches the method on each element in parallel. This is syntactic sugar — equivalent to `b=get_value(a)`.
 
 ```rust
   q3 = make_scores();
   total = 0;
-  for a in q3.items par(b = a.get_value(), 4) {
-    total += b;
+  for thr_a in q3.items par(thr_b = thr_a.get_value(), 4) {
+    total += thr_b;
   }
   assert(total == 60, "method call: total == 60");
 ```
 
 === Empty Vector
 
-An empty vector is safe — the loop body never executes.
+An empty vector is safe — the loop body never executes, no threads are spawned.
 
 ```rust
   empty = ScoreList { };
-  n = 0;
-  for a in empty.items par(b = double_score(a), 1) {
-    n += 1;
+  thr_n = 0;
+  for thr_a in empty.items par(thr_b = double_score(thr_a), 1) {
+    thr_n += 1;
   }
-  assert(n == 0, "empty: 0 iterations");
+  assert(thr_n == 0, "empty: 0 iterations");
+```
+
+=== Sequential fallback
+
+Using `par(..., 1)` runs the worker on a single thread — useful for debugging.  The behaviour is identical; only the parallelism changes.
+
+```rust
+  q4 = make_scores();
+  seq_sum = 0;
+  for thr_a in q4.items par(thr_b = double_score(thr_a), 1) {
+    seq_sum += thr_b;
+  }
+  assert(seq_sum == 120, "sequential par(1): same result");
 }
 ```
 
@@ -4270,10 +4387,10 @@ No special syntax at the call site — the compiler infers T from the first argu
 
 ```rust
 fn test_identity() {
-  assert(identity(42) == 42);
-  assert(identity(3.14) == 3.14);
-  assert(identity("hello") == "hello");
-  assert(identity(true) == true);
+  assert(identity(42) == 42, "identity integer");
+  assert(identity(3.14) == 3.14, "identity float");
+  assert(identity("hello") == "hello", "identity text");
+  assert(identity(true) == true, "identity bool");
 }
 ```
 
@@ -4282,29 +4399,95 @@ fn test_identity() {
 Additional parameters can also use T.  They all share the same concrete type.
 
 ```rust
-fn pick_second<T>(a: T, b: T) -> T {
-  _x = a;
-  b
+fn pick_second<T>(gen_a: T, gen_b: T) -> T {
+  _x = gen_a;
+  gen_b
 }
 fn test_pick_second() {
-  assert(pick_second(1, 99) == 99);
-  assert(pick_second("a", "b") == "b");
+  assert(pick_second(1, 99) == 99, "pick second int");
+  assert(pick_second("a", "b") == "b", "pick second text");
+}
+```
+
+=== Generic functions on vectors
+
+The most common use of generics: write a function that works on any vector. T is inferred from the vector's element type.
+
+```rust
+fn first_element<T>(gen_v: vector<T>) -> T {
+  gen_v[0]
+}
+fn last_element<T>(gen_v: vector<T>) -> T {
+  gen_v[gen_v.len() - 1]
+}
+fn test_vector_generics() {
+  ints = [10, 20, 30];
+  assert(first_element(ints) == 10, "first int");
+  assert(last_element(ints) == 30, "last int");
+  words = ["alpha", "beta", "gamma"];
+  assert(first_element(words) == "alpha", "first text");
+  assert(last_element(words) == "gamma", "last text");
+}
+```
+
+=== Bounded generics with interfaces
+
+By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: `\<T: Ordered\>` means T must support `\<`, `\<=`, `\>`, `\>=` comparisons.
+
+Built-in interfaces:
+
+```
+Ordered    — comparison operators (<, <=, >, >=)
+Equatable  — equality operators (==, !=)
+Addable    — addition and subtraction (+, -)
+Numeric    — all arithmetic (+, -, *, /, %)
+Scalable   — multiplication by integer (* integer)
+```
+
+```rust
+fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
+  if gen_x > gen_y { gen_x } else { gen_y }
+}
+fn gen_min<T: Ordered>(gen_x: T, gen_y: T) -> T {
+  if gen_x < gen_y { gen_x } else { gen_y }
+}
+fn test_bounded() {
+  assert(gen_max(3, 7) == 7, "max int");
+  assert(gen_max(2.5, 1.5) == 2.5, "max float");
+  assert(gen_min(3, 7) == 3, "min int");
+  assert(gen_min("apple", "banana") == "apple", "min text");
+}
+```
+
+=== Combining bounds
+
+Use `+` to require multiple interfaces: `\<T: Ordered + Addable\>`.
+
+```rust
+fn clamped_add<T: Ordered + Addable>(gen_a: T, gen_b: T, gen_hi: T) -> T {
+  result = gen_a + gen_b;
+  if result > gen_hi { gen_hi } else { result }
+}
+fn test_combined_bounds() {
+  assert(clamped_add(3, 4, 10) == 7, "under limit");
+  assert(clamped_add(8, 5, 10) == 10, "clamped to limit");
+  assert(clamped_add(1.0, 2.0, 2.5) == 2.5, "float clamped");
 }
 ```
 
 === Allowed operations on T
 
-Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.
+Inside a generic function you may only use operations that the bound guarantees.  Without any bound: assign, return, store in variables. With Ordered: comparisons.  With Addable: + and -.
 
 === Disallowed operations
 
-The compiler rejects operations that require knowing what T is. For example, `x + y` on two T values gives:
+The compiler rejects operations not covered by the bound. `x + y` on unbounded T gives:
 
 ```
 "generic type T: operator '+' requires a concrete type"
 ```
 
-Similarly, `x.field` gives:
+`x.field` on T gives:
 
 ```
 "generic type T: field access requires a concrete type"
@@ -4314,6 +4497,9 @@ Similarly, `x.field` gives:
 fn main() {
   test_identity();
   test_pick_second();
+  test_vector_generics();
+  test_bounded();
+  test_combined_bounds();
 }
 ```
 
@@ -4729,6 +4915,278 @@ Already in order
   triple.1 = 99;
   assert(triple.0 == 10 && triple.1 == 99 && triple.2 == 30,
     "triple modified: ({triple.0},{triple.1},{triple.2})");
+}
+```
+
+
+= Match
+
+The `match` expression lets you compare a value against a series of patterns and run different code for each case.  It is similar to `switch` in other languages but more powerful: patterns can destructure structs, bind fields to local variables, and include `if` guards. Match is an expression — it returns a value, so you can assign the result or use it directly inside a larger expression.
+
+=== Simple enum matching
+
+The most common use: branch on an enum variant.  Every variant must be covered or a `_` wildcard must appear — the compiler checks exhaustiveness.
+
+```rust
+enum Direction { North, South, East, West }
+```
+
+```rust
+fn direction_name(d: Direction) -> text {
+  match d {
+    North => "north",
+    South => "south",
+    East  => "east",
+    West  => "west",
+  }
+}
+```
+
+```rust
+fn main() {
+  assert(direction_name(North) == "north", "simple enum match");
+  assert(direction_name(West) == "west", "west");
+```
+
+=== Match as expression
+
+Because match returns a value you can use it in assignments and arguments.
+
+```rust
+  score = match Direction.East {
+    North | South => 10,
+    East | West   => 20,
+  };
+  assert(score == 20, "match expression: {score}");
+```
+
+=== Struct-enum destructuring
+
+When an enum has variants with fields (a struct-enum) you can bind the fields to variables in the match arm.
+
+```
+Circle { radius } — binds the 'radius' field to a local variable
+Rect { w, h }     — binds both 'w' and 'h'
+```
+
+The variable names must match the field names exactly.
+
+=== Guards
+
+Add `if condition` after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.
+
+```rust
+  v = 42;
+  label = match v {
+    0      => "zero",
+    _ if v < 0 => "negative",
+    _ if v > 100 => "large",
+    _      => "normal",
+  };
+  assert(label == "normal", "guard: {label}");
+```
+
+=== Wildcard `_`
+
+The underscore `_` matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.
+
+```rust
+  x = 7;
+  kind = match x {
+    1 => "one",
+    2 => "two",
+    _ => "other",
+  };
+  assert(kind == "other", "wildcard: {kind}");
+```
+
+=== Integer matching
+
+Match works on integers — each arm is compared with `==`.
+
+```rust
+  name = match 3 {
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    _ => "many",
+  };
+  assert(name == "three", "integer match: {name}");
+```
+
+=== Text matching
+
+Match also works on text values.
+
+```rust
+  greeting = "hi";
+  reply = match greeting {
+    "hello" => "formal",
+    "hi"    => "casual",
+    _       => "unknown",
+  };
+  assert(reply == "casual", "text match: {reply}");
+```
+
+=== Multiple patterns with `|`
+
+Combine patterns with `|` to share the same arm body.
+
+```rust
+  d = Direction.South;
+  axis = match d {
+    North | South => "vertical",
+    East | West   => "horizontal",
+  };
+  assert(axis == "vertical", "multi-pattern: {axis}");
+```
+
+=== Nested match
+
+Match can appear inside other expressions, including other match arms.
+
+```rust
+  n = 15;
+  result = match n % 2 == 0 {
+    true  => "even",
+    false => match n % 3 == 0 {
+      true  => "odd multiple of 3",
+      false => "odd",
+    },
+  };
+  assert(result == "odd multiple of 3", "nested: {result}");
+}
+```
+
+
+= Formatting
+
+Loft strings can embed expressions inside `{...}` braces.  A colon after the expression introduces a format specifier that controls width, alignment, precision, number base, and output style.
+
+=== Basic interpolation
+
+Any expression inside `{...}` is evaluated and converted to text.
+
+```rust
+fn main() {
+  name = "world";
+  assert("hello {name}" == "hello world", "basic interpolation");
+  assert("1 + 2 = {1 + 2}" == "1 + 2 = 3", "expression in braces");
+```
+
+=== Width and alignment
+
+A number after `:` sets the minimum width.  The value is padded with spaces to fill the width.
+
+```
+{val:6}   — right-aligned (default for numbers)
+{val:>6}  — right-aligned (explicit)
+{val:<6}  — left-aligned
+{val:^6}  — centered
+```
+
+For text, the default alignment is left.  For numbers, right.
+
+```rust
+  assert("{42:6}" == "    42", "default number align is right");
+  assert("{42:>6}" == "    42", "explicit right-align");
+  assert("{42:<6}" == "42    ", "left-align number");
+  assert("{42:^6}" == "  42  ", "center-align number");
+  s = "hi";
+  assert("{s:6}" == "hi    ", "default text align is left");
+  assert("{s:>6}" == "    hi", "right-align text");
+  assert("{s:^6}" == "  hi  ", "center-align text");
+```
+
+=== Zero padding
+
+Prefix the width with `0` to pad with zeros instead of spaces.
+
+```rust
+  assert("{7:03}" == "007", "zero-padded 3 digits");
+  assert("{42:05}" == "00042", "zero-padded 5 digits");
+  assert("{-1:04}" == "-001", "zero-padded negative: sign before zeros");
+```
+
+=== Signed format
+
+`+` forces a sign on positive numbers.
+
+```rust
+  assert("{42:+}" == "+42", "explicit positive sign");
+  assert("{-42:+}" == "-42", "negative sign always shown");
+  assert("{0:+}" == "+0", "sign on zero");
+```
+
+=== Hexadecimal, binary, octal
+
+`:x` for lowercase hex, `:\#x` for hex with `0x` prefix. `:b` for binary, `:o` for octal.
+
+```rust
+  assert("{255:x}" == "ff", "hex lowercase");
+  assert("{255:#x}" == "0xff", "hex with prefix");
+  assert("{10:b}" == "1010", "binary");
+  assert("{8:o}" == "10", "octal");
+```
+
+=== Float precision
+
+`.N` after the colon limits decimal places.
+
+```rust
+  assert("{3.125:.1}" == "3.1", "1 decimal place");
+  assert("{3.125:.2}" == "3.12", "2 decimal places");
+  assert("{3.125:.0}" == "3", "0 decimal places");
+  assert("{0.0:.3}" == "0.000", "trailing zeros");
+```
+
+=== Width + precision
+
+Combine width and precision: `{val:W.P}` where W is total width and P is decimal places.
+
+```rust
+  assert("{3.125:8.2}" == "    3.12", "width 8 precision 2");
+  assert("{-3.125:8.2}" == "   -3.12", "negative width+precision");
+```
+
+=== JSON format
+
+`:j` serialises a struct or value as JSON. `:j` serialises a struct as JSON.  Use it on struct values, not primitives. See the JSON documentation page for full details.
+
+=== Vector format
+
+Vectors are formatted as `\[a,b,c\]` by default. A format specifier inside a `for` loop applies to each element.
+
+```rust
+  v = [1, 2, 3];
+  assert("{v}" == "[1,2,3]", "default vector format");
+  assert("{for fmt_n in 1..4 {fmt_n * 10}:04}" == "[0010,0020,0030]", "formatted vector elements");
+```
+
+=== Long and single types
+
+Long integers and single-precision floats use the same format specifiers.
+
+```rust
+  n = 1000000l;
+  assert("{n}" == "1000000", "long default");
+  assert("{n:>10}" == "   1000000", "long right-aligned");
+  f = 1.5f;
+  assert("{f}" == "1.5", "single default");
+```
+
+=== Character format
+
+```rust
+  c = 'A';
+  assert("{c}" == "A", "character default");
+```
+
+=== Boolean format
+
+```rust
+  assert("{true}" == "true", "boolean true");
+  assert("{false}" == "false", "boolean false");
 }
 ```
 
@@ -5351,7 +5809,7 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T
 
 Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum(\[10, 20, 12\], 0) == 42
 
-== A10: Field iteration support types
+== Field iteration support types
 
 ```rust
 pub enum FieldValue {

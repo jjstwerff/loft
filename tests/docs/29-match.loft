@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Match
+// @TITLE: Pattern matching with match expressions
+// The `match` expression lets you compare a value against a series of patterns
+// and run different code for each case.  It is similar to `switch` in other
+// languages but more powerful: patterns can destructure structs, bind fields to
+// local variables, and include `if` guards.
+// Match is an expression — it returns a value, so you can assign the result
+// or use it directly inside a larger expression.
+// ## Simple enum matching
+// The most common use: branch on an enum variant.  Every variant must be covered
+// or a `_` wildcard must appear — the compiler checks exhaustiveness.
+enum Direction { North, South, East, West }
+
+fn direction_name(d: Direction) -> text {
+  match d {
+    North => "north",
+    South => "south",
+    East  => "east",
+    West  => "west",
+  }
+}
+
+fn main() {
+  assert(direction_name(North) == "north", "simple enum match");
+  assert(direction_name(West) == "west", "west");
+  // ## Match as expression
+  // Because match returns a value you can use it in assignments and arguments.
+  score = match Direction.East {
+    North | South => 10,
+    East | West   => 20,
+  };
+  assert(score == 20, "match expression: {score}");
+  // ## Struct-enum destructuring
+  // When an enum has variants with fields (a struct-enum) you can bind the
+  // fields to variables in the match arm.
+  //   Circle { radius } — binds the 'radius' field to a local variable
+  //   Rect { w, h }     — binds both 'w' and 'h'
+  // The variable names must match the field names exactly.
+  // ## Guards
+  // Add `if condition` after a pattern to restrict when the arm matches.
+  // The guard can reference variables bound by the pattern.
+  v = 42;
+  label = match v {
+    0      => "zero",
+    _ if v < 0 => "negative",
+    _ if v > 100 => "large",
+    _      => "normal",
+  };
+  assert(label == "normal", "guard: {label}");
+  // ## Wildcard `_`
+  // The underscore `_` matches anything.  Put it last as a catch-all.
+  // Without it, the compiler will reject the match if any value could
+  // fall through without matching.
+  x = 7;
+  kind = match x {
+    1 => "one",
+    2 => "two",
+    _ => "other",
+  };
+  assert(kind == "other", "wildcard: {kind}");
+  // ## Integer matching
+  // Match works on integers — each arm is compared with `==`.
+  name = match 3 {
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    _ => "many",
+  };
+  assert(name == "three", "integer match: {name}");
+  // ## Text matching
+  // Match also works on text values.
+  greeting = "hi";
+  reply = match greeting {
+    "hello" => "formal",
+    "hi"    => "casual",
+    _       => "unknown",
+  };
+  assert(reply == "casual", "text match: {reply}");
+  // ## Multiple patterns with `|`
+  // Combine patterns with `|` to share the same arm body.
+  d = Direction.South;
+  axis = match d {
+    North | South => "vertical",
+    East | West   => "horizontal",
+  };
+  assert(axis == "vertical", "multi-pattern: {axis}");
+  // ## Nested match
+  // Match can appear inside other expressions, including other match arms.
+  n = 15;
+  result = match n % 2 == 0 {
+    true  => "even",
+    false => match n % 3 == 0 {
+      true  => "odd multiple of 3",
+      false => "odd",
+    },
+  };
+  assert(result == "odd multiple of 3", "nested: {result}");
+}

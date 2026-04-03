@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <span class="cur">Generics</span> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <span class="cur">Generics</span> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Generics</h1>
 <article>
 <p>A generic function uses a type variable to work with any type. Write the function once; the compiler creates a specialised copy for each concrete type you call it with.</p>
@@ -17,28 +17,73 @@
 <h2 id="calling-a-generic-function">Calling a generic function</h2>
 <p>No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">test_identity</span>() {
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">42</span>) == <span class="nm">42</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">3.14</span>) == <span class="nm">3.14</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="kw">true</span>) == <span class="kw">true</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">42</span>) == <span class="nm">42</span>, <span class="st">"identity integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">3.14</span>) == <span class="nm">3.14</span>, <span class="st">"identity float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>, <span class="st">"identity text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="kw">true</span>) == <span class="kw">true</span>, <span class="st">"identity bool"</span>);
 }</code></pre>
 <h2 id="multiple-parameters-of-the-same-type">Multiple parameters of the same type</h2>
 <p>Additional parameters can also use T.  They all share the same concrete type.</p>
-<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(a: <span class="en">T</span>, b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
-  _x = a;
-  b
+<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  _x = gen_a;
+  gen_b
 }
 <span class="kw">fn</span> <span class="fn-call">test_pick_second</span>() {
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>, <span class="st">"pick second int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>, <span class="st">"pick second text"</span>);
+}</code></pre>
+<h2 id="generic-functions-on-vectors">Generic functions on vectors</h2>
+<p>The most common use of generics: write a function that works on any vector. T is inferred from the vector's element type.</p>
+<pre><code><span class="kw">fn</span> first_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span> {
+  gen_v[<span class="nm">0</span>]
+}
+<span class="kw">fn</span> last_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span> {
+  gen_v[gen_v.<span class="bi"><a href="stdlib-text.html">len</a></span>() - <span class="nm">1</span>]
+}
+<span class="kw">fn</span> <span class="fn-call">test_vector_generics</span>() {
+  ints = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">first_element</span>(ints) == <span class="nm">10</span>, <span class="st">"first int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(ints) == <span class="nm">30</span>, <span class="st">"last int"</span>);
+  words = [<span class="st">"alpha"</span>, <span class="st">"beta"</span>, <span class="st">"gamma"</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">first_element</span>(words) == <span class="st">"alpha"</span>, <span class="st">"first text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(words) == <span class="st">"gamma"</span>, <span class="st">"last text"</span>);
+}</code></pre>
+<h2 id="bounded-generics-with-interfaces">Bounded generics with interfaces</h2>
+<p>By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: <code>&lt;T: Ordered&gt;</code> means T must support <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> comparisons.</p>
+<p>Built-in interfaces: Ordered    — comparison operators (&lt;, &lt;=, &gt;, &gt;=) Equatable  — equality operators (==, !=) Addable    — addition and subtraction (+, -) Numeric    — all arithmetic (+, -, *, /, %) Scalable   — multiplication by integer (* integer)</p>
+<pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  <span class="kw">if</span> gen_x &gt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
+}
+<span class="kw">fn</span> gen_min&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  <span class="kw">if</span> gen_x &lt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
+}
+<span class="kw">fn</span> <span class="fn-call">test_bounded</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">7</span>, <span class="st">"max int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">2.5</span>, <span class="nm">1.5</span>) == <span class="nm">2.5</span>, <span class="st">"max float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">3</span>, <span class="st">"min int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="st">"apple"</span>, <span class="st">"banana"</span>) == <span class="st">"apple"</span>, <span class="st">"min text"</span>);
+}</code></pre>
+<h2 id="combining-bounds">Combining bounds</h2>
+<p>Use <code>+</code> to require multiple interfaces: <code>&lt;T: Ordered + Addable&gt;</code>.</p>
+<pre><code><span class="kw">fn</span> clamped_add&lt;<span class="en">T</span>: <span class="en">Ordered</span> + <span class="en">Addable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>, gen_hi: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  result = gen_a + gen_b;
+  <span class="kw">if</span> result &gt; gen_hi { gen_hi } <span class="kw">else</span> { result }
+}
+<span class="kw">fn</span> <span class="fn-call">test_combined_bounds</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">10</span>) == <span class="nm">7</span>, <span class="st">"under limit"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">8</span>, <span class="nm">5</span>, <span class="nm">10</span>) == <span class="nm">10</span>, <span class="st">"clamped to limit"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">1.0</span>, <span class="nm">2.0</span>, <span class="nm">2.5</span>) == <span class="nm">2.5</span>, <span class="st">"float clamped"</span>);
 }</code></pre>
 <h2 id="allowed-operations-on-t">Allowed operations on T</h2>
-<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.</p>
+<p>Inside a generic function you may only use operations that the bound guarantees.  Without any bound: assign, return, store in variables. With Ordered: comparisons.  With Addable: + and -.</p>
 <h2 id="disallowed-operations">Disallowed operations</h2>
-<p>The compiler rejects operations that require knowing what T is. For example, <code>x + y</code> on two T values gives: "generic type T: operator <code>+</code> requires a concrete type" Similarly, <code>x.field</code> gives: "generic type T: field access requires a concrete type"</p>
+<p>The compiler rejects operations not covered by the bound. <code>x + y</code> on unbounded T gives: "generic type T: operator <code>+</code> requires a concrete type" <code>x.field</code> on T gives: "generic type T: field access requires a concrete type"</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call">test_identity</span>();
   <span class="fn-call">test_pick_second</span>();
+  <span class="fn-call">test_vector_generics</span>();
+  <span class="fn-call">test_bounded</span>();
+  <span class="fn-call">test_combined_bounds</span>();
 }</code></pre>
 
   </article>
