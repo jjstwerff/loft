@@ -129,7 +129,11 @@ pub fn load_one(state: &mut State, path: &str) {
     }
 
     for (name, call) in staged {
-        state.static_fn(&name, call);
+        // PKG.1: if the function was already registered as a stub by byte_code(),
+        // replace the stub with the real implementation.
+        if !state.replace_static_fn(&name, call) {
+            state.static_fn(&name, call);
+        }
     }
 
     loaded.insert(canonical);
