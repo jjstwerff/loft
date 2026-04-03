@@ -1005,3 +1005,335 @@ fn render_doc_page<S: std::hash::BuildHasher>(
     let body = render_topic_body(source, link_map);
     page_html(name, &nav, name, &body)
 }
+
+// ─── Package documentation generation ────────────────────────────────────────
+
+/// Build a navigation bar for a package's documentation pages.
+/// Contains: package name home link, topic pages, API section links.
+fn build_pkg_nav(
+    pkg_name: &str,
+    topic_info: &[(String, String)],
+    api_sections: &[String],
+    active: &str,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if active == "index" {
+        parts.push(format!("<span class=\"cur\">{pkg_name}</span>"));
+    } else {
+        parts.push(format!("<a href=\"index.html\">{pkg_name}</a>"));
+    }
+
+    if !topic_info.is_empty() {
+        parts.push("<span class=\"nav-sep\">Guides:</span>".to_string());
+        for (filename, name) in topic_info {
+            if filename == active {
+                parts.push(format!("<span class=\"cur\">{name}</span>"));
+            } else {
+                parts.push(format!("<a href=\"{filename}.html\">{name}</a>"));
+            }
+        }
+    }
+
+    if !api_sections.is_empty() {
+        parts.push("<span class=\"nav-sep\">API:</span>".to_string());
+        for section_name in api_sections {
+            let id = slugify(section_name);
+            let stem = format!("api-{id}");
+            if stem == active {
+                parts.push(format!("<span class=\"cur\">{section_name}</span>"));
+            } else {
+                parts.push(format!("<a href=\"api-{id}.html\">{section_name}</a>"));
+            }
+        }
+    }
+
+    parts.join(" · ")
+}
+
+/// Convert a section name to a URL-safe slug.
+fn slugify(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Parsed API section from a package source file.
+struct PkgApiSection {
+    name: String,
+    items: Vec<(String, Vec<String>)>, // (signature, doc_lines)
+}
+
+/// Parse `pub` items and `// --- Section ---` headers from a source file.
+fn parse_pkg_api(content: &str) -> Vec<PkgApiSection> {
+    let mut sections = Vec::new();
+    let mut current_name = "General".to_string();
+    let mut items: Vec<(String, Vec<String>)> = Vec::new();
+    let mut doc: Vec<String> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Section header
+        if trimmed.starts_with("// ---") && trimmed.ends_with("---") {
+            let inner = trimmed
+                .trim_start_matches('/')
+                .trim()
+                .trim_matches('-')
+                .trim();
+            if !inner.is_empty() {
+                if !items.is_empty() {
+                    sections.push(PkgApiSection {
+                        name: current_name.clone(),
+                        items: std::mem::take(&mut items),
+                    });
+                }
+                current_name = inner.to_string();
+                doc.clear();
+                continue;
+            }
+        }
+        // Comment → accumulate doc
+        if trimmed.starts_with("//") {
+            let text = trimmed.trim_start_matches('/').trim().to_string();
+            doc.push(text);
+            continue;
+        }
+        // Public item
+        if trimmed.starts_with("pub ") {
+            let sig = strip_pub_body(trimmed);
+            items.push((sig, std::mem::take(&mut doc)));
+            continue;
+        }
+        // Other lines: clear doc accumulation (unless #rust annotation)
+        if !trimmed.starts_with('#') {
+            doc.clear();
+        }
+    }
+    if !items.is_empty() {
+        sections.push(PkgApiSection {
+            name: current_name,
+            items,
+        });
+    }
+    sections
+}
+
+/// Strip function body from a pub declaration, keeping just the signature.
+fn strip_pub_body(line: &str) -> String {
+    // For structs/enums, keep the full first line
+    if line.starts_with("pub struct") || line.starts_with("pub enum") {
+        return line.to_string();
+    }
+    // For functions, strip body after `{`
+    if let Some(pos) = line.find('{') {
+        line[..pos].trim().to_string()
+    } else {
+        line.trim_end_matches(';').to_string()
+    }
+}
+
+/// Render an API section page as HTML body content.
+fn render_api_section_body(section: &PkgApiSection) -> String {
+    let mut body = String::new();
+    for (sig, doc_lines) in &section.items {
+        body.push_str("<div class=\"item\">\n");
+        if !sig.is_empty() {
+            writeln!(body, "<pre><code>{}</code></pre>", html_escape(sig)).expect("");
+        }
+        if !doc_lines.is_empty() {
+            body.push_str("<p>");
+            body.push_str(&doc_lines.join(" "));
+            body.push_str("</p>\n");
+        }
+        body.push_str("</div>\n");
+    }
+    body
+}
+
+/// Escape HTML special characters in a string.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Generate documentation for a package directory.
+///
+/// Expects the standard package layout:
+/// - `loft.toml` — package manifest (name, version)
+/// - `src/*.loft` — source files (scanned for `pub` API docs)
+/// - `docs/*.loft` — topic/guide pages (optional)
+///
+/// Generates HTML files in `doc/` (created if missing):
+/// - `doc/index.html` — package overview
+/// - `doc/<topic>.html` — guide pages from `docs/*.loft`
+/// - `doc/api-<section>.html` — API reference from `src/*.loft`
+///
+/// # Errors
+/// Returns `Err` when files cannot be read or written.
+#[allow(clippy::too_many_lines)]
+pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
+    let manifest_path = pkg_dir.join("loft.toml");
+    let manifest = if manifest_path.exists() {
+        crate::manifest::read_manifest(&manifest_path.to_string_lossy()).unwrap_or_default()
+    } else {
+        crate::manifest::Manifest::default()
+    };
+    let pkg_name = manifest.name.unwrap_or_else(|| {
+        pkg_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
+    let version = manifest.version.unwrap_or_else(|| "0.0.0".to_string());
+
+    // Create doc/ output directory.
+    let out_dir = pkg_dir.join("doc");
+    std::fs::create_dir_all(&out_dir)?;
+
+    // Copy style.css from the main doc directory if it exists.
+    let main_style = std::path::Path::new("doc/style.css");
+    let pkg_style = out_dir.join("style.css");
+    if main_style.exists() && !pkg_style.exists() {
+        std::fs::copy(main_style, &pkg_style)?;
+    }
+
+    // Gather topic pages from docs/*.loft
+    let docs_dir = pkg_dir.join("docs");
+    let topics = if docs_dir.is_dir() {
+        gather_pkg_topics(&docs_dir)
+    } else {
+        Vec::new()
+    };
+    let topic_info: Vec<(String, String)> = topics
+        .iter()
+        .map(|t| (t.filename.clone(), t.name.clone()))
+        .collect();
+
+    // Parse API sections from src/*.loft
+    let src_dir = pkg_dir.join("src");
+    let mut all_api_sections = Vec::new();
+    if src_dir.is_dir() {
+        let mut src_files: Vec<_> = std::fs::read_dir(&src_dir)?
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("loft"))
+            })
+            .collect();
+        src_files.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in src_files {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                all_api_sections.extend(parse_pkg_api(&content));
+            }
+        }
+    }
+    let section_names: Vec<String> = all_api_sections.iter().map(|s| s.name.clone()).collect();
+
+    // Generate index page.
+    let nav = build_pkg_nav(&pkg_name, &topic_info, &section_names, "index");
+    let mut index_body = String::new();
+    writeln!(index_body, "<p><strong>{pkg_name}</strong> v{version}</p>").expect("");
+    if !topic_info.is_empty() {
+        index_body.push_str("<h2>Guides</h2>\n<ul>\n");
+        for (filename, name) in &topic_info {
+            writeln!(
+                index_body,
+                "<li><a href=\"{filename}.html\">{name}</a></li>"
+            )
+            .expect("");
+        }
+        index_body.push_str("</ul>\n");
+    }
+    if !section_names.is_empty() {
+        index_body.push_str("<h2>API Reference</h2>\n<ul>\n");
+        for name in &section_names {
+            let id = slugify(name);
+            writeln!(index_body, "<li><a href=\"api-{id}.html\">{name}</a></li>").expect("");
+        }
+        index_body.push_str("</ul>\n");
+    }
+    let index_html = page_html(&pkg_name, &nav, &pkg_name, &index_body);
+    std::fs::write(out_dir.join("index.html"), index_html)?;
+
+    // Generate topic pages.
+    let link_map: HashMap<String, String> = HashMap::new();
+    for topic in &topics {
+        let stem = &topic.filename;
+        let nav = build_pkg_nav(&pkg_name, &topic_info, &section_names, stem);
+        if let Ok(source) = std::fs::read_to_string(&topic.file) {
+            let body = render_topic_body(&source, &link_map);
+            let html = page_html(&topic.name, &nav, &topic.name, &body);
+            std::fs::write(out_dir.join(format!("{stem}.html")), html)?;
+        }
+    }
+
+    // Generate API section pages.
+    for section in &all_api_sections {
+        let id = slugify(&section.name);
+        let stem = format!("api-{id}");
+        let nav = build_pkg_nav(&pkg_name, &topic_info, &section_names, &stem);
+        let body = render_api_section_body(section);
+        let html = page_html(&section.name, &nav, &section.name, &body);
+        std::fs::write(out_dir.join(format!("{stem}.html")), html)?;
+    }
+
+    let topic_count = topics.len();
+    let api_count = all_api_sections.len();
+    println!(
+        "Generated docs for {pkg_name}: {topic_count} guide(s), {api_count} API section(s) → {}",
+        out_dir.display()
+    );
+    Ok(())
+}
+
+/// Gather topic files from a package's docs/ directory.
+fn gather_pkg_topics(docs_dir: &std::path::Path) -> Vec<Topic> {
+    let mut result = Vec::new();
+    let Ok(dir) = std::fs::read_dir(docs_dir) else {
+        return result;
+    };
+    let mut entries: Vec<_> = dir.filter_map(Result::ok).collect();
+    entries.sort_by_key(DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+        {
+            continue;
+        }
+        let filename = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let mut name = filename.clone();
+        let mut title = String::new();
+        if let Ok(file) = File::open(&path) {
+            let reader = BufReader::new(file);
+            for line in reader.lines().map_while(Result::ok) {
+                if let Some(s) = line.strip_prefix("// @NAME: ") {
+                    name = s.to_string();
+                }
+                if let Some(s) = line.strip_prefix("// @TITLE: ") {
+                    title = s.to_string();
+                }
+            }
+        }
+        result.push(Topic {
+            file: path,
+            filename,
+            name,
+            title,
+        });
+    }
+    result
+}

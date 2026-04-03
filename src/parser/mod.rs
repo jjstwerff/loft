@@ -73,8 +73,7 @@ pub struct Parser {
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
     /// PKG.3: package dependencies discovered during manifest reading.
-    /// Each entry is (dep_name, parent_dir) where parent_dir is the directory
-    /// containing the depending package — sibling packages are searched there.
+    /// Each entry is (name, dir) — sibling packages are searched in `dir`.
     pending_pkg_deps: Vec<(String, String)>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.

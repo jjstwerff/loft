@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: How to use the graphics package for 2D drawing.
+//
+// ## Creating a canvas
+//
+// A canvas is a 2D pixel buffer. Create one with a width, height, and fill color:
+use graphics;
+
+fn main() {
+  cv = graphics::canvas(100, 100, graphics::rgb(0, 0, 0));
+  assert(cv.width == 100, "canvas width");
+}
+
+// The canvas stores pixels as packed RGBA integers. Use `rgb()` for opaque
+// colors and `rgba()` when you need transparency.
+//
+// ## Drawing shapes
+//
+// Draw lines, rectangles, circles, and more:
+
+fn drawing_shapes() {
+  sh_cv = graphics::canvas(50, 50, 0);
+  sh_red = graphics::rgb(255, 0, 0);
+
+  // Draw a filled rectangle
+  sh_cv.fill_rect(5, 5, 20, 10, sh_red);
+
+  // Draw a circle outline
+  sh_cv.draw_circle(25, 25, 10, graphics::rgb(0, 0, 255));
+
+  // Draw a line
+  sh_cv.draw_line(0, 0, 49, 49, graphics::rgb(255, 255, 255));
+}
+
+// ## Anti-aliased lines
+//
+// For smoother lines, use `draw_aa_line()` which uses Xiaolin Wu's algorithm:
+
+fn aa_example() {
+  aa_cv = graphics::canvas(100, 100, 0);
+  aa_cv.draw_aa_line(10, 10, 90, 50, graphics::rgb(255, 255, 0));
+}
