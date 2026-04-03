@@ -186,6 +186,20 @@ impl State {
         self.static_fn(symbol, call);
     }
 
+    /// PKG.1: Replace a previously registered function (e.g. a stub) with a
+    /// real implementation.  Used by `extensions::load_all()` to swap stubs
+    /// created during `byte_code()` with actual native library functions.
+    /// Returns `true` if the function was found and replaced.
+    pub fn replace_static_fn(&mut self, name: &str, call: Call) -> bool {
+        if let Some(&nr) = self.library_names.get(name) {
+            let lib = Arc::make_mut(&mut self.library);
+            lib[nr as usize] = call;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Call a function, remember the current code position on the stack.
     ///
     /// * `d_nr` - definition number of the called function.

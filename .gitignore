@@ -11,3 +11,4 @@ ide/assets/base-fs.json
 tests/wasm/pkg/
 tests/wasm/assets.json
 .claude/worktrees/
+tests/test_native_pkg/

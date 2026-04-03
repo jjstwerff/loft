@@ -101,6 +101,15 @@ fn print_help() {
     );
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings in --tests output");
+    println!();
+    println!("Subcommands:");
+    println!("  test [target]                 run package tests (requires loft.toml in cwd)");
+    println!("                                test         — run all tests in tests/");
+    println!("                                test draw    — run tests/draw.loft");
+    println!("                                test draw::f — run a single test function");
+    println!("  install [path]                install a package to ~/.loft/lib/ for global use");
+    println!("                                install .    — install package in current dir");
+    println!("                                install /p   — install package at /p");
 }
 
 fn handle_generate_log_config(path_opt: Option<&str>) {
