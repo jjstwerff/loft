@@ -4,7 +4,7 @@ All notable changes to the loft language and interpreter.
 
 ---
 
-## [Unreleased]
+## [0.8.3] — 2026-04-03
 
 ### Bug fixes
 
