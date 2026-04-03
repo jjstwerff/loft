@@ -1295,10 +1295,11 @@ impl Parser {
             | Type::Enum(_, true, _)
             | Type::Vector(_, _) => self.cl("OpGetField", &[code, p, self.type_info(tp)]),
             Type::Reference(_, _) => {
-                // P105 (open): OpGetVector returns inline DbRef but this branch
-                // uses OpGetRef for all Value::Call nodes. Changing to OpGetField
-                // for OpGetVector results causes intermittent "Unknown record"
-                // regressions in the parser library. Needs runtime-level fix.
+                // P105: OpGetVector returns inline DbRef for non-linked elements.
+                // OpGetRef would misinterpret inline data as a record pointer.
+                // Runtime safety net in get_ref() (claims check) handles this.
+                // Phase 2 parser optimization deferred — intermittent regressions
+                // in 16-parser.loft indicate additional code paths affected.
                 if let Value::Call(_, _) = code {
                     self.cl("OpGetRef", &[code, p])
                 } else {
