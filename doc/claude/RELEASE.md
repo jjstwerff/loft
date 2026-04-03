@@ -25,14 +25,10 @@ Reevaluation](PLANNING.md#milestone-reevaluation) for the full reasoning.
 
 These block a 1.0 release because they cause panics on valid programs, ship incorrect public identity, or leave public keywords in a permanently-broken state.
 
-Completed gate items (T0-1, T1-5, PROBLEMS #10, A4 pre-gate, Cargo.toml, README, CHANGELOG, CI pipeline, T0-7, R1) are recorded in CHANGELOG.md.
+Completed gate items (T0-1 through T0-7, T1-5, PROBLEMS #10, #37–#40, A4 pre-gate,
+Cargo.toml, README, CHANGELOG, CI pipeline, R1) are recorded in CHANGELOG.md.
 
-| Item | Why it blocks 1.0 |
-|---|---|
-| **T0-2** — LIFO store-free panic (PROBLEMS #37) | Panics at runtime whenever a function has 2+ owned refs in the same scope; 9+ tests fail including `structs`, `enums`, `vectors`, `collections`, `threading`. Fix: one-line `res.reverse()` in `scopes.rs::variables()`. |
-| **T0-3** — T0-1 regression: `sorted`/`hash`/`index` key-null removal silently broken (PROBLEMS #38) | `collection[key] = null` does nothing; collection retains all elements. Fix: guard `convert()` call to scalar types only in `parse_assign_op`. |
-| **T0-4** — `v += other_vec` shallow copy: text fields in appended struct elements become dangling (PROBLEMS #39) | Panics "Unknown record N" at runtime for any `vector<S>` append where S has text/ref fields. Fix: call `copy_claims` per element in `vector_add`. |
-| **T0-5** — `index<T>` struct field: `OpCopyRecord`/`OpClear` panic (PROBLEMS #40) | `copy_claims`/`remove_claims` in `allocation.rs` have no `Parts::Index` arm. Fix: add Index arms to both functions. |
+No open gate items remain.  All known crashes on valid programs have been fixed.
 
 ---
 

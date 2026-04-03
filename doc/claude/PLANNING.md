@@ -30,7 +30,7 @@ release gate criteria, project structure changes, and release artifact checklist
 Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
 creates noise and makes the document harder to scan for remaining work.
 
-Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [BYTECODE_CACHE.md](BYTECODE_CACHE.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
+Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
 
 ---
 
@@ -389,7 +389,7 @@ lambda type inference support.
 ---
 
 ### P4  Bytecode cache (`.loftc`)
-**Sources:** [BYTECODE_CACHE.md](BYTECODE_CACHE.md)
+
 **Severity:** Medium — repeated runs of an unchanged script re-parse and re-compile every
 time; for scripts with many `use`-imported libraries this is measurably slow
 **Description:** On first run, write a `.loftc` cache file next to the script containing
@@ -404,7 +404,7 @@ Phases:
 - **C2** — library file invalidation (`Parser.imported_sources`)
 - **C3** — debug info preserved (error messages still show file:line after cache hit)
 - **C4** — `--cache-dir xdg` and `--no-cache` / `--invalidate-cache` flags
-**Fix path:** See [BYTECODE_CACHE.md](BYTECODE_CACHE.md) for full detail.
+**Fix path:** Deferred — superseded by native codegen.
 **Effort:** Medium (C1 is Small; full C1–C4 is Medium)
 **Target:** Deferred — superseded by Tier N (native Rust code generation eliminates
 the recompile overhead that caching was designed to address)
@@ -3873,7 +3873,6 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design asymmetries and surprises
 - [ASSIGNMENT.md](ASSIGNMENT.md) — Stack slot assignment status (A6 detail)
 - [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — External library packaging design (A7 Phase 2)
-- [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — Bytecode cache design (P4)
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process, quality gates, scope rules, and backwards compatibility
 - [THREADING.md](THREADING.md) — Parallel for-loop design (A1 detail)
 - [LOGGER.md](LOGGER.md) — Logger design (A2 detail)

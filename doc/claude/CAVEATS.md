@@ -77,24 +77,6 @@ Only same-file enum variants work in match patterns.
 
 ---
 
-## C54 — `file.lines()` drops content without trailing newline *(fixed)*
-
-Fixed in `default/02_images.loft`: changed `if p > 0` to `if p < c.len()` so
-trailing content without a `\n` is included as the last line.
-
-**Test:** `tests/scripts/71-caveats-problems.loft::test_c54_file_lines_no_trailing_newline` (passes).
-
----
-
-## C55–C58 — Fixed (2026-04-02)
-
-- **C55** `rev(vector)` now works — parser accepts plain vectors for reverse iteration.
-- **C56** Format `:<`/`:^` now works for integers, longs, and floats.
-- **C57** Float `:.0` precision now correctly rounds to zero decimals.
-- **C58** Empty struct comprehension no longer crashes the compiler.
-
----
-
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
