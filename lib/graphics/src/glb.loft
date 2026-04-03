@@ -198,6 +198,31 @@ fn glb_material_json(mat: scene::Material) -> text {
   result
 }
 
+// True if a Mat4 is the identity matrix (within exact float equality).
+fn glb_is_identity_mat4(tr: math::Mat4) -> boolean {
+  mm = tr.m;
+  mm[0] == 1.0 && mm[1] == 0.0 && mm[2] == 0.0 && mm[3] == 0.0 &&
+  mm[4] == 0.0 && mm[5] == 1.0 && mm[6] == 0.0 && mm[7] == 0.0 &&
+  mm[8] == 0.0 && mm[9] == 0.0 && mm[10] == 1.0 && mm[11] == 0.0 &&
+  mm[12] == 0.0 && mm[13] == 0.0 && mm[14] == 0.0 && mm[15] == 1.0
+}
+
+// Build a glTF "matrix" JSON property from a row-major Mat4.
+// glTF 2.0 uses column-major order: col0, col1, col2, col3.
+fn glb_mat4_json(tr: math::Mat4) -> text {
+  mm = tr.m;
+  // Transpose row-major → column-major
+  c0  = mm[0]  as single; c1  = mm[4]  as single; c2  = mm[8]  as single; c3  = mm[12] as single;
+  c4  = mm[1]  as single; c5  = mm[5]  as single; c6  = mm[9]  as single; c7  = mm[13] as single;
+  c8  = mm[2]  as single; c9  = mm[6]  as single; c10 = mm[10] as single; c11 = mm[14] as single;
+  c12 = mm[3]  as single; c13 = mm[7]  as single; c14 = mm[11] as single; c15 = mm[15] as single;
+  result = "\"matrix\":[{c0:.6},{c1:.6},{c2:.6},{c3:.6},";
+  result += "{c4:.6},{c5:.6},{c6:.6},{c7:.6},";
+  result += "{c8:.6},{c9:.6},{c10:.6},{c11:.6},";
+  result += "{c12:.6},{c13:.6},{c14:.6},{c15:.6}]";
+  result
+}
+
 // Build the full glTF JSON for a Scene.
 // BIN layout: for each mesh in order — pos, norm, uv, idx (no padding between meshes).
 // accessor base = mesh_idx * 4; bufferView base = mesh_idx * 4.
@@ -205,10 +230,20 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
   nm = sc.meshes.len();
   sn = sc.name;
 
-  // --- accessors ---
+  // Build per-mesh material index: for each mesh, the material used by the
+  // first node that references it.  In glTF 2.0, material lives on the mesh
+  // primitive (not on the node).
+  mesh_mat = [];
+  for _ in sc.meshes {
+    mesh_mat += [0];
+  }
+  for nd in sc.nodes {
+    mesh_mat[nd.mesh_idx] = nd.material_idx;
+  }
+
+  // --- scene / scenes ---
   result = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"loft\"}},";
   result += "\"scene\":0,\"scenes\":[{{\"name\":\"{sn}\",\"nodes\":[";
-  // node indices: 0..nodes.len()-1
   ni = 0;
   for _ in sc.nodes {
     if ni > 0 { result += ","; }
@@ -217,31 +252,35 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
   }
   result += "]}}],";
 
-  // --- nodes ---
+  // --- nodes: reference mesh; include "matrix" only for non-identity transforms ---
   result += "\"nodes\":[";
   ni = 0;
   for nd in sc.nodes {
     if ni > 0 { result += ","; }
     mid = nd.mesh_idx;
-    matid = nd.material_idx;
     ndname = nd.name;
-    result += "{{\"name\":\"{ndname}\",\"mesh\":{mid},\"material\":{matid}}}";
+    if glb_is_identity_mat4(nd.transform) {
+      result += "{{\"name\":\"{ndname}\",\"mesh\":{mid}}}";
+    } else {
+      mat_str = glb_mat4_json(nd.transform);
+      result += "{{\"name\":\"{ndname}\",\"mesh\":{mid},{mat_str}}}";
+    }
     ni = ni + 1;
   }
   result += "],";
 
-  // --- meshes ---
+  // --- meshes: material reference lives on the primitive ---
   result += "\"meshes\":[";
   mi = 0;
   for me in sc.meshes {
     if mi > 0 { result += ","; }
     mename = me.name;
-    // accessor base index for this mesh
     acc_pos  = mi * 4;
     acc_norm = mi * 4 + 1;
     acc_uv   = mi * 4 + 2;
     acc_idx  = mi * 4 + 3;
-    result += "{{\"name\":\"{mename}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{acc_pos},\"NORMAL\":{acc_norm},\"TEXCOORD_0\":{acc_uv}}},\"indices\":{acc_idx}}}]}}";
+    mat_idx  = mesh_mat[mi];
+    result += "{{\"name\":\"{mename}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{acc_pos},\"NORMAL\":{acc_norm},\"TEXCOORD_0\":{acc_uv}}},\"indices\":{acc_idx},\"material\":{mat_idx}}}]}}";
     mi = mi + 1;
   }
   result += "],";

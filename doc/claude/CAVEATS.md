@@ -118,6 +118,22 @@ access in `get_val()`.
 
 ---
 
+## C59 — Struct field reassignment corrupts store when field contains nested vector
+
+Overwriting a struct field of type `Struct-with-vector` (e.g., `math::Mat4` which
+holds `m: vector<float>`) after the struct has been created causes store corruption
+and a `fl_validate` crash.
+
+**Workaround:** Pass all nested-vector fields at construction time via a dedicated
+constructor function (e.g., `scene::node_at(name, mesh, mat, transform)` rather
+than creating with `node()` and then assigning `n.transform = ...`).
+
+**Test:** `lib/graphics/tests/scene_glb.loft::test_scene_glb_node_transform`
+(uses `node_at()` to avoid the bug).
+**Docs:** [PROBLEMS.md](PROBLEMS.md) § P109.
+
+---
+
 ## C58 — `f#next` initial seek on a fresh read handle does not work
 
 Setting `f#next = N as long` as the very first operation on a freshly-opened file

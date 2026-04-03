@@ -125,6 +125,78 @@ fn test_scene_glb_bin_size_two_meshes() {
   delete("test_sglb_e.glb");
 }
 
+// Verify that the JSON chunk contains "material" on the mesh primitive,
+// not on the node, per glTF 2.0 spec.
+fn test_scene_glb_json_material_in_primitive() {
+  sm_s = scene::scene("mattest");
+  sm_s.add_mesh(mesh::cube());
+  sm_mati = sm_s.add_material(scene::material("red"));
+  sm_s.add_node(scene::node("cube", 0, sm_mati));
+  glb::save_scene_glb(sm_s, "test_sglb_g.glb");
+  {sm_f = file("test_sglb_g.glb");
+   sm_f#format = LittleEndian;
+   sm_f#read(4) as i32;  // magic
+   sm_f#read(4) as i32;  // version
+   sm_f#read(4) as i32;  // total_len
+   sm_jlen = sm_f#read(4) as i32;
+   sm_f#read(4) as i32;  // JSON chunk type
+   // Read the JSON text directly (sm_jlen bytes after offset 20).
+   sm_json = sm_f#read(sm_jlen) as text;
+   // "material" must appear inside "primitives" (mesh section).
+   assert(sm_json.contains("\"primitives\""), "has primitives");
+   assert(sm_json.contains("\"material\":"), "material present");
+   // nodes section must NOT reference material.
+   // The node JSON should be {"name":"cube","mesh":0} — no "material" key.
+   // We check by verifying node object ends with "mesh" field.
+   assert(sm_json.contains("\"mesh\":0}}"), "node ends with mesh ref only");
+  }
+  delete("test_sglb_g.glb");
+}
+
+// Verify that a non-identity node transform produces a "matrix" field in JSON.
+fn test_scene_glb_node_transform() {
+  st_s = scene::scene("xform");
+  st_s.add_mesh(mesh::cube());
+  st_mati = st_s.add_material(scene::material("m"));
+  // Create node with a non-identity transform (translate by 2 on X).
+  // Use node_at() to pass the transform at construction — avoids transform field
+  // reassignment which triggers a store bug with nested vector mutation (P109).
+  st_n = scene::node_at("moved", 0, st_mati, math::mat4_translate(2.0, 0.0, 0.0));
+  st_s.add_node(st_n);
+  glb::save_scene_glb(st_s, "test_sglb_h.glb");
+  {st_f = file("test_sglb_h.glb");
+   st_f#format = LittleEndian;
+   st_f#read(4) as i32;
+   st_f#read(4) as i32;
+   st_f#read(4) as i32;
+   st_jlen = st_f#read(4) as i32;
+   st_f#read(4) as i32;
+   st_json = st_f#read(st_jlen) as text;
+   assert(st_json.contains("\"matrix\":"), "non-identity has matrix field");
+  }
+  delete("test_sglb_h.glb");
+}
+
+// Verify that an identity transform does NOT produce a "matrix" field.
+fn test_scene_glb_identity_no_matrix() {
+  si_s = scene::scene("ident");
+  si_s.add_mesh(mesh::cube());
+  si_mati = si_s.add_material(scene::material("m"));
+  si_s.add_node(scene::node("cube", 0, si_mati));
+  glb::save_scene_glb(si_s, "test_sglb_i.glb");
+  {si_f = file("test_sglb_i.glb");
+   si_f#format = LittleEndian;
+   si_f#read(4) as i32;
+   si_f#read(4) as i32;
+   si_f#read(4) as i32;
+   si_jlen = si_f#read(4) as i32;
+   si_f#read(4) as i32;
+   si_json = si_f#read(si_jlen) as text;
+   assert(!si_json.contains("\"matrix\":"), "identity has no matrix field");
+  }
+  delete("test_sglb_i.glb");
+}
+
 // Verify JSON chunk is 4-byte aligned.
 fn test_scene_glb_json_padding() {
   sp_s = scene::scene("pad");

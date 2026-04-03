@@ -46,6 +46,11 @@ pub fn node(nn: text, nm: integer, nmat: integer) -> Node {
   Node { name: nn, mesh_idx: nm, material_idx: nmat, transform: math::mat4_identity() }
 }
 
+// Create a node with an explicit transform (avoids mutation of transform field).
+pub fn node_at(nn: text, nm: integer, nmat: integer, xf: math::Mat4) -> Node {
+  Node { name: nn, mesh_idx: nm, material_idx: nmat, transform: xf }
+}
+
 // --- Camera ---
 
 pub struct Camera {

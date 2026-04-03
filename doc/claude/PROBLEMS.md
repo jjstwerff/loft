@@ -39,6 +39,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
 | 107 | `++` return expression + struct parameter bug: second param typed as `Text([])` | Medium | Use `result = ""; result += "..."; result` instead of `"..." ++ "..."` return |
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
+| 109 | Struct field reassignment corrupts store when field contains nested vector | High | Pass the value at construction time instead of reassigning after creation |
 
 ---
 
@@ -640,6 +641,36 @@ val = f#read(4) as i32;  // bytes 12-15
 
 **Discovered:** Sprint 8 GLB tests.  `f#next = N` after prior reads (forward seek)
 works correctly; it is only the very first operation that fails.
+
+---
+
+### 109. Struct field reassignment corrupts store when field contains nested vector
+
+**Symptom:** Reassigning a struct field whose type is a struct-with-vector (e.g.,
+`math::Mat4` which contains `m: vector<float>`) causes `fl_validate: node at N has
+positive header 0 (should be free)` followed by a crash.
+
+```loft
+n = scene::node("x", 0, 0);      // creates Node with Mat4 (identity) inside
+n.transform = math::mat4_translate(2.0, 0.0, 0.0);  // CRASH: store corruption
+```
+
+**Root cause:** When a struct field holding a nested vector is overwritten, the
+old vector's backing store node is freed but still referenced in the struct's
+on-stack copy.  When the struct is later used (e.g., appended to a scene's
+`nodes` vector), the dangling reference triggers the freelist validator.
+
+**Workaround:** Pass the value at construction time to avoid field reassignment:
+```loft
+// WRONG: reassign after construction
+n = scene::node("x", 0, 0);
+n.transform = math::mat4_translate(2.0, 0.0, 0.0);
+
+// CORRECT: pass at construction via node_at()
+n = scene::node_at("x", 0, 0, math::mat4_translate(2.0, 0.0, 0.0));
+```
+
+**Discovered:** Sprint 8 GLB transform test.
 
 ---
 
