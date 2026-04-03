@@ -39,7 +39,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
 | 107 | `++` return expression + struct parameter bug: second param typed as `Text([])` | Medium | Use `result = ""; result += "..."; result` instead of `"..." ++ "..."` return |
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
-| 109 | Struct field reassignment corrupts store when field contains nested vector | High | Pass the value at construction time instead of reassigning after creation |
+| 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
 
 ---
 
@@ -644,33 +644,23 @@ works correctly; it is only the very first operation that fails.
 
 ---
 
-### 109. Struct field reassignment corrupts store when field contains nested vector
+### 109. Struct field reassignment corrupts store when field contains nested vector *(fixed)*
 
 **Symptom:** Reassigning a struct field whose type is a struct-with-vector (e.g.,
 `math::Mat4` which contains `m: vector<float>`) causes `fl_validate: node at N has
 positive header 0 (should be free)` followed by a crash.
 
-```loft
-n = scene::node("x", 0, 0);      // creates Node with Mat4 (identity) inside
-n.transform = math::mat4_translate(2.0, 0.0, 0.0);  // CRASH: store corruption
-```
+**Root cause (two parts):**
+1. `copy_record` did not call `remove_claims` before overwriting, leaking the old vector.
+2. When building `Inner { vals: [...] }` into an existing field (`is_field = true`),
+   the `elm` (_elm_1) variable had an empty dep list → `get_free_vars` emitted
+   `OpFreeRef(elm)` → freed the entire store that the outer struct lived in.
 
-**Root cause:** When a struct field holding a nested vector is overwritten, the
-old vector's backing store node is freed but still referenced in the struct's
-on-stack copy.  When the struct is later used (e.g., appended to a scene's
-`nodes` vector), the dangling reference triggers the freelist validator.
+**Fix:** Two commits in sprint 8:
+- `src/state/io.rs` `copy_record`: added `remove_claims(&to, tp)` before `copy_block`.
+- `src/parser/vectors.rs` `parse_vector`: added `set_skip_free(elm)` when `is_field = true`.
 
-**Workaround:** Pass the value at construction time to avoid field reassignment:
-```loft
-// WRONG: reassign after construction
-n = scene::node("x", 0, 0);
-n.transform = math::mat4_translate(2.0, 0.0, 0.0);
-
-// CORRECT: pass at construction via node_at()
-n = scene::node_at("x", 0, 0, math::mat4_translate(2.0, 0.0, 0.0));
-```
-
-**Discovered:** Sprint 8 GLB transform test.
+**Discovered:** Sprint 8 GLB transform test.  **Test:** `/tmp/p109_repro.loft`.
 
 ---
 

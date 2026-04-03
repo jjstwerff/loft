@@ -934,6 +934,10 @@ impl State {
         let to = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         let size = u32::from(self.database.size(tp));
+        // P109: free any nested vectors/strings already owned by the destination
+        // before overwriting it, to prevent double-free and leaks when a struct
+        // field containing a nested vector is reassigned.
+        self.database.remove_claims(&to, tp);
         self.database.copy_block(&data, &to, size);
         self.database.copy_claims(&data, &to, tp);
     }

@@ -118,18 +118,14 @@ access in `get_val()`.
 
 ---
 
-## C59 — Struct field reassignment corrupts store when field contains nested vector
+## C59 — ~~Struct field reassignment corrupts store when field contains nested vector~~ FIXED
 
-Overwriting a struct field of type `Struct-with-vector` (e.g., `math::Mat4` which
-holds `m: vector<float>`) after the struct has been created causes store corruption
-and a `fl_validate` crash.
+**Fixed** in `src/parser/vectors.rs` (P109): `set_skip_free(elm)` when `is_field = true`
+suppresses the erroneous `FreeRef` that freed the owning struct's store.
 
-**Workaround:** Pass all nested-vector fields at construction time via a dedicated
-constructor function (e.g., `scene::node_at(name, mesh, mat, transform)` rather
-than creating with `node()` and then assigning `n.transform = ...`).
+The `node_at()` workaround in `lib/graphics/src/scene.loft` can be reverted if desired,
+but the workaround is harmless and the scene API is cleaner with it.
 
-**Test:** `lib/graphics/tests/scene_glb.loft::test_scene_glb_node_transform`
-(uses `node_at()` to avoid the bug).
 **Docs:** [PROBLEMS.md](PROBLEMS.md) § P109.
 
 ---
