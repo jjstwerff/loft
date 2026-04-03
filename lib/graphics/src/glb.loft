@@ -1,0 +1,178 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// GLB (GL Transmission Format Binary) file writer.
+// Exports a Mesh as a GLB 2.0 file readable by Blender, three.js, and gltf-validator.
+// Format reference: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
+use math;
+use mesh;
+
+// Build the float32 position buffer (3 × f32 per vertex, x y z).
+fn glb_pos_buf(verts: vector<mesh::Vertex>) -> vector<single> {
+  result = [];
+  for v in verts {
+    result += [v.pos.x as single, v.pos.y as single, v.pos.z as single];
+  }
+  result
+}
+
+// Build the float32 normal buffer (3 × f32 per vertex).
+fn glb_norm_buf(verts: vector<mesh::Vertex>) -> vector<single> {
+  result = [];
+  for v in verts {
+    result += [v.normal.x as single, v.normal.y as single, v.normal.z as single];
+  }
+  result
+}
+
+// Build the float32 UV buffer (2 × f32 per vertex, u=x v=y).
+fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
+  result = [];
+  for v in verts {
+    result += [v.uv.x as single, v.uv.y as single];
+  }
+  result
+}
+
+// Build the uint32 index buffer (3 indices per triangle: a, b, c).
+fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<integer> {
+  result = [];
+  for t in tris {
+    result += [t.a, t.b, t.c];
+  }
+  result
+}
+
+// Compute the minimum position across all vertices (component-wise).
+fn glb_pos_min(verts: vector<mesh::Vertex>) -> math::Vec3 {
+  if verts.len() == 0 {
+    math::vec3(0.0, 0.0, 0.0)
+  } else {
+    mx = verts[0].pos.x;
+    my = verts[0].pos.y;
+    mz = verts[0].pos.z;
+    for v in verts {
+      if v.pos.x < mx { mx = v.pos.x; }
+      if v.pos.y < my { my = v.pos.y; }
+      if v.pos.z < mz { mz = v.pos.z; }
+    }
+    math::vec3(mx, my, mz)
+  }
+}
+
+// Compute the maximum position across all vertices (component-wise).
+fn glb_pos_max(verts: vector<mesh::Vertex>) -> math::Vec3 {
+  if verts.len() == 0 {
+    math::vec3(0.0, 0.0, 0.0)
+  } else {
+    mx = verts[0].pos.x;
+    my = verts[0].pos.y;
+    mz = verts[0].pos.z;
+    for v in verts {
+      if v.pos.x > mx { mx = v.pos.x; }
+      if v.pos.y > my { my = v.pos.y; }
+      if v.pos.z > mz { mz = v.pos.z; }
+    }
+    math::vec3(mx, my, mz)
+  }
+}
+
+// Number of padding bytes needed to reach the next 4-byte boundary.
+fn glb_pad4(n: integer) -> integer {
+  r = n % 4;
+  if r == 0 { 0 } else { 4 - r }
+}
+
+// Build the glTF 2.0 JSON string for a single mesh.
+// Buffer layout (all contiguous in BIN chunk):
+//   [0]  POSITION:   nv * 12 bytes  (VEC3, f32)
+//   [1]  NORMAL:     nv * 12 bytes  (VEC3, f32)
+//   [2]  TEXCOORD_0: nv *  8 bytes  (VEC2, f32)
+//   [3]  INDICES:    ni *  4 bytes  (SCALAR, u32)
+fn glb_json(m: mesh::Mesh, pos_min: math::Vec3, pos_max: math::Vec3) -> text {
+  nv = m.vertices.len();
+  nt = m.triangles.len();
+  ni = nt * 3;
+  pos_bytes  = nv * 12;
+  norm_bytes = nv * 12;
+  uv_bytes   = nv * 8;
+  idx_bytes  = ni * 4;
+  bin_bytes  = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
+  off_norm   = pos_bytes;
+  off_uv     = pos_bytes + norm_bytes;
+  off_idx    = pos_bytes + norm_bytes + uv_bytes;
+
+  mn = m.name;
+  minx = pos_min.x; miny = pos_min.y; minz = pos_min.z;
+  maxx = pos_max.x; maxy = pos_max.y; maxz = pos_max.z;
+
+  // Use {{ and }} for literal { } in loft format strings.
+  // Use result += "..." to avoid the ++ return-concat + Vec3-param type bug.
+  result = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"loft\"}},";
+  result += "\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"mesh\":0}}],";
+  result += "\"meshes\":[{{\"name\":\"{mn}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2}},\"indices\":3}}]}}],";
+  result += "\"accessors\":[";
+  result += "{{\"bufferView\":0,\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\",\"min\":[{minx:.6},{miny:.6},{minz:.6}],\"max\":[{maxx:.6},{maxy:.6},{maxz:.6}]}},";
+  result += "{{\"bufferView\":1,\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\"}},";
+  result += "{{\"bufferView\":2,\"componentType\":5126,\"count\":{nv},\"type\":\"VEC2\"}},";
+  result += "{{\"bufferView\":3,\"componentType\":5125,\"count\":{ni},\"type\":\"SCALAR\"}}";
+  result += "],";
+  result += "\"bufferViews\":[";
+  result += "{{\"buffer\":0,\"byteOffset\":0,\"byteLength\":{pos_bytes},\"target\":34962}},";
+  result += "{{\"buffer\":0,\"byteOffset\":{off_norm},\"byteLength\":{norm_bytes},\"target\":34962}},";
+  result += "{{\"buffer\":0,\"byteOffset\":{off_uv},\"byteLength\":{uv_bytes},\"target\":34962}},";
+  result += "{{\"buffer\":0,\"byteOffset\":{off_idx},\"byteLength\":{idx_bytes},\"target\":34963}}";
+  result += "],";
+  result += "\"buffers\":[{{\"byteLength\":{bin_bytes}}}]}}";
+  result
+}
+
+// Export a Mesh as a GLB 2.0 file.
+// The output file will contain POSITION, NORMAL, and TEXCOORD_0 vertex attributes
+// plus triangle indices.  Readable by Blender, three.js, gltf-validator.
+pub fn save_glb(m: mesh::Mesh, path: text) {
+  nv = m.vertices.len();
+  nt = m.triangles.len();
+  ni = nt * 3;
+
+  pos_bytes  = nv * 12;
+  norm_bytes = nv * 12;
+  uv_bytes   = nv * 8;
+  idx_bytes  = ni * 4;
+  bin_bytes  = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
+
+  pmin = glb_pos_min(m.vertices);
+  pmax = glb_pos_max(m.vertices);
+
+  json      = glb_json(m, pmin, pmax);
+  json_len  = json.len();
+  json_pad  = glb_pad4(json_len);
+  json_chunk = json_len + json_pad;
+
+  // Total file size: 12 (header) + 8 (json chunk hdr) + json_chunk + 8 (bin chunk hdr) + bin_bytes
+  total_len = 12 + 8 + json_chunk + 8 + bin_bytes;
+
+  f = file(path);
+  f#format = LittleEndian;
+
+  // GLB header (12 bytes)
+  f += 0x46546C67;  // magic 'glTF'
+  f += 2;           // version 2
+  f += total_len;   // total file length
+
+  // JSON chunk (8-byte header + padded JSON)
+  f += json_chunk;    // chunk data length (padded)
+  f += 0x4E4F534A;   // chunk type 'JSON'
+  f += json;          // JSON bytes (raw UTF-8)
+  // Pad JSON to 4-byte boundary with ASCII spaces
+  for _ in 0..json_pad {
+    f += 32 as u8;
+  }
+
+  // BIN chunk (8-byte header + binary buffers)
+  f += bin_bytes;     // chunk data length
+  f += 0x004E4942;   // chunk type 'BIN\0'
+  f += glb_pos_buf(m.vertices);
+  f += glb_norm_buf(m.vertices);
+  f += glb_uv_buf(m.vertices);
+  f += glb_idx_buf(m.triangles);
+}

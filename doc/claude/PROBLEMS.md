@@ -37,6 +37,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
+| 107 | `++` return expression + struct parameter bug: second param typed as `Text([])` | Medium | Use `result = ""; result += "..."; result` instead of `"..." ++ "..."` return |
+| 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
 
 ---
 
@@ -590,6 +592,54 @@ causing reads from wrong memory locations and silently returning empty vectors.
 
 **Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p106_nested_vector_in_vector_element`.
 See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
+
+---
+
+### 107. `++` return expression + struct parameter bug
+
+**Symptom:** A function with a `math::Vec3` (or similar struct) parameter that
+returns a text value via `"str1" ++ "str2" ++ ...` concatenation expression fails
+at runtime: `generate_call [n_func]: mutable arg 1 (v1: Text([])) expected 16B on
+stack but generate(Null) pushed 0B`.
+
+**Root cause:** When the return expression of a function is a `++` text concat
+chain and the function has a struct reference parameter (e.g., `math::Vec3`), the
+second parameter's type is misidentified as `Text([])` (16B) instead of the
+correct `Reference` type (24B for Vec3).
+
+**Workaround:** Replace `"part1" ++ "part2"` return expression with:
+```loft
+result = "part1";
+result += "part2";
+result
+```
+
+**Discovered:** Sprint 8, while writing `glb_json()` in `lib/graphics/src/glb.loft`.
+
+---
+
+### 108. `f#next` initial seek on fresh read-only file handle
+
+**Symptom:** After opening a file handle for reading and immediately setting
+`f#next = N as long`, subsequent `f#read(4)` calls still return bytes from
+position 0 instead of position N.
+
+**Workaround:** Read at least one byte before seeking.  Use sequential reads to
+advance the position; then `f#next = pos` to seek forward from the current position.
+```loft
+// WRONG — reads 4 bytes starting at offset 0, not 12:
+f#next = 12l;
+val = f#read(4) as i32;
+
+// CORRECT — read sequentially first:
+f#read(4) as i32;  // bytes 0-3
+f#read(4) as i32;  // bytes 4-7
+f#read(4) as i32;  // bytes 8-11
+val = f#read(4) as i32;  // bytes 12-15
+```
+
+**Discovered:** Sprint 8 GLB tests.  `f#next = N` after prior reads (forward seek)
+works correctly; it is only the very first operation that fails.
 
 ---
 

@@ -118,6 +118,21 @@ access in `get_val()`.
 
 ---
 
+## C58 — `f#next` initial seek on a fresh read handle does not work
+
+Setting `f#next = N as long` as the very first operation on a freshly-opened file
+handle does not seek.  Subsequent reads still start from position 0.  Seeking
+forward **after** at least one read works correctly.
+
+**Workaround:** Read the leading bytes sequentially to advance the position, then
+use `f#next = offset as long` to seek further forward.
+
+**Test:** `lib/graphics/tests/glb.loft` — all tests use sequential reads before
+any seek.
+**Docs:** [PROBLEMS.md](PROBLEMS.md) § P108.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths
