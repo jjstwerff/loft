@@ -41,12 +41,7 @@ static WRAP_LOCK: Mutex<()> = Mutex::new(());
 /// `dir` skips these so that all other docs files are still exercised.
 /// Remove an entry here once the underlying issue is fixed.
 const SUITE_SKIP: &[&str] = &[
-    // (PROBLEMS #27 set_int crash and #37 LIFO panic both fixed 2026-03-15)
-    // (PROBLEMS #41 inline ref-returning calls leak stores fixed 2026-03-15)
-    // (PROBLEMS #42 generate_call size mismatch fixed 2026-03-16)
-    // Pre-existing: "Unknown record 2147483648" crash in store.rs — also fails on main.
-    "15-lexer.loft",
-    "16-parser.loft",
+    // All previously skipped files now pass (verified 2026-04-03).
 ];
 
 /// Docs files that are known to fail in `--native-wasm` mode.
