@@ -1,0 +1,144 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for save_scene_glb — scene-level GLB 2.0 export.
+// Run with: cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/scene_glb.loft
+use math;
+use mesh;
+use scene;
+use glb;
+
+// Verify save_scene_glb produces a non-empty file for a single-mesh scene.
+fn test_scene_glb_creates_file() {
+  sg_s = scene::scene("test");
+  sg_mi = sg_s.add_mesh(mesh::cube());
+  sg_mati = sg_s.add_material(scene::material("default"));
+  sg_s.add_node(scene::node("cube", sg_mi, sg_mati));
+  glb::save_scene_glb(sg_s, "test_sglb_a.glb");
+  assert(file("test_sglb_a.glb").size > 0l, "scene GLB created");
+  delete("test_sglb_a.glb");
+}
+
+// Verify the GLB header for a scene file.
+fn test_scene_glb_header() {
+  sh_s = scene::scene("hdr");
+  sh_s.add_mesh(mesh::cube());
+  sh_mati = sh_s.add_material(scene::material("mat"));
+  sh_s.add_node(scene::node("n", 0, sh_mati));
+  glb::save_scene_glb(sh_s, "test_sglb_b.glb");
+  sh_sz = file("test_sglb_b.glb").size;
+  {sh_f = file("test_sglb_b.glb");
+   sh_f#format = LittleEndian;
+   assert(sh_f#read(4) as i32 == 0x46546C67, "magic 'glTF'");
+   assert(sh_f#read(4) as i32 == 2, "version 2");
+   sh_total = sh_f#read(4) as i32;
+   assert(sh_total as long == sh_sz, "total_len matches file size={sh_sz}");
+  }
+  delete("test_sglb_b.glb");
+}
+
+// Verify JSON chunk type and BIN chunk type for scene GLB.
+fn test_scene_glb_chunk_types() {
+  sc_s = scene::scene("chunks");
+  sc_s.add_mesh(mesh::cube());
+  sc_mati = sc_s.add_material(scene::material("m"));
+  sc_s.add_node(scene::node("n", 0, sc_mati));
+  glb::save_scene_glb(sc_s, "test_sglb_c.glb");
+  {sc_f = file("test_sglb_c.glb");
+   sc_f#format = LittleEndian;
+   sc_f#read(4) as i32;  // magic
+   sc_f#read(4) as i32;  // version
+   sc_f#read(4) as i32;  // total_len
+   sc_jlen = sc_f#read(4) as i32;
+   assert(sc_f#read(4) as i32 == 0x4E4F534A, "JSON chunk type 'JSON'");
+   sc_f#next = (20 + sc_jlen) as long;
+   sc_f#read(4) as i32;  // BIN data length
+   assert(sc_f#read(4) as i32 == 0x004E4942, "BIN chunk type 'BIN\\0'");
+  }
+  delete("test_sglb_c.glb");
+}
+
+// Verify BIN chunk size for a single triangle-mesh scene.
+// 3 verts: pos=36 + norm=36 + uv=24 + idx=12 = 108 bytes.
+fn test_scene_glb_bin_size_single_mesh() {
+  sb_s = scene::scene("binsize");
+  sb_m = mesh::mesh("tri");
+  sb_n = math::vec3(0.0, 0.0, 1.0);
+  sb_uv = math::vec2(0.0, 0.0);
+  sb_m.add_vertex(mesh::vertex(math::vec3(0.0, 0.0, 0.0), sb_n, sb_uv));
+  sb_m.add_vertex(mesh::vertex(math::vec3(1.0, 0.0, 0.0), sb_n, sb_uv));
+  sb_m.add_vertex(mesh::vertex(math::vec3(0.0, 1.0, 0.0), sb_n, sb_uv));
+  sb_m.add_triangle(0, 1, 2);
+  sb_mi = sb_s.add_mesh(sb_m);
+  sb_mati = sb_s.add_material(scene::material("white"));
+  sb_s.add_node(scene::node("tri", sb_mi, sb_mati));
+  glb::save_scene_glb(sb_s, "test_sglb_d.glb");
+  {sb_f = file("test_sglb_d.glb");
+   sb_f#format = LittleEndian;
+   sb_f#read(4) as i32;  // magic
+   sb_f#read(4) as i32;  // version
+   sb_f#read(4) as i32;  // total_len
+   sb_jlen = sb_f#read(4) as i32;
+   sb_f#read(4) as i32;  // JSON chunk type
+   sb_f#next = (20 + sb_jlen) as long;
+   sb_blen = sb_f#read(4) as i32;
+   assert(sb_blen == 108, "bin size for 3-vert 1-tri={sb_blen}");
+  }
+  delete("test_sglb_d.glb");
+}
+
+// Verify BIN chunk size for a two-mesh scene.
+// Mesh A: 3 verts, 1 tri = 108 bytes; Mesh B: 3 verts, 1 tri = 108 bytes → total 216.
+fn test_scene_glb_bin_size_two_meshes() {
+  st_s = scene::scene("two");
+  st_n = math::vec3(0.0, 0.0, 1.0);
+  st_uv = math::vec2(0.0, 0.0);
+
+  st_ma = mesh::mesh("a");
+  st_ma.add_vertex(mesh::vertex(math::vec3(0.0, 0.0, 0.0), st_n, st_uv));
+  st_ma.add_vertex(mesh::vertex(math::vec3(1.0, 0.0, 0.0), st_n, st_uv));
+  st_ma.add_vertex(mesh::vertex(math::vec3(0.0, 1.0, 0.0), st_n, st_uv));
+  st_ma.add_triangle(0, 1, 2);
+
+  st_mb = mesh::mesh("b");
+  st_mb.add_vertex(mesh::vertex(math::vec3(2.0, 0.0, 0.0), st_n, st_uv));
+  st_mb.add_vertex(mesh::vertex(math::vec3(3.0, 0.0, 0.0), st_n, st_uv));
+  st_mb.add_vertex(mesh::vertex(math::vec3(2.0, 1.0, 0.0), st_n, st_uv));
+  st_mb.add_triangle(0, 1, 2);
+
+  st_mia = st_s.add_mesh(st_ma);
+  st_mib = st_s.add_mesh(st_mb);
+  st_mati = st_s.add_material(scene::material("mat"));
+  st_s.add_node(scene::node("a", st_mia, st_mati));
+  st_s.add_node(scene::node("b", st_mib, st_mati));
+  glb::save_scene_glb(st_s, "test_sglb_e.glb");
+  {st_f = file("test_sglb_e.glb");
+   st_f#format = LittleEndian;
+   st_f#read(4) as i32;
+   st_f#read(4) as i32;
+   st_f#read(4) as i32;
+   st_jlen = st_f#read(4) as i32;
+   st_f#read(4) as i32;
+   st_f#next = (20 + st_jlen) as long;
+   st_blen = st_f#read(4) as i32;
+   assert(st_blen == 216, "two-mesh bin size={st_blen}");
+  }
+  delete("test_sglb_e.glb");
+}
+
+// Verify JSON chunk is 4-byte aligned.
+fn test_scene_glb_json_padding() {
+  sp_s = scene::scene("pad");
+  sp_s.add_mesh(mesh::cube());
+  sp_mati = sp_s.add_material(scene::material("mat"));
+  sp_s.add_node(scene::node("n", 0, sp_mati));
+  glb::save_scene_glb(sp_s, "test_sglb_f.glb");
+  {sp_f = file("test_sglb_f.glb");
+   sp_f#format = LittleEndian;
+   sp_f#read(4) as i32;
+   sp_f#read(4) as i32;
+   sp_f#read(4) as i32;
+   sp_jlen = sp_f#read(4) as i32;
+   assert(sp_jlen % 4 == 0, "JSON chunk 4-byte aligned={sp_jlen}");
+  }
+  delete("test_sglb_f.glb");
+}
