@@ -42,11 +42,14 @@ Sprint 7: Package deps + docs ✓ (branch sprint-7-pkg-deps-math)
   loft doc subcommand ✓
   shapes test package ✓
 
-Sprint 8: 3D types + GLB (branch sprint-8-glb-types)
+Sprint 8: 3D types + bug fixes (branch sprint-8-glb-types)
   GL4.1   Vec3/Mat4 math types ✓
   GL4.2   mesh types ✓
   GL4.3   scene types ✓
-  GL4.4   GLB binary writer
+  C54     add ** operator → pow()
+  P104    fix direct struct return with vector literal
+  P105    fix nested struct field access on vector elements
+  P106    retest after P104+P105
 
 Sprint 9: Native codegen for packages
   PKG.4   native codegen --extern
