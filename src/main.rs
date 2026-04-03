@@ -110,6 +110,10 @@ fn print_help() {
     println!("  install [path]                install a package to ~/.loft/lib/ for global use");
     println!("                                install .    — install package in current dir");
     println!("                                install /p   — install package at /p");
+    println!("  doc [path]                    generate HTML documentation for a package");
+    println!("                                doc          — generate docs for package in cwd");
+    println!("                                doc lib/pkg  — generate docs for lib/pkg");
+    println!("                                output: <pkg>/doc/*.html");
 }
 
 fn handle_generate_log_config(path_opt: Option<&str>) {
@@ -379,6 +383,18 @@ fn main() {
                 std::env::current_dir().unwrap_or_default()
             };
             install_package(&pkg_path);
+            return;
+        } else if a == "doc" {
+            // PKG.8: `loft doc [path]` — generate HTML docs for a package.
+            let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                std::path::PathBuf::from(&argv[i])
+            } else {
+                std::env::current_dir().unwrap_or_default()
+            };
+            if let Err(e) = loft::documentation::generate_pkg_docs(&pkg_path) {
+                eprintln!("Error generating docs: {e}");
+                std::process::exit(1);
+            }
             return;
         } else if a.starts_with('-') {
             println!("unknown option: {a}");

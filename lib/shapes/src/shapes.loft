@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// High-level shape drawing library built on the graphics package.
+// Demonstrates PKG.3 transitive dependency resolution.
+use graphics;
+
+// Draw a filled rectangle with a 1px border outline.
+pub fn bordered_rect(cv: graphics::Canvas, brx: integer, bry: integer, brw: integer, brh: integer, fill: integer, border: integer) {
+  cv.fill_rect(brx, bry, brw, brh, fill);
+  cv.draw_rect(brx, bry, brw, brh, border);
+}
+
+// Draw a filled circle with a 1px outline.
+pub fn bordered_circle(cv: graphics::Canvas, bcx: integer, bcy: integer, radius: integer, fill: integer, border: integer) {
+  cv.fill_circle(bcx, bcy, radius, fill);
+  cv.draw_circle(bcx, bcy, radius, border);
+}
+
+// Draw a diamond shape (45-degree rotated square) centered at (dx, dy).
+pub fn diamond(cv: graphics::Canvas, dx: integer, dy: integer, size: integer, color: integer) {
+  cv.draw_line(dx, dy - size, dx + size, dy, color);
+  cv.draw_line(dx + size, dy, dx, dy + size, color);
+  cv.draw_line(dx, dy + size, dx - size, dy, color);
+  cv.draw_line(dx - size, dy, dx, dy - size, color);
+}

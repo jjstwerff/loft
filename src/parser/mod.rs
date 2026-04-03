@@ -72,6 +72,9 @@ pub struct Parser {
     /// A7.2: resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
+    /// PKG.3: package dependencies discovered during manifest reading.
+    /// Each entry is (name, dir) — sibling packages are searched in `dir`.
+    pending_pkg_deps: Vec<(String, String)>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
     /// - Define variables, try to determine their type (can become clear from later code).
@@ -280,6 +283,7 @@ impl Parser {
             line: 0,
             lib_dirs: Vec::new(),
             pending_native_libs: Vec::new(),
+            pending_pkg_deps: Vec::new(),
             pending_imports: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
@@ -1880,6 +1884,29 @@ impl Parser {
                 }
             }
         }
+        // PKG.3: load transitive dependencies discovered during manifest reading.
+        // Dependencies are queued by lib_path_manifest when it reads [dependencies].
+        while !self.pending_pkg_deps.is_empty() {
+            let deps = std::mem::take(&mut self.pending_pkg_deps);
+            for (dep_id, parent_dir) in deps {
+                if self.data.use_exists(&dep_id) {
+                    continue;
+                }
+                // First try the sibling package directory (same parent as the
+                // depending package), then fall back to the normal lib_path search.
+                let f = if let Some(entry) = self.lib_path_manifest(&parent_dir, &dep_id) {
+                    entry
+                } else {
+                    self.lib_path(&dep_id)
+                };
+                if std::path::Path::new(&f).exists() {
+                    let cur = &self.lexer.pos().file;
+                    self.todo_files.push((cur.clone(), self.data.source));
+                    self.data.use_add(&dep_id);
+                    self.lexer.switch(&f);
+                }
+            }
+        }
         // Apply wildcard/selective imports queued for this source now that the while-use loop
         // has resolved all libraries.  Must run before the definitions loop so that imported
         // names are visible when function bodies and type annotations are parsed.
@@ -2120,6 +2147,18 @@ impl Parser {
                 let filename = crate::extensions::platform_lib_name(stem);
                 let lib_path = format!("{pkg_dir}/native/{filename}");
                 self.pending_native_libs.push(lib_path);
+            }
+            // PKG.3: register the package's parent directory so that
+            // dependencies declared in [dependencies] can be found as sibling
+            // packages during normal `use` resolution.
+            if !m.dependencies.is_empty() && !self.lib_dirs.contains(&dir.to_string()) {
+                self.lib_dirs.push(dir.to_string());
+            }
+            for (dep_name, _dep_version) in &m.dependencies {
+                if !self.data.use_exists(dep_name) {
+                    self.pending_pkg_deps
+                        .push((dep_name.clone(), dir.to_string()));
+                }
             }
             m.entry.map_or_else(
                 || format!("{pkg_dir}/src/{id}.loft"),

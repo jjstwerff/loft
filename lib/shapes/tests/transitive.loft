@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Test PKG.3: only import shapes — graphics should load transitively.
+use shapes;
+
+fn test_transitive_dep() {
+  // graphics::canvas and graphics::rgb are available because shapes
+  // declares graphics as a dependency in its loft.toml.
+  cv = graphics::canvas(20, 20, 0);
+  shapes::diamond(cv, 10, 10, 3, graphics::rgb(255, 0, 0));
+  assert(cv.get_pixel(10, 7) == graphics::rgb(255, 0, 0), "diamond drawn via transitive dep");
+}

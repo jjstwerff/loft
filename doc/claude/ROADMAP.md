@@ -37,39 +37,35 @@ All new libraries are built as **packages** using the format designed in
 ### Remaining sprints
 
 ```
-Sprint 7: Stdlib extraction
-  EXT.1   imaging package (PNG + Image types)
-  EXT.2   random package
+Sprint 7: Package deps + docs ✓ (branch sprint-7-pkg-deps-math)
+  PKG.3   dependency resolution ✓
+  loft doc subcommand ✓
+  shapes test package ✓
 
-Sprint 8: Package dependency & codegen
-  PKG.3   dependency resolution
-  PKG.4   native codegen --extern
-  PKG.5   WASM codegen linking
-  PKG.7   lock file
-
-Sprint 9: HTTP client
-  H4.1    HttpResponse struct
-  H4.2    http_get/post native (ureq)
-  H4.3    headers
-  H4.5    tests
-
-Sprint 10: Graphics — text + math
-  GL3     text rendering (fontdue native)
-  GL4.1   Vec3/Mat4 math types
-  GL4.2   mesh types
-
-Sprint 11: GLB export
+Sprint 8: GLB export (pure loft)
   GL4.3   scene types
   GL4.4   GLB binary writer
   GL4.5   accessor encoding
   GL4.6   material encoding
 
-Sprint 12: OpenGL + WebGL
+Sprint 9: Native codegen for packages
+  PKG.4   native codegen --extern
+  PKG.5   WASM codegen linking
+
+Sprint 10: Stdlib extraction (needs PKG.4)
+  EXT.1   imaging package (PNG + Image types)
+  EXT.2   random package
+
+Sprint 11: HTTP client (needs PKG.4)
+  H4.1    HttpResponse struct
+  H4.2    http_get/post native (ureq)
+  H4.3    headers
+  H4.5    tests
+
+Sprint 12: Graphics native (needs PKG.4)
+  GL3     text rendering (fontdue native)
   GL5.1   window + event loop
-  GL5.2   shaders
-  GL5.3   VBO/VAO
-  GL5.4   render loop
-  GL5.5   texture upload
+  GL5.2-5 shaders, VBO, render, texture
   GL6.1-4 WebGL2 equivalents
 ```
 
@@ -79,7 +75,6 @@ Sprint 12: OpenGL + WebGL
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
 | EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
-| PKG.3     | Package dependencies + transitive resolution              | M  | ✓      | PKG.2        | manifest.rs, parser/mod.rs    |
 | PKG.4     | Native codegen `--extern` for `#native` packages          | M  | ✓      | PKG.1        | generation/mod.rs, main.rs    |
 | PKG.5     | WASM codegen with native package wasm rlib                | M  | ✓      | PKG.4        | main.rs                       |
 | PKG.7     | Lock file (`loft.lock`) for reproducible builds           | S  | ✓      | PKG.3        | manifest.rs                   |
