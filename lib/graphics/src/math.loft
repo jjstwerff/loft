@@ -84,13 +84,12 @@ pub struct Mat4 {
 
 // Create an identity matrix.
 pub fn mat4_identity() -> Mat4 {
-  id_res = Mat4 { m: [
+  Mat4 { m: [
     1.0, 0.0, 0.0, 0.0,
     0.0, 1.0, 0.0, 0.0,
     0.0, 0.0, 1.0, 0.0,
     0.0, 0.0, 0.0, 1.0
-  ] };
-  id_res
+  ] }
 }
 
 // Create a translation matrix.

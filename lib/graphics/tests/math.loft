@@ -44,4 +44,38 @@ fn test_vec3_normalize() {
   assert(nn.z == 0.0, "norm z");
 }
 
-// Mat4 tests in math_mat4.loft and math_mul.loft to avoid flat-namespace collision
+fn test_mat4_identity() {
+  id_m = math::mat4_identity();
+  assert(id_m.m[0] == 1.0, "m00");
+  assert(id_m.m[5] == 1.0, "m11");
+  assert(id_m.m[10] == 1.0, "m22");
+  assert(id_m.m[15] == 1.0, "m33");
+  assert(id_m.m[1] == 0.0, "m10");
+}
+
+fn test_mat4_translate() {
+  t4_m = math::mat4_translate(10.0, 20.0, 30.0);
+  t4_v = math::vec3(0.0, 0.0, 0.0);
+  t4_r = math::mat4_transform(t4_m, t4_v);
+  assert(t4_r.x == 10.0, "translate x");
+  assert(t4_r.y == 20.0, "translate y");
+  assert(t4_r.z == 30.0, "translate z");
+}
+
+fn test_mat4_scale() {
+  s4_m = math::mat4_scale(2.0, 3.0, 4.0);
+  s4_v = math::vec3(1.0, 1.0, 1.0);
+  s4_r = math::mat4_transform(s4_m, s4_v);
+  assert(s4_r.x == 2.0, "scale x");
+  assert(s4_r.y == 3.0, "scale y");
+  assert(s4_r.z == 4.0, "scale z");
+}
+
+fn test_mat4_mul() {
+  tma = math::mat4_translate(5.0, 0.0, 0.0);
+  tmb = math::mat4_scale(2.0, 2.0, 2.0);
+  tmc = math::mat4_mul(tma, tmb);
+  tmv = math::vec3(1.0, 0.0, 0.0);
+  tmres = math::mat4_transform(tmc, tmv);
+  assert(tmres.x == 7.0, "mul result x={tmres.x}");
+}
