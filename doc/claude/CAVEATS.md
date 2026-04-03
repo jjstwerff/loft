@@ -85,24 +85,21 @@ mapped to `pow()` via `rename()`.  `x ** 0.5`, `x ** 2.0`, etc. all work.
 
 ---
 
-## C55 — Struct return with inline vector literal
+## C55 — Struct return with inline vector literal *(FIXED)*
 
-Returning a struct containing a vector literal directly as the return
-expression can cause "Unknown definition" codegen errors.  See P104.
-
-**Workaround:** assign to intermediate variable, then return it.
-**Test:** `lib/graphics/src/math.loft` — `mat4_identity()`.
+**Fixed by P104:** The "Unknown definition" error was caused by the test
+runner executing library functions (like `mat4_identity()`) as tests.
+Direct struct return with vector literal works correctly.
+**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p104_direct_return`.
 
 ---
 
-## C56 — Flat namespace requires split test files for complex libraries
+## C56 — Flat namespace requires split test files *(FIXED)*
 
-Libraries with many functions (math.loft has 15+) cause flat-namespace
-collisions when all tests are in one file.  Loop variables in library
-functions interfere with test function codegen.
-
-**Workaround:** split tests across multiple `.loft` files.
-**Test:** `lib/graphics/tests/math.loft`, `math_mat4.loft`, `math_mul.loft`.
+**Fixed by P104:** The test runner now filters library functions by source
+file.  Tests and library functions no longer collide.  All math tests
+consolidated in a single file (9 tests).
+**Test:** `lib/graphics/tests/math.loft`.
 
 ---
 

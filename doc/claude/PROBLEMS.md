@@ -547,17 +547,34 @@ defined in the test file itself are treated as entry points.
 ### 105. Nested struct field access on vector elements crashes *(open)*
 
 **Symptom:** Accessing a struct field on a vector element that itself contains
-a struct causes "Unknown record 0" runtime error:
+a struct causes "Unknown record N" runtime error:
 
 ```loft
 mesh.vertices[0].pos.x   // "Unknown record 0"
 ```
 
-**Workaround:** Avoid deep chained access on vector elements.
+**Root cause:** `get_val()` in `src/parser/mod.rs:1297-1307` emits `OpGetRef`
+for all `Value::Call` nodes when accessing `Type::Reference` fields.
+`OpGetRef` reads 4 bytes at `db.pos + fld` and treats the value as a record
+pointer.  But vector elements are stored inline — the bytes at that offset
+are the struct's actual field data (e.g., integer 42), not a record number.
 
-**Discovered:** Sprint 8 (GL4.2 mesh types).
-**Test:** `lib/graphics/tests/mesh.loft::test_mesh_add_vertex` (simplified to avoid crash).
-**Workaround test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p105_workaround`.
+All vector elements are stored inline (`src/vector.rs:247-280`).  Struct
+fields within vector elements (including Reference fields like `inner: Inner`)
+are stored as flat data at byte offsets, not as 4-byte pointers.
+
+**Parser-level fixes failed:** Three attempts to change which opcode the
+parser emits (checking for OpGetVector in `get_val`) all caused intermittent
+regressions in `tests/docs/16-parser.loft`.  The bytecode changes have
+unpredictable side effects across files loaded together.
+
+**Recommended fix:** Runtime fallback in `get_ref()` at
+`src/database/structures.rs:750`.  Check `store.claims.contains(&res)` —
+if the value read isn't a valid record, fall back to offset addition
+(get_field behavior).  See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
+
+**Workaround:** Avoid deep chained access on vector elements.
+**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p105_workaround`.
 
 ---
 
