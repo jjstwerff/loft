@@ -4,6 +4,32 @@ All notable changes to the loft language and interpreter.
 
 ---
 
+## [Unreleased]
+
+### Graphics library (pure-loft package)
+
+- **GL0** — Package scaffolding: `lib/graphics/` with `loft.toml` manifest.
+- **GL1** — `Canvas` struct with `canvas()`, `get_pixel()`, `set_pixel()`, `clear()`,
+  `blend()`, `blend_pixel()`.
+- **GL2.1** — Drawing primitives: `fill_rect()`, `hline()`, `vline()`, `draw_rect()`.
+- **GL2.2** — `draw_line()`: Bresenham algorithm for all octants.
+- **GL2.3** — `draw_circle()`, `fill_circle()`, `draw_ellipse()`: midpoint algorithms
+  with octant/quadrant symmetry.
+- RGBA color packing via `rgba()`/`rgb()` using long arithmetic to avoid i32::MIN
+  sentinel collision.
+- 20 canvas tests covering all primitives.
+
+### Package infrastructure
+
+- **PKG.1** — Native stub registration: `#native` annotations generate stubs replaced
+  at load time by real shared-library implementations.
+- **PKG.2** — `loft install` command for local package installation to `~/.loft/lib/`.
+- **PKG.6** — `loft test` subcommand discovers and runs `tests/*.loft` in packages.
+- **PKG.3** — `[dependencies]` section in `loft.toml` manifest parsing.
+- Manifest parser: `name`, `version`, `loft` version constraint, `native` stem fields.
+
+---
+
 ## [0.8.3] — 2026-04-03
 
 ### Bug fixes

@@ -102,12 +102,12 @@ Sprint 4: HTTP client
   H4.4    WASM bridge (fetch)
   H4.5    tests
 
-Sprint 5: Graphics foundation
-  GL0     package scaffolding
-  GL1     Canvas + pixel ops
-  GL2.1   lines + rect
-  GL2.2   Bresenham + AA line
-  GL2.3   circle + ellipse
+Sprint 5: Graphics foundation ✓ (branch sprint-3-graphics-foundation)
+  GL0     package scaffolding ✓
+  GL1     Canvas + pixel ops ✓
+  GL2.1   lines + rect ✓
+  GL2.2   Bresenham line ✓
+  GL2.3   circle + ellipse ✓
 
 Sprint 6: Graphics advanced
   GL2.4   Bezier curves
