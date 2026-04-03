@@ -66,20 +66,31 @@ Examples:
 
 ### Sprint workflow
 
+**Every sprint branch MUST start from a merged, up-to-date `main`.**
+If the previous sprint's PR has not been merged yet, wait for it.
+Never branch from another feature branch.
+
 ```
-1. git checkout main && git pull
-2. git checkout -b sprint-{N}-{description}
-3. For each item in the sprint (up to ~4):
+1. Merge the previous sprint's PR (wait for CI green)
+2. git checkout main && git pull     ← MANDATORY: start from merged main
+3. git checkout -b sprint-{N}-{description}
+4. For each item in the sprint (up to ~4):
    a. Write tests with @EXPECT_FAIL / @EXPECT_ERROR
    b. Implement the code change
    c. Remove annotations, verify tests pass
    d. Commit: "{ID}: {description}"
-4. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
-5. git push -u origin sprint-{N}-{description}
-6. gh pr create
-7. Wait for CI green on all 3 platforms
-8. gh pr merge --squash
+5. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
+6. git push -u origin sprint-{N}-{description}
+7. gh pr create
+8. Wait for CI green on all 3 platforms
+9. gh pr merge --squash
 ```
+
+**Why this matters:** branching from an unmerged feature branch creates
+a dependency chain.  If the earlier branch needs changes during review,
+the later branch must be rebased — causing merge conflicts and wasted
+work.  Sequential merges keep the history linear and each PR reviewable
+in isolation.
 
 ### Item limit per sprint
 
