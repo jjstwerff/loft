@@ -547,6 +547,7 @@ pub fn mat4_identity() -> Mat4 {
 
 **Discovered:** Sprint 8 (GL4.1 math types).
 **Test:** `lib/graphics/tests/math_mat4.loft::test_mat4_identity` passes with workaround.
+**Workaround test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p104_workaround`.
 
 ---
 
@@ -563,6 +564,7 @@ mesh.vertices[0].pos.x   // "Unknown record 0"
 
 **Discovered:** Sprint 8 (GL4.2 mesh types).
 **Test:** `lib/graphics/tests/mesh.loft::test_mesh_add_vertex` (simplified to avoid crash).
+**Workaround test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p105_workaround`.
 
 ---
 

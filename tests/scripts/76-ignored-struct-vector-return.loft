@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P104: Direct struct return with vector literal — workaround validation
+// P105: Nested struct field access on vector elements — workaround validation
+// C54: sqrt() stdlib workaround for ** 0.5
+
+// P104 and P105 are flat-namespace-dependent: they crash only when compiled
+// alongside many other functions (see lib/graphics/tests/math*.loft).
+// This file validates the WORKAROUNDS work correctly.
+
+struct SvMat {
+  vals: vector<float>
+}
+
+// P104 workaround: intermediate variable before return
+fn svr_identity() -> SvMat {
+  svr_res = SvMat { vals: [1.0, 0.0, 0.0, 1.0] };
+  svr_res
+}
+
+fn test_p104_workaround() {
+  svr_m = svr_identity();
+  assert(svr_m.vals.len() == 4, "has 4 elements");
+  assert(svr_m.vals[0] == 1.0, "first is 1.0");
+  assert(svr_m.vals[3] == 1.0, "last is 1.0");
+}
+
+// P105: nested struct access — validate non-chained access works
+struct SvInner {
+  ix: float not null,
+  iy: float not null
+}
+
+struct SvOuter {
+  items: vector<SvInner>
+}
+
+fn test_p105_workaround() {
+  svo = SvOuter { };
+  svo.items += [SvInner { ix: 3.0, iy: 4.0 }];
+  assert(svo.items.len() == 1, "one item added");
+  // P105: svo.items[0].ix would crash — just verify len works
+}
+
+// C54 workaround: sqrt() instead of ** 0.5
+fn test_c54_sqrt_workaround() {
+  sv_val = 25.0;
+  sv_root = sqrt(sv_val);
+  assert(sv_root == 5.0, "sqrt of 25");
+}
+
+fn test_c54_sqrt_zero() {
+  sv_z = sqrt(0.0);
+  assert(sv_z == 0.0, "sqrt of 0");
+}

@@ -83,8 +83,8 @@ Using `** 0.5` to compute a square root causes a codegen assertion:
 *"generate_call: mutable arg expected 8B on stack but generate(Null) pushed 0B"*.
 
 **Workaround:** use `sqrt()` from stdlib instead of `** 0.5`.
-**Test:** `lib/graphics/src/math.loft` — `length3()` uses `sqrt()`.
-**Bug:** [PROBLEMS.md](PROBLEMS.md) — not yet filed as a numbered problem (low priority, stdlib `sqrt` is the idiomatic approach).
+**Reproducer:** `tests/scripts/77-ignored-exponentiation.loft` (`@EXPECT_FAIL`).
+**Workaround test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_c54_sqrt_workaround`.
 
 ---
 

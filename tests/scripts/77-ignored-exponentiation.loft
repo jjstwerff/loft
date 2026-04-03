@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// C54: Exponentiation ** 0.5 causes codegen panic
+// @EXPECT_FAIL test_exponentiation_sqrt
+
+// C54: ** 0.5 crashes codegen — use sqrt() instead
+fn test_exponentiation_sqrt() {
+  sv_val = 9.0;
+  sv_root = sv_val ** 0.5;
+  assert(sv_root == 3.0, "sqrt of 9");
+}
