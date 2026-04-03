@@ -524,11 +524,11 @@ database allocation out of the Block into the function preamble.
 
 ---
 
-### 104. Direct struct return with vector literal causes "Unknown definition" *(open)*
+### 104. Test runner executes library functions as tests *(fixed)*
 
-**Symptom:** A function that returns a struct containing a vector literal
-directly as the return expression causes "Unknown definition" codegen error
-when the file is loaded alongside other functions:
+**Symptom:** Library functions with zero parameters (e.g. `mat4_identity()`)
+were picked up by the `--tests` runner as test entry points, causing crashes
+when `execute_argv` looked them up in the wrong source context.
 
 ```loft
 pub fn mat4_identity() -> Mat4 {
@@ -536,18 +536,11 @@ pub fn mat4_identity() -> Mat4 {
 }
 ```
 
-**Workaround:** Assign to an intermediate variable before returning:
+**Fix:** Filter test function discovery by source file — only functions
+defined in the test file itself are treated as entry points.
 
-```loft
-pub fn mat4_identity() -> Mat4 {
-  id_res = Mat4 { m: [1.0, 0.0, ...] };
-  id_res                          // OK
-}
-```
-
-**Discovered:** Sprint 8 (GL4.1 math types).
-**Test:** `lib/graphics/tests/math_mat4.loft::test_mat4_identity` passes with workaround.
-**Workaround test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p104_workaround`.
+**File:** `src/test_runner.rs` — added `def.position.file != abs_file` check.
+**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p104_direct_return`.
 
 ---
 

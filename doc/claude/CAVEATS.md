@@ -77,14 +77,11 @@ Only same-file enum variants work in match patterns.
 
 ---
 
-## C54 — Exponentiation `** 0.5` causes codegen crash
+## C54 — Exponentiation `** 0.5` *(FIXED)*
 
-Using `** 0.5` to compute a square root causes a codegen assertion:
-*"generate_call: mutable arg expected 8B on stack but generate(Null) pushed 0B"*.
-
-**Workaround:** use `sqrt()` from stdlib instead of `** 0.5`.
-**Reproducer:** `tests/scripts/77-ignored-exponentiation.loft` (`@EXPECT_FAIL`).
-**Workaround test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_c54_sqrt_workaround`.
+**Fixed in Sprint 8:** Added `**` to lexer TOKENS and parser OPERATORS table,
+mapped to `pow()` via `rename()`.  `x ** 0.5`, `x ** 2.0`, etc. all work.
+**Test:** `tests/scripts/77-ignored-exponentiation.loft` (5 passing tests).
 
 ---
 

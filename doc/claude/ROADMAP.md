@@ -46,10 +46,10 @@ Sprint 8: 3D types + bug fixes (branch sprint-8-glb-types)
   GL4.1   Vec3/Mat4 math types ✓
   GL4.2   mesh types ✓
   GL4.3   scene types ✓
-  C54     add ** operator → pow()
-  P104    fix direct struct return with vector literal
-  P105    fix nested struct field access on vector elements
-  P106    retest after P104+P105
+  C54     add ** operator → pow() ✓
+  P104    test runner library function filter ✓
+  P105    deferred — get_val fix regresses parser library
+  P106    deferred — depends on P105
 
 Sprint 9: Native codegen for packages
   PKG.4   native codegen --extern

@@ -30,6 +30,12 @@ All notable changes to the loft language and interpreter.
   sentinel collision.
 - 30 canvas tests covering all primitives.
 
+### Bug fixes
+
+- **C54** — `**` exponentiation operator now works, mapped to `pow()`.
+- **P104** — Test runner no longer picks up library functions as tests;
+  only functions defined in the test file are executed.
+
 ### Package infrastructure
 
 - **PKG.1** — Native stub registration: `#native` annotations generate stubs replaced
