@@ -36,6 +36,25 @@ fn test_mesh_add_triangle() {
 fn test_cube() {
   cb = mesh::cube();
   assert(cb.name == "cube", "cube name");
-  assert(cb.vertices.len() == 8, "cube has 8 verts");
-  assert(cb.triangles.len() == 4, "cube has 4 tris (2 faces)");
+  assert(cb.vertices.len() == 24, "cube has 24 verts (4 per face)");
+  assert(cb.triangles.len() == 12, "cube has 12 tris (2 per face * 6 faces)");
+}
+
+fn test_plane() {
+  pl = mesh::plane("ground", 2.0, 3.0);
+  assert(pl.name == "ground", "plane name");
+  assert(pl.vertices.len() == 4, "plane has 4 verts");
+  assert(pl.triangles.len() == 2, "plane has 2 tris");
+  // Check normal is up (y = 1)
+  pln = pl.vertices[0].normal;
+  assert(pln.y == 1.0, "normal up");
+}
+
+fn test_sphere() {
+  sp = mesh::sphere("ball", 1.0, 8, 6);
+  assert(sp.name == "ball", "sphere name");
+  // (slices+1)*(stacks+1) = 9*7 = 63 verts
+  assert(sp.vertices.len() == 63, "sphere verts={sp.vertices.len()}");
+  // slices*stacks*2 = 8*6*2 = 96 tris
+  assert(sp.triangles.len() == 96, "sphere tris={sp.triangles.len()}");
 }

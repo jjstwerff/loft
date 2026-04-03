@@ -26,6 +26,14 @@ All notable changes to the loft language and interpreter.
   (`add_vertex`, `add_triangle`, `add_quad`, `cube()`).
 - **GL4.3** — `scene.loft`: `Material`, `Node`, `Camera`, `Scene` types with
   PBR material support and scene graph builder.
+- **GL5** — `glb.loft`: `save_glb(mesh, path)` exports a single `Mesh` as a
+  GLB 2.0 file (POSITION, NORMAL, TEXCOORD_0, u32 indices).  5 binary tests.
+- **GL6** — `glb.loft`: `save_scene_glb(scene, path)` exports a full `Scene`
+  with multiple meshes, PBR materials, and nodes into one GLB BIN chunk.
+  9 tests including JSON content verification and multi-mesh BIN size.
+- **GL7** — `scene.loft`: `node_at(name, mesh, mat, transform)` constructor.
+  glTF 2.0 compliance: material reference moved to mesh primitive; node
+  transform outputs `"matrix"` field only when non-identity.
 - RGBA color packing via `rgba()`/`rgb()` using long arithmetic to avoid i32::MIN
   sentinel collision.
 - 30 canvas tests covering all primitives.
