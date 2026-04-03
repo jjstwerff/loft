@@ -47,12 +47,22 @@ the actual implementation diverged:
 | fill_ellipse | `fill_ellipse()` — midpoint + hline | `graphics.loft` |
 | Phase 2.11 AA fill boundary | Not yet implemented |  |
 | Phase 2.13 Dashed/Dotted | Not yet implemented |  |
+| Phase 4.1–4.3 3D types | `math.loft` (Vec2/3/4, Mat4), `mesh.loft` (Vertex/Triangle/Mesh), `scene.loft` (Material/Node/Camera/Scene) | `lib/graphics/src/` |
+| GL5 single-mesh GLB | `glb::save_glb(mesh, path)` — binary GLB 2.0 writer | `glb.loft` |
+| GL6 scene GLB | `glb::save_scene_glb(scene, path)` — multi-mesh with materials | `glb.loft` |
+| GL7 glTF compliance | material on primitive (not node); node transform matrix | `glb.loft`, `scene.loft` |
+| GL8 mesh primitives | Complete 6-face cube; `plane(w, d)`; `sphere(r, slices, stacks)` | `mesh.loft` |
 
-Tests: `lib/graphics/tests/canvas.loft` — 30 tests covering all implemented primitives.
-Run with: `cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/canvas.loft`
+Tests:
+- `lib/graphics/tests/canvas.loft` — 30 canvas tests. Run: `cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/canvas.loft`
+- `lib/graphics/tests/math.loft` — 9 math tests.
+- `lib/graphics/tests/mesh.loft` — 6 mesh tests (cube, plane, sphere).
+- `lib/graphics/tests/scene.loft` — 5 scene graph tests.
+- `lib/graphics/tests/glb.loft` — 5 single-mesh GLB tests.
+- `lib/graphics/tests/scene_glb.loft` — 9 scene GLB tests (binary structure + JSON content).
 
 The original Rust-native design is preserved below for reference.  Future phases (text,
-GLB, OpenGL) will likely need native extensions via the `#native` mechanism.
+OpenGL) will likely need native extensions via the `#native` mechanism.
 
 ---
 
