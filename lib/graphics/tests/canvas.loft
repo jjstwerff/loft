@@ -120,3 +120,82 @@ fn test_fill_rect_clipped() {
   assert(cv.get_pixel(1, 1) == c, "clipped interior");
   assert(cv.get_pixel(2, 2) == 0, "outside clipped rect");
 }
+
+// --- GL2.2: Bresenham line ---
+
+fn test_draw_line_horizontal() {
+  cv = graphics::canvas(10, 10, 0);
+  red = graphics::rgb(255, 0, 0);
+  cv.draw_line(1, 3, 7, 3, red);
+  assert(cv.data[3 * 10 + 1] == red, "line start");
+  assert(cv.data[3 * 10 + 7] == red, "line end");
+  assert(cv.data[3 * 10 + 0] == 0, "before line");
+}
+
+fn test_draw_line_vertical() {
+  cv = graphics::canvas(10, 10, 0);
+  blue = graphics::rgb(0, 0, 255);
+  cv.draw_line(4, 1, 4, 8, blue);
+  assert(cv.data[1 * 10 + 4] == blue, "vline start");
+  assert(cv.data[8 * 10 + 4] == blue, "vline end");
+  assert(cv.data[0 * 10 + 4] == 0, "above line");
+}
+
+fn test_draw_line_diagonal() {
+  cv = graphics::canvas(10, 10, 0);
+  green = graphics::rgb(0, 255, 0);
+  cv.draw_line(0, 0, 5, 5, green);
+  assert(cv.data[0 * 10 + 0] == green, "diagonal start");
+  assert(cv.data[5 * 10 + 5] == green, "diagonal end");
+  assert(cv.data[2 * 10 + 2] == green, "diagonal mid");
+}
+
+fn test_draw_line_reverse() {
+  cv = graphics::canvas(10, 10, 0);
+  white = graphics::rgb(255, 255, 255);
+  cv.draw_line(7, 7, 2, 2, white);
+  assert(cv.data[7 * 10 + 7] == white, "reverse start");
+  assert(cv.data[2 * 10 + 2] == white, "reverse end");
+}
+
+// --- GL2.3: Circle and ellipse ---
+
+fn test_draw_circle() {
+  cv = graphics::canvas(20, 20, 0);
+  red = graphics::rgb(255, 0, 0);
+  cv.draw_circle(10, 10, 5, red);
+  // Top of circle: (10, 5)
+  assert(cv.data[5 * 20 + 10] == red, "circle top");
+  // Bottom: (10, 15)
+  assert(cv.data[15 * 20 + 10] == red, "circle bottom");
+  // Left: (5, 10)
+  assert(cv.data[10 * 20 + 5] == red, "circle left");
+  // Right: (15, 10)
+  assert(cv.data[10 * 20 + 15] == red, "circle right");
+  // Center should be empty
+  assert(cv.data[10 * 20 + 10] == 0, "circle center empty");
+}
+
+fn test_fill_circle() {
+  cv = graphics::canvas(20, 20, 0);
+  blue = graphics::rgb(0, 0, 255);
+  cv.fill_circle(10, 10, 4, blue);
+  // Center should be filled
+  assert(cv.data[10 * 20 + 10] == blue, "filled center");
+  // Edge should be filled
+  assert(cv.data[10 * 20 + 14] == blue, "filled right edge");
+  // Outside should be empty
+  assert(cv.data[10 * 20 + 16] == 0, "outside circle");
+}
+
+fn test_draw_ellipse() {
+  cv = graphics::canvas(30, 20, 0);
+  green = graphics::rgb(0, 255, 0);
+  cv.draw_ellipse(15, 10, 10, 5, green);
+  // Rightmost point: (25, 10)
+  assert(cv.data[10 * 30 + 25] == green, "ellipse right");
+  // Topmost point: (15, 5)
+  assert(cv.data[5 * 30 + 15] == green, "ellipse top");
+  // Center should be empty (outline only)
+  assert(cv.data[10 * 30 + 15] == 0, "ellipse center empty");
+}

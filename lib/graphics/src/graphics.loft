@@ -129,3 +129,121 @@ pub fn draw_rect(self: Canvas, drx: integer, dry: integer, drw: integer, drh: in
   self.vline(drx, dry, dry + drh, color);
   self.vline(drx + drw - 1, dry, dry + drh, color);
 }
+
+// --- GL2.2: Bresenham line drawing ---
+
+// Draw a line from (x0, y0) to (x1, y1) using Bresenham's algorithm.
+// Handles all octants. Each pixel is set (no blending).
+pub fn draw_line(self: Canvas, lx0: integer, ly0: integer, lx1: integer, ly1: integer, color: integer) {
+  dx = if lx1 > lx0 { lx1 - lx0 } else { lx0 - lx1 };
+  dy = if ly1 > ly0 { ly1 - ly0 } else { ly0 - ly1 };
+  sx = if lx0 < lx1 { 1 } else { -1 };
+  sy = if ly0 < ly1 { 1 } else { -1 };
+  err = dx - dy;
+  cx = lx0;
+  cy = ly0;
+  for _ in 0..dx + dy + 1 {
+    self.set_pixel(cx, cy, color);
+    if cx == lx1 and cy == ly1 { break; }
+    e2 = 2 * err;
+    if e2 > -dy {
+      err -= dy;
+      cx += sx;
+    }
+    if e2 < dx {
+      err += dx;
+      cy += sy;
+    }
+  }
+}
+
+// --- GL2.3: Circle and ellipse ---
+
+// Draw a circle outline using the midpoint algorithm.
+// Center at (cx, cy) with the given radius. Clipped via set_pixel.
+pub fn draw_circle(self: Canvas, ccx: integer, ccy: integer, radius: integer, color: integer) {
+  cx = 0;
+  cy = radius;
+  d = 1 - radius;
+  for _ in 0..radius * 4 + 4 {
+    if cx > cy { break; }
+    // Draw all 8 octant-symmetric points.
+    self.set_pixel(ccx + cx, ccy + cy, color);
+    self.set_pixel(ccx - cx, ccy + cy, color);
+    self.set_pixel(ccx + cx, ccy - cy, color);
+    self.set_pixel(ccx - cx, ccy - cy, color);
+    self.set_pixel(ccx + cy, ccy + cx, color);
+    self.set_pixel(ccx - cy, ccy + cx, color);
+    self.set_pixel(ccx + cy, ccy - cx, color);
+    self.set_pixel(ccx - cy, ccy - cx, color);
+    if d < 0 {
+      d += 2 * cx + 3;
+    } else {
+      d += 2 * (cx - cy) + 5;
+      cy -= 1;
+    }
+    cx += 1;
+  }
+}
+
+// Fill a circle (solid disk). Center at (cx, cy), given radius.
+pub fn fill_circle(self: Canvas, fcx: integer, fcy: integer, radius: integer, color: integer) {
+  cx = 0;
+  cy = radius;
+  d = 1 - radius;
+  for _ in 0..radius * 4 + 4 {
+    if cx > cy { break; }
+    self.hline(fcx - cx, fcx + cx + 1, fcy + cy, color);
+    self.hline(fcx - cx, fcx + cx + 1, fcy - cy, color);
+    self.hline(fcx - cy, fcx + cy + 1, fcy + cx, color);
+    self.hline(fcx - cy, fcx + cy + 1, fcy - cx, color);
+    if d < 0 {
+      d += 2 * cx + 3;
+    } else {
+      d += 2 * (cx - cy) + 5;
+      cy -= 1;
+    }
+    cx += 1;
+  }
+}
+
+// Draw an axis-aligned ellipse outline. Center (cx, cy), radii (rx, ry).
+pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery: integer, color: integer) {
+  // Midpoint ellipse algorithm — two regions.
+  ex = 0;
+  ey = ery;
+  rx2 = erx * erx;
+  ry2 = ery * ery;
+  // Region 1: dy/dx > -1
+  d1 = ry2 - rx2 * ery + rx2 / 4;
+  for _ in 0..erx + ery + 1 {
+    if ry2 * ex > rx2 * ey { break; }
+    self.set_pixel(ecx + ex, ecy + ey, color);
+    self.set_pixel(ecx - ex, ecy + ey, color);
+    self.set_pixel(ecx + ex, ecy - ey, color);
+    self.set_pixel(ecx - ex, ecy - ey, color);
+    if d1 < 0 {
+      d1 += ry2 * (2 * ex + 3);
+    } else {
+      d1 += ry2 * (2 * ex + 3) + rx2 * (-2 * ey + 2);
+      ey -= 1;
+    }
+    ex += 1;
+  }
+  // Region 2: dy/dx <= -1
+  d2 = ry2 * (ex * 2 + 1) * (ex * 2 + 1) / 4 + rx2 * (ey - 1) * (ey - 1) - rx2 * ry2;
+  for _ in 0..erx + ery + 1 {
+    if ey < 0 { break; }
+    self.set_pixel(ecx + ex, ecy + ey, color);
+    self.set_pixel(ecx - ex, ecy + ey, color);
+    self.set_pixel(ecx + ex, ecy - ey, color);
+    self.set_pixel(ecx - ex, ecy - ey, color);
+    if d2 > 0 {
+      d2 += rx2 * (-2 * ey + 3);
+    } else {
+      d2 += ry2 * (2 * ex + 2) + rx2 * (-2 * ey + 3);
+      ex += 1;
+    }
+    ey -= 1;
+  }
+}
