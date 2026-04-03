@@ -31,8 +31,6 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
 development happens on feature branches and reaches `main` only through a
 reviewed, CI-green pull request.
 
-The **currently active development branch** is `benchmark`.
-
 Rules:
 - Never `git commit` directly on `main`.
 - Never `git push` without an explicit user instruction.
@@ -41,22 +39,71 @@ Rules:
 
 ---
 
+## Sprint Branches
+
+Development is organized into **sprints** (see [ROADMAP.md](ROADMAP.md) for
+the sprint plan).  Each sprint gets **one branch** containing up to ~4 items.
+The branch is merged to main via a single PR when all items pass CI.
+
+### Why sprints, not per-item branches
+
+- A sprint groups related items that touch overlapping files (e.g. PKG.1 +
+  PKG.2 + PKG.6 all touch `compile.rs` and `main.rs`).
+- Fewer PRs = less CI wait time and merge churn.
+- Each commit within the branch is still one coherent item (test + code +
+  enable), so `git log` stays bisectable.
+
+### Sprint branch naming
+
+```
+sprint-{N}-{short-description}
+```
+
+Examples:
+- `sprint-1-pkg-infrastructure`
+- `sprint-2-stdlib-extraction`
+- `sprint-4-http-client`
+
+### Sprint workflow
+
+```
+1. git checkout main && git pull
+2. git checkout -b sprint-{N}-{description}
+3. For each item in the sprint (up to ~4):
+   a. Write tests with @EXPECT_FAIL / @EXPECT_ERROR
+   b. Implement the code change
+   c. Remove annotations, verify tests pass
+   d. Commit: "{ID}: {description}"
+4. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
+5. git push -u origin sprint-{N}-{description}
+6. gh pr create
+7. Wait for CI green on all 3 platforms
+8. gh pr merge --squash
+```
+
+### Item limit per sprint
+
+**Target: ~4 items per branch.** This keeps PRs reviewable (<500 lines of
+non-test code) and limits blast radius if something goes wrong.  A sprint
+with fewer than 4 items is fine — never pad a sprint to reach the target.
+
+If an item turns out larger than expected, split the sprint: merge what's
+done, create a new branch for the remainder.
+
+---
+
 ## Branch Naming
 
-A branch covers one or more PLANNING.md items (or phases of a single item).
-Branch names list all item IDs, lowercased, with a short suffix:
+For non-sprint branches (bug fixes, documentation, one-off tasks), use
+item ID + short suffix:
 
 ```
 {id}-{short-name}
-{id}-{id}-{short-name}        # two items or phases
-{id}-{id}-{id}-{short-name}   # three items or phases
+{id}-{id}-{short-name}        # two items
 ```
 
 IDs use the single-letter prefix scheme: `l1`, `p1`, `p1-1`, `a6`, `n2`, `r1`, `w1`.
 Phase sub-steps use the dot notation lowercased: `p1-1`, `p1-2`, `a6-3`.
-
-Group items in one branch only when they **touch overlapping files** — otherwise
-keep them separate to make review straightforward.
 
 Examples:
 
