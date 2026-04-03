@@ -47,6 +47,8 @@
 <li><a href="#26-closures">Closures</a> — <span class="toc-desc">Capturing variables from the surrounding scope</span></li>
 <li><a href="#27-coroutines">Coroutines</a> — <span class="toc-desc">Lazy sequences with generators and yield</span></li>
 <li><a href="#28-tuples">Tuples</a> — <span class="toc-desc">Grouping values without defining a struct</span></li>
+<li><a href="#29-match">Match</a> — <span class="toc-desc">Pattern matching with match expressions</span></li>
+<li><a href="#30-formatting">Formatting</a> — <span class="toc-desc">Format strings — interpolation, alignment, and number bases</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
@@ -57,7 +59,7 @@
 <li class="toc-indent"><a href="#stdlib-collections">Collections</a></li>
 <li class="toc-indent"><a href="#stdlib-output-and-diagnostics">Output and Diagnostics</a></li>
 <li class="toc-indent"><a href="#stdlib-vector-aggregates">Vector aggregates</a></li>
-<li class="toc-indent"><a href="#stdlib-a10-field-iteration-support-types">A10: Field iteration support types</a></li>
+<li class="toc-indent"><a href="#stdlib-field-iteration-support-types">Field iteration support types</a></li>
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
 <li class="toc-indent"><a href="#stdlib-random">Random</a></li>
@@ -1079,28 +1081,57 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <h1>Image</h1>
 <p>Loft can load PNG files and access every pixel. Loading takes one function call; after that you can read dimensions, iterate pixels, and examine individual channels.</p>
 <h2 id="loading-an-image">Loading an Image</h2>
-<p>Call <code>file(path).png()</code> to load a PNG into memory. The entire file is decoded at this point.</p>
+<p>Call <code>file(path).png()</code> to load a PNG into memory. The entire file is decoded at this point — width, height, and a flat vector of Pixel records are all available immediately.</p>
 <h2 id="dimensions-and-name">Dimensions and Name</h2>
 <p><code>img.width</code> and <code>img.height</code> give the pixel dimensions. <code>img.name</code> is the file name without the directory path.</p>
+<h2 id="the-pixel-struct">The Pixel Struct</h2>
+<p>Each element of <code>img.data</code> is a <code>Pixel</code> with three fields: r: integer limit(0, 255) not null — red channel g: integer limit(0, 255) not null — green channel b: integer limit(0, 255) not null — blue channel Values range from 0 (no intensity) to 255 (full intensity).</p>
 <h2 id="pixel-access">Pixel Access</h2>
-<p><code>img.data</code> is a <code>vector&lt;Pixel&gt;</code>. Each Pixel has <code>r</code>, <code>g</code>, <code>b</code> fields (0–255). Access by index: <code>img.data[y * img.width + x]</code>. Iterate with a for loop to scan every pixel.</p>
+<p><code>img.data</code> is a <code>vector&lt;Pixel&gt;</code>. Access by coordinate: img.data[y * img.width + x] Iterate with a for loop to scan every pixel.</p>
 <h2 id="error-handling">Error Handling</h2>
-<p><code>png()</code> returns null when the file does not exist or cannot be decoded.</p>
+<p><code>png()</code> returns null when the file does not exist or cannot be decoded. Always check <code>!img</code> or <code>img == null</code> before accessing fields.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="loading-an-image">Loading an Image</h2>
 <pre><code>  img = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/map.png"</span>).<span class="fn-call"><a href="stdlib-file-system.html">png</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.width == <span class="nm">256</span>, <span class="st">"width={img.width}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.height == <span class="nm">256</span>, <span class="st">"height={img.height}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.name == <span class="st">"map.png"</span>, <span class="st">"name={img.name}"</span>);</code></pre>
-<h2 id="pixel-access">Pixel Access</h2>
+<h2 id="pixel-count">Pixel Count</h2>
 <p>Total pixels = width * height.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.data.<span class="bi"><a href="stdlib-text.html">len</a></span>() == img.width * img.height, <span class="st">"pixel count"</span>);</code></pre>
-<p>Read the top-left pixel.</p>
+<h2 id="reading-individual-pixels">Reading Individual Pixels</h2>
+<p>The top-left pixel is at index 0.</p>
 <pre><code>  px = img.data[<span class="nm">0</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.r &gt;= <span class="nm">0</span> <span class="kw">and</span> px.r &lt;= <span class="nm">255</span>, <span class="st">"r in range"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.r &gt;= <span class="nm">0</span> <span class="kw">and</span> px.r &lt;= <span class="nm">255</span>, <span class="st">"r in range"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.g &gt;= <span class="nm">0</span> <span class="kw">and</span> px.g &lt;= <span class="nm">255</span>, <span class="st">"g in range"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.b &gt;= <span class="nm">0</span> <span class="kw">and</span> px.b &lt;= <span class="nm">255</span>, <span class="st">"b in range"</span>);</code></pre>
 <p>Read a pixel at (x=128, y=128) — the center.</p>
 <pre><code>  center = img.data[<span class="nm">128</span> * img.width + <span class="nm">128</span>];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(center.r &gt;= <span class="nm">0</span>, <span class="st">"center pixel r valid"</span>);</code></pre>
+<h2 id="scanning-pixels">Scanning Pixels</h2>
+<p>Count pixels brighter than a threshold.  A simple brightness approximation: (r + g + b) / 3 &gt; threshold.</p>
+<pre><code>  bright_count = <span class="nm">0</span>;
+  <span class="kw">for</span> img_px <span class="kw">in</span> img.data {
+    brightness = (img_px.r + img_px.g + img_px.b) / <span class="nm">3</span>;
+    <span class="kw">if</span> brightness &gt; <span class="nm">200</span> {
+      bright_count += <span class="nm">1</span>;
+    }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bright_count &gt;= <span class="nm">0</span>, <span class="st">"bright pixel count: {bright_count}"</span>);</code></pre>
+<h2 id="finding-dominant-channel">Finding Dominant Channel</h2>
+<p>Walk every pixel and find which channel has the highest total value.</p>
+<pre><code>  total_r = <span class="nm">0l</span>;
+  total_g = <span class="nm">0l</span>;
+  total_b = <span class="nm">0l</span>;
+  <span class="kw">for</span> ch_px <span class="kw">in</span> img.data {
+    total_r += ch_px.r <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span>;
+    total_g += ch_px.g <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span>;
+    total_b += ch_px.b <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span>;
+  }
+  dominant = <span class="kw">if</span> total_r &gt;= total_g <span class="kw">and</span> total_r &gt;= total_b { <span class="st">"red"</span> }
+    <span class="kw">else</span> <span class="kw">if</span> total_g &gt;= total_b { <span class="st">"green"</span> }
+    <span class="kw">else</span> { <span class="st">"blue"</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dominant.<span class="bi"><a href="stdlib-text.html">len</a></span>() &gt; <span class="nm">0</span>, <span class="st">"dominant channel: {dominant}"</span>);</code></pre>
 <h2 id="error-handling">Error Handling</h2>
 <pre><code>  bad = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_image.png"</span>).<span class="fn-call"><a href="stdlib-file-system.html">png</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == <span class="kw">null</span>, <span class="st">"png of missing file is null"</span>);
@@ -1355,13 +1386,31 @@ entry = "src/mylib.loft"   override the default entry path
 <section class="print-section" id="19-threading">
 <h1>Parallel execution</h1>
 <p>The <code>par(b=worker_call, threads)</code> clause on a <code>for</code> loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.</p>
-<p>Full syntax: <code>for a in vec par(b=func(a), N) { body }</code></p>
-<p>Two call forms:</p>
+<h2 id="why-parallel-loops">Why parallel loops?</h2>
+<p>When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — <code>par()</code> splits the work across CPU cores automatically.  You write a normal for loop; adding <code>par(...)</code> makes it parallel with no other changes.</p>
+<h2 id="syntax">Syntax</h2>
+<pre><code>`for a in vec par(b=func(a), N) { body }`
+</code></pre>
+<ul>
+<li><code>a</code> — loop variable, read-only reference to the current element</li>
+<li><code>b</code> — result variable, holds the return value of <code>func(a)</code></li>
+<li><code>func(a)</code> — worker function called on each element</li>
+<li><code>N</code> — number of threads (1 = sequential, 4 = typical)</li>
+</ul>
+<h2 id="two-call-forms">Two call forms</h2>
 <ul>
 <li><strong>Form 1</strong> — global function: <code>par(b=my_func(a), 4)</code></li>
 <li><strong>Form 2</strong> — method on element: <code>par(b=a.my_method(), 4)</code></li>
 </ul>
-<p>The worker function takes a read-only (<code>const</code>) reference to the element and returns a value (integer, float, boolean, text, or a struct). Results are delivered in the original order regardless of thread count. Extra arguments are forwarded: <code>par(b=scale(a, mult), N)</code>.</p>
+<h2 id="worker-function-rules">Worker function rules</h2>
+<p>The worker function:</p>
+<ul>
+<li>Takes a <code>const</code> reference to the element (read-only, no mutation)</li>
+<li>Returns a value (integer, float, boolean, text, or a struct)</li>
+<li>Must not use global state or I/O (no println, no file access)</li>
+<li>Can accept extra arguments forwarded from the calling scope</li>
+</ul>
+<p>Results are delivered in the original order regardless of which thread finishes first.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -1372,53 +1421,75 @@ entry = "src/mylib.loft"   override the default entry path
   label: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   doubled: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">double_score</span>(r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
-  r.value * <span class="nm">2</span>
+<pre><code><span class="kw">fn</span> <span class="fn-call">double_score</span>(thr_r: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  thr_r.value * <span class="nm">2</span>
 }</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">make_doubled</span>(r: const <span class="en">Score</span>) -&gt; <span class="en">DoubledScore</span> {
-  <span class="en">DoubledScore</span> { label: <span class="st">"v{r.value}"</span>, doubled: r.value * <span class="nm">2</span> }
+<pre><code><span class="kw">fn</span> <span class="fn-call">scale_score</span>(thr_r: const <span class="en">Score</span>, thr_factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  thr_r.value * thr_factor
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">make_doubled</span>(thr_r: const <span class="en">Score</span>) -&gt; <span class="en">DoubledScore</span> {
+  <span class="en">DoubledScore</span> { label: <span class="st">"v{thr_r.value}"</span>, doubled: thr_r.value * <span class="nm">2</span> }
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">get_value</span>(self: const <span class="en">Score</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   self.value
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">make_scores</span>() -&gt; <span class="en">ScoreList</span> {
-  q = <span class="en">ScoreList</span> { };
-  q.items +=[<span class="en">Score</span> {value: <span class="nm">10</span> }, <span class="en">Score</span> {value: <span class="nm">20</span> }, <span class="en">Score</span> {value: <span class="nm">30</span> }];
-  q
+  thr_q = <span class="en">ScoreList</span> { };
+  thr_q.items +=[<span class="en">Score</span> {value: <span class="nm">10</span> }, <span class="en">Score</span> {value: <span class="nm">20</span> }, <span class="en">Score</span> {value: <span class="nm">30</span> }];
+  thr_q
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="global-function-form-1">Global Function (Form 1)</h2>
-<p>Each Score's value is doubled by <code>double_score</code> across 4 threads.</p>
+<p>Each Score's value is doubled by <code>double_score</code> across 4 threads. The loop body sees <code>b</code> with the doubled value, in original order.</p>
 <pre><code>  q = <span class="fn-call">make_scores</span>();
   sum = <span class="nm">0</span>;
-  <span class="kw">for</span> a <span class="kw">in</span> q.items <span class="fn-call">par</span>(b = <span class="fn-call">double_score</span>(a), <span class="nm">4</span>) {
-    sum += b;
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">120</span>, <span class="st">"parallel double: sum == 120"</span>);</code></pre>
+  <span class="kw">for</span> thr_a <span class="kw">in</span> q.items <span class="fn-call">par</span>(thr_b = <span class="fn-call">double_score</span>(thr_a), <span class="nm">4</span>) {
+    sum += thr_b;
+  }</code></pre>
+<p>10*2 + 20*2 + 30*2 = 120</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">120</span>, <span class="st">"parallel double: sum == 120"</span>);</code></pre>
+<h2 id="extra-arguments">Extra Arguments</h2>
+<p>The worker function can take extra arguments from the calling scope. Here <code>scale_score(a, factor)</code> passes <code>factor=3</code> to every worker.</p>
+<pre><code>  q1b = <span class="fn-call">make_scores</span>();
+  factor = <span class="nm">3</span>;
+  scaled_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> thr_a <span class="kw">in</span> q1b.items <span class="fn-call">par</span>(thr_b = <span class="fn-call">scale_score</span>(thr_a, factor), <span class="nm">4</span>) {
+    scaled_sum += thr_b;
+  }</code></pre>
+<p>10*3 + 20*3 + 30*3 = 180</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(scaled_sum == <span class="nm">180</span>, <span class="st">"extra arg: scaled sum == 180"</span>);</code></pre>
 <h2 id="struct-return">Struct Return</h2>
-<p>Workers can return a struct. Text fields are deep-copied automatically.</p>
+<p>Workers can return a struct.  Text fields are deep-copied so they remain valid after the worker thread exits.</p>
 <pre><code>  q2 = <span class="fn-call">make_scores</span>();
   labels = <span class="st">""</span>;
-  <span class="kw">for</span> sa <span class="kw">in</span> q2.items <span class="fn-call">par</span>(ds = <span class="fn-call">make_doubled</span>(sa), <span class="nm">1</span>) {
-    labels += <span class="st">"{ds.label},"</span>;
+  <span class="kw">for</span> thr_sa <span class="kw">in</span> q2.items <span class="fn-call">par</span>(thr_ds = <span class="fn-call">make_doubled</span>(thr_sa), <span class="nm">1</span>) {
+    labels += <span class="st">"{thr_ds.label},"</span>;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"v10,v20,v30,"</span>, <span class="st">"struct return: {labels}"</span>);</code></pre>
 <h2 id="method-call-form-2">Method Call (Form 2)</h2>
-<p><code>b=a.get_value()</code> dispatches the method on each element in parallel.</p>
+<p><code>b=a.get_value()</code> dispatches the method on each element in parallel. This is syntactic sugar — equivalent to <code>b=get_value(a)</code>.</p>
 <pre><code>  q3 = <span class="fn-call">make_scores</span>();
   total = <span class="nm">0</span>;
-  <span class="kw">for</span> a <span class="kw">in</span> q3.items <span class="fn-call">par</span>(b = a.<span class="fn-call">get_value</span>(), <span class="nm">4</span>) {
-    total += b;
+  <span class="kw">for</span> thr_a <span class="kw">in</span> q3.items <span class="fn-call">par</span>(thr_b = thr_a.<span class="fn-call">get_value</span>(), <span class="nm">4</span>) {
+    total += thr_b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"method call: total == 60"</span>);</code></pre>
 <h2 id="empty-vector">Empty Vector</h2>
-<p>An empty vector is safe — the loop body never executes.</p>
+<p>An empty vector is safe — the loop body never executes, no threads are spawned.</p>
 <pre><code>  empty = <span class="en">ScoreList</span> { };
-  n = <span class="nm">0</span>;
-  <span class="kw">for</span> a <span class="kw">in</span> empty.items <span class="fn-call">par</span>(b = <span class="fn-call">double_score</span>(a), <span class="nm">1</span>) {
-    n += <span class="nm">1</span>;
+  thr_n = <span class="nm">0</span>;
+  <span class="kw">for</span> thr_a <span class="kw">in</span> empty.items <span class="fn-call">par</span>(thr_b = <span class="fn-call">double_score</span>(thr_a), <span class="nm">1</span>) {
+    thr_n += <span class="nm">1</span>;
   }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n == <span class="nm">0</span>, <span class="st">"empty: 0 iterations"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(thr_n == <span class="nm">0</span>, <span class="st">"empty: 0 iterations"</span>);</code></pre>
+<h2 id="sequential-fallback">Sequential fallback</h2>
+<p>Using <code>par(..., 1)</code> runs the worker on a single thread — useful for debugging.  The behaviour is identical; only the parallelism changes.</p>
+<pre><code>  q4 = <span class="fn-call">make_scores</span>();
+  seq_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> thr_a <span class="kw">in</span> q4.items <span class="fn-call">par</span>(thr_b = <span class="fn-call">double_score</span>(thr_a), <span class="nm">1</span>) {
+    seq_sum += thr_b;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(seq_sum == <span class="nm">120</span>, <span class="st">"sequential par(1): same result"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="20-logging">
@@ -1788,28 +1859,73 @@ for e in data#errors { log_warn(e) }
 <h2 id="calling-a-generic-function">Calling a generic function</h2>
 <p>No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">test_identity</span>() {
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">42</span>) == <span class="nm">42</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">3.14</span>) == <span class="nm">3.14</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="kw">true</span>) == <span class="kw">true</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">42</span>) == <span class="nm">42</span>, <span class="st">"identity integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="nm">3.14</span>) == <span class="nm">3.14</span>, <span class="st">"identity float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>, <span class="st">"identity text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">identity</span>(<span class="kw">true</span>) == <span class="kw">true</span>, <span class="st">"identity bool"</span>);
 }</code></pre>
 <h2 id="multiple-parameters-of-the-same-type">Multiple parameters of the same type</h2>
 <p>Additional parameters can also use T.  They all share the same concrete type.</p>
-<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(a: <span class="en">T</span>, b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
-  _x = a;
-  b
+<pre><code><span class="kw">fn</span> pick_second&lt;<span class="en">T</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  _x = gen_a;
+  gen_b
 }
 <span class="kw">fn</span> <span class="fn-call">test_pick_second</span>() {
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="nm">1</span>, <span class="nm">99</span>) == <span class="nm">99</span>, <span class="st">"pick second int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">pick_second</span>(<span class="st">"a"</span>, <span class="st">"b"</span>) == <span class="st">"b"</span>, <span class="st">"pick second text"</span>);
+}</code></pre>
+<h2 id="generic-functions-on-vectors">Generic functions on vectors</h2>
+<p>The most common use of generics: write a function that works on any vector. T is inferred from the vector's element type.</p>
+<pre><code><span class="kw">fn</span> first_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span> {
+  gen_v[<span class="nm">0</span>]
+}
+<span class="kw">fn</span> last_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span> {
+  gen_v[gen_v.<span class="bi"><a href="stdlib-text.html">len</a></span>() - <span class="nm">1</span>]
+}
+<span class="kw">fn</span> <span class="fn-call">test_vector_generics</span>() {
+  ints = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">first_element</span>(ints) == <span class="nm">10</span>, <span class="st">"first int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(ints) == <span class="nm">30</span>, <span class="st">"last int"</span>);
+  words = [<span class="st">"alpha"</span>, <span class="st">"beta"</span>, <span class="st">"gamma"</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">first_element</span>(words) == <span class="st">"alpha"</span>, <span class="st">"first text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(words) == <span class="st">"gamma"</span>, <span class="st">"last text"</span>);
+}</code></pre>
+<h2 id="bounded-generics-with-interfaces">Bounded generics with interfaces</h2>
+<p>By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: <code>&lt;T: Ordered&gt;</code> means T must support <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> comparisons.</p>
+<p>Built-in interfaces: Ordered    — comparison operators (&lt;, &lt;=, &gt;, &gt;=) Equatable  — equality operators (==, !=) Addable    — addition and subtraction (+, -) Numeric    — all arithmetic (+, -, *, /, %) Scalable   — multiplication by integer (* integer)</p>
+<pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  <span class="kw">if</span> gen_x &gt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
+}
+<span class="kw">fn</span> gen_min&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  <span class="kw">if</span> gen_x &lt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
+}
+<span class="kw">fn</span> <span class="fn-call">test_bounded</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">7</span>, <span class="st">"max int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">2.5</span>, <span class="nm">1.5</span>) == <span class="nm">2.5</span>, <span class="st">"max float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">3</span>, <span class="st">"min int"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="st">"apple"</span>, <span class="st">"banana"</span>) == <span class="st">"apple"</span>, <span class="st">"min text"</span>);
+}</code></pre>
+<h2 id="combining-bounds">Combining bounds</h2>
+<p>Use <code>+</code> to require multiple interfaces: <code>&lt;T: Ordered + Addable&gt;</code>.</p>
+<pre><code><span class="kw">fn</span> clamped_add&lt;<span class="en">T</span>: <span class="en">Ordered</span> + <span class="en">Addable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>, gen_hi: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+  result = gen_a + gen_b;
+  <span class="kw">if</span> result &gt; gen_hi { gen_hi } <span class="kw">else</span> { result }
+}
+<span class="kw">fn</span> <span class="fn-call">test_combined_bounds</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">10</span>) == <span class="nm">7</span>, <span class="st">"under limit"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">8</span>, <span class="nm">5</span>, <span class="nm">10</span>) == <span class="nm">10</span>, <span class="st">"clamped to limit"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">1.0</span>, <span class="nm">2.0</span>, <span class="nm">2.5</span>) == <span class="nm">2.5</span>, <span class="st">"float clamped"</span>);
 }</code></pre>
 <h2 id="allowed-operations-on-t">Allowed operations on T</h2>
-<p>Inside a generic function you may only use operations that do not depend on what T actually is: assign, return, and store in variables. Type-specific operations like arithmetic, field access, and method calls are compile-time errors.</p>
+<p>Inside a generic function you may only use operations that the bound guarantees.  Without any bound: assign, return, store in variables. With Ordered: comparisons.  With Addable: + and -.</p>
 <h2 id="disallowed-operations">Disallowed operations</h2>
-<p>The compiler rejects operations that require knowing what T is. For example, <code>x + y</code> on two T values gives: "generic type T: operator <code>+</code> requires a concrete type" Similarly, <code>x.field</code> gives: "generic type T: field access requires a concrete type"</p>
+<p>The compiler rejects operations not covered by the bound. <code>x + y</code> on unbounded T gives: "generic type T: operator <code>+</code> requires a concrete type" <code>x.field</code> on T gives: "generic type T: field access requires a concrete type"</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call">test_identity</span>();
   <span class="fn-call">test_pick_second</span>();
+  <span class="fn-call">test_vector_generics</span>();
+  <span class="fn-call">test_bounded</span>();
+  <span class="fn-call">test_combined_bounds</span>();
 }</code></pre>
 </section>
 <section class="print-section" id="26-closures">
@@ -2042,6 +2158,157 @@ for e in data#errors { log_warn(e) }
   triple.<span class="nm">1</span> = <span class="nm">99</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(triple.<span class="nm">0</span> == <span class="nm">10</span> &amp;&amp; triple.<span class="nm">1</span> == <span class="nm">99</span> &amp;&amp; triple.<span class="nm">2</span> == <span class="nm">30</span>,
     <span class="st">"triple modified: ({triple.0},{triple.1},{triple.2})"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="29-match">
+<h1>Match</h1>
+<p>The <code>match</code> expression lets you compare a value against a series of patterns and run different code for each case.  It is similar to <code>switch</code> in other languages but more powerful: patterns can destructure structs, bind fields to local variables, and include <code>if</code> guards. Match is an expression — it returns a value, so you can assign the result or use it directly inside a larger expression.</p>
+<h2 id="simple-enum-matching">Simple enum matching</h2>
+<p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — the compiler checks exhaustiveness.</p>
+<pre><code><span class="kw">enum</span> <span class="en">Direction</span> { <span class="en">North</span>, <span class="en">South</span>, <span class="en">East</span>, <span class="en">West</span> }</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">direction_name</span>(d: <span class="en">Direction</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  match d {
+    <span class="en">North</span> =&gt; <span class="st">"north"</span>,
+    <span class="en">South</span> =&gt; <span class="st">"south"</span>,
+    <span class="en">East</span>  =&gt; <span class="st">"east"</span>,
+    <span class="en">West</span>  =&gt; <span class="st">"west"</span>,
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">direction_name</span>(<span class="en">North</span>) == <span class="st">"north"</span>, <span class="st">"simple enum match"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">direction_name</span>(<span class="en">West</span>) == <span class="st">"west"</span>, <span class="st">"west"</span>);</code></pre>
+<h2 id="match-as-expression">Match as expression</h2>
+<p>Because match returns a value you can use it in assignments and arguments.</p>
+<pre><code>  score = match <span class="en">Direction</span>.<span class="en">East</span> {
+    <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="nm">10</span>,
+    <span class="en">East</span> | <span class="en">West</span>   =&gt; <span class="nm">20</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(score == <span class="nm">20</span>, <span class="st">"match expression: {score}"</span>);</code></pre>
+<h2 id="struct-enum-destructuring">Struct-enum destructuring</h2>
+<p>When an enum has variants with fields (a struct-enum) you can bind the fields to variables in the match arm. Circle { radius } — binds the <code>radius</code> field to a local variable Rect { w, h }     — binds both <code>w</code> and <code>h</code> The variable names must match the field names exactly.</p>
+<h2 id="guards">Guards</h2>
+<p>Add <code>if condition</code> after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.</p>
+<pre><code>  v = <span class="nm">42</span>;
+  label = match v {
+    <span class="nm">0</span>      =&gt; <span class="st">"zero"</span>,
+    _ <span class="kw">if</span> v &lt; <span class="nm">0</span> =&gt; <span class="st">"negative"</span>,
+    _ <span class="kw">if</span> v &gt; <span class="nm">100</span> =&gt; <span class="st">"large"</span>,
+    _      =&gt; <span class="st">"normal"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"normal"</span>, <span class="st">"guard: {label}"</span>);</code></pre>
+<h2 id="wildcard">Wildcard <code>_</code></h2>
+<p>The underscore <code>_</code> matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.</p>
+<pre><code>  x = <span class="nm">7</span>;
+  kind = match x {
+    <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
+    <span class="nm">2</span> =&gt; <span class="st">"two"</span>,
+    _ =&gt; <span class="st">"other"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"other"</span>, <span class="st">"wildcard: {kind}"</span>);</code></pre>
+<h2 id="integer-matching">Integer matching</h2>
+<p>Match works on integers — each arm is compared with <code>==</code>.</p>
+<pre><code>  name = match <span class="nm">3</span> {
+    <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
+    <span class="nm">2</span> =&gt; <span class="st">"two"</span>,
+    <span class="nm">3</span> =&gt; <span class="st">"three"</span>,
+    _ =&gt; <span class="st">"many"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(name == <span class="st">"three"</span>, <span class="st">"integer match: {name}"</span>);</code></pre>
+<h2 id="text-matching">Text matching</h2>
+<p>Match also works on text values.</p>
+<pre><code>  greeting = <span class="st">"hi"</span>;
+  reply = match greeting {
+    <span class="st">"hello"</span> =&gt; <span class="st">"formal"</span>,
+    <span class="st">"hi"</span>    =&gt; <span class="st">"casual"</span>,
+    _       =&gt; <span class="st">"unknown"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reply == <span class="st">"casual"</span>, <span class="st">"text match: {reply}"</span>);</code></pre>
+<h2 id="multiple-patterns-with">Multiple patterns with <code>|</code></h2>
+<p>Combine patterns with <code>|</code> to share the same arm body.</p>
+<pre><code>  d = <span class="en">Direction</span>.<span class="en">South</span>;
+  axis = match d {
+    <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="st">"vertical"</span>,
+    <span class="en">East</span> | <span class="en">West</span>   =&gt; <span class="st">"horizontal"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(axis == <span class="st">"vertical"</span>, <span class="st">"multi-pattern: {axis}"</span>);</code></pre>
+<h2 id="nested-match">Nested match</h2>
+<p>Match can appear inside other expressions, including other match arms.</p>
+<pre><code>  n = <span class="nm">15</span>;
+  result = match n % <span class="nm">2</span> == <span class="nm">0</span> {
+    <span class="kw">true</span>  =&gt; <span class="st">"even"</span>,
+    <span class="kw">false</span> =&gt; match n % <span class="nm">3</span> == <span class="nm">0</span> {
+      <span class="kw">true</span>  =&gt; <span class="st">"odd multiple of 3"</span>,
+      <span class="kw">false</span> =&gt; <span class="st">"odd"</span>,
+    },
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(result == <span class="st">"odd multiple of 3"</span>, <span class="st">"nested: {result}"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="30-formatting">
+<h1>Formatting</h1>
+<p>Loft strings can embed expressions inside <code>{...}</code> braces.  A colon after the expression introduces a format specifier that controls width, alignment, precision, number base, and output style.</p>
+<h2 id="basic-interpolation">Basic interpolation</h2>
+<p>Any expression inside <code>{...}</code> is evaluated and converted to text.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  name = <span class="st">"world"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"hello {name}"</span> == <span class="st">"hello world"</span>, <span class="st">"basic interpolation"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1 + 2 = {1 + 2}"</span> == <span class="st">"1 + 2 = 3"</span>, <span class="st">"expression in braces"</span>);</code></pre>
+<h2 id="width-and-alignment">Width and alignment</h2>
+<p>A number after <code>:</code> sets the minimum width.  The value is padded with spaces to fill the width. {val:6}   — right-aligned (default for numbers) {val:&gt;6}  — right-aligned (explicit) {val:&lt;6}  — left-aligned {val:^6}  — centered For text, the default alignment is left.  For numbers, right.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:6}"</span> == <span class="st">"    42"</span>, <span class="st">"default number align is right"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:&gt;6}"</span> == <span class="st">"    42"</span>, <span class="st">"explicit right-align"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:&lt;6}"</span> == <span class="st">"42    "</span>, <span class="st">"left-align number"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:^6}"</span> == <span class="st">"  42  "</span>, <span class="st">"center-align number"</span>);
+  s = <span class="st">"hi"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:6}"</span> == <span class="st">"hi    "</span>, <span class="st">"default text align is left"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:&gt;6}"</span> == <span class="st">"    hi"</span>, <span class="st">"right-align text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:^6}"</span> == <span class="st">"  hi  "</span>, <span class="st">"center-align text"</span>);</code></pre>
+<h2 id="zero-padding">Zero padding</h2>
+<p>Prefix the width with <code>0</code> to pad with zeros instead of spaces.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{7:03}"</span> == <span class="st">"007"</span>, <span class="st">"zero-padded 3 digits"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:05}"</span> == <span class="st">"00042"</span>, <span class="st">"zero-padded 5 digits"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-1:04}"</span> == <span class="st">"-001"</span>, <span class="st">"zero-padded negative: sign before zeros"</span>);</code></pre>
+<h2 id="signed-format">Signed format</h2>
+<p><code>+</code> forces a sign on positive numbers.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:+}"</span> == <span class="st">"+42"</span>, <span class="st">"explicit positive sign"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-42:+}"</span> == <span class="st">"-42"</span>, <span class="st">"negative sign always shown"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0:+}"</span> == <span class="st">"+0"</span>, <span class="st">"sign on zero"</span>);</code></pre>
+<h2 id="hexadecimal-binary-octal">Hexadecimal, binary, octal</h2>
+<p><code>:x</code> for lowercase hex, <code>:#x</code> for hex with <code>0x</code> prefix. <code>:b</code> for binary, <code>:o</code> for octal.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:x}"</span> == <span class="st">"ff"</span>, <span class="st">"hex lowercase"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:#x}"</span> == <span class="st">"0xff"</span>, <span class="st">"hex with prefix"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{10:b}"</span> == <span class="st">"1010"</span>, <span class="st">"binary"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{8:o}"</span> == <span class="st">"10"</span>, <span class="st">"octal"</span>);</code></pre>
+<h2 id="float-precision">Float precision</h2>
+<p><code>.N</code> after the colon limits decimal places.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.1}"</span> == <span class="st">"3.1"</span>, <span class="st">"1 decimal place"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.2}"</span> == <span class="st">"3.12"</span>, <span class="st">"2 decimal places"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.0}"</span> == <span class="st">"3"</span>, <span class="st">"0 decimal places"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0.0:.3}"</span> == <span class="st">"0.000"</span>, <span class="st">"trailing zeros"</span>);</code></pre>
+<h2 id="width-precision">Width + precision</h2>
+<p>Combine width and precision: <code>{val:W.P}</code> where W is total width and P is decimal places.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:8.2}"</span> == <span class="st">"    3.12"</span>, <span class="st">"width 8 precision 2"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-3.125:8.2}"</span> == <span class="st">"   -3.12"</span>, <span class="st">"negative width+precision"</span>);</code></pre>
+<h2 id="json-format">JSON format</h2>
+<p><code>:j</code> serialises a struct or value as JSON. <code>:j</code> serialises a struct as JSON.  Use it on struct values, not primitives. See the JSON documentation page for full details.</p>
+<h2 id="vector-format">Vector format</h2>
+<p>Vectors are formatted as <code>[a,b,c]</code> by default. A format specifier inside a <code>for</code> loop applies to each element.</p>
+<pre><code>  v = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"[1,2,3]"</span>, <span class="st">"default vector format"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{for fmt_n in 1..4 {fmt_n * 10}:04}"</span> == <span class="st">"[0010,0020,0030]"</span>, <span class="st">"formatted vector elements"</span>);</code></pre>
+<h2 id="long-and-single-types">Long and single types</h2>
+<p>Long integers and single-precision floats use the same format specifiers.</p>
+<pre><code>  n = <span class="nm">1000000l</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n}"</span> == <span class="st">"1000000"</span>, <span class="st">"long default"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n:&gt;10}"</span> == <span class="st">"   1000000"</span>, <span class="st">"long right-aligned"</span>);
+  f = <span class="nm">1.5f</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{f}"</span> == <span class="st">"1.5"</span>, <span class="st">"single default"</span>);</code></pre>
+<h2 id="character-format">Character format</h2>
+<pre><code>  c = <span class="ch">'A'</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{c}"</span> == <span class="st">"A"</span>, <span class="st">"character default"</span>);</code></pre>
+<h2 id="boolean-format">Boolean format</h2>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{true}"</span> == <span class="st">"true"</span>, <span class="st">"boolean true"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"boolean false"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">
@@ -2648,7 +2915,7 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn sum&lt;T: Addable&gt;(v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
 <p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42</p>
 </div>
-<h2 id="stdlib-a10-field-iteration-support-types">A10: Field iteration support types</h2>
+<h2 id="stdlib-field-iteration-support-types">Field iteration support types</h2>
 <div class="item">
 <pre><code>pub enum FieldValue {
   FvBool   { v: boolean },

@@ -6,17 +6,33 @@
 // on every element of a vector in parallel and gives you the results one by
 // one in the loop body.
 //
-// Full syntax:
+// ## Why parallel loops?
+// When you have a large collection and each element can be processed
+// independently — image filters, score calculations, data transforms —
+// `par()` splits the work across CPU cores automatically.  You write a
+// normal for loop; adding `par(...)` makes it parallel with no other changes.
+//
+// ## Syntax
 //   `for a in vec par(b=func(a), N) { body }`
 //
-// Two call forms:
+// - `a` — loop variable, read-only reference to the current element
+// - `b` — result variable, holds the return value of `func(a)`
+// - `func(a)` — worker function called on each element
+// - `N` — number of threads (1 = sequential, 4 = typical)
+//
+// ## Two call forms
 // - **Form 1** — global function: `par(b=my_func(a), 4)`
 // - **Form 2** — method on element: `par(b=a.my_method(), 4)`
 //
-// The worker function takes a read-only (`const`) reference to the element
-// and returns a value (integer, float, boolean, text, or a struct).
-// Results are delivered in the original order regardless of thread count.
-// Extra arguments are forwarded: `par(b=scale(a, mult), N)`.
+// ## Worker function rules
+// The worker function:
+// - Takes a `const` reference to the element (read-only, no mutation)
+// - Returns a value (integer, float, boolean, text, or a struct)
+// - Must not use global state or I/O (no println, no file access)
+// - Can accept extra arguments forwarded from the calling scope
+//
+// Results are delivered in the original order regardless of which
+// thread finishes first.
 struct Score {
   value: integer
 }
@@ -30,12 +46,16 @@ struct DoubledScore {
   doubled: integer
 }
 
-fn double_score(r: const Score) -> integer {
-  r.value * 2
+fn double_score(thr_r: const Score) -> integer {
+  thr_r.value * 2
 }
 
-fn make_doubled(r: const Score) -> DoubledScore {
-  DoubledScore { label: "v{r.value}", doubled: r.value * 2 }
+fn scale_score(thr_r: const Score, thr_factor: integer) -> integer {
+  thr_r.value * thr_factor
+}
+
+fn make_doubled(thr_r: const Score) -> DoubledScore {
+  DoubledScore { label: "v{thr_r.value}", doubled: thr_r.value * 2 }
 }
 
 fn get_value(self: const Score) -> integer {
@@ -43,45 +63,72 @@ fn get_value(self: const Score) -> integer {
 }
 
 fn make_scores() -> ScoreList {
-  q = ScoreList { };
-  q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
-  q
+  thr_q = ScoreList { };
+  thr_q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
+  thr_q
 }
 
 fn main() {
   // ## Global Function (Form 1)
   // Each Score's value is doubled by `double_score` across 4 threads.
+  // The loop body sees `b` with the doubled value, in original order.
   q = make_scores();
   sum = 0;
-  for a in q.items par(b = double_score(a), 4) {
-    sum += b;
+  for thr_a in q.items par(thr_b = double_score(thr_a), 4) {
+    sum += thr_b;
   }
+  // 10*2 + 20*2 + 30*2 = 120
   assert(sum == 120, "parallel double: sum == 120");
 
+  // ## Extra Arguments
+  // The worker function can take extra arguments from the calling scope.
+  // Here `scale_score(a, factor)` passes `factor=3` to every worker.
+  q1b = make_scores();
+  factor = 3;
+  scaled_sum = 0;
+  for thr_a in q1b.items par(thr_b = scale_score(thr_a, factor), 4) {
+    scaled_sum += thr_b;
+  }
+  // 10*3 + 20*3 + 30*3 = 180
+  assert(scaled_sum == 180, "extra arg: scaled sum == 180");
+
   // ## Struct Return
-  // Workers can return a struct. Text fields are deep-copied automatically.
+  // Workers can return a struct.  Text fields are deep-copied so they
+  // remain valid after the worker thread exits.
   q2 = make_scores();
   labels = "";
-  for sa in q2.items par(ds = make_doubled(sa), 1) {
-    labels += "{ds.label},";
+  for thr_sa in q2.items par(thr_ds = make_doubled(thr_sa), 1) {
+    labels += "{thr_ds.label},";
   }
   assert(labels == "v10,v20,v30,", "struct return: {labels}");
 
   // ## Method Call (Form 2)
   // `b=a.get_value()` dispatches the method on each element in parallel.
+  // This is syntactic sugar — equivalent to `b=get_value(a)`.
   q3 = make_scores();
   total = 0;
-  for a in q3.items par(b = a.get_value(), 4) {
-    total += b;
+  for thr_a in q3.items par(thr_b = thr_a.get_value(), 4) {
+    total += thr_b;
   }
   assert(total == 60, "method call: total == 60");
 
   // ## Empty Vector
-  // An empty vector is safe — the loop body never executes.
+  // An empty vector is safe — the loop body never executes,
+  // no threads are spawned.
   empty = ScoreList { };
-  n = 0;
-  for a in empty.items par(b = double_score(a), 1) {
-    n += 1;
+  thr_n = 0;
+  for thr_a in empty.items par(thr_b = double_score(thr_a), 1) {
+    thr_n += 1;
   }
-  assert(n == 0, "empty: 0 iterations");
+  assert(thr_n == 0, "empty: 0 iterations");
+
+  // ## Sequential fallback
+  // Using `par(..., 1)` runs the worker on a single thread — useful
+  // for debugging.  The behaviour is identical; only the parallelism changes.
+  q4 = make_scores();
+  seq_sum = 0;
+  for thr_a in q4.items par(thr_b = double_score(thr_a), 1) {
+    seq_sum += thr_b;
+  }
+  assert(seq_sum == 120, "sequential par(1): same result");
 }

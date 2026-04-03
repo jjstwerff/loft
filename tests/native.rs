@@ -25,7 +25,8 @@ use common::cached_default;
 /// Docs files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for details on each issue number.
 const NATIVE_SKIP: &[&str] = &[
-    // Add entries here only for confirmed native-mode failures with a CAVEATS.md reference.
+    // P61: native codegen mishandles text match subjects (String vs &String)
+    "29-match.loft",
 ];
 
 /// Script files that are known to fail in `--native` mode.

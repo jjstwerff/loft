@@ -107,7 +107,7 @@ feature-gated).
 ### Stdlib additions
 
 ```loft
-// In default/04_web.loft (feature = "http")
+// In default/06_web.loft (feature = "http")
 
 pub struct HttpResponse {
     status: integer
@@ -188,7 +188,7 @@ because it would be thread-unsafe with parallel workers.
 | Step | Description | Effort | Dependencies |
 |------|-------------|--------|-------------|
 | 1 | Add `ureq` dependency (feature-gated `http`) | Small | Cargo.toml |
-| 2 | `HttpResponse` struct + `ok()` method in `default/04_web.loft` | Small | — |
+| 2 | `HttpResponse` struct + `ok()` method in `default/06_web.loft` | Small | — |
 | 3 | Native functions in `src/native_http.rs` via `#rust` | Medium | ureq |
 | 4 | User documentation page `tests/docs/NN-web-services.loft` | Small | Steps 2–3 |
 | 5 | Integration tests in `tests/scripts/` | Small | Steps 2–3 |

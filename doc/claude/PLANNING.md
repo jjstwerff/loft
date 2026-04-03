@@ -30,7 +30,7 @@ release gate criteria, project structure changes, and release artifact checklist
 Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
 creates noise and makes the document harder to scan for remaining work.
 
-Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [BYTECODE_CACHE.md](BYTECODE_CACHE.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
+Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
 
 ---
 
@@ -83,20 +83,6 @@ in parallel.
 
 ---
 
-### Version 0.8.3 — Language syntax extensions *(completed)*
-
-All items completed.  See CHANGELOG.md for details.
-
-- **P1** — Lambda expressions ✓ (completed in 0.8.2)
-- **P3** — Vector aggregates: `sum_of`, `min_of`, `max_of`, `any`, `all`, `count_if` ✓
-- **P5** — Generic functions: parse, instantiate, validate, test+docs ✓
-- **L2** — Nested match patterns: field sub-patterns in struct arms ✓
-- **A10** — Field iteration (`for f in s#fields`): all 5 phases ✓
-- **T1.1–T1.7** — Tuple types: type system, parser, scope, codegen, ref params, mutation guard, `not null` ✓
-- **CO1** — Coroutines: opcodes, yield, text serialisation, `for` integration, `yield from` ✓
-- **TR1** — Stack trace: shadow call-frame, type declarations, materialisation, line numbers ✓
-- **A5** — Closures: capture analysis, record layout, call-site allocation, body reads, lifetime ✓
-
 ---
 
 ### Version 0.8.4 — HTTP client and JSON (planned)
@@ -113,7 +99,7 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 **JSON primitive stdlib (H2):**
 - **H2** — Add `serde_json`-backed extraction functions: `json_text`, `json_int`,
   `json_long`, `json_float`, `json_bool`, `json_items`, `json_nested`.
-  Declared in `default/04_web.loft`; implemented in new `src/native_http.rs`.
+  Declared in `default/06_web.loft`; implemented in new `src/native_http.rs`.
 
 **JSON deserialization codegen — scalars (H3):**
 - **H3** — For each `#json` struct with primitive fields only, synthesise
@@ -131,22 +117,7 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 
 ---
 
-### Version 0.8.1 — Stability patch (2026-03-18)
-
-Three correctness fixes — no new language features.
-
-- **T0-11** — `addr_mut()` on a locked store now panics (replaced the silent DUMMY buffer).
-- **T0-12** — `vector_add()` snapshots source bytes before resize; `v += v` is now correct.
-- **T1-32** — `write_file`, `read_file`, `seek_file` log errors to stderr instead of silently discarding them.
-
 ---
-
-### Version 0.8.0 — Released (2026-03-17)
-
-Match expressions (enum, scalar, or-patterns, guard clauses, range patterns, null/char
-patterns, struct destructuring), code formatter, wildcard imports, callable fn-refs,
-map/filter/reduce, vector.clear(), mkdir, time functions, logging, parallel execution,
-24+ bug fixes, comprehensive user documentation (24 pages + Safety guide + PDF).
 
 ---
 
@@ -326,11 +297,6 @@ brace depth; missing `=>` in match skips to `=>` or `,`.
 
 ---
 
-### L6  Prevent double evaluation of `expr ?? default` *(completed 0.8.3)*
-
-Implemented: non-trivial LHS expressions are materialised into a temp variable
-before building the null-check conditional.  Tests in `25-null-coalescing.loft`.
-
 ---
 
 **Severity:** Low–Medium — a REPL dramatically reduces iteration time when exploring data
@@ -377,37 +343,9 @@ left at the last successful checkpoint.
 
 ---
 
-### P3  Vector aggregates *(completed 0.8.3)*
-
-`sum_of`/`min_of`/`max_of` implemented as pure-loft reduce wrappers for
-`vector<integer>`.  `any(vec, pred)`, `all(vec, pred)`, `count_if(vec, pred)`
-implemented as compiler special-cases with short-circuit evaluation and
-lambda type inference support.
-
 ---
 
 ---
-
-### P4  Bytecode cache (`.loftc`)
-**Sources:** [BYTECODE_CACHE.md](BYTECODE_CACHE.md)
-**Severity:** Medium — repeated runs of an unchanged script re-parse and re-compile every
-time; for scripts with many `use`-imported libraries this is measurably slow
-**Description:** On first run, write a `.loftc` cache file next to the script containing
-the compiled bytecode, type schema, function-position table, and source mtimes.  On
-subsequent runs, if all mtimes and the binary hash match, skip the entire parse/compile
-pipeline and execute directly from cache.
-```
-script.loft   →   script.loftc    (next to source; --cache-dir for override)
-```
-Phases:
-- **C1** — single-file cache (4 files changed, no new dependencies)
-- **C2** — library file invalidation (`Parser.imported_sources`)
-- **C3** — debug info preserved (error messages still show file:line after cache hit)
-- **C4** — `--cache-dir xdg` and `--no-cache` / `--invalidate-cache` flags
-**Fix path:** See [BYTECODE_CACHE.md](BYTECODE_CACHE.md) for full detail.
-**Effort:** Medium (C1 is Small; full C1–C4 is Medium)
-**Target:** Deferred — superseded by Tier N (native Rust code generation eliminates
-the recompile overhead that caching was designed to address)
 
 ---
 
@@ -891,32 +829,6 @@ best = max_of([Score{value: 3}, Score{value: 7}, Score{value: 1}]);
 
 | ID  | Title | E | Source |
 |-----|-------|---|--------|
-| I1  | Lexer: add `interface` keyword | XS | *(completed 0.8.3)* `src/lexer.rs` |
-| I2  | Data: `DefType::Interface` + `Definition.bounds: Vec<u32>` | S | *(completed 0.8.3)* `src/data.rs` |
-| I3  | Parser first pass: parse interface declarations | M | *(completed 0.8.3)* `src/parser/definitions.rs` |
-| I3.1| Op-sugar `op <token> (...)` in interface bodies → `OpCamelCase` | XS | *(completed 0.8.3)* `src/parser/definitions.rs` |
-| I4  | Parser first pass: `<T: A + B>` bound syntax + conflict detection | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
-| I5  | Type resolution: validate interface bodies; factory-method restriction (phase 1) | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
-| I11 | gendoc stub/guard for `DefType::Interface` | XS | *(completed 0.8.3)* `src/gendoc.rs` |
-| I6  | Satisfaction checking at generic instantiation | M | *(completed 0.8.3)* `src/parser/mod.rs` |
-| I7  | Allow bounded method calls on `T` inside generic bodies | S | *(completed 0.8.3)* `src/parser/fields.rs` |
-| I8.1| Same-type binary operators (`T op T`) via bound | S | *(completed 0.8.3)* `src/parser/mod.rs` |
-| I8.2| Result-type propagation from interface signature | S | *(completed 0.8.3)* — no code change; T-stub infra handles it |
-| I8.3| Mixed-type binary operators (`T op concrete`) | S | *(completed 0.8.3)* — no code change; `call_nr` handles mixed types |
-| I8.4| Unary operators on `T` | XS | *(completed 0.8.3)* — no code change; same `call_op` path |
-| I9  | Stdlib `Ordered`, `Equatable`, `Addable` interfaces | S | *(completed 0.8.3)* `default/01_code.loft` |
-| I9-p| Built-in type satisfaction via `possible` operator map | S | *(completed 0.8.3)* `src/data.rs`, `src/parser/mod.rs` |
-| I9.1| Bounded generics on built-in types (integer, float) | S | *(completed 0.8.3)* — verified via tests |
-| I10 | Diagnostics: "does not satisfy" with expected vs actual sig | S | *(completed 0.8.3)* `src/parser/mod.rs` |
-| I9-v| Vector<T> element access fix in generic specialization | S | *(completed 0.8.3)* `src/parser/mod.rs` |
-| I9+ | Stdlib `Numeric` interface (op *, op -) | S | *(completed 0.8.3)* `default/01_code.loft` |
-| I9-v2| Generic accumulator fix (skip ref_return for generic templates) | S | *(completed 0.8.3)* `src/parser/control.rs` |
-| I9-Sc| Stdlib `Scalable` interface (method-based) | XS | *(completed 0.8.3)* `default/01_code.loft` |
-| I9-st| Interface stub naming collision fix (__iface scoping) | S | *(completed 0.8.3)* `src/parser/definitions.rs`, `src/parser/mod.rs` |
-| I9.1| Generic min_of/max_of using Ordered | S | *(completed 0.8.3)* `default/01_code.loft` |
-| I9.2| Generic sum with Addable + identity | XS | *(completed 0.8.3)* `default/01_code.loft` |
-| I9-tx| T-stub hidden __work_1 for text-returning interface methods | S | *(completed 0.8.3)* `src/parser/definitions.rs` |
-| I9-Pr| Stdlib `Printable` interface | XS | *(completed 0.8.3)* `default/01_code.loft` |
 
 **Dependency order:** I1 → I3 → I4 → I6 → I7 → I8 → I9.
 I2 is parallel with I1. I5 depends on I3. I10 depends on I6.
@@ -930,13 +842,6 @@ functions from the codegen perspective.
 ---
 
 ## A — Architecture
-
-### A1  Parallel workers: struct/reference return types *(completed 0.8.3)*
-
-All parallel worker return types are now supported: primitives, text, enum, and
-struct/reference.  Struct returns use deep-copy (`copy_block` + `copy_claims`) in
-the bytecode interpreter and `n_parallel_for_ref_native` in native codegen.
-The native skip for `40-par-ref-return` has been removed.
 
 ---
 
@@ -1548,290 +1453,15 @@ green.
 
 ---
 
-### A7  Native extension libraries *(completed 0.8.3)*
-**Sources:** [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2
-**Severity:** Low — core language and stdlib cover most use cases; native extensions target
-specialised domains (graphics, audio, database drivers) that cannot be expressed in loft
-**Description:** Allow separately-packaged libraries to ship a compiled Rust `cdylib`
-alongside their `.loft` API files.  The shared library exports `loft_register_v1()` and
-registers native functions via `state.static_fn()`.  A new `#native "name"` annotation in
-`.loft` API files references an externally-registered symbol (parallel to the existing
-`#rust "..."` inline-code annotation).
-
-Example package: an `opengl` library with `src/opengl.loft` declaring `pub fn gl_clear(c: integer);` `#native "n_gl_clear"` and `native/libloft_opengl.so` containing the Rust implementation.
-**Fix path:**
-- **Phase 1 — `#native` annotation + symbol registration** (parser, compiler, `state.rs`):
-  Parse `#native "symbol_name"` on `pub fn` declarations in `.loft` API files.  In the
-  compiler, emit a call to a new `OpCallNative(symbol_id)` opcode that dispatches via a
-  `HashMap<String, NativeFn>` registered at startup.  Add `State::register_native()` for
-  tests.  Test: register a hand-written Rust function, call it from loft, verify result.
-- **Phase 2 — `cdylib` loader** (new optional feature `native-ext`, `libloading` dep):
-  Add `State::load_plugin(path)` that `dlopen`s the shared library and calls
-  `loft_register_v1(state)`.  Gated behind `--features native-ext` so the default binary
-  stays free of `libloading`.  Test: build a minimal `cdylib` in the test suite, load it,
-  verify it registers correctly.
-- **Phase 3 — package layout + `plugin-api` crate** (new workspace member):
-  Introduce `loft-plugin-api/` with the stable C ABI (`loft_register_v1`, `NativeFnCtx`).
-  Document the package layout (`src/*.loft` + `native/lib*.so`).  Add an example package
-  under `examples/opengl-stub/`.  Update EXTERNAL_LIBS.md to reflect the final API.
-
-Full detail in [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) Phase 2.
-**Effort:** High (parser, compiler, extensions loader, plugin API crate)
-**Depends on:** —
-**Target:** 0.8.3
+---
 
 ---
 
-### A10  Field iteration — `for f in s#fields` *(completed 0.8.3)*
-**Sources:** Design evaluation 2026-03-18; syntax decision 2026-03-19
-**Description:** Allow iterating over the stored primitive fields of a struct value with
-`for f in s#fields`.  The loop variable `f` has type `Field` (defined in
-`default/01_code.loft`) with `f.name: text` (the compile-time field name) and
-`f.value: FieldValue` (a struct-enum covering all primitive types).  Native type capture
-uses existing `match f.value { Float{v} => ... }` pattern syntax.
-
-The loop is a compile-time unroll: the parser expands `for f in s#fields` into one
-sequential block per eligible field.  No runtime allocation is needed.  Fields whose
-type is a reference, collection, or nested struct are skipped in this version.
-
-**Syntax choice — `s#fields` vs `fields(s)`:**
-`s#fields` was chosen over `fields(s)` to avoid reserving `fields` as a keyword.
-`fields` is a common English word (it was already used as an identifier in 3 stdlib files
-and had to be renamed when L3 added it to KEYWORDS).  The `#` postfix pattern already
-avoids keyword reservation for `count`, `first`, `index`, `remove`, etc., and the same
-mechanism works here.  Constraint: the source `s` must be a plain identifier; for complex
-expressions, assign a temporary first (`let cfg = get_config(); for f in cfg#fields`).
-
-```loft
-struct Config { host: text, port: integer not null, debug: boolean }
-c = Config{ host: "localhost", port: 8080, debug: true };
-
-for f in c#fields {
-    match f.value {
-        Text { v } => log_info("{f.name} = '{v}'")
-        Int  { v } => log_info("{f.name} = {v}")
-        Bool { v } => log_info("{f.name} = {v}")
-        _          => {}
-    }
-}
-```
-
-**Fix path:**
-
-**Phase A10.0 — Remove `fields` from `KEYWORDS`** (`src/lexer.rs`):
-Delete `"fields"` from the `KEYWORDS` static array (reverting the L3 code change).
-The identifier renames made during L3 (`type_fields`, `flds`, `items`) can remain as
-they are improvements in their own right.
-*Tests:* existing tests pass; `fields` is legal as a variable, function, and field name
-in user code again.
-
-**Phase A10.1 — `Field` and `FieldValue` types** (`default/01_code.loft`):
-Define the two public types that form the loop variable contract.  No compiler changes in
-this phase.
-
-```loft
-pub enum FieldValue {
-    Bool   { v: boolean },
-    Int    { v: integer },
-    Long   { v: long },
-    Float  { v: float },
-    Single { v: single },
-    Char   { v: character },
-    Text   { v: text },
-    Enum   { name: text not null, ordinal: integer not null },
-}
-
-pub struct Field {
-    name:  text not null,
-    value: FieldValue,
-}
-```
-
-`Enum` carries both the variant name (for display) and the ordinal (for comparison).
-Reference, collection, and nested-struct fields are excluded from `FieldValue`; the
-compiler will skip those field types silently in Phase A10.3.
-*Tests:* `Field` and `FieldValue` are usable in normal loft code; a hand-constructed
-`Field{name: "x", value: FieldValue::Float{v: 1.0}}` round-trips through a match arm.
-
-**Phase A10.2 — `ident#fields` detection in `parse_for`** (`src/parser/collections.rs`,
-`src/data.rs`):
-In `parse_for`, after reading the source identifier, check `lexer.has_token("#")` followed
-by `lexer.has_keyword("fields")`.  If matched, resolve the identifier's type; validate it
-is a struct (non-struct → clear compile error: `#fields requires a struct variable, got
-<type>`).  Return a new IR node `Value::FieldsOf(struct_def_nr, Box<source_expr>)` with
-type `Type::FieldsOf(struct_def_nr)`.
-
-```
-// data.rs — add to Value enum
-FieldsOf(u32, Box<Value>),   // (struct def_nr, source expression)
-
-// data.rs — add to Type enum
-FieldsOf(u32),               // struct def_nr; erased after loop unrolling
-```
-
-*Tests:* `for f in point#fields` on a known struct type-checks without error; `for f in
-n#fields` where `n: integer` produces one diagnostic naming the offending type.
-
-**Phase A10.3 — Loop unrolling** (`src/parser/collections.rs`):
-In `parse_for` (or the `parse_in_range` helper that determines iterator type), detect
-`Type::FieldsOf(struct_def_nr)` and take the unrolling path instead of the normal
-`v_loop` path.
-
-Algorithm:
-1. Declare loop variable `f` with type `Field` in the current variable scope.
-2. Parse the loop body once (first pass: types still unknown; second pass: body typed
-   against `Field`).
-3. For each field in `data.structs[struct_def_nr].fields` in declaration order:
-   a. Determine the `FieldValue` variant for the field's type:
-      - `boolean` → `Bool`, `integer` (all limit variants) → `Int`, `long` → `Long`,
-        `float` → `Float`, `single` → `Single`, `character` → `Char`,
-        `text` → `Text`, plain enum → `Enum`
-      - reference / collection / nested struct → **skip this field**
-   b. Build the Field constructor IR:
-      ```
-      Value::Call(field_ctor_nr, [
-          Value::Str(field_name),                         // f.name
-          Value::Call(fv_variant_ctor_nr, [               // f.value
-              <source_expr>.field_name,                   // actual field read
-          ]),
-      ])
-      ```
-      For plain enum fields the variant is `Enum{ name: format_enum(s.variant), ordinal: s.variant as integer }`.
-   c. Emit `v_block([v_set(f_var, field_constructor), body_copy])`.
-4. Wrap all N blocks in a single `v_block`.  The result replaces the normal loop IR.
-
-`break` and `continue` inside a `for f in s#fields` body are a compile error in this
-version (emit: `break/continue not supported in field loops`).
-
-*Tests:*
-- Iterate over `struct Point { x: float not null, y: float not null, z: float not null }`:
-  verify three iterations; `f.name` values are `"x"`, `"y"`, `"z"`; `f.value` matches
-  `Float{v}` with the correct values.
-- Iterate over a mixed-type struct (`integer`, `text`, `boolean`, `float` fields): all four
-  `FieldValue` variants are matched correctly in the same loop body.
-- Null field value: a nullable text field holding `null` produces `Text{v: null}`; the match
-  arm `Text{v}` binds `v = null`.
-- Plain enum field: produces `Enum{name: "Red", ordinal: 0}` for a `Color::Red` value.
-- Struct with a reference field and a vector field: those fields are skipped; only the
-  primitive fields are visited.
-- `break` inside the body: compile error with message naming the field loop restriction.
-- Non-struct `n#fields` where `n: integer`: single diagnostic, no crash.
-
-**Phase A10.4 — Error messages and documentation** (`doc/claude/LOFT.md`,
-`doc/claude/STDLIB.md`):
-Polish pass: verify error messages are clear and point to the right source location.
-Add `s#fields` to LOFT.md § Control flow (alongside `for`) and to STDLIB.md § Structs.
-Document the skipped-field limitation, the identifier-only constraint, and the future
-`A10+` path for non-primitive fields.
-*Tests:* `ref_val#fields` (reference type, not the struct it points to) gives a clear
-error distinguishing "you have a reference; use a struct variable, not a reference" from
-the generic type-mismatch message.
-
-**Files changed:**
-
-| File | Change |
-|---|---|
-| `src/lexer.rs` | Remove `"fields"` from `KEYWORDS` (A10.0) |
-| `default/01_code.loft` | Add `FieldValue` (struct-enum, 8 variants) and `Field` (struct) |
-| `src/data.rs` | Add `Value::FieldsOf(u32, Box<Value>)` and `Type::FieldsOf(u32)` |
-| `src/parser/collections.rs` | Detect `ident#fields` in `parse_for`; build unrolled block IR |
-| `src/typedef.rs` | Erase `Type::FieldsOf` after unrolling (it should not appear in bytecode) |
-| `tests/docs/21-field-iter.loft` | New — test coverage |
-| `tests/wrap.rs` | Add `field_iteration()` test |
-| `doc/claude/LOFT.md` | Document `for f in s#fields` in the For-loop section |
-| `doc/claude/STDLIB.md` | Add `s#fields` to the Structs section |
-
-**Limitations (initial version):**
-- Only primitive-typed fields are visited; reference, collection, and nested-struct fields
-  are silently skipped.
-- `break` and `continue` are not supported inside the loop body.
-- The source must be a plain identifier, not an arbitrary expression.  Use a temporary:
-  `let cfg = get_config(); for f in cfg#fields { ... }`.
-- `s#fields` is only valid as the source expression of a `for` loop, not as a standalone
-  expression producing a `vector<Field>`.
-- `virtual` fields are included (they are read-only computed values, still primitive).
-
-**Effort:** Medium (data.rs + 2 parser files + default library; no bytecode changes)
-**Target:** 0.8.3
+---
 
 ---
 
-### S14  Struct-enum stdlib field positions *(completed 0.8.3)*
-
-Fixed: `fill_all()` now processes all definitions from 0 (not `start_def`), and the
-discriminant field uses `database.byte(0, false)` instead of `database.name("byte")`.
-
 ---
-
-### S15  Struct-enum same-name variant field offsets *(completed 0.8.3)*
-
-Fixed: match arm field bindings now use per-arm unique variables via
-`create_unique` + temporary name aliasing.  Each arm's variable has the
-correct type for its variant, avoiding the type/slot reuse bug.
-Field offsets were already correct in the database — the root cause was
-`add_variable` reusing the first arm's variable for subsequent arms.
-A10 field iteration test now passes.
-
-**Effort:** Medium (requires understanding database field layout)
-**Target:** 0.8.3
-
----
-
-### L7  Non-zero exit code on parse/runtime errors *(completed 0.8.3)*
-
-**Implemented.** `src/main.rs` now checks `p.diagnostics.level() >= Level::Error` before calling
-`std::process::exit(1)`; warning-only programs execute and exit 0.  A missing file produces
-`Level::Fatal` in the lexer, which is `>= Level::Error`, so `loft nonexistent.loft` exits 1.
-
-**Sources:** CAVEATS.md C6, `src/main.rs`, `src/diagnostics.rs`
-**Severity (original):** Medium — shell scripts that use `loft` as a pipeline step check `$?` to detect failures; returning 0 on error silently swallows failures.
-**Description:** Two issues in `src/main.rs`:
-
-1. **Parse/compile error path (line 343):** The diagnostic check `if !p.diagnostics.is_empty()` exits with code 1 whenever any diagnostic is present, including warnings-only programs. This is too aggressive: a program with only warnings should execute and exit 0.
-2. **Warning-only programs don't run:** Because warnings cause exit 1 at line 343, a program like `46-caveats.loft` (which has a C14 format-specifier warning) would not execute at all when invoked via the CLI — even though the interpreter test harness runs it fine (bypasses `main.rs`).
-
-**Fix path (`src/main.rs` lines 343–348):**
-```rust
-// Before (exits 1 for any diagnostic including warnings):
-if !p.diagnostics.is_empty() {
-    for l in p.diagnostics.lines() {
-        println!("{l}");
-    }
-    std::process::exit(1);
-}
-```
-```rust
-// After (print all diagnostics, only exit 1 for errors or fatal):
-if !p.diagnostics.is_empty() {
-    for l in p.diagnostics.lines() {
-        println!("{l}");
-    }
-    if p.diagnostics.level() >= Level::Error {
-        std::process::exit(1);
-    }
-}
-```
-Import `Level` from `crate::diagnostics::Level` if not already in scope.
-
-**Scope check diagnostics:** `scopes::check` does not produce a separate `Diagnostics`; its errors are printed directly via the parser’s lexer and collected into `p.diagnostics`. Verify with a scope-error test.
-
-**Runtime fatal path (line 553):** `state.database.had_fatal` already correctly exits 1 on `log_fatal()`. No change needed there.
-
-**`--format-check` path:** Already exits 1 on bad format (line 106). No change needed.
-
-**Test plan:**
-1. `cargo run --bin loft -- tests/scripts/46-caveats.loft` — should print the C14 warning and then execute, printing `caveats: all ok`, exiting 0.
-2. `echo 'fn main() { x = 1' | cargo run --bin loft -- /dev/stdin` — should exit 1.
-3. Add shell-level test in `tests/integration.rs` (or a new `tests/exit_codes.rs`) that invokes the binary and checks `$?`.
-**Effort:** Small
-**Target:** 0.8.3
-
----
-
-### L8  Warn on format specifier / type mismatch *(completed 0.8.3)*
-
-Implemented: compile-time warnings in `append_data()` for numeric format specifiers
-on text/boolean and zero-padding on text.  Tests in `38-parse-warnings.loft`.
 
 ---
 
@@ -1930,22 +1560,7 @@ use.
 
 ---
 
-### A13  Complete two-zone slot assignment (Steps 8 and 10) *(completed 0.8.3)*
-
-All steps done.  Step 8 was completed earlier.  Step 10:
-- **10a** — Full cross-check (2026-03-24) confirmed `build_scope_parents`, `scan_inner`,
-  and `compute_intervals` all handle every `Value` variant with nested expressions.
-- **10b** — `Value::Iter` arm already present in `scan_inner` (added earlier).
-- **Scope-cycle root cause** — Fixed: `build_scope_parents` now uses `entry().or_insert()`
-  to keep the first-seen parent and skips self-loops (`bl.scope == parent`).
-
 ---
-
-### A14  `par_light`: lightweight parallel loop with pre-allocated stores *(completed 0.8.3)*
-
-All 7 steps (L1–L7) implemented.  The compiler automatically selects the light
-path for eligible `par()` workers (primitive return, no recursive store allocation).
-No new syntax — `par(...)` is transparently optimized.
 
 ---
 
@@ -2778,51 +2393,6 @@ In `output_call`, when emitting a call from a pure context to a pure callee, emi
 
 ---
 
-### O7  WASM: pre-allocate format-string buffers in native/wasm codegen *(completed 0.8.3)*
-**Sources:** PERFORMANCE.md § W1 (Design: W1 — wasm string representation)
-**Expected gain:** Reduces wasm/native string-building gap from 2.06× to <1.3× on benchmark 07.
-**Background:** Each format string in loft generates a sequence of bytecodes:
-1. `OpClearStackText` — resets the work-text variable to `""`
-2. N × `Op*Format*` calls — append each segment and value
-3. The completed string is used (moved or assigned)
-
-In native/wasm codegen, `OpClearStackText` emits `var_x.clear()` (`src/generation/text.rs::clear_stack_text`).  Each subsequent `OpAppendText` emits `var_x += &*(expr)`, which calls `String::push_str` internally and triggers a reallocation whenever capacity is exceeded.  In the wasm linear-memory allocator each reallocation requires a potential `memory.grow`, making repeated small appends disproportionately slow.
-
-**Fix path:**
-
-**Step 1 — Profile (verify root cause):**
-Run `bench/run_bench.sh` targeting benchmark 07 with wasm build and capture a `wasmtime --profile` trace.  Confirm that `String` reallocations (calls to `wasm_bindgen::__wbindgen_malloc` or equivalent) account for the majority of the gap.  If the gap is from function-call overhead instead, revisit the approach.
-
-**Step 2 — Count format operations at codegen time:**
-In `src/generation/` the `Output` struct processes bytecodes in order.  Add a pre-scan function `count_format_ops(ops: &[Op]) -> usize` that, for a sequence starting with `OpClearStackText`, counts consecutive `Op*Format*` operations until the next non-format op.  This count is the static upper bound for the number of append calls.
-
-**Step 3 — Emit `with_capacity` in `clear_stack_text`:**
-Modify `src/generation/text.rs::clear_stack_text` to accept the pre-scanned count `n`:
-```rust
-// Before:
-write!(w, "var_{s_nr}.clear()")?;
-
-// After (when n > 1):
-// avg_element_len = 8 is a conservative estimate for mixed text/integer fields
-write!(w, "{{ let _cap = {n} * 8usize; if var_{s_nr}.capacity() < _cap {{ var_{s_nr} = String::with_capacity(_cap); }} else {{ var_{s_nr}.clear(); }} }}")?;
-```
-Use `with_capacity` only for format strings with 2+ segments; single-segment strings (just `clear()`) are unaffected.
-
-**Step 4 — Verify `append_text` uses `push_str`:**
-Confirm line 87 in `text.rs` emits `var_{s_nr} += &*(expr)`.  Rust’s `AddAssign<&str>` on `String` calls `push_str` internally so no allocation is triggered when capacity is sufficient.  No change needed here.
-
-**Step 5 — Feature-gate (optional):**
-The `with_capacity` change benefits both native and wasm builds (reducing allocations in both).  No feature gate required.  If profiling shows native is unaffected, gate behind `#[cfg(feature = "wasm")]` to keep the emitted code simple.
-
-**Step 6 — Benchmark and verify:**
-Re-run benchmark 07 wasm vs native.  Target: gap < 1.3×.  If gap persists, increase `avg_element_len` or apply the capacity hint to `OpClearText` paths as well.
-
-**Files changed:** `src/generation/text.rs` (10–20 lines), `src/generation/dispatch.rs` (pass count to `clear_stack_text`).
-
-**Effort:** Medium
-**Depends:** W1 (W1.9 — WASM entry point; needed to test the wasm build)
-**Target:** 0.8.3
-
 ---
 
 ## H — HTTP / Web Services
@@ -2874,7 +2444,7 @@ If `to_json` is called on a struct without `#json`, emit a compile error:
 
 ### H2  JSON primitive extraction stdlib
 **Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B; CODE.md § Dependencies
-**Description:** Add a new stdlib module `default/04_web.loft` with JSON field-extraction
+**Description:** Add a new stdlib module `default/06_web.loft` with JSON field-extraction
 functions.  Functions extract a single typed value from a JSON object body supplied as
 a `text` string.  No `serde_json` dependency — the existing parsing primitives in
 `src/database/structures.rs` are sufficient; a new `src/database/json.rs` module adds
@@ -2919,7 +2489,7 @@ are `fn` (module-private) because they are only called by `parsing()` within the
 module.  Rather than widening their visibility, `json.rs` keeps its own small copies
 to preserve the clean boundary between schema-driven and schema-free parsing.
 
-**Step 3 — Loft declarations** (`default/04_web.loft`):
+**Step 3 — Loft declarations** (`default/06_web.loft`):
 ```loft
 // Extract primitive values from a JSON object body.
 // Returns zero/empty/null-sentinel if the key is absent or type does not match.
@@ -3011,12 +2581,12 @@ Verify that `Type.from_json` resolves as a callable fn-ref with type
 
 ### H4  HTTP client stdlib and `HttpResponse`
 **Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, stdlib additions; PROBLEMS #55
-**Description:** Add blocking HTTP functions to `default/04_web.loft` backed by `ureq`.
+**Description:** Add blocking HTTP functions to `default/06_web.loft` backed by `ureq`.
 All functions return `HttpResponse` — a plain struct — so there is no thread-local status
 state and the API is parallel-safe (see PROBLEMS #55).
 **Fix path:**
 
-**Step 1 — `HttpResponse` struct** (`default/04_web.loft`):
+**Step 1 — `HttpResponse` struct** (`default/06_web.loft`):
 ```loft
 pub struct HttpResponse {
     status: integer
@@ -3046,7 +2616,7 @@ process(file("local/data.txt").lines());
 process(http_get("https://example.com/data").lines());
 ```
 
-**Step 2 — HTTP functions declaration** (`default/04_web.loft`):
+**Step 2 — HTTP functions declaration** (`default/06_web.loft`):
 ```loft
 // Body-less requests
 pub fn http_get(url: text) -> HttpResponse;
@@ -3202,48 +2772,6 @@ is plain ES-module JavaScript with no required build step after the WASM is comp
 once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 
 ---
-
-### W1  WASM Foundation *(W1.1–W1.13 all completed 0.8.3)*
-**Sources:** [WASM.md](WASM.md) — full design and 14-step implementation plan
-**Severity/Value:** High — nothing else in Tier W is possible without this
-**Description:** Compile the loft interpreter itself as a WASM module
-(`wasm32-unknown-unknown` + `wasm-bindgen`) so it can run in browsers and Node.js.
-This is distinct from the existing `--native-wasm` flag (which compiles *loft programs* to WASM).
-The WASM module exposes `compile_and_run([{name, content}])` returning
-`{output, diagnostics, success}`. The JS host provides filesystem, random, time,
-env, and log operations through `globalThis.loftHost`.
-
-**Steps W1.1–W1.9 (Rust):** all behind `#[cfg(feature = "wasm")]`, verifiable with
-`cargo check --features wasm --no-default-features` + `cargo test` (native green):
-1. **W1.1** `Cargo.toml`: `wasm`/`threading`/`wasm-threads` features + optional deps (`wasm-bindgen`, `serde`, `web-sys`); `crate-type = ["cdylib","rlib"]`
-2. **W1.2** `src/fill.rs`: `print()` writes to thread-local buffer under `wasm`, real `print!()` otherwise
-3. **W1.3** `src/parallel.rs`: `run_parallel_*` gated on `threading`; sequential fallback when `not(threading)`; `tests/threading.rs` guarded by `#![cfg(feature = "threading")]`
-4. **W1.4** `src/logger.rs`: file I/O, rotation, `Instant`/`SystemTime` gated on `not(wasm)`; WASM calls `crate::wasm::host_log_write()`
-5. **W1.5** `src/ops.rs`: random functions already gated on `random`; WASM branch calls `host_random_int`/`host_random_seed` when `wasm` and `not(random)`
-6. **W1.6** `src/native.rs` + `src/database/format.rs`: `SystemTime`, `std::env`, `dirs` gated; WASM stubs call `time_now`, `time_ticks`, `env_variable`, `arguments`, path bridges
-7. **W1.7** `src/state/io.rs`: every `std::fs` call gated on `not(wasm)`; WASM branches call `fs_exists`, `fs_read_text`, `fs_write_text`, `fs_read_binary`, `fs_write_binary`, `fs_delete`, `fs_move`, `fs_mkdir`, `fs_mkdir_all`, `fs_list_dir`, `fs_seek`, `fs_read_bytes`, `fs_write_bytes`, `fs_get_cursor`
-8. **W1.8** `src/png_store.rs`: extract `decode_into_store<R: Read>()`; WASM reads bytes via `host_read_binary` + `Cursor<Vec<u8>>`
-9. **W1.9** `src/wasm.rs`: implement `#[wasm_bindgen] fn compile_and_run(files_js: JsValue) -> JsValue`; wire parse → scope → codegen → execute → return result
-
-**Step W1.10 (JavaScript):** completed 0.8.3:
-10. **W1.10** `tests/wasm/virt-fs.mjs`: full VirtFS class (path resolution, text/binary, cursors, snapshot/restore, JSON roundtrip); `harness.mjs` + `virt-fs.test.mjs` — all 13 unit tests pass under Node.js
-
-**Step W1.11 (JavaScript):** completed 0.8.3:
-11. **W1.11** `tests/wasm/host.mjs`: `createHost(tree, options)` wiring VirtFS to `loftHost`; deterministic xoshiro128** PRNG; `bridge.test.mjs` (7 tests, skips if no pkg), `file-io.test.mjs` (14 host-level tests, no WASM needed), `random.test.mjs` (host + optional WASM level)
-
-**Step W1.12 (JavaScript):** completed 0.8.3:
-12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`; 20 unit tests in `layered-fs.test.mjs`
-
-**Step W1.13 (JavaScript):** completed 0.8.3:
-12. **W1.12** `tests/wasm/layered-fs.mjs`: `LayeredFS extends VirtFS` (base + delta overlay, persistence); `ide/scripts/build-base-fs.js` generates `ide/assets/base-fs.json`
-13. **W1.13** `tests/wasm/suite.mjs`: discovers all `fn main()` loft files in `tests/scripts/` and `tests/docs/`; builds a VirtFS pre-populated with fixtures; runs each through WASM; compares output against `cargo run` native reference; skips non-deterministic tests (time, unseeded random, image); exits non-zero on failure
-
-**Host bridge API** (JS → Rust): `fs_*`, `random_*`, `time_*`, `env_*`, `log_*` functions
-on `globalThis.loftHost`. Full spec in [WASM.md](WASM.md) § Host Bridge API.
-
-**Effort:** High (13 steps; W1.1–W1.8 are individually small; W1.9–W1.13 are medium)
-**Depends on:** R1
-**Target:** 0.8.3
 
 ---
 
@@ -3873,7 +3401,6 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design asymmetries and surprises
 - [ASSIGNMENT.md](ASSIGNMENT.md) — Stack slot assignment status (A6 detail)
 - [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — External library packaging design (A7 Phase 2)
-- [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — Bytecode cache design (P4)
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process, quality gates, scope rules, and backwards compatibility
 - [THREADING.md](THREADING.md) — Parallel for-loop design (A1 detail)
 - [LOGGER.md](LOGGER.md) — Logger design (A2 detail)

@@ -55,6 +55,8 @@ if hundreds of parallel calls are made.
 | # | Change | File(s) | Effort | Impact |
 |---|--------|---------|--------|--------|
 | 1 | `Arc` for `Stores::types` / `names` | `database.rs` | Medium | Low–Med |
+| 2 | O8.1b: packed bytes in bytecode | `vector.rs`, `state/mod.rs` | Medium | High |
+| 3 | O8.3: zero-fill struct defaults | `parser/objects.rs` | Small | Low–Med |
 
 ---
 
@@ -162,3 +164,24 @@ Compute: `new_off = (pc3 + 2 + old_off) - (pc + super_size)`.
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results, root-cause analysis, and detailed designs for O1–O7 (superinstructions, stack pointer cache, native collection emit, purity analysis)
 - [PLANNING.md](PLANNING.md) — Priority-ordered backlog
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/store.rs`, `src/state/` implementation details
+
+### 2. O8: Constant data initialisation (delivered 2026-04-02)
+
+**Files:** `src/const_eval.rs`, `src/vector.rs`, `src/fill.rs`, `src/parser/vectors.rs`
+
+Three optimisations delivered:
+
+- **O8.1a** `OpPreAllocVector`: pre-allocates vector capacity for known-size
+  literals, eliminating all `store.resize()` calls.  One new opcode (replaced
+  unused `OpNop` slot).
+- **O8.5** Constant comprehension unrolling: `[for i in 0..N { expr(i) }]`
+  unrolled at compile time when bounds and body are const-evaluable.  10k limit.
+- **`const_eval()`** module: compile-time constant folder for arithmetic, casts,
+  comparisons, boolean ops across all numeric types.
+
+**Impact:** For a 20-element constant vector, eliminates 1-2 resize allocations.
+For constant comprehensions, eliminates the entire runtime loop.
+
+Full design: [CONST_DATA.md](CONST_DATA.md).
+
+---

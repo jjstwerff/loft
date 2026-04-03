@@ -1,0 +1,81 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Formatting
+// @TITLE: Format strings — interpolation, alignment, and number bases
+// Loft strings can embed expressions inside `{...}` braces.  A colon after
+// the expression introduces a format specifier that controls width, alignment,
+// precision, number base, and output style.
+// ## Basic interpolation
+// Any expression inside `{...}` is evaluated and converted to text.
+fn main() {
+  name = "world";
+  assert("hello {name}" == "hello world", "basic interpolation");
+  assert("1 + 2 = {1 + 2}" == "1 + 2 = 3", "expression in braces");
+  // ## Width and alignment
+  // A number after `:` sets the minimum width.  The value is padded with
+  // spaces to fill the width.
+  //   {val:6}   — right-aligned (default for numbers)
+  //   {val:>6}  — right-aligned (explicit)
+  //   {val:<6}  — left-aligned
+  //   {val:^6}  — centered
+  // For text, the default alignment is left.  For numbers, right.
+  assert("{42:6}" == "    42", "default number align is right");
+  assert("{42:>6}" == "    42", "explicit right-align");
+  assert("{42:<6}" == "42    ", "left-align number");
+  assert("{42:^6}" == "  42  ", "center-align number");
+  s = "hi";
+  assert("{s:6}" == "hi    ", "default text align is left");
+  assert("{s:>6}" == "    hi", "right-align text");
+  assert("{s:^6}" == "  hi  ", "center-align text");
+  // ## Zero padding
+  // Prefix the width with `0` to pad with zeros instead of spaces.
+  assert("{7:03}" == "007", "zero-padded 3 digits");
+  assert("{42:05}" == "00042", "zero-padded 5 digits");
+  assert("{-1:04}" == "-001", "zero-padded negative: sign before zeros");
+  // ## Signed format
+  // `+` forces a sign on positive numbers.
+  assert("{42:+}" == "+42", "explicit positive sign");
+  assert("{-42:+}" == "-42", "negative sign always shown");
+  assert("{0:+}" == "+0", "sign on zero");
+  // ## Hexadecimal, binary, octal
+  // `:x` for lowercase hex, `:#x` for hex with `0x` prefix.
+  // `:b` for binary, `:o` for octal.
+  assert("{255:x}" == "ff", "hex lowercase");
+  assert("{255:#x}" == "0xff", "hex with prefix");
+  assert("{10:b}" == "1010", "binary");
+  assert("{8:o}" == "10", "octal");
+  // ## Float precision
+  // `.N` after the colon limits decimal places.
+  assert("{3.125:.1}" == "3.1", "1 decimal place");
+  assert("{3.125:.2}" == "3.12", "2 decimal places");
+  assert("{3.125:.0}" == "3", "0 decimal places");
+  assert("{0.0:.3}" == "0.000", "trailing zeros");
+  // ## Width + precision
+  // Combine width and precision: `{val:W.P}` where W is total width
+  // and P is decimal places.
+  assert("{3.125:8.2}" == "    3.12", "width 8 precision 2");
+  assert("{-3.125:8.2}" == "   -3.12", "negative width+precision");
+  // ## JSON format
+  // `:j` serialises a struct or value as JSON.
+  // `:j` serialises a struct as JSON.  Use it on struct values, not primitives.
+  // See the JSON documentation page for full details.
+  // ## Vector format
+  // Vectors are formatted as `[a,b,c]` by default.
+  // A format specifier inside a `for` loop applies to each element.
+  v = [1, 2, 3];
+  assert("{v}" == "[1,2,3]", "default vector format");
+  assert("{for fmt_n in 1..4 {fmt_n * 10}:04}" == "[0010,0020,0030]", "formatted vector elements");
+  // ## Long and single types
+  // Long integers and single-precision floats use the same format specifiers.
+  n = 1000000l;
+  assert("{n}" == "1000000", "long default");
+  assert("{n:>10}" == "   1000000", "long right-aligned");
+  f = 1.5f;
+  assert("{f}" == "1.5", "single default");
+  // ## Character format
+  c = 'A';
+  assert("{c}" == "A", "character default");
+  // ## Boolean format
+  assert("{true}" == "true", "boolean true");
+  assert("{false}" == "false", "boolean false");
+}

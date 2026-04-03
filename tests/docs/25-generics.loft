@@ -14,33 +14,86 @@ fn identity<T>(x: T) -> T { x }
 // No special syntax at the call site — the compiler infers T from the first
 // argument's type and creates a specialised copy automatically.
 fn test_identity() {
-  assert(identity(42) == 42);
-  assert(identity(3.14) == 3.14);
-  assert(identity("hello") == "hello");
-  assert(identity(true) == true);
+  assert(identity(42) == 42, "identity integer");
+  assert(identity(3.14) == 3.14, "identity float");
+  assert(identity("hello") == "hello", "identity text");
+  assert(identity(true) == true, "identity bool");
 }
 // ## Multiple parameters of the same type
 // Additional parameters can also use T.  They all share the same concrete type.
-fn pick_second<T>(a: T, b: T) -> T {
-  _x = a;
-  b
+fn pick_second<T>(gen_a: T, gen_b: T) -> T {
+  _x = gen_a;
+  gen_b
 }
 fn test_pick_second() {
-  assert(pick_second(1, 99) == 99);
-  assert(pick_second("a", "b") == "b");
+  assert(pick_second(1, 99) == 99, "pick second int");
+  assert(pick_second("a", "b") == "b", "pick second text");
+}
+// ## Generic functions on vectors
+// The most common use of generics: write a function that works on any vector.
+// T is inferred from the vector's element type.
+fn first_element<T>(gen_v: vector<T>) -> T {
+  gen_v[0]
+}
+fn last_element<T>(gen_v: vector<T>) -> T {
+  gen_v[gen_v.len() - 1]
+}
+fn test_vector_generics() {
+  ints = [10, 20, 30];
+  assert(first_element(ints) == 10, "first int");
+  assert(last_element(ints) == 30, "last int");
+  words = ["alpha", "beta", "gamma"];
+  assert(first_element(words) == "alpha", "first text");
+  assert(last_element(words) == "gamma", "last text");
+}
+// ## Bounded generics with interfaces
+// By default, you can only assign and return T — no arithmetic, no comparison.
+// To use operators on T, add an interface bound: `<T: Ordered>` means T must
+// support `<`, `<=`, `>`, `>=` comparisons.
+//
+// Built-in interfaces:
+//   Ordered    — comparison operators (<, <=, >, >=)
+//   Equatable  — equality operators (==, !=)
+//   Addable    — addition and subtraction (+, -)
+//   Numeric    — all arithmetic (+, -, *, /, %)
+//   Scalable   — multiplication by integer (* integer)
+fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
+  if gen_x > gen_y { gen_x } else { gen_y }
+}
+fn gen_min<T: Ordered>(gen_x: T, gen_y: T) -> T {
+  if gen_x < gen_y { gen_x } else { gen_y }
+}
+fn test_bounded() {
+  assert(gen_max(3, 7) == 7, "max int");
+  assert(gen_max(2.5, 1.5) == 2.5, "max float");
+  assert(gen_min(3, 7) == 3, "min int");
+  assert(gen_min("apple", "banana") == "apple", "min text");
+}
+// ## Combining bounds
+// Use `+` to require multiple interfaces: `<T: Ordered + Addable>`.
+fn clamped_add<T: Ordered + Addable>(gen_a: T, gen_b: T, gen_hi: T) -> T {
+  result = gen_a + gen_b;
+  if result > gen_hi { gen_hi } else { result }
+}
+fn test_combined_bounds() {
+  assert(clamped_add(3, 4, 10) == 7, "under limit");
+  assert(clamped_add(8, 5, 10) == 10, "clamped to limit");
+  assert(clamped_add(1.0, 2.0, 2.5) == 2.5, "float clamped");
 }
 // ## Allowed operations on T
-// Inside a generic function you may only use operations that do not depend
-// on what T actually is: assign, return, and store in variables.
-// Type-specific operations like arithmetic, field access, and method calls
-// are compile-time errors.
+// Inside a generic function you may only use operations that the bound
+// guarantees.  Without any bound: assign, return, store in variables.
+// With Ordered: comparisons.  With Addable: + and -.
 // ## Disallowed operations
-// The compiler rejects operations that require knowing what T is.
-// For example, `x + y` on two T values gives:
+// The compiler rejects operations not covered by the bound.
+// `x + y` on unbounded T gives:
 //   "generic type T: operator '+' requires a concrete type"
-// Similarly, `x.field` gives:
+// `x.field` on T gives:
 //   "generic type T: field access requires a concrete type"
 fn main() {
   test_identity();
   test_pick_second();
+  test_vector_generics();
+  test_bounded();
+  test_combined_bounds();
 }

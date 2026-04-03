@@ -160,6 +160,8 @@ states that are harder to debug than the original problem.
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
 | [THREADING.md](doc/claude/THREADING.md) | Parallel for-loop (`par(...)`), `fn <name>` references, runtime parallel execution |
 | [SAFE.md](doc/claude/SAFE.md) | Thread safety analysis — parallel worker store isolation, risks, and mitigation designs |
+| [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading, phase design |
+| [WASM.md](doc/claude/WASM.md) | WASM architecture — wasm32-wasip2 target, VirtFS, host bridges, feature gates |
 | [LIGHT_PAR.md](doc/claude/LIGHT_PAR.md) | `par_light(...)` design — shallow-borrow stores + pre-allocated pool for non-recursive workers |
 | [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
 | [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
@@ -183,6 +185,7 @@ states that are harder to debug than the original problem.
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
+| [PACKAGES.md](doc/claude/PACKAGES.md) | Unified package format — native Rust + WASM + loft; OpenGL case study |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |

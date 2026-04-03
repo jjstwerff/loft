@@ -34,11 +34,8 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
-| 91 | L7 `init(expr)` circular-init detection *(fixed)* / parameter form missing | Low | Parameter form: pass explicitly |
+| 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
-| 93 | T1.1 tuple-in-struct-field rejection *(fixed)* | — | Clear error emitted |
-| 97 | T1.2 `(a, b) += expr` *(fixed)* | — | Clear error emitted |
-| 98 | Index range query with descending key *(fixed)* | — | XOR reverse bit for desc primary key |
 | 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
 
 ---

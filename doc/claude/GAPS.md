@@ -245,6 +245,5 @@ These are inherently Rust-API tests. They don't need `.loft` script equivalents:
 
 ## See also
 - [TESTING.md](TESTING.md) — How to write tests, use `LOFT_LOG` presets, and add script/doc test files
-- [FAILURES.md](FAILURES.md) — Historical failure analysis that informed the coverage measurement baseline
 - [PROBLEMS.md](PROBLEMS.md) — Open bugs that block or reduce coverage in specific areas
 - [PLANNING.md](PLANNING.md) — Enhancement backlog; coverage gaps often align with planned work

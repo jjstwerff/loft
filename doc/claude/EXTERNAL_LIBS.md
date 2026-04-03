@@ -572,5 +572,4 @@ Deferred:
 - [PLANNING.md](PLANNING.md) — Version milestones and priority-ordered backlog
 - [COMPILER.md](COMPILER.md) — `lib_path()` and `parse_file()` internals
 - [INTERNALS.md](INTERNALS.md) — `State::static_fn()` and `native::init()` details
-- [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — Cache invalidation includes external library files
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process and quality gates

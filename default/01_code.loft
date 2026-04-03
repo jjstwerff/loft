@@ -984,7 +984,7 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
   result
 }
 
-// --- A10: Field iteration support types ---
+// --- Field iteration support types ---
 
 // Wraps a field value in a type-discriminated enum for compile-time field iteration.
 pub enum FieldValue {

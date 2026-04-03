@@ -6,6 +6,61 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Bug fixes
+
+- **P58** — Variables with unknown type (typos like `y = unknown_thing`) now
+  produce a compile-time error instead of silently creating garbage values.
+- **P99** — Empty struct comprehension (`[for x in 0..0 { Struct{} }]`) with
+  multiple hash types no longer crashes the compiler.
+- **P100** — Format left-align (`:<`) and center-align (`:^`) now work for
+  integers, longs, and floats.
+- **P101** — Float format `:.0` (zero precision) now correctly rounds to zero
+  decimal places.
+- **P102** — `rev(vector)` now works — plain vectors can be iterated in reverse.
+- **P98** — Index range queries with descending primary key now return correct
+  results, in both interpreter and native codegen.
+- **P91** — Circular `= expr` field defaults (e.g. `a: integer = $.b, b: integer = $.a`)
+  are now detected at compile time.
+- **C54** — `file.lines()` now returns content after the last newline (or content
+  with no newlines at all).
+- **P103** (mitigated) — Compile-time warning when vector concatenation appears
+  inline in an expression that could corrupt the stack.
+- **Windows native codegen** — Backslashes in file paths are now escaped in
+  generated Rust string literals.
+
+### Test infrastructure
+
+- `tests/wrap.rs` now discovers and runs all `fn test_*()` entry points, not
+  just `main()`.  Supports `@EXPECT_FAIL`, `@EXPECT_ERROR`, `@EXPECT_WARNING`
+  annotations per function with `catch_unwind` isolation.
+- 12 new test scripts (61–74) covering vector sort/reverse, index range queries,
+  format edge cases, hash edge cases, known-issue reproducers (caveats/problems),
+  and constant vector initialisation.
+- `SUITE_SKIP` emptied — `15-lexer.loft` and `16-parser.loft` now pass.
+- Branch protection enabled on `main` — PRs required with all 5 CI checks.
+
+### Optimisations
+
+- **`const_eval`** module — compile-time constant folder for arithmetic, casts,
+  comparisons, and boolean ops across all numeric types.
+- **`OpPreAllocVector`** — pre-allocates vector capacity for known-size literals,
+  eliminating all `store.resize()` calls.
+- **Constant comprehension unrolling** — `[for i in 0..N { expr(i) }]` is unrolled
+  at compile time when bounds and body are const-evaluable (10,000-element limit).
+
+### Documentation
+
+- New **PACKAGES.md** — unified package format design (native Rust + WASM,
+  dependencies, test suites, OpenGL case study).
+- New **CONST_DATA.md** — constant data initialisation design with safety analysis.
+- New doc pages: **29-match.loft** (pattern matching) and **30-formatting.loft**
+  (format string reference).
+- Expanded: 14-image (pixel scanning), 19-threading (worker rules), 25-generics
+  (bounded generics with interfaces).
+- Regenerated 137-page PDF reference.
+- ROADMAP split: all H/MH items into S/M testable sub-steps with sprint ordering.
+- PLANNING pruned: 473 lines of completed items removed.
+
 ### Closures
 
 - **Cross-scope text-capturing closures** (A5.6-text) — Functions that return
@@ -42,7 +97,7 @@ All notable changes to the loft language and interpreter.
   (`find_reusable_zone2_slot`) restricted to Text-only reuse at the top-of-stack
   position.  Tests: `assign_slots_sequential_text_reuse`, `text_slot_reuse_sequential`.
 
-### Bug fixes
+### Bug fixes (continued)
 
 - **C41** — Struct-enum local variable leak (Problem #85) confirmed fixed; regression
   test `struct_enum_local_freed` added.
@@ -279,7 +334,7 @@ All notable changes to the loft language and interpreter.
   `"'T' is reserved as a generic type variable"` instead of a confusing
   "Redefined struct" message or a runtime crash.
 
-### Sorted collection slicing (A8)
+### Sorted collection slicing (A8) (continued)
 
 - **Open-ended bounds, range iteration, comprehensions** (A8.1, A8.2, A8.4, A8.6):
   - A8.1: `col[lo..]`, `col[..hi]`, and `col[..]` now work on sorted collections.
@@ -401,7 +456,7 @@ All notable changes to the loft language and interpreter.
   Test `store_non_lifo_free_reclaims_slot` in `tests/threading.rs` verifies that a
   freed non-top slot is reused by the next `database()` call and `max` does not grow.
 
-### Language features
+### Language features (continued)
 
 - **Tuple destructuring in `match`** (T1.9) — `match` now dispatches on `Type::Tuple`
   subjects.  New `parse_tuple_match` in `src/parser/control.rs` parses comma- or
@@ -424,7 +479,7 @@ All notable changes to the loft language and interpreter.
   destructuring — use (a, b) = expr instead" (`parse_assign` in `expressions.rs` returns
   early in both passes, consuming the operator and RHS to keep the parser state clean).
 
-### Coroutine safety documentation
+### Coroutine safety documentation (continued)
 
 - **Store-backed `Str` debug guard in `coroutine_yield`** (P2-R5 M10-a) — In
   `#[cfg(debug_assertions)]` builds on 64-bit targets, `coroutine_yield` now
@@ -1012,7 +1067,7 @@ All notable changes to the loft language and interpreter.
   size after emitting `OpCoroutineYield`, so subsequent variable accesses in the same
   generator use correct offsets on the second and later resumes.
 
-### Bug fixes
+### Bug fixes (continued)
 
 - **Fix #87** — `static_call` no longer snapshots the call stack on every native
   function call; the snapshot now only runs when `n_stack_trace` is dispatched.
@@ -1046,7 +1101,7 @@ All notable changes to the loft language and interpreter.
   (`:x`, `:b`, `:o`) on a `text` or `boolean` value, or zero-padding (`:05`) on a
   `text` value, is now a compile error rather than a silent no-op.  C14 closed.
 
-### Bug fixes
+### Bug fixes (continued)
 
 - **S15: match arm binding type reuse** — When multiple struct-enum match arms bind the
   same field name with different types, each arm now gets its own variable. Previously
