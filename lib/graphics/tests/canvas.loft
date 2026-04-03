@@ -199,3 +199,117 @@ fn test_draw_ellipse() {
   // Center should be empty (outline only)
   assert(cv.data[10 * 30 + 15] == 0, "ellipse center empty");
 }
+
+fn test_fill_ellipse() {
+  fev = graphics::canvas(30, 20, 0);
+  fe_col = graphics::rgb(0, 128, 255);
+  fev.fill_ellipse(15, 10, 8, 4, fe_col);
+  // Center should be filled
+  assert(fev.get_pixel(15, 10) == fe_col, "fill ellipse center");
+  // Right edge should be filled
+  assert(fev.get_pixel(23, 10) == fe_col, "fill ellipse right edge");
+  // Outside should be empty
+  assert(fev.get_pixel(15, 4) == 0, "fill ellipse outside top");
+}
+
+// --- GL2.4: Bezier curves ---
+
+fn test_bezier_straight() {
+  bv = graphics::canvas(20, 20, 0);
+  bc = graphics::rgb(255, 0, 128);
+  // Control points on the line → should be a straight line
+  bv.draw_bezier(2, 10, 6, 10, 12, 10, 18, 10, bc);
+  assert(bv.get_pixel(2, 10) == bc, "bezier start");
+  assert(bv.get_pixel(18, 10) == bc, "bezier end");
+  assert(bv.get_pixel(10, 10) == bc, "bezier mid");
+}
+
+fn test_bezier_curve() {
+  bv2 = graphics::canvas(30, 30, 0);
+  bc2 = graphics::rgb(0, 200, 100);
+  // Curve bowing upward: (5,25) → ctrl(5,5),(25,5) → (25,25)
+  bv2.draw_bezier(5, 25, 5, 5, 25, 5, 25, 25, bc2);
+  // Start and end should be drawn
+  assert(bv2.get_pixel(5, 25) == bc2, "bezier curve start");
+  assert(bv2.get_pixel(25, 25) == bc2, "bezier curve end");
+  // Somewhere near the top of the arc should have pixels
+  // The apex is roughly at (15, ~8) for this curve
+  bz_has_top = false;
+  for bz_ty in 5..15 {
+    if bv2.get_pixel(15, bz_ty) != 0 { bz_has_top = true; }
+  }
+  assert(bz_has_top, "bezier has pixels near top");
+}
+
+fn test_bezier_point() {
+  bv3 = graphics::canvas(10, 10, 0);
+  bc3 = graphics::rgb(255, 255, 0);
+  // All points the same → single pixel
+  bv3.draw_bezier(5, 5, 5, 5, 5, 5, 5, 5, bc3);
+  assert(bv3.get_pixel(5, 5) == bc3, "bezier degenerate point");
+}
+
+// --- GL2.6: Anti-aliased line ---
+
+fn test_aa_line_horizontal() {
+  av = graphics::canvas(20, 10, 0);
+  ac = graphics::rgb(255, 255, 255);
+  av.draw_aa_line(2, 5, 18, 5, ac);
+  // Horizontal AA line should have full-alpha pixels on the line
+  assert(graphics::color_a(av.get_pixel(10, 5)) > 200, "aa hline mid bright");
+  assert(av.get_pixel(0, 5) == 0, "aa hline before");
+}
+
+fn test_aa_line_diagonal() {
+  av2 = graphics::canvas(20, 20, 0);
+  ac2 = graphics::rgb(255, 0, 0);
+  av2.draw_aa_line(0, 0, 19, 19, ac2);
+  // Diagonal should have pixels along the diagonal
+  assert(av2.get_pixel(0, 0) != 0, "aa diag start");
+  assert(av2.get_pixel(19, 19) != 0, "aa diag end");
+  // At 45 degrees the line is pixel-perfect; verify mid-point
+  assert(av2.get_pixel(10, 10) != 0, "aa diag mid");
+}
+
+fn test_aa_line_steep() {
+  av3 = graphics::canvas(10, 30, 0);
+  ac3 = graphics::rgb(0, 255, 0);
+  av3.draw_aa_line(2, 1, 8, 28, ac3);
+  assert(av3.get_pixel(2, 1) != 0, "aa steep start");
+  assert(av3.get_pixel(8, 28) != 0, "aa steep end");
+}
+
+// --- GL2.5: Triangle fill ---
+
+fn test_fill_triangle() {
+  tv = graphics::canvas(20, 20, 0);
+  tc = graphics::rgb(128, 0, 255);
+  tv.fill_triangle(10, 2, 2, 18, 18, 18, tc);
+  // Center should be filled
+  assert(tv.get_pixel(10, 12) == tc, "triangle center");
+  // Vertices should be filled
+  assert(tv.get_pixel(10, 2) == tc, "triangle top");
+  assert(tv.get_pixel(2, 18) == tc, "triangle bottom-left");
+  assert(tv.get_pixel(18, 18) == tc, "triangle bottom-right");
+  // Outside should be empty
+  assert(tv.get_pixel(0, 0) == 0, "triangle outside");
+}
+
+fn test_fill_triangle_flat_top() {
+  tv2 = graphics::canvas(20, 20, 0);
+  tc2 = graphics::rgb(255, 128, 0);
+  // Flat-top triangle: (5,5), (15,5), (10,15)
+  tv2.fill_triangle(5, 5, 15, 5, 10, 15, tc2);
+  assert(tv2.get_pixel(10, 10) == tc2, "flat-top center");
+  assert(tv2.get_pixel(5, 5) == tc2, "flat-top left");
+  assert(tv2.get_pixel(15, 5) == tc2, "flat-top right");
+}
+
+fn test_fill_triangle_degenerate() {
+  tv3 = graphics::canvas(10, 10, 0);
+  tc3 = graphics::rgb(100, 100, 100);
+  // Degenerate: all on same y
+  tv3.fill_triangle(2, 5, 5, 5, 8, 5, tc3);
+  // Should not crash; degenerate triangle draws nothing
+  assert(tv3.get_pixel(5, 5) == 0, "degenerate triangle");
+}
