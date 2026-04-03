@@ -886,9 +886,8 @@ impl State {
                     | crate::database::Parts::EnumValue(_, _)
                     | crate::database::Parts::Vector(_) => {
                         let val = *self.get_stack::<DbRef>();
-                        let mut res = format!("ref({},{},{})=", val.store_nr, val.rec, val.pos);
-                        self.database.show(&mut res, &val, known, false);
-                        res
+                        let (depth, elems) = Self::dump_limits();
+                        self.database.dump_compact(&val, known, depth, elems)
                     }
                     _ => String::new(),
                 },
@@ -902,7 +901,20 @@ impl State {
         }
     }
 
-    // TODO dump of data structures with only the top level records, limited array sizes
+    /// Read dump depth and element limits from environment variables.
+    /// `LOFT_DUMP_DEPTH` (default 2) and `LOFT_DUMP_ELEMENTS` (default 8).
+    fn dump_limits() -> (u16, u16) {
+        let depth = std::env::var("LOFT_DUMP_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+        let elems = std::env::var("LOFT_DUMP_ELEMENTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        (depth, elems)
+    }
+
     pub(super) fn dump_stack(&mut self, typedef: &Type, code: u32, data: &Data) -> String {
         match typedef {
             Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i32>()),
@@ -967,9 +979,8 @@ impl State {
                         return format!("ref({},{},{})=<freed>", val.store_nr, val.rec, val.pos);
                     }
                 }
-                let mut res = format!("ref({},{},{})=", val.store_nr, val.rec, val.pos);
-                self.database.show(&mut res, &val, known, false);
-                res
+                let (depth, elems) = Self::dump_limits();
+                self.database.dump_compact(&val, known, depth, elems)
             }
             Type::Vector(_, _) => {
                 let val = *self.get_stack::<DbRef>();
@@ -984,9 +995,8 @@ impl State {
                 {
                     return format!("ref({},{},{})=<freed>", val.store_nr, val.rec, val.pos);
                 }
-                let mut res = format!("ref({},{},{})=", val.store_nr, val.rec, val.pos);
-                self.database.show(&mut res, &val, known, false);
-                res
+                let (depth, elems) = Self::dump_limits();
+                self.database.dump_compact(&val, known, depth, elems)
             }
             _ => "unknown".to_string(),
         }

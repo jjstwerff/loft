@@ -1,0 +1,95 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the GLB 2.0 binary writer (GL5: save_glb).
+// Run with: cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/glb.loft
+use math;
+use mesh;
+use glb;
+
+// Verify that save_glb produces a non-empty file.
+fn test_glb_creates_file() {
+  gc_m = mesh::cube();
+  glb::save_glb(gc_m, "test_glb_a.glb");
+  assert(file("test_glb_a.glb").size > 0l, "GLB file was created");
+  delete("test_glb_a.glb");
+}
+
+// Verify the 12-byte GLB header: magic 'glTF', version 2, and total length.
+fn test_glb_header() {
+  gh_m = mesh::cube();
+  glb::save_glb(gh_m, "test_glb_b.glb");
+  gh_sz = file("test_glb_b.glb").size;
+  {gh_f = file("test_glb_b.glb");
+   gh_f#format = LittleEndian;
+   assert(gh_f#read(4) as i32 == 0x46546C67, "magic 'glTF'");
+   assert(gh_f#read(4) as i32 == 2, "version 2");
+   gh_total = gh_f#read(4) as i32;
+   assert(gh_total as long == gh_sz, "total_len matches file size={gh_sz}");
+  }
+  delete("test_glb_b.glb");
+}
+
+// Verify the JSON chunk type tag and BIN chunk type tag.
+// Reads the header sequentially (f#next seek-to-offset does not work before
+// the first read on a freshly opened file handle).
+fn test_glb_chunk_types() {
+  gt_m = mesh::cube();
+  glb::save_glb(gt_m, "test_glb_c.glb");
+  {gt_f = file("test_glb_c.glb");
+   gt_f#format = LittleEndian;
+   gt_f#read(4) as i32;  // magic
+   gt_f#read(4) as i32;  // version
+   gt_f#read(4) as i32;  // total_len
+   gt_jlen = gt_f#read(4) as i32;  // JSON chunk data length
+   assert(gt_f#read(4) as i32 == 0x4E4F534A, "JSON chunk type 'JSON'");
+   // Skip JSON data (includes padding): seek past it.
+   // After reading 5 x 4 = 20 bytes, current position = 20.
+   // JSON data starts at 20 and is gt_jlen bytes long.
+   // Use #next to jump to BIN chunk header at 20 + gt_jlen.
+   gt_f#next = (20 + gt_jlen) as long;
+   gt_f#read(4) as i32;  // skip BIN chunk data length
+   assert(gt_f#read(4) as i32 == 0x004E4942, "BIN chunk type 'BIN\\0'");
+  }
+  delete("test_glb_c.glb");
+}
+
+// Verify the BIN chunk data length for a known mesh (3 vertices, 1 triangle).
+// bin = pos(3*12) + norm(3*12) + uv(3*8) + idx(3*4) = 36+36+24+12 = 108 bytes.
+fn test_glb_bin_size() {
+  gb_m = mesh::mesh("tri");
+  gb_n = math::vec3(0.0, 0.0, 1.0);
+  gb_uv = math::vec2(0.0, 0.0);
+  gb_m.add_vertex(mesh::vertex(math::vec3(0.0, 0.0, 0.0), gb_n, gb_uv));
+  gb_m.add_vertex(mesh::vertex(math::vec3(1.0, 0.0, 0.0), gb_n, gb_uv));
+  gb_m.add_vertex(mesh::vertex(math::vec3(0.0, 1.0, 0.0), gb_n, gb_uv));
+  gb_m.add_triangle(0, 1, 2);
+  glb::save_glb(gb_m, "test_glb_d.glb");
+  {gb_f = file("test_glb_d.glb");
+   gb_f#format = LittleEndian;
+   gb_f#read(4) as i32;  // magic
+   gb_f#read(4) as i32;  // version
+   gb_f#read(4) as i32;  // total_len
+   gb_jlen = gb_f#read(4) as i32;  // JSON chunk length
+   gb_f#read(4) as i32;  // JSON chunk type
+   // Now seek past JSON data to BIN chunk header.
+   gb_f#next = (20 + gb_jlen) as long;
+   gb_blen = gb_f#read(4) as i32;  // BIN chunk data length
+   assert(gb_blen == 108, "bin size for 3-vert 1-tri={gb_blen}");
+  }
+  delete("test_glb_d.glb");
+}
+
+// Verify JSON chunk data length is a multiple of 4.
+fn test_glb_json_padding() {
+  gp_m = mesh::cube();
+  glb::save_glb(gp_m, "test_glb_e.glb");
+  {gp_f = file("test_glb_e.glb");
+   gp_f#format = LittleEndian;
+   gp_f#read(4) as i32;  // magic
+   gp_f#read(4) as i32;  // version
+   gp_f#read(4) as i32;  // total_len
+   gp_jlen = gp_f#read(4) as i32;  // JSON chunk length
+   assert(gp_jlen % 4 == 0, "JSON chunk is 4-byte aligned={gp_jlen}");
+  }
+  delete("test_glb_e.glb");
+}

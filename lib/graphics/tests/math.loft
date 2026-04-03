@@ -1,0 +1,81 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the math module.
+use math;
+
+fn test_vec3_create() {
+  mv = math::vec3(1.0, 2.0, 3.0);
+  assert(mv.x == 1.0, "x");
+  assert(mv.y == 2.0, "y");
+  assert(mv.z == 3.0, "z");
+}
+
+fn test_vec3_add() {
+  ma = math::vec3(1.0, 2.0, 3.0);
+  mb = math::vec3(4.0, 5.0, 6.0);
+  mc = math::add3(ma, mb);
+  assert(mc.x == 5.0, "add x");
+  assert(mc.y == 7.0, "add y");
+  assert(mc.z == 9.0, "add z");
+}
+
+fn test_vec3_dot() {
+  da = math::vec3(1.0, 0.0, 0.0);
+  db = math::vec3(0.0, 1.0, 0.0);
+  assert(math::dot3(da, db) == 0.0, "orthogonal dot");
+  dc = math::vec3(1.0, 0.0, 0.0);
+  assert(math::dot3(da, dc) == 1.0, "parallel dot");
+}
+
+fn test_vec3_cross() {
+  cx = math::vec3(1.0, 0.0, 0.0);
+  cy = math::vec3(0.0, 1.0, 0.0);
+  cz = math::cross(cx, cy);
+  assert(cz.x == 0.0, "cross x");
+  assert(cz.y == 0.0, "cross y");
+  assert(cz.z == 1.0, "cross z");
+}
+
+fn test_vec3_normalize() {
+  nv = math::vec3(3.0, 0.0, 0.0);
+  nn = math::normalize3(nv);
+  assert(nn.x == 1.0, "norm x");
+  assert(nn.y == 0.0, "norm y");
+  assert(nn.z == 0.0, "norm z");
+}
+
+fn test_mat4_identity() {
+  id_m = math::mat4_identity();
+  assert(id_m.m[0] == 1.0, "m00");
+  assert(id_m.m[5] == 1.0, "m11");
+  assert(id_m.m[10] == 1.0, "m22");
+  assert(id_m.m[15] == 1.0, "m33");
+  assert(id_m.m[1] == 0.0, "m10");
+}
+
+fn test_mat4_translate() {
+  t4_m = math::mat4_translate(10.0, 20.0, 30.0);
+  t4_v = math::vec3(0.0, 0.0, 0.0);
+  t4_r = math::mat4_transform(t4_m, t4_v);
+  assert(t4_r.x == 10.0, "translate x");
+  assert(t4_r.y == 20.0, "translate y");
+  assert(t4_r.z == 30.0, "translate z");
+}
+
+fn test_mat4_scale() {
+  s4_m = math::mat4_scale(2.0, 3.0, 4.0);
+  s4_v = math::vec3(1.0, 1.0, 1.0);
+  s4_r = math::mat4_transform(s4_m, s4_v);
+  assert(s4_r.x == 2.0, "scale x");
+  assert(s4_r.y == 3.0, "scale y");
+  assert(s4_r.z == 4.0, "scale z");
+}
+
+fn test_mat4_mul() {
+  tma = math::mat4_translate(5.0, 0.0, 0.0);
+  tmb = math::mat4_scale(2.0, 2.0, 2.0);
+  tmc = math::mat4_mul(tma, tmb);
+  tmv = math::vec3(1.0, 0.0, 0.0);
+  tmres = math::mat4_transform(tmc, tmv);
+  assert(tmres.x == 7.0, "mul result x={tmres.x}");
+}

@@ -1047,6 +1047,12 @@ impl Parser {
         let mut in_t = assign_tp.clone();
         let mut res = Vec::new();
         let elm = self.unique_elm_var(parent_tp, &assign_tp, vec);
+        if is_field {
+            // elm is a reference INTO an existing field's store — the owning struct's
+            // variable already emits FreeRef at scope exit.  Suppress FreeRef for elm
+            // to prevent a double-free (P109).
+            self.vars.set_skip_free(elm);
+        }
         // Handle [for n in range [if cond] { body }] vector comprehension
         if self.lexer.peek_token("for") {
             self.lexer.has_token("for");

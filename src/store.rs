@@ -889,6 +889,17 @@ impl Store {
         }
     }
 
+    /// P105: fast check whether a value looks like a valid live record.
+    /// Used by `get_ref()` to detect inline data that was misinterpreted
+    /// as a record pointer.  Cheaper than `HashSet` lookup — just a range
+    /// check and one memory read (the record header).
+    #[must_use]
+    pub fn is_valid_record(&self, rec: u32) -> bool {
+        // Record must be within the store's allocated space and have a
+        // positive header (live records have size > 0; freed have size < 0).
+        rec > 0 && rec < self.size && *self.addr::<i32>(rec, 0) > 0
+    }
+
     /// Try to validate a record reference as much as possible.
     /// Complete validations are only done in 'test' mode.
     pub fn valid(&self, rec: u32, fld: u32) -> bool {

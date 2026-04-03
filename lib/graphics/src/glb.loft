@@ -1,0 +1,406 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// GLB (GL Transmission Format Binary) file writer.
+// Exports a Mesh or Scene as a GLB 2.0 file readable by Blender, three.js, and gltf-validator.
+// Format reference: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
+use math;
+use mesh;
+use scene;
+
+// Build the float32 position buffer (3 × f32 per vertex, x y z).
+fn glb_pos_buf(verts: vector<mesh::Vertex>) -> vector<single> {
+  result = [];
+  for v in verts {
+    result += [v.pos.x as single, v.pos.y as single, v.pos.z as single];
+  }
+  result
+}
+
+// Build the float32 normal buffer (3 × f32 per vertex).
+fn glb_norm_buf(verts: vector<mesh::Vertex>) -> vector<single> {
+  result = [];
+  for v in verts {
+    result += [v.normal.x as single, v.normal.y as single, v.normal.z as single];
+  }
+  result
+}
+
+// Build the float32 UV buffer (2 × f32 per vertex, u=x v=y).
+fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
+  result = [];
+  for v in verts {
+    result += [v.uv.x as single, v.uv.y as single];
+  }
+  result
+}
+
+// Build the uint32 index buffer (3 indices per triangle: a, b, c).
+fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<integer> {
+  result = [];
+  for t in tris {
+    result += [t.a, t.b, t.c];
+  }
+  result
+}
+
+// Compute the minimum position across all vertices (component-wise).
+fn glb_pos_min(verts: vector<mesh::Vertex>) -> math::Vec3 {
+  if verts.len() == 0 {
+    math::vec3(0.0, 0.0, 0.0)
+  } else {
+    mx = verts[0].pos.x;
+    my = verts[0].pos.y;
+    mz = verts[0].pos.z;
+    for v in verts {
+      if v.pos.x < mx { mx = v.pos.x; }
+      if v.pos.y < my { my = v.pos.y; }
+      if v.pos.z < mz { mz = v.pos.z; }
+    }
+    math::vec3(mx, my, mz)
+  }
+}
+
+// Compute the maximum position across all vertices (component-wise).
+fn glb_pos_max(verts: vector<mesh::Vertex>) -> math::Vec3 {
+  if verts.len() == 0 {
+    math::vec3(0.0, 0.0, 0.0)
+  } else {
+    mx = verts[0].pos.x;
+    my = verts[0].pos.y;
+    mz = verts[0].pos.z;
+    for v in verts {
+      if v.pos.x > mx { mx = v.pos.x; }
+      if v.pos.y > my { my = v.pos.y; }
+      if v.pos.z > mz { mz = v.pos.z; }
+    }
+    math::vec3(mx, my, mz)
+  }
+}
+
+// Number of padding bytes needed to reach the next 4-byte boundary.
+fn glb_pad4(n: integer) -> integer {
+  r = n % 4;
+  if r == 0 { 0 } else { 4 - r }
+}
+
+// Build the glTF 2.0 JSON string for a single mesh.
+// Buffer layout (all contiguous in BIN chunk):
+//   [0]  POSITION:   nv * 12 bytes  (VEC3, f32)
+//   [1]  NORMAL:     nv * 12 bytes  (VEC3, f32)
+//   [2]  TEXCOORD_0: nv *  8 bytes  (VEC2, f32)
+//   [3]  INDICES:    ni *  4 bytes  (SCALAR, u32)
+fn glb_json(m: mesh::Mesh, pos_min: math::Vec3, pos_max: math::Vec3) -> text {
+  nv = m.vertices.len();
+  nt = m.triangles.len();
+  ni = nt * 3;
+  pos_bytes  = nv * 12;
+  norm_bytes = nv * 12;
+  uv_bytes   = nv * 8;
+  idx_bytes  = ni * 4;
+  bin_bytes  = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
+  off_norm   = pos_bytes;
+  off_uv     = pos_bytes + norm_bytes;
+  off_idx    = pos_bytes + norm_bytes + uv_bytes;
+
+  mn = m.name;
+  minx = pos_min.x; miny = pos_min.y; minz = pos_min.z;
+  maxx = pos_max.x; maxy = pos_max.y; maxz = pos_max.z;
+
+  // Use {{ and }} for literal { } in loft format strings.
+  // Use result += "..." to avoid the ++ return-concat + Vec3-param type bug.
+  result = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"loft\"}},";
+  result += "\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"mesh\":0}}],";
+  result += "\"meshes\":[{{\"name\":\"{mn}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2}},\"indices\":3}}]}}],";
+  result += "\"accessors\":[";
+  result += "{{\"bufferView\":0,\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\",\"min\":[{minx:.6},{miny:.6},{minz:.6}],\"max\":[{maxx:.6},{maxy:.6},{maxz:.6}]}},";
+  result += "{{\"bufferView\":1,\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\"}},";
+  result += "{{\"bufferView\":2,\"componentType\":5126,\"count\":{nv},\"type\":\"VEC2\"}},";
+  result += "{{\"bufferView\":3,\"componentType\":5125,\"count\":{ni},\"type\":\"SCALAR\"}}";
+  result += "],";
+  result += "\"bufferViews\":[";
+  result += "{{\"buffer\":0,\"byteOffset\":0,\"byteLength\":{pos_bytes},\"target\":34962}},";
+  result += "{{\"buffer\":0,\"byteOffset\":{off_norm},\"byteLength\":{norm_bytes},\"target\":34962}},";
+  result += "{{\"buffer\":0,\"byteOffset\":{off_uv},\"byteLength\":{uv_bytes},\"target\":34962}},";
+  result += "{{\"buffer\":0,\"byteOffset\":{off_idx},\"byteLength\":{idx_bytes},\"target\":34963}}";
+  result += "],";
+  result += "\"buffers\":[{{\"byteLength\":{bin_bytes}}}]}}";
+  result
+}
+
+// Export a Mesh as a GLB 2.0 file.
+// The output file will contain POSITION, NORMAL, and TEXCOORD_0 vertex attributes
+// plus triangle indices.  Readable by Blender, three.js, gltf-validator.
+pub fn save_glb(m: mesh::Mesh, path: text) {
+  nv = m.vertices.len();
+  nt = m.triangles.len();
+  ni = nt * 3;
+
+  pos_bytes  = nv * 12;
+  norm_bytes = nv * 12;
+  uv_bytes   = nv * 8;
+  idx_bytes  = ni * 4;
+  bin_bytes  = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
+
+  pmin = glb_pos_min(m.vertices);
+  pmax = glb_pos_max(m.vertices);
+
+  json      = glb_json(m, pmin, pmax);
+  json_len  = json.len();
+  json_pad  = glb_pad4(json_len);
+  json_chunk = json_len + json_pad;
+
+  // Total file size: 12 (header) + 8 (json chunk hdr) + json_chunk + 8 (bin chunk hdr) + bin_bytes
+  total_len = 12 + 8 + json_chunk + 8 + bin_bytes;
+
+  f = file(path);
+  f#format = LittleEndian;
+
+  // GLB header (12 bytes)
+  f += 0x46546C67;  // magic 'glTF'
+  f += 2;           // version 2
+  f += total_len;   // total file length
+
+  // JSON chunk (8-byte header + padded JSON)
+  f += json_chunk;    // chunk data length (padded)
+  f += 0x4E4F534A;   // chunk type 'JSON'
+  f += json;          // JSON bytes (raw UTF-8)
+  // Pad JSON to 4-byte boundary with ASCII spaces
+  for _ in 0..json_pad {
+    f += 32 as u8;
+  }
+
+  // BIN chunk (8-byte header + binary buffers)
+  f += bin_bytes;     // chunk data length
+  f += 0x004E4942;   // chunk type 'BIN\0'
+  f += glb_pos_buf(m.vertices);
+  f += glb_norm_buf(m.vertices);
+  f += glb_uv_buf(m.vertices);
+  f += glb_idx_buf(m.triangles);
+}
+
+// ─── Scene-level GLB export ───────────────────────────────────────────────────
+
+// Build a JSON material entry for glTF 2.0 pbrMetallicRoughness.
+fn glb_material_json(mat: scene::Material) -> text {
+  mn = mat.name;
+  cr = mat.base_color_r as single;
+  cg = mat.base_color_g as single;
+  cb = mat.base_color_b as single;
+  ca = mat.base_color_a as single;
+  me = mat.metallic as single;
+  ro = mat.roughness as single;
+  result = "{{\"name\":\"{mn}\",";
+  result += "\"pbrMetallicRoughness\":{{";
+  result += "\"baseColorFactor\":[{cr:.6},{cg:.6},{cb:.6},{ca:.6}],";
+  result += "\"metallicFactor\":{me:.6},";
+  result += "\"roughnessFactor\":{ro:.6}";
+  result += "}}}}";
+  result
+}
+
+// True if a Mat4 is the identity matrix (within exact float equality).
+fn glb_is_identity_mat4(tr: math::Mat4) -> boolean {
+  mm = tr.m;
+  mm[0] == 1.0 && mm[1] == 0.0 && mm[2] == 0.0 && mm[3] == 0.0 &&
+  mm[4] == 0.0 && mm[5] == 1.0 && mm[6] == 0.0 && mm[7] == 0.0 &&
+  mm[8] == 0.0 && mm[9] == 0.0 && mm[10] == 1.0 && mm[11] == 0.0 &&
+  mm[12] == 0.0 && mm[13] == 0.0 && mm[14] == 0.0 && mm[15] == 1.0
+}
+
+// Build a glTF "matrix" JSON property from a row-major Mat4.
+// glTF 2.0 uses column-major order: col0, col1, col2, col3.
+fn glb_mat4_json(tr: math::Mat4) -> text {
+  mm = tr.m;
+  // Transpose row-major → column-major
+  c0  = mm[0]  as single; c1  = mm[4]  as single; c2  = mm[8]  as single; c3  = mm[12] as single;
+  c4  = mm[1]  as single; c5  = mm[5]  as single; c6  = mm[9]  as single; c7  = mm[13] as single;
+  c8  = mm[2]  as single; c9  = mm[6]  as single; c10 = mm[10] as single; c11 = mm[14] as single;
+  c12 = mm[3]  as single; c13 = mm[7]  as single; c14 = mm[11] as single; c15 = mm[15] as single;
+  result = "\"matrix\":[{c0:.6},{c1:.6},{c2:.6},{c3:.6},";
+  result += "{c4:.6},{c5:.6},{c6:.6},{c7:.6},";
+  result += "{c8:.6},{c9:.6},{c10:.6},{c11:.6},";
+  result += "{c12:.6},{c13:.6},{c14:.6},{c15:.6}]";
+  result
+}
+
+// Build the full glTF JSON for a Scene.
+// BIN layout: for each mesh in order — pos, norm, uv, idx (no padding between meshes).
+// accessor base = mesh_idx * 4; bufferView base = mesh_idx * 4.
+fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
+  nm = sc.meshes.len();
+  sn = sc.name;
+
+  // Build per-mesh material index: for each mesh, the material used by the
+  // first node that references it.  In glTF 2.0, material lives on the mesh
+  // primitive (not on the node).
+  mesh_mat = [];
+  for _ in sc.meshes {
+    mesh_mat += [0];
+  }
+  for nd in sc.nodes {
+    mesh_mat[nd.mesh_idx] = nd.material_idx;
+  }
+
+  // --- scene / scenes ---
+  result = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"loft\"}},";
+  result += "\"scene\":0,\"scenes\":[{{\"name\":\"{sn}\",\"nodes\":[";
+  ni = 0;
+  for _ in sc.nodes {
+    if ni > 0 { result += ","; }
+    result += "{ni}";
+    ni = ni + 1;
+  }
+  result += "]}}],";
+
+  // --- nodes: reference mesh; include "matrix" only for non-identity transforms ---
+  result += "\"nodes\":[";
+  ni = 0;
+  for nd in sc.nodes {
+    if ni > 0 { result += ","; }
+    mid = nd.mesh_idx;
+    ndname = nd.name;
+    if glb_is_identity_mat4(nd.transform) {
+      result += "{{\"name\":\"{ndname}\",\"mesh\":{mid}}}";
+    } else {
+      mat_str = glb_mat4_json(nd.transform);
+      result += "{{\"name\":\"{ndname}\",\"mesh\":{mid},{mat_str}}}";
+    }
+    ni = ni + 1;
+  }
+  result += "],";
+
+  // --- meshes: material reference lives on the primitive ---
+  result += "\"meshes\":[";
+  mi = 0;
+  for me in sc.meshes {
+    if mi > 0 { result += ","; }
+    mename = me.name;
+    acc_pos  = mi * 4;
+    acc_norm = mi * 4 + 1;
+    acc_uv   = mi * 4 + 2;
+    acc_idx  = mi * 4 + 3;
+    mat_idx  = mesh_mat[mi];
+    result += "{{\"name\":\"{mename}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{acc_pos},\"NORMAL\":{acc_norm},\"TEXCOORD_0\":{acc_uv}}},\"indices\":{acc_idx},\"material\":{mat_idx}}}]}}";
+    mi = mi + 1;
+  }
+  result += "],";
+
+  // --- accessors ---
+  result += "\"accessors\":[";
+  mi = 0;
+  for me in sc.meshes {
+    if mi > 0 { result += ","; }
+    nv = me.vertices.len();
+    nt = me.triangles.len();
+    nidx = nt * 3;
+    pmin = glb_pos_min(me.vertices);
+    pmax = glb_pos_max(me.vertices);
+    minx = pmin.x as single; miny = pmin.y as single; minz = pmin.z as single;
+    maxx = pmax.x as single; maxy = pmax.y as single; maxz = pmax.z as single;
+    bv_pos  = mi * 4;
+    bv_norm = mi * 4 + 1;
+    bv_uv   = mi * 4 + 2;
+    bv_idx  = mi * 4 + 3;
+    result += "{{\"bufferView\":{bv_pos},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\",\"min\":[{minx:.6},{miny:.6},{minz:.6}],\"max\":[{maxx:.6},{maxy:.6},{maxz:.6}]}},";
+    result += "{{\"bufferView\":{bv_norm},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\"}},";
+    result += "{{\"bufferView\":{bv_uv},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC2\"}},";
+    result += "{{\"bufferView\":{bv_idx},\"componentType\":5125,\"count\":{nidx},\"type\":\"SCALAR\"}}";
+    mi = mi + 1;
+    if mi < nm { result += ","; }
+  }
+  result += "],";
+
+  // --- bufferViews ---
+  result += "\"bufferViews\":[";
+  mi = 0;
+  for me in sc.meshes {
+    if mi > 0 { result += ","; }
+    nv = me.vertices.len();
+    nt = me.triangles.len();
+    nidx = nt * 3;
+    pos_bytes  = nv * 12;
+    norm_bytes = nv * 12;
+    uv_bytes   = nv * 8;
+    idx_bytes  = nidx * 4;
+    base = bin_offset[mi];
+    off_norm = base + pos_bytes;
+    off_uv   = base + pos_bytes + norm_bytes;
+    off_idx  = base + pos_bytes + norm_bytes + uv_bytes;
+    result += "{{\"buffer\":0,\"byteOffset\":{base},\"byteLength\":{pos_bytes},\"target\":34962}},";
+    result += "{{\"buffer\":0,\"byteOffset\":{off_norm},\"byteLength\":{norm_bytes},\"target\":34962}},";
+    result += "{{\"buffer\":0,\"byteOffset\":{off_uv},\"byteLength\":{uv_bytes},\"target\":34962}},";
+    result += "{{\"buffer\":0,\"byteOffset\":{off_idx},\"byteLength\":{idx_bytes},\"target\":34963}}";
+    mi = mi + 1;
+    if mi < nm { result += ","; }
+  }
+  result += "],";
+
+  // --- materials ---
+  result += "\"materials\":[";
+  mi = 0;
+  for mat in sc.materials {
+    if mi > 0 { result += ","; }
+    result += glb_material_json(mat);
+    mi = mi + 1;
+  }
+  result += "],";
+
+  // --- buffer ---
+  // Total bin size = sum of all mesh bin sizes
+  total_bin = 0;
+  for me in sc.meshes {
+    nv = me.vertices.len();
+    nt = me.triangles.len();
+    total_bin = total_bin + nv * 12 + nv * 12 + nv * 8 + nt * 3 * 4;
+  }
+  result += "\"buffers\":[{{\"byteLength\":{total_bin}}}]}}";
+  result
+}
+
+// Export a Scene as a GLB 2.0 file.
+// All meshes are packed into one BIN chunk; materials use pbrMetallicRoughness.
+pub fn save_scene_glb(sc: scene::Scene, path: text) {
+  // Compute per-mesh byte offsets in the BIN chunk.
+  bin_offset = [];
+  cur_offset = 0;
+  for me in sc.meshes {
+    bin_offset += [cur_offset];
+    nv = me.vertices.len();
+    nt = me.triangles.len();
+    cur_offset = cur_offset + nv * 12 + nv * 12 + nv * 8 + nt * 3 * 4;
+  }
+  total_bin = cur_offset;
+
+  json      = glb_scene_json(sc, bin_offset);
+  json_len  = json.len();
+  json_pad  = glb_pad4(json_len);
+  json_chunk = json_len + json_pad;
+
+  total_len = 12 + 8 + json_chunk + 8 + total_bin;
+
+  f = file(path);
+  f#format = LittleEndian;
+
+  // GLB header
+  f += 0x46546C67;
+  f += 2;
+  f += total_len;
+
+  // JSON chunk
+  f += json_chunk;
+  f += 0x4E4F534A;
+  f += json;
+  for _ in 0..json_pad {
+    f += 32 as u8;
+  }
+
+  // BIN chunk
+  f += total_bin;
+  f += 0x004E4942;
+  for me in sc.meshes {
+    f += glb_pos_buf(me.vertices);
+    f += glb_norm_buf(me.vertices);
+    f += glb_uv_buf(me.vertices);
+    f += glb_idx_buf(me.triangles);
+  }
+}

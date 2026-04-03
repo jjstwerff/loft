@@ -18,6 +18,7 @@ use crate::parser::Parser;
 use crate::scopes;
 use crate::state::State;
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 /// Run all zero-parameter functions in `.loft` files under `root_dir` as tests.
@@ -649,6 +650,11 @@ pub(crate) fn run_tests(
                 {
                     continue;
                 }
+                // P104: skip library functions loaded via `use`. Only run
+                // functions defined in the test file itself.
+                if def.position.file != abs_file {
+                    continue;
+                }
                 // Zero parameters — always a test entry point.
                 // Single vector<…> parameter — entry point when @ARGS provides argv.
                 let attrs = &def.attributes;
@@ -925,6 +931,7 @@ pub(crate) fn run_tests(
 
                     // Build a fresh State + bytecode for every function so tests
                     // within a file cannot leak heap/store state into each other.
+                    let loft_log_active = std::env::var("LOFT_LOG").is_ok();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut data_copy = clean_data.clone();
                         let mut state = State::new(clean_db.clone());
@@ -946,7 +953,22 @@ pub(crate) fn run_tests(
                                 Some(std::sync::Arc::new(std::sync::Mutex::new(lg)));
                         }
 
-                        state.execute_argv(&fn_name_owned, &data_copy, &user_args);
+                        if loft_log_active {
+                            // When LOFT_LOG is set, emit IR+bytecode+trace to stderr
+                            // (same format as cargo-test dump files, but to stderr so
+                            // it is visible immediately for ad-hoc --tests invocations).
+                            let config = LogConfig::from_env();
+                            let mut log = std::io::stderr();
+                            writeln!(log, "=== {fn_name_owned} ===").ok();
+                            compile::show_code(&mut log, &mut state, &mut data_copy, &config).ok();
+                            if let Err(e) =
+                                state.execute_log(&mut log, &fn_name_owned, &config, &data_copy)
+                            {
+                                panic!("{e}");
+                            }
+                        } else {
+                            state.execute_argv(&fn_name_owned, &data_copy, &user_args);
+                        }
                     }));
 
                     // Evaluate pass/fail, respecting @EXPECT_FAIL annotations.

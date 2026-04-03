@@ -19,9 +19,30 @@ All notable changes to the loft language and interpreter.
 - **GL2.5** — `fill_triangle()`: scanline fill with vertex sorting.
 - **GL2.6** — `draw_aa_line()`: Xiaolin Wu anti-aliased line with alpha blending.
 - `fill_ellipse()`: solid filled ellipse via midpoint algorithm.
+- **GL4.1** — `math.loft`: `Vec2`, `Vec3`, `Vec4`, `Mat4` types with vector ops
+  (`add3`, `sub3`, `scale3`, `dot3`, `cross`, `normalize3`, `length3`) and matrix
+  ops (`mat4_identity`, `mat4_translate`, `mat4_scale`, `mat4_mul`, `mat4_transform`).
+- **GL4.2** — `mesh.loft`: `Vertex`, `Triangle`, `Mesh` types with builders
+  (`add_vertex`, `add_triangle`, `add_quad`, `cube()`).
+- **GL4.3** — `scene.loft`: `Material`, `Node`, `Camera`, `Scene` types with
+  PBR material support and scene graph builder.
+- **GL5** — `glb.loft`: `save_glb(mesh, path)` exports a single `Mesh` as a
+  GLB 2.0 file (POSITION, NORMAL, TEXCOORD_0, u32 indices).  5 binary tests.
+- **GL6** — `glb.loft`: `save_scene_glb(scene, path)` exports a full `Scene`
+  with multiple meshes, PBR materials, and nodes into one GLB BIN chunk.
+  9 tests including JSON content verification and multi-mesh BIN size.
+- **GL7** — `scene.loft`: `node_at(name, mesh, mat, transform)` constructor.
+  glTF 2.0 compliance: material reference moved to mesh primitive; node
+  transform outputs `"matrix"` field only when non-identity.
 - RGBA color packing via `rgba()`/`rgb()` using long arithmetic to avoid i32::MIN
   sentinel collision.
 - 30 canvas tests covering all primitives.
+
+### Bug fixes
+
+- **C54** — `**` exponentiation operator now works, mapped to `pow()`.
+- **P104** — Test runner no longer picks up library functions as tests;
+  only functions defined in the test file are executed.
 
 ### Package infrastructure
 

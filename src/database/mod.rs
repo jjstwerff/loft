@@ -489,6 +489,22 @@ pub struct ShowDb<'a> {
     pub json: bool,
 }
 
+/// Structured debug dump with store/record references, depth and element limits.
+/// Used for `tests/dumps/*.txt` diagnostics and `LOFT_LOG` execution trace.
+pub struct DumpDb<'a> {
+    pub stores: &'a Stores,
+    pub store: u16,
+    pub rec: u32,
+    pub pos: u32,
+    pub known_type: u16,
+    /// Maximum nesting depth (0 = just the value, 1 = one level of fields, etc.)
+    pub max_depth: u16,
+    /// Maximum number of array/vector elements to show before `...`
+    pub max_elements: u16,
+    /// When true, output stays on a single line (spaces instead of newlines).
+    pub compact: bool,
+}
+
 /// `get_type()` with an out-of-range index must panic with a helpful message.
 #[test]
 #[should_panic(expected = "type index 999 out of range")]

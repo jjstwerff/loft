@@ -1,0 +1,140 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// 3D math types for the graphics package.
+// Uses float (64-bit) for precision in transforms and projections.
+
+// --- Vectors ---
+
+// A 2D vector / point.
+pub struct Vec2 {
+  x: float not null,
+  y: float not null
+}
+
+pub fn vec2(vx: float, vy: float) -> Vec2 {
+  Vec2 { x: vx, y: vy }
+}
+
+// A 3D vector / point.
+pub struct Vec3 {
+  x: float not null,
+  y: float not null,
+  z: float not null
+}
+
+pub fn vec3(vx: float, vy: float, vz: float) -> Vec3 {
+  Vec3 { x: vx, y: vy, z: vz }
+}
+
+// A 4D vector (homogeneous coordinates).
+pub struct Vec4 {
+  x: float not null,
+  y: float not null,
+  z: float not null,
+  w: float not null
+}
+
+pub fn vec4(vx: float, vy: float, vz: float, vw: float) -> Vec4 {
+  Vec4 { x: vx, y: vy, z: vz, w: vw }
+}
+
+// --- Vec3 operations ---
+
+pub fn add3(va: const Vec3, vb: const Vec3) -> Vec3 {
+  Vec3 { x: va.x + vb.x, y: va.y + vb.y, z: va.z + vb.z }
+}
+
+pub fn sub3(va: const Vec3, vb: const Vec3) -> Vec3 {
+  Vec3 { x: va.x - vb.x, y: va.y - vb.y, z: va.z - vb.z }
+}
+
+pub fn scale3(sv: const Vec3, ss: float) -> Vec3 {
+  Vec3 { x: sv.x * ss, y: sv.y * ss, z: sv.z * ss }
+}
+
+pub fn dot3(da: const Vec3, db: const Vec3) -> float {
+  da.x * db.x + da.y * db.y + da.z * db.z
+}
+
+pub fn cross(ca: const Vec3, cb: const Vec3) -> Vec3 {
+  Vec3 {
+    x: ca.y * cb.z - ca.z * cb.y,
+    y: ca.z * cb.x - ca.x * cb.z,
+    z: ca.x * cb.y - ca.y * cb.x
+  }
+}
+
+pub fn length3(lv: const Vec3) -> float {
+  sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z)
+}
+
+pub fn normalize3(nv: const Vec3) -> Vec3 {
+  nl = length3(nv);
+  if nl == 0.0 { return Vec3 { x: 0.0, y: 0.0, z: 0.0 }; }
+  Vec3 { x: nv.x / nl, y: nv.y / nl, z: nv.z / nl }
+}
+
+// --- 4x4 Matrix (column-major, matching OpenGL/GLB convention) ---
+
+// A 4x4 transformation matrix stored as 16 floats in column-major order.
+// m[0..3] = column 0, m[4..7] = column 1, m[8..11] = column 2, m[12..15] = column 3.
+pub struct Mat4 {
+  m: vector<float>
+}
+
+// Create an identity matrix.
+pub fn mat4_identity() -> Mat4 {
+  Mat4 { m: [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  ] }
+}
+
+// Create a translation matrix.
+pub fn mat4_translate(tx: float, ty: float, tz: float) -> Mat4 {
+  Mat4 { m: [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    tx,  ty,  tz,  1.0
+  ] }
+}
+
+// Create a uniform scale matrix.
+pub fn mat4_scale(sx: float, sy: float, sz: float) -> Mat4 {
+  Mat4 { m: [
+    sx,  0.0, 0.0, 0.0,
+    0.0, sy,  0.0, 0.0,
+    0.0, 0.0, sz,  0.0,
+    0.0, 0.0, 0.0, 1.0
+  ] }
+}
+
+// Multiply two 4x4 matrices (A * B). Result = A applied after B.
+pub fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  mul_r = Mat4 { m: [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+  ] };
+  for mul_col in 0..4 {
+    for mul_row in 0..4 {
+      mul_sum = 0.0;
+      for mul_k in 0..4 {
+        mul_sum += ma.m[mul_k * 4 + mul_row] * mb.m[mul_col * 4 + mul_k];
+      }
+      mul_r.m[mul_col * 4 + mul_row] = mul_sum;
+    }
+  }
+  mul_r
+}
+
+// Transform a Vec3 by a Mat4 (as a point, w=1).
+pub fn mat4_transform(tm: const Mat4, tv: const Vec3) -> Vec3 {
+  Vec3 {
+    x: tm.m[0] * tv.x + tm.m[4] * tv.y + tm.m[8]  * tv.z + tm.m[12],
+    y: tm.m[1] * tv.x + tm.m[5] * tv.y + tm.m[9]  * tv.z + tm.m[13],
+    z: tm.m[2] * tv.x + tm.m[6] * tv.y + tm.m[10] * tv.z + tm.m[14]
+  }
+}

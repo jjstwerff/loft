@@ -329,13 +329,21 @@ impl Parser {
         let elm_size = i32::from(self.database.size(known));
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
-                let mut op = self.cl(
-                    "OpGetVector",
-                    &[code.clone(), Value::Int(elm_size), *next.clone()],
-                );
-                if self.database.is_base(known) || self.database.is_linked(known) {
-                    op = self.get_val(etp, true, 0, op);
-                }
+                // Linked structs: array stores 4-byte record pointers → use OpVectorRef
+                // which internally uses elm_size=4 and dereferences to the actual record.
+                // Base/primitive types: array stores inline values → use OpGetVector + get_val.
+                let op = if self.database.is_linked(known) {
+                    self.cl("OpVectorRef", &[code.clone(), *next.clone()])
+                } else {
+                    let mut v = self.cl(
+                        "OpGetVector",
+                        &[code.clone(), Value::Int(elm_size), *next.clone()],
+                    );
+                    if self.database.is_base(known) {
+                        v = self.get_val(etp, true, 0, v);
+                    }
+                    v
+                };
                 *code = Value::Iter(
                     var,
                     init,
@@ -358,9 +366,16 @@ impl Parser {
                 index_t.show(&self.data, &self.vars)
             );
         }
-        *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
-        if self.database.is_base(known) || self.database.is_linked(known) {
-            *code = self.get_val(etp, true, 0, code.clone());
+        // Linked structs: array stores 4-byte record pointers → OpVectorRef dereferences correctly.
+        // Base/primitive types: inline data → OpGetVector + get_val reads the primitive value.
+        // Plain inline structs: OpGetVector only (field access happens at the next level).
+        if self.database.is_linked(known) {
+            *code = self.cl("OpVectorRef", &[code.clone(), p]);
+        } else {
+            *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
+            if self.database.is_base(known) {
+                *code = self.get_val(etp, true, 0, code.clone());
+            }
         }
         None
     }

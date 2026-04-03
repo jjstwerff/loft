@@ -37,6 +37,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
+| 107 | `++` return expression + struct parameter bug: second param typed as `Text([])` | Medium | Use `result = ""; result += "..."; result` instead of `"..." ++ "..."` return |
+| 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
+| 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
 
 ---
 
@@ -521,6 +524,143 @@ result = f([1,2,3,4,5]) + 100 * f(combined);  // correct
 **Full fix path:** Restructure `generate_block` to account for function-scoped
 variable allocations (`__vdb_N`, `_vec_N`) inside expression Blocks, or hoist
 database allocation out of the Block into the function preamble.
+
+---
+
+### 104. Test runner executes library functions as tests *(fixed)*
+
+**Symptom:** Library functions with zero parameters (e.g. `mat4_identity()`)
+were picked up by the `--tests` runner as test entry points, causing crashes
+when `execute_argv` looked them up in the wrong source context.
+
+```loft
+pub fn mat4_identity() -> Mat4 {
+  Mat4 { m: [1.0, 0.0, ...] }   // FAILS — "Unknown definition"
+}
+```
+
+**Fix:** Filter test function discovery by source file — only functions
+defined in the test file itself are treated as entry points.
+
+**File:** `src/test_runner.rs` — added `def.position.file != abs_file` check.
+**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p104_direct_return`.
+
+---
+
+### 105. Nested struct field access on vector elements crashes *(fixed)*
+
+**Symptom:** Accessing a struct field on a vector element that itself contains
+a struct caused "Unknown record N" runtime error:
+
+```loft
+mesh.vertices[0].pos.x   // "Unknown record 0"  — fixed
+```
+
+**Root cause:** `get_val()` in `src/parser/mod.rs` emitted `OpGetRef` for
+all `Value::Call` nodes when accessing `Type::Reference` fields.  Inline
+struct fields in vectors are at a byte offset, not a record pointer — so
+`OpGetRef` read garbage and crashed.
+
+**Fix:** Two-part change in `src/parser/fields.rs` `parse_vector_index()`:
+1. For **linked** struct types (`is_linked` — struct used in both a vector
+   and a hash/sorted, causing the vector to store 4-byte record pointers):
+   emit `OpVectorRef` directly.  `OpVectorRef` hardcodes elm_size=4 and
+   dereferences the pointer, giving correct results for all indices.
+2. For **inline** structs in plain vectors: keep `OpGetVector(elm_size)`.
+   No dereference call after — field access happens at the next `.` level.
+In `src/parser/mod.rs` `get_val()`: `Type::Reference` now always emits
+`OpGetField` (offset addition).  The linked-type dereference is handled
+by `OpVectorRef` at the call site.
+
+**Tests:** `tests/scripts/76-ignored-struct-vector-return.loft` —
+`test_p105_inline_struct_in_vector`, `test_p105_nested_struct_in_vector`.
+See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
+
+---
+
+### 106. Store corruption with complex nested struct assignments *(fixed)*
+
+**Symptom:** A nested vector inside a vector element had zero length after
+append — e.g., `t.items[0].inner.vals.len()` returned 0 instead of the
+expected count.
+
+**Root cause:** Same as P105.  `get_val()` emitted `OpGetRef` instead of
+`OpGetField` when reading inline `Type::Reference` fields on vector elements,
+causing reads from wrong memory locations and silently returning empty vectors.
+
+**Fix:** Same two-part fix as P105 — `OpVectorRef` for linked types,
+`OpGetField` for all `Type::Reference` accesses in `get_val()`.
+
+**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p106_nested_vector_in_vector_element`.
+See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
+
+---
+
+### 107. `++` return expression + struct parameter bug
+
+**Symptom:** A function with a `math::Vec3` (or similar struct) parameter that
+returns a text value via `"str1" ++ "str2" ++ ...` concatenation expression fails
+at runtime: `generate_call [n_func]: mutable arg 1 (v1: Text([])) expected 16B on
+stack but generate(Null) pushed 0B`.
+
+**Root cause:** When the return expression of a function is a `++` text concat
+chain and the function has a struct reference parameter (e.g., `math::Vec3`), the
+second parameter's type is misidentified as `Text([])` (16B) instead of the
+correct `Reference` type (24B for Vec3).
+
+**Workaround:** Replace `"part1" ++ "part2"` return expression with:
+```loft
+result = "part1";
+result += "part2";
+result
+```
+
+**Discovered:** Sprint 8, while writing `glb_json()` in `lib/graphics/src/glb.loft`.
+
+---
+
+### 108. `f#next` initial seek on fresh read-only file handle
+
+**Symptom:** After opening a file handle for reading and immediately setting
+`f#next = N as long`, subsequent `f#read(4)` calls still return bytes from
+position 0 instead of position N.
+
+**Workaround:** Read at least one byte before seeking.  Use sequential reads to
+advance the position; then `f#next = pos` to seek forward from the current position.
+```loft
+// WRONG — reads 4 bytes starting at offset 0, not 12:
+f#next = 12l;
+val = f#read(4) as i32;
+
+// CORRECT — read sequentially first:
+f#read(4) as i32;  // bytes 0-3
+f#read(4) as i32;  // bytes 4-7
+f#read(4) as i32;  // bytes 8-11
+val = f#read(4) as i32;  // bytes 12-15
+```
+
+**Discovered:** Sprint 8 GLB tests.  `f#next = N` after prior reads (forward seek)
+works correctly; it is only the very first operation that fails.
+
+---
+
+### 109. Struct field reassignment corrupts store when field contains nested vector *(fixed)*
+
+**Symptom:** Reassigning a struct field whose type is a struct-with-vector (e.g.,
+`math::Mat4` which contains `m: vector<float>`) causes `fl_validate: node at N has
+positive header 0 (should be free)` followed by a crash.
+
+**Root cause (two parts):**
+1. `copy_record` did not call `remove_claims` before overwriting, leaking the old vector.
+2. When building `Inner { vals: [...] }` into an existing field (`is_field = true`),
+   the `elm` (_elm_1) variable had an empty dep list → `get_free_vars` emitted
+   `OpFreeRef(elm)` → freed the entire store that the outer struct lived in.
+
+**Fix:** Two commits in sprint 8:
+- `src/state/io.rs` `copy_record`: added `remove_claims(&to, tp)` before `copy_block`.
+- `src/parser/vectors.rs` `parse_vector`: added `set_skip_free(elm)` when `is_field = true`.
+
+**Discovered:** Sprint 8 GLB transform test.  **Test:** `/tmp/p109_repro.loft`.
 
 ---
 

@@ -1,0 +1,154 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Mesh types for the graphics package.
+// Vertex and triangle data structures for 3D geometry.
+use math;
+
+// --- Vertex and mesh ---
+
+// A single vertex with position, normal, and texture coordinates.
+pub struct Vertex {
+  pos: math::Vec3,
+  normal: math::Vec3,
+  uv: math::Vec2
+}
+
+pub fn vertex(vp: math::Vec3, vn: math::Vec3, vuv: math::Vec2) -> Vertex {
+  Vertex { pos: vp, normal: vn, uv: vuv }
+}
+
+// A triangle defined by three vertex indices.
+pub struct Triangle {
+  a: integer not null,
+  b: integer not null,
+  c: integer not null
+}
+
+// A mesh: a collection of vertices and triangles.
+pub struct Mesh {
+  name: text,
+  vertices: vector<Vertex>,
+  triangles: vector<Triangle>
+}
+
+pub fn mesh(mn: text) -> Mesh {
+  Mesh { name: mn }
+}
+
+// Add a vertex to the mesh and return its index.
+pub fn add_vertex(self: Mesh, av: Vertex) -> integer {
+  idx = self.vertices.len();
+  self.vertices += [av];
+  idx
+}
+
+// Add a triangle by vertex indices.
+pub fn add_triangle(self: Mesh, ti0: integer, ti1: integer, ti2: integer) {
+  self.triangles += [Triangle { a: ti0, b: ti1, c: ti2 }];
+}
+
+// Build a simple quad (two triangles) from 4 vertices.
+// Vertices should be in counter-clockwise order.
+pub fn add_quad(self: Mesh, qi0: integer, qi1: integer, qi2: integer, qi3: integer) {
+  self.add_triangle(qi0, qi1, qi2);
+  self.add_triangle(qi0, qi2, qi3);
+}
+
+// --- Primitive builders ---
+
+// Create a unit cube centered at origin (side length 1).
+// 24 vertices (4 per face with correct per-face normals), 12 triangles.
+pub fn cube() -> Mesh {
+  cm = mesh("cube");
+  // Front face (z = +0.5, normal = (0, 0, 1))
+  cv0 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 0.0)));
+  cv1 = cm.add_vertex(vertex(math::vec3( 0.5, -0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 0.0)));
+  cv2 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 1.0)));
+  cv3 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5,  0.5), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv0, cv1, cv2, cv3);
+  // Back face (z = -0.5, normal = (0, 0, -1))
+  cv4 = cm.add_vertex(vertex(math::vec3( 0.5, -0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(0.0, 0.0)));
+  cv5 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(1.0, 0.0)));
+  cv6 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(1.0, 1.0)));
+  cv7 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5, -0.5), math::vec3(0.0, 0.0, -1.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv4, cv5, cv6, cv7);
+  // Right face (x = +0.5, normal = (1, 0, 0))
+  cv8  = cm.add_vertex(vertex(math::vec3( 0.5, -0.5,  0.5), math::vec3(1.0, 0.0, 0.0), math::vec2(0.0, 0.0)));
+  cv9  = cm.add_vertex(vertex(math::vec3( 0.5, -0.5, -0.5), math::vec3(1.0, 0.0, 0.0), math::vec2(1.0, 0.0)));
+  cv10 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5, -0.5), math::vec3(1.0, 0.0, 0.0), math::vec2(1.0, 1.0)));
+  cv11 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5,  0.5), math::vec3(1.0, 0.0, 0.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv8, cv9, cv10, cv11);
+  // Left face (x = -0.5, normal = (-1, 0, 0))
+  cv12 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5, -0.5), math::vec3(-1.0, 0.0, 0.0), math::vec2(0.0, 0.0)));
+  cv13 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5,  0.5), math::vec3(-1.0, 0.0, 0.0), math::vec2(1.0, 0.0)));
+  cv14 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5,  0.5), math::vec3(-1.0, 0.0, 0.0), math::vec2(1.0, 1.0)));
+  cv15 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5, -0.5), math::vec3(-1.0, 0.0, 0.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv12, cv13, cv14, cv15);
+  // Top face (y = +0.5, normal = (0, 1, 0))
+  cv16 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5,  0.5), math::vec3(0.0, 1.0, 0.0), math::vec2(0.0, 0.0)));
+  cv17 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5,  0.5), math::vec3(0.0, 1.0, 0.0), math::vec2(1.0, 0.0)));
+  cv18 = cm.add_vertex(vertex(math::vec3( 0.5,  0.5, -0.5), math::vec3(0.0, 1.0, 0.0), math::vec2(1.0, 1.0)));
+  cv19 = cm.add_vertex(vertex(math::vec3(-0.5,  0.5, -0.5), math::vec3(0.0, 1.0, 0.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv16, cv17, cv18, cv19);
+  // Bottom face (y = -0.5, normal = (0, -1, 0))
+  cv20 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5, -0.5), math::vec3(0.0, -1.0, 0.0), math::vec2(0.0, 0.0)));
+  cv21 = cm.add_vertex(vertex(math::vec3( 0.5, -0.5, -0.5), math::vec3(0.0, -1.0, 0.0), math::vec2(1.0, 0.0)));
+  cv22 = cm.add_vertex(vertex(math::vec3( 0.5, -0.5,  0.5), math::vec3(0.0, -1.0, 0.0), math::vec2(1.0, 1.0)));
+  cv23 = cm.add_vertex(vertex(math::vec3(-0.5, -0.5,  0.5), math::vec3(0.0, -1.0, 0.0), math::vec2(0.0, 1.0)));
+  cm.add_quad(cv20, cv21, cv22, cv23);
+  cm
+}
+
+// Create a flat horizontal plane centered at origin.
+// pw = width (x-axis), pd = depth (z-axis); normal = (0, 1, 0).
+pub fn plane(pn: text, pw: float, pd: float) -> Mesh {
+  pm = mesh(pn);
+  hw = pw / 2.0;
+  hd = pd / 2.0;
+  pn_v = math::vec3(0.0, 1.0, 0.0);
+  pv0 = pm.add_vertex(vertex(math::vec3(-hw, 0.0, -hd), pn_v, math::vec2(0.0, 0.0)));
+  pv1 = pm.add_vertex(vertex(math::vec3( hw, 0.0, -hd), pn_v, math::vec2(1.0, 0.0)));
+  pv2 = pm.add_vertex(vertex(math::vec3( hw, 0.0,  hd), pn_v, math::vec2(1.0, 1.0)));
+  pv3 = pm.add_vertex(vertex(math::vec3(-hw, 0.0,  hd), pn_v, math::vec2(0.0, 1.0)));
+  pm.add_quad(pv0, pv1, pv2, pv3);
+  pm
+}
+
+// Create a UV sphere centered at origin.
+// sr = radius, ss = longitudinal slices (≥3), st = latitudinal stacks (≥2).
+// Produces (ss+1)*(st+1) vertices and ss*st*2 triangles.
+pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh {
+  sm = mesh(sn);
+  pi2 = 6.283185307179586;  // 2 * pi
+  // Generate rings from top (+y) to bottom (-y).
+  row = 0;
+  for row in 0..st+1 {
+    v_phi = 3.141592653589793 * (row as float) / (st as float);  // 0..pi
+    sy = sr * cos(v_phi);
+    ring_r = sr * sin(v_phi);
+    col = 0;
+    for col in 0..ss+1 {
+      v_theta = pi2 * (col as float) / (ss as float);  // 0..2pi
+      sx = ring_r * cos(v_theta);
+      sz = ring_r * sin(v_theta);
+      su = (col as float) / (ss as float);
+      sv = (row as float) / (st as float);
+      spos = math::vec3(sx, sy, sz);
+      snrm = math::normalize3(spos);
+      sm.add_vertex(vertex(spos, snrm, math::vec2(su, sv)));
+    }
+  }
+  // Wire triangles.
+  row = 0;
+  for row in 0..st {
+    col = 0;
+    for col in 0..ss {
+      i00 = row * (ss + 1) + col;
+      i01 = row * (ss + 1) + col + 1;
+      i10 = (row + 1) * (ss + 1) + col;
+      i11 = (row + 1) * (ss + 1) + col + 1;
+      sm.add_quad(i00, i01, i11, i10);
+    }
+  }
+  sm
+}
