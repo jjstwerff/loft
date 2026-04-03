@@ -207,6 +207,40 @@ pub fn fill_circle(self: Canvas, fcx: integer, fcy: integer, radius: integer, co
   }
 }
 
+// Fill an axis-aligned ellipse (solid). Center (cx, cy), radii (rx, ry).
+pub fn fill_ellipse(self: Canvas, fex: integer, fey: integer, ferx: integer, fery: integer, color: integer) {
+  fe_x = 0;
+  fe_y = fery;
+  fe_rx2 = ferx * ferx;
+  fe_ry2 = fery * fery;
+  fe_d1 = fe_ry2 - fe_rx2 * fery + fe_rx2 / 4;
+  for _ in 0..ferx + fery + 1 {
+    if fe_ry2 * fe_x > fe_rx2 * fe_y { break; }
+    self.hline(fex - fe_x, fex + fe_x + 1, fey + fe_y, color);
+    self.hline(fex - fe_x, fex + fe_x + 1, fey - fe_y, color);
+    if fe_d1 < 0 {
+      fe_d1 += fe_ry2 * (2 * fe_x + 3);
+    } else {
+      fe_d1 += fe_ry2 * (2 * fe_x + 3) + fe_rx2 * (-2 * fe_y + 2);
+      fe_y -= 1;
+    }
+    fe_x += 1;
+  }
+  fe_d2 = fe_ry2 * (fe_x * 2 + 1) * (fe_x * 2 + 1) / 4 + fe_rx2 * (fe_y - 1) * (fe_y - 1) - fe_rx2 * fe_ry2;
+  for _ in 0..ferx + fery + 1 {
+    if fe_y < 0 { break; }
+    self.hline(fex - fe_x, fex + fe_x + 1, fey + fe_y, color);
+    self.hline(fex - fe_x, fex + fe_x + 1, fey - fe_y, color);
+    if fe_d2 > 0 {
+      fe_d2 += fe_rx2 * (-2 * fe_y + 3);
+    } else {
+      fe_d2 += fe_ry2 * (2 * fe_x + 2) + fe_rx2 * (-2 * fe_y + 3);
+      fe_x += 1;
+    }
+    fe_y -= 1;
+  }
+}
+
 // Draw an axis-aligned ellipse outline. Center (cx, cy), radii (rx, ry).
 pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery: integer, color: integer) {
   // Midpoint ellipse algorithm — two regions.
@@ -245,5 +279,157 @@ pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery:
       ex += 1;
     }
     ey -= 1;
+  }
+}
+
+// --- GL2.4: Cubic Bezier curves ---
+
+// Draw a cubic Bezier curve from (bx0,by0) to (bx3,by3) with control points
+// (bx1,by1) and (bx2,by2). Uses adaptive subdivision — splits until segments
+// are flat enough, then draws with Bresenham lines.
+// Flatness threshold: max deviation of control points from the chord.
+pub fn draw_bezier(self: Canvas, bx0: integer, by0: integer, bx1: integer, by1: integer, bx2: integer, by2: integer, bx3: integer, by3: integer, color: integer) {
+  // Stack-based adaptive subdivision. Each segment = 8 entries (4 points × 2 coords).
+  // Use a stack pointer instead of shrinking vectors.
+  bz_sx = [for _ in 0..0 { 0 }];
+  bz_sy = [for _ in 0..0 { 0 }];
+  bz_sx += [bx0]; bz_sx += [bx1]; bz_sx += [bx2]; bz_sx += [bx3];
+  bz_sy += [by0]; bz_sy += [by1]; bz_sy += [by2]; bz_sy += [by3];
+  bz_top = 4;  // stack pointer (next free index)
+  for _ in 0..1000 {
+    if bz_top == 0 { break; }
+    // Pop segment (read 4 values, then decrease pointer)
+    bz_p0x = bz_sx[bz_top - 4]; bz_p1x = bz_sx[bz_top - 3];
+    bz_p2x = bz_sx[bz_top - 2]; bz_p3x = bz_sx[bz_top - 1];
+    bz_p0y = bz_sy[bz_top - 4]; bz_p1y = bz_sy[bz_top - 3];
+    bz_p2y = bz_sy[bz_top - 2]; bz_p3y = bz_sy[bz_top - 1];
+    bz_top -= 4;
+    // Flatness test: cross product distances of control points from chord
+    bz_dx = bz_p3x - bz_p0x;
+    bz_dy = bz_p3y - bz_p0y;
+    bz_d1 = (bz_p1x - bz_p3x) * bz_dy - (bz_p1y - bz_p3y) * bz_dx;
+    bz_d2 = (bz_p2x - bz_p3x) * bz_dy - (bz_p2y - bz_p3y) * bz_dx;
+    if bz_d1 < 0 { bz_d1 = -bz_d1; }
+    if bz_d2 < 0 { bz_d2 = -bz_d2; }
+    bz_flat = if bz_d1 > bz_d2 { bz_d1 } else { bz_d2 };
+    bz_chord2 = bz_dx * bz_dx + bz_dy * bz_dy;
+    if bz_flat * bz_flat <= bz_chord2 or bz_chord2 == 0 {
+      self.draw_line(bz_p0x, bz_p0y, bz_p3x, bz_p3y, color);
+    } else {
+      // de Casteljau subdivision at t=0.5
+      bz_m01x = (bz_p0x + bz_p1x) / 2; bz_m01y = (bz_p0y + bz_p1y) / 2;
+      bz_m12x = (bz_p1x + bz_p2x) / 2; bz_m12y = (bz_p1y + bz_p2y) / 2;
+      bz_m23x = (bz_p2x + bz_p3x) / 2; bz_m23y = (bz_p2y + bz_p3y) / 2;
+      bz_m012x = (bz_m01x + bz_m12x) / 2; bz_m012y = (bz_m01y + bz_m12y) / 2;
+      bz_m123x = (bz_m12x + bz_m23x) / 2; bz_m123y = (bz_m12y + bz_m23y) / 2;
+      bz_mx = (bz_m012x + bz_m123x) / 2; bz_my = (bz_m012y + bz_m123y) / 2;
+      // Push second half first (so first half is popped next)
+      // Grow vectors if needed
+      if bz_top + 8 > bz_sx.len() {
+        bz_sx += [0]; bz_sx += [0]; bz_sx += [0]; bz_sx += [0];
+        bz_sx += [0]; bz_sx += [0]; bz_sx += [0]; bz_sx += [0];
+        bz_sy += [0]; bz_sy += [0]; bz_sy += [0]; bz_sy += [0];
+        bz_sy += [0]; bz_sy += [0]; bz_sy += [0]; bz_sy += [0];
+      }
+      bz_sx[bz_top] = bz_mx; bz_sx[bz_top+1] = bz_m123x;
+      bz_sx[bz_top+2] = bz_m23x; bz_sx[bz_top+3] = bz_p3x;
+      bz_sy[bz_top] = bz_my; bz_sy[bz_top+1] = bz_m123y;
+      bz_sy[bz_top+2] = bz_m23y; bz_sy[bz_top+3] = bz_p3y;
+      bz_top += 4;
+      if bz_top + 4 > bz_sx.len() {
+        bz_sx += [0]; bz_sx += [0]; bz_sx += [0]; bz_sx += [0];
+        bz_sy += [0]; bz_sy += [0]; bz_sy += [0]; bz_sy += [0];
+      }
+      bz_sx[bz_top] = bz_p0x; bz_sx[bz_top+1] = bz_m01x;
+      bz_sx[bz_top+2] = bz_m012x; bz_sx[bz_top+3] = bz_mx;
+      bz_sy[bz_top] = bz_p0y; bz_sy[bz_top+1] = bz_m01y;
+      bz_sy[bz_top+2] = bz_m012y; bz_sy[bz_top+3] = bz_my;
+      bz_top += 4;
+    }
+  }
+}
+
+// --- GL2.6: Wu anti-aliased line ---
+
+// Draw an anti-aliased line using Xiaolin Wu's algorithm.
+// Uses blend_pixel for sub-pixel coverage.
+pub fn draw_aa_line(self: Canvas, ax0: integer, ay0: integer, ax1: integer, ay1: integer, color: integer) {
+  aa_dx = if ax1 > ax0 { ax1 - ax0 } else { ax0 - ax1 };
+  aa_dy = if ay1 > ay0 { ay1 - ay0 } else { ay0 - ay1 };
+  aa_steep = aa_dy > aa_dx;
+  // If steep, we step along y instead of x.
+  // Map to canonical form: always step along the longer axis.
+  aa_x0 = if aa_steep { ay0 } else { ax0 };
+  aa_y0 = if aa_steep { ax0 } else { ay0 };
+  aa_x1 = if aa_steep { ay1 } else { ax1 };
+  aa_y1 = if aa_steep { ax1 } else { ay1 };
+  // Ensure we draw left-to-right
+  if aa_x0 > aa_x1 {
+    aa_tmp = aa_x0; aa_x0 = aa_x1; aa_x1 = aa_tmp;
+    aa_tmp = aa_y0; aa_y0 = aa_y1; aa_y1 = aa_tmp;
+  }
+  aa_run = aa_x1 - aa_x0;
+  if aa_run == 0 {
+    // Single pixel
+    self.set_pixel(ax0, ay0, color);
+    return;
+  }
+  // Fixed-point gradient: rise * 256 / run
+  aa_rise = aa_y1 - aa_y0;
+  aa_grad256 = aa_rise * 256 / aa_run;
+  // y in fixed-point (8 fractional bits)
+  aa_yf = aa_y0 * 256;
+  aa_cr = graphics::color_r(color);
+  aa_cg = graphics::color_g(color);
+  aa_cb = graphics::color_b(color);
+  for aa_xi in aa_x0..aa_x1 + 1 {
+    aa_yi = aa_yf / 256;
+    aa_frac = aa_yf - aa_yi * 256;
+    if aa_frac < 0 { aa_frac += 256; aa_yi -= 1; }
+    aa_a1 = 255 - aa_frac;
+    aa_a2 = aa_frac;
+    aa_c1 = graphics::rgba(aa_cr, aa_cg, aa_cb, aa_a1);
+    aa_c2 = graphics::rgba(aa_cr, aa_cg, aa_cb, aa_a2);
+    if aa_steep {
+      self.blend_pixel(aa_yi, aa_xi, aa_c1);
+      if aa_a2 > 0 { self.blend_pixel(aa_yi + 1, aa_xi, aa_c2); }
+    } else {
+      self.blend_pixel(aa_xi, aa_yi, aa_c1);
+      if aa_a2 > 0 { self.blend_pixel(aa_xi, aa_yi + 1, aa_c2); }
+    }
+    aa_yf += aa_grad256;
+  }
+}
+
+// --- GL2.5: Triangle fill (scanline) ---
+
+// Fill a triangle with vertices (tx0,ty0), (tx1,ty1), (tx2,ty2).
+// Uses flat-top/flat-bottom decomposition with scanline fill.
+pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1: integer, tx2: integer, ty2: integer, color: integer) {
+  // Sort vertices by y: ta_y <= tb_y <= tc_y
+  ta_x = tx0; ta_y = ty0;
+  tb_x = tx1; tb_y = ty1;
+  tc_x = tx2; tc_y = ty2;
+  if ta_y > tb_y { tr_t = ta_x; ta_x = tb_x; tb_x = tr_t; tr_t = ta_y; ta_y = tb_y; tb_y = tr_t; }
+  if tb_y > tc_y { tr_t = tb_x; tb_x = tc_x; tc_x = tr_t; tr_t = tb_y; tb_y = tc_y; tc_y = tr_t; }
+  if ta_y > tb_y { tr_t = ta_x; ta_x = tb_x; tb_x = tr_t; tr_t = ta_y; ta_y = tb_y; tb_y = tr_t; }
+  if ta_y == tc_y { return; }  // degenerate
+  for tr_y in ta_y..tc_y + 1 {
+    // x along edge A→C (the long edge, always valid)
+    tr_xac = ta_x + (tc_x - ta_x) * (tr_y - ta_y) / (tc_y - ta_y);
+    // x along the short edge (A→B or B→C depending on scanline)
+    tr_xother = tr_xac;
+    if tr_y < tb_y and tb_y != ta_y {
+      tr_xother = ta_x + (tb_x - ta_x) * (tr_y - ta_y) / (tb_y - ta_y);
+    }
+    if tr_y >= tb_y and tc_y != tb_y {
+      tr_xother = tb_x + (tc_x - tb_x) * (tr_y - tb_y) / (tc_y - tb_y);
+    }
+    if tr_y >= tb_y and tc_y == tb_y {
+      tr_xother = tb_x;
+    }
+    tr_left = if tr_xac < tr_xother { tr_xac } else { tr_xother };
+    tr_right = if tr_xac > tr_xother { tr_xac } else { tr_xother };
+    self.hline(tr_left, tr_right + 1, tr_y, color);
   }
 }
