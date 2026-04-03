@@ -2068,6 +2068,18 @@ impl Parser {
                 }
             }
         }
+        // PKG.2: ~/.loft/lib/<id>/src/<id>.loft (installed packages)
+        if !std::path::Path::new(&f).exists() {
+            let home = env::var("HOME")
+                .or_else(|_| env::var("USERPROFILE"))
+                .unwrap_or_default();
+            if !home.is_empty() {
+                let user_lib = format!("{home}/.loft/lib");
+                if let Some(entry) = self.lib_path_manifest(&user_lib, id) {
+                    f = entry;
+                }
+            }
+        }
         // - the current directory (beside the parsed file)
         if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
             f = format!("{cur_dir}/{id}.loft");

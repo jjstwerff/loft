@@ -120,6 +120,95 @@ fn handle_generate_log_config(path_opt: Option<&str>) {
 }
 
 #[allow(clippy::too_many_lines)]
+/// PKG.2: Install a local package to ~/.loft/lib/<name>/.
+///
+/// Reads loft.toml from `pkg_path`, copies src/*.loft and loft.toml to
+/// the user's library directory.  The package is then available via `use <name>;`.
+fn install_package(pkg_path: &std::path::Path) {
+    let manifest_file = pkg_path.join("loft.toml");
+    if !manifest_file.exists() {
+        println!("loft install: no loft.toml found in {}", pkg_path.display());
+        std::process::exit(1);
+    }
+    let manifest =
+        manifest::read_manifest(manifest_file.to_str().unwrap_or("loft.toml")).unwrap_or_default();
+    // Derive package name from directory name or manifest entry.
+    let pkg_name = pkg_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    if pkg_name.is_empty() {
+        println!("loft install: cannot determine package name from path");
+        std::process::exit(1);
+    }
+    // Target: ~/.loft/lib/<name>/
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    let target = std::path::Path::new(&home)
+        .join(".loft")
+        .join("lib")
+        .join(&pkg_name);
+    // Create target directories.
+    let target_src = target.join("src");
+    if let Err(e) = std::fs::create_dir_all(&target_src) {
+        println!("loft install: cannot create {}: {e}", target_src.display());
+        std::process::exit(1);
+    }
+    // Copy loft.toml.
+    if let Err(e) = std::fs::copy(&manifest_file, target.join("loft.toml")) {
+        println!("loft install: cannot copy loft.toml: {e}");
+        std::process::exit(1);
+    }
+    // Copy src/*.loft files.
+    let src_dir = if let Some(entry) = &manifest.entry {
+        pkg_path.join(
+            std::path::Path::new(entry)
+                .parent()
+                .unwrap_or(std::path::Path::new("src")),
+        )
+    } else {
+        pkg_path.join("src")
+    };
+    let mut copied = 0;
+    if let Ok(entries) = std::fs::read_dir(&src_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            {
+                let dest = target_src.join(entry.file_name());
+                if let Err(e) = std::fs::copy(&path, &dest) {
+                    println!("loft install: cannot copy {}: {e}", path.display());
+                } else {
+                    copied += 1;
+                }
+            }
+        }
+    }
+    // Copy tests/ if present (for `loft test` on installed packages).
+    let tests_dir = pkg_path.join("tests");
+    if tests_dir.is_dir() {
+        let target_tests = target.join("tests");
+        let _ = std::fs::create_dir_all(&target_tests);
+        if let Ok(entries) = std::fs::read_dir(&tests_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = std::fs::copy(&path, target_tests.join(entry.file_name()));
+                }
+            }
+        }
+    }
+    println!(
+        "installed {pkg_name} ({copied} source files) → {}",
+        target.display()
+    );
+}
+
+#[allow(clippy::too_many_lines)]
 fn main() {
     let argv: Vec<String> = env::args_os()
         .skip(1)
@@ -230,6 +319,57 @@ fn main() {
             no_warnings = true;
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
+            return;
+        } else if a == "test" {
+            // PKG.6: `loft test [target]` — run package tests.
+            // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
+            let mut test_target = "tests".to_string();
+            if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                // `loft test draw` → tests/draw.loft
+                // `loft test draw::test_foo` → tests/draw.loft::test_foo
+                let arg = &argv[i];
+                if arg.contains("::")
+                    || std::path::Path::new(arg.as_str())
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+                {
+                    test_target = format!("tests/{arg}");
+                } else {
+                    test_target = format!("tests/{arg}.loft");
+                }
+                i += 1;
+            }
+            // Read loft.toml to find src/ directory.
+            let manifest_path = std::path::Path::new("loft.toml");
+            if manifest_path.exists() {
+                let manifest = crate::manifest::read_manifest("loft.toml").unwrap_or_default();
+                let entry = manifest.entry.unwrap_or_else(|| "src".to_string());
+                let src_dir = std::path::Path::new(&entry)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("src"));
+                let abs_src = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(src_dir)
+                    .to_string_lossy()
+                    .to_string();
+                lib_dirs.push(abs_src);
+            } else if std::path::Path::new("src").is_dir() {
+                let abs_src = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("src")
+                    .to_string_lossy()
+                    .to_string();
+                lib_dirs.push(abs_src);
+            }
+            tests_dir = Some(test_target);
+        } else if a == "install" {
+            // PKG.2: `loft install [path]` — install a local package to ~/.loft/lib/
+            let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                std::path::PathBuf::from(&argv[i])
+            } else {
+                std::env::current_dir().unwrap_or_default()
+            };
+            install_package(&pkg_path);
             return;
         } else if a.starts_with('-') {
             println!("unknown option: {a}");

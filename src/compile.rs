@@ -17,11 +17,46 @@ use std::io::{Error, Write};
 /// Create byte code.
 pub fn byte_code(state: &mut State, data: &mut Data) {
     native::init(state);
+    // PKG.1: register stub functions for all #native declarations so that
+    // codegen can emit OpStaticCall.  The stubs panic with a clear message
+    // if called before the real library is loaded via extensions::load_all().
+    register_native_stubs(state, data);
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
         state.def_code(d_nr, data);
+    }
+}
+
+/// PKG.1: For each `#native "symbol"` declaration, register a stub function
+/// that panics when called.  This lets codegen emit `OpStaticCall` with the
+/// correct library index.  `extensions::load_all()` replaces the stubs with
+/// real function pointers after bytecode generation.
+fn register_native_stubs(state: &mut State, data: &Data) {
+    use crate::database::Stores;
+    use crate::keys::DbRef;
+
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if def.native.is_empty() {
+            continue;
+        }
+        let sym = &def.native;
+        // Skip if already registered (e.g. by native::init for built-in functions).
+        if state.library_names.contains_key(sym) {
+            continue;
+        }
+        // Register a stub that panics with a descriptive message.
+        let stub: fn(&mut Stores, &mut DbRef) = {
+            // We can't capture sym_owned in a fn pointer, so use a single
+            // generic stub.  The State tracks which library index maps to
+            // which name, so the panic message comes from the dispatch side.
+            |_stores: &mut Stores, _db: &mut DbRef| {
+                panic!("native function not loaded — call extensions::load_all() first");
+            }
+        };
+        state.static_fn(sym, stub);
     }
 }
 
