@@ -15,9 +15,13 @@ All notable changes to the loft language and interpreter.
 - **GL2.2** — `draw_line()`: Bresenham algorithm for all octants.
 - **GL2.3** — `draw_circle()`, `fill_circle()`, `draw_ellipse()`: midpoint algorithms
   with octant/quadrant symmetry.
+- **GL2.4** — `draw_bezier()`: cubic Bezier with adaptive de Casteljau subdivision.
+- **GL2.5** — `fill_triangle()`: scanline fill with vertex sorting.
+- **GL2.6** — `draw_aa_line()`: Xiaolin Wu anti-aliased line with alpha blending.
+- `fill_ellipse()`: solid filled ellipse via midpoint algorithm.
 - RGBA color packing via `rgba()`/`rgb()` using long arithmetic to avoid i32::MIN
   sentinel collision.
-- 20 canvas tests covering all primitives.
+- 30 canvas tests covering all primitives.
 
 ### Package infrastructure
 

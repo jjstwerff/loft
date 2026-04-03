@@ -41,11 +41,14 @@ the actual implementation diverged:
 | Phase 2.4 Bresenham | `draw_line()` — pure loft, all octants | `graphics.loft` |
 | Phase 2.6 circle | `draw_circle()`, `fill_circle()` — midpoint algorithm | `graphics.loft` |
 | Phase 2.8–2.9 ellipse | `draw_ellipse()` — midpoint two-region | `graphics.loft` |
-| Phase 2.5 AA line | Not yet implemented |  |
-| Phase 2.7–2.9 Bezier | Not yet implemented |  |
-| Phase 2.10–2.12 fill | Not yet implemented |  |
+| Phase 2.5 AA line | `draw_aa_line()` — Wu algorithm with blend_pixel | `graphics.loft` |
+| Phase 2.7–2.9 Bezier | `draw_bezier()` — adaptive de Casteljau subdivision | `graphics.loft` |
+| Phase 2.10 fill | `fill_triangle()` — scanline with vertex sort | `graphics.loft` |
+| fill_ellipse | `fill_ellipse()` — midpoint + hline | `graphics.loft` |
+| Phase 2.11 AA fill boundary | Not yet implemented |  |
+| Phase 2.13 Dashed/Dotted | Not yet implemented |  |
 
-Tests: `lib/graphics/tests/canvas.loft` — 20 tests covering all implemented primitives.
+Tests: `lib/graphics/tests/canvas.loft` — 30 tests covering all implemented primitives.
 Run with: `cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/canvas.loft`
 
 The original Rust-native design is preserved below for reference.  Future phases (text,

@@ -109,12 +109,14 @@ Sprint 5: Graphics foundation ✓ (branch sprint-3-graphics-foundation)
   GL2.2   Bresenham line ✓
   GL2.3   circle + ellipse ✓
 
-Sprint 6: Graphics advanced
-  GL2.4   Bezier curves
-  GL2.5   polygon fill
-  GL3     text rendering (fontdue)
-  GL4.1   math types
-  GL4.2   mesh types
+Sprint 6: Graphics advanced ✓ (branch sprint-6-graphics-advanced)
+  GL2.4   Bezier curves ✓
+  GL2.5   triangle fill ✓
+  GL2.6   Wu AA line ✓
+  fill_ellipse ✓
+  GL3     text rendering (fontdue) — deferred (needs native extension)
+  GL4.1   math types — deferred to Sprint 7
+  GL4.2   mesh types — deferred to Sprint 7
 
 Sprint 7: GLB export
   GL4.3   scene types
