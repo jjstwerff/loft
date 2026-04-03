@@ -40,7 +40,8 @@ distance: 5.0
 - **String interpolation** — `"{expr}"` with format specifiers
 - **Parallel for** — `par(...)` distributes work across CPU cores
 - **JSON** — serialise with `"{value:j}"`, deserialise with `Type.parse(json)`
-- **Lambdas and closures** — `fn(x: integer) -> integer { x * 2 }` or `|x| { x * 2 }`; lambdas capture outer variables automatically
+- **Match expressions** — pattern matching on enums, integers, text with guards and destructuring
+- **Lambdas and closures** — `fn(x: integer) -> integer { x * 2 }` or `|x| { x * 2 }`; lambdas capture outer variables and work with `map`/`filter`/`reduce`
 - **Generators** — `iterator<T>` return type with `yield`; lazy sequences and `yield from` delegation
 - **Tuples** — multi-value returns `(integer, text)`, destructuring `(a, b) = fn()`
 - **Native compilation** — compile to a native binary via `rustc` or to WebAssembly
@@ -77,6 +78,7 @@ Download a release binary from the [Releases](https://github.com/jjstwerff/loft/
 ```sh
 loft program.loft                     # run a program (entry point: fn main())
 loft --native program.loft            # compile to native binary and run
+loft --native-wasm out.wasm program.loft  # compile to WebAssembly
 loft --tests                          # run all fn test*() functions
 loft --tests file.loft::test_name     # run a specific test
 loft --format file.loft               # format in-place
@@ -95,8 +97,8 @@ To build locally: `cargo run --bin gendoc`, then open `doc/index.html`.
 
 ## Known limitations (0.8.x)
 
-- **Closure scope** — captured lambdas only work when called directly by name in the same scope; passing capturing lambdas to `map`/`filter`/`reduce` is not yet supported
 - **No REPL** — interactive mode is planned for 0.9.0
+- **No package manager** — libraries are loaded from local directories; `loft install` is planned for 0.8.4
 
 ---
 
