@@ -1295,16 +1295,10 @@ impl Parser {
             | Type::Enum(_, true, _)
             | Type::Vector(_, _) => self.cl("OpGetField", &[code, p, self.type_info(tp)]),
             Type::Reference(_, _) => {
-                // P105: OpGetVector returns inline DbRef for non-linked elements.
-                // OpGetRef would misinterpret inline data as a record pointer.
-                // Runtime safety net in get_ref() (claims check) handles this.
-                // Phase 2 parser optimization deferred — intermittent regressions
-                // in 16-parser.loft indicate additional code paths affected.
-                if let Value::Call(_, _) = code {
-                    self.cl("OpGetRef", &[code, p])
-                } else {
-                    self.cl("OpGetField", &[code, p, self.type_info(tp)])
-                }
+                // Inline struct field: OpGetField adds the field offset to the base ref.
+                // Linked/base type dereference is handled at the call site (fields.rs)
+                // using OpVectorRef, which combines the 4-byte pointer read + deref.
+                self.cl("OpGetField", &[code, p, self.type_info(tp)])
             }
             _ => {
                 diagnostic!(

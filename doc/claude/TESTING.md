@@ -224,8 +224,29 @@ Default content (preset `full`):
 - IR (intermediate representation) for each non-default function.
 - Bytecode disassembly with slot annotations (`var=name[slot]:type`).
 - The execution trace with variable-name annotations on stack-access steps.
+- **Inline struct/vector dumps** on every opcode that produces or consumes a `DbRef`.
 
 Set the `LOFT_LOG` environment variable before running tests to select a different preset.
+
+#### Inline struct/vector dump format
+
+Every `DbRef` result in the execution trace is shown as a compact single-line dump:
+
+```
+  44:[44] VarRef(var[20]=__ref_1) -> #2.1 { x: 1.5 }[44]
+ 109:[56] VarRef(var[32]=l) -> #3.1 { name: "diagonal", start: #2.1 { x: 1.5, y: 2.5 }, end_p: #3.1 { } }[56]
+ 161:[44] VarRef(var[32]=l) -> #3.1 { name: "diagonal", start: #3.1 { x: 1.5, y: 2.5 }, end_p: #3.1 { x: 10, y: 20 } }[44]
+```
+
+- `#store.record` prefix identifies which allocation each record lives in
+- Null fields are suppressed; freshly-allocated structs show only set fields
+- Nested structs expand to depth 2 by default (`{...}` beyond that)
+- Vectors show up to 8 elements by default (`...N more` beyond that)
+
+Adjust with environment variables (no recompile needed):
+```bash
+LOFT_DUMP_DEPTH=3 LOFT_DUMP_ELEMENTS=4 cargo test -- my_test
+```
 
 These files are useful for debugging compiler output and are not committed.
 

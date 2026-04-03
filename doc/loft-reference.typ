@@ -27,7 +27,7 @@
 
 _A statically-typed scripting language with null safety and built-in parallel execution._
 
-#text(size: 10pt, fill: luma(100))[Version 0.8.2]
+#text(size: 10pt, fill: luma(100))[Version 0.8.3]
 
 Every code example in this document is an executable part of the test suite.
 

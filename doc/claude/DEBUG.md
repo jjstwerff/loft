@@ -36,6 +36,73 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 
 ---
 
+## Database / Struct Debug Dumps in the Trace
+
+Every opcode that produces or consumes a `DbRef` (struct, enum, or vector) shows a
+compact inline dump of the pointed-to record in the execution trace.  The format is:
+
+```
+   8:[44] VarRef(var[32]=l) -> #3.1 { name: "diagonal", start: #2.1 { x: 1.5, y: 2.5 }, end_p: #1.1 { x: 10, y: 20 } }[44]
+  65:[68] GetField(v1=ref(3,1,8)[56], fld=0) -> #3.1 { }[56]
+```
+
+**Reference prefix** `#store.record` — e.g. `#3.1` means store 3, record 1.
+This tells you which allocation each struct lives in, making it easy to track
+aliasing and double-free issues across opcodes.
+
+**Depth limit** — nested structs expand up to depth 2 by default.  Deeper records
+are shown as `{...}`:
+
+```
+#3.1 { inner: #5.7 { val: 42, nested: #6.2 {...} } }
+```
+
+**Element limit** — vectors show up to 8 elements by default, then `...N more`:
+
+```
+#4.3 [ #2.1 { x: 0 }, #2.2 { x: 1 }, ...6 more ]
+```
+
+**Depth limit at a vector** — if the depth limit is reached at a vector, shows
+the element count instead of expanding: `#4.3 [10 items...]`
+
+**Null fields are hidden** — fields holding the null sentinel are omitted, so a
+freshly allocated struct with only one field set shows only that field.  This keeps
+traces compact even for large structs.
+
+### Tuning the dump limits
+
+```bash
+LOFT_DUMP_DEPTH=3    # expand up to 3 levels of nesting (default 2)
+LOFT_DUMP_ELEMENTS=4 # show at most 4 vector elements (default 8)
+```
+
+These are read from the environment at runtime; no recompile needed.
+
+### Accessing dumps directly via `cargo run`
+
+When `LOFT_LOG` is set, `cargo run --bin loft` routes execution through
+`execute_log` and writes the full trace (including struct dumps) to stderr:
+
+```bash
+LOFT_LOG=full  cargo run --bin loft -- myprog.loft 2>trace.txt
+LOFT_LOG=minimal cargo run --bin loft -- myprog.loft 2>trace.txt
+LOFT_DUMP_DEPTH=3 LOFT_LOG=full cargo run --bin loft -- myprog.loft 2>trace.txt
+```
+
+Without `LOFT_LOG`, the program runs without any trace output (production mode).
+
+### Implementation
+
+| File | Role |
+|------|------|
+| `src/database/mod.rs` | `DumpDb` struct — stores, depth/element limits, compact flag |
+| `src/database/format.rs` | `Stores::dump_compact()`, `DumpDb::write()`, `write_struct()`, `write_list()` |
+| `src/state/debug.rs` | `dump_limits()`, `dump_result()`, `dump_stack()` — calls `dump_compact()` for inline trace |
+| `src/main.rs` | Routes `LOFT_LOG`-enabled runs through `execute_log` instead of `execute_argv` |
+
+---
+
 ## Debugging a Parse Error or Wrong IR
 
 1. Add `LOFT_LOG=static` and run the failing test.

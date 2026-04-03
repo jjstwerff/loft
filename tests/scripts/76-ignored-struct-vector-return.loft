@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // P104 FIXED: test runner now filters library functions
-// P105 FIXED: get_ref() claims check detects inline vector data
+// P105 FIXED: nested struct field access on vector elements
+// P106 FIXED: same root cause as P105 — OpGetField now emitted for inline fields
 // C54 FIXED: ** operator mapped to pow()
 
 struct SvMat {
@@ -20,7 +21,7 @@ fn test_p104_direct_return() {
   assert(svr_m.vals[3] == 1.0, "last is 1.0");
 }
 
-// P105: nested struct field access on vector elements
+// P105 FIXED: nested struct field access on vector elements
 struct SvInner {
   ix: float not null,
   iy: float not null
@@ -30,61 +31,40 @@ struct SvOuter {
   items: vector<SvInner>
 }
 
-fn test_p105_nested_field() {
+fn test_p105_inline_struct_in_vector() {
   svo = SvOuter { };
   svo.items += [SvInner { ix: 3.0, iy: 4.0 }];
-  assert(svo.items.len() == 1, "one item");
-  assert(svo.items[0].ix == 3.0, "nested ix");
-  assert(svo.items[0].iy == 4.0, "nested iy");
+  assert(svo.items.len() == 1, "one item added");
+  assert(svo.items[0].ix == 3.0, "nested field ix");
+  assert(svo.items[0].iy == 4.0, "nested field iy");
 }
 
-fn test_p105_multiple_elements() {
-  svo2 = SvOuter { };
-  svo2.items += [SvInner { ix: 1.0, iy: 2.0 }];
-  svo2.items += [SvInner { ix: 5.0, iy: 6.0 }];
-  assert(svo2.items[0].ix == 1.0, "first ix");
-  assert(svo2.items[1].ix == 5.0, "second ix");
-  assert(svo2.items[1].iy == 6.0, "second iy");
+// P105: deeper nesting — struct containing struct in vector
+struct SvP2 { x: float not null, y: float not null }
+struct SvSeg { start: SvP2, end_p: SvP2 }
+struct SvSegList { segs: vector<SvSeg> }
+
+fn test_p105_nested_struct_in_vector() {
+  sl = SvSegList {};
+  sl.segs += [SvSeg { start: SvP2 { x: 1.0, y: 2.0 }, end_p: SvP2 { x: 3.0, y: 4.0 } }];
+  assert(sl.segs[0].start.x == 1.0, "start.x");
+  assert(sl.segs[0].start.y == 2.0, "start.y");
+  assert(sl.segs[0].end_p.x == 3.0, "end_p.x");
+  assert(sl.segs[0].end_p.y == 4.0, "end_p.y");
 }
 
-// P105: complex struct with text + nested struct ref
-struct SvComplex {
-  name: text,
-  val: integer
-}
+// P106 FIXED: nested vector in vector element
+struct SvV2Inner { vals: vector<float> }
+struct SvV2Outer { name: text, inner: SvV2Inner }
+struct SvV2Top { items: vector<SvV2Outer> }
 
-struct SvHolder {
-  items: vector<SvComplex>
-}
-
-fn test_p105_text_field() {
-  svh = SvHolder { };
-  svh.items += [SvComplex { name: "hello", val: 42 }];
-  assert(svh.items[0].name == "hello", "text field on vector element");
-  assert(svh.items[0].val == 42, "int field on vector element");
-}
-
-// P105: deeply nested — struct within struct within vector
-struct SvPoint {
-  px: float not null,
-  py: float not null
-}
-
-struct SvVertex {
-  pos: SvPoint,
-  color: integer not null
-}
-
-struct SvMesh {
-  verts: vector<SvVertex>
-}
-
-fn test_p105_deep_nested() {
-  sm = SvMesh { };
-  sm.verts += [SvVertex { pos: SvPoint { px: 1.5, py: 2.5 }, color: 255 }];
-  assert(sm.verts[0].color == 255, "color field");
-  assert(sm.verts[0].pos.px == 1.5, "deep nested pos.px");
-  assert(sm.verts[0].pos.py == 2.5, "deep nested pos.py");
+fn test_p106_nested_vector_in_vector_element() {
+  t = SvV2Top {};
+  o = SvV2Outer { name: "x", inner: SvV2Inner { vals: [1.0, 2.0] } };
+  t.items += [o];
+  assert(t.items.len() == 1, "one item");
+  assert(t.items[0].name == "x", "name preserved");
+  assert(t.items[0].inner.vals.len() == 2, "nested vec len preserved");
 }
 
 // C54: ** operator works

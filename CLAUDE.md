@@ -252,3 +252,14 @@ Set before `cargo test` to control what appears in `tests/dumps/*.txt`:
 | `all_fns` | Bytecode of all functions including `default/` built-ins |
 
 Full API: [TESTING.md](doc/claude/TESTING.md) § LogConfig and `src/log_config.rs`.
+
+Every opcode that produces or consumes a `DbRef` shows an inline struct/vector dump
+in the trace: `#3.1 { name: "x", inner: #2.1 { val: 42 } }`.  Tune with:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `LOFT_DUMP_DEPTH` | `2` | Max nesting depth before `{...}` / `[N items...]` |
+| `LOFT_DUMP_ELEMENTS` | `8` | Max vector elements before `...N more` |
+
+Also works with `cargo run --bin loft` when `LOFT_LOG` is set (writes to stderr).
+See [DEBUG.md](doc/claude/DEBUG.md) § Database / Struct Debug Dumps for details.

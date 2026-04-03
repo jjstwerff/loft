@@ -757,17 +757,6 @@ impl Stores {
         }
         let store = self.store(db);
         let res = store.get_int(db.rec, db.pos + fld) as u32;
-        // P105: if the value is not a valid live record, the data is
-        // stored inline (e.g., struct field within a vector element).
-        // Fall back to offset addition (get_field behavior).
-        // Cost: one range check + one header read (no HashSet lookup).
-        if !store.is_valid_record(res) {
-            return DbRef {
-                store_nr: db.store_nr,
-                rec: db.rec,
-                pos: db.pos + fld,
-            };
-        }
         DbRef {
             store_nr: db.store_nr,
             rec: res,

@@ -734,7 +734,16 @@ fn main() {
     }
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 
-    state.execute_argv("main", &p.data, &user_args);
+    if std::env::var("LOFT_LOG").is_ok() {
+        let config = log_config::LogConfig::from_env();
+        let mut log = std::io::stderr();
+        if let Err(e) = state.execute_log(&mut log, "main", &config, &p.data) {
+            eprintln!("Execution error: {e}");
+            std::process::exit(1);
+        }
+    } else {
+        state.execute_argv("main", &p.data, &user_args);
+    }
     if state.database.had_fatal {
         std::process::exit(1);
     }

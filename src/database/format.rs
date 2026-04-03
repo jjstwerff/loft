@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! Display/debug formatting: `show`, `show_value`, `dump` functions.
 
-use crate::database::{Field, Parts, ShowDb, Stores};
+use crate::database::{DumpDb, Field, Parts, ShowDb, Stores};
 use crate::keys::{self, DbRef};
 use crate::store::Store;
 use crate::vector;
@@ -665,6 +665,7 @@ impl ShowDb<'_> {
         s.push(']');
     }
 
+    #[allow(dead_code)]
     fn write_hash(&self, s: &mut String, content: u16, indent: u16, data: &DbRef, complex: bool) {
         let mut map = BTreeMap::new();
         let mut pos = i32::MAX;
@@ -728,6 +729,274 @@ impl ShowDb<'_> {
         if self.pretty {
             s.push(' ');
         }
+        s.push(']');
+    }
+}
+
+// ─── DumpDb: structured debug dump with references and limits ────────────────
+
+impl Stores {
+    /// Produce a structured debug dump string showing store/record references.
+    /// Multi-line with indentation when `compact` is false.
+    #[must_use]
+    pub fn dump_data(&self, db: &DbRef, tp: u16, max_depth: u16, max_elements: u16) -> String {
+        let mut s = String::new();
+        DumpDb {
+            stores: self,
+            store: db.store_nr,
+            rec: db.rec,
+            pos: db.pos,
+            known_type: tp,
+            max_depth,
+            max_elements,
+            compact: false,
+        }
+        .write(&mut s, 0, 0);
+        s
+    }
+
+    /// Compact single-line dump for inline trace output.
+    #[must_use]
+    pub fn dump_compact(&self, db: &DbRef, tp: u16, max_depth: u16, max_elements: u16) -> String {
+        let mut s = String::new();
+        DumpDb {
+            stores: self,
+            store: db.store_nr,
+            rec: db.rec,
+            pos: db.pos,
+            known_type: tp,
+            max_depth,
+            max_elements,
+            compact: true,
+        }
+        .write(&mut s, 0, 0);
+        s
+    }
+}
+
+impl DumpDb<'_> {
+    fn store(&self) -> &Store {
+        let r = DbRef {
+            store_nr: self.store,
+            rec: 0,
+            pos: 0,
+        };
+        self.stores.store(&r)
+    }
+
+    fn sep(&self, s: &mut String, level: u16) {
+        if self.compact {
+            s.push(' ');
+        } else {
+            s.push('\n');
+            for _ in 0..level {
+                s.push_str("  ");
+            }
+        }
+    }
+
+    /// Write the dump to string `s` at the given indent level and depth.
+    pub fn write(&self, s: &mut String, indent: u16, depth: u16) {
+        if self.rec == 0 {
+            s.push_str("null");
+            return;
+        }
+        match self.known_type {
+            0 => write!(s, "{}", self.store().get_int(self.rec, self.pos)).unwrap(), // integer
+            1 => write!(s, "{}l", self.store().get_long(self.rec, self.pos)).unwrap(), // long
+            2 => write!(s, "{}f", self.store().get_single(self.rec, self.pos)).unwrap(), // single
+            3 => write!(s, "{}", self.store().get_float(self.rec, self.pos)).unwrap(), // float
+            4 => s.push_str(if self.store().get_byte(self.rec, self.pos, 0) == 0 {
+                "false"
+            } else {
+                "true"
+            }),
+            5 => {
+                // text
+                let text_nr = self.store().get_int(self.rec, self.pos) as u32;
+                let text_val = self.store().get_str(text_nr);
+                write!(s, "\"{}\"", text_val.replace('"', "\\\"")).unwrap();
+            }
+            6 => {
+                // character
+                let i = self.store().get_int(self.rec, self.pos);
+                if let Some(ch) = char::from_u32(i as u32) {
+                    write!(s, "'{ch}'").unwrap();
+                } else {
+                    write!(s, "'?{i}'").unwrap();
+                }
+            }
+            tp if (tp as usize) < self.stores.types.len() => {
+                self.write_typed(s, indent, depth);
+            }
+            tp => write!(s, "?type({tp})").unwrap(),
+        }
+    }
+
+    fn write_typed(&self, s: &mut String, indent: u16, depth: u16) {
+        match &self.stores.types[self.known_type as usize].parts.clone() {
+            Parts::Enum(vals) => {
+                let v = self.store().get_byte(self.rec, self.pos, 0);
+                let name = if v <= 0 {
+                    "null"
+                } else if (v as usize - 1) < vals.len() {
+                    &vals[v as usize - 1].1
+                } else {
+                    "?"
+                };
+                s.push_str(name);
+                let tp_nr = if v <= 0 || (v as usize - 1) >= vals.len() {
+                    u16::MAX
+                } else {
+                    vals[v as usize - 1].0
+                };
+                if tp_nr != u16::MAX
+                    && let Parts::EnumValue(_, st) = &self.stores.types[tp_nr as usize].parts
+                {
+                    s.push(' ');
+                    self.write_struct(s, st, indent, depth);
+                }
+            }
+            Parts::Struct(st) | Parts::EnumValue(_, st) => {
+                self.write_struct(s, st, indent, depth);
+            }
+            Parts::Vector(tp)
+            | Parts::Sorted(tp, _)
+            | Parts::Array(tp)
+            | Parts::Ordered(tp, _)
+            | Parts::Index(tp, _, _) => {
+                self.write_list(s, *tp, indent, depth);
+            }
+            Parts::Hash(_, _) | Parts::Spacial(_, _) => {
+                // Hash and Spacial don't support sequential next() — show count only.
+                let data = DbRef {
+                    store_nr: self.store,
+                    rec: self.rec,
+                    pos: self.pos,
+                };
+                let len = vector::length_vector(&data, &self.stores.allocations);
+                write!(s, "#{}.? [{len} items]", self.store).unwrap();
+            }
+            Parts::Byte(from, nullable) => {
+                let v = self.store().get_byte(self.rec, self.pos, *from);
+                if *nullable && v == 255 {
+                    s.push_str("null");
+                } else {
+                    write!(s, "{v}").unwrap();
+                }
+            }
+            Parts::Short(from, nullable) => {
+                let v = self.store().get_short(self.rec, self.pos, *from);
+                if *nullable && v == 65535 {
+                    s.push_str("null");
+                } else {
+                    write!(s, "{v}").unwrap();
+                }
+            }
+            Parts::Base => {
+                write!(s, "?base({})", self.known_type).unwrap();
+            }
+        }
+    }
+
+    fn write_struct(&self, s: &mut String, fields: &[Field], indent: u16, depth: u16) {
+        // Show store:record reference
+        write!(s, "#{}.{}", self.store, self.rec).unwrap();
+        if depth >= self.max_depth {
+            s.push_str(" {...}");
+            return;
+        }
+        s.push_str(" {");
+        let mut first = true;
+        for fld in fields {
+            if fld.name == "enum" || fld.name.starts_with('#') {
+                continue;
+            }
+            if self.stores.is_null(
+                self.store(),
+                self.rec,
+                self.pos + u32::from(fld.position),
+                fld.content,
+            ) {
+                continue;
+            }
+            if !first {
+                s.push(',');
+            }
+            first = false;
+            self.sep(s, indent + 1);
+            s.push_str(&fld.name);
+            s.push_str(": ");
+            DumpDb {
+                stores: self.stores,
+                store: self.store,
+                rec: self.rec,
+                pos: self.pos + u32::from(fld.position),
+                known_type: fld.content,
+                max_depth: self.max_depth,
+                max_elements: self.max_elements,
+                compact: self.compact,
+            }
+            .write(s, indent + 1, depth + 1);
+        }
+        self.sep(s, indent);
+        s.push('}');
+    }
+
+    fn write_list(&self, s: &mut String, content: u16, indent: u16, depth: u16) {
+        let data = DbRef {
+            store_nr: self.store,
+            rec: self.rec,
+            pos: self.pos,
+        };
+        // Show the vector record reference
+        let vec_rec = if data.rec > 0 {
+            self.store().get_int(data.rec, data.pos) as u32
+        } else {
+            0
+        };
+        write!(s, "#{}.{}", self.store, vec_rec).unwrap();
+        if depth >= self.max_depth {
+            let len = vector::length_vector(&data, &self.stores.allocations);
+            write!(s, " [{len} items...]").unwrap();
+            return;
+        }
+        s.push_str(" [");
+        let mut pos = i32::MAX;
+        let mut count: u16 = 0;
+        loop {
+            if data.rec == 0 {
+                break;
+            }
+            let rec = self.stores.next(&data, &mut pos, self.known_type);
+            if rec.rec == 0 {
+                break;
+            }
+            if count >= self.max_elements {
+                self.sep(s, indent + 1);
+                let remaining =
+                    vector::length_vector(&data, &self.stores.allocations) as u16 - count;
+                write!(s, "...{remaining} more").unwrap();
+                break;
+            }
+            if count > 0 {
+                s.push(',');
+            }
+            self.sep(s, indent + 1);
+            DumpDb {
+                stores: self.stores,
+                store: self.store,
+                rec: rec.rec,
+                pos: rec.pos,
+                known_type: content,
+                max_depth: self.max_depth,
+                max_elements: self.max_elements,
+                compact: self.compact,
+            }
+            .write(s, indent + 1, depth + 1);
+            count += 1;
+        }
+        self.sep(s, indent);
         s.push(']');
     }
 }

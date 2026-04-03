@@ -103,6 +103,21 @@ consolidated in a single file (9 tests).
 
 ---
 
+---
+
+## C57 — Nested struct field access on vector elements *(FIXED)*
+
+**Fixed by P105/P106:** `vec[i].struct_field` and `vec[i].struct.inner_field`
+patterns were crashing or silently corrupting data.  Linked struct types
+(in both a vector and a hash/sorted) were also affected for index > 0.
+**Fix:** `OpVectorRef` for linked types; `OpGetField` for inline struct field
+access in `get_val()`.
+**Tests:** `tests/scripts/76-ignored-struct-vector-return.loft` —
+`test_p105_inline_struct_in_vector`, `test_p105_nested_struct_in_vector`,
+`test_p106_nested_vector_in_vector_element`.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths

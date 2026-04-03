@@ -891,7 +891,7 @@ impl Store {
 
     /// P105: fast check whether a value looks like a valid live record.
     /// Used by `get_ref()` to detect inline data that was misinterpreted
-    /// as a record pointer.  Cheaper than HashSet lookup — just a range
+    /// as a record pointer.  Cheaper than `HashSet` lookup — just a range
     /// check and one memory read (the record header).
     #[must_use]
     pub fn is_valid_record(&self, rec: u32) -> bool {

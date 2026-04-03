@@ -544,51 +544,52 @@ defined in the test file itself are treated as entry points.
 
 ---
 
-### 105. Nested struct field access on vector elements crashes *(open)*
+### 105. Nested struct field access on vector elements crashes *(fixed)*
 
 **Symptom:** Accessing a struct field on a vector element that itself contains
-a struct causes "Unknown record N" runtime error:
+a struct caused "Unknown record N" runtime error:
 
 ```loft
-mesh.vertices[0].pos.x   // "Unknown record 0"
+mesh.vertices[0].pos.x   // "Unknown record 0"  — fixed
 ```
 
-**Root cause:** `get_val()` in `src/parser/mod.rs:1297-1307` emits `OpGetRef`
-for all `Value::Call` nodes when accessing `Type::Reference` fields.
-`OpGetRef` reads 4 bytes at `db.pos + fld` and treats the value as a record
-pointer.  But vector elements are stored inline — the bytes at that offset
-are the struct's actual field data (e.g., integer 42), not a record number.
+**Root cause:** `get_val()` in `src/parser/mod.rs` emitted `OpGetRef` for
+all `Value::Call` nodes when accessing `Type::Reference` fields.  Inline
+struct fields in vectors are at a byte offset, not a record pointer — so
+`OpGetRef` read garbage and crashed.
 
-All vector elements are stored inline (`src/vector.rs:247-280`).  Struct
-fields within vector elements (including Reference fields like `inner: Inner`)
-are stored as flat data at byte offsets, not as 4-byte pointers.
+**Fix:** Two-part change in `src/parser/fields.rs` `parse_vector_index()`:
+1. For **linked** struct types (`is_linked` — struct used in both a vector
+   and a hash/sorted, causing the vector to store 4-byte record pointers):
+   emit `OpVectorRef` directly.  `OpVectorRef` hardcodes elm_size=4 and
+   dereferences the pointer, giving correct results for all indices.
+2. For **inline** structs in plain vectors: keep `OpGetVector(elm_size)`.
+   No dereference call after — field access happens at the next `.` level.
+In `src/parser/mod.rs` `get_val()`: `Type::Reference` now always emits
+`OpGetField` (offset addition).  The linked-type dereference is handled
+by `OpVectorRef` at the call site.
 
-**Parser-level fixes failed:** Three attempts to change which opcode the
-parser emits (checking for OpGetVector in `get_val`) all caused intermittent
-regressions in `tests/docs/16-parser.loft`.  The bytecode changes have
-unpredictable side effects across files loaded together.
-
-**Recommended fix:** Runtime fallback in `get_ref()` at
-`src/database/structures.rs:750`.  Check `store.claims.contains(&res)` —
-if the value read isn't a valid record, fall back to offset addition
-(get_field behavior).  See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
-
-**Workaround:** Avoid deep chained access on vector elements.
-**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p105_workaround`.
+**Tests:** `tests/scripts/76-ignored-struct-vector-return.loft` —
+`test_p105_inline_struct_in_vector`, `test_p105_nested_struct_in_vector`.
+See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
 
 ---
 
-### 106. Store corruption with complex nested struct assignments *(open)*
+### 106. Store corruption with complex nested struct assignments *(fixed)*
 
-**Symptom:** Assigning a `Mat4` to a field of a `Node` struct inside a `Scene`
-(3 levels of nesting with vector storage) triggers "fl_validate: node at N has
-positive header" store corruption error.
+**Symptom:** A nested vector inside a vector element had zero length after
+append — e.g., `t.items[0].inner.vals.len()` returned 0 instead of the
+expected count.
 
-**Workaround:** Simplify nested struct operations — avoid assigning complex
-values to struct fields that are elements of vectors.
+**Root cause:** Same as P105.  `get_val()` emitted `OpGetRef` instead of
+`OpGetField` when reading inline `Type::Reference` fields on vector elements,
+causing reads from wrong memory locations and silently returning empty vectors.
 
-**Discovered:** Sprint 8 (GL4.3 scene types).
-**Test:** `lib/graphics/tests/scene.loft::test_scene_with_node` (simplified to avoid crash).
+**Fix:** Same two-part fix as P105 — `OpVectorRef` for linked types,
+`OpGetField` for all `Type::Reference` accesses in `get_val()`.
+
+**Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p106_nested_vector_in_vector_element`.
+See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
 
 ---
 
