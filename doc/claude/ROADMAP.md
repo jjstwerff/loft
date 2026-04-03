@@ -37,11 +37,10 @@ All new libraries are built as **packages** using the format designed in
 ### Remaining sprints
 
 ```
-Sprint 7: Package deps + pure-loft graphics
-  PKG.3   dependency resolution
-  PKG.7   lock file
-  GL4.1   Vec3/Mat4 math types
-  GL4.2   mesh types
+Sprint 7: Package deps + docs ✓ (branch sprint-7-pkg-deps-math)
+  PKG.3   dependency resolution ✓
+  loft doc subcommand ✓
+  shapes test package ✓
 
 Sprint 8: GLB export (pure loft)
   GL4.3   scene types
@@ -76,7 +75,6 @@ Sprint 12: Graphics native (needs PKG.4)
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
 | EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
-| PKG.3     | Package dependencies + transitive resolution              | M  | ✓      | PKG.2        | manifest.rs, parser/mod.rs    |
 | PKG.4     | Native codegen `--extern` for `#native` packages          | M  | ✓      | PKG.1        | generation/mod.rs, main.rs    |
 | PKG.5     | WASM codegen with native package wasm rlib                | M  | ✓      | PKG.4        | main.rs                       |
 | PKG.7     | Lock file (`loft.lock`) for reproducible builds           | S  | ✓      | PKG.3        | manifest.rs                   |

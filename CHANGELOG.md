@@ -28,6 +28,10 @@ All notable changes to the loft language and interpreter.
 - **PKG.1** — Native stub registration: `#native` annotations generate stubs replaced
   at load time by real shared-library implementations.
 - **PKG.2** — `loft install` command for local package installation to `~/.loft/lib/`.
+- **PKG.3** — Transitive dependency resolution: packages with `[dependencies]`
+  in `loft.toml` automatically discover sibling packages.
+- **`loft doc`** — New subcommand generates HTML documentation for packages:
+  API reference from `src/*.loft` and guide pages from `docs/*.loft`.
 - **PKG.6** — `loft test` subcommand discovers and runs `tests/*.loft` in packages.
 - **PKG.3** — `[dependencies]` section in `loft.toml` manifest parsing.
 - Manifest parser: `name`, `version`, `loft` version constraint, `native` stem fields.
