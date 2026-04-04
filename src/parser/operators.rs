@@ -530,8 +530,7 @@ impl Parser {
                 *ctp = lhs_type;
             } else {
                 let mut rhs = Value::Null;
-                let rhs_type =
-                    self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
+                let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
                 self.known_var_or_type(&rhs);
                 if matches!(lhs_type, Type::Null) {
                     // LHS is an untyped null literal: always use the RHS.

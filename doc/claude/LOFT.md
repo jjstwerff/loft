@@ -226,7 +226,13 @@ Constants must be `UPPER_CASE` and are defined at file scope.
 ```
 type MyInt = integer;
 type Coord = integer limit(-32768, 32767);
+type Handler = fn(Request) -> Response;
+type Pair = (integer, text);
 ```
+
+Type aliases are purely compile-time substitutions — `Handler` and
+`fn(Request) -> Response` are the same type.  Aliases for `fn(...)` types
+and tuple types are supported (C55).
 
 In library/default files, `size(n)` specifies the storage size in bytes:
 ```
@@ -251,7 +257,7 @@ Listed by precedence (lowest to highest):
 
 | Precedence | Operators                              | Notes                   |
 |------------|----------------------------------------|-------------------------|
-| 0 (lowest) | `??`                                   | null-coalescing         |
+| 0 (lowest) | `??`, `?? return`                      | null-coalescing / early return (C56) |
 | 1          | `\|\|`, `or`                           | logical OR              |
 | 2          | `&&`, `and`                            | logical AND             |
 | 3          | `==`, `!=`, `<`, `<=`, `>`, `>=`       | comparison              |
@@ -568,6 +574,47 @@ return           // for void functions
 ```
 
 The last expression in a block (without a trailing `;`) is automatically returned.
+
+`?? return` (C56): if the left side of `??` is null, return from the function
+immediately with the right-hand value:
+```
+id = param(req, "id") ?? return bad_request("missing id");
+val = lookup(id)       ?? return;    // void function: return nothing
+```
+
+### Custom iterators (I13)
+
+Any type with a `fn next(self: T) -> Item?` method can be used in a `for` loop.
+Returning `null` from `next` terminates the loop:
+
+```
+struct Counter { current: integer, limit: integer }
+fn next(self: Counter) -> integer {
+    val = self.current;
+    self.current = val + 1;
+    if val >= self.limit { return null; }
+    val
+}
+
+c = new_counter(5);
+for x in c { }    // iterates 0, 1, 2, 3, 4
+```
+
+`#count` and `#first` work; `#index` and `#remove` are not available.
+
+### Parallel blocks (A15)
+
+`parallel { }` runs each top-level expression concurrently (currently sequential):
+
+```
+parallel {
+    task_a();
+    task_b();
+}
+// continues after both arms complete
+```
+
+No trailing `;` is required after the closing `}`.
 
 ### Match expressions
 
