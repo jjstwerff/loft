@@ -9,6 +9,13 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### HTTP server (Sprint 16)
+
+- **SRV.1** — Blocking HTTP server with polling model. Loft controls the
+  request loop via I13 iterator protocol (`for req in srv`). Native cdylib
+  handles TCP accept/parse/respond using `std::net` only — no tokio/hyper.
+  Functions: `listen`, `next` (iterator), `respond`, `close`.
+
 ### Graphics native (Sprint 15)
 
 - **GL5.1** — Window creation + event loop via `glutin` + `winit` with

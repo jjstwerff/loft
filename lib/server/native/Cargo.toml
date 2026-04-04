@@ -1,0 +1,8 @@
+[package]
+name = "loft-server"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib", "rlib"]

@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- HTTP Server ---
+// Minimal blocking HTTP server with polling model.
+// Use `for req in srv` (I13 iterator) to handle requests.
+
+// A server handle wrapping a TCP listener.
+pub struct Server {
+  handle: integer
+}
+
+// An incoming HTTP request.
+pub struct Request {
+  method: text,
+  path: text,
+  body: text
+}
+
+// --- Internal native functions ---
+
+fn tcp_listen(port: integer) -> integer;
+#native "n_tcp_listen"
+
+fn tcp_accept(handle: integer) -> boolean;
+#native "n_tcp_accept"
+
+fn tcp_method() -> text;
+#native "n_tcp_method"
+
+fn tcp_path() -> text;
+#native "n_tcp_path"
+
+fn tcp_body() -> text;
+#native "n_tcp_body"
+
+fn tcp_respond(status: integer, body: text);
+#native "n_tcp_respond"
+
+fn tcp_close(handle: integer);
+#native "n_tcp_close"
+
+// --- Public API ---
+
+// Create a server listening on the given port.
+pub fn listen(port: integer) -> Server {
+  Server { handle: tcp_listen(port) }
+}
+
+// Iterator protocol: blocks until a request arrives, returns it.
+// Returns null when the server is shut down.
+pub fn next(self: Server) -> Request {
+  if !tcp_accept(self.handle) { return null; }
+  Request {
+    method: tcp_method(),
+    path: tcp_path(),
+    body: tcp_body()
+  }
+}
+
+// Send an HTTP response for this request.
+pub fn respond(self: Request, status: integer, body: text) {
+  tcp_respond(status, body);
+}
+
+// Stop the server.
+pub fn close(self: Server) {
+  tcp_close(self.handle);
+}

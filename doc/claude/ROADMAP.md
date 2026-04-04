@@ -55,10 +55,9 @@ Sprint 15: Graphics native ✓
   GL5.5   texture upload/bind/delete ✓
   GL3     font loading + text measurement + rasterization (fontdue) ✓
 
-Sprint 16: WebGL + server core
-  GL6.1-4 WebGL2 equivalents
-  SRV.1   plain HTTP: routing, middleware pipeline, request/response
-  SRV.2   HTTPS with static PEM certificates
+Sprint 16: Server core ✓ + WebGL deferred
+  SRV.1   blocking HTTP server with polling model (iterator protocol) ✓
+  GL6.1-4 WebGL2 equivalents — deferred (requires WASM target)
 
 Sprint 17: Server advanced + game protocol
   SRV.3   WebSocket support (using I13 for msg in ws)
