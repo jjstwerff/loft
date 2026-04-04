@@ -1546,6 +1546,17 @@ fn greet(name: text, greeting: text = "Hello") -> text {
 }
 ```
 
+=== Default arguments that involve other arguments
+
+Loft defaults must be literal values, not expressions referencing other parameters. When one argument's default should be derived from another, use a sentinel value and compute the actual default inside the function body. The convention is to use -1 (or 0) as "not provided" for integer parameters.
+
+```rust
+fn substring(t: text, start: integer = 0, end: integer = -1) -> text {
+  actual_end = if end < 0 { len(t) } else { end };
+  t[start..actual_end]
+}
+```
+
 === Named Arguments
 
 When a function has several parameters with defaults, you can skip middle ones by naming the arguments you want to provide. Positional arguments come first; once you use a name, all remaining arguments must also be named.
@@ -1762,6 +1773,14 @@ Use fn(...) long form when you need explicit types — for example when storing 
   assert(connect(host: "example.com", tls: false) == "example.com:8080:false", "all named");
   assert(connect("example.com", port: 443, tls: false) == "example.com:443:false", "mixed");
   assert(greet(name: "World") == "Hello, World!", "named with default greeting");
+```
+
+--- Default argument that depends on another argument --- 'end' defaults to -1 (sentinel); inside the body it becomes len(t).
+
+```rust
+  assert(substring("hello", 1, 3) == "el", "explicit start and end");
+  assert(substring("hello", 2) == "llo", "end defaults to len(t)");
+  assert(substring("hello") == "hello", "both defaults");
 }
 ```
 
@@ -2510,6 +2529,82 @@ Note: \#index is not available on sorted — use \#count for a sequential counte
 }
 ```
 
+```rust
+struct Word {
+  name: text,
+  score: integer
+}
+```
+
+```rust
+struct Dict {
+  words: sorted<Word[name]>
+}
+```
+
+```rust
+fn main_ranges() {
+```
+
+=== Iterating a Key Range
+
+Use an `if` guard inside a `for` loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.
+
+```rust
+  d = Dict { words: [
+    Word { name: "apple",      score: 5 },
+    Word { name: "banana",     score: 3 },
+    Word { name: "cherry",     score: 8 },
+    Word { name: "date",       score: 2 },
+    Word { name: "elderberry", score: 1 }
+  ] };
+```
+
+Closed range: keys \>= "banana" and \<= "date".
+
+```rust
+  range_total = 0;
+  for w in d.words if w.name >= "banana" && w.name <= "date" {
+    range_total += w.score
+  }
+  assert(range_total == 13, "banana(3)+cherry(8)+date(2) = {range_total}");
+```
+
+=== Open-ended Range (tail)
+
+All records from "cherry" onward to the end of the sorted order.
+
+```rust
+  tail_count = 0;
+  for w in d.words if w.name >= "cherry" {
+    tail_count += 1
+  }
+  assert(tail_count == 3, "cherry, date, elderberry = {tail_count}");
+```
+
+=== Open-ended Range (head)
+
+All records up to and including "banana".
+
+```rust
+  head_names = "";
+  for w in d.words if w.name <= "banana" {
+    head_names += w.name + " "
+  }
+  assert(head_names == "apple banana ", "apple and banana: '{head_names}'");
+```
+
+=== Range outside the for (building a result vector)
+
+Collect matching records into a vector for later use.
+
+```rust
+  subset = [for w in d.words if w.name >= "banana" && w.name <= "cherry" { w.score }];
+  assert(subset[0] == 3, "first in range: {subset[0]}");
+  assert(subset[1] == 8, "second in range: {subset[1]}");
+}
+```
+
 filling and finding values
 
 
@@ -3145,6 +3240,8 @@ The 'parser' library lets a Loft program read and validate other Loft source cod
 - validate configuration files written in the Loft syntax
 - build tools that inspect or transform Loft source
 - write a test that checks whether a generated code snippet is syntactically correct
+
+Together the 'lexer' and 'parser' libraries are designed as a reusable foundation. You can use them to build entirely new languages: feed the lexer your own token rules, then layer a custom parser on top. This keeps the tokeniser and grammar logic separate from the language runtime so you only bring in what you need.
 
 'parse(name, source)' is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.
 
@@ -4042,7 +4139,20 @@ log_info("Done in {(ticks() - start) / 1000l} ms")
 
 = Safety
 
-Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.
+Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior. Helper used in the '??' double-evaluation example below. Increments the call counter and returns the given value unchanged.
+
+```rust
+fn counted_call(calls: &integer, value: integer) -> integer {
+  calls += 1;
+  value
+}
+```
+
+Used to obtain a null text value (an uninitialized field is the NUL sentinel).
+
+```rust
+struct NullTextHolder { s: text }
+```
 
 ```rust
 fn main() {
@@ -4057,7 +4167,7 @@ Every type reserves one special value to mean "nothing here" (null). That reserv
 - `long`            — the most negative 64-bit integer is null
 - `float`/`single`  — `NaN` (Not a Number) is null
 - `character`       — the NUL character (code point 0) is null
-- `text`            — an empty internal reference is null
+- `text`            — a single NUL character (`'\\0'`) is null; the empty string `""` is NOT null
 - `reference`       — record 0 is null
 - plain `enum`      — byte value 255 is null (limits enums to 255 variants)
 
@@ -4077,6 +4187,15 @@ Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
 ```
 
+Text null is the NUL character ('\\0'), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:
+
+```rust
+  holder = NullTextHolder.parse(`{{}}`);
+  assert(!holder.s, "missing JSON text field is null (the NUL sentinel)");
+  empty = "";
+  assert(empty, "empty string is NOT null — this surprises most newcomers");
+```
+
 Mitigation: Use `long` when you need the full 32-bit integer range, or declare struct fields as `not null` so that reserved value can be used as data.
 
 === Integer overflow wraps silently
@@ -4087,7 +4206,7 @@ Mitigation: Use `long` when you need the full 32-bit integer range, or declare s
 big = 2000000000; big + big  →  negative number
 ```
 
-Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap.
+Mitigation: Use `long` (64-bit) when multiplying or summing large values: `big as long + big as long` avoids the wrap. Design: a future `--debug` flag will turn silent overflow into a logged WARN with file:line context so overflows are visible during development without affecting release performance.
 
 ```rust
   big = 2000000000;
@@ -4122,11 +4241,12 @@ Use `!f` or `f ?? default` to check for null floats.
 
 === Text length counts bytes, not characters
 
-`len()` on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.
+`len()` on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes. `size()` returns the number of Unicode code points (characters). These two values differ whenever the text contains any multi-byte character.
 
 ```rust
   emoji = "Hi 😊!";
   assert(len(emoji) == 8, "5 visible chars but 8 bytes (emoji is 4 bytes)");
+  assert(size(emoji) == 5, "size() counts code points: {size(emoji)}");
 ```
 
 Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use `for c in text` to iterate by character. Use `c\#index` and `c\#next` to get the byte boundaries of each character.
@@ -4157,9 +4277,18 @@ Text \#index is a byte offset, not a character count:
   assert(byte_pos == 1, "text #index: byte offset of 'é' (byte 1, not char 1)");
 ```
 
-=== `??` evaluates the left side twice for complex expressions
+=== `??` evaluates the left side exactly once
 
-The `??` operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of `result = expensive_call() ?? default` (which calls the function twice), write `temp = expensive_call()` on one line and then `result = temp ?? default` on the next.
+The `??` operator means "use this value, or if it is null, use the right side instead". The left-hand expression is evaluated exactly once regardless of whether the result is null. The example below uses `counted_call` (defined above) to verify this.
+
+```rust
+  calls = 0;
+  qq_result = counted_call(calls, 7) ?? 99;
+  assert(calls == 1, "?? evaluated left side exactly once: {calls}");
+  assert(qq_result == 7, "result is the value from that single evaluation: {qq_result}");
+```
+
+This means `result = expensive_call() ?? default` is safe: the function is called once. If it returns null, `default` is used. There is no double call.
 
 === Text indexing and slicing return different types
 
@@ -4219,7 +4348,7 @@ All file reading in loft assumes the file content is valid UTF-8. Reading a bina
 
 === XOR is `^`, not exponentiation
 
-Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. Use the `pow()` function for exponentiation.
+Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. The `\*\*` operator (Python/Ruby exponentiation) does not exist either. Use the `pow()` function for exponentiation.
 
 ```rust
   assert((0b1010 ^ 0b1100) == 0b0110, "^ is XOR");
@@ -4299,18 +4428,11 @@ struct Contact {
 
 ```rust
 fn main() {
-```
-
---- Serialisation ---
-
-```rust
   u = User { id: 42, name: "Alice", email: "alice@example.com" };
   json = "{u:j}";
   expected = `{{"id":42,"name":"Alice","email":"alice@example.com"}}`;
   assert(json == expected, "to json");
 ```
-
---- Parsing a single object ---
 
 ```rust
   bob = User.parse(`{{"id":7,"name":"Bob","email":"bob@test.org"}}`);
@@ -4319,15 +4441,11 @@ fn main() {
   assert(bob.email == "bob@test.org", "parsed email");
 ```
 
---- Round-trip: serialise then parse ---
-
 ```rust
   u2 = User.parse("{u:j}");
   assert(u2.id == u.id, "round-trip id");
   assert(u2.name == u.name, "round-trip name");
 ```
-
---- Parse errors ---
 
 ```rust
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
@@ -4339,8 +4457,6 @@ fn main() {
   assert(errs > 0, "expected parse errors, got {errs}");
 ```
 
---- Parsing a vector ---
-
 ```rust
   scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}},{{"value":30}}]`);
   total = 0;
@@ -4350,8 +4466,6 @@ fn main() {
   assert(total == 60, "vector sum: {total}");
 ```
 
---- Nested struct ---
-
 ```rust
   c = Contact.parse(`{{"name":"Carol","address":{{"city":"Amsterdam","zip":"1012"}}}}`);
   assert(c.name == "Carol", "nested name");
@@ -4359,7 +4473,9 @@ fn main() {
   assert(c.address.zip == "1012", "nested zip");
 ```
 
---- Missing fields get null ---
+=== Missing fields get null
+
+When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character '\\0' (not the empty string ""); for integer it is the minimum i32 value. Check with '!' before use, or assign a default with '??'.
 
 ```rust
   partial = User.parse(`{{"id":1}}`);

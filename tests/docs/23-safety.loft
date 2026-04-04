@@ -6,6 +6,16 @@
 // runtime. This page catalogues every known trap so you can write confident
 // code from day one. Each section includes a live example that proves the
 // described behavior.
+// Helper used in the '??' double-evaluation example below.
+// Increments the call counter and returns the given value unchanged.
+fn counted_call(calls: &integer, value: integer) -> integer {
+  calls += 1;
+  value
+}
+
+// Used to obtain a null text value (an uninitialized field is the NUL sentinel).
+struct NullTextHolder { s: text }
+
 fn main() {
   // ## Null values — hidden reserved values
   // Every type reserves one special value to mean "nothing here" (null).
@@ -16,7 +26,7 @@ fn main() {
   // - `long`            — the most negative 64-bit integer is null
   // - `float`/`single`  — `NaN` (Not a Number) is null
   // - `character`       — the NUL character (code point 0) is null
-  // - `text`            — an empty internal reference is null
+  // - `text`            — a single NUL character (`'\0'`) is null; the empty string `""` is NOT null
   // - `reference`       — record 0 is null
   // - plain `enum`      — byte value 255 is null (limits enums to 255 variants)
   //
@@ -30,6 +40,12 @@ fn main() {
   assert(n < 0, "i32::MIN is the most negative 32-bit integer");
   // Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
+  // Text null is the NUL character ('\0'), not the empty string.
+  // Parsing a JSON object with a missing text field produces the NUL sentinel:
+  holder = NullTextHolder.parse(`{{}}`);
+  assert(!holder.s, "missing JSON text field is null (the NUL sentinel)");
+  empty = "";
+  assert(empty, "empty string is NOT null — this surprises most newcomers");
   // Mitigation: Use `long` when you need the full 32-bit integer range, or
   // declare struct fields as `not null` so that reserved value can be used as data.
 
@@ -41,6 +57,9 @@ fn main() {
   //   big = 2000000000; big + big  →  negative number
   // Mitigation: Use `long` (64-bit) when multiplying or summing large
   // values: `big as long + big as long` avoids the wrap.
+  // Design: a future `--debug` flag will turn silent overflow into a logged
+  // WARN with file:line context so overflows are visible during development
+  // without affecting release performance.
   big = 2000000000;
   assert(big as long + big as long == 4000000000l, "long avoids wrap");
 
@@ -68,8 +87,11 @@ fn main() {
   // `len()` on text returns the number of UTF-8 bytes, not the number of
   // visible characters. Multi-byte characters (accented letters, emoji,
   // CJK) each occupy 2-4 bytes.
+  // `size()` returns the number of Unicode code points (characters).
+  // These two values differ whenever the text contains any multi-byte character.
   emoji = "Hi 😊!";
   assert(len(emoji) == 8, "5 visible chars but 8 bytes (emoji is 4 bytes)");
+  assert(size(emoji) == 5, "size() counts code points: {size(emoji)}");
   // Slicing and indexing also use byte offsets. Slicing in the middle of a
   // multi-byte character is an error.
   // Mitigation: Use `for c in text` to iterate by character. Use
@@ -92,14 +114,16 @@ fn main() {
   for c in t { byte_pos = c#index; }
   assert(byte_pos == 1, "text #index: byte offset of 'é' (byte 1, not char 1)");
 
-  // ## `??` evaluates the left side twice for complex expressions
+  // ## `??` evaluates the left side exactly once
   // The `??` operator means "use this value, or if it is null, use the right side instead".
-  // For a simple variable this is fine, but for a function call or complex expression
-  // the left side is evaluated once for the null check and once for the result.
-  // Mitigation: Assign complex expressions to a temporary variable first.
-  // For example, instead of `result = expensive_call() ?? default` (which
-  // calls the function twice), write `temp = expensive_call()` on one line
-  // and then `result = temp ?? default` on the next.
+  // The left-hand expression is evaluated exactly once regardless of whether the result is
+  // null. The example below uses `counted_call` (defined above) to verify this.
+  calls = 0;
+  qq_result = counted_call(calls, 7) ?? 99;
+  assert(calls == 1, "?? evaluated left side exactly once: {calls}");
+  assert(qq_result == 7, "result is the value from that single evaluation: {qq_result}");
+  // This means `result = expensive_call() ?? default` is safe: the function
+  // is called once. If it returns null, `default` is used. There is no double call.
 
   // ## Text indexing and slicing return different types
   // `txt[i]` returns a `character` (a single Unicode scalar value).
@@ -165,7 +189,8 @@ fn main() {
 
   // ## XOR is `^`, not exponentiation
   // Unlike some languages where `^` means "power", in loft `^` is bitwise
-  // XOR. Use the `pow()` function for exponentiation.
+  // XOR. The `**` operator (Python/Ruby exponentiation) does not exist either.
+  // Use the `pow()` function for exponentiation.
   assert((0b1010 ^ 0b1100) == 0b0110, "^ is XOR");
   assert(pow(2.0, 3.0) == 8.0, "use pow() for power");
 }

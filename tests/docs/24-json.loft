@@ -57,24 +57,20 @@ struct Contact {
 }
 
 fn main() {
-  // --- Serialisation ---
   u = User { id: 42, name: "Alice", email: "alice@example.com" };
   json = "{u:j}";
   expected = `{{"id":42,"name":"Alice","email":"alice@example.com"}}`;
   assert(json == expected, "to json");
 
-  // --- Parsing a single object ---
   bob = User.parse(`{{"id":7,"name":"Bob","email":"bob@test.org"}}`);
   assert(bob.id == 7, "parsed id: {bob.id}");
   assert(bob.name == "Bob", "parsed name");
   assert(bob.email == "bob@test.org", "parsed email");
 
-  // --- Round-trip: serialise then parse ---
   u2 = User.parse("{u:j}");
   assert(u2.id == u.id, "round-trip id");
   assert(u2.name == u.name, "round-trip name");
 
-  // --- Parse errors ---
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
   errs = 0;
   for err in bad#errors {
@@ -83,7 +79,6 @@ fn main() {
   }
   assert(errs > 0, "expected parse errors, got {errs}");
 
-  // --- Parsing a vector ---
   scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}},{{"value":30}}]`);
   total = 0;
   for s in scores {
@@ -91,13 +86,15 @@ fn main() {
   }
   assert(total == 60, "vector sum: {total}");
 
-  // --- Nested struct ---
   c = Contact.parse(`{{"name":"Carol","address":{{"city":"Amsterdam","zip":"1012"}}}}`);
   assert(c.name == "Carol", "nested name");
   assert(c.address.city == "Amsterdam", "nested city: {c.address.city}");
   assert(c.address.zip == "1012", "nested zip");
 
-  // --- Missing fields get null ---
+  // ## Missing fields get null
+  // When a field is absent from the JSON, the struct field gets its null sentinel.
+  // For text, that is the NUL character '\0' (not the empty string ""); for integer
+  // it is the minimum i32 value. Check with '!' before use, or assign a default with '??'.
   partial = User.parse(`{{"id":1}}`);
   assert(partial.id == 1, "partial id");
   assert(!partial.name, "missing name is null");

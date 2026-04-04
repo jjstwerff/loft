@@ -16,6 +16,7 @@
 <li>build tools that inspect or transform Loft source</li>
 <li>write a test that checks whether a generated code snippet is syntactically correct</li>
 </ul>
+<p>Together the <code>lexer</code> and <code>parser</code> libraries are designed as a reusable foundation. You can use them to build entirely new languages: feed the lexer your own token rules, then layer a custom parser on top. This keeps the tokeniser and grammar logic separate from the language runtime so you only bring in what you need.</p>
 <p><code>parse(name, source)</code> is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.</p>
 <p>If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.</p>
 <h2 id="what-the-parser-understands">What the parser understands</h2>
