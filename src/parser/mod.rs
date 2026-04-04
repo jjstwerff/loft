@@ -2147,6 +2147,17 @@ impl Parser {
                 let lib_path = format!("{pkg_dir}/native/{filename}");
                 self.pending_native_libs.push(lib_path);
             }
+            // PKG.4: register native function symbols and package crate info.
+            if let Some(ref crate_name) = m.native_crate {
+                self.data
+                    .native_packages
+                    .push((crate_name.clone(), pkg_dir.clone()));
+                for (loft_name, rust_symbol) in &m.native_functions {
+                    self.data
+                        .native_symbols
+                        .insert(loft_name.clone(), rust_symbol.clone());
+                }
+            }
             // PKG.3: register the package's parent directory so that
             // dependencies declared in [dependencies] can be found as sibling
             // packages during normal `use` resolution.

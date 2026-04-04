@@ -756,6 +756,14 @@ pub struct Data {
     pub(crate) op_codes: u16,
     possible: HashMap<String, Vec<u32>>,
     pub(crate) operators: HashMap<u8, u32>,
+    /// PKG.4: native function symbols — loft function name → Rust symbol path.
+    /// Populated when packages with `[native.functions]` are loaded.
+    /// Keys are the user-facing loft names (e.g. `save_png`), not the internal
+    /// `n_save_png` or `t_8graphics_save_png` forms.
+    pub native_symbols: HashMap<String, String>,
+    /// PKG.4: native package crate directories — (`crate_name`, `pkg_dir`).
+    /// Used to construct `--extern` flags for `rustc`.
+    pub native_packages: Vec<(String, String)>,
 }
 
 #[must_use]
@@ -838,6 +846,8 @@ impl Data {
             op_codes: 0,
             possible: HashMap::new(),
             operators: HashMap::new(),
+            native_symbols: HashMap::new(),
+            native_packages: Vec::new(),
         }
     }
 
