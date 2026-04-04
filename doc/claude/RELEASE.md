@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Release Planning
 
 ## What "0.9.0" and "1.0.0" mean

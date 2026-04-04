@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Design — Major Algorithms in loft
 
 This document catalogues every significant algorithm in the project, ordered by execution pipeline stage. For each algorithm it records: goals, participating functions with locations, code-size estimate, reducibility, code-quality assessment, debuggability, and enhancement opportunities.

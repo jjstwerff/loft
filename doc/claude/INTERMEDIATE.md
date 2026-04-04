@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # loft Intermediate Language (IR) Reference
 
 ## Overview

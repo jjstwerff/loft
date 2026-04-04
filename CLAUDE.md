@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Claude Code Instructions for the Loft Project
 
 ## What loft is

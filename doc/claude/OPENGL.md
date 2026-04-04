@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # OpenGL / WebGL / GLB Library Design
 
 Design for a loft graphics library covering 2D RGBA drawing, 3D mesh representation,

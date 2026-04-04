@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Compiler Pipeline
 
 This document covers how loft source code is turned into executable bytecode: the lexer, the two-pass parser, the IR, type resolution, scope analysis, and bytecode generation.

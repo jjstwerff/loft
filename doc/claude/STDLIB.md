@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Loft Standard Library Reference
 
 This document describes all public functions, constants, and types available in the loft standard library.
