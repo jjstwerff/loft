@@ -104,4 +104,52 @@ fn main() {
   assert(sum3 == 40, "Sum after key removal: {sum3}");
   // Note: #index is not available on sorted — use #count for a sequential counter.
 }
+
+struct Word {
+  name: text,
+  score: integer
+}
+
+struct Dict {
+  words: sorted<Word[name]>
+}
+
+fn main_ranges() {
+  // ## Iterating a Key Range
+  // Use an `if` guard inside a `for` loop to visit only records whose key falls
+  // within a range. Because the collection is sorted the guard still sees all
+  // elements, but the body only runs for the matching ones.
+  d = Dict { words: [
+    Word { name: "apple",      score: 5 },
+    Word { name: "banana",     score: 3 },
+    Word { name: "cherry",     score: 8 },
+    Word { name: "date",       score: 2 },
+    Word { name: "elderberry", score: 1 }
+  ] };
+  // Closed range: keys >= "banana" and <= "date".
+  range_total = 0;
+  for w in d.words if w.name >= "banana" && w.name <= "date" {
+    range_total += w.score
+  }
+  assert(range_total == 13, "banana(3)+cherry(8)+date(2) = {range_total}");
+  // ## Open-ended Range (tail)
+  // All records from "cherry" onward to the end of the sorted order.
+  tail_count = 0;
+  for w in d.words if w.name >= "cherry" {
+    tail_count += 1
+  }
+  assert(tail_count == 3, "cherry, date, elderberry = {tail_count}");
+  // ## Open-ended Range (head)
+  // All records up to and including "banana".
+  head_names = "";
+  for w in d.words if w.name <= "banana" {
+    head_names += w.name + " "
+  }
+  assert(head_names == "apple banana ", "apple and banana: '{head_names}'");
+  // ## Range outside the for (building a result vector)
+  // Collect matching records into a vector for later use.
+  subset = [for w in d.words if w.name >= "banana" && w.name <= "cherry" { w.score }];
+  assert(subset[0] == 3, "first in range: {subset[0]}");
+  assert(subset[1] == 8, "second in range: {subset[1]}");
+}
 // filling and finding values

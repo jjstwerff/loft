@@ -52,6 +52,25 @@ distance: 5.0
 
 ---
 
+## What makes loft different
+
+Most languages allocate each object separately on the heap — a struct here, a vector there, a string somewhere else. Traversing a data structure means chasing pointers scattered across memory, pulling in unrelated allocations that happen to live nearby. Cache lines fill with data you don't need.
+
+Loft uses a **store-based memory model**: each named collection of records lives in its own contiguous word-addressed block (`Store`). All records of a given type sit together, so iterating a vector, walking a sorted tree, or scanning a hash table touches only the memory that matters. Unrelated structures stay out of the cache.
+
+This has compounding benefits for collection-heavy algorithms:
+
+- **Vectors** — elements are packed consecutively; no per-element allocation overhead.
+- **Sorted / index** — the red-black tree nodes for a `sorted<T>` or `index<T>` live in one store; tree traversal stays local.
+- **Hash tables** — the open-addressing table for `hash<T>` is a single flat array; probe chains don't escape the store.
+- **Structs in collections** — a `vector<Point>` stores all `Point` records back-to-back, not a vector of pointers to individually-allocated structs.
+
+The allocator (`store.rs`) is a simple first-fit free-list over a doubling buffer. Allocation is fast, and because all records of a type share one store, the working set for any algorithm fits in fewer cache lines.
+
+Parallel workers each receive a shallow copy of the store layout with private allocation state (`clone_for_worker`), so `par(...)` loops avoid lock contention entirely — each core writes to its own slice without coordination.
+
+---
+
 ## Install
 
 ### From source (requires Rust 1.85+)

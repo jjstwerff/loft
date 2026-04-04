@@ -348,6 +348,12 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">greet</span>(name: <span class="ty"><a href="stdlib-types.html">text</a></span>, greeting: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"Hello"</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   greeting + <span class="st">", "</span> + name + <span class="st">"!"</span>
 }</code></pre>
+<h2 id="default-arguments-that-involve-other-arguments">Default arguments that involve other arguments</h2>
+<p>Loft defaults must be literal values, not expressions referencing other parameters. When one argument's default should be derived from another, use a sentinel value and compute the actual default inside the function body. The convention is to use -1 (or 0) as "not provided" for integer parameters.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">substring</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>, start: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>, end: <span class="ty"><a href="stdlib-types.html">integer</a></span> = -<span class="nm">1</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  actual_end = <span class="kw">if</span> end &lt; <span class="nm">0</span> { <span class="bi"><a href="stdlib-text.html">len</a></span>(t) } <span class="kw">else</span> { end };
+  t[start..actual_end]
+}</code></pre>
 <h2 id="named-arguments">Named Arguments</h2>
 <p>When a function has several parameters with defaults, you can skip middle ones by naming the arguments you want to provide. Positional arguments come first; once you use a name, all remaining arguments must also be named.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">connect</span>(host: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">8080</span>, tls: <span class="ty"><a href="stdlib-types.html">boolean</a></span> = <span class="kw">true</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
@@ -443,7 +449,11 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"skip port"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(host: <span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"all named"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, port: <span class="nm">443</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:443:false"</span>, <span class="st">"mixed"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(name: <span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"named with default greeting"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(name: <span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"named with default greeting"</span>);</code></pre>
+<p>--- Default argument that depends on another argument --- <code>end</code> defaults to -1 (sentinel); inside the body it becomes len(t).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>, <span class="nm">1</span>, <span class="nm">3</span>) == <span class="st">"el"</span>, <span class="st">"explicit start and end"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>, <span class="nm">2</span>) == <span class="st">"llo"</span>, <span class="st">"end defaults to len(t)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>, <span class="st">"both defaults"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="07-vector">
@@ -839,6 +849,49 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
 <p>Note: #index is not available on sorted — use #count for a sequential counter.</p>
 <pre><code>}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Word</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  score: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Dict</span> {
+  words: <span class="ty"><a href="stdlib-collections.html">sorted</a></span>&lt;<span class="en">Word</span>[name]&gt;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main_ranges</span>() {</code></pre>
+<h2 id="iterating-a-key-range">Iterating a Key Range</h2>
+<p>Use an <code>if</code> guard inside a <code>for</code> loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.</p>
+<pre><code>  d = <span class="en">Dict</span> { words: [
+    <span class="en">Word</span> { name: <span class="st">"apple"</span>,      score: <span class="nm">5</span> },
+    <span class="en">Word</span> { name: <span class="st">"banana"</span>,     score: <span class="nm">3</span> },
+    <span class="en">Word</span> { name: <span class="st">"cherry"</span>,     score: <span class="nm">8</span> },
+    <span class="en">Word</span> { name: <span class="st">"date"</span>,       score: <span class="nm">2</span> },
+    <span class="en">Word</span> { name: <span class="st">"elderberry"</span>, score: <span class="nm">1</span> }
+  ] };</code></pre>
+<p>Closed range: keys &gt;= "banana" and &lt;= "date".</p>
+<pre><code>  range_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"date"</span> {
+    range_total += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(range_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {range_total}"</span>);</code></pre>
+<h2 id="open-ended-range-tail">Open-ended Range (tail)</h2>
+<p>All records from "cherry" onward to the end of the sorted order.</p>
+<pre><code>  tail_count = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"cherry"</span> {
+    tail_count += <span class="nm">1</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tail_count == <span class="nm">3</span>, <span class="st">"cherry, date, elderberry = {tail_count}"</span>);</code></pre>
+<h2 id="open-ended-range-head">Open-ended Range (head)</h2>
+<p>All records up to and including "banana".</p>
+<pre><code>  head_names = <span class="st">""</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &lt;= <span class="st">"banana"</span> {
+    head_names += w.name + <span class="st">" "</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(head_names == <span class="st">"apple banana "</span>, <span class="st">"apple and banana: '{head_names}'"</span>);</code></pre>
+<h2 id="range-outside-the-for-building-a-result-vector">Range outside the for (building a result vector)</h2>
+<p>Collect matching records into a vector for later use.</p>
+<pre><code>  subset = [<span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"cherry"</span> { w.score }];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(subset[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"first in range: {subset[0]}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(subset[<span class="nm">1</span>] == <span class="nm">8</span>, <span class="st">"second in range: {subset[1]}"</span>);
+}</code></pre>
 <p>filling and finding values</p>
 </section>
 <section class="print-section" id="11-index">
@@ -1203,6 +1256,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <li>build tools that inspect or transform Loft source</li>
 <li>write a test that checks whether a generated code snippet is syntactically correct</li>
 </ul>
+<p>Together the <code>lexer</code> and <code>parser</code> libraries are designed as a reusable foundation. You can use them to build entirely new languages: feed the lexer your own token rules, then layer a custom parser on top. This keeps the tokeniser and grammar logic separate from the language runtime so you only bring in what you need.</p>
 <p><code>parse(name, source)</code> is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.</p>
 <p>If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.</p>
 <h2 id="what-the-parser-understands">What the parser understands</h2>
@@ -1673,7 +1727,13 @@ elapsed_ms  = elapsed_us / 1000l
 </section>
 <section class="print-section" id="23-safety">
 <h1>Safety</h1>
-<p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior.</p>
+<p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior. Helper used in the <code>??</code> double-evaluation example below. Increments the call counter and returns the given value unchanged.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">counted_call</span>(calls: &amp;<span class="ty"><a href="stdlib-types.html">integer</a></span>, value: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  calls += <span class="nm">1</span>;
+  value
+}</code></pre>
+<p>Used to obtain a null text value (an uninitialized field is the NUL sentinel).</p>
+<pre><code><span class="kw">struct</span> <span class="en">NullTextHolder</span> { s: <span class="ty"><a href="stdlib-types.html">text</a></span> }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
 <p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
@@ -1683,7 +1743,7 @@ elapsed_ms  = elapsed_us / 1000l
 <li><code>long</code>            — the most negative 64-bit integer is null</li>
 <li><code>float</code>/<code>single</code>  — <code>NaN</code> (Not a Number) is null</li>
 <li><code>character</code>       — the NUL character (code point 0) is null</li>
-<li><code>text</code>            — an empty internal reference is null</li>
+<li><code>text</code>            — a single NUL character (<code>'\0'</code>) is null; the empty string <code>""</code> is NOT null</li>
 <li><code>reference</code>       — record 0 is null</li>
 <li>plain <code>enum</code>      — byte value 255 is null (limits enums to 255 variants)</li>
 </ul>
@@ -1695,9 +1755,14 @@ elapsed_ms  = elapsed_us / 1000l
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
+<p>Text null is the NUL character (<code>\0</code>), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:</p>
+<pre><code>  holder = <span class="en">NullTextHolder</span>.<span class="fn-call">parse</span>(`{{}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!holder.s, <span class="st">"missing JSON text field is null (the NUL sentinel)"</span>);
+  empty = <span class="st">""</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty, <span class="st">"empty string is NOT null — this surprises most newcomers"</span>);</code></pre>
 <p>Mitigation: Use <code>long</code> when you need the full 32-bit integer range, or declare struct fields as <code>not null</code> so that reserved value can be used as data.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
-<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use <code>long</code> (64-bit) when multiplying or summing large values: <code>big as long + big as long</code> avoids the wrap.</p>
+<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use <code>long</code> (64-bit) when multiplying or summing large values: <code>big as long + big as long</code> avoids the wrap. Design: a future <code>--debug</code> flag will turn silent overflow into a logged WARN with file:line context so overflows are visible during development without affecting release performance.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> + big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> == <span class="nm">4000000000l</span>, <span class="st">"long avoids wrap"</span>);</code></pre>
 <h2 id="bitwise-operators-with-zero">Bitwise operators with zero</h2>
@@ -1716,9 +1781,10 @@ elapsed_ms  = elapsed_us / 1000l
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != <span class="nm">0.0</span>, <span class="st">"null != 0.0 is true"</span>);</code></pre>
 <p>Use <code>!f</code> or <code>f ?? default</code> to check for null floats.</p>
 <h2 id="text-length-counts-bytes-not-characters">Text length counts bytes, not characters</h2>
-<p><code>len()</code> on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes.</p>
+<p><code>len()</code> on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes. <code>size()</code> returns the number of Unicode code points (characters). These two values differ whenever the text contains any multi-byte character.</p>
 <pre><code>  emoji = <span class="st">"Hi 😊!"</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"5 visible chars but 8 bytes (emoji is 4 bytes)"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"5 visible chars but 8 bytes (emoji is 4 bytes)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(emoji) == <span class="nm">5</span>, <span class="st">"size() counts code points: {size(emoji)}"</span>);</code></pre>
 <p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use <code>for c in text</code> to iterate by character. Use <code>c#index</code> and <code>c#next</code> to get the byte boundaries of each character.</p>
 <pre><code>  count = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> emoji { count += <span class="nm">1</span>; }
@@ -1734,8 +1800,13 @@ elapsed_ms  = elapsed_us / 1000l
   byte_pos = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> t { byte_pos = c#<span class="ty">index</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(byte_pos == <span class="nm">1</span>, <span class="st">"text #index: byte offset of 'é' (byte 1, not char 1)"</span>);</code></pre>
-<h2 id="evaluates-the-left-side-twice-for-complex-expressions"><code>??</code> evaluates the left side twice for complex expressions</h2>
-<p>The <code>??</code> operator means "use this value, or if it is null, use the right side instead". For a simple variable this is fine, but for a function call or complex expression the left side is evaluated once for the null check and once for the result. Mitigation: Assign complex expressions to a temporary variable first. For example, instead of <code>result = expensive_call() ?? default</code> (which calls the function twice), write <code>temp = expensive_call()</code> on one line and then <code>result = temp ?? default</code> on the next.</p>
+<h2 id="evaluates-the-left-side-exactly-once"><code>??</code> evaluates the left side exactly once</h2>
+<p>The <code>??</code> operator means "use this value, or if it is null, use the right side instead". The left-hand expression is evaluated exactly once regardless of whether the result is null. The example below uses <code>counted_call</code> (defined above) to verify this.</p>
+<pre><code>  calls = <span class="nm">0</span>;
+  qq_result = <span class="fn-call">counted_call</span>(calls, <span class="nm">7</span>) ?? <span class="nm">99</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(calls == <span class="nm">1</span>, <span class="st">"?? evaluated left side exactly once: {calls}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(qq_result == <span class="nm">7</span>, <span class="st">"result is the value from that single evaluation: {qq_result}"</span>);</code></pre>
+<p>This means <code>result = expensive_call() ?? default</code> is safe: the function is called once. If it returns null, <code>default</code> is used. There is no double call.</p>
 <h2 id="text-indexing-and-slicing-return-different-types">Text indexing and slicing return different types</h2>
 <p><code>txt[i]</code> returns a <code>character</code> (a single Unicode scalar value). <code>txt[i..j]</code> returns <code>text</code> (a UTF-8 string). These are different types.</p>
 <pre><code>  txt = <span class="st">"hello"</span>;
@@ -1766,7 +1837,7 @@ elapsed_ms  = elapsed_us / 1000l
 <h2 id="file-i-o-assumes-utf-8">File I/O assumes UTF-8</h2>
 <p>All file reading in loft assumes the file content is valid UTF-8. Reading a binary file or a file in a different encoding (e.g. Latin-1) will crash the program at runtime. There is currently no way to read raw bytes. Mitigation: Only read files you know to be UTF-8. If you need to process binary data, convert it to UTF-8 externally before passing it to loft.</p>
 <h2 id="xor-is-not-exponentiation">XOR is <code>^</code>, not exponentiation</h2>
-<p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. Use the <code>pow()</code> function for exponentiation.</p>
+<p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. The <code>**</code> operator (Python/Ruby exponentiation) does not exist either. Use the <code>pow()</code> function for exponentiation.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"use pow() for power"</span>);
 }</code></pre>
@@ -1809,22 +1880,18 @@ for e in data#errors { log_warn(e) }
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   address: <span class="en">Address</span>
 }</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>--- Serialisation ---</p>
-<pre><code>  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
   json = <span class="st">"{u:j}"</span>;
   expected = `{{<span class="st">"id"</span>:<span class="nm">42</span>,<span class="st">"name"</span>:<span class="st">"Alice"</span>,<span class="st">"email"</span>:<span class="st">"alice@example.com"</span>}}`;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(json == expected, <span class="st">"to json"</span>);</code></pre>
-<p>--- Parsing a single object ---</p>
 <pre><code>  bob = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">7</span>,<span class="st">"name"</span>:<span class="st">"Bob"</span>,<span class="st">"email"</span>:<span class="st">"bob@test.org"</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.id == <span class="nm">7</span>, <span class="st">"parsed id: {bob.id}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.name == <span class="st">"Bob"</span>, <span class="st">"parsed name"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.email == <span class="st">"bob@test.org"</span>, <span class="st">"parsed email"</span>);</code></pre>
-<p>--- Round-trip: serialise then parse ---</p>
 <pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
-<p>--- Parse errors ---</p>
 <pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
   errs = <span class="nm">0</span>;
   <span class="kw">for</span> err <span class="kw">in</span> bad#errors {
@@ -1832,19 +1899,18 @@ for e in data#errors { log_warn(e) }
     errs += <span class="nm">1</span>;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(errs &gt; <span class="nm">0</span>, <span class="st">"expected parse errors, got {errs}"</span>);</code></pre>
-<p>--- Parsing a vector ---</p>
 <pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
   total = <span class="nm">0</span>;
   <span class="kw">for</span> s <span class="kw">in</span> scores {
     total += s.value;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"vector sum: {total}"</span>);</code></pre>
-<p>--- Nested struct ---</p>
 <pre><code>  c = <span class="en">Contact</span>.<span class="fn-call">parse</span>(`{{<span class="st">"name"</span>:<span class="st">"Carol"</span>,<span class="st">"address"</span>:{{<span class="st">"city"</span>:<span class="st">"Amsterdam"</span>,<span class="st">"zip"</span>:<span class="st">"1012"</span>}}}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.name == <span class="st">"Carol"</span>, <span class="st">"nested name"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
-<p>--- Missing fields get null ---</p>
+<h2 id="missing-fields-get-null">Missing fields get null</h2>
+<p>When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character <code>\0</code> (not the empty string ""); for integer it is the minimum i32 value. Check with <code>!</code> before use, or assign a default with <code>??</code>.</p>
 <pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);

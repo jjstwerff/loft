@@ -16,6 +16,12 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">greet</span>(name: <span class="ty"><a href="stdlib-types.html">text</a></span>, greeting: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"Hello"</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   greeting + <span class="st">", "</span> + name + <span class="st">"!"</span>
 }</code></pre>
+<h2 id="default-arguments-that-involve-other-arguments">Default arguments that involve other arguments</h2>
+<p>Loft defaults must be literal values, not expressions referencing other parameters. When one argument's default should be derived from another, use a sentinel value and compute the actual default inside the function body. The convention is to use -1 (or 0) as "not provided" for integer parameters.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">substring</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>, start: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>, end: <span class="ty"><a href="stdlib-types.html">integer</a></span> = -<span class="nm">1</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  actual_end = <span class="kw">if</span> end &lt; <span class="nm">0</span> { <span class="bi"><a href="stdlib-text.html">len</a></span>(t) } <span class="kw">else</span> { end };
+  t[start..actual_end]
+}</code></pre>
 <h2 id="named-arguments">Named Arguments</h2>
 <p>When a function has several parameters with defaults, you can skip middle ones by naming the arguments you want to provide. Positional arguments come first; once you use a name, all remaining arguments must also be named.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">connect</span>(host: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">8080</span>, tls: <span class="ty"><a href="stdlib-types.html">boolean</a></span> = <span class="kw">true</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
@@ -111,7 +117,11 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"skip port"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(host: <span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"all named"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, port: <span class="nm">443</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:443:false"</span>, <span class="st">"mixed"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(name: <span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"named with default greeting"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(name: <span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"named with default greeting"</span>);</code></pre>
+<p>--- Default argument that depends on another argument --- <code>end</code> defaults to -1 (sentinel); inside the body it becomes len(t).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>, <span class="nm">1</span>, <span class="nm">3</span>) == <span class="st">"el"</span>, <span class="st">"explicit start and end"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>, <span class="nm">2</span>) == <span class="st">"llo"</span>, <span class="st">"end defaults to len(t)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>, <span class="st">"both defaults"</span>);
 }</code></pre>
 
   </article>

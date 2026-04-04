@@ -46,22 +46,18 @@ for e in data#errors { log_warn(e) }
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   address: <span class="en">Address</span>
 }</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>--- Serialisation ---</p>
-<pre><code>  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
   json = <span class="st">"{u:j}"</span>;
   expected = `{{<span class="st">"id"</span>:<span class="nm">42</span>,<span class="st">"name"</span>:<span class="st">"Alice"</span>,<span class="st">"email"</span>:<span class="st">"alice@example.com"</span>}}`;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(json == expected, <span class="st">"to json"</span>);</code></pre>
-<p>--- Parsing a single object ---</p>
 <pre><code>  bob = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">7</span>,<span class="st">"name"</span>:<span class="st">"Bob"</span>,<span class="st">"email"</span>:<span class="st">"bob@test.org"</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.id == <span class="nm">7</span>, <span class="st">"parsed id: {bob.id}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.name == <span class="st">"Bob"</span>, <span class="st">"parsed name"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.email == <span class="st">"bob@test.org"</span>, <span class="st">"parsed email"</span>);</code></pre>
-<p>--- Round-trip: serialise then parse ---</p>
 <pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
-<p>--- Parse errors ---</p>
 <pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
   errs = <span class="nm">0</span>;
   <span class="kw">for</span> err <span class="kw">in</span> bad#errors {
@@ -69,19 +65,18 @@ for e in data#errors { log_warn(e) }
     errs += <span class="nm">1</span>;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(errs &gt; <span class="nm">0</span>, <span class="st">"expected parse errors, got {errs}"</span>);</code></pre>
-<p>--- Parsing a vector ---</p>
 <pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
   total = <span class="nm">0</span>;
   <span class="kw">for</span> s <span class="kw">in</span> scores {
     total += s.value;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"vector sum: {total}"</span>);</code></pre>
-<p>--- Nested struct ---</p>
 <pre><code>  c = <span class="en">Contact</span>.<span class="fn-call">parse</span>(`{{<span class="st">"name"</span>:<span class="st">"Carol"</span>,<span class="st">"address"</span>:{{<span class="st">"city"</span>:<span class="st">"Amsterdam"</span>,<span class="st">"zip"</span>:<span class="st">"1012"</span>}}}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.name == <span class="st">"Carol"</span>, <span class="st">"nested name"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
-<p>--- Missing fields get null ---</p>
+<h2 id="missing-fields-get-null">Missing fields get null</h2>
+<p>When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character <code>\0</code> (not the empty string ""); for integer it is the minimum i32 value. Check with <code>!</code> before use, or assign a default with <code>??</code>.</p>
 <pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);

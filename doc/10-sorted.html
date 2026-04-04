@@ -97,6 +97,49 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
 <p>Note: #index is not available on sorted — use #count for a sequential counter.</p>
 <pre><code>}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Word</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  score: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Dict</span> {
+  words: <span class="ty"><a href="stdlib-collections.html">sorted</a></span>&lt;<span class="en">Word</span>[name]&gt;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main_ranges</span>() {</code></pre>
+<h2 id="iterating-a-key-range">Iterating a Key Range</h2>
+<p>Use an <code>if</code> guard inside a <code>for</code> loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.</p>
+<pre><code>  d = <span class="en">Dict</span> { words: [
+    <span class="en">Word</span> { name: <span class="st">"apple"</span>,      score: <span class="nm">5</span> },
+    <span class="en">Word</span> { name: <span class="st">"banana"</span>,     score: <span class="nm">3</span> },
+    <span class="en">Word</span> { name: <span class="st">"cherry"</span>,     score: <span class="nm">8</span> },
+    <span class="en">Word</span> { name: <span class="st">"date"</span>,       score: <span class="nm">2</span> },
+    <span class="en">Word</span> { name: <span class="st">"elderberry"</span>, score: <span class="nm">1</span> }
+  ] };</code></pre>
+<p>Closed range: keys &gt;= "banana" and &lt;= "date".</p>
+<pre><code>  range_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"date"</span> {
+    range_total += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(range_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {range_total}"</span>);</code></pre>
+<h2 id="open-ended-range-tail">Open-ended Range (tail)</h2>
+<p>All records from "cherry" onward to the end of the sorted order.</p>
+<pre><code>  tail_count = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"cherry"</span> {
+    tail_count += <span class="nm">1</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tail_count == <span class="nm">3</span>, <span class="st">"cherry, date, elderberry = {tail_count}"</span>);</code></pre>
+<h2 id="open-ended-range-head">Open-ended Range (head)</h2>
+<p>All records up to and including "banana".</p>
+<pre><code>  head_names = <span class="st">""</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &lt;= <span class="st">"banana"</span> {
+    head_names += w.name + <span class="st">" "</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(head_names == <span class="st">"apple banana "</span>, <span class="st">"apple and banana: '{head_names}'"</span>);</code></pre>
+<h2 id="range-outside-the-for-building-a-result-vector">Range outside the for (building a result vector)</h2>
+<p>Collect matching records into a vector for later use.</p>
+<pre><code>  subset = [<span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"cherry"</span> { w.score }];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(subset[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"first in range: {subset[0]}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(subset[<span class="nm">1</span>] == <span class="nm">8</span>, <span class="st">"second in range: {subset[1]}"</span>);
+}</code></pre>
 <p>filling and finding values</p>
 
   </article>

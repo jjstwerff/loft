@@ -16,6 +16,15 @@
 fn greet(name: text, greeting: text = "Hello") -> text {
   greeting + ", " + name + "!"
 }
+// ## Default arguments that involve other arguments
+// Loft defaults must be literal values, not expressions referencing other parameters.
+// When one argument's default should be derived from another, use a sentinel value
+// and compute the actual default inside the function body.
+// The convention is to use -1 (or 0) as "not provided" for integer parameters.
+fn substring(t: text, start: integer = 0, end: integer = -1) -> text {
+  actual_end = if end < 0 { len(t) } else { end };
+  t[start..actual_end]
+}
 // ## Named Arguments
 // When a function has several parameters with defaults, you can skip middle ones
 // by naming the arguments you want to provide. Positional arguments come first;
@@ -160,4 +169,10 @@ fn main() {
   assert(connect(host: "example.com", tls: false) == "example.com:8080:false", "all named");
   assert(connect("example.com", port: 443, tls: false) == "example.com:443:false", "mixed");
   assert(greet(name: "World") == "Hello, World!", "named with default greeting");
+
+  // --- Default argument that depends on another argument ---
+  // 'end' defaults to -1 (sentinel); inside the body it becomes len(t).
+  assert(substring("hello", 1, 3) == "el", "explicit start and end");
+  assert(substring("hello", 2) == "llo", "end defaults to len(t)");
+  assert(substring("hello") == "hello", "both defaults");
 }
