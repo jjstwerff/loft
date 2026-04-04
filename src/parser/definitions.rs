@@ -368,15 +368,11 @@ impl Parser {
             self.data.def_nr(&type_name)
         };
         if self.lexer.has_token("=") {
-            if let Some(type_name) = self.lexer.has_identifier() {
-                if let Some(tp) = self.parse_type(d_nr, &type_name, false) {
-                    if self.first_pass {
-                        self.data.set_returned(d_nr, tp);
-                    }
-                } else if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Error, "'{type_name}' is not a type");
+            if let Some(tp) = self.parse_type_full(d_nr, false) {
+                if self.first_pass {
+                    self.data.set_returned(d_nr, tp);
                 }
-            } else {
+            } else if !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Expected a type after =");
             }
         }

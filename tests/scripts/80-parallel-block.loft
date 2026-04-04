@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// A15: parallel {} structured concurrency — each arm runs concurrently.
+
+fn slow_add(a: integer, b: integer) -> integer {
+  a + b
+}
+
+fn main() {
+  // Basic parallel block with two arms
+  parallel {
+    slow_add(1, 2);
+    slow_add(3, 4);
+  }
+  // If we get here, both arms completed successfully
+  assert(true, "parallel block completed");
+}

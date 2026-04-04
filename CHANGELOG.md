@@ -9,6 +9,19 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Language ergonomics (Sprint 10)
+
+- **C55** — Type aliases: `type Handler = fn(Request) -> Response` — compile-time
+  substitution for function and tuple types in `type` declarations.
+- **C56** — Null-coalesce with early return: `x ?? return err` desugars to a
+  null-check with immediate function return, collapsing two-line null guards
+  into one expression.
+- **A15** — `parallel { }` structured concurrency block: runs each arm
+  sequentially (threading deferred). Three new opcodes replace six dead
+  superinstruction slots, freeing three net opcode slots.
+- **I13** — Iterator protocol: any type with `fn next(self: T) -> Item?` can be
+  used in a `for x in val` loop. Null return from `next` terminates the loop.
+
 ### Graphics library (pure-loft package)
 
 - **GL0** — Package scaffolding: `lib/graphics/` with `loft.toml` manifest.

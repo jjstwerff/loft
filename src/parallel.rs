@@ -616,6 +616,40 @@ impl WorkerPool {
     }
 }
 
+/// A15: Run N independent arms concurrently, each at a given bytecode position.
+#[allow(dead_code)]
+/// Each arm runs as a void function (no args, no return value).
+/// Uses the same store-isolation model as `par()`: each arm gets a read-only snapshot.
+/// # Panics
+/// Panics if any arm thread panics.
+pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions: &[u32]) {
+    if arm_positions.is_empty() {
+        return;
+    }
+    #[cfg(all(feature = "threading", not(feature = "wasm")))]
+    {
+        let program = Arc::new(program);
+        thread::scope(|s| {
+            for &pos in arm_positions {
+                let worker_stores = stores.clone_for_worker();
+                let prog = Arc::clone(&program);
+                s.spawn(move || {
+                    let mut state = prog.new_state(worker_stores);
+                    state.execute_at_void(pos);
+                });
+            }
+        });
+    }
+    #[cfg(not(feature = "threading"))]
+    {
+        // Sequential fallback (WASM or threading disabled).
+        for &pos in arm_positions {
+            let mut state = program.new_state(stores.clone_for_worker());
+            state.execute_at_void(pos);
+        }
+    }
+}
+
 #[cfg(test)]
 mod pool_tests {
     use super::*;

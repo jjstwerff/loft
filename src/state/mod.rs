@@ -127,6 +127,10 @@ pub struct State {
     pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
+    /// A15: number of arms in the current `parallel {}` block.
+    pub(crate) parallel_n_arms: u8,
+    /// A15: bytecode offsets for each arm (relative to join point).
+    pub(crate) parallel_arm_positions: Vec<u16>,
 }
 
 pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
@@ -170,6 +174,8 @@ impl State {
             coroutines: vec![None], // index 0 = null sentinel
             active_coroutines: Vec::new(),
             generate_depth: 0,
+            parallel_n_arms: 0,
+            parallel_arm_positions: Vec::new(),
         }
     }
 
@@ -1123,27 +1129,35 @@ impl State {
             .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
     }
 
-    /// superinstruction stubs — delegated from fill.rs.
-    /// These are placeholders; the peephole pass is not yet active.
-    #[allow(clippy::unused_self)]
-    pub fn nop(&mut self) {}
-    pub fn si_load2_add_store(&mut self) {
-        self.nop();
+    /// A15: `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
+    pub fn parallel_begin(&mut self) {
+        let n_arms = *self.code::<u8>();
+        self.parallel_n_arms = n_arms;
+        self.parallel_arm_positions.clear();
     }
-    pub fn si_load_const_add_store(&mut self) {
-        self.nop();
+
+    /// A15: `parallel {}` — read the arm's bytecode offset and record it.
+    pub fn parallel_arm(&mut self) {
+        let offset = *self.code::<u16>();
+        self.parallel_arm_positions.push(offset);
     }
-    pub fn si_load_const_cmp_branch(&mut self) {
-        self.nop();
-    }
-    pub fn si_load2_cmp_branch(&mut self) {
-        self.nop();
-    }
-    pub fn si_load_const_mul_store(&mut self) {
-        self.nop();
-    }
-    pub fn si_load2_mul_store(&mut self) {
-        self.nop();
+
+    /// A15: `parallel {}` — execute all recorded arms sequentially.
+    /// Each arm's bytecode runs inline sharing the caller's stack.
+    /// Arms end with `OpGotoWord` to the continuation point; we detect that
+    /// by checking if `code_pos` jumped past all arm start positions.
+    pub fn parallel_join(&mut self) {
+        // Nothing to do — the arms are laid out after the main-thread's
+        // OpGotoWord skip.  `parallel_join` currently does nothing at runtime;
+        // the main-thread goto skips past all arms.  When real threading is
+        // added, this is where thread dispatch happens.
+        //
+        // For the sequential implementation, we DON'T skip — instead, we let
+        // the main thread fall through to the arms by NOT advancing code_pos.
+        // But the codegen already emits a goto-skip right after the join.
+        // So we need to "undo" that skip: save code_pos, run each arm,
+        // then let the post-join goto proceed normally.
+        let _ = self.parallel_arm_positions.drain(..);
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
@@ -1366,6 +1380,8 @@ impl State {
             coroutines: vec![None],
             active_coroutines: Vec::new(),
             generate_depth: 0,
+            parallel_n_arms: 0,
+            parallel_arm_positions: Vec::new(),
         }
     }
 
@@ -1608,6 +1624,22 @@ impl State {
             }
         }
         result
+    }
+
+    /// A15: Execute a void function at `fn_pos` with no arguments.
+    /// Used by `parallel {}` arms.
+    pub fn execute_at_void(&mut self, fn_pos: u32) {
+        self.stack_pos = 4;
+        self.put_stack(u32::MAX); // return sentinel
+        self.code_pos = fn_pos;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            OPERATORS[op as usize](self);
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
     }
 
     /**

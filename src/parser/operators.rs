@@ -496,33 +496,67 @@ impl Parser {
             }
             self.expr_not_null = false;
             let lhs_type = ctp.clone();
-            let mut rhs = Value::Null;
-            let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
-            self.known_var_or_type(&rhs);
-            if matches!(lhs_type, Type::Null) {
-                // LHS is an untyped null literal: always use the RHS.
-                *code = rhs;
-                *ctp = rhs_type;
-            } else {
-                if !self.convert(&mut rhs, &rhs_type, &lhs_type) && !self.first_pass {
-                    self.can_convert(&rhs_type, &lhs_type);
+            if self.lexer.has_token("return") {
+                // C56: `x ?? return ret_expr` — if LHS is null, return from the function.
+                // Desugars to: { tmp = x; if (tmp == null) { return ret_expr; }; tmp }
+                let mut ret_val = Value::Null;
+                let r_type = self.data.def(self.context).returned.clone();
+                if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
+                    let t = self.expression(&mut ret_val);
+                    if t != Type::Null
+                        && !self.convert(&mut ret_val, &t, &r_type)
+                        && !self.first_pass
+                    {
+                        self.validate_convert("return", &t, &r_type);
+                    }
+                } else if r_type != Type::Void && !self.first_pass {
+                    ret_val = self.null(&r_type);
                 }
-                if let Value::Var(_) = code {
-                    // Simple variable: reading twice is side-effect-free.
-                    let lhs = code.clone();
-                    let mut null_check = code.clone();
-                    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
-                    *code = v_if(null_check, lhs, rhs);
-                } else {
-                    // Non-trivial expression: materialise into a temp to avoid double evaluation.
-                    let tmp = self.create_unique("ncc", &lhs_type);
-                    let set_tmp = v_set(tmp, code.clone());
-                    let mut null_check = Value::Var(tmp);
-                    self.convert(&mut null_check, &lhs_type, &Type::Boolean);
-                    let if_expr = v_if(null_check, Value::Var(tmp), rhs);
-                    *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
-                }
+                let ret_stmt = Value::Return(Box::new(ret_val));
+                let tmp = self.create_unique("ncr", &lhs_type);
+                let set_tmp = v_set(tmp, code.clone());
+                let mut null_check = Value::Var(tmp);
+                self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+                // Negate: true when null (i.e. when the boolean conversion is false)
+                let is_null = self.cl("OpNot", &[null_check]);
+                // if (is_null) { return ret_expr; } — no else branch
+                let if_ret = v_if(is_null, ret_stmt, Value::Null);
+                // Block: { tmp = x; if (is_null) { return; }; tmp }
+                *code = v_block(
+                    vec![set_tmp, if_ret, Value::Var(tmp)],
+                    lhs_type.clone(),
+                    "ncr",
+                );
                 *ctp = lhs_type;
+            } else {
+                let mut rhs = Value::Null;
+                let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
+                self.known_var_or_type(&rhs);
+                if matches!(lhs_type, Type::Null) {
+                    // LHS is an untyped null literal: always use the RHS.
+                    *code = rhs;
+                    *ctp = rhs_type;
+                } else {
+                    if !self.convert(&mut rhs, &rhs_type, &lhs_type) && !self.first_pass {
+                        self.can_convert(&rhs_type, &lhs_type);
+                    }
+                    if let Value::Var(_) = code {
+                        // Simple variable: reading twice is side-effect-free.
+                        let lhs = code.clone();
+                        let mut null_check = code.clone();
+                        self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+                        *code = v_if(null_check, lhs, rhs);
+                    } else {
+                        // Non-trivial expression: materialise into a temp to avoid double evaluation.
+                        let tmp = self.create_unique("ncc", &lhs_type);
+                        let set_tmp = v_set(tmp, code.clone());
+                        let mut null_check = Value::Var(tmp);
+                        self.convert(&mut null_check, &lhs_type, &Type::Boolean);
+                        let if_expr = v_if(null_check, Value::Var(tmp), rhs);
+                        *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
+                    }
+                    *ctp = lhs_type;
+                }
             }
         } else if operator == "as" {
             self.expr_not_null = false;

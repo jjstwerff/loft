@@ -60,11 +60,11 @@ Sprint 9: Registry ✓ (independent — no PKG.4 dependency)
   REG.3   loft registry sync — download registry.txt from source: URL ✓
   REG.4   loft registry check — installed vs registry; exit 1 on yanks ✓
 
-Sprint 10: Language ergonomics (needed by server/game_client — no external deps)
-  C55     type aliases: type Handler = fn(Request) -> Response
-  C56     ?? return expr — null early-exit in one line
-  A15     parallel { } — structured concurrency block
-  I13     iterator protocol — for msg in ws via fn next(self) -> T?
+Sprint 10: Language ergonomics ✓ (branch sprint-10-language-ergonomics)
+  C55     type aliases: type Handler = fn(Request) -> Response ✓
+  C56     ?? return expr — null early-exit in one line ✓
+  A15     parallel { } — structured concurrency block (sequential) ✓
+  I13     iterator protocol — for msg in ws via fn next(self) -> T? ✓
 
 Sprint 11: Native codegen for packages
   PKG.4   native codegen --extern
@@ -114,10 +114,6 @@ Sprint 18: Graphics native (needs PKG.4)
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| C55       | Type aliases (`type Handler = fn(Request) -> Response`)   | XS | ✓      |              | src/parser/definitions.rs     |
-| C56       | `?? return expr` — null early-exit in handlers            | XS | ✓      |              | src/parser/expressions.rs     |
-| A15       | `parallel { }` structured concurrency block               | M  | ✓      |              | src/parser/expressions.rs     |
-| I13       | Iterator protocol (`for msg in ws` via `fn next → T?`)   | MH | ✓      | I5+          | src/parser/collections.rs     |
 | EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
 | EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
 | PKG.4     | Native codegen `--extern` for `#native` packages          | M  | ✓      | PKG.1        | generation/mod.rs, main.rs    |

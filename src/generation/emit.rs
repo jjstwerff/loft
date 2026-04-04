@@ -208,6 +208,10 @@ impl Output<'_> {
                     )?;
                 }
             }
+            Value::Parallel(_) => {
+                // Native codegen for parallel {} is not yet supported.
+                write!(w, "/* parallel {{}} — not supported in native codegen */")?;
+            }
         }
         Ok(())
     }
