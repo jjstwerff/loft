@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Server smoke test: verify structs and listen/close work.
+// Full integration requires concurrent client+server (parallel {} with threading).
+use server;
+
+fn main() {
+  // Verify Server struct creation
+  srv = server::listen(18082);
+  assert(srv.handle >= 0, "listen returned handle={srv.handle}");
+
+  // Close immediately — no accept needed
+  srv.close();
+  assert(true, "server created and closed");
+}

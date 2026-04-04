@@ -1142,22 +1142,21 @@ impl State {
         self.parallel_arm_positions.push(offset);
     }
 
-    /// A15: `parallel {}` — execute all recorded arms sequentially.
-    /// Each arm's bytecode runs inline sharing the caller's stack.
-    /// Arms end with `OpGotoWord` to the continuation point; we detect that
-    /// by checking if `code_pos` jumped past all arm start positions.
+    /// A15: `parallel {}` — spawn threads for all recorded arms and join.
+    /// Each arm runs as a void function at its bytecode position.
     pub fn parallel_join(&mut self) {
-        // Nothing to do — the arms are laid out after the main-thread's
-        // OpGotoWord skip.  `parallel_join` currently does nothing at runtime;
-        // the main-thread goto skips past all arms.  When real threading is
-        // added, this is where thread dispatch happens.
-        //
-        // For the sequential implementation, we DON'T skip — instead, we let
-        // the main thread fall through to the arms by NOT advancing code_pos.
-        // But the codegen already emits a goto-skip right after the join.
-        // So we need to "undo" that skip: save code_pos, run each arm,
-        // then let the post-join goto proceed normally.
-        let _ = self.parallel_arm_positions.drain(..);
+        let positions: Vec<u32> = self
+            .parallel_arm_positions
+            .drain(..)
+            .map(|off| self.code_pos + u32::from(off))
+            .collect();
+        let program = crate::parallel::WorkerProgram {
+            bytecode: Arc::clone(&self.bytecode),
+            text_code: Arc::clone(&self.text_code),
+            library: Arc::clone(&self.library),
+            stack_trace_lib_nr: self.stack_trace_lib_nr,
+        };
+        crate::parallel::run_parallel_block(&self.database, program, &positions);
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
