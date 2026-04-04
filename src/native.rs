@@ -69,16 +69,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_get_long", n_parallel_get_long),
     ("n_parallel_get_float", n_parallel_get_float),
     ("n_parallel_get_bool", n_parallel_get_bool),
-    #[cfg(feature = "random")]
     ("n_rand", n_rand),
-    #[cfg(feature = "random")]
     ("n_rand_seed", n_rand_seed),
-    #[cfg(feature = "random")]
     ("n_rand_indices", n_rand_indices),
-    #[cfg(all(feature = "wasm", not(feature = "random")))]
-    ("n_rand", n_rand_wasm),
-    #[cfg(all(feature = "wasm", not(feature = "random")))]
-    ("n_rand_seed", n_rand_seed_wasm),
+    ("n_load_png", n_load_png),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -976,38 +970,37 @@ fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// Return a random integer in [lo, hi] (inclusive); null (`i32::MIN`) if lo > hi.
-#[cfg(feature = "random")]
 fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
     let v_hi = *stores.get::<i32>(stack);
     let v_lo = *stores.get::<i32>(stack);
-    stores.put(stack, ops::rand_int(v_lo, v_hi));
+    let result = if let Some(f) = crate::extensions::get_rand_int() {
+        f(v_lo, v_hi)
+    } else {
+        #[cfg(feature = "random")]
+        {
+            ops::rand_int(v_lo, v_hi)
+        }
+        #[cfg(not(feature = "random"))]
+        {
+            i32::MIN
+        }
+    };
+    stores.put(stack, result);
 }
 
 /// Seed the thread-local PCG RNG so subsequent `rand()` calls are reproducible.
-#[cfg(feature = "random")]
 fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
     let v_seed = *stores.get::<i64>(stack);
-    ops::rand_seed(v_seed);
-}
-
-/// WASM bridge: return a random integer via the JS host RNG.
-#[cfg(all(feature = "wasm", not(feature = "random")))]
-fn n_rand_wasm(stores: &mut Stores, stack: &mut DbRef) {
-    let v_hi = *stores.get::<i32>(stack);
-    let v_lo = *stores.get::<i32>(stack);
-    stores.put(stack, ops::rand_int(v_lo, v_hi));
-}
-
-/// WASM bridge: seed the JS host RNG.
-#[cfg(all(feature = "wasm", not(feature = "random")))]
-fn n_rand_seed_wasm(stores: &mut Stores, stack: &mut DbRef) {
-    let v_seed = *stores.get::<i64>(stack);
-    ops::rand_seed(v_seed);
+    if let Some(f) = crate::extensions::get_rand_seed() {
+        f(v_seed);
+    } else {
+        #[cfg(feature = "random")]
+        ops::rand_seed(v_seed);
+    }
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector when `n <= 0` or `n` is null.
-#[cfg(feature = "random")]
 fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
     let v_n = *stores.get::<i32>(stack);
     let n = if v_n == i32::MIN || v_n <= 0 {
@@ -1016,11 +1009,40 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
         v_n as usize
     };
 
-    // Build the shuffled index list in a temporary Rust Vec.
-    let mut indices: Vec<i32> = (0..n as i32).collect();
-    ops::shuffle_ints(&mut indices);
+    // Get shuffled indices — from cdylib or built-in fallback.
+    let indices: Vec<i32> = if let Some(f) = crate::extensions::get_rand_indices() {
+        let mut ptr: *mut i32 = std::ptr::null_mut();
+        let mut len: usize = 0;
+        unsafe {
+            f(
+                v_n,
+                std::ptr::addr_of_mut!(ptr),
+                std::ptr::addr_of_mut!(len),
+            );
+        }
+        if ptr.is_null() || len == 0 {
+            Vec::new()
+        } else {
+            let v = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
+            if let Some(free_fn) = crate::extensions::get_free_indices() {
+                unsafe { free_fn(ptr, len) };
+            }
+            v
+        }
+    } else {
+        #[cfg(feature = "random")]
+        {
+            let mut v: Vec<i32> = (0..n as i32).collect();
+            ops::shuffle_ints(&mut v);
+            v
+        }
+        #[cfg(not(feature = "random"))]
+        {
+            Vec::new()
+        }
+    };
 
-    // Allocate a new store to hold the result vector.
+    // Write into store.
     let result_db = stores.null();
     let vec_words = (n as u32 * 4 + 15) / 8;
     let vec_words = vec_words.max(1);
@@ -1031,7 +1053,7 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
 
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_int(vec_rec, 4, indices.len() as i32);
         for (i, &val) in indices.iter().enumerate() {
             store.set_int(vec_rec, 8 + i as u32 * 4, val);
         }
@@ -1044,6 +1066,91 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
         pos: 4,
     };
     stores.put(stack, result_ref);
+}
+
+/// EXT.1: load a PNG image into an Image struct.
+/// Calls the imaging package's cdylib decode function (resolved at load time),
+/// then writes the raw pixel data into the store.
+fn n_load_png(stores: &mut Stores, stack: &mut DbRef) {
+    let v_image = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+
+    let decode_fn = crate::extensions::get_decode_png();
+    let result = if let Some(decode) = decode_fn {
+        // Call cdylib's decode function via C-ABI
+        let path = v_path.str();
+        let mut width: u32 = 0;
+        let mut height: u32 = 0;
+        let mut pixels: *mut u8 = std::ptr::null_mut();
+        let mut pixels_len: usize = 0;
+        let ok = unsafe {
+            decode(
+                path.as_ptr(),
+                path.len(),
+                std::ptr::addr_of_mut!(width),
+                std::ptr::addr_of_mut!(height),
+                std::ptr::addr_of_mut!(pixels),
+                std::ptr::addr_of_mut!(pixels_len),
+            )
+        };
+        if ok && !pixels.is_null() {
+            // Write decoded data into the Image struct in the store
+            let pixel_data = unsafe { std::slice::from_raw_parts(pixels, pixels_len) };
+            let wrote =
+                write_image_to_store(stores, &v_image, width, height, pixel_data, v_path.str());
+            // Free the cdylib-allocated buffer
+            if let Some(free_fn) = crate::extensions::get_free_pixels() {
+                unsafe { free_fn(pixels, pixels_len) };
+            }
+            wrote
+        } else {
+            false
+        }
+    } else {
+        // Fallback: use built-in png_store if available (png feature)
+        #[cfg(feature = "png")]
+        {
+            stores.get_png(v_path.str(), &v_image)
+        }
+        #[cfg(not(feature = "png"))]
+        {
+            false
+        }
+    };
+    stores.put(stack, result);
+}
+
+/// Write raw RGB pixel data into an Image struct in the store.
+#[allow(clippy::cast_possible_wrap)]
+fn write_image_to_store(
+    stores: &mut Stores,
+    image_ref: &DbRef,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    file_path: &str,
+) -> bool {
+    let store = stores.store_mut(image_ref);
+    // Set name field
+    if let Some(name) = std::path::Path::new(file_path).file_name() {
+        let name_pos = store.set_str(name.to_str().unwrap_or(""));
+        store.set_int(image_ref.rec, image_ref.pos, name_pos as i32);
+    }
+    // Set width, height
+    store.set_int(image_ref.rec, image_ref.pos + 4, width as i32);
+    store.set_int(image_ref.rec, image_ref.pos + 8, height as i32);
+    // Allocate vector for pixel data: 8-byte header + pixel bytes
+    let pixel_count = pixels.len() / 3; // 3 bytes per Pixel (r, g, b)
+    let img = store.claim((pixels.len() / 8) as u32 + 2);
+    store.set_int(img, 4, pixel_count as i32);
+    // Copy pixel data after the 8-byte vector header
+    let buf = store.buffer(img);
+    let header_bytes = 8;
+    if buf.len() > header_bytes && buf.len() - header_bytes >= pixels.len() {
+        buf[header_bytes..header_bytes + pixels.len()].copy_from_slice(pixels);
+    }
+    store.set_int(image_ref.rec, image_ref.pos + 12, img as i32);
+    true
 }
 
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).

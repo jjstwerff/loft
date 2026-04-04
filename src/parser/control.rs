@@ -11,6 +11,13 @@ use super::{
     merge_dependencies, v_block, v_if, v_loop, v_set,
 };
 
+/// Check if the last meaningful expression in a block is divergent.
+fn is_block_divergent(ops: &[Value]) -> bool {
+    ops.iter()
+        .rev()
+        .any(|v| matches!(v, Value::Return(_) | Value::Break(_) | Value::Continue(_)))
+}
+
 /// Collected match arm data for enum/struct-enum match expressions.
 struct EnumArm {
     /// discriminants for this arm — Vec allows or-patterns (multiple variants per arm).
@@ -104,7 +111,9 @@ impl Parser {
             if let Value::Insert(ls) = n {
                 Self::move_insert_elements(&mut l, ls);
                 t = Type::Void;
-            } else if t != Type::Void && (self.lexer.peek_token(";") || *result == Type::Void) {
+            } else if !matches!(t, Type::Void | Type::Never)
+                && (self.lexer.peek_token(";") || *result == Type::Void)
+            {
                 l.push(Value::Drop(Box::new(n)));
             } else {
                 l.push(n);
@@ -112,7 +121,10 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
-            t = Type::Void;
+            // Preserve Never for blocks that end with return/break/continue.
+            if !matches!(t, Type::Never) {
+                t = Type::Void;
+            }
             match l.last() {
                 Some(
                     Value::If(_, _, _) | Value::Loop(_) | Value::Block(_) | Value::Parallel(_),
@@ -214,7 +226,7 @@ impl Parser {
             // so suppress the void-vs-iterator mismatch.
             let is_generator = matches!(result, Type::Iterator(_, _));
             let ignore = is_generator
-                || (*t == Type::Void
+                || (matches!(*t, Type::Void | Type::Never)
                     && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last])));
             if !self.convert(&mut l[last], t, result) && !ignore {
                 // for function bodies with `not null` return, downgrade to a warning.
@@ -279,14 +291,18 @@ impl Parser {
             if self.lexer.has_token("if") {
                 self.parse_if(&mut false_code);
             } else {
-                if true_type == Type::Null {
+                if matches!(true_type, Type::Null | Type::Never) {
                     true_type = Type::Unknown(0);
                 }
                 false_type = self.parse_block("else", &mut false_code, &true_type);
                 if true_type == Type::Unknown(0) {
+                    // Only patch the true block with a null value if the last
+                    // expression is NOT a divergent expression (return/break/continue).
                     if let Value::Block(bl) = &mut true_code {
                         let p = bl.operators.len() - 1;
-                        bl.operators[p] = self.null(&false_type);
+                        if !is_block_divergent(&bl.operators) {
+                            bl.operators[p] = self.null(&false_type);
+                        }
                         bl.result = false_type.clone();
                     }
                     true_type = false_type.clone();
@@ -294,7 +310,7 @@ impl Parser {
             }
         } else {
             self.vars.restore_write_state(&write_state);
-            if true_type != Type::Void {
+            if !matches!(true_type, Type::Void | Type::Never) {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,

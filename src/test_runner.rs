@@ -32,6 +32,7 @@ pub(crate) fn run_tests(
     lib_dirs: &[String],
     project: Option<&str>,
     native_mode: bool,
+    extra_native_libs: &[String],
 ) -> i32 {
     use crate::data::DefType;
     use std::collections::BTreeMap;
@@ -696,6 +697,13 @@ pub(crate) fn run_tests(
             // fresh State.  Stores::clone() preserves the type schema but resets
             // runtime allocations — State::new + compile::byte_code reinitialise
             // everything, giving each function a clean heap.
+            let mut pending_native = p.pending_native_libs;
+            // Merge extra native libs from loft.toml (the package's own native crate).
+            for lib in extra_native_libs {
+                if !pending_native.contains(lib) {
+                    pending_native.push(lib.clone());
+                }
+            }
             let clean_data = p.data;
             let clean_db = p.database;
 
@@ -936,6 +944,8 @@ pub(crate) fn run_tests(
                         let mut data_copy = clean_data.clone();
                         let mut state = State::new(clean_db.clone());
                         compile::byte_code(&mut state, &mut data_copy);
+                        // Load native extensions for packages with #native functions.
+                        crate::extensions::load_all(&mut state, pending_native.clone());
 
                         // Set up logger if @ARGS requested --production or --log-conf.
                         if production || log_conf.is_some() {

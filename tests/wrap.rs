@@ -314,7 +314,6 @@ script_test!(vectors, "tests/scripts/11-vectors.loft");
 script_test!(collections, "tests/scripts/12-collections.loft");
 script_test!(map_filter_reduce, "tests/scripts/13-map-filter-reduce.loft");
 script_test!(formatting, "tests/scripts/14-formatting.loft");
-script_test!(random, "tests/scripts/15-random.loft");
 script_test!(min_max_clamp, "tests/scripts/17-min-max-clamp.loft");
 script_test!(math_functions, "tests/scripts/18-math-functions.loft");
 script_test!(files, "tests/scripts/19-files.loft");
@@ -825,6 +824,9 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
         // Run each function with catch_unwind so one failure doesn't abort the rest.
         let mut failures: Vec<String> = Vec::new();
         for name in &fns {
+            if std::env::var("LOFT_TEST_VERBOSE").is_ok() {
+                eprintln!("  running {path}::{name}");
+            }
             let should_fail = file_level_fail || expect_fail.contains(name.as_str());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 state.execute(name, &p_data);

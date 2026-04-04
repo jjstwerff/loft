@@ -1,42 +1,44 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Random numbers: rand, rand_seed, rand_indices.
+use random;
+
 fn main() {
   // --- rand: values stay within [lo, hi] ---
-  rand_seed(42);
+  random::rand_seed(42);
   ok = true;
   for i in 0..200 {
-    r = rand(10, 20);
+    r = random::rand(10, 20);
     if r < 10 || r > 20 {
       ok = false;
     }
   }
   assert(ok, "rand stays in [10, 20]");
   // --- rand: single-value range always returns that value ---
-  assert(rand(7, 7) == 7, "rand single value");
+  assert(random::rand(7, 7) == 7, "rand single value");
   // --- rand: lo > hi returns null ---
-  assert(!rand(10, 5), "rand invalid range (lo>hi) is null");
+  assert(!random::rand(10, 5), "rand invalid range (lo>hi) is null");
   // --- rand_seed: reproducible sequence ---
-  rand_seed(99);
-  a = rand(0, 1000);
-  b = rand(0, 1000);
-  rand_seed(99);
-  assert(rand(0, 1000) == a, "rand_seed reproducible: first value matches");
-  assert(rand(0, 1000) == b, "rand_seed reproducible: second value matches");
+  random::rand_seed(99);
+  a = random::rand(0, 1000);
+  b = random::rand(0, 1000);
+  random::rand_seed(99);
+  assert(random::rand(0, 1000) == a, "rand_seed reproducible: first value matches");
+  assert(random::rand(0, 1000) == b, "rand_seed reproducible: second value matches");
   // --- rand_seed: different seeds produce different values ---
-  rand_seed(1);
-  s1 = rand(0, 1000000);
-  rand_seed(2);
-  s2 = rand(0, 1000000);
+  random::rand_seed(1);
+  s1 = random::rand(0, 1000000);
+  random::rand_seed(2);
+  s2 = random::rand(0, 1000000);
   assert(s1 != s2, "different seeds give different values");
   // --- rand_indices: length ---
-  rand_seed(7);
-  vi = rand_indices(10);
+  random::rand_seed(7);
+  vi = random::rand_indices(10);
   assert(len(vi) == 10, "rand_indices(10) has length 10");
   // --- rand_indices: is a permutation of 0..n-1 ---
-  rand_seed(42);
+  random::rand_seed(42);
   n = 20;
-  perm = rand_indices(n);
+  perm = random::rand_indices(n);
   assert(len(perm) == n, "rand_indices permutation length");
   for expected in 0..n {
     found = false;
@@ -48,13 +50,13 @@ fn main() {
     assert(found, "rand_indices missing value {expected}");
   }
   // --- rand_indices: empty input ---
-  ev = rand_indices(0);
+  ev = random::rand_indices(0);
   assert(len(ev) == 0, "rand_indices(0) is empty");
   // --- rand_indices: different seeds give different orderings ---
-  rand_seed(1);
-  ra = rand_indices(10);
-  rand_seed(9999);
-  rb = rand_indices(10);
+  random::rand_seed(1);
+  ra = random::rand_indices(10);
+  random::rand_seed(9999);
+  rb = random::rand_indices(10);
   diff = false;
   for i in 0..10 {
     if ra[i] != rb[i] {
@@ -63,10 +65,10 @@ fn main() {
   }
   assert(diff, "rand_indices: different seeds give different orders");
   // --- rand_indices: same seed gives same ordering ---
-  rand_seed(123);
-  rc = rand_indices(8);
-  rand_seed(123);
-  rd = rand_indices(8);
+  random::rand_seed(123);
+  rc = random::rand_indices(8);
+  random::rand_seed(123);
+  rd = random::rand_indices(8);
   same = true;
   for i in 0..8 {
     if rc[i] != rd[i] {
@@ -77,50 +79,50 @@ fn main() {
 }
 
 fn test_rand_in_range() {
-  rand_seed(42);
+  random::rand_seed(42);
   ok = true;
   for _i in 0..200 {
-    r = rand(10, 20);
+    r = random::rand(10, 20);
     if r < 10 || r > 20 { ok = false }
   }
   assert(ok, "rand out of range");
 }
 
 fn test_rand_single_value() {
-  assert(rand(7, 7) == 7, "single value");
+  assert(random::rand(7, 7) == 7, "single value");
 }
 
 fn test_rand_invalid_range() {
-  assert(!rand(10, 5), "invalid range should be null");
+  assert(!random::rand(10, 5), "invalid range should be null");
 }
 
 fn test_rand_seed_reproducible() {
-  rand_seed(99);
-  a = rand(0, 1000);
-  b = rand(0, 1000);
-  rand_seed(99);
-  assert(rand(0, 1000) == a, "first value must match");
-  assert(rand(0, 1000) == b, "second value must match");
+  random::rand_seed(99);
+  a = random::rand(0, 1000);
+  b = random::rand(0, 1000);
+  random::rand_seed(99);
+  assert(random::rand(0, 1000) == a, "first value must match");
+  assert(random::rand(0, 1000) == b, "second value must match");
 }
 
 fn test_rand_different_seeds() {
-  rand_seed(1);
-  a = rand(0, 1000000);
-  rand_seed(2);
-  b = rand(0, 1000000);
+  random::rand_seed(1);
+  a = random::rand(0, 1000000);
+  random::rand_seed(2);
+  b = random::rand(0, 1000000);
   assert(a != b, "different seeds should give different values");
 }
 
 fn test_rand_indices_length() {
-  rand_seed(7);
-  v = rand_indices(10);
+  random::rand_seed(7);
+  v = random::rand_indices(10);
   assert(len(v) == 10, "size {len(v)}");
 }
 
 fn test_rand_indices_permutation() {
-  rand_seed(42);
+  random::rand_seed(42);
   n = 20;
-  v = rand_indices(n);
+  v = random::rand_indices(n);
   assert(len(v) == n, "wrong size");
   for expected in 0..n {
     found = false;
@@ -130,25 +132,25 @@ fn test_rand_indices_permutation() {
 }
 
 fn test_rand_indices_zero() {
-  v = rand_indices(0);
+  v = random::rand_indices(0);
   assert(len(v) == 0, "expected empty vector");
 }
 
 fn test_rand_indices_different_orderings() {
-  rand_seed(1);
-  a = rand_indices(10);
-  rand_seed(9999);
-  b = rand_indices(10);
+  random::rand_seed(1);
+  a = random::rand_indices(10);
+  random::rand_seed(9999);
+  b = random::rand_indices(10);
   diff = false;
   for i in 0..10 { if a[i] != b[i] { diff = true } }
   assert(diff, "expected different orderings");
 }
 
 fn test_rand_indices_reproducible() {
-  rand_seed(123);
-  a = rand_indices(8);
-  rand_seed(123);
-  b = rand_indices(8);
+  random::rand_seed(123);
+  a = random::rand_indices(8);
+  random::rand_seed(123);
+  b = random::rand_indices(8);
   same = true;
   for i in 0..8 { if a[i] != b[i] { same = false } }
   assert(same, "seeded rand_indices should be reproducible");

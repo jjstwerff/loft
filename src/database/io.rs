@@ -479,6 +479,7 @@ impl Stores {
     }
 
     #[cfg(not(feature = "png"))]
+    #[allow(clippy::unused_self)]
     pub fn get_png(&mut self, _file_path: &str, _result: &DbRef) -> bool {
         false
     }

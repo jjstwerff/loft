@@ -34,42 +34,17 @@ All new libraries are built as **packages** using the format designed in
 
 - **Sprint 1** — Package infrastructure (PKG.1, PKG.2, PKG.6)
 - **Sprint 2** — Manifest deps, native stub replacement
-- **Sprint 5** — Graphics foundation (GL0–GL2.3: canvas, pixel ops, lines, rect, circle, ellipse)
-- **Sprint 6** — Graphics advanced (GL2.4–GL2.6: Bezier, AA line, triangle fill, fill_ellipse)
+- **Sprint 5** — Graphics foundation (GL0–GL2.3)
+- **Sprint 6** — Graphics advanced (GL2.4–GL2.6)
+- **Sprint 7** — Package deps + docs (PKG.3, `loft doc`, shapes)
+- **Sprint 8** — 3D types + bug fixes (GL4.1–GL4.3, C54, P104)
+- **Sprint 9** — Package registry (REG.1–REG.4)
+- **Sprint 10** — Language ergonomics (C55, C56, A15, I13)
+- **Sprint 11** — Native codegen for packages (PKG.4, PKG.5)
 
 ### Remaining sprints
 
 ```
-Sprint 7: Package deps + docs ✓ (branch sprint-7-pkg-deps-math)
-  PKG.3   dependency resolution ✓
-  loft doc subcommand ✓
-  shapes test package ✓
-
-Sprint 8: 3D types + bug fixes (branch sprint-8-glb-types)
-  GL4.1   Vec3/Mat4 math types ✓
-  GL4.2   mesh types ✓
-  GL4.3   scene types ✓
-  C54     add ** operator → pow() ✓
-  P104    test runner library function filter ✓
-  P105    deferred — get_val fix regresses parser library
-  P106    deferred — depends on P105
-
-Sprint 9: Registry ✓ (independent — no PKG.4 dependency)
-  REG.1   src/registry.rs: read_registry(), find_package(), download_and_extract() ✓
-  REG.2   loft install <name>[@version] — registry lookup in main.rs ✓
-  REG.3   loft registry sync — download registry.txt from source: URL ✓
-  REG.4   loft registry check — installed vs registry; exit 1 on yanks ✓
-
-Sprint 10: Language ergonomics ✓ (branch sprint-10-language-ergonomics)
-  C55     type aliases: type Handler = fn(Request) -> Response ✓
-  C56     ?? return expr — null early-exit in one line ✓
-  A15     parallel { } — structured concurrency block (sequential) ✓
-  I13     iterator protocol — for msg in ws via fn next(self) -> T? ✓
-
-Sprint 11: Native codegen for packages ✓ (branch sprint-11-native-codegen-packages)
-  PKG.4   native codegen --extern ✓
-  PKG.5   WASM codegen linking ✓
-
 Sprint 12: Stdlib extraction (needs PKG.4)
   EXT.1   imaging package (PNG + Image types)
   EXT.2   random package
@@ -108,6 +83,12 @@ Sprint 18: Graphics native (needs PKG.4)
   GL5.1   window + event loop
   GL5.2-5 shaders, VBO, render, texture
   GL6.1-4 WebGL2 equivalents
+
+Sprint 19: Native FFI simplification (needs Sprint 12)
+  FFI.1   generic type marshaller — auto pop/push from #native type signature
+  FFI.2   generic cdylib loader — scan exports, register in HashMap
+  FFI.3   eliminate per-function glue in native.rs and extensions.rs
+  FFI.4   doc: "write a Rust function, declare in loft, done"
 ```
 
 ### Remaining item table
@@ -149,6 +130,10 @@ Sprint 18: Graphics native (needs PKG.4)
 | GL6.2     | Shader compile + link (WebGL2 API)                        | S  | ✓      | GL6.1        | graphics/native/src/webgl.rs  |
 | GL6.3     | Buffer upload + draw call + requestAnimationFrame         | S  | ✓      | GL6.2        | graphics/native/src/webgl.rs  |
 | GL6.4     | Texture upload from Canvas pixel buffer (WebGL)           | S  | ✓      | GL6.3        | graphics/native/src/webgl.rs  |
+| FFI.1     | Generic type marshaller from `#native` type signature     | MH | —      | EXT.1        | src/native.rs, src/state/codegen.rs |
+| FFI.2     | Generic cdylib loader — scan exports, HashMap dispatch    | S  | —      | FFI.1        | src/extensions.rs             |
+| FFI.3     | Eliminate per-function glue in native.rs / extensions.rs  | M  | —      | FFI.2        | src/native.rs, src/extensions.rs |
+| FFI.4     | Docs: zero-boilerplate native function guide              | S  | —      | FFI.3        | doc/claude/EXTERNAL_LIBS.md   |
 
 **Package system design:** [PACKAGES.md](PACKAGES.md).
 

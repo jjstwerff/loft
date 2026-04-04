@@ -106,6 +106,96 @@ Without `LOFT_LOG`, the program runs without any trace output (production mode).
 
 ---
 
+## Inspecting a Specific Function
+
+### IR inspection with `LOFT_IR`
+
+Set `LOFT_IR` to a function name (substring match) to see the parsed IR tree:
+
+```bash
+LOFT_IR=distance loft myprog.loft
+```
+
+Output:
+```
+=== IR: n_distance ===
+{#block(1):integer
+  [7] OpAddInt(OpMulInt(OpGetInt(p(0), 0), OpGetInt(p(0), 0)),
+               OpMulInt(OpGetInt(p(0), 4), OpGetInt(p(0), 4)));
+}#block(1):integer
+===
+```
+
+The IR shows how the parser translated the loft source into internal operations.
+Each `Op*` is a bytecode operator; `p(0)` is a variable reference; field offsets
+(0, 4) correspond to struct field positions in bytes.
+
+Use `LOFT_IR=*` to dump all user functions.
+
+### Execution trace with `LOFT_LOG`
+
+Set `LOFT_LOG` to trace bytecode execution step by step:
+
+```bash
+LOFT_LOG=full loft myprog.loft 2>trace.txt
+```
+
+Output (excerpt):
+```
+Execute main:
+    0:[8] ReserveFrame(size=4)
+    5:[48] Database(var[36], db_tp=48)
+   10:[48] VarRef(var[36]=p) -> #1.1 { }[48]
+   13:[60] ConstInt(val=3) -> 3[60]
+   18:[64] SetInt(v1=ref(1,1,8)[48], fld=0, val=3[60])
+   32:[48] VarRef(var[36]=p) -> #1.1 { x: 3, y: 4 }[48]
+   35:[60] Call(d_nr=499, args_size=12, fn=n_distance)
+ 3487:[64] VarRef(var[48]=p) -> #1.1 { x: 3, y: 4 }[64]
+ 3490:[76] GetInt(v1=ref(1,1,8)[64], fld=0) -> 3[64]
+ 3499:[72] MulInt(v1=3[64], v2=3[68]) -> 9[64]
+ 3513:[72] AddInt(v1=9[64], v2=16[68]) -> 25[64]
+ 3514:[68] Return(ret=3566[60], value=4, discard=20) -> 25[48]
+```
+
+**Reading the trace:**
+- `[48]` is the stack position in bytes
+- `#1.1 { x: 3, y: 4 }` is an inline struct dump (store 1, record 1)
+- `-> 25[64]` shows the result value and where it was pushed on the stack
+- `Call(..., fn=n_distance)` shows function entry with the internal name
+- `Return(...)` shows the function exit with the returned value
+
+### Filtering by function name
+
+Use `LOFT_LOG=fn:distance` to only trace execution inside `distance`:
+
+```bash
+LOFT_LOG=fn:distance loft myprog.loft 2>trace.txt
+```
+
+### Combining IR and trace
+
+Both can be used together to see the IR at compile time and the execution at runtime:
+
+```bash
+LOFT_IR=distance LOFT_LOG=full loft myprog.loft 2>trace.txt
+```
+
+### Quick reference
+
+| Variable | Value | What it shows |
+|----------|-------|---------------|
+| `LOFT_IR` | `distance` | IR tree for functions matching "distance" |
+| `LOFT_IR` | `*` | IR tree for all user functions |
+| `LOFT_LOG` | `full` | IR + bytecode + execution trace for all functions |
+| `LOFT_LOG` | `minimal` | Execution trace only |
+| `LOFT_LOG` | `static` | IR + bytecode only (no execution) |
+| `LOFT_LOG` | `fn:distance` | Execution trace for `distance` only |
+| `LOFT_LOG` | `crash_tail:50` | Last 50 execution steps before a crash |
+| `LOFT_DUMP_DEPTH` | `3` | Struct nesting depth in dumps (default 2) |
+| `LOFT_DUMP_ELEMENTS` | `4` | Max vector elements in dumps (default 8) |
+
+---
+
 ## Debugging a Parse Error or Wrong IR
 
 1. Add `LOFT_LOG=static` and run the failing test.

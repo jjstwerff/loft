@@ -309,13 +309,33 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
 
     // For test-style files without fn main(), generate a main() that calls
     // each test function so the native binary is a valid executable.
+    // Skip functions marked with @EXPECT_FAIL in the source.
     if !has_main && !test_fns.is_empty() {
         use std::io::Write;
+        let src = std::fs::read_to_string(entry).unwrap_or_default();
+        let expect_fail_fns: std::collections::HashSet<String> = src
+            .lines()
+            .filter(|l| l.contains("@EXPECT_FAIL"))
+            .flat_map(|l| {
+                l.split_whitespace()
+                    .skip_while(|w| *w != "@EXPECT_FAIL")
+                    .skip(1)
+                    .map(String::from)
+            })
+            .collect();
         writeln!(buf, "\nfn main() {{")?;
         writeln!(buf, "    let mut stores = Stores::new();")?;
         writeln!(buf, "    init(&mut stores);")?;
         for (_, name) in &test_fns {
-            writeln!(buf, "    {name}(&mut stores);")?;
+            let user_name = name.strip_prefix("n_").unwrap_or(name);
+            if expect_fail_fns
+                .iter()
+                .any(|f| user_name.contains(f.as_str()))
+            {
+                writeln!(buf, "    // skipped (EXPECT_FAIL): {name}")?;
+            } else {
+                writeln!(buf, "    {name}(&mut stores);")?;
+            }
         }
         writeln!(buf, "}}")?;
     }

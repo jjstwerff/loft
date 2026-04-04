@@ -1,0 +1,44 @@
+// Copyright (c) 2024 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- Imaging ---
+// Types and functions for reading PNG images.
+
+// Data per pixel of a PNG image.
+// Fields r, g, b hold red, green and blue intensity, each 0–255.
+pub struct Pixel {
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
+}
+
+// Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
+// Use for fast colour comparison or storage.
+pub fn value(self: Pixel) -> integer {
+  self.r * 0x10000 + self.g * 0x100 + self.b
+}
+
+// Database structure with image data.
+// The actual data is in height rows of width length.
+pub struct Image {
+  name: text,
+  width: integer,
+  height: integer,
+  data: vector<Pixel>
+}
+
+// Native function: decode a PNG file into an Image struct.
+fn load_png(path: text, image: Image) -> boolean;
+#native "n_load_png"
+
+// Decodes a PNG file and returns an Image.
+// Returns null if the file is not in text format.
+// Use to load sprite sheets or textures.
+pub fn png(self: File) -> Image {
+  if self.format == Format.TextFile {
+    result = Image { };
+    load_png(self.path, result);
+    result
+  } else {
+    null
+  }
+}

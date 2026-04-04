@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- Random ---
+// Random number generation functions.
+
+// Returns a random integer in [lo, hi] (inclusive).
+// Returns null when lo > hi or when either argument is null.
+pub fn rand(lo: integer, hi: integer) -> integer;
+#native "n_rand"
+
+// Seeds the thread-local random number generator with the given value.
+// Call this before rand() or rand_indices() to get reproducible sequences.
+pub fn rand_seed(seed: long);
+#native "n_rand_seed"
+
+// Returns a vector of n integers [0, 1, ..., n-1] in a random order.
+// Useful for random iteration, shuffling, or sampling without replacement.
+// Returns an empty vector when n is 0 or null.
+pub fn rand_indices(n: integer) -> vector<integer>;
+#native "n_rand_indices"

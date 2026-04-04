@@ -1,89 +1,82 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! A7.2/A7.3 — Native extension loader.
+//! Native extension loader.
 //!
-//! Loads platform shared libraries that expose a `loft_register_v1` C-ABI
-//! entry point and registers their native functions with the interpreter via
-//! `State::static_fn()`.
-//!
-//! The loading path is gated behind the `native-extensions` Cargo feature to
-//! keep the default build free of the `libloading` dependency.  The
-//! `LoftPluginCtx` struct is always available because plugin crates that
-//! depend on `loft-plugin-api` need its definition even when building without
-//! the full interpreter.
+//! Package native crates export pure C-ABI functions that the interpreter
+//! loads via dlopen.  The cdylib never touches `Stores` — only primitives
+//! cross the boundary.  See `EXTERNAL_LIBS.md` for the full design.
 
-use std::ffi::c_char;
+use std::sync::OnceLock;
 
-use crate::state::State;
+// ── C-ABI function pointer types for imaging cdylib ─────────────────────
 
-/// C-ABI context passed to `loft_register_v1` in a native extension.
-///
-/// Plugin crates receive a `*mut LoftPluginCtx` and call `register_fn` once
-/// for each native function they expose.  The fields beginning with `_` are
-/// internal to the interpreter; plugins must not read or write them directly.
-///
-/// This struct has a stable `repr(C)` layout.  New fields may be appended in
-/// minor versions; plugins must not assume a fixed size.
-#[repr(C)]
-#[allow(clippy::pub_underscore_fields, dead_code)]
-pub struct LoftPluginCtx {
-    /// Reserved for future interpreter state pointer.  Must be null; plugins
-    /// must not dereference it.
-    pub _state: *mut (),
-    /// Call this once per native function to register it with the interpreter.
-    ///
-    /// `name` must be a null-terminated C string following the loft naming
-    /// convention (`n_<fn>` for globals, `t_<N><Type>_<method>` for methods).
-    /// `func` is cast from `fn(&mut Stores, &mut DbRef)` at the plugin side.
-    pub register_fn: unsafe extern "C" fn(
-        ctx: *mut LoftPluginCtx,
-        name: *const c_char,
-        func: unsafe extern "C" fn(*mut (), *mut ()),
-    ),
-    /// Internal staging pointer used by the trampoline.  Must not be
-    /// accessed by plugins.
-    pub _staged: *mut (),
+/// `loft_decode_png(path, len, &w, &h, &pixels, &pixels_len) -> bool`
+pub type DecodePngFn =
+    unsafe extern "C" fn(*const u8, usize, *mut u32, *mut u32, *mut *mut u8, *mut usize) -> bool;
+
+/// `loft_free_pixels(ptr, len)`
+pub type FreePixelsFn = unsafe extern "C" fn(*mut u8, usize);
+
+static DECODE_PNG: OnceLock<DecodePngFn> = OnceLock::new();
+static FREE_PIXELS: OnceLock<FreePixelsFn> = OnceLock::new();
+
+/// Get the loaded PNG decode function, or `None` if the imaging cdylib
+/// hasn't been loaded.
+pub fn get_decode_png() -> Option<DecodePngFn> {
+    DECODE_PNG.get().copied()
 }
 
-/// # Safety
-///
-/// `LoftPluginCtx` contains raw pointers.  The interpreter constructs one on
-/// the stack before calling `loft_register_v1` and the pointers are valid for
-/// the duration of that call.
-unsafe impl Send for LoftPluginCtx {}
+/// Get the pixel buffer free function.
+pub fn get_free_pixels() -> Option<FreePixelsFn> {
+    FREE_PIXELS.get().copied()
+}
 
-/// Load all pending native extension libraries into `state`.
-///
-/// Called from `main.rs` between `byte_code()` and `state.execute_argv()`.
-/// `paths` comes from `Parser::pending_native_libs`.
+// ── C-ABI function pointer types for random cdylib ──────────────────────
+
+pub type RandIntFn = extern "C" fn(i32, i32) -> i32;
+pub type RandSeedFn = extern "C" fn(i64);
+pub type RandIndicesFn = unsafe extern "C" fn(i32, *mut *mut i32, *mut usize);
+pub type FreeIndicesFn = unsafe extern "C" fn(*mut i32, usize);
+
+static RAND_INT: OnceLock<RandIntFn> = OnceLock::new();
+static RAND_SEED: OnceLock<RandSeedFn> = OnceLock::new();
+static RAND_INDICES: OnceLock<RandIndicesFn> = OnceLock::new();
+static FREE_INDICES: OnceLock<FreeIndicesFn> = OnceLock::new();
+
+pub fn get_rand_int() -> Option<RandIntFn> {
+    RAND_INT.get().copied()
+}
+pub fn get_rand_seed() -> Option<RandSeedFn> {
+    RAND_SEED.get().copied()
+}
+pub fn get_rand_indices() -> Option<RandIndicesFn> {
+    RAND_INDICES.get().copied()
+}
+pub fn get_free_indices() -> Option<FreeIndicesFn> {
+    FREE_INDICES.get().copied()
+}
+
+// ── Library loading ─────────────────────────────────────────────────────
+
+/// Load all pending native extension libraries.
+/// Resolves C-ABI symbols from each cdylib and stores function pointers.
 #[cfg(feature = "native-extensions")]
-pub fn load_all(state: &mut State, paths: Vec<String>) {
+pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
     for path in paths {
-        load_one(state, &path);
+        load_one(&path);
     }
 }
 
-/// No-op when `native-extensions` feature is disabled.
 #[cfg(not(feature = "native-extensions"))]
-pub fn load_all(_state: &mut State, _paths: Vec<String>) {}
+pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 
-/// Load a single native extension shared library at `path` and register all
-/// functions it exposes via its `loft_register_v1` entry point.
-///
-/// # Panics
-/// Panics if the library cannot be opened or does not export `loft_register_v1`.
 #[cfg(feature = "native-extensions")]
-pub fn load_one(state: &mut State, path: &str) {
-    use crate::state::Call;
-    use libloading::{Library, Symbol};
+fn load_one(path: &str) {
+    use libloading::Library;
     use std::collections::HashSet;
-    use std::ffi::CStr;
     use std::sync::Mutex;
 
-    // A7.2-par: serialise dlopen calls to prevent heap corruption when multiple
-    // threads load shared libraries simultaneously (e.g. parallel test execution).
-    // Also tracks already-loaded paths to avoid double-loading the same library.
     static LOAD_LOCK: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
     let canonical = std::fs::canonicalize(path)
@@ -91,73 +84,80 @@ pub fn load_one(state: &mut State, path: &str) {
         .to_string_lossy()
         .into_owned();
 
-    let mut guard = LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = LOAD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let loaded = guard.get_or_insert_with(HashSet::new);
     if loaded.contains(&canonical) {
         return;
     }
 
-    unsafe extern "C" fn trampoline_register(
-        ctx: *mut LoftPluginCtx,
-        name: *const c_char,
-        func: unsafe extern "C" fn(*mut (), *mut ()),
-    ) {
-        let staged = unsafe { &mut *((*ctx)._staged as *mut Vec<(String, Call)>) };
-        let name = unsafe { CStr::from_ptr(name) }
-            .to_string_lossy()
-            .into_owned();
-        let call: Call = unsafe { std::mem::transmute(func) };
-        staged.push((name, call));
-    }
-
-    let lib = unsafe { Library::new(path) }
-        .unwrap_or_else(|e| panic!("loft: failed to open native extension '{path}': {e}"));
-
-    let mut staged: Vec<(String, Call)> = Vec::new();
-    let mut ctx = LoftPluginCtx {
-        _state: std::ptr::null_mut(),
-        register_fn: trampoline_register,
-        _staged: &mut staged as *mut _ as *mut (),
+    let lib = match unsafe { Library::new(path) } {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("loft: cannot load native extension '{path}': {e}");
+            return;
+        }
     };
 
-    {
-        let register: Symbol<unsafe extern "C" fn(*mut LoftPluginCtx)> =
-            unsafe { lib.get(b"loft_register_v1\0") }.unwrap_or_else(|e| {
-                panic!("loft: native extension '{path}' does not export loft_register_v1: {e}")
-            });
-        unsafe { register(&mut ctx) };
+    // Resolve known symbols.  Each package registers its symbols here.
+    // This is explicit — no generic registration loop needed.
+    if let Ok(f) = unsafe { lib.get::<DecodePngFn>(b"loft_decode_png\0") } {
+        let _ = DECODE_PNG.set(*f);
     }
-
-    for (name, call) in staged {
-        // PKG.1: if the function was already registered as a stub by byte_code(),
-        // replace the stub with the real implementation.
-        if !state.replace_static_fn(&name, call) {
-            state.static_fn(&name, call);
-        }
+    if let Ok(f) = unsafe { lib.get::<FreePixelsFn>(b"loft_free_pixels\0") } {
+        let _ = FREE_PIXELS.set(*f);
+    }
+    // Random symbols
+    if let Ok(f) = unsafe { lib.get::<RandIntFn>(b"loft_rand_int\0") } {
+        let _ = RAND_INT.set(*f);
+    }
+    if let Ok(f) = unsafe { lib.get::<RandSeedFn>(b"loft_rand_seed\0") } {
+        let _ = RAND_SEED.set(*f);
+    }
+    if let Ok(f) = unsafe { lib.get::<RandIndicesFn>(b"loft_rand_indices\0") } {
+        let _ = RAND_INDICES.set(*f);
+    }
+    if let Ok(f) = unsafe { lib.get::<FreeIndicesFn>(b"loft_free_indices\0") } {
+        let _ = FREE_INDICES.set(*f);
     }
 
     loaded.insert(canonical);
-
-    // Keep the library alive for the interpreter's lifetime.
-    // Leak it intentionally — the process exits before cleanup matters.
     std::mem::forget(lib);
-    // Drop the lock guard after forget so the library handle is fully settled.
 }
 
-/// No-op stub when `native-extensions` feature is disabled.
-#[cfg(not(feature = "native-extensions"))]
-#[allow(dead_code)]
-pub fn load_one(_state: &mut State, _path: &str) {}
+// ── Auto-build ──────────────────────────────────────────────────────────
+
+/// Auto-build a package's native crate if the shared library is missing.
+/// Returns the path to the built library, or `None` if no native source exists.
+#[must_use]
+pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
+    let cargo_toml = format!("{pkg_dir}/native/Cargo.toml");
+    if !std::path::Path::new(&cargo_toml).exists() {
+        return None;
+    }
+    let lib_name = platform_lib_name(stem);
+    let release_path = format!("{pkg_dir}/native/target/release/{lib_name}");
+    if std::path::Path::new(&release_path).exists() {
+        return Some(release_path);
+    }
+    let debug_path = format!("{pkg_dir}/native/target/debug/{lib_name}");
+    if std::path::Path::new(&debug_path).exists() {
+        return Some(debug_path);
+    }
+    let built_path = release_path;
+    let status = std::process::Command::new("cargo")
+        .args(["build", "--release", "--manifest-path", &cargo_toml])
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+    match status {
+        Ok(s) if s.success() && std::path::Path::new(&built_path).exists() => Some(built_path),
+        _ => None,
+    }
+}
 
 /// Resolve the platform-correct shared-library filename from a stem.
-///
-/// `stem` is the value from `loft.toml [library] native = "..."`.
-///
-/// | OS      | Result            |
-/// |---------|-------------------|
-/// | Linux   | `lib<stem>.so`    |
-/// | macOS   | `lib<stem>.dylib` |
-/// | Windows | `<stem>.dll`      |
 #[must_use]
 pub fn platform_lib_name(stem: &str) -> String {
     if cfg!(target_os = "macos") {

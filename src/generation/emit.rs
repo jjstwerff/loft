@@ -119,19 +119,25 @@ impl Output<'_> {
             }
             Value::Return(val) => {
                 let returned = &self.data.def(self.def_nr).returned;
-                let returns_text = matches!(returned, Type::Text(_));
-                let narrow = narrow_int_cast(returned);
-                write!(w, "return ")?;
-                if returns_text {
-                    write!(w, "Str::new(")?;
-                } else if narrow.is_some() {
-                    write!(w, "(")?;
-                }
-                self.output_code_inner(w, val)?;
-                if returns_text {
-                    write!(w, ")")?;
-                } else if let Some(cast) = narrow {
-                    write!(w, ") as {cast}")?;
+                // When returning null from a non-void function, emit the
+                // type-appropriate null sentinel instead of ().
+                if matches!(**val, Value::Null) && *returned != Type::Void {
+                    write!(w, "return {}", super::default_native_value(returned))?;
+                } else {
+                    let returns_text = matches!(returned, Type::Text(_));
+                    let narrow = narrow_int_cast(returned);
+                    write!(w, "return ")?;
+                    if returns_text {
+                        write!(w, "Str::new(")?;
+                    } else if narrow.is_some() {
+                        write!(w, "(")?;
+                    }
+                    self.output_code_inner(w, val)?;
+                    if returns_text {
+                        write!(w, ")")?;
+                    } else if let Some(cast) = narrow {
+                        write!(w, ") as {cast}")?;
+                    }
                 }
             }
             Value::Keys(keys) => {
