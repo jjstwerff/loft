@@ -123,6 +123,9 @@ Sprint 13: Graphics native (needs PKG.4)
 | LIB.2     | Migrate lib/graphics/ → jjstwerff/loft-graphics repo      | S  | ✓      | LIB.1, REG.4 | lib/graphics/ (removed)       |
 | LIB.3     | Migrate lib/shapes/ → jjstwerff/loft-shapes repo          | S  | ✓      | LIB.2        | lib/shapes/ (removed)         |
 | LIB.4     | Add graphics + shapes to central registry; verify install  | S  | ✓      | LIB.3, REG.3 | registry.txt                  |
+| C55       | Type aliases (`type Handler = fn(Request) -> Response`)   | XS | ✓      |              | SERVER_FEATURES.md § C55      |
+| C56       | `?? return expr` null early-exit in handlers              | XS | ✓      |              | SERVER_FEATURES.md § C56      |
+| A15       | `parallel { }` structured concurrency block               | M  | ✓      |              | SERVER_FEATURES.md § A15      |
 | L1        | Error recovery after token failures                       | M  | ✓      |              | PLANNING.md § L1              |
 | A2        | Logger: hot-reload, run-mode, release + debug             | M  | ✓      |              | LOGGER.md                     |
 | C52       | Stdlib name clash: warning + `std::` prefix               | M  | ✓      |              | PLANNING.md § C52             |
@@ -151,6 +154,7 @@ Additional warnings to catch common mistakes, inspired by Rust's Clippy:
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
+| I13       | Iterator protocol (`for msg in ws` via `fn next → T?`)   | MH | ✓      | I5+          | SERVER_FEATURES.md § I13      |
 | W2        | Editor shell (CodeMirror 6 + Loft grammar)                | M  | ✓      | W1           | WEB_IDE.md M2                 |
 | W3        | Symbol navigation (go-to-def, find-usages)                | M  | ✓      | W1, W2       | WEB_IDE.md M3                 |
 | W4        | Multi-file projects (IndexedDB)                           | M  | ✓      | W2           | WEB_IDE.md M4                 |
@@ -163,6 +167,7 @@ Additional warnings to catch common mistakes, inspired by Rust's Clippy:
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
+| C57       | Route decorator syntax (`@get`, `@post`, `@ws`)           | H  | ✓      | C55          | SERVER_FEATURES.md § C57      |
 | W1.14     | WASM Tier 2: Web Worker pool; `par()` parallelism         | VH | ✓      | W1.18        | WASM.md — Threading           |
 | I12       | Interfaces: factory methods (`fn zero() -> Self`)         | S  | ✓      | I5.1         | INTERFACES.md § Q4/Q6         |
 | I8.5      | Interfaces: left-side concrete operand                    | S  | ~      | I8.3         | INTERFACES.md § Phase 1 gaps  |
