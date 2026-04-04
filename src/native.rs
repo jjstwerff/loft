@@ -81,6 +81,18 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("i_parse_errors", i_parse_errors),
     ("n_http_do", n_http_do),
     ("n_http_body", n_http_body),
+    ("n_gl_create_window", n_gl_create_window),
+    ("n_gl_poll_events", n_gl_poll_events),
+    ("n_gl_swap_buffers", n_gl_swap_buffers),
+    ("n_gl_clear", n_gl_clear),
+    ("n_gl_destroy_window", n_gl_destroy_window),
+    ("n_gl_create_shader", n_gl_create_shader),
+    ("n_gl_use_shader", n_gl_use_shader),
+    ("n_gl_draw", n_gl_draw),
+    ("n_gl_load_font", n_gl_load_font),
+    ("n_gl_measure_text", n_gl_measure_text),
+    ("n_gl_bind_texture", n_gl_bind_texture),
+    ("n_gl_delete_texture", n_gl_delete_texture),
 ];
 
 pub fn init(state: &mut State) {
@@ -1373,4 +1385,156 @@ fn n_http_body(stores: &mut Stores, stack: &mut DbRef) {
         &stores.scratch[0]
     };
     stores.put(stack, Str::new(body));
+}
+
+// ── OpenGL glue (GL5) ───────────────────────────────────────────────────
+
+fn n_gl_create_window(stores: &mut Stores, stack: &mut DbRef) {
+    let v_title = *stores.get::<Str>(stack);
+    let v_height = *stores.get::<i32>(stack);
+    let v_width = *stores.get::<i32>(stack);
+    let result = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(u32, u32, *const u8, usize) -> bool>(
+            "loft_gl_create_window",
+        )
+    } {
+        f(
+            v_width as u32,
+            v_height as u32,
+            v_title.str().as_ptr(),
+            v_title.str().len(),
+        )
+    } else {
+        false
+    };
+    stores.put(stack, result);
+}
+
+fn n_gl_poll_events(stores: &mut Stores, stack: &mut DbRef) {
+    let result = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn() -> bool>("loft_gl_poll_events")
+    } {
+        f()
+    } else {
+        false
+    };
+    stores.put(stack, result);
+}
+
+fn n_gl_swap_buffers(_stores: &mut Stores, _stack: &mut DbRef) {
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn()>("loft_gl_swap_buffers") }
+    {
+        f();
+    }
+}
+
+fn n_gl_clear(stores: &mut Stores, stack: &mut DbRef) {
+    let v_color = *stores.get::<i32>(stack);
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_clear") }
+    {
+        f(v_color as u32);
+    }
+}
+
+fn n_gl_destroy_window(_stores: &mut Stores, _stack: &mut DbRef) {
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn()>("loft_gl_destroy_window") }
+    {
+        f();
+    }
+}
+
+fn n_gl_create_shader(stores: &mut Stores, stack: &mut DbRef) {
+    let v_frag = *stores.get::<Str>(stack);
+    let v_vert = *stores.get::<Str>(stack);
+    let result = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(*const u8, usize, *const u8, usize) -> u32>(
+            "loft_gl_create_shader",
+        )
+    } {
+        f(
+            v_vert.str().as_ptr(),
+            v_vert.str().len(),
+            v_frag.str().as_ptr(),
+            v_frag.str().len(),
+        )
+    } else {
+        0
+    };
+    stores.put(stack, result as i32);
+}
+
+fn n_gl_use_shader(stores: &mut Stores, stack: &mut DbRef) {
+    let v_program = *stores.get::<i32>(stack);
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_use_shader") }
+    {
+        f(v_program as u32);
+    }
+}
+
+fn n_gl_draw(stores: &mut Stores, stack: &mut DbRef) {
+    let v_count = *stores.get::<i32>(stack);
+    let v_vao = *stores.get::<i32>(stack);
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32, u32)>("loft_gl_draw") }
+    {
+        f(v_vao as u32, v_count as u32);
+    }
+}
+
+fn n_gl_load_font(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(*const u8, usize) -> i32>(
+            "loft_gl_load_font",
+        )
+    } {
+        f(v_path.str().as_ptr(), v_path.str().len())
+    } else {
+        i32::MIN
+    };
+    stores.put(stack, result);
+}
+
+fn n_gl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
+    let v_size = *stores.get::<f64>(stack);
+    let v_text = *stores.get::<Str>(stack);
+    let v_font = *stores.get::<i32>(stack);
+    let result = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(i32, *const u8, usize, f32) -> f32>(
+            "loft_gl_measure_text",
+        )
+    } {
+        f64::from(f(
+            v_font,
+            v_text.str().as_ptr(),
+            v_text.str().len(),
+            v_size as f32,
+        ))
+    } else {
+        0.0
+    };
+    stores.put(stack, result);
+}
+
+fn n_gl_bind_texture(stores: &mut Stores, stack: &mut DbRef) {
+    let v_unit = *stores.get::<i32>(stack);
+    let v_tex = *stores.get::<i32>(stack);
+    if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(u32, u32)>("loft_gl_bind_texture")
+    } {
+        f(v_tex as u32, v_unit as u32);
+    }
+}
+
+fn n_gl_delete_texture(stores: &mut Stores, stack: &mut DbRef) {
+    let v_tex = *stores.get::<i32>(stack);
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_delete_texture") }
+    {
+        f(v_tex as u32);
+    }
 }

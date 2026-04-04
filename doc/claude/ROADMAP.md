@@ -47,10 +47,13 @@ All new libraries are built as **packages** using the format designed in
 ### Remaining sprints
 
 ```
-Sprint 15: Graphics native (needs PKG.4)
-  GL3     text rendering (fontdue native)
-  GL5.1   window + event loop
-  GL5.2-5 shaders, VBO, render, texture
+Sprint 15: Graphics native ✓
+  GL5.1   window + event loop (glutin + winit pump_app_events) ✓
+  GL5.2   shader compile + link ✓
+  GL5.3   VBO/VAO upload ✓
+  GL5.4   draw call + render loop ✓
+  GL5.5   texture upload/bind/delete ✓
+  GL3     font loading + text measurement + rasterization (fontdue) ✓
 
 Sprint 16: WebGL + server core
   GL6.1-4 WebGL2 equivalents
