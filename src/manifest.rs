@@ -25,6 +25,12 @@ pub struct Manifest {
     /// PKG.3: package dependencies from `[dependencies]` section.
     /// Key = package name, value = version requirement or path.
     pub dependencies: Vec<(String, String)>,
+    /// PKG.4: Rust crate directory name from `[native] crate = "..."`.
+    pub native_crate: Option<String>,
+    /// PKG.4: loft function name → Rust symbol path from `[native.functions]`.
+    pub native_functions: Vec<(String, String)>,
+    /// PKG.5: WASM-specific overrides from `[native.wasm]`.
+    pub native_wasm: Vec<(String, String)>,
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -52,6 +58,17 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                 ("dependencies", _) => {
                     manifest
                         .dependencies
+                        .push((key.to_string(), value.to_string()));
+                }
+                ("native", "crate") => manifest.native_crate = Some(value.to_string()),
+                ("native.functions", _) => {
+                    manifest
+                        .native_functions
+                        .push((key.to_string(), value.to_string()));
+                }
+                ("native.wasm", _) => {
+                    manifest
+                        .native_wasm
                         .push((key.to_string(), value.to_string()));
                 }
                 _ => {}
@@ -148,6 +165,45 @@ mod tests {
         assert_eq!(
             m.dependencies[1],
             ("utils".to_string(), "../utils".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_native_section() {
+        let p = write_temp(
+            "native",
+            r#"[package]
+name = "graphics"
+version = "0.1.0"
+
+[native]
+crate = "graphics_native"
+
+[native.functions]
+save_png = "graphics_native::save_png"
+load_font = "graphics_native::load_font"
+
+[native.wasm]
+gl_create = "graphics_native::webgl::create_canvas"
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.native_crate.as_deref(), Some("graphics_native"));
+        assert_eq!(m.native_functions.len(), 2);
+        assert_eq!(
+            m.native_functions[0],
+            (
+                "save_png".to_string(),
+                "graphics_native::save_png".to_string()
+            )
+        );
+        assert_eq!(m.native_wasm.len(), 1);
+        assert_eq!(
+            m.native_wasm[0],
+            (
+                "gl_create".to_string(),
+                "graphics_native::webgl::create_canvas".to_string()
+            )
         );
     }
 

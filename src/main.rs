@@ -628,6 +628,46 @@ fn registry_age_str(path: &std::path::Path) -> String {
     }
 }
 
+/// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
+/// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
+/// otherwise looks for native rlibs in `native/target/release/`.
+fn add_native_extern_flags(
+    cmd: &mut std::process::Command,
+    data: &data::Data,
+    target: Option<&str>,
+) {
+    for (crate_name, pkg_dir) in &data.native_packages {
+        // Look for the compiled rlib in the package's native crate output.
+        let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
+        let rlib_path = if let Some(tgt) = target {
+            // WASM: check prebuilt first, then native/target/<target>/release/
+            let prebuilt = std::path::PathBuf::from(pkg_dir)
+                .join("prebuilt")
+                .join(tgt)
+                .join(&rlib_name);
+            if prebuilt.exists() {
+                prebuilt
+            } else {
+                std::path::PathBuf::from(pkg_dir)
+                    .join("native/target")
+                    .join(tgt)
+                    .join("release")
+                    .join(&rlib_name)
+            }
+        } else {
+            // Native: check native/target/release/
+            std::path::PathBuf::from(pkg_dir)
+                .join("native/target/release")
+                .join(&rlib_name)
+        };
+        if rlib_path.exists() {
+            let extern_name = crate_name.replace('-', "_");
+            cmd.arg("--extern")
+                .arg(format!("{}={}", extern_name, rlib_path.display()));
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     let argv: Vec<String> = env::args_os()
@@ -1018,6 +1058,8 @@ fn main() {
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
             cmd.arg("-L").arg(lib_dir.join("deps"));
         }
+        // PKG.5: add --extern flags for native packages (WASM target).
+        add_native_extern_flags(&mut cmd, &p.data, Some("wasm32-wasip2"));
         let status = cmd.status();
         let _ = std::fs::remove_file(&rs_path);
         match status {
@@ -1107,6 +1149,8 @@ fn main() {
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
             cmd.arg("-L").arg(lib_dir.join("deps"));
         }
+        // PKG.4: add --extern flags for native packages.
+        add_native_extern_flags(&mut cmd, &p.data, None);
         let status = cmd.status();
         let status = match status {
             Ok(s) => s,

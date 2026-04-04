@@ -892,26 +892,56 @@ extern crate loft;"
             }
         } else if def.code == Value::Null {
             // Native-only function with no loft body.
-            // Internal i_ functions have implementations in codegen_runtime.rs;
-            // all others get a todo!() stub.
-            writeln!(w, "{{")?;
-            if def.name == "i_parse_errors" {
-                writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
-            } else if def.name == "i_parse_error_push" {
-                writeln!(
-                    w,
-                    "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
-                )?;
-            } else if def.returned != Type::Void {
-                writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+            // PKG.4: check if this function has a native symbol from a package manifest.
+            let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
+            if let Some(rust_symbol) = self.data.native_symbols.get(user_name) {
+                // Emit a call to the native Rust function.
+                self.output_native_extern_call(w, def_nr, rust_symbol)?;
+            } else {
+                // Internal i_ functions have implementations in codegen_runtime.rs;
+                // all others get a todo!() stub.
+                writeln!(w, "{{")?;
+                if def.name == "i_parse_errors" {
+                    writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
+                } else if def.name == "i_parse_error_push" {
+                    writeln!(
+                        w,
+                        "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
+                    )?;
+                } else if def.returned != Type::Void {
+                    writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                }
+                writeln!(w, "}}")?;
             }
-            writeln!(w, "}}")?;
         } else {
             writeln!(w, "{{")?;
             self.output_code_inner(w, &def.code)?;
             writeln!(w, "\n}}")?;
         }
         writeln!(w, "\n")
+    }
+
+    /// PKG.4: emit a call to an external native Rust function from a package.
+    /// The generated code calls `rust_symbol(stores, arg1, arg2, ...)` and
+    /// returns the result.
+    fn output_native_extern_call(
+        &self,
+        w: &mut dyn Write,
+        d_nr: u32,
+        rust_symbol: &str,
+    ) -> std::io::Result<()> {
+        let def = self.data.def(d_nr);
+        writeln!(w, "{{")?;
+        // Build argument list: first arg is always `stores: &mut Stores`.
+        write!(w, "  {rust_symbol}(stores")?;
+        for attr in &def.attributes {
+            if attr.name.starts_with("__") {
+                continue;
+            }
+            write!(w, ", var_{}", sanitize(&attr.name))?;
+        }
+        write!(w, ")")?;
+        writeln!(w, "\n}}")
     }
 }
 
