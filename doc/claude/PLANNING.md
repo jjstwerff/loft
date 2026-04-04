@@ -146,7 +146,25 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 
 Goal: every planned language feature is present and the interpreter ships pre-built.
 Interpreter correctness and native codegen are handled by 0.8.2; new syntax by 0.8.3;
-HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tooling.
+HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tooling,
+and moves the bundled libraries to independent GitHub repositories so they are
+distributed through the registry rather than the interpreter source tree.
+
+**Library extraction (LIB.1–LIB.4):**
+- **LIB.1** — GitHub Actions release workflow template: a reusable workflow file that,
+  on a version tag push (`v*`), packages `src/`, `loft.toml`, `tests/`, `README.md`,
+  and `LICENSE` as `<name>-<version>.zip`, attaches it to a GitHub Release, and prints
+  the download URL.  Designed once; copied into each library repository.
+- **LIB.2** — Migrate `lib/graphics/` to a new `jjstwerff/loft-graphics` GitHub
+  repository (or `loft-lang/loft-graphics` if the org exists by then).  Tag `v0.1.0`,
+  trigger the LIB.1 workflow to produce the release zip, add the entry to the central
+  registry.  Remove `lib/graphics/` from the main `loft` repository; update any
+  in-repo test scripts that referenced it to use `loft install graphics` instead.
+- **LIB.3** — Same migration for `lib/shapes/` → `jjstwerff/loft-shapes`.  Shapes
+  depends on graphics, so LIB.2 must land first.
+- **LIB.4** — Add both packages to the central registry file and cut the first
+  `loft registry sync` that includes them.  Verify with `loft install graphics` and
+  `loft install shapes` on a clean machine.
 
 **Language completeness:**
 - **L1** — Error recovery: a single bad token must not cascade into dozens of spurious errors.

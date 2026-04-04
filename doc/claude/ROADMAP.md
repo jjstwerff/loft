@@ -115,10 +115,14 @@ Sprint 13: Graphics native (needs PKG.4)
 
 ---
 
-## 0.9.0 — Standalone executable + developer warnings
+## 0.9.0 — Standalone executable + library extraction + developer warnings
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
+| LIB.1     | GitHub Actions release-zip workflow template for lib repos | S  | ✓      | REG.1        | .github/workflows/release.yml |
+| LIB.2     | Migrate lib/graphics/ → jjstwerff/loft-graphics repo      | S  | ✓      | LIB.1, REG.4 | lib/graphics/ (removed)       |
+| LIB.3     | Migrate lib/shapes/ → jjstwerff/loft-shapes repo          | S  | ✓      | LIB.2        | lib/shapes/ (removed)         |
+| LIB.4     | Add graphics + shapes to central registry; verify install  | S  | ✓      | LIB.3, REG.3 | registry.txt                  |
 | L1        | Error recovery after token failures                       | M  | ✓      |              | PLANNING.md § L1              |
 | A2        | Logger: hot-reload, run-mode, release + debug             | M  | ✓      |              | LOGGER.md                     |
 | C52       | Stdlib name clash: warning + `std::` prefix               | M  | ✓      |              | PLANNING.md § C52             |
