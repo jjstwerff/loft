@@ -57,21 +57,50 @@ Sprint 9: Registry (independent — no PKG.4 dependency)
   REG.3   loft registry sync — download registry.txt from source: URL
   REG.4   loft registry check — installed vs registry; exit 1 on yanks
 
-Sprint 10: Native codegen for packages
+Sprint 10: Language ergonomics (needed by server/game_client — no external deps)
+  C55     type aliases: type Handler = fn(Request) -> Response
+  C56     ?? return expr — null early-exit in one line
+  A15     parallel { } — structured concurrency block
+  I13     iterator protocol — for msg in ws via fn next(self) -> T?
+
+Sprint 11: Native codegen for packages
   PKG.4   native codegen --extern
   PKG.5   WASM codegen linking
 
-Sprint 11: Stdlib extraction (needs PKG.4)
+Sprint 12: Stdlib extraction (needs PKG.4)
   EXT.1   imaging package (PNG + Image types)
   EXT.2   random package
 
-Sprint 12: HTTP client (needs PKG.4)
+Sprint 13: HTTP client (needs PKG.4)
   H4.1    HttpResponse struct
   H4.2    http_get/post native (ureq)
   H4.3    headers
   H4.5    tests
 
-Sprint 13: Graphics native (needs PKG.4)
+Sprint 14: Server library — core (needs Sprint 10 + PKG.2 ✓)
+  SRV.1   plain HTTP: routing, middleware pipeline, request/response
+  SRV.2   HTTPS with static PEM certificates
+  SRV.3   WebSocket support (using I13 for msg in ws)
+  SRV.4   Authentication: JWT, session, API key, HTTP Basic
+  game_protocol package: GameEnvelope, WsMessage, Msg* structs
+
+Sprint 15: Server library — production + game additions (needs SRV.3)
+  SRV.5   ACME / Let's Encrypt automatic certificate provisioning
+  SRV.6   CORS, rate limiting, decompression, static files
+  SRV.G   Game additions: ws_poll, ws_broadcast, ConnectionRegistry,
+           run_game_loop, WASM loading (shared rules.wasm)
+
+Sprint 16: game_client — networking + lobby + loop (needs Sprint 10 + SRV.1)
+  GC.1    WebSocket client + GameEnvelope protocol + Dispatcher
+  GC.2    Lobby + matchmaking state management
+  GC.3    Fixed-timestep game loop (using A15 for loop + render concurrently)
+  GC.4    Client-side prediction + reconciliation + state delta sync + ping
+
+Sprint 17: game_client — WASM scripts + shared logic (needs PKG.5 + SRV.G)
+  GC.5    WASM script loading: wasm_load/call/verify, Ed25519 signature check
+  GC.6    Shared game logic: n_script_* exports, end-to-end Tic-Tac-Toe example
+
+Sprint 18: Graphics native (needs PKG.4)
   GL3     text rendering (fontdue native)
   GL5.1   window + event loop
   GL5.2-5 shaders, VBO, render, texture
@@ -86,6 +115,10 @@ Sprint 13: Graphics native (needs PKG.4)
 | REG.2     | `loft install <name>[@v]` — download + extract from registry | S  | ✓      | REG.1        | src/main.rs                   |
 | REG.3     | `loft registry sync` — pull registry.txt from source URL    | S  | ✓      | REG.1        | src/registry.rs, src/main.rs  |
 | REG.4     | `loft registry check` — installed vs registry; exit 1 yanks | S  | ✓      | REG.3        | src/registry.rs, src/main.rs  |
+| C55       | Type aliases (`type Handler = fn(Request) -> Response`)   | XS | ✓      |              | src/parser/definitions.rs     |
+| C56       | `?? return expr` — null early-exit in handlers            | XS | ✓      |              | src/parser/expressions.rs     |
+| A15       | `parallel { }` structured concurrency block               | M  | ✓      |              | src/parser/expressions.rs     |
+| I13       | Iterator protocol (`for msg in ws` via `fn next → T?`)   | MH | ✓      | I5+          | src/parser/collections.rs     |
 | EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
 | EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
 | PKG.4     | Native codegen `--extern` for `#native` packages          | M  | ✓      | PKG.1        | generation/mod.rs, main.rs    |
@@ -95,6 +128,21 @@ Sprint 13: Graphics native (needs PKG.4)
 | H4.2      | http_get/post/put/delete in web/native/ (ureq)            | M  | ✓      | H4.1         | web/native/src/lib.rs         |
 | H4.3      | Header support (http_get_h, http_post_h)                  | S  | ✓      | H4.2         | web/native/src/lib.rs         |
 | H4.5      | Package tests + documentation                             | S  | ✓      | H4.2         | web/tests/                    |
+| SRV.1     | Plain HTTP routing + middleware pipeline (loft layer)     | M  | ✓      | C55, C56     | server/src/                   |
+| SRV.2     | HTTPS with static PEM certificates (rustls)               | S  | ✓      | SRV.1        | server/native/                |
+| SRV.3     | WebSocket support (I13 enables `for msg in ws`)           | S  | ✓      | SRV.1, I13   | server/src/websocket.loft     |
+| SRV.4     | Authentication: JWT, session, API key, HTTP Basic         | M  | ✓      | SRV.1        | server/src/auth.loft          |
+| SRV.P     | game_protocol package: GameEnvelope, WsMessage, Msg*      | S  | ✓      |              | game_protocol/src/            |
+| SRV.5     | ACME / Let's Encrypt automatic certificate provisioning   | M  | ✓      | SRV.2        | server/native/ (instant-acme) |
+| SRV.6     | CORS, rate limiting, decompression, static files          | M  | ✓      | SRV.1        | server/src/middleware.loft    |
+| SRV.G     | Game additions: ws_poll, ws_broadcast, ConnectionRegistry, | M  | ✓      | SRV.3, A15   | server/src/game_loop.loft     |
+|           |   run_game_loop, server-side WASM loading                 |    |        |              |                               |
+| GC.1      | WebSocket client + GameEnvelope protocol + Dispatcher     | M  | ✓      | SRV.P        | game_client/src/              |
+| GC.2      | Lobby + matchmaking state management                      | S  | ✓      | GC.1         | game_client/src/lobby.loft    |
+| GC.3      | Fixed-timestep game loop (A15 enables loop + render side-by-side) | S | ✓ | GC.2, A15  | game_client/src/loop.loft     |
+| GC.4      | Client-side prediction + reconciliation + state sync + ping | M | ✓     | GC.3         | game_client/src/predict.loft  |
+| GC.5      | WASM script loading: wasm_load/call/verify, Ed25519       | M  | ✓      | GC.1, PKG.5  | game_client/native/           |
+| GC.6      | Shared game logic: n_script_* exports, Tic-Tac-Toe demo  | M  | ✓      | GC.5, SRV.G  | game_client/src/wasm.loft     |
 | GL3       | Text rendering (fontdue native + pure loft layout)        | M  | ✓      | GL1, PKG.1   | graphics/src/text.loft        |
 | GL4.4     | GLB binary writer (header + JSON chunk + BIN chunk)       | M  | ✓      | GL4.2        | graphics/src/glb.loft         |
 | GL4.5     | GLB accessor/bufferView encoding for mesh data            | M  | ✓      | GL4.4        | graphics/src/glb.loft         |

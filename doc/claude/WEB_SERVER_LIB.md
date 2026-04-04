@@ -883,15 +883,23 @@ readable, testable, and modifiable in loft.
 
 ## Implementation phases
 
+**Prerequisites (interpreter features — all land in Sprint 10 before server work begins):**
+- **C55** — `type Handler = fn(Request) -> Response` — used throughout for readable signatures
+- **C56** — `?? return expr` — used in every handler for concise null-safe early exit
+- **A15** — `parallel { }` — required for running the game loop alongside `serve_all`
+- **I13** — iterator protocol — required for Phase 3 (`for msg in ws`)
+
 ### Phase 1 — Plain HTTP server (no TLS)
+*(Requires: C55, C56 from interpreter Sprint 10)*
 
 - TCP listen + accept loop (native)
 - HTTP/1.1 request parsing (native: hyper)
 - `Request` / `Response` / `Header` structs in loft
+- `Handler` and `WsHandler` type aliases (C55) in `server.loft`
 - `new_app`, `route`, `get`/`post`/`put`/`delete`, `serve` in loft
 - Route matching engine in loft
 - `Middleware.Logger` in loft
-- Response builder functions in loft
+- Response builder functions in loft (all handlers use `?? return` idiom from C56)
 - Tests: routing, response codes, query params, path params
 
 ### Phase 2 — HTTPS with static certificates
@@ -903,10 +911,12 @@ readable, testable, and modifiable in loft.
 - Tests: HTTPS handshake, certificate loading, redirect
 
 ### Phase 3 — WebSockets
+*(Requires: I13 from interpreter Sprint 10)*
 
 - `tokio-tungstenite` in native layer
-- `WebSocket` opaque struct, `ws_send`/`ws_receive`/`ws_close` in native
-- `route_ws`, `WsMessage` enum in loft
+- `WebSocket` opaque struct, `ws_send`/`ws_receive`/`ws_close`/`ws_poll` in native
+- `route_ws`, `WsMessage` enum (from `game_protocol`) in loft
+- `for msg in ws` handler pattern using I13 iterator protocol
 - `Middleware.Authenticate` pre-handshake support
 - Tests: echo server, message types, close handling
 

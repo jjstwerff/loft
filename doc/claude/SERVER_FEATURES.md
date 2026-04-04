@@ -499,10 +499,10 @@ pass; requires the two-pass parser infrastructure already present.
 
 | ID | Feature | Effort | Milestone | Key benefit |
 |----|---------|--------|-----------|-------------|
-| C55 | Type aliases (`type Handler = fn(...)`) | XS | 0.9.0 | Readable API signatures |
-| C56 | `?? return expr` null early-exit | XS | 0.9.0 | Concise null-safe handlers |
-| A15 | `parallel { }` structured concurrency | M | 0.9.0 | Game loop + server concurrently |
-| I13 | Iterator protocol (`for msg in ws`) | MH | 1.0.0 | Natural WebSocket loops |
+| C55 | Type aliases (`type Handler = fn(...)`) | XS | 0.8.4 Sprint 10 | Readable API signatures |
+| C56 | `?? return expr` null early-exit | XS | 0.8.4 Sprint 10 | Concise null-safe handlers |
+| A15 | `parallel { }` structured concurrency | M | 0.8.4 Sprint 10 | Game loop + server concurrently |
+| I13 | Iterator protocol (`for msg in ws`) | MH | 0.8.4 Sprint 10 | Natural WebSocket loops |
 | C57 | `@get` / `@post` route decorator | H | 1.1+ | Co-locate URL and handler |
 
 **C55 and C56 are highest priority** — they are tiny changes with immediate

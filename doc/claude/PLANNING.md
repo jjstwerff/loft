@@ -59,9 +59,10 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [A15 — `parallel { }` structured concurrency block](#a15--parallel---structured-concurrency-block) *(0.9.0)*
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
 - [E — Library Ergonomics](#e--library-ergonomics)
-  - [C55 — Type aliases](#c55--type-aliases) *(0.9.0)*
-  - [C56 — Null-coalesce with early return (`?? return`)](#c56--null-coalesce-with-early-return) *(0.9.0)*
-  - [I13 — Iterator protocol (`for x in custom`)](#i13--iterator-protocol) *(1.0.0)*
+  - [C55 — Type aliases](#c55--type-aliases) *(0.8.4 Sprint 10)*
+  - [C56 — Null-coalesce with early return (`?? return`)](#c56--null-coalesce-with-early-return) *(0.8.4 Sprint 10)*
+  - [A15 — `parallel { }` structured concurrency](#a15--parallel---structured-concurrency-block) *(0.8.4 Sprint 10)*
+  - [I13 — Iterator protocol (`for x in custom`)](#i13--iterator-protocol) *(0.8.4 Sprint 10)*
   - [C57 — Route decorator syntax (`@get`, `@post`, `@ws`)](#c57--route-decorator-syntax) *(1.1+)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
@@ -121,6 +122,19 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 - **H5** — Extend `from_json` codegen to nested `#json` struct fields, `vector<T>` array
   fields, and plain enum fields.  Integration test suite against a mock HTTP server.
 
+**Language ergonomics (C55, C56, A15, I13 — Sprint 10, needed by server library):**
+- **C55** — Type aliases: `type Handler = fn(Request) -> Response` — compile-time
+  substitution; no new opcodes; parser + typedef.rs only.  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § C55.
+- **C56** — `?? return expr`: allow a `return` expression on the right of `??` so
+  nullable lookups in handlers collapse to one line.  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § C56.
+- **A15** — `parallel { }` structured concurrency: runs a fixed set of independent
+  tasks concurrently and blocks until all finish.  Needed for the game loop + HTTP
+  server side-by-side pattern; uses same store-isolation model as `par()`.
+  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § A15.
+- **I13** — Iterator protocol: any type with `fn next(self: &Self) -> T?` is iterable
+  in a `for` loop.  Enables `for msg in ws` in WebSocket handlers; desugars at IR
+  level with no new opcodes.  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § I13.
+
 **Package registry (REG.1–REG.2):**
 - **REG.1** — `src/registry.rs`: parse a plain-text registry file (`name version url` per
   line), resolve the best version (highest semver for "latest", exact match for pinned),
@@ -175,9 +189,6 @@ distributed through the registry rather than the interpreter source tree.
 **Language completeness:**
 - **L1** — Error recovery: a single bad token must not cascade into dozens of spurious errors.
 - **P2** — REPL / interactive mode: `loft` with no arguments enters a persistent session.
-- **C55** — Type aliases (`type Handler = fn(Request) -> Response`) — XS, pure compile-time.
-- **C56** — `?? return expr` null early-exit in handlers — XS, parser + codegen change.
-- **A15** — `parallel { }` structured concurrency block — enables game loop + server side by side.
 
 **Parallel execution completeness:**
 - **A1** — Moved to 0.8.2 (see remaining work above).
@@ -213,11 +224,6 @@ Full gate criteria in [RELEASE.md](RELEASE.md).
 - **W5** — Documentation and examples browser: embedded HTML docs + one-click example projects.
 - **W6** — Export/import ZIP + PWA: offline support, URL sharing, drag-and-drop import.
 
-**Library ergonomics:**
-- **I13** — Iterator protocol: any type with `fn next(self: &Self) -> T?` can be
-  used in `for` loops.  Enables `for msg in ws` in WebSocket handlers.
-  Builds on I5+ interface system.
-
 **Stability gate (same as RELEASE.md §§ 1–9):**
 - All INCONSISTENCIES.md entries addressed or documented as accepted behaviour.
 - Full documentation review; pre-built binaries for all four platforms; crates.io publish.
@@ -231,6 +237,15 @@ A5, A7, Tier N (native codegen), C57.
 
 New language features that are strictly backward-compatible.  Candidates: A5 (closures),
 A7 (native extensions), Tier N (native codegen), C57 (route decorator syntax).
+
+When A5 (closures) lands, `server` middleware can be written as factory functions
+instead of enum variants:
+
+```loft
+// Post-A5: middleware becomes a function returning a handler:
+app.use_middleware(rate_limit(100));
+app.use_middleware(require_roles(["admin"]));
+```
 
 ---
 
@@ -3535,7 +3550,7 @@ pub fn route_ws(app: &App, pattern: text, handler: WsHandler)
 `typedef.rs` (cycle detection required).  No new opcodes.
 
 **Effort:** XS
-**Target:** 0.9.0
+**Target:** 0.8.4 (Sprint 10)
 
 ---
 
@@ -3572,7 +3587,7 @@ after `??` is `Token::Return`, parse a `NullCoalesceReturn` IR node.  Codegen
 emits a conditional jump over a `OpReturn`.
 
 **Effort:** XS
-**Target:** 0.9.0
+**Target:** 0.8.4 (Sprint 10)
 
 ---
 
@@ -3620,7 +3635,7 @@ task concurrency, not data parallelism.  Analogous to Rust's `std::thread::scope
 store-merge policy extended for long-running tasks.
 
 **Effort:** M
-**Target:** 0.9.0
+**Target:** 0.8.4 (Sprint 10)
 
 ---
 
@@ -3675,7 +3690,7 @@ desugaring applies to any type that structurally has a matching `next` method.
 
 **Effort:** MH — parser change in `parse_for()` + type resolution for method
 lookup.  No new opcodes.  Benefits from I5+ but can land structurally before it.
-**Target:** 1.0.0
+**Target:** 0.8.4 (Sprint 10)
 
 ---
 
