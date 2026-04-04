@@ -1286,13 +1286,17 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
 /// Perform an HTTP request. Returns the status code as integer.
 /// The response body is stored in `stores.scratch` for retrieval by `n_http_body`.
 fn n_http_do(stores: &mut Stores, stack: &mut DbRef) {
+    let v_headers = *stores.get::<Str>(stack);
     let v_body = *stores.get::<Str>(stack);
     let v_url = *stores.get::<Str>(stack);
     let v_method = *stores.get::<Str>(stack);
 
+    #[allow(clippy::type_complexity)]
     let status = if let Some(req_fn) = unsafe {
         crate::extensions::get_native_fn::<
             unsafe extern "C" fn(
+                *const u8,
+                usize,
                 *const u8,
                 usize,
                 *const u8,
@@ -1308,6 +1312,7 @@ fn n_http_do(stores: &mut Stores, stack: &mut DbRef) {
         let method = v_method.str();
         let url = v_url.str();
         let body = v_body.str();
+        let headers = v_headers.str();
         let mut out_status: i32 = 0;
         let mut out_body: *mut u8 = std::ptr::null_mut();
         let mut out_body_len: usize = 0;
@@ -1315,6 +1320,11 @@ fn n_http_do(stores: &mut Stores, stack: &mut DbRef) {
             (std::ptr::null(), 0)
         } else {
             (body.as_ptr(), body.len())
+        };
+        let (hp, hl) = if headers.is_empty() {
+            (std::ptr::null(), 0)
+        } else {
+            (headers.as_ptr(), headers.len())
         };
         unsafe {
             req_fn(
@@ -1324,6 +1334,8 @@ fn n_http_do(stores: &mut Stores, stack: &mut DbRef) {
                 url.len(),
                 bp,
                 bl,
+                hp,
+                hl,
                 std::ptr::addr_of_mut!(out_status),
                 std::ptr::addr_of_mut!(out_body),
                 std::ptr::addr_of_mut!(out_body_len),

@@ -16,34 +16,71 @@ pub fn ok(self: HttpResponse) -> boolean {
 
 // --- Internal native functions returning primitives ---
 
-fn http_do(method: text, url: text, body: text) -> integer;
+fn http_do(method: text, url: text, body: text, headers: text) -> integer;
 #native "n_http_do"
 
 fn http_body() -> text;
 #native "n_http_body"
 
-// --- Public HTTP functions ---
+// Internal: serialize headers vector to newline-separated "Key: Value" text.
+fn join_headers(headers: vector<text>) -> text {
+  result = "";
+  for h in headers {
+    if result.len() > 0 { result += "\n"; }
+    result += h;
+  }
+  result
+}
+
+// --- Simple HTTP functions (no custom headers) ---
 
 // Send a GET request.
 pub fn http_get(url: text) -> HttpResponse {
-  status = http_do("GET", url, "");
+  status = http_do("GET", url, "", "");
   HttpResponse { status: status, body: http_body() }
 }
 
 // Send a POST request with a body.
 pub fn http_post(url: text, body: text) -> HttpResponse {
-  status = http_do("POST", url, body);
+  status = http_do("POST", url, body, "");
   HttpResponse { status: status, body: http_body() }
 }
 
 // Send a PUT request with a body.
 pub fn http_put(url: text, body: text) -> HttpResponse {
-  status = http_do("PUT", url, body);
+  status = http_do("PUT", url, body, "");
   HttpResponse { status: status, body: http_body() }
 }
 
 // Send a DELETE request.
 pub fn http_delete(url: text) -> HttpResponse {
-  status = http_do("DELETE", url, "");
+  status = http_do("DELETE", url, "", "");
+  HttpResponse { status: status, body: http_body() }
+}
+
+// --- HTTP functions with custom headers ---
+// Headers are passed as a vector of "Key: Value" strings.
+
+// GET with custom headers.
+pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("GET", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// POST with custom headers.
+pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("POST", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// PUT with custom headers.
+pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("PUT", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// DELETE with custom headers.
+pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("DELETE", url, "", join_headers(headers));
   HttpResponse { status: status, body: http_body() }
 }
