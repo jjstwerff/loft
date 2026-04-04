@@ -148,6 +148,60 @@ any seek.
 
 ---
 
+## C15 — Function references require definition before call site
+
+Passing a function as a `fn(…)` argument (or through a type alias) fails with
+"Unknown variable" if the function is defined **after** the call site in source
+order.  This applies to both aliased and non-aliased fn-type parameters.
+
+```loft
+// FAILS — triple defined after main:
+fn main() { apply(triple, 3); }
+fn triple(x: integer) -> integer { x * 3 }
+
+// WORKS — triple defined before main:
+fn triple(x: integer) -> integer { x * 3 }
+fn main() { apply(triple, 3); }
+```
+
+**Root cause:** the two-pass parser registers function *signatures* on pass 1
+but resolves bare-name fn-ref arguments on pass 2 using the variable table,
+which only sees definitions that precede the current function body.
+
+**Workaround:** define referenced functions before the call site.
+**Test:** `tests/scripts/78-type-aliases.loft` — all fn-refs use functions
+defined before `main`.
+
+---
+
+## C16 — Return in else branch of an if-expression crashes codegen
+
+Placing a `return` inside the else branch of an `if` used as an **expression**
+(i.e. where the `if` produces a value) causes a stack-position mismatch in
+bytecode generation, leading to a `copy_nonoverlapping` panic at runtime.
+
+```loft
+// CRASHES — return in else branch of value-producing if:
+val = if cond { x } else { return -1; };
+
+// WORKS — return in a statement-level if (no value expected):
+if !cond { return -1; }
+val = x;
+```
+
+**Root cause:** `gen_if` expects both branches to leave the same stack delta.
+A `Return` branch emits `OpReturn` and pushes nothing, while the other branch
+pushes the expression result.  The join-point stack position is wrong.
+
+**Impact on C56:** the `?? return` desugaring avoids this by using a
+statement-level `if (is_null) { return expr; }` with no else branch, followed
+by the non-null value as a separate block expression.
+
+**Workaround:** use statement-level `if` for early returns; never put `return`
+inside a branch of a value-producing `if`.
+
+---
+
 ## See also
 
 - [PROBLEMS.md](PROBLEMS.md) — full bug tracker with severity and fix paths

@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// I13: Iterator protocol — for x in val when val's type has fn next(self) -> Item?
+
+struct Counter {
+  current: integer,
+  limit: integer
+}
+
+fn new_counter(limit: integer) -> Counter {
+  Counter { current: 0, limit: limit }
+}
+
+fn next(self: Counter) -> integer {
+  val = self.current;
+  self.current = val + 1;
+  if val >= self.limit { return null; }
+  val
+}
+
+fn main() {
+  // Basic custom iterator: count from 0 to 2
+  c = new_counter(3);
+  total = 0;
+  for x in c {
+    total = total + x;
+  }
+  assert(total == 3, "counter 0+1+2={total}");
+
+  // Empty iterator: limit = 0
+  c2 = new_counter(0);
+  count = 0;
+  for x in c2 {
+    count = count + 1;
+  }
+  assert(count == 0, "empty counter iterations={count}");
+
+  // Single element
+  c3 = new_counter(1);
+  sum = 0;
+  for x in c3 {
+    sum = sum + x;
+  }
+  assert(sum == 0, "single counter 0={sum}");
+}

@@ -102,6 +102,8 @@ pub enum Value {
     // A5.6-1: Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
     // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
     FnRef(i32, u16, Box<Type>),
+    /// A15: parallel { arm1; arm2; } — each arm runs concurrently.
+    Parallel(Vec<Value>),
 }
 
 #[allow(dead_code)]
@@ -1793,6 +1795,17 @@ impl Data {
             }
             Value::FnRef(d_nr, clos_var, _) => {
                 write!(write, "FnRef({d_nr}, {})", vars.name(*clos_var))
+            }
+            Value::Parallel(arms) => {
+                writeln!(write, "parallel {{")?;
+                for arm in arms {
+                    self.show_code(write, vars, arm, indent + 1, true)?;
+                    writeln!(write, ";")?;
+                }
+                for _i in 0..indent {
+                    write!(write, "  ")?;
+                }
+                write!(write, "}}")
             }
         }
     }

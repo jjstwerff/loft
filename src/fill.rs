@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 256] = &[
+pub const OPERATORS: &[fn(&mut State); 253] = &[
     goto,
     goto_word,
     goto_false,
@@ -235,12 +235,9 @@ pub const OPERATORS: &[fn(&mut State); 256] = &[
     append_stack_text,
     append_stack_character,
     clear_stack_text,
-    si_load2_add_store,
-    si_load_const_add_store,
-    si_load_const_cmp_branch,
-    si_load2_cmp_branch,
-    si_load_const_mul_store,
-    si_load2_mul_store,
+    parallel_begin,
+    parallel_arm,
+    parallel_join,
     pre_alloc_vector,
     get_file,
     get_dir,
@@ -1792,28 +1789,16 @@ fn clear_stack_text(s: &mut State) {
     s.clear_stack_text();
 }
 
-fn si_load2_add_store(s: &mut State) {
-    s.si_load2_add_store();
+fn parallel_begin(s: &mut State) {
+    s.parallel_begin();
 }
 
-fn si_load_const_add_store(s: &mut State) {
-    s.si_load_const_add_store();
+fn parallel_arm(s: &mut State) {
+    s.parallel_arm();
 }
 
-fn si_load_const_cmp_branch(s: &mut State) {
-    s.si_load_const_cmp_branch();
-}
-
-fn si_load2_cmp_branch(s: &mut State) {
-    s.si_load2_cmp_branch();
-}
-
-fn si_load_const_mul_store(s: &mut State) {
-    s.si_load_const_mul_store();
-}
-
-fn si_load2_mul_store(s: &mut State) {
-    s.si_load2_mul_store();
+fn parallel_join(s: &mut State) {
+    s.parallel_join();
 }
 
 fn pre_alloc_vector(s: &mut State) {

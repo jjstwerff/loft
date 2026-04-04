@@ -114,7 +114,12 @@ impl Parser {
             }
             t = Type::Void;
             match l.last() {
-                Some(Value::If(_, _, _) | Value::Loop(_) | Value::Block(_)) => (),
+                Some(
+                    Value::If(_, _, _)
+                    | Value::Loop(_)
+                    | Value::Block(_)
+                    | Value::Parallel(_),
+                ) => (),
                 _ => {
                     if !self.lexer.token(";") {
                         break;
@@ -1773,6 +1778,11 @@ impl Parser {
         } else if let Type::Text(_) = in_type {
             Type::Character
         } else if let Type::Reference(_, _) | Type::Integer(_, _, _) | Type::Long = in_type {
+            // I13: check for custom iterator protocol before falling back.
+            let next_d_nr = self.data.find_fn(u16::MAX, "next", in_type);
+            if next_d_nr != u32::MAX {
+                return self.data.def(next_d_nr).returned.clone();
+            }
             in_type.clone()
         } else {
             if !self.first_pass {
@@ -2577,5 +2587,25 @@ impl Parser {
         }
         self.lexer.token(")");
         (types, list)
+    }
+
+    /// A15: Parse `parallel { arm1; arm2; ... }`.
+    /// Each semicolon-separated expression in the block becomes one concurrent arm.
+    pub(crate) fn parse_parallel(&mut self, code: &mut Value) {
+        self.lexer.token("{");
+        let mut arms = Vec::new();
+        while !self.lexer.peek_token("}") {
+            let mut arm = Value::Null;
+            self.expression(&mut arm);
+            if arm != Value::Null {
+                arms.push(arm);
+            }
+            self.lexer.has_token(";");
+        }
+        self.lexer.token("}");
+        if arms.is_empty() && !self.first_pass {
+            diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+        }
+        *code = Value::Parallel(arms);
     }
 }

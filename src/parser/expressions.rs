@@ -42,7 +42,9 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
                 || inline_ref_set_in(b, r, depth + 1)
                 || inline_ref_set_in(c, r, depth + 1)
         }
-        Value::Tuple(elems) => elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
+        Value::Tuple(elems) | Value::Parallel(elems) => {
+            elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
+        }
         Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
         // Leaf variants — cannot contain a Set node.
         Value::Null
@@ -204,6 +206,9 @@ impl Parser {
             Type::Void
         } else if self.lexer.has_token("return") {
             self.parse_return(val);
+            Type::Void
+        } else if self.lexer.has_keyword("parallel") {
+            self.parse_parallel(val);
             Type::Void
         } else if self.lexer.has_token("yield") {
             // CO1.3c: yield expr — only valid inside generator functions.

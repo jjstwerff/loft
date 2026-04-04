@@ -224,6 +224,10 @@ impl State {
                 }
                 Type::Tuple(types)
             }
+            Value::Parallel(arms) => {
+                self.gen_parallel(arms, stack);
+                Type::Void
+            }
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef using OpGetInt/etc.
@@ -527,6 +531,23 @@ impl State {
         }
         stack.position -= size;
         Type::Void
+    }
+
+    /// A15: Generate bytecode for `parallel { arm1; arm2; ... }`.
+    ///
+    /// Current implementation: sequential execution inline.
+    /// The opcodes are emitted for future threading support but act as noops.
+    /// Arms run inline in sequence, each dropping its result value.
+    pub(super) fn gen_parallel(&mut self, arms: &[Value], stack: &mut Stack) {
+        // Emit marker opcodes (noops for sequential execution).
+        stack.add_op("OpParallelBegin", self);
+        self.code_add(arms.len() as u8);
+        // Generate each arm's code inline, dropping results.
+        for arm in arms {
+            self.gen_drop(arm, stack);
+        }
+        // Emit join marker (noop for sequential).
+        stack.add_op("OpParallelJoin", self);
     }
 
     pub(super) fn gen_set_first_text(&mut self, stack: &mut Stack, v: u16, value: &Value) {
@@ -1897,6 +1918,15 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         }
         Value::FnRef(d_nr, clos_var, _) => {
             eprint!("FnRef({d_nr}, clos={})", vars.name(*clos_var));
+        }
+        Value::Parallel(arms) => {
+            eprintln!("parallel {{");
+            for arm in arms {
+                eprint!("{pad}  ");
+                print_ir(arm, data, vars, depth + 1);
+                eprintln!(";");
+            }
+            eprint!("{pad}}}");
         }
     }
 }

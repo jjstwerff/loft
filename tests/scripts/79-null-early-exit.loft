@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// C56: ?? return expr — null-coalesce with early return.
+
+fn maybe_int(x: integer) -> integer {
+  if x < 0 { return null; }
+  x * 2
+}
+
+fn safe_double(x: integer) -> integer {
+  val = maybe_int(x) ?? return -1;
+  val + 100
+}
+
+fn main() {
+  // Non-null path: ?? return is skipped, expression continues
+  assert(safe_double(5) == 110, "non-null: safe_double(5)={safe_double(5)}");
+  assert(safe_double(0) == 100, "non-null: safe_double(0)={safe_double(0)}");
+
+  // Null path: ?? return fires, function returns early
+  assert(safe_double(-1) == -1, "null: safe_double(-1)={safe_double(-1)}");
+  assert(safe_double(-99) == -1, "null: safe_double(-99)={safe_double(-99)}");
+
+  // Chained ?? return
+  assert(chain_test(5) == 20, "chain non-null: {chain_test(5)}");
+  assert(chain_test(-1) == -2, "chain first null: {chain_test(-1)}");
+
+  // ?? return with void function
+  void_test(5);
+  void_test(-1);
+}
+
+fn chain_test(x: integer) -> integer {
+  a = maybe_int(x) ?? return -2;
+  b = maybe_int(a) ?? return -3;
+  b
+}
+
+fn void_test(x: integer) {
+  val = maybe_int(x) ?? return;
+  assert(val >= 0, "void_test: val should be non-negative, got {val}");
+}

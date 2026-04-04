@@ -201,6 +201,21 @@ impl Parser {
                     return iter_next;
                 }
                 _ => {
+                    // I13: custom iterator protocol — check for fn next(&T) -> Item?
+                    let next_d_nr = self.data.find_fn(u16::MAX, "next", is_type);
+                    if next_d_nr != u32::MAX {
+                        // Store the iterable in a variable so .next() has a stable target.
+                        let iter_obj_var = self.create_unique("__iter_obj", is_type);
+                        self.vars.defined(iter_obj_var);
+                        let obj_expr = code.clone();
+                        *code = v_set(iter_obj_var, obj_expr);
+                        // The "next" expression is a method call: iter_obj.next()
+                        let next_call = Value::Call(
+                            next_d_nr,
+                            vec![Value::Var(iter_obj_var)],
+                        );
+                        return next_call;
+                    }
                     if self.first_pass {
                         return Value::Null;
                     }

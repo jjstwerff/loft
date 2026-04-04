@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// C55: Type aliases — compile-time substitution for named types.
+
+type IntFn = fn(integer) -> integer;
+
+fn apply(f: IntFn, x: integer) -> integer {
+  f(x)
+}
+
+type BinFn = fn(integer, integer) -> integer;
+
+fn apply2(f: BinFn, a: integer, b: integer) -> integer {
+  f(a, b)
+}
+
+type Pred = fn(integer) -> boolean;
+
+fn check(p: Pred, x: integer) -> boolean {
+  p(x)
+}
+
+fn main() {
+  // Basic type alias for fn type used in parameter position
+  assert(apply(fn(x: integer) -> integer { x * 2 }, 5) == 10, "alias fn param: apply(*2, 5)");
+  assert(apply(fn(x: integer) -> integer { x + 1 }, 9) == 10, "alias fn param: apply(+1, 9)");
+
+  // Type alias with two parameters
+  assert(apply2(fn(a: integer, b: integer) -> integer { a + b }, 3, 4) == 7, "alias bin fn: 3+4");
+
+  // Predicate alias
+  assert(check(fn(x: integer) -> boolean { x > 0 }, 5), "alias pred: 5 > 0");
+  assert(!check(fn(x: integer) -> boolean { x > 0 }, -1), "alias pred: -1 not > 0");
+
+  // Type alias used in variable declaration
+  dbl: IntFn = fn(x: integer) -> integer { x * 2 };
+  assert(dbl(21) == 42, "alias var: dbl(21)={dbl(21)}");
+
+}
