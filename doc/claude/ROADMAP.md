@@ -66,9 +66,9 @@ Sprint 10: Language ergonomics ✓ (branch sprint-10-language-ergonomics)
   A15     parallel { } — structured concurrency block (sequential) ✓
   I13     iterator protocol — for msg in ws via fn next(self) -> T? ✓
 
-Sprint 11: Native codegen for packages
-  PKG.4   native codegen --extern
-  PKG.5   WASM codegen linking
+Sprint 11: Native codegen for packages ✓ (branch sprint-11-native-codegen-packages)
+  PKG.4   native codegen --extern ✓
+  PKG.5   WASM codegen linking ✓
 
 Sprint 12: Stdlib extraction (needs PKG.4)
   EXT.1   imaging package (PNG + Image types)
@@ -116,8 +116,6 @@ Sprint 18: Graphics native (needs PKG.4)
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
 | EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
-| PKG.4     | Native codegen `--extern` for `#native` packages          | M  | ✓      | PKG.1        | generation/mod.rs, main.rs    |
-| PKG.5     | WASM codegen with native package wasm rlib                | M  | ✓      | PKG.4        | main.rs                       |
 | PKG.7     | Lock file (`loft.lock`) for reproducible builds           | S  | ✓      | PKG.3        | manifest.rs                   |
 | H4.1      | HttpResponse struct + ok() in web/src/web.loft            | S  | ✓      | PKG.1        | web/src/web.loft              |
 | H4.2      | http_get/post/put/delete in web/native/ (ureq)            | M  | ✓      | H4.1         | web/native/src/lib.rs         |

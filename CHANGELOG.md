@@ -9,6 +9,14 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Native codegen for packages (Sprint 11)
+
+- **PKG.4** — Native codegen `--extern`: packages with `[native.functions]` in
+  `loft.toml` now emit direct Rust calls in `--native` mode.  The build pipeline
+  passes `--extern` flags for pre-compiled native rlibs.
+- **PKG.5** — WASM codegen linking: `--native-wasm` resolves package WASM rlibs
+  from `prebuilt/wasm32-wasip2/` or `native/target/wasm32-wasip2/release/`.
+
 ### Language ergonomics (Sprint 10)
 
 - **C55** — Type aliases: `type Handler = fn(Request) -> Response` — compile-time
