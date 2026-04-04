@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Stack Slot Assignment
 
 > **HISTORICAL** — This document records the P1/P2 design proposals and intermediate bug

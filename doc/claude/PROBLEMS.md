@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 

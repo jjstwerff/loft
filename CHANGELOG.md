@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Changelog
 
 All notable changes to the loft language and interpreter.

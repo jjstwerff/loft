@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Loft Language Reference
 
 Loft is a statically-typed, imperative scripting language with null safety and built-in parallel execution.

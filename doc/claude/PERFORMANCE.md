@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Performance Analysis
 
 This document records current benchmark results, a root-cause analysis of every

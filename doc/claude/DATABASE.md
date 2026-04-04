@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Database and Storage Layer
 
 ## Overview

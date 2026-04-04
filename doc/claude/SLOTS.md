@@ -1,3 +1,6 @@
+---
+render_with_liquid: false
+---
 # Stack Slot Assignment — Design and Implementation
 
 This document is the working reference for the `assign_slots` redesign.
