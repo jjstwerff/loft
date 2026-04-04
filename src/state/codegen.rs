@@ -562,16 +562,50 @@ impl State {
     /// Current implementation: sequential execution inline.
     /// The opcodes are emitted for future threading support but act as noops.
     /// Arms run inline in sequence, each dropping its result value.
+    /// A15: Generate bytecode for `parallel { arm1; arm2; ... }`.
+    ///
+    /// Layout:
+    ///   `OpParallelBegin(n)`
+    ///   `OpParallelArm(off0)` `OpParallelArm(off1)` ...
+    ///   `OpParallelJoin` — main thread blocks here
+    ///   `OpGotoWord(skip_arms)` — main thread skips arm code
+    ///   [arm0 code] `OpReturn`
+    ///   [arm1 code] `OpReturn`
+    ///   [continue]
     pub(super) fn gen_parallel(&mut self, arms: &[Value], stack: &mut Stack) {
-        // Emit marker opcodes (noops for sequential execution).
+        let n = arms.len();
         stack.add_op("OpParallelBegin", self);
-        self.code_add(arms.len() as u8);
-        // Generate each arm's code inline, dropping results.
-        for arm in arms {
-            self.gen_drop(arm, stack);
+        self.code_add(n as u8);
+        // OpParallelArm(offset) placeholders
+        let mut arm_offset_positions = Vec::with_capacity(n);
+        for _ in 0..n {
+            stack.add_op("OpParallelArm", self);
+            arm_offset_positions.push(self.code_pos);
+            self.code_add(0u16);
         }
-        // Emit join marker (noop for sequential).
+        // OpParallelJoin — join_pos is code_pos after this opcode
         stack.add_op("OpParallelJoin", self);
+        let join_pos = self.code_pos;
+        // OpGotoWord past all arm code — main thread skips
+        stack.add_op("OpGotoWord", self);
+        let goto_skip_pos = self.code_pos;
+        self.code_add(0i16);
+        let goto_skip_base = self.code_pos;
+        // Emit each arm as a separate region ending with OpReturn
+        for (i, arm) in arms.iter().enumerate() {
+            let arm_start = self.code_pos;
+            let offset = (arm_start - join_pos) as u16;
+            self.code_put(arm_offset_positions[i], offset);
+            self.gen_drop(arm, stack);
+            // OpReturn — arm is a void "function"
+            stack.add_op("OpReturn", self);
+            self.code_add(0u16); // arguments = 0
+            self.code_add(0u8); // return_size = 0
+            self.code_add(stack.position);
+        }
+        // Patch skip goto
+        let end_pos = self.code_pos;
+        self.code_put(goto_skip_pos, (end_pos - goto_skip_base) as i16);
     }
 
     pub(super) fn gen_set_first_text(&mut self, stack: &mut Stack, v: u16, value: &Value) {
