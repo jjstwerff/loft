@@ -91,12 +91,19 @@ to fetch updates.
 # source: https://raw.githubusercontent.com/jjstwerff/loft-registry/main/registry.txt
 ```
 
+The URL points to the personal repository initially.  If the registry migrates
+to a GitHub organisation (e.g. `loft-lang/registry`), the `source:` line in
+the file is updated and users get the new URL automatically on their next sync —
+no interpreter release is needed.
+
 Rules:
 - The `source:` line must be the first non-blank line of the file.
 - Only one `source:` line is recognised; subsequent ones are plain comments.
 - If absent, `loft registry sync` falls back to the `LOFT_REGISTRY_URL`
   environment variable, then the compiled-in default URL.
 - The `source:` line is preserved verbatim when `sync` rewrites the file.
+- Teams hosting a private registry change only this one line — all other
+  registry mechanics (sync, check, install) work identically.
 
 ### Constraints
 
@@ -243,7 +250,8 @@ a custom source URL) and replaces the local `~/.loft/registry.txt`.
 ### First-time sync (no local registry)
 
 If `~/.loft/registry.txt` does not exist, `loft registry sync` downloads from
-`LOFT_REGISTRY_URL` or the compiled-in default and creates the file.  A user
+`LOFT_REGISTRY_URL` or the compiled-in default (which tracks wherever the
+official registry lives — personal repo or org) and creates the file.  A user
 running `loft install` for the first time is directed to run sync first:
 
 ```

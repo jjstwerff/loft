@@ -6,15 +6,19 @@
 Procedures for adding third-party libraries to the central Loft package registry
 and for responding when problems are discovered in listed packages.
 
-The registry is a plain text file (`registry.txt`) maintained in the
-`jjstwerff/loft-registry` GitHub repository.  The file format is described in
-[REGISTRY.md](REGISTRY.md).  This document governs who may add entries and what
-happens when an entry must be restricted or removed.
+The registry is a plain text file (`registry.txt`) maintained in a GitHub
+repository.  It starts as a personal repository (`jjstwerff/loft-registry`)
+and can migrate to a shared GitHub organisation (`loft-lang/registry` or
+similar) when the community grows to the point where one person cannot handle
+the review load alone.  Both hosting models are described here.  The file
+format is described in [REGISTRY.md](REGISTRY.md).  This document governs who
+may add entries and what happens when an entry must be restricted or removed.
 
 ---
 
 ## Contents
 - [Principles](#principles)
+- [Shared Registry Hosting](#shared-registry-hosting)
 - [Registry Format — Extended Fields](#registry-format--extended-fields)
 - [Submission Requirements](#submission-requirements)
 - [Review Checklist](#review-checklist)
@@ -40,9 +44,122 @@ happens when an entry must be restricted or removed.
    the severity.
 4. **Stable URLs** — a registered URL for a specific version must never change.
    If the file moves, a new version entry is added.  Old entries are not edited.
-5. **One maintainer** — at this stage of the project one person (the repository
-   owner) holds final approval authority.  The process is designed to be
-   lightweight for a small community.
+5. **Scalable authority** — the process starts with one person and scales to a
+   small team without changing the rules.  Any single Maintainer may approve a
+   submission or act on a security report; consensus is not required for routine
+   work.  Policy changes require team discussion.  See
+   [Shared Registry Hosting](#shared-registry-hosting).
+
+---
+
+## Shared Registry Hosting
+
+### Solo model (starting point)
+
+The registry begins as a personal repository owned by the project author
+(`jjstwerff/loft-registry`).  One person handles all submissions, yanks, and
+deprecations.  The compiled-in `source:` URL in the interpreter points here.
+
+This model works for a small package ecosystem.  When the submission queue
+regularly takes more than one person can process within the response windows,
+it is time to migrate to the team model.
+
+### Team model — GitHub organisation
+
+Create a GitHub organisation (e.g. `loft-lang`) and transfer the repository
+to `loft-lang/registry`.  Update the compiled-in `source:` URL in
+`src/registry.rs` and the official registry file header at the same time.
+Users who run `loft registry sync` will pick up the new URL on their next sync;
+no interpreter release is required.
+
+#### Roles
+
+| Role | Count | Permissions |
+|------|-------|-------------|
+| **Admin** | 1–2 | Add/remove Maintainers; change branch protection; modify this governance document |
+| **Maintainer** | 2–5 | Approve submissions; yank/deprecate entries; merge PRs to `registry.txt` |
+| **Reviewer** | optional | Review pull requests and issues; no merge permission |
+
+**Reviewer** is an informal role — anyone with a GitHub account can comment on
+submission issues.  The label is used in issue assignment to acknowledge people
+who contribute reviews without holding Maintainer rights.
+
+#### How decisions are made
+
+- **Routine submissions** — any single Maintainer may approve after the review
+  period.  No consensus or second approval is required.  First available
+  Maintainer picks up the issue.
+- **P0 yanks** — any single Maintainer may yank immediately without consulting
+  others.  They notify the rest of the team via a comment on the yank commit or
+  a GitHub team mention as soon as they act.
+- **Rejections** — any single Maintainer may reject.  The author may re-open
+  the issue and request that a different Maintainer review if they believe the
+  rejection was incorrect.
+- **Policy changes** (to this document) — a pull request, open for at least
+  7 days, visible to all Maintainers.  No objection from any Maintainer within
+  that window constitutes approval.  Objections must be resolved before merging.
+- **Team membership** — Admin only.  A new member is added when nominated by
+  any Maintainer and no existing Maintainer objects within 7 days.
+
+#### Load balancing
+
+Issues are self-assigned: any Maintainer picks up an unassigned submission.
+If a submission sits unassigned for 4 days, GitHub's stale-issue bot pings
+the team.  Maintainers are encouraged to claim issues they have domain knowledge
+in (e.g. graphics Maintainer reviews graphics packages).
+
+A rotating on-call schedule for P0/P1 security reports is optional but
+recommended when the team reaches 3 or more members: one Maintainer per week is
+designated as the primary responder for that week's urgent reports.
+
+#### Joining the team
+
+A person is eligible when they have:
+
+1. Contributed at least **3 substantive reviews** on submission or problem
+   issues in the registry repository (comments that check requirements, test
+   the package, or identify concerns — not just "+1").
+2. Been nominated by any existing Maintainer in a GitHub issue titled
+   `Team nomination: <handle>`.
+3. Received no objection from existing Maintainers within 7 days.
+
+An Admin then adds the person to the GitHub team.  No vote is taken; silence
+is consent.
+
+#### Leaving the team
+
+- **Voluntary** — open an issue or message an Admin.  Access is removed promptly.
+- **Inactive** — a Maintainer with no review activity for **6 months** receives
+  a 30-day notice issue.  If no activity follows, their Maintainer access is
+  downgraded to Reviewer by an Admin.  They can rejoin the Maintainer role by
+  resuming activity and requesting re-elevation from any Admin.
+
+#### Branch protection settings (recommended)
+
+```
+Branch: main
+  Require pull request before merging: ON
+  Required approvals: 1
+  Dismiss stale reviews: ON
+  Allow specified actors to push directly: Maintainers (for P0 emergency yanks)
+```
+
+Allowing Maintainers to bypass the PR requirement exists solely for P0 yanks
+where speed matters more than process.  Every direct push must include a
+comment on the registry issue explaining the urgency.
+
+#### Conflict resolution
+
+If two Maintainers disagree on a submission decision:
+
+1. Either may request a second Maintainer review by posting `@loft-lang/maintainers please review`.
+2. If a third Maintainer agrees with one side, that side prevails.
+3. If the team is evenly split and cannot resolve within 14 days, the submission
+   is held and the author is notified.  The team writes up the specific concern
+   in the issue so the author can address it directly.
+
+For severity disputes on problem reports, the higher severity always wins
+initially: it is safer to over-restrict and loosen later than the reverse.
 
 ---
 
@@ -159,8 +276,9 @@ The maintainer works through this checklist before approving:
 
 ### Step 1 — Open a submission issue
 
-The package author opens a GitHub issue in `jjstwerff/loft-registry` using the
-**Package Submission** template.  Required fields:
+The package author opens a GitHub issue in the registry repository
+(`jjstwerff/loft-registry` or `loft-lang/registry` if the team model is active)
+using the **Package Submission** template.  Required fields:
 
 - Package name and version
 - Download URL (the exact `.zip` URL)
@@ -179,23 +297,29 @@ decision.  Community members may:
 - Confirm they tested the package successfully
 - Suggest improvements to the submission
 
-The 7-day period may be waived by the maintainer for:
+The 7-day period may be waived by any Maintainer for:
 - A patch to an already-approved package (same name, new version)
 - A dependency of an already-approved package
 
+In the team model, any available Maintainer self-assigns the issue within
+4 days of it being opened.  If no one self-assigns, GitHub's stale bot pings
+the team.
+
 ### Step 3 — Maintainer decision
 
-After the review period the maintainer either:
+After the review period any Maintainer may act:
 
 - **Approves** — adds the entry to `registry.txt` via a pull request, closes
   the issue with a link to the commit.
 - **Requests changes** — lists specific blockers in the issue.  The author
-  addresses them and re-requests review.  A new 7-day period does not restart
-  unless the maintainer judges the concerns were substantial.
+  addresses them and re-requests review.  The same or a different Maintainer
+  may handle the follow-up.  A new 7-day period does not restart unless the
+  Maintainer judges the concerns were substantial.
 - **Rejects** — closes the issue with a written reason.  Rejection reasons
   include: name collision, licence incompatibility, fails to build or test,
   native package fails the safety checklist, or the package duplicates
-  existing stdlib functionality without adding value.
+  existing stdlib functionality without adding value.  The author may ask a
+  different Maintainer to re-review if they believe the rejection was wrong.
 
 ### Step 4 — Ongoing versions
 
@@ -211,19 +335,25 @@ field increments monotonically and the URL is stable, then appends the new line.
 Native packages (those with `#native` annotations and compiled shared libraries)
 follow the same workflow but with a **14-day** review period and a mandatory
 Rust source review.  The checklist item "at least one reviewer other than the
-submitter has read the Rust source" must be satisfied before the maintainer
+submitter has read the Rust source" must be satisfied before any Maintainer
 approves.
 
-If no community reviewer steps forward in 14 days, the maintainer performs the
-source review alone.  This is acceptable for small packages.  Large or complex
-native packages may be held until a reviewer is found.
+**Solo model** — if no community reviewer steps forward in 14 days, the single
+maintainer performs the source review alone.  This is acceptable for small
+packages but uncomfortable for large or complex ones; such packages may be held.
+
+**Team model** — the approving Maintainer must not be the sole reviewer of the
+Rust source.  A second Maintainer or a community Reviewer must have commented
+confirming they read the native code.  This cross-review requirement is the
+primary reason native packages exist as a separate track: with a team, it is
+always satisfiable without holding packages indefinitely.
 
 ---
 
 ## Problem Reporting
 
 Anyone — user, security researcher, or package author — may report a problem by
-opening a GitHub issue in `jjstwerff/loft-registry` with the **Problem Report**
+opening a GitHub issue in the registry repository with the **Problem Report**
 label.
 
 Required information:
@@ -240,11 +370,15 @@ For security issues (malicious code, data exfiltration, privilege escalation,
 or any issue where publishing reproduction steps could cause immediate harm),
 report privately:
 
-- Email: `<maintainer-email>` (from the GitHub profile)
-- Or use GitHub's **private security advisory** feature on the registry repository
+- Use GitHub's **private security advisory** feature on the registry repository
+  (works for both the solo and team models — all Maintainers see it).
+- Email any individual Maintainer whose address is on their GitHub profile if
+  the advisory feature is not available.
 
-The maintainer will yank the affected versions within **24 hours** of a credible
-private report, before any public disclosure.
+Any single Maintainer who receives a credible private report will yank the
+affected versions within **24 hours**, before any public disclosure, and notify
+the rest of the team immediately after acting.  In the team model, the on-call
+Maintainer (if a rotation is in place) is the primary recipient.
 
 ---
 
@@ -266,17 +400,20 @@ suggested severity is taken as input, not as binding.
 
 ### P0 — Critical
 
-1. Maintainer yanks all affected versions immediately (single-line edit to
-   `registry.txt`, merged without review period).
-2. Maintainer opens a public issue describing the problem at a high level
-   (no exploit details if not yet public).
-3. If the author is reachable and acting in good faith, they are given
+1. **Any single Maintainer** yanks all affected versions immediately — a
+   direct push to `registry.txt` is allowed under branch protection for exactly
+   this case.  No approval from other Maintainers is needed; speed is paramount.
+2. The acting Maintainer posts a team notification (GitHub team mention or email)
+   within 1 hour of the yank explaining what was done and why.
+3. A public issue is opened describing the problem at a high level (no exploit
+   details if not yet public).
+4. If the author is reachable and acting in good faith, they are given
    opportunity to release a fixed version before the public issue is opened.
    This window is at most **24 hours**.
-4. If the package was malicious or the author is unresponsive, the package is
+5. If the package was malicious or the author is unresponsive, the package is
    permanently removed from the registry (all versions yanked with
    `yanked:malicious` or `yanked:removed`).
-5. The public issue references the yank commit and summarises the nature of the
+6. The public issue references the yank commit and summarises the nature of the
    problem.
 
 ### P1 — High
@@ -350,14 +487,19 @@ edits the status field manually.
 
 If a package author believes a yank or deprecation was applied incorrectly:
 
-1. Open a GitHub issue in `jjstwerff/loft-registry` titled
+1. Open a GitHub issue in the registry repository titled
    `Appeal: <package> <version>`.
 2. Explain why the action was incorrect and provide evidence (fixed code,
    misattributed CVE, etc.).
-3. The maintainer reviews within **7 days**.
-4. If the appeal is upheld, the status is removed or changed and a new version
+3. **Solo model** — the maintainer reviews within **7 days**, taking the
+   reporter's argument at face value since there is no second opinion available.
+4. **Team model** — the appeal is reviewed by a Maintainer who was *not*
+   involved in the original decision.  This separation is one of the concrete
+   benefits of the team model: appeals are not judged by the person being
+   challenged.  Resolution within **7 days**.
+5. If the appeal is upheld, the status is removed or changed and a new version
    is added if appropriate.
-5. P0 yanks (malicious code) are not subject to appeal.
+6. P0 yanks (malicious code) are not subject to appeal.
 
 ---
 
@@ -402,18 +544,59 @@ propagate the yank — the registry file is the single source of truth.
 
 ## Registry Maintainer Responsibilities
 
-The registry maintainer commits to:
+These apply to every Maintainer regardless of model.
 
-- Reviewing new submissions within **14 days** of the review period closing.
-- Responding to P0 reports within **24 hours** (may be yanking alone, with full
-  disclosure to follow).
-- Responding to P1 reports with a deprecation decision within **48 hours**.
-- Keeping `registry.txt` in a git repository with a public history so all
-  additions, yanks, and deprecations are traceable.
-- Publishing a `REGISTRY_CHANGELOG.md` that summarises yanks and deprecations
-  in human-readable form for users who want to audit their installed packages.
-- Not removing entries from `registry.txt` (only adding status fields) so that
-  the file remains a permanent, auditable record.
+### Response times (shared commitment)
+
+| Action | Target |
+|--------|--------|
+| Self-assign an open submission | 4 days |
+| Complete submission review after review period | 14 days |
+| P0 yank after credible private report | 24 hours |
+| P1 deprecation decision | 48 hours |
+| Appeal review | 7 days |
+
+Response times are per-team, not per-individual — if the assigned Maintainer
+cannot meet a deadline, any other Maintainer may step in.  In the solo model
+these are personal commitments; in the team model they are collective ones.
+
+### Record-keeping (all Maintainers)
+
+- `registry.txt` is kept in a git repository with a public commit history.
+  Every addition, yank, and deprecation is a traceable commit with the acting
+  Maintainer's identity visible in `git log`.
+- `REGISTRY_CHANGELOG.md` in the same repository summarises all yanks and
+  deprecations in human-readable form, updated with every status change.
+- Entries are never removed from `registry.txt` — only the `status` field is
+  added.  The file is a permanent auditable record.
+
+### Additional responsibilities in the team model
+
+- **On-call rotation** — when the team has 3 or more Maintainers, maintain a
+  weekly on-call schedule for P0/P1 responses.  The schedule is published in
+  the repository's `MAINTAINERS.md`.
+- **Monthly async review** — post a brief summary to the repository's GitHub
+  Discussions each month: open submissions, recent yanks/deprecations, team
+  membership changes.  This keeps all Maintainers informed even if they were
+  not the ones acting.
+- **MAINTAINERS.md** — keep a `MAINTAINERS.md` file in the registry repository
+  listing current Maintainers, their GitHub handles, and (if applicable) which
+  week they are on call.  Update it when membership changes.
+
+### Stepping down as primary owner (solo → team migration)
+
+When the solo maintainer decides to migrate to the team model:
+
+1. Create the GitHub organisation and transfer the repository.
+2. Invite 2–4 people who have already been reviewing submissions as community
+   members; they become the first Maintainers.
+3. Update the `source:` URL in the registry file and the compiled-in default
+   in `src/registry.rs` in a coordinated interpreter patch release.
+4. Publish a `REGISTRY_CHANGELOG.md` entry and a GitHub release note explaining
+   the transition.
+
+The original owner retains an Admin role in the organisation indefinitely,
+but may reduce their Maintainer workload to match the team capacity.
 
 ---
 
