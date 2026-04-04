@@ -227,6 +227,37 @@ Not expected in the near term.
 
 ---
 
+### Ecosystem libraries (independent of interpreter version)
+
+These are separate repositories installed via `loft install`.  They are not
+gated to a specific interpreter milestone — they evolve alongside the interpreter
+and publish their own version numbers.  Full designs live in their own documents.
+
+**`server` — HTTP server library** ([WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)):
+A fully featured HTTP server written mostly in loft with a thin native Rust layer
+for TCP, TLS, WebSockets, ACME, and cryptographic primitives.  Phases:
+
+- **Phase 1** — Plain HTTP: routing, middleware pipeline, request/response structs.
+  Requires: interpreter 0.8.3 (lambdas for handler fn-refs), PKG Phase 2 (native
+  extension loading).
+- **Phase 2** — HTTPS with static PEM certificates.
+- **Phase 3** — WebSocket support.
+- **Phase 4** — Authentication: JWT, session, API key, HTTP Basic.
+- **Phase 5** — ACME / Let's Encrypt automatic certificate provisioning and renewal.
+- **Phase 6** — Advanced middleware: CORS, rate limiting, decompression, static files.
+
+**`graphics` → `jjstwerff/loft-graphics`** (LIB.2, 0.9.0):
+2D canvas, mesh, scene, and GLB export.  Migrated from `lib/graphics/` in the
+main repo.
+
+**`shapes` → `jjstwerff/loft-shapes`** (LIB.3, 0.9.0):
+Shape primitives built on the graphics library.  Migrated from `lib/shapes/`.
+
+**`web` — HTTP client** (H4, 0.8.4):
+Blocking HTTP client and JSON response handling.  Lives in `jjstwerff/loft-web`.
+
+---
+
 ### Milestone Reevaluation
 
 The previous plan had 1.0 as a language-stability contract for the interpreter alone,
