@@ -205,6 +205,7 @@ states that are harder to debug than the original problem.
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
 | [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) | Web services design evaluation — HTTP/JSON approach comparison, issues #54/#55 |
 | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) | `server` library design — HTTP server, WebSockets, TLS, ACME, auth, RBAC (separate package) |
+| [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
 | [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
 | [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
@@ -235,6 +236,7 @@ states that are harder to debug than the original problem.
 | Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) → [STDLIB.md](doc/claude/STDLIB.md) |
 | Implement `loft install <name>` registry | [REGISTRY.md](doc/claude/REGISTRY.md) → [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) |
 | Build or understand the `server` library | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) |
+| Build or understand the `game_client` library | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |
 | Understand variable lifetimes / dep tracking | [LIFETIME.md](doc/claude/LIFETIME.md) → [DATABASE.md](doc/claude/DATABASE.md) |
 

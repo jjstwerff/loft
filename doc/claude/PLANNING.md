@@ -256,6 +256,23 @@ Shape primitives built on the graphics library.  Migrated from `lib/shapes/`.
 **`web` — HTTP client** (H4, 0.8.4):
 Blocking HTTP client and JSON response handling.  Lives in `jjstwerff/loft-web`.
 
+**`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md)):
+Client-side companion to `server`.  Provides WebSocket connectivity, a typed game
+message protocol (envelope + dispatcher), lobby management, fixed-timestep game loop,
+client-side prediction with server reconciliation, and dynamic WASM script loading.
+WASM scripts are loft programs compiled with `--native-wasm` and loaded at runtime by
+both client and server — guaranteeing identical physics and rules without sending full
+state every tick.  Phases:
+
+- **Phase 1** — WebSocket client + protocol: `WsClient`, `GameEnvelope`, `GameMessage`
+  enum, `Dispatcher`.  Requires: interpreter 0.8.3, `server` Phase 1.
+- **Phase 2** — Lobby + fixed-timestep game loop.
+- **Phase 3** — Client-side prediction + reconciliation + state delta sync + ping.
+- **Phase 4** — WASM script loading: `WasmModule`, `wasm_load/call/verify`, Ed25519
+  signature check.  Requires: `--native-wasm` codegen (0.8.4 PKG.5).
+- **Phase 5** — Shared game logic: document the `n_script_*` export interface; build
+  an end-to-end example (Tic-Tac-Toe server + browser client + shared `rules.wasm`).
+
 ---
 
 ### Milestone Reevaluation
