@@ -5,12 +5,23 @@
 // @EXPECT_ERROR: compound assignment is not supported for tuple destructuring
 // @EXPECT_ERROR: circular init dependency: a
 // @EXPECT_ERROR: circular init dependency: b
+// @EXPECT_ERROR: '++' is not a valid operator
+// @EXPECT_ERROR: '++' is not a valid operator
 
 // --- P93: Tuple type in struct field — correctly rejected ---
 struct P93Bad { coord: (integer, integer) }
 
 // --- P91: Circular init defaults — now correctly rejected ---
 struct P91Circ { a: integer = $.b, b: integer = $.a }
+
+// --- P107: '++' is not a valid operator — correctly rejected ---
+fn test_p107_double_plus_text() {
+  p107_a = "hello" ++ "world";
+}
+
+fn test_p107_double_plus_integer() {
+  p107_b = 1 ++ 2;
+}
 
 // --- P97: Tuple compound assignment — correctly rejected ---
 fn test_p97_tuple_compound_assign() {

@@ -46,6 +46,8 @@ All notable changes to the loft language and interpreter.
 - **C54** — `**` exponentiation operator now works, mapped to `pow()`.
 - **P104** — Test runner no longer picks up library functions as tests;
   only functions defined in the test file are executed.
+- **P107** — `++` (not a valid operator) now produces a clear error instead
+  of crashing in codegen with a confusing type mismatch.
 
 ### Package infrastructure
 
