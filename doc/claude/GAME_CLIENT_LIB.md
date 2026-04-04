@@ -964,13 +964,15 @@ Everything above these 15 symbols is implemented in loft.
 
 ```toml
 [dependencies]
-web = ">=0.1"     # HTTP client — used by wasm_load_url and wasm_verify flow
+web           = ">=0.1"     # HTTP client — used by wasm_load_url and wasm_verify flow
+game_protocol = ">=0.1"    # shared GameEnvelope, Msg* structs, WsMessage enum
 ```
 
 ### Relationship to other libraries
 
 | Library | Relationship |
 |---------|-------------|
-| `server` | Provides the WebSocket server side; shares the message protocol (copy `protocol.loft` to both, or extract to a `game_protocol` shared package) |
+| `server` | Provides the WebSocket server side; see WEB_SERVER_LIB.md § Game server additions for required server extensions |
+| `game_protocol` | Shared package — canonical `GameEnvelope`, `Msg*`, `WsMessage`; both `server` and `game_client` depend on it |
 | `web` | HTTP client used by `wasm_load_url` to download module bytes |
 | `graphics` | Used by the game rendering layer (not a direct dependency of `game_client` — the game imports it separately) |

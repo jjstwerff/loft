@@ -30,6 +30,7 @@ primitives.
 - [Native layer boundary](#native-layer-boundary)
 - [Implementation phases](#implementation-phases)
 - [Dependencies](#dependencies)
+- [Game server additions](#game-server-additions)
 
 ---
 
@@ -965,3 +966,357 @@ readable, testable, and modifiable in loft.
 # The web package (HTTP client) is a separate library; both can be used
 # together but neither depends on the other.
 ```
+
+---
+
+## Game server additions
+
+When `server` is used to back a multiplayer game built with `game_client`, the
+basic request/response design is insufficient.  This section documents the gaps
+identified by evaluating the two libraries together and the additions that close
+them.
+
+---
+
+### Gap 1 — JWT signing is missing
+
+The complete example calls `jwt_sign(...)`, but the native boundary only
+declares `n_jwt_verify_hs256`.  Game servers must issue tokens (on login or
+`/join`) as well as verify them.
+
+**Addition:** one new native symbol.
+
+```
+n_jwt_sign_hs256   alg, secret, sub, roles[], exp_secs → compact JWT text
+```
+
+The loft wrapper:
+
+```loft
+// Issue a signed JWT valid for exp_secs seconds.
+// sub = principal identity; roles = authorization roles.
+pub fn jwt_sign(secret: text, sub: text, roles: vector<text>, exp_secs: integer) -> text
+```
+
+---
+
+### Gap 2 — No non-blocking WebSocket receive
+
+Game servers run a tick loop that must drain messages from all player
+connections since the last tick.  `ws_receive` blocks until a frame arrives —
+it cannot be called per-player in a loop without deadlocking when some players
+have sent nothing.
+
+**Addition:** one new native symbol.
+
+```
+n_ws_poll   ws_handle → WsMessage | null
+```
+
+Returns the next queued frame without blocking, or `null` if the connection's
+receive buffer is empty right now.
+
+```loft
+// Non-blocking receive.  Returns null if no frame is currently available.
+pub fn ws_poll(ws: &WebSocket) -> WsMessage
+```
+
+A game tick loop uses `ws_poll` to drain every player's queue in order before
+running the rules step.
+
+---
+
+### Gap 3 — No connection registry or broadcast
+
+Each `route_ws` handler is isolated: it owns one `WebSocket` and has no
+reference to any other connection.  A game server needs to send the same state
+snapshot to every player in a lobby simultaneously.
+
+**Two additions:**
+
+#### 3a — ConnectionRegistry (implemented in loft)
+
+A shared, thread-safe registry that maps a connection ID to its `WebSocket`
+handle.  Implemented using loft's parallel-safe store (same infrastructure as
+`RateLimit`).
+
+```loft
+struct ConnectionRegistry { /* opaque, backed by parallel store */ }
+
+// Create the registry.  Passed to new_app() so middleware can populate it.
+pub fn new_registry() -> ConnectionRegistry
+
+// Register a connection (called at the start of every ws handler).
+pub fn registry_add(reg: &ConnectionRegistry, id: text, ws: &WebSocket)
+
+// Deregister when the handler exits.
+pub fn registry_remove(reg: &ConnectionRegistry, id: text)
+
+// Look up one connection's WebSocket.
+pub fn registry_get(reg: &ConnectionRegistry, id: text) -> WebSocket
+
+// Return all currently connected IDs.
+pub fn registry_ids(reg: &ConnectionRegistry) -> vector<text>
+```
+
+#### 3b — `n_ws_broadcast` (native)
+
+Sending to multiple connections from a single call avoids serializing messages
+one at a time through the loft/native boundary for each recipient.
+
+```
+n_ws_broadcast   handles[], WsMessage → sent_count
+```
+
+```loft
+// Send msg to every WebSocket in the list.  Returns number actually sent.
+// Silently skips closed connections.
+pub fn ws_broadcast(connections: vector<WebSocket>, msg: WsMessage) -> integer
+```
+
+Typical lobby broadcast:
+
+```loft
+fn broadcast_state(reg: &ConnectionRegistry, lobby_id: text, state: GameState) {
+    ids   = registry_ids(reg);
+    conns = [for conn_id in ids if starts_with(conn_id, "{lobby_id}/") {
+        registry_get(reg, conn_id)
+    }];
+    payload = "{state:j}";
+    env = GameEnvelope { type_id: MSG_STATE_FULL, seq: 0, tick: state.tick, payload: payload };
+    ws_broadcast(conns, WsMessage.Text { content: "{env:j}" });
+}
+```
+
+---
+
+### Gap 4 — No server-side game loop
+
+`serve` / `serve_all` models the server as pure request-response.  A game
+server additionally needs a fixed-rate tick loop running independently of
+incoming connections — collecting buffered inputs, stepping the rules WASM
+module, and broadcasting the new state.
+
+**Addition:** `game_loop.loft` — a new source file in `server/src/` providing
+a server-side fixed-timestep loop.
+
+```loft
+struct GameLoop {
+    tick_rate:      integer,   // ticks per second; default 20
+    max_frame_time: integer,   // max ms per real frame before clamping; default 100
+}
+
+// Run a server-side tick loop until the process exits.
+// Called alongside serve_all() on a separate thread.
+// tick_fn(tick: integer) is called at the fixed rate.
+pub fn run_game_loop(loop_cfg: GameLoop, tick_fn: fn(integer))
+```
+
+The native layer provides one symbol to support it:
+
+```
+n_sleep_until_us   target_us → void
+```
+
+`run_game_loop` is implemented in loft:
+
+```loft
+pub fn run_game_loop(loop_cfg: GameLoop, tick_fn: fn(integer)) {
+    tick_us    = 1000000 / loop_cfg.tick_rate;
+    max_us     = loop_cfg.max_frame_time * 1000l;
+    next_us    = ticks();
+    tick_count = 0;
+    for _ in 0..2147483647 {
+        now_us   = ticks();
+        elapsed  = now_us - next_us;
+        if elapsed > max_us { next_us = now_us; }   // spiral-of-death guard
+        for _ in 0..1000 if ticks() >= next_us {
+            tick_fn(tick_count);
+            tick_count += 1;
+            next_us    += tick_us as long;
+        }
+        sleep_until_us(next_us);
+    }
+}
+```
+
+Usage alongside `serve_all`:
+
+```loft
+fn game_tick(tick: integer) {
+    // 1. drain each player's ws_poll queue into buffered inputs
+    // 2. run rules WASM step
+    // 3. broadcast state snapshot
+}
+
+fn main() {
+    // ... set up Apps ...
+    parallel {
+        serve_all([public, ws_app]);
+        run_game_loop(GameLoop { tick_rate: 20 }, fn game_tick);
+    }
+}
+```
+
+Until loft gets a `parallel {}` block, `run_game_loop` can be started on a
+background thread via a native helper:
+
+```
+n_spawn_thread   fn() -> void → void
+```
+
+---
+
+### Gap 5 — No WASM loading on server
+
+The shared game logic pattern (see GAME_CLIENT_LIB.md § Shared game logic
+pattern) requires both client and server to load and run the same `rules.wasm`
+module.  The `server` library currently has no WASM runtime.
+
+**Addition:** three new native symbols, identical to the client-side ones.
+
+```
+n_wasm_load        bytes: text (base64) → module_handle: integer
+n_wasm_call        handle, export_name, args_json → result_json: text
+n_wasm_has_export  handle, export_name → boolean
+n_wasm_unload      handle → void
+```
+
+```loft
+// Load a WASM module from base64-encoded bytes.  Returns an opaque handle.
+pub fn wasm_load_bytes(bytes: text) -> integer
+
+// Call a WASM export function.  args and result are JSON-encoded.
+pub fn wasm_call(handle: integer, export: text, args: text) -> text
+
+// True if the module exports the named symbol.
+pub fn wasm_has_export(handle: integer, export: text) -> boolean
+
+// Release a loaded WASM module.
+pub fn wasm_unload(handle: integer)
+```
+
+The server-side WASM sandbox is identical to the client-side one:
+only `loft::rand_u32()` and `loft::log()` are available as imports.
+Ed25519 signature verification before loading is recommended (see
+GAME_CLIENT_LIB.md § Security model).
+
+---
+
+### Gap 6 — `WsMessage` protocol divergence
+
+`server` and `game_client` each define their own `WsMessage` enum with
+subtly different variants (`Ping { data: text }` vs `Ping` with no fields).
+Any shared protocol code that constructs or matches `WsMessage` values must
+be duplicated with slight modifications.
+
+**Resolution:** extract the shared protocol types into a lightweight
+`game_protocol` package.
+
+```
+game_protocol/              ← GitHub: jjstwerff/loft-game-protocol
+  loft.toml
+  src/
+    envelope.loft           ← GameEnvelope, MSG_* constants
+    messages.loft           ← Msg* request/response structs
+    ws_message.loft         ← canonical WsMessage enum
+```
+
+Both `server` and `game_client` declare this as a dependency:
+
+```toml
+# server/loft.toml
+[dependencies]
+game_protocol = "0.1"
+
+# game_client/loft.toml
+[dependencies]
+game_protocol = "0.1"
+```
+
+The canonical `WsMessage` definition (in `game_protocol`):
+
+```loft
+enum WsMessage {
+    Text   { content: text },
+    Binary { data: text },     // raw bytes as base64
+    Ping,
+    Pong,
+    Close  { code: integer, reason: text },
+}
+```
+
+The server and game_client native layers both map their internal frame types
+to this enum on receipt, and map from it on send.
+
+---
+
+### Gap 7 — Thread pool exhaustion for long-lived WebSocket connections
+
+Each WebSocket handler holds a blocking thread for the entire lifetime of the
+connection.  For a game server with 100 concurrent players, `Server.threads`
+must be set large enough to accommodate all WebSocket handlers plus any
+simultaneous HTTP request handlers.
+
+**Guidance** (added to `server.loft` documentation):
+
+```loft
+// For game servers: set threads to at least max_concurrent_players + 10.
+// Each WebSocket handler holds one thread; HTTP handlers need additional slots.
+// Example: 64 players + 10 HTTP headroom = threads: 74
+srv = Server {
+    threads: 74,
+    // ...
+};
+```
+
+Long-term (deferred to Phase 7+): a connection manager model where WebSocket
+handlers do not hold threads between frames, instead registering callbacks that
+are invoked when frames arrive.  This scales to thousands of concurrent
+connections with a small thread pool.  Requires async loft handler support,
+which depends on the coroutine design (COROUTINE.md).
+
+---
+
+### Summary of additions
+
+| # | What | Where | Type |
+|---|------|-------|------|
+| 1 | `n_jwt_sign_hs256` | native layer | new native symbol |
+| 2 | `n_ws_poll` | native layer | new native symbol |
+| 3a | `ConnectionRegistry` + accessors | `websocket.loft` | loft |
+| 3b | `n_ws_broadcast` | native layer | new native symbol |
+| 4a | `GameLoop`, `run_game_loop` | `game_loop.loft` (new file) | loft |
+| 4b | `n_sleep_until_us`, `n_spawn_thread` | native layer | new native symbols |
+| 5 | `n_wasm_load/call/has_export/unload` | native layer | new native symbols (4) |
+| 6 | `game_protocol` shared package | new repo | loft package |
+| 7 | Thread-sizing guidance | `server.loft` docs | documentation |
+
+Updated native symbol table (additions marked **new**):
+
+| Symbol | Purpose |
+|--------|---------|
+| `n_server_listen` | Bind TCP socket, start tokio runtime |
+| `n_server_accept_loop` | Accept connections; call loft handler per request |
+| `n_tls_load_pem` | Load PEM certificate + key into rustls config |
+| `n_acme_provision` | Run ACME issuance flow; return cert bytes |
+| `n_acme_renew_loop` | Background renewal task |
+| `n_ws_send` | Write WebSocket frame |
+| `n_ws_receive` | Read next WebSocket frame (blocking) |
+| `n_ws_poll` | **new** — non-blocking receive; null if empty |
+| `n_ws_broadcast` | **new** — send to multiple connections |
+| `n_ws_close` | Send close frame |
+| `n_jwt_verify_hs256` | Verify HMAC-SHA256 signature |
+| `n_jwt_sign_hs256` | **new** — sign a JWT (issue tokens) |
+| `n_argon2_hash` | Hash a password with Argon2id |
+| `n_argon2_verify` | Verify a password against an Argon2id hash |
+| `n_session_id_new` | Generate a cryptographically random session ID |
+| `n_random_bytes` | Fill a buffer with random bytes |
+| `n_wasm_load` | **new** — load WASM module bytes → handle |
+| `n_wasm_call` | **new** — call WASM export function |
+| `n_wasm_has_export` | **new** — check WASM export exists |
+| `n_wasm_unload` | **new** — release WASM module |
+| `n_sleep_until_us` | **new** — sleep until absolute microsecond timestamp |
+| `n_spawn_thread` | **new** — run a loft fn on a background thread |
+
+Total: 13 original symbols + 10 new = **23 native symbols**.

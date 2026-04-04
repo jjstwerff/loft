@@ -256,16 +256,23 @@ Shape primitives built on the graphics library.  Migrated from `lib/shapes/`.
 **`web` — HTTP client** (H4, 0.8.4):
 Blocking HTTP client and JSON response handling.  Lives in `jjstwerff/loft-web`.
 
+**`game_protocol` — shared multiplayer protocol** (`jjstwerff/loft-game-protocol`):
+Lightweight shared package depended on by both `server` (when used as a game server)
+and `game_client`.  Contains the canonical `WsMessage` enum, `GameEnvelope` struct,
+`MSG_*` constants, and all `Msg*` request/response structs.  Extracting these into a
+separate package prevents the two libraries from diverging in their protocol definitions.
+No native layer required — pure loft.  Phases: just one (all types defined at once).
+
 **`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md)):
 Client-side companion to `server`.  Provides WebSocket connectivity, a typed game
 message protocol (envelope + dispatcher), lobby management, fixed-timestep game loop,
 client-side prediction with server reconciliation, and dynamic WASM script loading.
 WASM scripts are loft programs compiled with `--native-wasm` and loaded at runtime by
 both client and server — guaranteeing identical physics and rules without sending full
-state every tick.  Phases:
+state every tick.  Depends on `game_protocol`.  Phases:
 
 - **Phase 1** — WebSocket client + protocol: `WsClient`, `GameEnvelope`, `GameMessage`
-  enum, `Dispatcher`.  Requires: interpreter 0.8.3, `server` Phase 1.
+  enum, `Dispatcher`.  Requires: interpreter 0.8.3, `server` Phase 1, `game_protocol`.
 - **Phase 2** — Lobby + fixed-timestep game loop.
 - **Phase 3** — Client-side prediction + reconciliation + state delta sync + ping.
 - **Phase 4** — WASM script loading: `WasmModule`, `wasm_load/call/verify`, Ed25519
