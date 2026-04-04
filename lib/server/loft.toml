@@ -1,0 +1,11 @@
+[package]
+name = "server"
+version = "0.1.0"
+loft = ">=0.8"
+
+[library]
+entry = "src/server.loft"
+native = "loft_server"
+
+[dependencies]
+web = ">=0.1"

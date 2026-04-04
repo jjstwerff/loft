@@ -93,6 +93,13 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_gl_measure_text", n_gl_measure_text),
     ("n_gl_bind_texture", n_gl_bind_texture),
     ("n_gl_delete_texture", n_gl_delete_texture),
+    ("n_tcp_listen", n_tcp_listen),
+    ("n_tcp_accept", n_tcp_accept),
+    ("n_tcp_method", n_tcp_method),
+    ("n_tcp_path", n_tcp_path),
+    ("n_tcp_body", n_tcp_body),
+    ("n_tcp_respond", n_tcp_respond),
+    ("n_tcp_close", n_tcp_close),
 ];
 
 pub fn init(state: &mut State) {
@@ -1536,5 +1543,110 @@ fn n_gl_delete_texture(stores: &mut Stores, stack: &mut DbRef) {
         unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_delete_texture") }
     {
         f(v_tex as u32);
+    }
+}
+
+// ── TCP server glue (SRV.1) ────────────────────────────────────────────
+
+fn n_tcp_listen(stores: &mut Stores, stack: &mut DbRef) {
+    let v_port = *stores.get::<i32>(stack);
+    let result = if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32) -> i32>("loft_tcp_listen") }
+    {
+        f(v_port as u32)
+    } else {
+        i32::MIN
+    };
+    stores.put(stack, result);
+}
+
+fn n_tcp_accept(stores: &mut Stores, stack: &mut DbRef) {
+    let v_handle = *stores.get::<i32>(stack);
+    let result = if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(i32) -> bool>("loft_tcp_accept") }
+    {
+        f(v_handle)
+    } else {
+        false
+    };
+    stores.put(stack, result);
+}
+
+fn n_tcp_method(stores: &mut Stores, stack: &mut DbRef) {
+    if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(*mut *const u8, *mut usize)>(
+            "loft_tcp_method",
+        )
+    } {
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len: usize = 0;
+        f(std::ptr::addr_of_mut!(ptr), std::ptr::addr_of_mut!(len));
+        if !ptr.is_null() && len > 0 {
+            let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
+            stores.scratch.clear();
+            stores.scratch.push(s.to_string());
+            stores.put(stack, Str::new(&stores.scratch[0]));
+            return;
+        }
+    }
+    stores.put(stack, Str::new(""));
+}
+
+fn n_tcp_path(stores: &mut Stores, stack: &mut DbRef) {
+    if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(*mut *const u8, *mut usize)>(
+            "loft_tcp_path",
+        )
+    } {
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len: usize = 0;
+        f(std::ptr::addr_of_mut!(ptr), std::ptr::addr_of_mut!(len));
+        if !ptr.is_null() && len > 0 {
+            let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
+            stores.scratch.clear();
+            stores.scratch.push(s.to_string());
+            stores.put(stack, Str::new(&stores.scratch[0]));
+            return;
+        }
+    }
+    stores.put(stack, Str::new(""));
+}
+
+fn n_tcp_body(stores: &mut Stores, stack: &mut DbRef) {
+    if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(*mut *const u8, *mut usize)>(
+            "loft_tcp_body",
+        )
+    } {
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len: usize = 0;
+        f(std::ptr::addr_of_mut!(ptr), std::ptr::addr_of_mut!(len));
+        if !ptr.is_null() && len > 0 {
+            let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
+            stores.scratch.clear();
+            stores.scratch.push(s.to_string());
+            stores.put(stack, Str::new(&stores.scratch[0]));
+            return;
+        }
+    }
+    stores.put(stack, Str::new(""));
+}
+
+fn n_tcp_respond(stores: &mut Stores, stack: &mut DbRef) {
+    let v_body = *stores.get::<Str>(stack);
+    let v_status = *stores.get::<i32>(stack);
+    if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(u16, *const u8, usize)>("loft_tcp_respond")
+    } {
+        f(v_status as u16, v_body.str().as_ptr(), v_body.str().len());
+    }
+}
+
+fn n_tcp_close(stores: &mut Stores, stack: &mut DbRef) {
+    let v_handle = *stores.get::<i32>(stack);
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(i32)>("loft_tcp_close") }
+    {
+        f(v_handle);
     }
 }
