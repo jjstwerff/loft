@@ -38,6 +38,7 @@ pub mod extensions;
 pub mod log_config;
 pub mod logger;
 pub mod manifest;
+pub mod registry;
 mod stack;
 
 pub mod documentation;

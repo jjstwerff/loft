@@ -54,11 +54,11 @@ Sprint 8: 3D types + bug fixes (branch sprint-8-glb-types)
   P105    deferred — get_val fix regresses parser library
   P106    deferred — depends on P105
 
-Sprint 9: Registry (independent — no PKG.4 dependency)
-  REG.1   src/registry.rs: read_registry(), find_package(), download_and_extract()
-  REG.2   loft install <name>[@version] — registry lookup in main.rs
-  REG.3   loft registry sync — download registry.txt from source: URL
-  REG.4   loft registry check — installed vs registry; exit 1 on yanks
+Sprint 9: Registry ✓ (independent — no PKG.4 dependency)
+  REG.1   src/registry.rs: read_registry(), find_package(), download_and_extract() ✓
+  REG.2   loft install <name>[@version] — registry lookup in main.rs ✓
+  REG.3   loft registry sync — download registry.txt from source: URL ✓
+  REG.4   loft registry check — installed vs registry; exit 1 on yanks ✓
 
 Sprint 10: Language ergonomics (needed by server/game_client — no external deps)
   C55     type aliases: type Handler = fn(Request) -> Response
@@ -114,10 +114,6 @@ Sprint 18: Graphics native (needs PKG.4)
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| REG.1     | Registry file parser + version resolver (`src/registry.rs`) | S  | ✓      | PKG.1        | src/registry.rs               |
-| REG.2     | `loft install <name>[@v]` — download + extract from registry | S  | ✓      | REG.1        | src/main.rs                   |
-| REG.3     | `loft registry sync` — pull registry.txt from source URL    | S  | ✓      | REG.1        | src/registry.rs, src/main.rs  |
-| REG.4     | `loft registry check` — installed vs registry; exit 1 yanks | S  | ✓      | REG.3        | src/registry.rs, src/main.rs  |
 | C55       | Type aliases (`type Handler = fn(Request) -> Response`)   | XS | ✓      |              | src/parser/definitions.rs     |
 | C56       | `?? return expr` — null early-exit in handlers            | XS | ✓      |              | src/parser/expressions.rs     |
 | A15       | `parallel { }` structured concurrency block               | M  | ✓      |              | src/parser/expressions.rs     |

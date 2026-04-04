@@ -107,9 +107,20 @@ fn print_help() {
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
     println!("                                test draw::f — run a single test function");
-    println!("  install [path]                install a package to ~/.loft/lib/ for global use");
-    println!("                                install .    — install package in current dir");
-    println!("                                install /p   — install package at /p");
+    println!("  install [target]              install a package to ~/.loft/lib/ for global use");
+    println!("                                install .        — install package in current dir");
+    println!("                                install /p       — install package at /p");
+    println!("                                install name     — download latest from registry");
+    println!("                                install name@v   — download specific version");
+    println!("  registry <subcommand>         manage the local package registry");
+    println!(
+        "                                sync             — pull latest registry from source URL"
+    );
+    println!(
+        "                                check            — report updates, deprecations, yanks"
+    );
+    println!("                                list             — browse all packages in registry");
+    println!("                                list --installed — show only installed packages");
     println!("  doc [path]                    generate HTML documentation for a package");
     println!("                                doc          — generate docs for package in cwd");
     println!("                                doc lib/pkg  — generate docs for lib/pkg");
@@ -219,6 +230,402 @@ fn install_package(pkg_path: &std::path::Path) {
         "installed {pkg_name} ({copied} source files) → {}",
         target.display()
     );
+}
+
+/// REG.2: Install a package from the registry by name (optionally with `@version`).
+#[cfg(feature = "registry")]
+fn install_from_registry(arg: &str) {
+    use loft::registry;
+
+    // Parse name[@version].
+    let (name, version) = if let Some((n, v)) = arg.split_once('@') {
+        (n, Some(v))
+    } else {
+        (arg, None)
+    };
+
+    // Find and read registry file.
+    let Some(reg_path) = registry::registry_path() else {
+        eprintln!(
+            "loft install: no registry file found.\n  \
+             Run 'loft registry sync' to download the package registry.\n  \
+             Or set LOFT_REGISTRY to a local registry file path."
+        );
+        std::process::exit(1);
+    };
+    let (entries, _) = registry::read_registry(reg_path.to_str().unwrap_or(""));
+
+    // Find matching entry.
+    let Some(entry) = registry::find_package(&entries, name, version) else {
+        let available: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.name == name && !e.is_yanked())
+            .map(|e| e.version.as_str())
+            .collect();
+        if available.is_empty() {
+            eprintln!("loft install: package '{name}' not found in registry.");
+        } else {
+            eprintln!(
+                "loft install: package '{name}@{}' not found in registry.\n  Available versions: {}",
+                version.unwrap_or("?"),
+                available.join(", ")
+            );
+        }
+        std::process::exit(1);
+    };
+
+    if entry.is_yanked() && version.is_some() {
+        eprintln!(
+            "warning: {name}@{} is yanked ({})",
+            entry.version,
+            entry.status_slug()
+        );
+    }
+
+    // Check if already installed.
+    let lib = registry::lib_dir();
+    let installed_toml = lib.join(name).join("loft.toml");
+    if installed_toml.exists()
+        && let Ok(content) = std::fs::read_to_string(&installed_toml)
+    {
+        let installed_ver = extract_toml_version(&content);
+        if installed_ver == entry.version {
+            println!(
+                "loft install: {name} {} is already installed.",
+                entry.version
+            );
+            return;
+        }
+    }
+
+    // Download and extract.
+    let tmp = std::env::temp_dir().join("loft_install");
+    let _ = std::fs::create_dir_all(&tmp);
+    match registry::download_and_extract(entry, &tmp) {
+        Ok(pkg_root) => {
+            install_package(&pkg_root);
+            // Clean up temp.
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        Err(e) => {
+            eprintln!("loft install: {e}");
+            let _ = std::fs::remove_dir_all(&tmp);
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(feature = "registry"))]
+fn install_from_registry(arg: &str) {
+    eprintln!(
+        "loft install: registry support is not compiled in.\n  \
+         Rebuild with: cargo build --features registry\n  \
+         Trying to install: {arg}"
+    );
+    std::process::exit(1);
+}
+
+/// Extract version string from `loft.toml` content.
+fn extract_toml_version(content: &str) -> String {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("version") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                return rest.trim().trim_matches('"').to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// REG.3/REG.4: Handle `loft registry <subcommand>`.
+fn handle_registry(argv: &[String], i: &mut usize) {
+    let sub = if argv.get(*i).is_some_and(|s| !s.starts_with('-')) {
+        *i += 1;
+        argv[*i - 1].as_str()
+    } else {
+        ""
+    };
+
+    match sub {
+        "sync" => registry_sync(),
+        "check" => registry_check(),
+        "list" => {
+            let installed_only = argv.get(*i).is_some_and(|s| s == "--installed");
+            registry_list(installed_only);
+        }
+        _ => {
+            eprintln!("usage: loft registry <sync|check|list>");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// REG.3: Download the latest registry from the source URL.
+fn registry_sync() {
+    use loft::registry;
+
+    // Determine source URL.
+    let existing_source = registry::registry_path().and_then(|p| {
+        let (_, src) = registry::read_registry(p.to_str().unwrap_or(""));
+        src
+    });
+    let url = registry::source_url(existing_source.as_deref());
+
+    eprintln!("syncing registry from {url} ...");
+
+    // Download to a temp file first, then validate and move.
+    let dst = registry::default_registry_path();
+    if let Some(parent) = dst.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = dst.with_extension("tmp");
+
+    #[cfg(feature = "registry")]
+    {
+        if let Err(e) = registry::download_file(&url, &tmp) {
+            eprintln!("loft registry sync: {e}\n  local registry is unchanged.");
+            std::process::exit(1);
+        }
+    }
+    #[cfg(not(feature = "registry"))]
+    {
+        let _ = url;
+        let _ = tmp;
+        eprintln!("loft registry sync: registry feature not compiled in.");
+        std::process::exit(1);
+    }
+
+    // Validate content.
+    let content = match std::fs::read_to_string(&tmp) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("loft registry sync: cannot read downloaded file: {e}");
+            let _ = std::fs::remove_file(&tmp);
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = registry::validate_registry_content(&content) {
+        eprintln!(
+            "loft registry sync: invalid registry content: {e}\n  local registry is unchanged."
+        );
+        let _ = std::fs::remove_file(&tmp);
+        std::process::exit(1);
+    }
+
+    // Move into place.
+    if let Err(e) = std::fs::rename(&tmp, &dst) {
+        eprintln!("loft registry sync: cannot write {}: {e}", dst.display());
+        let _ = std::fs::remove_file(&tmp);
+        std::process::exit(1);
+    }
+
+    let (entries, _) = registry::parse_registry(&content);
+    let (pkgs, versions) = registry::registry_stats(&entries);
+    let today = chrono_date();
+    println!("registry synced: {pkgs} packages, {versions} versions  ({today})");
+}
+
+/// REG.4: Compare installed packages against the registry.
+fn registry_check() {
+    use loft::registry;
+
+    let Some(reg_path) = registry::registry_path() else {
+        eprintln!(
+            "loft registry check: no registry file found.\n  \
+             Run 'loft registry sync' to download the package registry."
+        );
+        std::process::exit(1);
+    };
+    let (entries, _) = registry::read_registry(reg_path.to_str().unwrap_or(""));
+    let (pkgs, versions) = registry::registry_stats(&entries);
+
+    // Staleness warning.
+    if let Some(warning) = registry::staleness_warning(&reg_path) {
+        eprintln!("{warning}");
+    }
+    let age_str = registry_age_str(&reg_path);
+    println!("registry: {pkgs} packages, {versions} versions  ({age_str})");
+    println!();
+
+    let lib = registry::lib_dir();
+    let installed = registry::installed_packages(&lib);
+
+    if installed.is_empty() {
+        println!("no packages installed.");
+        println!("\nnew packages in registry: {pkgs}");
+        println!("  run 'loft registry list' to browse");
+        return;
+    }
+
+    println!("installed packages ({}):", installed.len());
+    let mut yanked_count = 0;
+    for (name, version) in &installed {
+        let status = registry::classify(&entries, name, version);
+        match status {
+            registry::PackageStatus::Yanked { entry } => {
+                println!(
+                    "  {name:<12} {version:<8} YANKED      {} — run: loft install {name}",
+                    entry.status_slug()
+                );
+                yanked_count += 1;
+            }
+            registry::PackageStatus::Deprecated { entry, .. } => {
+                println!(
+                    "  {name:<12} {version:<8} deprecated  {} — run: loft install {name}",
+                    entry.status_slug()
+                );
+            }
+            registry::PackageStatus::Outdated { latest } => {
+                println!(
+                    "  {name:<12} {version:<8} outdated    → {} — run: loft install {name}",
+                    latest.version
+                );
+            }
+            registry::PackageStatus::Current => {
+                println!("  {name:<12} {version:<8} current");
+            }
+            registry::PackageStatus::Unknown => {
+                println!("  {name:<12} {version:<8} (not in registry)");
+            }
+        }
+    }
+
+    let not_installed = pkgs.saturating_sub(installed.len());
+    if not_installed > 0 {
+        println!("\nnew packages in registry not installed: {not_installed}");
+        println!("  run 'loft registry list' to browse");
+    }
+
+    if yanked_count > 0 {
+        println!(
+            "\n{yanked_count} security issue{} — yanked packages must be updated.",
+            if yanked_count == 1 { "" } else { "s" }
+        );
+        std::process::exit(1);
+    } else if installed.iter().all(|(name, version)| {
+        matches!(
+            registry::classify(&entries, name, version),
+            registry::PackageStatus::Current
+        )
+    }) {
+        println!("\nall installed packages are up to date.");
+    }
+}
+
+/// `loft registry list [--installed]`
+fn registry_list(installed_only: bool) {
+    use loft::registry;
+
+    let Some(reg_path) = registry::registry_path() else {
+        eprintln!(
+            "loft registry list: no registry file found.\n  \
+             Run 'loft registry sync' to download the package registry."
+        );
+        std::process::exit(1);
+    };
+    let (entries, _) = registry::read_registry(reg_path.to_str().unwrap_or(""));
+    let lib = registry::lib_dir();
+    let installed = registry::installed_packages(&lib);
+
+    let names = registry::package_names(&entries);
+
+    println!(
+        "{:<12} {:<28} {:<12} status",
+        "name", "versions", "installed"
+    );
+    println!("{:-<12} {:-<28} {:-<12} {:-<20}", "", "", "", "");
+
+    for name in &names {
+        let versions = registry::package_versions(&entries, name);
+        let inst_ver = installed
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or("\u{2014}", |(_, v)| v.as_str());
+        if installed_only && inst_ver == "\u{2014}" {
+            continue;
+        }
+        let ver_str: Vec<&str> = versions.iter().map(|e| e.version.as_str()).collect();
+        // Determine status column.
+        let status = if inst_ver == "\u{2014}" {
+            String::new()
+        } else if let Some(e) = versions.iter().find(|e| e.version == inst_ver) {
+            if e.is_yanked() {
+                format!("YANKED ({inst_ver})")
+            } else if e.is_deprecated() {
+                "deprecated".to_string()
+            } else {
+                let latest = registry::find_package(&entries, name, None);
+                if latest.is_some_and(|l| l.version != inst_ver) {
+                    "outdated".to_string()
+                } else {
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+        println!(
+            "{:<12} {:<28} {:<12} {}",
+            name,
+            ver_str.join("  "),
+            inst_ver,
+            status
+        );
+    }
+}
+
+/// Get a simple date string without pulling in the chrono crate.
+fn chrono_date() -> String {
+    // Use file modification time of a temp file as a proxy for "now".
+    let tmp = std::env::temp_dir().join(".loft_date_probe");
+    let _ = std::fs::write(&tmp, "");
+    let date = std::fs::metadata(&tmp)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| {
+            let dur = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+            let secs = dur.as_secs();
+            // Simple date calculation from unix timestamp.
+            let days = secs / 86400;
+            let (year, month, day) = days_to_ymd(days);
+            Some(format!("{year}-{month:02}-{day:02}"))
+        })
+        .unwrap_or_else(|| "unknown date".to_string());
+    let _ = std::fs::remove_file(&tmp);
+    date
+}
+
+/// Convert days since Unix epoch to (year, month, day).
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Human-readable age of the registry file.
+fn registry_age_str(path: &std::path::Path) -> String {
+    let age = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+        .map(|d| d.as_secs() / 86400);
+    match age {
+        Some(0) => "synced today".to_string(),
+        Some(1) => "synced 1 day ago".to_string(),
+        Some(d) => format!("synced {d} days ago"),
+        None => "sync date unknown".to_string(),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -376,13 +783,33 @@ fn main() {
             }
             tests_dir = Some(test_target);
         } else if a == "install" {
-            // PKG.2: `loft install [path]` — install a local package to ~/.loft/lib/
-            let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                std::path::PathBuf::from(&argv[i])
+            let arg = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                i += 1;
+                argv[i - 1].clone()
             } else {
-                std::env::current_dir().unwrap_or_default()
+                String::new()
             };
-            install_package(&pkg_path);
+            if arg.is_empty()
+                || arg.starts_with('/')
+                || arg.starts_with("./")
+                || arg.starts_with("../")
+                || arg == "."
+                || arg.contains('/')
+            {
+                // Local path install.
+                let pkg_path = if arg.is_empty() {
+                    std::env::current_dir().unwrap_or_default()
+                } else {
+                    std::path::PathBuf::from(&arg)
+                };
+                install_package(&pkg_path);
+            } else {
+                // Registry install.
+                install_from_registry(&arg);
+            }
+            return;
+        } else if a == "registry" {
+            handle_registry(&argv, &mut i);
             return;
         } else if a == "doc" {
             // PKG.8: `loft doc [path]` — generate HTML docs for a package.

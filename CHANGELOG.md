@@ -49,6 +49,20 @@ All notable changes to the loft language and interpreter.
 - **P107** — `++` (not a valid operator) now produces a clear error instead
   of crashing in codegen with a confusing type mismatch.
 
+### Package registry (Sprint 9)
+
+- **REG.1** — `src/registry.rs`: registry file parser with version resolution,
+  package classification (yanked/deprecated/outdated/current/unknown), and
+  installed package scanner.
+- **REG.2** — `loft install <name>[@version]`: download and install packages
+  from the registry.  Detects already-installed versions, warns on yanked packages.
+- **REG.3** — `loft registry sync`: download the latest registry from the
+  source URL (`# source:` header, `LOFT_REGISTRY_URL` env, or compiled-in default).
+- **REG.4** — `loft registry check`: compare installed packages against the
+  registry, report yanked/deprecated/outdated status, exit 1 on security issues.
+- `loft registry list [--installed]`: browse all registry packages with
+  installed status.
+
 ### Package infrastructure
 
 - **PKG.1** — Native stub registration: `#native` annotations generate stubs replaced
