@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Random number generator for the random package.
-//! No loft dependency — only depends on rand_core and rand_pcg.
+//! Native random number generator. No loft dependency.
 
 use rand_core::{RngCore, SeedableRng};
 use rand_pcg::Pcg64;
@@ -12,9 +11,10 @@ thread_local! {
     static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::from_os_rng());
 }
 
-/// Return a random integer in [lo, hi] (inclusive).
-/// Returns i32::MIN (null sentinel) if lo > hi or either is null.
-pub fn rand_int(lo: i32, hi: i32) -> i32 {
+// ── C-ABI exports ───────────────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_rand_int(lo: i32, hi: i32) -> i32 {
     if lo == i32::MIN || hi == i32::MIN || lo > hi {
         return i32::MIN;
     }
@@ -23,34 +23,11 @@ pub fn rand_int(lo: i32, hi: i32) -> i32 {
     lo + (r % range) as i32
 }
 
-/// Seed the thread-local RNG for reproducible sequences.
-pub fn rand_seed(seed: i64) {
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_rand_seed(seed: i64) {
     RNG.with(|rng| *rng.borrow_mut() = Pcg64::seed_from_u64(seed as u64));
 }
 
-/// Fisher-Yates shuffle of a mutable i32 slice.
-pub fn shuffle_ints(v: &mut [i32]) {
-    let n = v.len();
-    for i in (1..n).rev() {
-        let j = RNG.with(|rng| rng.borrow_mut().next_u64()) as usize % (i + 1);
-        v.swap(i, j);
-    }
-}
-
-// ── C-ABI exports for interpreter dlopen ────────────────────────────────
-
-#[unsafe(no_mangle)]
-pub extern "C" fn loft_rand_int(lo: i32, hi: i32) -> i32 {
-    rand_int(lo, hi)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn loft_rand_seed(seed: i64) {
-    rand_seed(seed);
-}
-
-/// Shuffle indices [0..n) and return them via out-pointer.
-/// Caller must free with `loft_free_indices`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_rand_indices(
     n: i32,
@@ -59,7 +36,11 @@ pub unsafe extern "C" fn loft_rand_indices(
 ) {
     let count = if n == i32::MIN || n <= 0 { 0 } else { n as usize };
     let mut indices: Vec<i32> = (0..count as i32).collect();
-    shuffle_ints(&mut indices);
+    let len = indices.len();
+    for i in (1..len).rev() {
+        let j = RNG.with(|rng| rng.borrow_mut().next_u64()) as usize % (i + 1);
+        indices.swap(i, j);
+    }
     unsafe {
         *out_len = indices.len();
         *out_ptr = indices.as_mut_ptr();
@@ -71,5 +52,20 @@ pub unsafe extern "C" fn loft_rand_indices(
 pub unsafe extern "C" fn loft_free_indices(ptr: *mut i32, len: usize) {
     if !ptr.is_null() && len > 0 {
         drop(unsafe { Vec::from_raw_parts(ptr, len, len) });
+    }
+}
+
+// ── Registration ────────────────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn loft_register_v1(
+    register: unsafe extern "C" fn(*const u8, usize, *const (), *mut ()),
+    ctx: *mut (),
+) {
+    unsafe {
+        register(b"loft_rand_int".as_ptr(), 13, loft_rand_int as *const (), ctx);
+        register(b"loft_rand_seed".as_ptr(), 14, loft_rand_seed as *const (), ctx);
+        register(b"loft_rand_indices".as_ptr(), 17, loft_rand_indices as *const (), ctx);
+        register(b"loft_free_indices".as_ptr(), 17, loft_free_indices as *const (), ctx);
     }
 }

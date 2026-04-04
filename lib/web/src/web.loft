@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- HTTP Client ---
+// Blocking HTTP client for consuming web services.
+
+// The result of an HTTP request.
+pub struct HttpResponse {
+  status: integer,
+  body: text
+}
+
+// Returns true when the status code is in the 200-299 range.
+pub fn ok(self: HttpResponse) -> boolean {
+  self.status >= 200 && self.status < 300
+}
+
+// --- Internal native functions returning primitives ---
+
+fn http_do(method: text, url: text, body: text) -> integer;
+#native "n_http_do"
+
+fn http_body() -> text;
+#native "n_http_body"
+
+// --- Public HTTP functions ---
+
+// Send a GET request.
+pub fn http_get(url: text) -> HttpResponse {
+  status = http_do("GET", url, "");
+  HttpResponse { status: status, body: http_body() }
+}
+
+// Send a POST request with a body.
+pub fn http_post(url: text, body: text) -> HttpResponse {
+  status = http_do("POST", url, body);
+  HttpResponse { status: status, body: http_body() }
+}
+
+// Send a PUT request with a body.
+pub fn http_put(url: text, body: text) -> HttpResponse {
+  status = http_do("PUT", url, body);
+  HttpResponse { status: status, body: http_body() }
+}
+
+// Send a DELETE request.
+pub fn http_delete(url: text) -> HttpResponse {
+  status = http_do("DELETE", url, "");
+  HttpResponse { status: status, body: http_body() }
+}

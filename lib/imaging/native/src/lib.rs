@@ -1,16 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! PNG decoder for the imaging package.
-//! No loft dependency — only depends on the `png` crate.
-//! Exports a C-ABI function that decodes a PNG file into raw RGB bytes.
+//! Native extension for the imaging package. No loft dependency.
 
 use png::Decoder;
 use std::fs::File;
 use std::io::BufReader;
 
-/// Decode a PNG file at `path` into raw RGB pixel bytes.
-/// Returns `(width, height, pixels)` or `None` on failure.
 pub fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     let file = File::open(path).ok()?;
     let decoder = Decoder::new(BufReader::new(file));
@@ -22,12 +18,8 @@ pub fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     Some((info.width, info.height, pixels))
 }
 
-/// C-ABI entry point for the interpreter's dlopen path.
-/// Decodes a PNG and returns the pixel data via out-pointers.
-/// The caller must free the returned pixel buffer with `loft_free_pixels`.
-///
-/// # Safety
-/// All pointers must be valid and non-null.
+// ── C-ABI exports ───────────────────────────────────────────────────────
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_decode_png(
     path_ptr: *const u8,
@@ -50,20 +42,29 @@ pub unsafe extern "C" fn loft_decode_png(
                 *out_pixels_len = pixels.len();
                 *out_pixels = pixels.as_mut_ptr();
             }
-            std::mem::forget(pixels); // caller owns the buffer
+            std::mem::forget(pixels);
             true
         }
         None => false,
     }
 }
 
-/// Free a pixel buffer allocated by `loft_decode_png`.
-///
-/// # Safety
-/// `ptr` and `len` must match a previous `loft_decode_png` call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_free_pixels(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {
         drop(unsafe { Vec::from_raw_parts(ptr, len, len) });
+    }
+}
+
+// ── Registration ────────────────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn loft_register_v1(
+    register: unsafe extern "C" fn(*const u8, usize, *const (), *mut ()),
+    ctx: *mut (),
+) {
+    unsafe {
+        register(b"loft_decode_png".as_ptr(), 15, loft_decode_png as *const (), ctx);
+        register(b"loft_free_pixels".as_ptr(), 16, loft_free_pixels as *const (), ctx);
     }
 }

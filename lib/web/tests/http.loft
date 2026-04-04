@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// HTTP client tests — requires network access.
+use web;
+
+fn main() {
+  // GET a known public endpoint
+  r = web::http_get("https://httpbin.org/get");
+  assert(r.ok(), "GET httpbin status={r.status}");
+  assert(r.status == 200, "GET status 200");
+  assert(r.body.len() > 0, "GET body not empty");
+
+  // POST with a body
+  r2 = web::http_post("https://httpbin.org/post", "hello");
+  assert(r2.ok(), "POST httpbin status={r2.status}");
+  assert(r2.status == 200, "POST status 200");
+
+  // 404
+  r3 = web::http_get("https://httpbin.org/status/404");
+  assert(!r3.ok(), "404 not ok");
+  assert(r3.status == 404, "404 status={r3.status}");
+}
