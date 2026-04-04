@@ -186,6 +186,8 @@ states that are harder to debug than the original problem.
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Unified package format — native Rust + WASM + loft; OpenGL case study |
+| [REGISTRY.md](doc/claude/REGISTRY.md) | Package registry — text-file format, URL-per-version, `loft install <name>` design |
+| [REGISTRY_GOVERNANCE.md](doc/claude/REGISTRY_GOVERNANCE.md) | Registry governance — submission, review, yank/deprecation, problem response procedures |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
@@ -202,6 +204,9 @@ states that are harder to debug than the original problem.
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
 | [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) | Web services design evaluation — HTTP/JSON approach comparison, issues #54/#55 |
+| [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) | `server` library design — HTTP server, WebSockets, TLS, ACME, auth, RBAC, game server additions |
+| [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
+| [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
 | [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
 | [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
@@ -230,6 +235,9 @@ states that are harder to debug than the original problem.
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) → [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) → [SLOT_FAILURES.md](doc/claude/SLOT_FAILURES.md) |
 | Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
 | Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) → [STDLIB.md](doc/claude/STDLIB.md) |
+| Implement `loft install <name>` registry | [REGISTRY.md](doc/claude/REGISTRY.md) → [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) |
+| Build or understand the `server` library | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) |
+| Build or understand the `game_client` library | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |
 | Understand variable lifetimes / dep tracking | [LIFETIME.md](doc/claude/LIFETIME.md) → [DATABASE.md](doc/claude/DATABASE.md) |
 

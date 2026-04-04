@@ -56,7 +56,14 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(deferred to 1.1+)*
   - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(completed 0.8.3)*
   - [A14 — `par_light`: lightweight parallel loop with pre-allocated stores](#a14--par_light-lightweight-parallel-loop-with-pre-allocated-stores)
+  - [A15 — `parallel { }` structured concurrency block](#a15--parallel---structured-concurrency-block) *(0.9.0)*
   - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
+- [E — Library Ergonomics](#e--library-ergonomics)
+  - [C55 — Type aliases](#c55--type-aliases) *(0.8.4 Sprint 10)*
+  - [C56 — Null-coalesce with early return (`?? return`)](#c56--null-coalesce-with-early-return) *(0.8.4 Sprint 10)*
+  - [A15 — `parallel { }` structured concurrency](#a15--parallel---structured-concurrency-block) *(0.8.4 Sprint 10)*
+  - [I13 — Iterator protocol (`for x in custom`)](#i13--iterator-protocol) *(0.8.4 Sprint 10)*
+  - [C57 — Route decorator syntax (`@get`, `@post`, `@ws`)](#c57--route-decorator-syntax) *(1.1+)*
 - [N — Native Codegen](#n--native-codegen)
 - [O — Performance Optimisations](#o--performance-optimisations)
   - [O1–O7 — Interpreter and native performance](#o1--superinstruction-merging) *(O1 deferred indefinitely — opcode table full; O2–O7 deferred to 1.1+)*
@@ -115,6 +122,40 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 - **H5** — Extend `from_json` codegen to nested `#json` struct fields, `vector<T>` array
   fields, and plain enum fields.  Integration test suite against a mock HTTP server.
 
+**Language ergonomics (C55, C56, A15, I13 — Sprint 10, needed by server library):**
+- **C55** — Type aliases: `type Handler = fn(Request) -> Response` — compile-time
+  substitution; no new opcodes; parser + typedef.rs only.  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § C55.
+- **C56** — `?? return expr`: allow a `return` expression on the right of `??` so
+  nullable lookups in handlers collapse to one line.  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § C56.
+- **A15** — `parallel { }` structured concurrency: runs a fixed set of independent
+  tasks concurrently and blocks until all finish.  Needed for the game loop + HTTP
+  server side-by-side pattern; uses same store-isolation model as `par()`.
+  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § A15.
+- **I13** — Iterator protocol: any type with `fn next(self: &Self) -> T?` is iterable
+  in a `for` loop.  Enables `for msg in ws` in WebSocket handlers; desugars at IR
+  level with no new opcodes.  Full design: [SERVER_FEATURES.md](SERVER_FEATURES.md) § I13.
+
+**Package registry (REG.1–REG.2):**
+- **REG.1** — `src/registry.rs`: parse a plain-text registry file (`name version url` per
+  line), resolve the best version (highest semver for "latest", exact match for pinned),
+  download the `.zip`, extract to a temp dir, locate the package root inside the archive.
+  Gated behind a new `registry` Cargo feature (on by default); deps: `ureq = "2"`,
+  `zip = "2"`.  Full design: [REGISTRY.md](REGISTRY.md).
+- **REG.2** — Extend `loft install` in `main.rs`: arguments without `/` or `.` are
+  treated as registry names with optional `@version` suffix.  Local-path installs
+  (`install .`, `install /path`) are unchanged.  Registry file location: `LOFT_REGISTRY`
+  env var or `~/.loft/registry.txt`.
+- **REG.3** — `loft registry sync`: reads the `# source: <url>` header from the local
+  registry file (falling back to `LOFT_REGISTRY_URL` env var or the compiled-in default
+  pointing at `jjstwerff/loft-registry` on GitHub), downloads via HTTPS, validates, and
+  replaces `~/.loft/registry.txt`.  Prints a summary line with package/version counts and
+  sync date.  Fails safely — the local file is not overwritten if the download fails.
+- **REG.4** — `loft registry check`: scans `~/.loft/lib/*/loft.toml` to collect installed
+  (name, version) pairs; reads the local registry; classifies each as yanked / deprecated /
+  outdated / current / unknown; prints a formatted report; exits 1 if any installed package
+  is yanked (for CI use).  Also adds `loft registry list [--installed]` for browsing.
+  Warns if the local registry file is older than 7 days without exiting non-zero.
+
 ---
 
 ---
@@ -125,7 +166,25 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 
 Goal: every planned language feature is present and the interpreter ships pre-built.
 Interpreter correctness and native codegen are handled by 0.8.2; new syntax by 0.8.3;
-HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tooling.
+HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tooling,
+and moves the bundled libraries to independent GitHub repositories so they are
+distributed through the registry rather than the interpreter source tree.
+
+**Library extraction (LIB.1–LIB.4):**
+- **LIB.1** — GitHub Actions release workflow template: a reusable workflow file that,
+  on a version tag push (`v*`), packages `src/`, `loft.toml`, `tests/`, `README.md`,
+  and `LICENSE` as `<name>-<version>.zip`, attaches it to a GitHub Release, and prints
+  the download URL.  Designed once; copied into each library repository.
+- **LIB.2** — Migrate `lib/graphics/` to a new `jjstwerff/loft-graphics` GitHub
+  repository (or `loft-lang/loft-graphics` if the org exists by then).  Tag `v0.1.0`,
+  trigger the LIB.1 workflow to produce the release zip, add the entry to the central
+  registry.  Remove `lib/graphics/` from the main `loft` repository; update any
+  in-repo test scripts that referenced it to use `loft install graphics` instead.
+- **LIB.3** — Same migration for `lib/shapes/` → `jjstwerff/loft-shapes`.  Shapes
+  depends on graphics, so LIB.2 must land first.
+- **LIB.4** — Add both packages to the central registry file and cut the first
+  `loft registry sync` that includes them.  Verify with `loft install graphics` and
+  `loft install shapes` on a clean machine.
 
 **Language completeness:**
 - **L1** — Error recovery: a single bad token must not cascade into dozens of spurious errors.
@@ -170,14 +229,23 @@ Full gate criteria in [RELEASE.md](RELEASE.md).
 - Full documentation review; pre-built binaries for all four platforms; crates.io publish.
 
 **Deferred to 1.1+:**
-A5, A7, Tier N (native codegen).
+A5, A7, Tier N (native codegen), C57.
 
 ---
 
 ### Version 1.x — Minor releases (additive)
 
 New language features that are strictly backward-compatible.  Candidates: A5 (closures),
-A7 (native extensions), Tier N (native codegen).
+A7 (native extensions), Tier N (native codegen), C57 (route decorator syntax).
+
+When A5 (closures) lands, `server` middleware can be written as factory functions
+instead of enum variants:
+
+```loft
+// Post-A5: middleware becomes a function returning a handler:
+app.use_middleware(rate_limit(100));
+app.use_middleware(require_roles(["admin"]));
+```
 
 ---
 
@@ -185,6 +253,61 @@ A7 (native extensions), Tier N (native codegen).
 
 Reserved for language-level breaking changes (sentinel redesign, syntax removal).
 Not expected in the near term.
+
+---
+
+### Ecosystem libraries (independent of interpreter version)
+
+These are separate repositories installed via `loft install`.  They are not
+gated to a specific interpreter milestone — they evolve alongside the interpreter
+and publish their own version numbers.  Full designs live in their own documents.
+
+**`server` — HTTP server library** ([WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)):
+A fully featured HTTP server written mostly in loft with a thin native Rust layer
+for TCP, TLS, WebSockets, ACME, and cryptographic primitives.  Phases:
+
+- **Phase 1** — Plain HTTP: routing, middleware pipeline, request/response structs.
+  Requires: interpreter 0.8.3 (lambdas for handler fn-refs), PKG Phase 2 (native
+  extension loading).
+- **Phase 2** — HTTPS with static PEM certificates.
+- **Phase 3** — WebSocket support.
+- **Phase 4** — Authentication: JWT, session, API key, HTTP Basic.
+- **Phase 5** — ACME / Let's Encrypt automatic certificate provisioning and renewal.
+- **Phase 6** — Advanced middleware: CORS, rate limiting, decompression, static files.
+
+**`graphics` → `jjstwerff/loft-graphics`** (LIB.2, 0.9.0):
+2D canvas, mesh, scene, and GLB export.  Migrated from `lib/graphics/` in the
+main repo.
+
+**`shapes` → `jjstwerff/loft-shapes`** (LIB.3, 0.9.0):
+Shape primitives built on the graphics library.  Migrated from `lib/shapes/`.
+
+**`web` — HTTP client** (H4, 0.8.4):
+Blocking HTTP client and JSON response handling.  Lives in `jjstwerff/loft-web`.
+
+**`game_protocol` — shared multiplayer protocol** (`jjstwerff/loft-game-protocol`):
+Lightweight shared package depended on by both `server` (when used as a game server)
+and `game_client`.  Contains the canonical `WsMessage` enum, `GameEnvelope` struct,
+`MSG_*` constants, and all `Msg*` request/response structs.  Extracting these into a
+separate package prevents the two libraries from diverging in their protocol definitions.
+No native layer required — pure loft.  Phases: just one (all types defined at once).
+
+**`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md)):
+Client-side companion to `server`.  Provides WebSocket connectivity, a typed game
+message protocol (envelope + dispatcher), lobby management, fixed-timestep game loop,
+client-side prediction with server reconciliation, and dynamic WASM script loading.
+WASM scripts are loft programs compiled with `--native-wasm` and loaded at runtime by
+both client and server — guaranteeing identical physics and rules without sending full
+state every tick.  Depends on `game_protocol`.  Phases:
+
+- **Phase 1** — WebSocket client + protocol: `WsClient`, `GameEnvelope`, `GameMessage`
+  enum, `Dispatcher`.  Requires: interpreter 0.8.3, `server` Phase 1, `game_protocol`.
+- **Phase 2** — Lobby + fixed-timestep game loop.
+- **Phase 3** — Client-side prediction + reconciliation + state delta sync + ping.
+- **Phase 4** — WASM script loading: `WasmModule`, `wasm_load/call/verify`, Ed25519
+  signature check.  Requires: `--native-wasm` codegen (0.8.4 PKG.5).
+- **Phase 5** — Shared game logic: document the `n_script_*` export interface; build
+  an end-to-end example (Tic-Tac-Toe server + browser client + shared `rules.wasm`).
 
 ---
 
@@ -253,11 +376,15 @@ in a better state than it found it, with passing tests).
 3. **A10** — field iteration; independent, medium; can land in parallel with P3
 
 **For 0.8.4 (after 0.8.3 is tagged):**
-1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
-2. **H2** — JSON primitive stdlib; Small–Medium, new `src/database/json.rs` (~80 lines, no new dep); test each extractor in isolation
-3. **H3** — `from_json` scalar codegen; Medium, depends on H1 + H2; verify `Type.from_json` as fn-ref
-4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
-5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
+1. **REG.1** — Registry file parser + download/extract; Small, independent of H-items; adds `ureq` + `zip` under `registry` feature
+2. **REG.2** — `loft install <name>` CLI extension; Small, depends on REG.1; no parser changes
+3. **REG.3** — `loft registry sync`; Small, reuses `ureq` from REG.1; adds `source:` header parsing
+4. **REG.4** — `loft registry check` + `list`; Small, pure filesystem + registry parsing; no new deps
+5. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
+4. **H2** — JSON primitive stdlib; Small–Medium, new `src/database/json.rs` (~80 lines, no new dep); test each extractor in isolation
+5. **H3** — `from_json` scalar codegen; Medium, depends on H1 + H2; verify `Type.from_json` as fn-ref
+8. **H4** — HTTP client + `HttpResponse`; Medium, `ureq` already present from REG.1; test against httpbin.org or mock
+7. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
 **For 0.9.0 (after 0.8.4 is tagged):**
 1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
@@ -3385,6 +3512,238 @@ WASM, works today).
 **Cargo feature:** `native-libs` (includes `native-extensions` + rustc)
 **Effort:** High
 **Target:** 0.9.0 (desktop dlopen), 1.0+ (WASM shared memory)
+
+---
+
+## E — Library Ergonomics
+
+Features motivated by the `server` and `game_client` library designs.
+Full design rationale and before/after code examples: [SERVER_FEATURES.md](SERVER_FEATURES.md).
+
+---
+
+### C55  Type aliases
+
+**Problem:** function type signatures for handler and middleware callbacks are
+long and appear verbatim in every route-registration function.  With a 20-route
+application the same type literal appears dozens of times.
+
+```loft
+// Today — same type in every signature:
+pub fn get(app: &App, pattern: text, handler: fn(Request) -> Response)
+pub fn post(app: &App, pattern: text, handler: fn(Request) -> Response)
+pub fn route_ws(app: &App, pattern: text, handler: fn(Request, &WebSocket))
+```
+
+**Fix:** `type Name = Type` at file scope — a compile-time alias, zero runtime
+cost.
+
+```loft
+pub type Handler   = fn(Request) -> Response
+pub type WsHandler = fn(Request, &WebSocket)
+
+pub fn get(app: &App, pattern: text, handler: Handler)
+pub fn route_ws(app: &App, pattern: text, handler: WsHandler)
+```
+
+**Implementation:** parser addition in `definitions.rs`; alias expansion in
+`typedef.rs` (cycle detection required).  No new opcodes.
+
+**Effort:** XS
+**Target:** 0.8.4 (Sprint 10)
+
+---
+
+### C56  Null-coalesce with early return (`?? return`)
+
+**Problem:** handler functions that call nullable lookups require two lines per
+result — one to check, one to return the error response — even for the trivial
+case.
+
+```loft
+// Today — two lines per nullable result:
+id_text = param(req, "id");
+if id_text == null { return response_bad_request("missing id"); }
+id = id_text as integer;
+if id == null { return response_bad_request("not a number"); }
+post = find_post(id);
+if post == null { return response_not_found(); }
+```
+
+**Fix:** allow a `return` expression on the right side of `??`.
+
+```loft
+id_text = param(req, "id")   ?? return response_bad_request("missing id");
+id      = id_text as integer ?? return response_bad_request("not a number");
+post    = find_post(id)      ?? return response_not_found();
+```
+
+`expr ?? return val` desugars to: evaluate `expr`; if null, execute `return val`;
+otherwise produce the non-null value.  `?? return` with no value is valid in void
+functions.
+
+**Implementation:** in `parse_null_coalesce()` (expressions.rs), if the token
+after `??` is `Token::Return`, parse a `NullCoalesceReturn` IR node.  Codegen
+emits a conditional jump over a `OpReturn`.
+
+**Effort:** XS
+**Target:** 0.8.4 (Sprint 10)
+
+---
+
+### A15  `parallel { }` structured concurrency block
+
+**Problem:** a game server must run a fixed-rate tick loop and an HTTP + WebSocket
+server simultaneously.  No safe loft-level mechanism exists for this today — the
+only option is a native `n_spawn_thread` call that bypasses store safety.
+
+```loft
+// Today — native workaround, no store safety:
+spawn_thread(fn do_serve);
+run_game_loop(GameLoop { tick_rate: 20 }, fn game_tick);
+```
+
+**Fix:** `parallel { }` — a new statement that runs each top-level expression in
+the block as an independent concurrent task and waits for all of them to finish.
+
+```loft
+parallel {
+    serve_all([public, ws_app]);
+    run_game_loop(GameLoop { tick_rate: 20 }, fn game_tick);
+}
+// returns only when both arms have exited
+```
+
+**Semantics:**
+- Each arm runs on a separate thread from the existing thread pool.
+- The calling thread blocks until all arms return.
+- Store isolation: same model as `par(...)` — each arm gets a snapshot on entry;
+  writes are merged last-write on exit.  For game servers, inter-arm communication
+  uses native-backed shared state (`ConnectionRegistry`) rather than loft stores,
+  the same pattern as `par()` workers sharing a database store.
+- Panic in one arm: signal cancellation to remaining arms; timeout then exit.
+- Variables declared inside an arm are not visible in other arms.
+- Variables captured from the outer scope are read-only inside the arm.
+
+**Distinction from `par()`:** `par(collection, fn worker)` maps over many items
+homogeneously.  `parallel {}` runs a **fixed set of distinct tasks** — structured
+task concurrency, not data parallelism.  Analogous to Rust's `std::thread::scope`.
+
+**Implementation:** new `Value::Parallel { arms }` IR node; parser in
+`expressions.rs`; three new opcodes (`OpParallelBegin`, `OpParallelArm`,
+`OpParallelJoin`); executor in `fill.rs` using the existing thread pool;
+store-merge policy extended for long-running tasks.
+
+**Effort:** M
+**Target:** 0.8.4 (Sprint 10)
+
+---
+
+### I13  Iterator protocol
+
+**Problem:** a WebSocket receive loop must be written as an explicit
+`for _ in 0..1000000 if running` workaround because `for` only iterates
+built-in collections.
+
+```loft
+// Today — verbose and fragile:
+running = true;
+for _ in 0..1000000 if running {
+    msg = ws_receive(ws);
+    match msg {
+        Close { _, _ } => running = false,
+        Text { content } => process(content),
+        _ => {},
+    }
+}
+```
+
+**Fix:** any type with a `fn next(self: &Self) -> T?` method is iterable.
+Returning `null` from `next` terminates the loop.
+
+```loft
+// WebSocket implements the protocol in websocket.loft:
+pub fn next(self: &WebSocket) -> WsMessage? {
+    msg = ws_receive(self);
+    match msg { Close { _, _ } => null, other => other }
+}
+
+// Handler:
+for msg in ws {
+    match msg { Text { content } => process(content), _ => {} }
+}
+```
+
+`for x in val` desugars to a standard bounded loop calling `val.next()` and
+breaking on null.  No new opcodes required — the desugaring happens at the IR
+level in `parse_for()`.
+
+**Loop attributes:** `#count` and `#first` work as usual.  `#index` and `#remove`
+are not available for custom iterators.
+
+**Types that benefit immediately:** `WebSocket`, `WsClient` (game_client),
+`ConnectionRegistry` (iterate all connections).
+
+**Formal enforcement:** when I5+ interfaces land, `Iterator<T>` becomes a formal
+interface and the protocol is enforced at compile time.  Before that, the
+desugaring applies to any type that structurally has a matching `next` method.
+
+**Effort:** MH — parser change in `parse_for()` + type resolution for method
+lookup.  No new opcodes.  Benefits from I5+ but can land structurally before it.
+**Target:** 0.8.4 (Sprint 10)
+
+---
+
+### C57  Route decorator syntax
+
+**Problem:** route registration is separated from the handler by potentially
+hundreds of lines.  With 30+ routes, finding which URL maps to which handler
+requires scrolling between the handler and the `main()` registration block.
+Keeping them in sync is error-prone.
+
+```loft
+// Today — URL and handler are far apart; easy to get out of sync:
+fn handle_health(req: Request) -> Response { ... }
+// ... 400 lines ...
+fn main() {
+    get(app, "/health", fn handle_health);   // must match spelling above
+}
+```
+
+**Fix:** `@annotation` syntax before `fn` declarations synthesises registration
+calls at compile time.
+
+```loft
+@get("/health")
+fn handle_health(req: Request) -> Response { ... }
+
+@post("/login")
+fn handle_login(req: Request) -> Response { ... }
+
+@ws("/ws/chat")
+fn handle_chat(req: Request, ws: &WebSocket) { ... }
+
+fn main() {
+    app = new_app(srv);
+    register_routes(app);   // generated: registers each annotated handler
+    serve(app);
+}
+```
+
+The `server` library defines `@get`, `@post`, `@ws`, etc. as annotations.  At
+compile time a synthetic `register_routes(app: &App)` function is generated from
+them.  The `app` reference is **not** captured at annotation time — it is passed
+at call time, avoiding implicit global state.
+
+**What annotations are NOT:** not runtime metadata, not general macros, not
+Turing-complete.  They are fixed templates that apply only to `fn` definitions.
+
+**Implementation:** new token `Token::At`; parser reads `@name(args)` before `fn`;
+annotation declarations (`annotation get(pattern: text) expands ...`); synthesis
+pass generates `register_routes`; two-pass compiler already supports this pattern.
+
+**Effort:** H — new token, new definition form, annotation registry, synthesis pass.
+**Target:** 1.1+
 
 ---
 

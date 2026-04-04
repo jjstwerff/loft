@@ -541,12 +541,41 @@ with the interpreter via `use mylib;` in a loft script.
 
 ---
 
-### Phase 3 — Tooling, Registry, and Polish (target: 2.x)
+### Phase 3 — Registry and Install (target: 0.8.4)
 
-Deferred:
-- `loft install <name>` package manager command.
-- Central package registry (crates.io-style).
-- SHA-256 hash verification of native binaries.
+Full design in [REGISTRY.md](REGISTRY.md).
+
+#### Phase 3a — Registry lookup and download
+
+A plain text registry file (`~/.loft/registry.txt` or `LOFT_REGISTRY`) maps
+package names and versions to `.zip` download URLs:
+
+```
+# name  version  url
+graphics 0.1.0  https://example.com/graphics-0.1.0.zip
+graphics 0.2.0  https://example.com/graphics-0.2.0.zip
+opengl   0.1.0  https://example.com/opengl-0.1.0.zip
+```
+
+New CLI behaviour:
+- `loft install graphics` — find latest version in registry, download zip, install
+- `loft install graphics@0.1.0` — install specific version
+- `loft install .` / `loft install /path` — local install unchanged (Phase 1)
+
+New source file: `src/registry.rs` with `read_registry()`, `find_package()`, and
+`download_and_extract()` (feature-gated under `registry`).
+
+New Cargo deps (optional, `registry` feature, on by default):
+- `ureq = "2"` — blocking HTTP download
+- `zip  = "2"` — zip extraction
+
+#### Phase 3b — Registry management commands (future)
+
+- `loft registry list` / `search` / `fetch <url>` / `add`
+
+#### Deferred
+
+- SHA-256 hash verification of downloaded zips.
 - `--no-native` flag for sandboxed environments.
 - Thin `loft-plugin-api` accessor wrappers (Option B) for non-Rust plugin authors.
 - Cross-platform pre-built binary packages distributed by library authors.
