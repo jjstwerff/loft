@@ -51,21 +51,27 @@ Sprint 8: 3D types + bug fixes (branch sprint-8-glb-types)
   P105    deferred — get_val fix regresses parser library
   P106    deferred — depends on P105
 
-Sprint 9: Native codegen for packages
+Sprint 9: Registry (independent — no PKG.4 dependency)
+  REG.1   src/registry.rs: read_registry(), find_package(), download_and_extract()
+  REG.2   loft install <name>[@version] — registry lookup in main.rs
+  REG.3   loft registry sync — download registry.txt from source: URL
+  REG.4   loft registry check — installed vs registry; exit 1 on yanks
+
+Sprint 10: Native codegen for packages
   PKG.4   native codegen --extern
   PKG.5   WASM codegen linking
 
-Sprint 10: Stdlib extraction (needs PKG.4)
+Sprint 11: Stdlib extraction (needs PKG.4)
   EXT.1   imaging package (PNG + Image types)
   EXT.2   random package
 
-Sprint 11: HTTP client (needs PKG.4)
+Sprint 12: HTTP client (needs PKG.4)
   H4.1    HttpResponse struct
   H4.2    http_get/post native (ureq)
   H4.3    headers
   H4.5    tests
 
-Sprint 12: Graphics native (needs PKG.4)
+Sprint 13: Graphics native (needs PKG.4)
   GL3     text rendering (fontdue native)
   GL5.1   window + event loop
   GL5.2-5 shaders, VBO, render, texture
@@ -76,6 +82,10 @@ Sprint 12: Graphics native (needs PKG.4)
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
+| REG.1     | Registry file parser + version resolver (`src/registry.rs`) | S  | ✓      | PKG.1        | src/registry.rs               |
+| REG.2     | `loft install <name>[@v]` — download + extract from registry | S  | ✓      | REG.1        | src/main.rs                   |
+| REG.3     | `loft registry sync` — pull registry.txt from source URL    | S  | ✓      | REG.1        | src/registry.rs, src/main.rs  |
+| REG.4     | `loft registry check` — installed vs registry; exit 1 yanks | S  | ✓      | REG.3        | src/registry.rs, src/main.rs  |
 | EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
 | EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
 | PKG.4     | Native codegen `--extern` for `#native` packages          | M  | ✓      | PKG.1        | generation/mod.rs, main.rs    |

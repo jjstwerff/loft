@@ -186,6 +186,8 @@ states that are harder to debug than the original problem.
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
 | [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Unified package format — native Rust + WASM + loft; OpenGL case study |
+| [REGISTRY.md](doc/claude/REGISTRY.md) | Package registry — text-file format, URL-per-version, `loft install <name>` design |
+| [REGISTRY_GOVERNANCE.md](doc/claude/REGISTRY_GOVERNANCE.md) | Registry governance — submission, review, yank/deprecation, problem response procedures |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
@@ -230,6 +232,7 @@ states that are harder to debug than the original problem.
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) → [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) → [SLOT_FAILURES.md](doc/claude/SLOT_FAILURES.md) |
 | Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
 | Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) → [STDLIB.md](doc/claude/STDLIB.md) |
+| Implement `loft install <name>` registry | [REGISTRY.md](doc/claude/REGISTRY.md) → [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |
 | Understand variable lifetimes / dep tracking | [LIFETIME.md](doc/claude/LIFETIME.md) → [DATABASE.md](doc/claude/DATABASE.md) |
 

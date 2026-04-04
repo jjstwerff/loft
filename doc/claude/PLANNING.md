@@ -115,6 +115,27 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
 - **H5** — Extend `from_json` codegen to nested `#json` struct fields, `vector<T>` array
   fields, and plain enum fields.  Integration test suite against a mock HTTP server.
 
+**Package registry (REG.1–REG.2):**
+- **REG.1** — `src/registry.rs`: parse a plain-text registry file (`name version url` per
+  line), resolve the best version (highest semver for "latest", exact match for pinned),
+  download the `.zip`, extract to a temp dir, locate the package root inside the archive.
+  Gated behind a new `registry` Cargo feature (on by default); deps: `ureq = "2"`,
+  `zip = "2"`.  Full design: [REGISTRY.md](REGISTRY.md).
+- **REG.2** — Extend `loft install` in `main.rs`: arguments without `/` or `.` are
+  treated as registry names with optional `@version` suffix.  Local-path installs
+  (`install .`, `install /path`) are unchanged.  Registry file location: `LOFT_REGISTRY`
+  env var or `~/.loft/registry.txt`.
+- **REG.3** — `loft registry sync`: reads the `# source: <url>` header from the local
+  registry file (falling back to `LOFT_REGISTRY_URL` env var or the compiled-in default
+  pointing at `jjstwerff/loft-registry` on GitHub), downloads via HTTPS, validates, and
+  replaces `~/.loft/registry.txt`.  Prints a summary line with package/version counts and
+  sync date.  Fails safely — the local file is not overwritten if the download fails.
+- **REG.4** — `loft registry check`: scans `~/.loft/lib/*/loft.toml` to collect installed
+  (name, version) pairs; reads the local registry; classifies each as yanked / deprecated /
+  outdated / current / unknown; prints a formatted report; exits 1 if any installed package
+  is yanked (for CI use).  Also adds `loft registry list [--installed]` for browsing.
+  Warns if the local registry file is older than 7 days without exiting non-zero.
+
 ---
 
 ---
@@ -253,11 +274,15 @@ in a better state than it found it, with passing tests).
 3. **A10** — field iteration; independent, medium; can land in parallel with P3
 
 **For 0.8.4 (after 0.8.3 is tagged):**
-1. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
-2. **H2** — JSON primitive stdlib; Small–Medium, new `src/database/json.rs` (~80 lines, no new dep); test each extractor in isolation
-3. **H3** — `from_json` scalar codegen; Medium, depends on H1 + H2; verify `Type.from_json` as fn-ref
-4. **H4** — HTTP client + `HttpResponse`; Medium, adds `ureq`; test against httpbin.org or mock
-5. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
+1. **REG.1** — Registry file parser + download/extract; Small, independent of H-items; adds `ureq` + `zip` under `registry` feature
+2. **REG.2** — `loft install <name>` CLI extension; Small, depends on REG.1; no parser changes
+3. **REG.3** — `loft registry sync`; Small, reuses `ureq` from REG.1; adds `source:` header parsing
+4. **REG.4** — `loft registry check` + `list`; Small, pure filesystem + registry parsing; no new deps
+5. **H1** — `#json` + `to_json`; Small, no new Rust deps; validates annotation parsing
+4. **H2** — JSON primitive stdlib; Small–Medium, new `src/database/json.rs` (~80 lines, no new dep); test each extractor in isolation
+5. **H3** — `from_json` scalar codegen; Medium, depends on H1 + H2; verify `Type.from_json` as fn-ref
+8. **H4** — HTTP client + `HttpResponse`; Medium, `ureq` already present from REG.1; test against httpbin.org or mock
+7. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
 **For 0.9.0 (after 0.8.4 is tagged):**
 1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
