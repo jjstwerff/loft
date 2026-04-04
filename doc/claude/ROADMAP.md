@@ -42,16 +42,11 @@ All new libraries are built as **packages** using the format designed in
 - **Sprint 10** — Language ergonomics (C55, C56, A15, I13)
 - **Sprint 11** — Native codegen for packages (PKG.4, PKG.5)
 - **Sprint 12** — Stdlib extraction + caveat fixes (EXT.1, EXT.2, C15, C16)
+- **Sprint 13/14** — HTTP client (H4.1–H4.5, loft_register_v1)
 
 ### Remaining sprints
 
 ```
-Sprint 13: HTTP client ✓
-  H4.1    HttpResponse struct ✓
-  H4.2    http_get/post native (ureq) ✓
-  H4.3    headers ✓
-  H4.5    tests ✓
-
 Sprint 15: Graphics native (needs PKG.4)
   GL3     text rendering (fontdue native)
   GL5.1   window + event loop
@@ -95,10 +90,6 @@ Sprint 21: Native FFI simplification
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
 | PKG.7     | Lock file (`loft.lock`) for reproducible builds           | S  | ✓      | PKG.3        | manifest.rs                   |
-| H4.1      | HttpResponse struct + ok() in web/src/web.loft            | S  | ✓      | PKG.1        | web/src/web.loft              |
-| H4.2      | http_get/post/put/delete in web/native/ (ureq)            | M  | ✓      | H4.1         | web/native/src/lib.rs         |
-| H4.3      | Header support (http_get_h, http_post_h)                  | S  | ✓      | H4.2         | web/native/src/lib.rs         |
-| H4.5      | Package tests + documentation                             | S  | ✓      | H4.2         | web/tests/                    |
 | SRV.1     | Plain HTTP routing + middleware pipeline (loft layer)     | M  | ✓      | C55, C56     | server/src/                   |
 | SRV.2     | HTTPS with static PEM certificates (rustls)               | S  | ✓      | SRV.1        | server/native/                |
 | SRV.3     | WebSocket support (I13 enables `for msg in ws`)           | S  | ✓      | SRV.1, I13   | server/src/websocket.loft     |

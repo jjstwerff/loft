@@ -9,6 +9,20 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### HTTP client (Sprints 13–14)
+
+- **H4.1** — `HttpResponse` struct with `status: integer`, `body: text`, and
+  `ok()` method in the `web` package (`lib/web/`).
+- **H4.2** — `http_get`, `http_post`, `http_put`, `http_delete` via native
+  cdylib using `ureq`.  The `ureq` crate is only in the cdylib — the
+  interpreter has no HTTP dependency.
+- **H4.3** — Header support: `http_get_h`, `http_post_h`, `http_put_h`,
+  `http_delete_h` accept `vector<text>` of `"Key: Value"` headers.
+- **loft_register_v1** — unified native extension registration protocol.
+  Each cdylib exports one C-ABI function that registers all symbols via a
+  callback.  Generic `HashMap<String, FnPtr>` replaces per-function statics.
+  All native cdylibs (imaging, random, web) use the new protocol.
+
 ### Native codegen for packages (Sprint 11)
 
 - **PKG.4** — Native codegen `--extern`: packages with `[native.functions]` in
