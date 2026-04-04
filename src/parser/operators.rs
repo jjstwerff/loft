@@ -249,6 +249,15 @@ impl Parser {
                 return current_type;
             }
             self.known_var_or_type(code);
+            // Detect '++': not a valid operator in loft. Consume the extra '+',
+            // emit an error, and continue as if a single '+' was written.
+            if operator == "+" && self.lexer.has_token("+") && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'++' is not a valid operator — use '+' for concatenation or addition"
+                );
+            }
             if operator == "+"
                 && matches!(
                     current_type,

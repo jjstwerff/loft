@@ -40,7 +40,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
 | 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
-| 107 | `++` return expression + struct parameter bug: second param typed as `Text([])` | Medium | Use `result = ""; result += "..."; result` instead of `"..." ++ "..."` return |
+| 107 | ~~`++` return expression + struct parameter bug~~ | ~~Medium~~ | **Fixed** — parser now rejects `++` with a clear error |
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
 
@@ -599,26 +599,22 @@ See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
 
 ---
 
-### 107. `++` return expression + struct parameter bug
+### 107. `++` return expression + struct parameter bug *(fixed)*
 
-**Symptom:** A function with a `math::Vec3` (or similar struct) parameter that
-returns a text value via `"str1" ++ "str2" ++ ...` concatenation expression fails
-at runtime: `generate_call [n_func]: mutable arg 1 (v1: Text([])) expected 16B on
-stack but generate(Null) pushed 0B`.
+**Symptom:** `"str1" ++ "str2"` crashed in codegen with a type mismatch assertion.
 
-**Root cause:** When the return expression of a function is a `++` text concat
-chain and the function has a struct reference parameter (e.g., `math::Vec3`), the
-second parameter's type is misidentified as `Text([])` (16B) instead of the
-correct `Reference` type (24B for Vec3).
+**Root cause:** `++` is not a valid operator in loft.  The lexer tokenized it as two
+`+` tokens.  The first `+` was consumed as binary addition/concat; the second `+`
+could not start an expression (no unary `+` in `parse_single`), producing a
+`Value::Null` / `Type::Unknown(0)` that corrupted the function's attribute list via
+`text_return`.  The original bug report attributed the crash to struct parameters,
+but the real trigger was `++` in any context.
 
-**Workaround:** Replace `"part1" ++ "part2"` return expression with:
-```loft
-result = "part1";
-result += "part2";
-result
-```
+**Fix:** The parser now detects `++` (two consecutive `+` tokens) and emits a clear
+error: *"'++' is not a valid operator — use '+' for concatenation or addition"*.
+The extra `+` is consumed so parsing recovers cleanly.
 
-**Discovered:** Sprint 8, while writing `glb_json()` in `lib/graphics/src/glb.loft`.
+**Test:** `tests/scripts/72-parse-error-caveats.loft` (`@EXPECT_ERROR`).
 
 ---
 
