@@ -9,6 +9,18 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Graphics native (Sprint 15)
+
+- **GL5.1** — Window creation + event loop via `glutin` + `winit` with
+  `pump_app_events` polling model. Thread-local state via `RefCell`.
+- **GL5.2** — Shader compilation and linking (vertex + fragment GLSL).
+- **GL5.3** — VBO/VAO upload from packed vertex data (position + normal + color).
+- **GL5.4** — Draw calls + render loop with `gl_draw`, `gl_clear`, `gl_swap_buffers`.
+- **GL5.5** — Texture upload, binding, and deletion via `glTexImage2D`.
+- **GL3** — Font loading (`fontdue`), text width measurement, and alpha bitmap
+  rasterization. All in the `lib/graphics/native/` cdylib — no font dependency
+  in the interpreter.
+
 ### HTTP client (Sprints 13–14)
 
 - **H4.1** — `HttpResponse` struct with `status: integer`, `body: text`, and
