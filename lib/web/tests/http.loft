@@ -3,20 +3,46 @@
 // HTTP client tests — requires network access.
 use web;
 
-fn main() {
-  // GET a known public endpoint
+fn test_get() {
   r = web::http_get("https://httpbin.org/get");
   assert(r.ok(), "GET httpbin status={r.status}");
-  assert(r.status == 200, "GET status 200");
+  assert(r.status == 200, "GET status 200, got {r.status}");
   assert(r.body.len() > 0, "GET body not empty");
+}
 
-  // POST with a body
-  r2 = web::http_post("https://httpbin.org/post", "hello");
-  assert(r2.ok(), "POST httpbin status={r2.status}");
-  assert(r2.status == 200, "POST status 200");
+fn test_post() {
+  r = web::http_post("https://httpbin.org/post", "hello world");
+  assert(r.ok(), "POST status={r.status}");
+  assert(r.status == 200, "POST status 200");
+}
 
-  // 404
-  r3 = web::http_get("https://httpbin.org/status/404");
-  assert(!r3.ok(), "404 not ok");
-  assert(r3.status == 404, "404 status={r3.status}");
+fn test_put() {
+  r = web::http_put("https://httpbin.org/put", "updated");
+  assert(r.ok(), "PUT status={r.status}");
+  assert(r.status == 200, "PUT status 200");
+}
+
+fn test_delete() {
+  r = web::http_delete("https://httpbin.org/delete");
+  assert(r.ok(), "DELETE status={r.status}");
+  assert(r.status == 200, "DELETE status 200");
+}
+
+fn test_404() {
+  r = web::http_get("https://httpbin.org/status/404");
+  assert(!r.ok(), "404 not ok");
+  assert(r.status == 404, "status 404, got {r.status}");
+}
+
+fn test_get_with_headers() {
+  headers = ["Accept: application/json", "X-Custom: test-value"];
+  r = web::http_get_h("https://httpbin.org/headers", headers);
+  assert(r.ok(), "GET+headers status={r.status}");
+  assert(r.status == 200, "GET+headers 200");
+}
+
+fn test_post_with_headers() {
+  headers = ["Content-Type: application/json"];
+  r = web::http_post_h("https://httpbin.org/post", "test-data", headers);
+  assert(r.ok(), "POST+headers status={r.status}");
 }

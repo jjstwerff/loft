@@ -46,11 +46,11 @@ All new libraries are built as **packages** using the format designed in
 ### Remaining sprints
 
 ```
-Sprint 13: HTTP client
-  H4.1    HttpResponse struct
-  H4.2    http_get/post native (ureq)
-  H4.3    headers
-  H4.5    tests
+Sprint 13: HTTP client ✓
+  H4.1    HttpResponse struct ✓
+  H4.2    http_get/post native (ureq) ✓
+  H4.3    headers ✓
+  H4.5    tests ✓
 
 Sprint 15: Graphics native (needs PKG.4)
   GL3     text rendering (fontdue native)
