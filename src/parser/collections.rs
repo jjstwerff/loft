@@ -210,10 +210,7 @@ impl Parser {
                         let obj_expr = code.clone();
                         *code = v_set(iter_obj_var, obj_expr);
                         // The "next" expression is a method call: iter_obj.next()
-                        let next_call = Value::Call(
-                            next_d_nr,
-                            vec![Value::Var(iter_obj_var)],
-                        );
+                        let next_call = Value::Call(next_d_nr, vec![Value::Var(iter_obj_var)]);
                         return next_call;
                     }
                     if self.first_pass {

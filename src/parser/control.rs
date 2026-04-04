@@ -115,10 +115,7 @@ impl Parser {
             t = Type::Void;
             match l.last() {
                 Some(
-                    Value::If(_, _, _)
-                    | Value::Loop(_)
-                    | Value::Block(_)
-                    | Value::Parallel(_),
+                    Value::If(_, _, _) | Value::Loop(_) | Value::Block(_) | Value::Parallel(_),
                 ) => (),
                 _ => {
                     if !self.lexer.token(";") {
