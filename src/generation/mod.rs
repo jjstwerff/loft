@@ -329,7 +329,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
 
 /// Return the Rust literal for the "null" default of a loft type, used when a function
 /// body is empty (an explicit stub) but the declared return type is non-void.
-fn default_native_value(tp: &Type) -> String {
+pub(super) fn default_native_value(tp: &Type) -> String {
     match tp {
         Type::Float => "0.0_f64".into(),
         Type::Single => "0.0_f32".into(),

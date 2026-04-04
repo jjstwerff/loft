@@ -150,6 +150,8 @@ pub enum Type {
     Null,
     /// Result of a function without return type.
     Void,
+    /// Divergent expression (return/break/continue) — compatible with any type.
+    Never,
     /// The given definition might hold restrictions on this number.
     /// (minimum, maximum, `not_null`).
     Integer(i32, u32, bool),
@@ -1558,6 +1560,7 @@ impl Data {
             Type::Unknown(_) => "unknown".to_string(),
             Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
+            Type::Never => "never".to_string(),
             Type::Integer(min, max, _) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
                 "integer".to_string()
             }

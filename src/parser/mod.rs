@@ -459,6 +459,10 @@ impl Parser {
         if is_type.is_equal(should) {
             return true;
         }
+        // Never (return/break/continue) is compatible with any type.
+        if matches!(is_type, Type::Never) {
+            return true;
+        }
         // Struct-literal inline constructors are typed as Rewritten(Reference(...)); strip
         // the wrapper so method calls chained on the constructor are accepted correctly.
         if let Type::Rewritten(inner) = is_type {
@@ -2142,10 +2146,15 @@ impl Parser {
                 }
             }
             // A7.2: register native shared library path for loading after byte_code().
+            // Try pre-built location first, then auto-build from source.
             if let Some(ref stem) = m.native {
                 let filename = crate::extensions::platform_lib_name(stem);
-                let lib_path = format!("{pkg_dir}/native/{filename}");
-                self.pending_native_libs.push(lib_path);
+                let prebuilt = format!("{pkg_dir}/native/{filename}");
+                if std::path::Path::new(&prebuilt).exists() {
+                    self.pending_native_libs.push(prebuilt);
+                } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem) {
+                    self.pending_native_libs.push(built);
+                }
             }
             // PKG.4: register native function symbols and package crate info.
             if let Some(ref crate_name) = m.native_crate {
@@ -2279,7 +2288,16 @@ impl Parser {
     pub fn null(&mut self, tp: &Type) -> Value {
         match tp {
             Type::Integer(_, _, _) | Type::Character => self.cl("OpConvIntFromNull", &[]),
-            Type::Boolean => self.cl("OpConvBoolFromNull", &[]),
+            Type::Boolean => {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot use null with boolean — boolean has no null representation"
+                    );
+                }
+                Value::Boolean(false)
+            }
             Type::Enum(tp, _, _) => self.cl(
                 "OpConvEnumFromNull",
                 &[Value::Int(i32::from(self.data.def(*tp).known_type))],
@@ -2298,6 +2316,13 @@ impl Parser {
 }
 
 fn merge_dependencies(a: &Type, b: &Type) -> Type {
+    // Never (return/break/continue) defers to the other branch's type.
+    if matches!(a, Type::Never) {
+        return b.clone();
+    }
+    if matches!(b, Type::Never) {
+        return a.clone();
+    }
     if let (Type::Text(da), Type::Text(db)) = (a, b) {
         let mut d = HashSet::new();
         for v in da {

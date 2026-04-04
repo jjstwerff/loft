@@ -98,6 +98,24 @@ impl Parser {
             t = t.depending(self.closure_param);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
+            // C15: on pass 2, if a variable has Unknown type, it may be a pass-1
+            // placeholder for a forward-declared function. Try fn-ref resolution.
+            if !self.first_pass && self.vars.tp(index_var).is_unknown() {
+                let prefixed = format!("n_{nm}");
+                let fn_d_nr = self.data.def_nr(&prefixed);
+                if fn_d_nr != u32::MAX && matches!(self.data.def_type(fn_d_nr), DefType::Function) {
+                    // Suppress "never read" warning on the pass-1 placeholder.
+                    self.var_usages(index_var, true);
+                    *code = Value::Int(fn_d_nr as i32);
+                    self.data.def_used(fn_d_nr);
+                    let n_args = self.data.attributes(fn_d_nr);
+                    let arg_types: Vec<Type> = (0..n_args)
+                        .map(|a| self.data.attr_type(fn_d_nr, a))
+                        .collect();
+                    let ret_type = self.data.def(fn_d_nr).returned.clone();
+                    return Type::Function(arg_types, Box::new(ret_type), vec![]);
+                }
+            }
             if self.lexer.has_token("#") {
                 self.var_usages(index_var, true);
                 if self.lexer.has_keyword("errors") {

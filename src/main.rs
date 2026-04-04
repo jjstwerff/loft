@@ -691,6 +691,7 @@ fn main() {
     let mut native_emit: Option<String> = None;
     let mut native_wasm: Option<String> = None;
     let mut tests_dir: Option<String> = None;
+    let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
     let mut user_args: Vec<String> = Vec::new();
 
@@ -799,7 +800,7 @@ fn main() {
                 }
                 i += 1;
             }
-            // Read loft.toml to find src/ directory.
+            // Read loft.toml to find src/ directory, dependency paths, and native libs.
             let manifest_path = std::path::Path::new("loft.toml");
             if manifest_path.exists() {
                 let manifest = crate::manifest::read_manifest("loft.toml").unwrap_or_default();
@@ -813,6 +814,36 @@ fn main() {
                     .to_string_lossy()
                     .to_string();
                 lib_dirs.push(abs_src);
+                // Add parent directory so sibling packages (dependencies) are found.
+                if !manifest.dependencies.is_empty() {
+                    let parent = std::env::current_dir()
+                        .unwrap_or_default()
+                        .join("..")
+                        .canonicalize()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if !lib_dirs.contains(&parent) {
+                        lib_dirs.push(parent);
+                    }
+                }
+                // Register the package's own native lib for loading.
+                // Dependency native libs are discovered when the parser
+                // processes `use` statements via lib_path_manifest().
+                if let Some(ref stem) = manifest.native {
+                    let pkg_dir = std::env::current_dir()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let lib_file = crate::extensions::platform_lib_name(stem);
+                    let prebuilt = format!("{pkg_dir}/native/{lib_file}");
+                    if std::path::Path::new(&prebuilt).exists() {
+                        native_lib_paths.push(prebuilt);
+                    } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem)
+                    {
+                        native_lib_paths.push(built);
+                    }
+                }
             } else if std::path::Path::new("src").is_dir() {
                 let abs_src = std::env::current_dir()
                     .unwrap_or_default()
@@ -943,6 +974,7 @@ fn main() {
             &lib_dirs,
             project.as_deref(),
             native_mode,
+            &native_lib_paths,
         );
         std::process::exit(exit_code);
     }
@@ -1205,7 +1237,22 @@ fn main() {
     }
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 
-    if std::env::var("LOFT_LOG").is_ok() {
+    let main_nr = p.data.def_nr("n_main");
+    if main_nr == u32::MAX {
+        // No main() — run all zero-parameter user functions (test_* style).
+        for d_nr in start_def..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.name.starts_with("n_")
+                && !def.name.starts_with("n___lambda_")
+                && matches!(def.def_type, data::DefType::Function)
+                && def.attributes.is_empty()
+                && !def.position.file.starts_with("default/")
+            {
+                let name = def.name.strip_prefix("n_").unwrap_or(&def.name);
+                state.execute(name, &p.data);
+            }
+        }
+    } else if std::env::var("LOFT_LOG").is_ok() {
         let config = log_config::LogConfig::from_env();
         let mut log = std::io::stderr();
         if let Err(e) = state.execute_log(&mut log, "main", &config, &p.data) {

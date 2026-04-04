@@ -1,0 +1,8 @@
+[package]
+name = "imaging"
+version = "0.1.0"
+loft = ">=0.8"
+
+[library]
+entry = "src/imaging.loft"
+native = "loft_imaging"

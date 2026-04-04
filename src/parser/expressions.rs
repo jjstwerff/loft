@@ -197,16 +197,16 @@ impl Parser {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
             }
             *val = Value::Continue(0);
-            Type::Void
+            Type::Never
         } else if self.lexer.has_token("break") {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot break outside a loop");
             }
             *val = Value::Break(0);
-            Type::Void
+            Type::Never
         } else if self.lexer.has_token("return") {
             self.parse_return(val);
-            Type::Void
+            Type::Never
         } else if self.lexer.has_keyword("parallel") {
             self.parse_parallel(val);
             Type::Void

@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 253] = &[
+pub const OPERATORS: &[fn(&mut State); 252] = &[
     goto,
     goto_word,
     goto_false,
@@ -241,7 +241,6 @@ pub const OPERATORS: &[fn(&mut State); 253] = &[
     pre_alloc_vector,
     get_file,
     get_dir,
-    get_png_image,
     get_file_text,
     write_file,
     read_file,
@@ -1823,13 +1822,6 @@ fn get_dir(s: &mut State) {
     let v_result = *s.get_stack::<DbRef>();
     let v_path = s.string();
     let new_value = s.database.get_dir(v_path.str(), &v_result);
-    s.put_stack(new_value);
-}
-
-fn get_png_image(s: &mut State) {
-    let v_image = *s.get_stack::<DbRef>();
-    let v_path = s.string();
-    let new_value = s.database.get_png(v_path.str(), &v_image);
     s.put_stack(new_value);
 }
 

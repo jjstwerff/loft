@@ -8,23 +8,6 @@ pub struct EnvVariable {
   name: text,
   value: text
 }
-// Data per pixel of the png graph.
-// Fields r, g, b hold red, green and blue intensity, each 0–255.
-
-pub struct Pixel {
-  r: integer limit(0, 255) not null,
-  g: integer limit(0, 255) not null,
-  b: integer limit(0, 255) not null
-}
-// Database structure with image data.
-// The actual data is in height rows of width length.
-
-pub struct Image {
-  name: text,
-  width: integer,
-  height: integer,
-  data: vector < Pixel >
-}
 // Describes how a file is opened.
 // TextFile: read or write as UTF-8 text (default).
 // LittleEndian: binary mode, least-significant byte first.
@@ -77,8 +60,6 @@ fn OpGetFile(file: File) -> boolean;
 #rust"stores.get_file(&@file)"
 fn OpGetDir(path: text, result: vector < File >) -> boolean;
 #rust"stores.get_dir(@path, &@result)"
-fn OpGetPngImage(path: text, image: Image) -> boolean;
-#rust"stores.get_png(@path, &@image)"
 fn OpGetFileText(file: File, content:  & text);
 fn OpWriteFile(file: File, val: reference, db_tp: const u16);
 fn OpReadFile(file: File, val: reference, bytes: i32, db_tp: const u16);
@@ -101,11 +82,6 @@ fn OpMkdir(path: text) -> boolean;
 #rust"codegen_runtime::fs_mkdir(@path)"
 fn OpMkdirAll(path: text) -> boolean;
 #rust"codegen_runtime::fs_mkdir_all(@path)"
-// Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
-// Use for fast colour comparison or storage.
-pub fn value(self: Pixel) -> integer {
-  self.r * 0x10000 + self.g * 0x100 + self.b
-}
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 
@@ -273,18 +249,6 @@ pub fn files(self: File) -> vector < File > {
 
 pub fn write(self: File, v: text);
 #rust"stores.write_file(&@self, @v);"
-// Decodes a PNG file and returns an Image.
-// Returns null if the file is not in text format.
-// Use to load sprite sheets or textures.
-pub fn png(self: File) -> Image {
-  if self.format == Format.TextFile {
-    result = Image { };
-    OpGetPngImage(self.path, result);
-    result
-  } else {
-    null
-  }
-}
 // --- Environment ---
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).
 // Use to inspect or forward the full environment.
@@ -295,19 +259,6 @@ pub fn env_variables() -> vector < EnvVariable >;
 // Use to read configuration from the shell environment.
 pub fn env_variable(name: text) -> text;
 #rust"Stores::os_variable(@name)"
-// --- Random ---
-// Returns a random integer in [lo, hi] (inclusive).
-// Returns null when lo > hi or when either argument is null.
-pub fn rand(lo: integer, hi: integer) -> integer;
-#rust"external::rand_int(@lo, @hi)"
-// Seeds the thread-local random number generator with the given value.
-// Call this before rand() or rand_indices() to get reproducible sequences.
-pub fn rand_seed(seed: long);
-#rust"external::rand_seed(@seed);"
-// Returns a vector of n integers [0, 1, ..., n-1] in a random order.
-// Useful for random iteration, shuffling, or sampling without replacement.
-// Returns an empty vector when n is 0 or null.
-pub fn rand_indices(n: integer) -> vector < integer >;
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
 // (1970-01-01T00:00:00 UTC). Use for timestamps and logging.

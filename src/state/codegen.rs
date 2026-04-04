@@ -4,7 +4,6 @@
 use super::State;
 use crate::data::{Block, Context, Data, I32, Type, Value};
 use crate::stack::Stack;
-#[cfg(debug_assertions)]
 use crate::variables::Function;
 use crate::variables::size;
 use std::collections::HashSet;
@@ -63,15 +62,27 @@ impl State {
             started.insert(a);
         }
         // Optional IR dump: set LOFT_IR=<name-filter> (or LOFT_IR=* for all user fns).
-        // Only compiled in debug builds; produces one block per matching function.
-        #[cfg(debug_assertions)]
         if let Ok(filter) = std::env::var("LOFT_IR") {
             let fn_name = stack.data.def(def_nr).name.as_str();
             let want_all = filter.is_empty() || filter == "*";
             let matches = want_all || filter == fn_name || fn_name.contains(&*filter);
             if matches && logging {
                 eprintln!("=== IR: {fn_name} ===");
+                #[cfg(debug_assertions)]
                 print_ir(&stack.data.def(def_nr).code, stack.data, &stack.function, 0);
+                #[cfg(not(debug_assertions))]
+                {
+                    let mut w = Vec::new();
+                    let mut vars = stack.function.clone();
+                    let _ = stack.data.show_code(
+                        &mut w,
+                        &mut vars,
+                        &stack.data.def(def_nr).code,
+                        0,
+                        true,
+                    );
+                    eprint!("{}", String::from_utf8_lossy(&w));
+                }
                 eprintln!();
                 eprintln!("===");
             }
@@ -446,6 +457,7 @@ impl State {
         let true_pos = self.code_pos;
         let stack_pos = stack.position;
         let tp = self.generate(t_val, stack, false);
+        let true_stack = stack.position;
         if *f_val == Value::Null {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
         } else {
@@ -455,8 +467,20 @@ impl State {
             let false_pos = self.code_pos;
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             stack.position = stack_pos;
-            self.generate(f_val, stack, false);
+            let fp = self.generate(f_val, stack, false);
+            let false_stack = stack.position;
             self.code_put(end, (self.code_pos - false_pos) as i16); // actual end
+            // C16: when one branch diverges (return/break/continue), use the
+            // other branch's stack position. The divergent branch exits the
+            // scope so its stack delta is irrelevant at the join point.
+            if is_divergent(t_val) {
+                stack.position = false_stack;
+            } else if is_divergent(f_val) {
+                stack.position = true_stack;
+            }
+            if matches!(tp, Type::Never) {
+                return fp;
+            }
         }
         tp
     }
@@ -1769,10 +1793,14 @@ impl State {
     }
 }
 
+/// Check if a Value is a divergent expression (return/break/continue)
+/// that never produces a value at the join point.
+fn is_divergent(val: &Value) -> bool {
+    matches!(val, Value::Return(_) | Value::Break(_) | Value::Continue(_))
+}
+
 /// Recursively checks whether `value` contains a direct `Var(v)` reference.
-/// Used in debug builds to detect first-assignment self-reference bugs: if
-/// `Set(v, expr)` and `expr` contains `Var(v)`, the variable is used before
-/// its storage has been allocated — almost always a parser-level bug.
+/// Used in debug builds to detect first-assignment self-reference bugs.
 #[cfg(debug_assertions)]
 fn ir_contains_var(value: &Value, v: u16) -> bool {
     match value {

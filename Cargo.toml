@@ -24,7 +24,7 @@ name = "gendoc"
 path = "src/gendoc.rs"
 
 [features]
-default      = ["png", "mmap", "random", "threading", "registry"]
+default      = ["mmap", "random", "threading", "registry", "native-extensions"]
 threading    = []
 wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
                 "dep:js-sys", "dep:web-sys", "png"]
