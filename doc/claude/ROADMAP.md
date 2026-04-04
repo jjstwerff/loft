@@ -41,50 +41,49 @@ All new libraries are built as **packages** using the format designed in
 - **Sprint 9** — Package registry (REG.1–REG.4)
 - **Sprint 10** — Language ergonomics (C55, C56, A15, I13)
 - **Sprint 11** — Native codegen for packages (PKG.4, PKG.5)
+- **Sprint 12** — Stdlib extraction + caveat fixes (EXT.1, EXT.2, C15, C16)
 
 ### Remaining sprints
 
 ```
-Sprint 12: Stdlib extraction (needs PKG.4)
-  EXT.1   imaging package (PNG + Image types)
-  EXT.2   random package
-
-Sprint 13: HTTP client (needs PKG.4)
+Sprint 13: HTTP client
   H4.1    HttpResponse struct
   H4.2    http_get/post native (ureq)
   H4.3    headers
   H4.5    tests
 
-Sprint 14: Server library — core (needs Sprint 10 + PKG.2 ✓)
+Sprint 15: Graphics native (needs PKG.4)
+  GL3     text rendering (fontdue native)
+  GL5.1   window + event loop
+  GL5.2-5 shaders, VBO, render, texture
+
+Sprint 16: WebGL + server core
+  GL6.1-4 WebGL2 equivalents
   SRV.1   plain HTTP: routing, middleware pipeline, request/response
   SRV.2   HTTPS with static PEM certificates
+
+Sprint 17: Server advanced + game protocol
   SRV.3   WebSocket support (using I13 for msg in ws)
   SRV.4   Authentication: JWT, session, API key, HTTP Basic
-  game_protocol package: GameEnvelope, WsMessage, Msg* structs
+  SRV.P   game_protocol package: GameEnvelope, WsMessage, Msg* structs
 
-Sprint 15: Server library — production + game additions (needs SRV.3)
+Sprint 18: Server production + game server
   SRV.5   ACME / Let's Encrypt automatic certificate provisioning
   SRV.6   CORS, rate limiting, decompression, static files
   SRV.G   Game additions: ws_poll, ws_broadcast, ConnectionRegistry,
            run_game_loop, WASM loading (shared rules.wasm)
 
-Sprint 16: game_client — networking + lobby + loop (needs Sprint 10 + SRV.1)
+Sprint 19: game_client — networking + lobby + loop
   GC.1    WebSocket client + GameEnvelope protocol + Dispatcher
   GC.2    Lobby + matchmaking state management
-  GC.3    Fixed-timestep game loop (using A15 for loop + render concurrently)
-  GC.4    Client-side prediction + reconciliation + state delta sync + ping
+  GC.3    Fixed-timestep game loop (using A15 for loop + render)
+  GC.4    Client-side prediction + reconciliation + state delta sync
 
-Sprint 17: game_client — WASM scripts + shared logic (needs PKG.5 + SRV.G)
+Sprint 20: game_client — WASM scripts + shared logic
   GC.5    WASM script loading: wasm_load/call/verify, Ed25519 signature check
-  GC.6    Shared game logic: n_script_* exports, end-to-end Tic-Tac-Toe example
+  GC.6    Shared game logic: n_script_* exports, Tic-Tac-Toe example
 
-Sprint 18: Graphics native (needs PKG.4)
-  GL3     text rendering (fontdue native)
-  GL5.1   window + event loop
-  GL5.2-5 shaders, VBO, render, texture
-  GL6.1-4 WebGL2 equivalents
-
-Sprint 19: Native FFI simplification (needs Sprint 12)
+Sprint 21: Native FFI simplification
   FFI.1   generic type marshaller — auto pop/push from #native type signature
   FFI.2   generic cdylib loader — scan exports, register in HashMap
   FFI.3   eliminate per-function glue in native.rs and extensions.rs
@@ -95,8 +94,6 @@ Sprint 19: Native FFI simplification (needs Sprint 12)
 
 | ID        | Title                                                     | E  | Design | Depends on   | Source                        |
 |-----------|-----------------------------------------------------------|----|--------|--------------|-------------------------------|
-| EXT.1     | Extract Image/Pixel/PNG to `imaging` package              | M  | ✓      | PKG.1        | default/02_images.loft → pkg  |
-| EXT.2     | Extract random to `random` package                        | S  | ✓      | PKG.1        | src/native.rs → pkg           |
 | PKG.7     | Lock file (`loft.lock`) for reproducible builds           | S  | ✓      | PKG.3        | manifest.rs                   |
 | H4.1      | HttpResponse struct + ok() in web/src/web.loft            | S  | ✓      | PKG.1        | web/src/web.loft              |
 | H4.2      | http_get/post/put/delete in web/native/ (ureq)            | M  | ✓      | H4.1         | web/native/src/lib.rs         |

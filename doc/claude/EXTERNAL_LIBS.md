@@ -671,13 +671,274 @@ New Cargo deps (optional, `registry` feature, on by default):
 
 - `loft registry list` / `search` / `fetch <url>` / `add`
 
+### Phase 4 — Generic Native Dispatch (target: 0.9.0)
+
+**Goal:** Library authors ship a cdylib that the interpreter loads without any changes
+to interpreter source code.  See detailed design in
+[Phase 4 — Generic Native Dispatch](#phase-4--generic-native-dispatch-eliminates-recompilation).
+
+- **4a**: `LoftHostVTable`, generic `load_one()`, `wire_plugins()`, `loft-plugin-api` crate
+- **4b**: Migrate existing libraries (web, imaging, random) to vtable ABI
+- **4c**: Remove hardcoded symbols from `extensions.rs` and per-function glue from `native.rs`
+
 #### Deferred
 
 - SHA-256 hash verification of downloaded zips.
 - `--no-native` flag for sandboxed environments.
-- Thin `loft-plugin-api` accessor wrappers (Option B) for non-Rust plugin authors.
 - Cross-platform pre-built binary packages distributed by library authors.
 - Documentation generation from external package `.loft` API files.
+
+---
+
+## Phase 4 — Generic Native Dispatch (eliminates recompilation)
+
+### Problem statement
+
+The Phase 2 implementation in `extensions.rs` is a **closed registry**.  Every C-ABI
+symbol is hardcoded: a dedicated `OnceLock<SpecificFnType>`, a getter function, and
+a probe in `load_one()`.  The glue in `native.rs` (`n_http_do`, `n_load_png`, etc.)
+is also hand-written per function.  Adding any new native library requires changes to
+three files and a recompile of the interpreter.
+
+The pure-loft side already works generically — `use database;` resolves through the
+search chain, reads `loft.toml`, and loads `.loft` files without any compiler changes.
+The bottleneck is **only** the native (cdylib) side.
+
+### Design goal
+
+A library author ships a cdylib + `.loft` declarations.  The interpreter loads and
+calls it without any code changes to `extensions.rs`, `native.rs`, or any other
+interpreter source file.
+
+### What already works
+
+| Component | Generic? | Notes |
+|-----------|----------|-------|
+| `#native "symbol"` declarations | Yes | Parser handles any symbol name |
+| `register_native_stubs()` | Yes | Registers panic-stubs for any `#native` symbol |
+| `replace_static_fn()` | Yes | Can swap any stub with a real function pointer |
+| `loft.toml` manifest | Yes | Declares `native = "stem"` |
+| `auto_build_native()` | Yes | Builds any cdylib on demand |
+| `load_one()` in `extensions.rs` | **No** | Hardcoded symbol list |
+| Glue in `native.rs` | **No** | Hand-written per function |
+
+### Architecture: universal calling convention + self-registering cdylib
+
+The design has three parts that together remove all per-library coupling from
+the interpreter.
+
+#### Part 1 — Universal native function signature
+
+Instead of each cdylib function having a unique C signature, all native functions
+use a single stack-based calling convention.  The interpreter already uses a stack
+(`DbRef`-based) for all function calls — the native function simply receives access
+to that same stack region through a callback table.
+
+```c
+// loft-plugin-api.h — the stable C-ABI interface
+
+typedef struct {
+    // Pop an integer from the loft stack
+    int32_t  (*pop_int)(void* ctx);
+    int64_t  (*pop_long)(void* ctx);
+    double   (*pop_float)(void* ctx);
+    // Pop a text value — returns (ptr, len) valid until next pop/push
+    void     (*pop_text)(void* ctx, const uint8_t** out_ptr, size_t* out_len);
+    // Pop a boolean
+    int32_t  (*pop_bool)(void* ctx);
+
+    // Push results back onto the loft stack
+    void     (*push_int)(void* ctx, int32_t val);
+    void     (*push_long)(void* ctx, int64_t val);
+    void     (*push_float)(void* ctx, double val);
+    void     (*push_text)(void* ctx, const uint8_t* ptr, size_t len);
+    void     (*push_bool)(void* ctx, int32_t val);
+    void     (*push_null)(void* ctx, int32_t type_size);
+} LoftHostVTable;
+
+// Every native function gets this uniform signature
+typedef void (*LoftNativeFn)(void* ctx, const LoftHostVTable* host);
+```
+
+The `void* ctx` is an opaque pointer to `(&mut Stores, &mut DbRef)` — the cdylib
+never sees Rust types.  The vtable callbacks are thin wrappers around the existing
+`stores.get::<T>()` / `stores.put()` calls.
+
+**Why a vtable instead of libffi?**  The vtable approach requires no external
+dependency, is trivially portable, and matches how the interpreter already works.
+Each callback is 2-3 lines of Rust wrapping the existing stack accessors.
+
+#### Part 2 — Self-registering cdylib via `loft_register`
+
+Each cdylib exports exactly one symbol:
+
+```c
+typedef void (*RegisterFn)(const char* name, LoftNativeFn fn_ptr);
+
+// Exported by the cdylib
+void loft_register(RegisterFn register_fn);
+```
+
+When the interpreter loads the cdylib, it calls `loft_register`, passing a callback.
+The cdylib calls `register_fn` for each native function it provides:
+
+```c
+// In lib/web/native/src/lib.rs (after migration)
+static void http_do_impl(void* ctx, const LoftHostVTable* host) {
+    // Pop arguments in reverse declaration order (stack is LIFO)
+    const uint8_t* body_ptr; size_t body_len;
+    host->pop_text(ctx, &body_ptr, &body_len);
+    const uint8_t* url_ptr; size_t url_len;
+    host->pop_text(ctx, &url_ptr, &url_len);
+    const uint8_t* method_ptr; size_t method_len;
+    host->pop_text(ctx, &method_ptr, &method_len);
+
+    // Do the actual work (ureq call, etc.)
+    int32_t status = /* ... */;
+
+    // Push result
+    host->push_int(ctx, status);
+}
+
+void loft_register(RegisterFn reg) {
+    reg("n_http_do", http_do_impl);
+    reg("n_http_body", http_body_impl);
+}
+```
+
+#### Part 3 — Generic loader replaces hardcoded `extensions.rs`
+
+The new `load_one()` becomes fully generic:
+
+```rust
+// extensions.rs — new generic loader (replaces hardcoded OnceLock approach)
+
+type LoftNativeFn = unsafe extern "C" fn(*mut c_void, *const LoftHostVTable);
+
+/// Function pointer table populated by loft_register callbacks.
+static PLUGIN_FNS: Mutex<HashMap<String, LoftNativeFn>> = Mutex::new(HashMap::new());
+
+fn load_one(path: &str) {
+    let lib = Library::new(path)?;
+
+    // Look for the self-registration entry point
+    if let Ok(register) = lib.get::<extern "C" fn(RegisterFn)>(b"loft_register\0") {
+        register(register_callback);
+    }
+    std::mem::forget(lib);
+}
+
+extern "C" fn register_callback(name: *const c_char, fn_ptr: LoftNativeFn) {
+    let name = unsafe { CStr::from_ptr(name) }.to_str().unwrap();
+    PLUGIN_FNS.lock().unwrap().insert(name.to_owned(), fn_ptr);
+}
+```
+
+After all cdylibs are loaded, the interpreter wires registered functions into the
+existing `State` mechanism:
+
+```rust
+pub fn wire_plugins(state: &mut State) {
+    let fns = PLUGIN_FNS.lock().unwrap();
+    for (name, fn_ptr) in fns.iter() {
+        let ptr = *fn_ptr;
+        // Create a closure that sets up the vtable and calls the plugin fn
+        let call: Call = move |stores: &mut Stores, stack: &mut DbRef| {
+            let vtable = build_host_vtable();
+            let ctx = (stores as *mut Stores, stack as *mut DbRef);
+            unsafe { ptr(ctx as *mut c_void, &vtable) };
+        };
+        state.replace_static_fn(name, call);
+    }
+}
+```
+
+### How a library author's workflow changes
+
+**Before (Phase 2) — requires interpreter recompilation:**
+
+1. Write cdylib with unique C-ABI signature per function
+2. Add type alias + `OnceLock` + getter in `extensions.rs`
+3. Add symbol probe in `load_one()`
+4. Write glue function in `native.rs` that marshals stack ↔ C-ABI
+5. Recompile interpreter
+
+**After (Phase 4) — no interpreter changes:**
+
+1. Write cdylib using the `LoftHostVTable` callbacks
+2. Export `loft_register` that self-registers all functions
+3. Write `.loft` declarations with `#native "n_my_func"`
+4. Ship directory with `loft.toml` + cdylib + `.loft` files
+5. Done — interpreter loads and calls it generically
+
+### Migration path for existing libraries
+
+The hardcoded symbols in `extensions.rs` become **legacy compat**.  Existing
+libraries (imaging, random, web) continue working as-is.  The generic loader
+checks for `loft_register` first, then falls back to probing hardcoded symbols.
+
+Migration per library:
+1. Add `loft_register` export that registers the same functions via the vtable ABI
+2. Keep old `extern "C"` exports temporarily for backwards compat
+3. Remove glue from `native.rs` once the generic path handles that library
+4. Eventually remove all hardcoded symbols from `extensions.rs`
+
+### Vtable implementation in Rust
+
+The host vtable callbacks are thin wrappers.  Example for `pop_int`:
+
+```rust
+unsafe extern "C" fn pop_int(ctx: *mut c_void) -> i32 {
+    let (stores, stack) = &mut *(ctx as *mut (&mut Stores, &mut DbRef));
+    *stores.get::<i32>(stack)
+}
+```
+
+The full vtable is ~30 lines — one wrapper per primitive type, each 2-3 lines.
+
+### Pop order convention
+
+The `.loft` declaration determines argument order.  For:
+
+```loft
+fn http_do(method: text, url: text, body: text) -> integer;
+#native "n_http_do"
+```
+
+The bytecode pushes arguments left-to-right (method, url, body).  The native
+function pops them in **reverse order** (body, url, method) because the stack
+is LIFO.  This matches the existing convention used by all `native.rs` glue
+functions today — no change for library authors who read the existing code.
+
+### Returning complex types
+
+For functions that return text or structs, the vtable provides `push_text`
+(copies bytes into a store-allocated string) and can be extended with
+`push_record` / `claim_buffer` for structured data.  The key constraint
+remains: **no `Stores` or `DbRef` types cross the C-ABI boundary**.
+
+### Scope estimate
+
+| Component | Lines | Phase |
+|-----------|-------|-------|
+| `LoftHostVTable` definition + callbacks | ~60 | 4a |
+| Generic `load_one()` + `register_callback` | ~40 | 4a |
+| `wire_plugins()` to connect to `State` | ~20 | 4a |
+| `loft-plugin-api` C header + Rust helper crate | ~80 | 4a |
+| Migrate `lib/web` to vtable ABI | ~40 | 4b |
+| Migrate `lib/imaging` to vtable ABI | ~50 | 4b |
+| Migrate `lib/random` to vtable ABI | ~30 | 4b |
+| Remove hardcoded symbols from `extensions.rs` | -100 | 4c |
+| Remove per-function glue from `native.rs` | -80 | 4c |
+
+Net result: ~150 lines of generic infrastructure replaces ~180 lines of
+per-library boilerplate, and no future library ever touches interpreter source.
+
+### Relation to `--native` codegen
+
+The `--native` path is unaffected.  It compiles everything as rlibs in one
+`rustc` invocation — types are shared, calls are direct.  The vtable ABI
+is exclusively for the interpreter's `dlopen` path.
 
 ---
 
@@ -691,7 +952,13 @@ New Cargo deps (optional, `registry` feature, on by default):
 | `src/extensions.rs` | New: `load_all()`, `load_one()`, trampoline | 2 |
 | `src/compile.rs` | Handle `#native "name"` annotation in `byte_code()` | 2 |
 | `Cargo.toml` | Add `libloading` under `native-extensions` feature | 2 |
-| `plugin-api/` | New workspace member: `LoftPluginCtx`, `loft-plugin-api` crate | 2 |
+| `src/extensions.rs` | Generic `load_one()` with `loft_register` entry point; `LoftHostVTable` definition + callbacks; `wire_plugins()` | 4a |
+| `plugin-api/` | New workspace member: `loft-plugin-api` crate with C header and Rust helpers | 4a |
+| `lib/web/native/src/lib.rs` | Migrate to vtable ABI, export `loft_register` | 4b |
+| `lib/imaging/native/src/lib.rs` | Migrate to vtable ABI, export `loft_register` | 4b |
+| `lib/random/native/src/lib.rs` | Migrate to vtable ABI, export `loft_register` | 4b |
+| `src/extensions.rs` | Remove hardcoded `OnceLock` symbols and `load_one()` probes | 4c |
+| `src/native.rs` | Remove per-library glue functions (`n_http_do`, `n_load_png`, `n_rand*`) | 4c |
 
 ---
 

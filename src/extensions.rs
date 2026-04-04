@@ -3,64 +3,56 @@
 
 //! Native extension loader.
 //!
-//! Package native crates export pure C-ABI functions that the interpreter
-//! loads via dlopen.  The cdylib never touches `Stores` — only primitives
-//! cross the boundary.  See `EXTERNAL_LIBS.md` for the full design.
+//! Package native crates (cdylib) export `loft_register_v1`, a C-ABI function
+//! that registers all native symbols with the interpreter via a callback.
+//! Only C primitives cross the boundary — no Rust types are shared.
+//!
+//! See `EXTERNAL_LIBS.md` for the full design.
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
-// ── C-ABI function pointer types for imaging cdylib ─────────────────────
+/// Wrapper for `*const ()` that is Send — function pointers from cdylibs are
+/// valid for the process lifetime (the Library handle is leaked).
+#[derive(Clone, Copy)]
+struct FnPtr(*const ());
+unsafe impl Send for FnPtr {}
 
-/// `loft_decode_png(path, len, &w, &h, &pixels, &pixels_len) -> bool`
-pub type DecodePngFn =
-    unsafe extern "C" fn(*const u8, usize, *mut u32, *mut u32, *mut *mut u8, *mut usize) -> bool;
+/// Global registry of native function pointers loaded from cdylibs.
+static NATIVE_REGISTRY: Mutex<Option<HashMap<String, FnPtr>>> = Mutex::new(None);
 
-/// `loft_free_pixels(ptr, len)`
-pub type FreePixelsFn = unsafe extern "C" fn(*mut u8, usize);
-
-static DECODE_PNG: OnceLock<DecodePngFn> = OnceLock::new();
-static FREE_PIXELS: OnceLock<FreePixelsFn> = OnceLock::new();
-
-/// Get the loaded PNG decode function, or `None` if the imaging cdylib
-/// hasn't been loaded.
-pub fn get_decode_png() -> Option<DecodePngFn> {
-    DECODE_PNG.get().copied()
+/// Look up a native function by symbol name and cast to the expected type.
+/// Returns `None` if the symbol hasn't been loaded.
+///
+/// # Safety
+/// The caller must ensure `T` matches the actual C-ABI signature of the symbol.
+pub unsafe fn get_native_fn<T: Copy>(name: &str) -> Option<T> {
+    let guard = NATIVE_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let registry = guard.as_ref()?;
+    let fp = registry.get(name)?;
+    Some(unsafe { std::ptr::read(std::ptr::from_ref(&fp.0).cast::<T>()) })
 }
 
-/// Get the pixel buffer free function.
-pub fn get_free_pixels() -> Option<FreePixelsFn> {
-    FREE_PIXELS.get().copied()
-}
+/// The C-ABI registration callback type.
+type RegisterFn =
+    unsafe extern "C" fn(unsafe extern "C" fn(*const u8, usize, *const (), *mut ()), *mut ());
 
-// ── C-ABI function pointer types for random cdylib ──────────────────────
-
-pub type RandIntFn = extern "C" fn(i32, i32) -> i32;
-pub type RandSeedFn = extern "C" fn(i64);
-pub type RandIndicesFn = unsafe extern "C" fn(i32, *mut *mut i32, *mut usize);
-pub type FreeIndicesFn = unsafe extern "C" fn(*mut i32, usize);
-
-static RAND_INT: OnceLock<RandIntFn> = OnceLock::new();
-static RAND_SEED: OnceLock<RandSeedFn> = OnceLock::new();
-static RAND_INDICES: OnceLock<RandIndicesFn> = OnceLock::new();
-static FREE_INDICES: OnceLock<FreeIndicesFn> = OnceLock::new();
-
-pub fn get_rand_int() -> Option<RandIntFn> {
-    RAND_INT.get().copied()
+/// The registration callback: called once per symbol by the cdylib.
+unsafe extern "C" fn collect(
+    name_ptr: *const u8,
+    name_len: usize,
+    fn_ptr: *const (),
+    ctx: *mut (),
+) {
+    let collected = unsafe { &mut *ctx.cast::<Vec<(String, *const ())>>() };
+    let name = std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
+        .unwrap_or("<invalid>");
+    collected.push((name.to_string(), fn_ptr));
 }
-pub fn get_rand_seed() -> Option<RandSeedFn> {
-    RAND_SEED.get().copied()
-}
-pub fn get_rand_indices() -> Option<RandIndicesFn> {
-    RAND_INDICES.get().copied()
-}
-pub fn get_free_indices() -> Option<FreeIndicesFn> {
-    FREE_INDICES.get().copied()
-}
-
-// ── Library loading ─────────────────────────────────────────────────────
 
 /// Load all pending native extension libraries.
-/// Resolves C-ABI symbols from each cdylib and stores function pointers.
 #[cfg(feature = "native-extensions")]
 pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
     for path in paths {
@@ -71,11 +63,19 @@ pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
 #[cfg(not(feature = "native-extensions"))]
 pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 
+/// Load a single native extension shared library.
+///
+/// The library must export `loft_register_v1`:
+/// ```c
+/// void loft_register_v1(
+///     void (*register)(const char* name, size_t name_len, void* fn_ptr, void* ctx),
+///     void* ctx
+/// );
+/// ```
 #[cfg(feature = "native-extensions")]
 fn load_one(path: &str) {
     use libloading::Library;
     use std::collections::HashSet;
-    use std::sync::Mutex;
 
     static LOAD_LOCK: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
@@ -100,26 +100,26 @@ fn load_one(path: &str) {
         }
     };
 
-    // Resolve known symbols.  Each package registers its symbols here.
-    // This is explicit — no generic registration loop needed.
-    if let Ok(f) = unsafe { lib.get::<DecodePngFn>(b"loft_decode_png\0") } {
-        let _ = DECODE_PNG.set(*f);
+    let register_sym = match unsafe { lib.get::<RegisterFn>(b"loft_register_v1\0") } {
+        Ok(f) => *f,
+        Err(e) => {
+            eprintln!("loft: '{path}' does not export loft_register_v1: {e}");
+            return;
+        }
+    };
+
+    let mut collected: Vec<(String, *const ())> = Vec::new();
+    unsafe {
+        register_sym(collect, std::ptr::addr_of_mut!(collected).cast::<()>());
     }
-    if let Ok(f) = unsafe { lib.get::<FreePixelsFn>(b"loft_free_pixels\0") } {
-        let _ = FREE_PIXELS.set(*f);
-    }
-    // Random symbols
-    if let Ok(f) = unsafe { lib.get::<RandIntFn>(b"loft_rand_int\0") } {
-        let _ = RAND_INT.set(*f);
-    }
-    if let Ok(f) = unsafe { lib.get::<RandSeedFn>(b"loft_rand_seed\0") } {
-        let _ = RAND_SEED.set(*f);
-    }
-    if let Ok(f) = unsafe { lib.get::<RandIndicesFn>(b"loft_rand_indices\0") } {
-        let _ = RAND_INDICES.set(*f);
-    }
-    if let Ok(f) = unsafe { lib.get::<FreeIndicesFn>(b"loft_free_indices\0") } {
-        let _ = FREE_INDICES.set(*f);
+
+    // Store in the global registry.
+    let mut reg_guard = NATIVE_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let registry = reg_guard.get_or_insert_with(HashMap::new);
+    for (name, ptr) in collected {
+        registry.insert(name, FnPtr(ptr));
     }
 
     loaded.insert(canonical);
@@ -129,7 +129,6 @@ fn load_one(path: &str) {
 // ── Auto-build ──────────────────────────────────────────────────────────
 
 /// Auto-build a package's native crate if the shared library is missing.
-/// Returns the path to the built library, or `None` if no native source exists.
 #[must_use]
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     let cargo_toml = format!("{pkg_dir}/native/Cargo.toml");

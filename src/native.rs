@@ -79,6 +79,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("i_parse_errors", i_parse_errors),
+    ("n_http_do", n_http_do),
+    ("n_http_body", n_http_body),
 ];
 
 pub fn init(state: &mut State) {
@@ -973,7 +975,9 @@ fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
 fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
     let v_hi = *stores.get::<i32>(stack);
     let v_lo = *stores.get::<i32>(stack);
-    let result = if let Some(f) = crate::extensions::get_rand_int() {
+    let result = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<extern "C" fn(i32, i32) -> i32>("loft_rand_int")
+    } {
         f(v_lo, v_hi)
     } else {
         #[cfg(feature = "random")]
@@ -991,7 +995,9 @@ fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
 /// Seed the thread-local PCG RNG so subsequent `rand()` calls are reproducible.
 fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
     let v_seed = *stores.get::<i64>(stack);
-    if let Some(f) = crate::extensions::get_rand_seed() {
+    if let Some(f) =
+        unsafe { crate::extensions::get_native_fn::<extern "C" fn(i64)>("loft_rand_seed") }
+    {
         f(v_seed);
     } else {
         #[cfg(feature = "random")]
@@ -1010,7 +1016,11 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
     };
 
     // Get shuffled indices — from cdylib or built-in fallback.
-    let indices: Vec<i32> = if let Some(f) = crate::extensions::get_rand_indices() {
+    let indices: Vec<i32> = if let Some(f) = unsafe {
+        crate::extensions::get_native_fn::<unsafe extern "C" fn(i32, *mut *mut i32, *mut usize)>(
+            "loft_rand_indices",
+        )
+    } {
         let mut ptr: *mut i32 = std::ptr::null_mut();
         let mut len: usize = 0;
         unsafe {
@@ -1024,7 +1034,11 @@ fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
             Vec::new()
         } else {
             let v = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
-            if let Some(free_fn) = crate::extensions::get_free_indices() {
+            if let Some(free_fn) = unsafe {
+                crate::extensions::get_native_fn::<unsafe extern "C" fn(*mut i32, usize)>(
+                    "loft_free_indices",
+                )
+            } {
                 unsafe { free_fn(ptr, len) };
             }
             v
@@ -1075,7 +1089,18 @@ fn n_load_png(stores: &mut Stores, stack: &mut DbRef) {
     let v_image = *stores.get::<DbRef>(stack);
     let v_path = *stores.get::<Str>(stack);
 
-    let decode_fn = crate::extensions::get_decode_png();
+    let decode_fn = unsafe {
+        crate::extensions::get_native_fn::<
+            unsafe extern "C" fn(
+                *const u8,
+                usize,
+                *mut u32,
+                *mut u32,
+                *mut *mut u8,
+                *mut usize,
+            ) -> bool,
+        >("loft_decode_png")
+    };
     let result = if let Some(decode) = decode_fn {
         // Call cdylib's decode function via C-ABI
         let path = v_path.str();
@@ -1099,7 +1124,11 @@ fn n_load_png(stores: &mut Stores, stack: &mut DbRef) {
             let wrote =
                 write_image_to_store(stores, &v_image, width, height, pixel_data, v_path.str());
             // Free the cdylib-allocated buffer
-            if let Some(free_fn) = crate::extensions::get_free_pixels() {
+            if let Some(free_fn) = unsafe {
+                crate::extensions::get_native_fn::<unsafe extern "C" fn(*mut u8, usize)>(
+                    "loft_free_pixels",
+                )
+            } {
                 unsafe { free_fn(pixels, pixels_len) };
             }
             wrote
@@ -1250,4 +1279,86 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     stores.scratch.clear();
     stores.scratch.push(msg);
     stores.put(stack, Str::new(&stores.scratch[0]));
+}
+
+// ── HTTP client glue (H4) ───────────────────────────────────────────────
+
+/// Perform an HTTP request. Returns the status code as integer.
+/// The response body is stored in `stores.scratch` for retrieval by `n_http_body`.
+fn n_http_do(stores: &mut Stores, stack: &mut DbRef) {
+    let v_body = *stores.get::<Str>(stack);
+    let v_url = *stores.get::<Str>(stack);
+    let v_method = *stores.get::<Str>(stack);
+
+    let status = if let Some(req_fn) = unsafe {
+        crate::extensions::get_native_fn::<
+            unsafe extern "C" fn(
+                *const u8,
+                usize,
+                *const u8,
+                usize,
+                *const u8,
+                usize,
+                *mut i32,
+                *mut *mut u8,
+                *mut usize,
+            ),
+        >("loft_http_request")
+    } {
+        let method = v_method.str();
+        let url = v_url.str();
+        let body = v_body.str();
+        let mut out_status: i32 = 0;
+        let mut out_body: *mut u8 = std::ptr::null_mut();
+        let mut out_body_len: usize = 0;
+        let (bp, bl) = if body.is_empty() {
+            (std::ptr::null(), 0)
+        } else {
+            (body.as_ptr(), body.len())
+        };
+        unsafe {
+            req_fn(
+                method.as_ptr(),
+                method.len(),
+                url.as_ptr(),
+                url.len(),
+                bp,
+                bl,
+                std::ptr::addr_of_mut!(out_status),
+                std::ptr::addr_of_mut!(out_body),
+                std::ptr::addr_of_mut!(out_body_len),
+            );
+        }
+        // Store the response body in scratch for n_http_body to retrieve.
+        stores.scratch.clear();
+        if !out_body.is_null() && out_body_len > 0 {
+            let s = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(out_body, out_body_len))
+            };
+            stores.scratch.push(s.to_string());
+            if let Some(free_fn) = unsafe {
+                crate::extensions::get_native_fn::<unsafe extern "C" fn(*mut u8, usize)>(
+                    "loft_free_string",
+                )
+            } {
+                unsafe { free_fn(out_body, out_body_len) };
+            }
+        } else {
+            stores.scratch.push(String::new());
+        }
+        out_status
+    } else {
+        i32::MIN // null — cdylib not loaded
+    };
+    stores.put(stack, status);
+}
+
+/// Retrieve the body from the last HTTP request (stored in scratch).
+fn n_http_body(stores: &mut Stores, stack: &mut DbRef) {
+    let body = if stores.scratch.is_empty() {
+        ""
+    } else {
+        &stores.scratch[0]
+    };
+    stores.put(stack, Str::new(body));
 }

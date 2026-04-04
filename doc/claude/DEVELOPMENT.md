@@ -93,15 +93,17 @@ Never branch from another feature branch.
 ### Announce each step — MANDATORY
 
 **State the name of every step as you start or finish it.**  This applies to
-both the numbered sprint workflow steps above and the individual items within
-step 4.
+the sprint workflow, individual items, and sub-steps within each item.
+Always include the issue/item ID when one exists.
 
 Examples:
-- "Starting step 2: checkout main"
-- "Starting item GL2.2: Bresenham line drawing"
-- "Finished item GL2.2 — all 7 tests pass"
+- "Starting H4.1: HttpResponse struct"
+- "Starting H4.1: writing test for http_get"
+- "Finished H4.1 — interpreter + native tests pass"
+- "Starting: clippy fixes for loft_register_v1 refactor"
+- "Finished: clippy clean, 0 warnings"
 - "Starting step 5: documentation updates"
-- "Finished step 6: CI green, 45 passed"
+- "Finished step 6: CI green, 548 passed"
 
 **Why:** silent progress is invisible progress.  The user cannot see tool
 calls in real time — they only see text output.  Naming each step gives the
