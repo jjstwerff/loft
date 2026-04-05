@@ -170,13 +170,20 @@ a = area(s);   // dispatches to correct variant
 ## Vectors
 
 ```loft
-empty = [for dummy in 0..0 { dummy }];  // empty vector<integer>
+empty: vector<integer> = [];            // empty typed vector (preferred)
 nums  = [for i in 0..10 { i * 2 }];    // comprehension → vector
+items = [1, 2, 3];                       // literal
 
 v += [element];      // append one element
 v += other_vec;      // concatenate
 len(v);              // length
 v[i];                // index read
+```
+
+**Empty vectors** need a type annotation so the compiler knows the element type:
+```loft
+buf: vector<single> = [];     // empty vector of f32
+names: vector<text> = [];     // empty vector of strings
 ```
 
 **Slices return iterators, not vectors.** `arr[lo..hi]` cannot be passed where a `vector<T>` is expected. Use index bounds instead:

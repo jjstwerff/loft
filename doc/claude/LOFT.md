@@ -726,7 +726,9 @@ data = configuration as Program
 ## Vectors
 
 ```
-v = [1, 2, 3]               // create
+v = [1, 2, 3]               // create with literal
+v: vector<integer> = []     // empty vector with type annotation
+buf: vector<single> = []    // empty vector of f32
 v += [4]                    // append one element
 v += [5, 6]                 // append multiple elements
 for x in v { }             // iterate
@@ -739,6 +741,9 @@ v[..end]                    // open-start slice from 0 to end (exclusive)
 [for n in 1..7 { n * 2 }]  // vector comprehension (builds [2, 4, 6, 8, 10, 12])
 [for n in 1..10 if n % 2 == 0 { n }]  // comprehension with filter
 ```
+
+**Empty vectors** require a type annotation so the compiler knows the element type.
+Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.
 
 To remove elements while iterating, use `v#remove` inside a filtered loop (see [For loops](#for-loops)).
 
