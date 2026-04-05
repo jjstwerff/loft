@@ -9,6 +9,12 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Parallel threading
+
+- **A15** — `parallel {}` now uses real OS threads via `std::thread::scope`.
+  Each arm runs in its own thread with a cloned `WorkerStores` snapshot.
+  Validated: loft HTTP server + client running concurrently in `parallel {}`.
+
 ### HTTP server (Sprint 16)
 
 - **SRV.1** — Blocking HTTP server with polling model. Loft controls the

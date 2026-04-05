@@ -129,7 +129,8 @@ done, create a new branch for the remainder.
 
 **Every sprint must update all documentation affected by its changes before
 the PR is created.**  Documentation is not a follow-up task — it ships with
-the code.
+the code.  **Never create a separate docs branch or PR** — documentation
+commits belong in the same sprint branch as the code they describe.
 
 #### Checklist (step 5 in the sprint workflow)
 
