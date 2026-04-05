@@ -479,6 +479,86 @@ pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer;
 pub fn gl_set_uniform_mat4(program: integer, name: text, mat: vector<float>);
 #native "n_gl_set_uniform_mat4"
 
+// --- Uniforms ---
+
+// Set a float uniform.
+pub fn gl_set_uniform_float(program: integer, name: text, val: float);
+#native "loft_gl_set_uniform_float"
+
+// Set an integer uniform (also used for sampler2D texture unit bindings).
+pub fn gl_set_uniform_int(program: integer, name: text, val: integer);
+#native "loft_gl_set_uniform_int"
+
+// Set a vec3 uniform (e.g. light position, color).
+pub fn gl_set_uniform_vec3(program: integer, name: text, x: float, y: float, z: float);
+#native "loft_gl_set_uniform_vec3"
+
+// --- GL state ---
+
+// Capability constants for gl_enable/gl_disable:
+GL_DEPTH_TEST = 1;
+GL_BLEND = 2;
+GL_CULL_FACE = 3;
+
+// Enable a GL capability (use GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE constants).
+pub fn gl_enable(cap: integer);
+#native "loft_gl_enable"
+
+// Disable a GL capability.
+pub fn gl_disable(cap: integer);
+#native "loft_gl_disable"
+
+// Blend factor constants for gl_blend_func:
+BLEND_ZERO = 0;
+BLEND_ONE = 1;
+BLEND_SRC_ALPHA = 2;
+BLEND_ONE_MINUS_SRC_ALPHA = 3;
+BLEND_DST_ALPHA = 4;
+BLEND_ONE_MINUS_DST_ALPHA = 5;
+
+// Set blend function (e.g. gl_blend_func(BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA)).
+pub fn gl_blend_func(src: integer, dst: integer);
+#native "loft_gl_blend_func"
+
+// Set which face to cull (0=back, 1=front).
+pub fn gl_cull_face(face: integer);
+#native "loft_gl_cull_face"
+
+// Enable/disable depth buffer writing.
+pub fn gl_depth_mask(write: boolean);
+#native "loft_gl_depth_mask"
+
+// Set the viewport rectangle (used for FBO render passes).
+pub fn gl_viewport(x: integer, y: integer, w: integer, h: integer);
+#native "loft_gl_viewport"
+
+// --- Framebuffer objects ---
+
+// Create a framebuffer object. Returns FBO handle.
+pub fn gl_create_framebuffer() -> integer;
+#native "loft_gl_create_framebuffer"
+
+// Bind a framebuffer (0 = default screen framebuffer).
+pub fn gl_bind_framebuffer(fbo: integer);
+#native "loft_gl_bind_framebuffer"
+
+// Attach a texture to an FBO (attachment: 0=color, 1=depth).
+pub fn gl_framebuffer_texture(fbo: integer, attachment: integer, tex: integer);
+#native "loft_gl_framebuffer_texture"
+
+// Create a depth-only texture for shadow mapping.
+pub fn gl_create_depth_texture(width: integer, height: integer) -> integer;
+#native "loft_gl_create_depth_texture"
+
+// Create an empty RGBA texture for render-to-texture.
+pub fn gl_create_color_texture(width: integer, height: integer) -> integer;
+#native "loft_gl_create_color_texture"
+
+// Draw a fullscreen quad (for post-processing). Uses built-in VAO with UV coords.
+// Vertex shader receives: layout(location=0) vec2 aPos, layout(location=1) vec2 aUV.
+pub fn gl_draw_fullscreen_quad();
+#native "loft_gl_draw_fullscreen_quad"
+
 // --- Text rendering (GL3) ---
 
 // Load a font from a file path. Returns a font handle (>= 0) or null on error.

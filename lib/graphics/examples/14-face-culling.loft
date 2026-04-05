@@ -1,0 +1,74 @@
+// LearnOpenGL: Face Culling
+// https://learnopengl.com/Advanced-OpenGL/Face-culling
+//
+// Demonstrates: back-face culling to skip invisible triangles.
+// Shows the same rotating cube with and without culling — with culling
+// enabled, back faces are discarded, improving performance.
+//
+// Loft constructions used:
+//   gl_enable(GL_CULL_FACE)  — enable face culling
+//   gl_cull_face(0)          — cull back faces (default)
+use graphics;
+use mesh;
+use math;
+
+VERT_FC = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() { gl_Position = uMVP * vec4(aPos, 1.0); vNormal = aNormal; }
+";
+
+FRAG_FC = "
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() {
+    vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
+    float d = max(dot(normalize(vNormal), ld), 0.0);
+    FragColor = vec4(uColor * (0.3 + 0.7 * d), 1.0);
+}
+";
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "14 - Face Culling") {
+    println("Failed to create window"); return;
+  }
+  fc_m = mesh::cube();
+  fc_shader = graphics::gl_create_shader(VERT_FC, FRAG_FC);
+  fc_data = mesh::mesh_to_floats(fc_m);
+  fc_vao = graphics::gl_upload_vertices(fc_data, 6);
+  fc_nv = fc_m.triangles.len() * 3;
+  fc_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  fc_view = math::mat4_look_at(
+    math::vec3(2.0, 2.0, 4.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  // Enable culling
+  graphics::gl_enable(GL_CULL_FACE);
+  graphics::gl_cull_face(0);
+  fc_start = ticks();
+  for fc_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    fc_t = (ticks() - fc_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(25, 25, 30, 255));
+    graphics::gl_use_shader(fc_shader);
+    // Left cube: culling on (default)
+    fc_m1 = math::mat4_mul(math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(fc_t));
+    fc_mvp1 = math::mat4_mul(fc_proj, math::mat4_mul(fc_view, fc_m1));
+    graphics::gl_set_uniform_mat4(fc_shader, "uMVP", fc_mvp1.m);
+    graphics::gl_set_uniform_vec3(fc_shader, "uColor", 0.2, 0.7, 0.9);
+    graphics::gl_enable(GL_CULL_FACE);
+    graphics::gl_draw(fc_vao, fc_nv);
+    // Right cube: culling off (both faces visible)
+    fc_m2 = math::mat4_mul(math::mat4_translate(1.5, 0.0, 0.0), math::mat4_rotate_y(fc_t));
+    fc_mvp2 = math::mat4_mul(fc_proj, math::mat4_mul(fc_view, fc_m2));
+    graphics::gl_set_uniform_mat4(fc_shader, "uMVP", fc_mvp2.m);
+    graphics::gl_set_uniform_vec3(fc_shader, "uColor", 0.9, 0.5, 0.2);
+    graphics::gl_disable(GL_CULL_FACE);
+    graphics::gl_draw(fc_vao, fc_nv);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}

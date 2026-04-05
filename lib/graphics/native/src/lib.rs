@@ -268,6 +268,209 @@ pub unsafe extern "C" fn n_gl_set_uniform_mat4(
     }
 }
 
+// ── Uniform helpers ────────────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_uniform_float(
+    program: u32, name_ptr: *const u8, name_len: usize, val: f64,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        if loc >= 0 { gl::Uniform1f(loc, val as f32); }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_uniform_int(
+    program: u32, name_ptr: *const u8, name_len: usize, val: i32,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        if loc >= 0 { gl::Uniform1i(loc, val); }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_uniform_vec3(
+    program: u32, name_ptr: *const u8, name_len: usize,
+    x: f64, y: f64, z: f64,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        if loc >= 0 { gl::Uniform3f(loc, x as f32, y as f32, z as f32); }
+    }
+}
+
+// ── GL state management ───────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_enable(cap: i32) {
+    let gl_cap = match cap {
+        1 => gl::DEPTH_TEST,
+        2 => gl::BLEND,
+        3 => gl::CULL_FACE,
+        _ => return,
+    };
+    unsafe { gl::Enable(gl_cap); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_disable(cap: i32) {
+    let gl_cap = match cap {
+        1 => gl::DEPTH_TEST,
+        2 => gl::BLEND,
+        3 => gl::CULL_FACE,
+        _ => return,
+    };
+    unsafe { gl::Disable(gl_cap); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_blend_func(src: i32, dst: i32) {
+    let map = |v: i32| -> u32 {
+        match v {
+            0 => gl::ZERO, 1 => gl::ONE,
+            2 => gl::SRC_ALPHA, 3 => gl::ONE_MINUS_SRC_ALPHA,
+            4 => gl::DST_ALPHA, 5 => gl::ONE_MINUS_DST_ALPHA,
+            _ => gl::ONE,
+        }
+    };
+    unsafe { gl::BlendFunc(map(src), map(dst)); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_cull_face(face: i32) {
+    let f = if face == 0 { gl::BACK } else { gl::FRONT };
+    unsafe { gl::CullFace(f); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_depth_mask(write: bool) {
+    unsafe { gl::DepthMask(if write { gl::TRUE } else { gl::FALSE }); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_viewport(x: i32, y: i32, w: i32, h: i32) {
+    unsafe { gl::Viewport(x, y, w, h); }
+}
+
+// ── Framebuffer objects ───────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_framebuffer() -> i32 {
+    let mut fbo = 0u32;
+    unsafe { gl::GenFramebuffers(1, &mut fbo); }
+    fbo as i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_bind_framebuffer(fbo: i32) {
+    unsafe { gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32); }
+}
+
+/// Attach a texture as the color (attachment=0) or depth (attachment=1) target.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i32) {
+    let att = if attachment == 0 { gl::COLOR_ATTACHMENT0 } else { gl::DEPTH_ATTACHMENT };
+    unsafe {
+        gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32);
+        gl::FramebufferTexture2D(gl::FRAMEBUFFER, att, gl::TEXTURE_2D, tex as u32, 0);
+        if attachment == 1 {
+            // Depth-only FBO: no color draw/read
+            gl::DrawBuffer(gl::NONE);
+            gl::ReadBuffer(gl::NONE);
+        }
+        gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+    }
+}
+
+/// Create a depth-only texture (for shadow mapping).
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
+    let mut tex = 0u32;
+    unsafe {
+        gl::GenTextures(1, &mut tex);
+        gl::BindTexture(gl::TEXTURE_2D, tex);
+        gl::TexImage2D(
+            gl::TEXTURE_2D, 0, gl::DEPTH_COMPONENT as i32,
+            width, height, 0,
+            gl::DEPTH_COMPONENT, gl::FLOAT, std::ptr::null(),
+        );
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+    }
+    tex as i32
+}
+
+/// Create an empty RGBA texture (for render-to-texture / post-processing).
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
+    let mut tex = 0u32;
+    unsafe {
+        gl::GenTextures(1, &mut tex);
+        gl::BindTexture(gl::TEXTURE_2D, tex);
+        gl::TexImage2D(
+            gl::TEXTURE_2D, 0, gl::RGBA as i32,
+            width, height, 0,
+            gl::RGBA, gl::UNSIGNED_BYTE, std::ptr::null(),
+        );
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+    }
+    tex as i32
+}
+
+/// Draw a fullscreen quad (for post-processing passes). Uses a built-in VAO.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_draw_fullscreen_quad() {
+    thread_local! {
+        static QUAD_VAO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let vao = QUAD_VAO.with(|c| {
+        let mut v = c.get();
+        if v == 0 {
+            let verts: [f32; 24] = [
+                -1.0, -1.0, 0.0, 0.0,
+                 1.0, -1.0, 1.0, 0.0,
+                -1.0,  1.0, 0.0, 1.0,
+                 1.0, -1.0, 1.0, 0.0,
+                 1.0,  1.0, 1.0, 1.0,
+                -1.0,  1.0, 0.0, 1.0,
+            ];
+            unsafe {
+                let mut vbo = 0u32;
+                gl::GenVertexArrays(1, &mut v);
+                gl::GenBuffers(1, &mut vbo);
+                gl::BindVertexArray(v);
+                gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+                gl::BufferData(gl::ARRAY_BUFFER, 96, verts.as_ptr().cast(), gl::STATIC_DRAW);
+                gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 16, std::ptr::null());
+                gl::EnableVertexAttribArray(0);
+                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 16, 8 as *const _);
+                gl::EnableVertexAttribArray(1);
+                gl::BindVertexArray(0);
+            }
+            c.set(v);
+        }
+        v
+    });
+    unsafe {
+        gl::BindVertexArray(vao);
+        gl::DrawArrays(gl::TRIANGLES, 0, 6);
+        gl::BindVertexArray(0);
+    }
+}
+
 // ── Registration ────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
@@ -300,6 +503,24 @@ pub unsafe extern "C" fn loft_register_v1(
         reg!(b"loft_gl_free_bitmap", loft_gl_free_bitmap);
         reg!(b"n_gl_upload_vertices", n_gl_upload_vertices);
         reg!(b"n_gl_set_uniform_mat4", n_gl_set_uniform_mat4);
+        // Uniform helpers
+        reg!(b"loft_gl_set_uniform_float", loft_gl_set_uniform_float);
+        reg!(b"loft_gl_set_uniform_int", loft_gl_set_uniform_int);
+        reg!(b"loft_gl_set_uniform_vec3", loft_gl_set_uniform_vec3);
+        // GL state
+        reg!(b"loft_gl_enable", loft_gl_enable);
+        reg!(b"loft_gl_disable", loft_gl_disable);
+        reg!(b"loft_gl_blend_func", loft_gl_blend_func);
+        reg!(b"loft_gl_cull_face", loft_gl_cull_face);
+        reg!(b"loft_gl_depth_mask", loft_gl_depth_mask);
+        reg!(b"loft_gl_viewport", loft_gl_viewport);
+        // Framebuffer objects
+        reg!(b"loft_gl_create_framebuffer", loft_gl_create_framebuffer);
+        reg!(b"loft_gl_bind_framebuffer", loft_gl_bind_framebuffer);
+        reg!(b"loft_gl_framebuffer_texture", loft_gl_framebuffer_texture);
+        reg!(b"loft_gl_create_depth_texture", loft_gl_create_depth_texture);
+        reg!(b"loft_gl_create_color_texture", loft_gl_create_color_texture);
+        reg!(b"loft_gl_draw_fullscreen_quad", loft_gl_draw_fullscreen_quad);
     }
 }
 
