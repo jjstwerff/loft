@@ -559,6 +559,63 @@ pub fn gl_create_color_texture(width: integer, height: integer) -> integer;
 pub fn gl_draw_fullscreen_quad();
 #native "loft_gl_draw_fullscreen_quad"
 
+// --- Draw modes ---
+
+// Draw mode constants for gl_draw_mode and gl_draw_elements:
+DRAW_TRIANGLES = 0;
+DRAW_LINES = 1;
+DRAW_POINTS = 2;
+
+// Draw a VAO with explicit mode (DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS).
+pub fn gl_draw_mode(vao: integer, vertex_count: integer, mode: integer);
+#native "loft_gl_draw_mode"
+
+// Draw using an index buffer (EBO). mode: DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS.
+pub fn gl_draw_elements(vao: integer, index_count: integer, mode: integer);
+#native "loft_gl_draw_elements"
+
+// Set line width for DRAW_LINES rendering.
+pub fn gl_line_width(width: float);
+#native "loft_gl_line_width"
+
+// Set point size for DRAW_POINTS rendering.
+pub fn gl_point_size(size: float);
+#native "loft_gl_point_size"
+
+// --- Input ---
+
+// Key code constants for gl_key_pressed:
+KEY_W = 119;
+KEY_A = 97;
+KEY_S = 115;
+KEY_D = 100;
+KEY_Q = 113;
+KEY_E = 101;
+KEY_SPACE = 32;
+KEY_ESCAPE = 27;
+KEY_UP = 128;
+KEY_DOWN = 129;
+KEY_LEFT = 130;
+KEY_RIGHT = 131;
+KEY_SHIFT = 132;
+KEY_CTRL = 133;
+
+// Returns true if the key is currently pressed (use KEY_* constants).
+pub fn gl_key_pressed(key_code: integer) -> boolean;
+#native "loft_gl_key_pressed"
+
+// Mouse position X (pixels from left edge of window).
+pub fn gl_mouse_x() -> float;
+#native "loft_gl_mouse_x"
+
+// Mouse position Y (pixels from top edge of window).
+pub fn gl_mouse_y() -> float;
+#native "loft_gl_mouse_y"
+
+// Mouse button bitmask: 1=left, 2=right, 4=middle.
+pub fn gl_mouse_button() -> integer;
+#native "loft_gl_mouse_button"
+
 // --- Text rendering (GL3) ---
 
 // Load a font from a file path. Returns a font handle (>= 0) or null on error.
@@ -578,3 +635,17 @@ pub fn gl_bind_texture(texture_id: integer, unit: integer);
 // Delete a texture.
 pub fn gl_delete_texture(texture_id: integer);
 #native "loft_gl_delete_texture"
+
+// --- GPU resource cleanup ---
+
+// Delete a shader program.
+pub fn gl_delete_shader(program: integer);
+#native "loft_gl_delete_shader"
+
+// Delete a vertex array object.
+pub fn gl_delete_vao(vao: integer);
+#native "loft_gl_delete_vao"
+
+// Delete a framebuffer object.
+pub fn gl_delete_framebuffer(fbo: integer);
+#native "loft_gl_delete_framebuffer"

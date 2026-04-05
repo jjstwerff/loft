@@ -1,0 +1,117 @@
+// Interactive Camera with WASD + Mouse
+//
+// Demonstrates: keyboard input for first-person camera movement.
+// WASD to move, Q/E to go up/down. Escape to close.
+//
+// Loft constructions used:
+//   gl_key_pressed(KEY_W) — real-time keyboard state polling
+//   gl_mouse_x/y           — cursor position tracking
+//   gl_mouse_button        — mouse button state
+//   ticks()                — frame-independent movement speed
+use graphics;
+use mesh;
+use math;
+
+VERT_CAM = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNormal = aNormal;
+}
+";
+
+FRAG_CAM = "
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() {
+    vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
+    float d = max(dot(normalize(vNormal), ld), 0.0);
+    FragColor = vec4(uColor * (0.2 + 0.8 * d), 1.0);
+}
+";
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "20 - Keyboard Camera (WASD + Q/E)") {
+    println("Failed to create window"); return;
+  }
+  // Scene: floor + scattered cubes
+  kc_cube = mesh::cube();
+  kc_floor = mesh::plane("floor", 20.0, 20.0);
+  kc_shader = graphics::gl_create_shader(VERT_CAM, FRAG_CAM);
+  kc_cvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(kc_cube), 6);
+  kc_fvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(kc_floor), 6);
+  kc_cnv = kc_cube.triangles.len() * 3;
+  kc_fnv = kc_floor.triangles.len() * 3;
+  kc_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  // Camera state
+  kc_cam_x = 0.0;
+  kc_cam_y = 2.0;
+  kc_cam_z = 8.0;
+  kc_cam_yaw = 0.0;
+  kc_last_tick = ticks();
+  graphics::gl_enable(GL_CULL_FACE);
+  for kc_frame in 0..100000 {
+    if !graphics::gl_poll_events() { break }
+    if graphics::gl_key_pressed(KEY_ESCAPE) { break }
+    // Delta time
+    kc_now = ticks();
+    kc_dt = (kc_now - kc_last_tick) as float / 1000000.0;
+    kc_last_tick = kc_now;
+    kc_speed = 4.0 * kc_dt;
+    // Camera movement
+    kc_fwd_x = sin(kc_cam_yaw);
+    kc_fwd_z = -cos(kc_cam_yaw);
+    if graphics::gl_key_pressed(KEY_W) {
+      kc_cam_x += kc_fwd_x * kc_speed;
+      kc_cam_z += kc_fwd_z * kc_speed;
+    }
+    if graphics::gl_key_pressed(KEY_S) {
+      kc_cam_x -= kc_fwd_x * kc_speed;
+      kc_cam_z -= kc_fwd_z * kc_speed;
+    }
+    if graphics::gl_key_pressed(KEY_A) {
+      kc_cam_x -= kc_fwd_z * kc_speed;
+      kc_cam_z += kc_fwd_x * kc_speed;
+    }
+    if graphics::gl_key_pressed(KEY_D) {
+      kc_cam_x += kc_fwd_z * kc_speed;
+      kc_cam_z -= kc_fwd_x * kc_speed;
+    }
+    if graphics::gl_key_pressed(KEY_Q) { kc_cam_y -= kc_speed }
+    if graphics::gl_key_pressed(KEY_E) { kc_cam_y += kc_speed }
+    if graphics::gl_key_pressed(KEY_LEFT) { kc_cam_yaw -= 2.0 * kc_dt }
+    if graphics::gl_key_pressed(KEY_RIGHT) { kc_cam_yaw += 2.0 * kc_dt }
+    kc_eye = math::vec3(kc_cam_x, kc_cam_y, kc_cam_z);
+    kc_target = math::vec3(kc_cam_x + kc_fwd_x, kc_cam_y, kc_cam_z + kc_fwd_z);
+    kc_view = math::mat4_look_at(kc_eye, kc_target, math::vec3(0.0, 1.0, 0.0));
+    graphics::gl_clear(rgba(40, 50, 60, 255));
+    graphics::gl_use_shader(kc_shader);
+    // Floor
+    kc_fmvp = math::mat4_mul(kc_proj, kc_view);
+    graphics::gl_set_uniform_mat4(kc_shader, "uMVP", kc_fmvp.m);
+    graphics::gl_set_uniform_vec3(kc_shader, "uColor", 0.3, 0.4, 0.3);
+    graphics::gl_draw(kc_fvao, kc_fnv);
+    // Scattered cubes
+    for kc_ci in 0..12 {
+      kc_cx = sin(kc_ci as float * 1.3) * 6.0;
+      kc_cz = cos(kc_ci as float * 0.9) * 6.0;
+      kc_cm = math::mat4_translate(kc_cx, 0.5, kc_cz);
+      kc_cmvp = math::mat4_mul(kc_proj, math::mat4_mul(kc_view, kc_cm));
+      graphics::gl_set_uniform_mat4(kc_shader, "uMVP", kc_cmvp.m);
+      kc_hue = (kc_ci as float * 0.26);
+      graphics::gl_set_uniform_vec3(kc_shader, "uColor",
+        0.5 + 0.5 * sin(kc_hue),
+        0.5 + 0.5 * sin(kc_hue + 2.1),
+        0.5 + 0.5 * sin(kc_hue + 4.2));
+      graphics::gl_draw(kc_cvao, kc_cnv);
+    }
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}

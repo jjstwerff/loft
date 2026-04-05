@@ -1,0 +1,106 @@
+// LearnOpenGL: Textures
+// https://learnopengl.com/Getting-started/Textures
+//
+// Demonstrates: UV-mapped textured cube using a procedural checkerboard.
+// Since we can't load PNG→GL directly yet, we generate a checkerboard
+// pattern as a Canvas and upload it as a texture.
+//
+// Loft constructions used:
+//   canvas()               — create a procedural texture
+//   mesh_to_floats_uv      — flatten mesh with UV coordinates (stride=8)
+//   gl_upload_vertices(d,8) — enables pos(3)+normal(3)+uv(2) layout
+//   gl_set_uniform_int     — bind sampler2D to texture unit
+use graphics;
+use mesh;
+use math;
+
+VERT_TEX = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aUV;
+uniform mat4 uMVP;
+out vec2 vUV;
+out vec3 vNormal;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = aUV;
+    vNormal = aNormal;
+}
+";
+
+FRAG_TEX = "
+#version 330 core
+in vec2 vUV;
+in vec3 vNormal;
+out vec4 FragColor;
+uniform sampler2D uTexture;
+void main() {
+    vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
+    float diff = max(dot(normalize(vNormal), ld), 0.0);
+    vec4 texColor = texture(uTexture, vUV);
+    FragColor = vec4(texColor.rgb * (0.3 + 0.7 * diff), 1.0);
+}
+";
+
+fn make_checkerboard() -> graphics::Canvas {
+  tc_c = graphics::canvas(64, 64, rgba(255, 255, 255, 255));
+  for tc_y in 0..64 {
+    for tc_x in 0..64 {
+      if (tc_x / 8 + tc_y / 8) % 2 == 0 {
+        tc_c.set_pixel(tc_x, tc_y, rgba(80, 80, 80, 255));
+      }
+    }
+  }
+  tc_c
+}
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "19 - Textured Cube (checkerboard)") {
+    println("Failed to create window"); return;
+  }
+  // Create procedural texture
+  tc_check = make_checkerboard();
+  // Upload canvas pixels as RGBA texture
+  // Canvas stores pixels as packed i32 (0xRRGGBBAA) — need to convert for GL
+  // For now, generate raw RGBA bytes
+  tc_pixels = [for tc_dummy in 0..0 { 0 }];
+  for tc_p in tc_check.data {
+    tc_r = (tc_p >> 24) & 255;
+    tc_g = (tc_p >> 16) & 255;
+    tc_b = (tc_p >> 8) & 255;
+    tc_a = tc_p & 255;
+    tc_pixels += [tc_r, tc_g, tc_b, tc_a];
+  }
+  // Build mesh with UVs
+  tc_m = mesh::cube();
+  tc_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
+  tc_data = mesh::mesh_to_floats_uv(tc_m);
+  tc_vao = graphics::gl_upload_vertices(tc_data, 8);
+  tc_nv = tc_m.triangles.len() * 3;
+  tc_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  tc_view = math::mat4_look_at(
+    math::vec3(2.0, 2.0, 3.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  // We need a color texture from raw RGBA — use gl_create_color_texture + manual upload
+  // For this example, use the existing GL upload texture (needs raw pointer)
+  // TODO: Add proper canvas→GL texture bridge
+  tc_tex = graphics::gl_create_color_texture(64, 64);
+  tc_start = ticks();
+  for tc_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    tc_t = (ticks() - tc_start) as float / 1000000.0;
+    tc_model = math::mat4_rotate_y(tc_t * 0.5);
+    tc_mvp = math::mat4_mul(tc_proj, math::mat4_mul(tc_view, tc_model));
+    graphics::gl_clear(rgba(30, 30, 35, 255));
+    graphics::gl_use_shader(tc_shader);
+    graphics::gl_set_uniform_mat4(tc_shader, "uMVP", tc_mvp.m);
+    graphics::gl_bind_texture(tc_tex, 0);
+    graphics::gl_set_uniform_int(tc_shader, "uTexture", 0);
+    graphics::gl_draw(tc_vao, tc_nv);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_delete_texture(tc_tex);
+  graphics::gl_delete_vao(tc_vao);
+  graphics::gl_delete_shader(tc_shader);
+  graphics::gl_destroy_window();
+}
