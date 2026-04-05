@@ -1,0 +1,89 @@
+#!/usr/bin/env -S loft --native
+// LearnOpenGL Chapter 4: Textures
+// https://learnopengl.com/Getting-started/Textures
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: texture mapping with UV coordinates.
+// A procedural checkerboard texture is applied to a rectangle.
+//
+// Run:
+//   loft examples/04-textures.loft
+//
+// Loft constructions used:
+//   canvas()              — procedural texture generation
+//   gl_upload_canvas      — upload Canvas pixel data as GL texture
+//   gl_bind_texture       — bind texture to a sampler unit
+//   gl_set_uniform_int    — bind sampler2D to texture unit
+//   GLSL sampler2D        — sample texture in fragment shader
+use graphics;
+
+VERT_TEX = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aUV;
+out vec2 vUV;
+void main() {{
+    gl_Position = vec4(aPos, 1.0);
+    vUV = aUV;
+}}
+`;
+
+FRAG_TEX = `
+#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uTexture;
+void main() {{
+    FragColor = texture(uTexture, vUV);
+}}
+`;
+
+fn make_checkerboard() -> graphics::Canvas {
+  tx_c = graphics::canvas(64, 64, graphics::rgba(230, 230, 230, 255));
+  for tx_y in 0..64 {
+    for tx_x in 0..64 {
+      if (tx_x / 8 + tx_y / 8) % 2 == 0 {
+        tx_c.set_pixel(tx_x, tx_y, graphics::rgba(60, 60, 60, 255));
+      }
+    }
+  }
+  tx_c
+}
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "04 - Textures (checkerboard)") {
+    println("Failed to create window"); return;
+  }
+  // Generate and upload checkerboard texture
+  tx_check = make_checkerboard();
+  tx_tex = graphics::gl_upload_canvas(tx_check.data, tx_check.width, tx_check.height);
+  tx_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
+  // Textured rectangle: pos(3) + normal(3) + uv(2) = stride 8
+  // Two triangles forming a rectangle
+  tx_data = [
+    -0.8f, -0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f,
+     0.8f, -0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+     0.8f,  0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 1.0f,
+    -0.8f, -0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f,
+     0.8f,  0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 1.0f,
+    -0.8f,  0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 1.0f
+  ];
+  tx_vao = graphics::gl_upload_vertices(tx_data, 8);
+  for _ in 0..300 {
+    if !graphics::gl_poll_events() { break }
+    graphics::gl_clear(graphics::rgba(40, 40, 45, 255));
+    graphics::gl_use_shader(tx_shader);
+    graphics::gl_bind_texture(tx_tex, 0);
+    graphics::gl_set_uniform_int(tx_shader, "uTexture", 0);
+    graphics::gl_draw(tx_vao, 6);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_delete_texture(tx_tex);
+  graphics::gl_delete_vao(tx_vao);
+  graphics::gl_delete_shader(tx_shader);
+  graphics::gl_destroy_window();
+}

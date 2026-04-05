@@ -11,8 +11,8 @@
 // The fragment shader computes lighting per-pixel using normals.
 //
 // Run:
-//   loft examples/07-basic-lighting.loft              -- native
-//   loft examples/07-basic-lighting.loft --mode glb   -- export GLB with material
+//   loft examples/08-basic-lighting.loft              -- native
+//   loft examples/08-basic-lighting.loft --mode glb   -- export GLB with material
 //
 // Loft constructions used:
 //   GLSL uniform vec3    — light and camera positions passed per frame
@@ -65,7 +65,7 @@ void main() {{
 `;
 
 fn render_native_lighting() {
-  if !graphics::gl_create_window(800, 600, "07 - Basic Lighting (Phong)") {
+  if !graphics::gl_create_window(800, 600, "08 - Basic Lighting (Phong)") {
     println("Failed to create window");
     return;
   }
@@ -115,8 +115,8 @@ fn export_glb_lighting() {
     position: math::vec3(2.0, 2.0, 4.0),
     target: math::vec3(0.0, 0.0, 0.0)
   });
-  glb::save_scene_glb(bl_s, "07-basic-lighting.glb");
-  println("Exported 07-basic-lighting.glb");
+  glb::save_scene_glb(bl_s, "08-basic-lighting.glb");
+  println("Exported 08-basic-lighting.glb");
 }
 
 fn main() {

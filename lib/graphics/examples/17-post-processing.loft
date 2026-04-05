@@ -73,7 +73,7 @@ void main() {{
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "16 - Post-Processing (grayscale)") {
+  if !graphics::gl_create_window(800, 600, "17 - Post-Processing (grayscale)") {
     println("Failed to create window"); return;
   }
   pp_cube = mesh::cube();

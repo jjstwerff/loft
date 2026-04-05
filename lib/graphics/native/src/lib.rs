@@ -814,6 +814,31 @@ pub extern "C" fn loft_save_png(
     }
 }
 
+/// Upload Canvas pixel data (0xAARRGGBB packed i32s) as a GL RGBA texture.
+/// Native compilation path: receives raw pointer + count.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_upload_canvas(
+    data_ptr: *const i32,
+    data_count: u32,
+    width: i32,
+    height: i32,
+) -> i32 {
+    let w = width as u32;
+    let h = height as u32;
+    if w == 0 || h == 0 || data_count < w * h {
+        return 0;
+    }
+    let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for &px in pixels {
+        rgba.push(((px >> 16) & 0xFF) as u8); // R
+        rgba.push(((px >> 8) & 0xFF) as u8);  // G
+        rgba.push((px & 0xFF) as u8);          // B
+        rgba.push(((px >> 24) & 0xFF) as u8);  // A
+    }
+    unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
+}
+
 /// Set line width for GL_LINES rendering.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_line_width(width: f64) {
@@ -894,6 +919,8 @@ pub unsafe extern "C" fn loft_register_v1(
         // Rendering hints
         reg!(b"loft_gl_line_width", loft_gl_line_width);
         reg!(b"loft_gl_point_size", loft_gl_point_size);
+        // Canvas → GL texture
+        reg!(b"loft_gl_upload_canvas", loft_gl_upload_canvas);
         // PNG export
         reg!(b"loft_save_png", loft_save_png);
     }

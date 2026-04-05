@@ -61,7 +61,7 @@ void main() {{
 `;
 
 fn render_native_complete() {
-  if !graphics::gl_create_window(800, 600, "18 - Complete Scene") {
+  if !graphics::gl_create_window(800, 600, "19 - Complete Scene") {
     println("Failed to create window"); return;
   }
   // Build meshes
@@ -182,8 +182,8 @@ fn export_glb_complete() {
   }
   fn_s.add_camera(scene::Camera { name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(8.0, 4.0, 0.0), target: math::vec3(0.0, 0.5, 0.0) });
-  glb::save_scene_glb(fn_s, "18-complete-scene.glb");
-  println("Exported 18-complete-scene.glb");
+  glb::save_scene_glb(fn_s, "19-complete-scene.glb");
+  println("Exported 19-complete-scene.glb");
 }
 
 fn main() {

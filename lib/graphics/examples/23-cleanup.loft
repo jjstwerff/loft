@@ -35,7 +35,7 @@ void main() {{
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "22 - Resource Cleanup") {
+  if !graphics::gl_create_window(800, 600, "23 - Resource Cleanup") {
     println("Failed to create window"); return;
   }
   // Create resources

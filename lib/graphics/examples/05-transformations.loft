@@ -12,8 +12,8 @@
 //   glb    — exports the cube as a .glb file with a camera
 //
 // Run:
-//   loft examples/04-transformations.loft              -- native
-//   loft examples/04-transformations.loft --mode glb   -- export GLB
+//   loft examples/05-transformations.loft              -- native
+//   loft examples/05-transformations.loft --mode glb   -- export GLB
 //
 // Loft constructions used:
 //   cube()               — unit cube mesh primitive (24 vertices, 12 triangles)
@@ -56,7 +56,7 @@ void main() {{
 `;
 
 fn render_native_cube() {
-  if !graphics::gl_create_window(800, 600, "04 - Transformations (spinning cube)") {
+  if !graphics::gl_create_window(800, 600, "05 - Transformations (spinning cube)") {
     println("Failed to create window");
     return;
   }
@@ -113,8 +113,8 @@ fn export_glb_cube() {
     position: math::vec3(0.0, 1.5, 3.0),
     target: math::vec3(0.0, 0.0, 0.0)
   });
-  glb::save_scene_glb(tc_s, "04-transformations.glb");
-  println("Exported 04-transformations.glb");
+  glb::save_scene_glb(tc_s, "05-transformations.glb");
+  println("Exported 05-transformations.glb");
 }
 
 fn main() {

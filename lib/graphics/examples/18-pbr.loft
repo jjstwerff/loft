@@ -87,7 +87,7 @@ void main() {{
 `;
 
 fn render_native_pbr() {
-  if !graphics::gl_create_window(800, 600, "17 - PBR (metallic/roughness grid)") {
+  if !graphics::gl_create_window(800, 600, "18 - PBR (metallic/roughness grid)") {
     println("Failed to create window"); return;
   }
   pb_sp = mesh::sphere("pbr_sphere", 0.4, 32, 24);
@@ -148,8 +148,8 @@ fn export_glb_pbr() {
   pb_s.add_camera(scene::Camera {
     name: "main", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(0.0, 0.0, 8.0), target: math::vec3(0.0, 0.0, 0.0) });
-  glb::save_scene_glb(pb_s, "17-pbr.glb");
-  println("Exported 17-pbr.glb (5x5 metallic/roughness grid)");
+  glb::save_scene_glb(pb_s, "18-pbr.glb");
+  println("Exported 18-pbr.glb (5x5 metallic/roughness grid)");
 }
 
 fn main() {

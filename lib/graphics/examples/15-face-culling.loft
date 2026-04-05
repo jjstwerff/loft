@@ -39,7 +39,7 @@ void main() {{
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "14 - Face Culling") {
+  if !graphics::gl_create_window(800, 600, "15 - Face Culling") {
     println("Failed to create window"); return;
   }
   fc_m = mesh::cube();

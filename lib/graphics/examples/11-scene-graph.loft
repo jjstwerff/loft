@@ -6,7 +6,7 @@
 // any GPU or windowing system — ideal for headless/server rendering.
 //
 // Run:
-//   loft examples/10-scene-graph.loft   -- exports 10-scene.glb
+//   loft examples/11-scene-graph.loft   -- exports 11-scene.glb
 //
 // Loft constructions used:
 //   Scene, Node, Camera, Material — scene graph types
@@ -75,6 +75,6 @@ fn main() {
     name: "main", fov: 50.0, near: 0.1, far: 100.0,
     position: math::vec3(5.0, 4.0, 6.0),
     target: math::vec3(0.0, 0.5, 0.0) });
-  glb::save_scene_glb(sg_s, "10-scene.glb");
-  println("Exported 10-scene.glb (floor + 3 objects + 5 arc spheres + camera)");
+  glb::save_scene_glb(sg_s, "11-scene.glb");
+  println("Exported 11-scene.glb (floor + 3 objects + 5 arc spheres + camera)");
 }

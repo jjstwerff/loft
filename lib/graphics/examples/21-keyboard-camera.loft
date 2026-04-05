@@ -38,7 +38,7 @@ void main() {{
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "20 - Keyboard Camera (WASD + Q/E)") {
+  if !graphics::gl_create_window(800, 600, "21 - Keyboard Camera (WASD + Q/E)") {
     println("Failed to create window"); return;
   }
   // Scene: floor + scattered cubes

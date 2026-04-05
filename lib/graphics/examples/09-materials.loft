@@ -10,8 +10,8 @@
 // A sphere and cube side by side with different metallic/roughness values.
 //
 // Run:
-//   loft examples/08-materials.loft              -- native (simplified Phong)
-//   loft examples/08-materials.loft --mode glb   -- export GLB with PBR materials
+//   loft examples/09-materials.loft              -- native (simplified Phong)
+//   loft examples/09-materials.loft --mode glb   -- export GLB with PBR materials
 //
 // Loft constructions used:
 //   sphere()          — UV sphere mesh primitive
@@ -59,7 +59,7 @@ void main() {{
 `;
 
 fn render_native_materials() {
-  if !graphics::gl_create_window(800, 600, "08 - Materials") {
+  if !graphics::gl_create_window(800, 600, "09 - Materials") {
     println("Failed to create window");
     return;
   }
@@ -126,8 +126,8 @@ fn export_glb_materials() {
     name: "main", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(3.0, 3.0, 5.0),
     target: math::vec3(0.0, 0.0, 0.0) });
-  glb::save_scene_glb(mt_s, "08-materials.glb");
-  println("Exported 08-materials.glb");
+  glb::save_scene_glb(mt_s, "09-materials.glb");
+  println("Exported 09-materials.glb");
 }
 
 fn main() {

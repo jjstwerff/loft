@@ -42,7 +42,7 @@ void main() {{
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "12 - Depth Testing Visualization") {
+  if !graphics::gl_create_window(800, 600, "13 - Depth Testing Visualization") {
     println("Failed to create window"); return;
   }
   dt_cube = mesh::cube();
