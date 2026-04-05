@@ -131,7 +131,8 @@ fn print_help() {
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings in --tests output");
     println!(
-        "  --check                       parse and compile only; report errors without running"
+        "  --check                       parse and compile only; report errors without running
+                                can be combined with --native to also verify rustc compilation"
     );
     println!();
     println!("Subcommands:");
@@ -1052,6 +1053,21 @@ fn add_native_extern_flags(
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
                 .arg(format!("{}={}", extern_name, rlib_path.display()));
+            // Add the native crate's deps directory so transitive deps (loft_ffi etc.) resolve.
+            let deps_dir = rlib_path.parent().unwrap().join("deps");
+            if deps_dir.is_dir() {
+                cmd.arg("-L").arg(&deps_dir);
+                // Also add --extern loft_ffi if present in deps.
+                for entry in std::fs::read_dir(&deps_dir).into_iter().flatten() {
+                    if let Ok(e) = entry {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with("libloft_ffi-") && name.ends_with(".rlib") {
+                            cmd.arg("--extern")
+                                .arg(format!("loft_ffi={}", e.path().display()));
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1483,7 +1499,9 @@ fn main() {
     extensions::wire_native_fns(&mut state, &p.data);
 
     // --check: parse + compile only, report errors and exit.
-    if check_only {
+    // When combined with --native, fall through to the native pipeline
+    // which will compile but not run the binary.
+    if check_only && !native_mode && native_emit.is_none() {
         println!("ok {abs_file}");
         return;
     }
@@ -1662,6 +1680,13 @@ fn main() {
                 "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
             );
             std::process::exit(1);
+        }
+        if check_only {
+            // --check --native: compile succeeded, report ok and exit.
+            let _ = std::fs::remove_file(&emit_path);
+            let _ = std::fs::remove_file(&binary);
+            println!("ok {abs_file}");
+            return;
         }
         let run_status = std::process::Command::new(&binary)
             .args(&user_args)

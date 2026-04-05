@@ -32,7 +32,7 @@ wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
 png          = ["dep:png"]
 mmap         = ["dep:mmap-storage"]
 random            = ["dep:rand_core", "dep:rand_pcg"]
-native-extensions = ["dep:libloading"]
+native-extensions = ["dep:libloading", "dep:loft-ffi"]
 registry     = ["dep:ureq", "dep:zip"]
 
 [dependencies]
@@ -48,6 +48,7 @@ js-sys             = { version = "0.3", optional = true }
 web-sys            = { version = "0.3", optional = true, features = ["console"] }
 wasm-bindgen-rayon = { version = "1.2", optional = true }
 libloading         = { version = "0.8", optional = true }
+loft-ffi           = { path = "loft-ffi", optional = true }
 ureq               = { version = "2", optional = true }
 zip                = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 

@@ -3,10 +3,31 @@
 
 //! Function call code generation: user-defined functions and `#rust` template calls.
 
-use crate::data::{Context, Definition, Type, Value};
+use crate::data::{Context, Data, Definition, Type, Value};
 use std::io::Write;
 
 use super::{Output, narrow_int_cast, rust_type, sanitize};
+
+/// Check if a Value tree contains a Call to OpDatabase (which mutates stores).
+pub(super) fn contains_op_database(val: &Value, data: &Data) -> bool {
+    match val {
+        Value::Call(d_nr, args) => {
+            if data.def(*d_nr).name == "OpDatabase" {
+                return true;
+            }
+            args.iter().any(|a| contains_op_database(a, data))
+        }
+        Value::Block(bl) => bl.operators.iter().any(|v| contains_op_database(v, data)),
+        Value::Insert(ops) => ops.iter().any(|v| contains_op_database(v, data)),
+        Value::Set(_, to) => contains_op_database(to, data),
+        Value::If(t, a, b) => {
+            contains_op_database(t, data)
+                || contains_op_database(a, data)
+                || contains_op_database(b, data)
+        }
+        _ => false,
+    }
+}
 
 impl Output<'_> {
     pub(super) fn output_call_user_fn(

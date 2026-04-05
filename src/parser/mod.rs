@@ -2158,6 +2158,7 @@ impl Parser {
             }
             // PKG.4: register native function symbols and package crate info.
             if let Some(ref crate_name) = m.native_crate {
+                let rust_crate = crate_name.replace('-', "_");
                 self.data
                     .native_packages
                     .push((crate_name.clone(), pkg_dir.clone()));
@@ -2165,6 +2166,18 @@ impl Parser {
                     self.data
                         .native_symbols
                         .insert(loft_name.clone(), rust_symbol.clone());
+                }
+                // Map all #native symbols from this package to their crate.
+                // Definitions parsed so far include this package's functions.
+                for d_nr in 0..self.data.definitions() {
+                    let sym = &self.data.def(d_nr).native;
+                    if !sym.is_empty()
+                        && !self.data.native_symbol_crates.contains_key(sym)
+                    {
+                        self.data
+                            .native_symbol_crates
+                            .insert(sym.clone(), rust_crate.clone());
+                    }
                 }
             }
             // PKG.3: register the package's parent directory so that

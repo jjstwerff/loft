@@ -85,7 +85,7 @@ unsafe impl Sync for LoftRef {}
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LoftStoreCtx {
-    _opaque: *mut (),
+    pub _opaque: *mut (),
 }
 
 #[repr(C)]

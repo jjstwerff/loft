@@ -766,6 +766,10 @@ pub struct Data {
     /// PKG.4: native package crate directories — (`crate_name`, `pkg_dir`).
     /// Used to construct `--extern` flags for `rustc`.
     pub native_packages: Vec<(String, String)>,
+    /// Map from `#native "symbol"` names to the Rust crate that provides them.
+    /// Populated when a package declares `[native] crate` in loft.toml.
+    /// Used by native codegen to emit `crate::symbol(args)` calls.
+    pub native_symbol_crates: HashMap<String, String>,
 }
 
 #[must_use]
@@ -850,6 +854,7 @@ impl Data {
             operators: HashMap::new(),
             native_symbols: HashMap::new(),
             native_packages: Vec::new(),
+            native_symbol_crates: HashMap::new(),
         }
     }
 
