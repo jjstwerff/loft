@@ -400,8 +400,10 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
     // Collect #native declarations.
     let mut stubs: Vec<String> = Vec::new();
     // Map struct name → (d_nr, fields) for generating field offset constants.
-    let mut struct_field_mods: std::collections::HashMap<String, (u32, Vec<(String, usize, Type)>)> =
-        std::collections::HashMap::new();
+    let mut struct_field_mods: std::collections::HashMap<
+        String,
+        (u32, Vec<(String, usize, Type)>),
+    > = std::collections::HashMap::new();
     for d_nr in 0..p.data.definitions() {
         let def = p.data.def(d_nr);
         if def.native.is_empty() || !matches!(def.def_type, DefType::Function) {
@@ -470,7 +472,12 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         }
 
         // Return type classification: text, ref, or scalar.
-        enum RetKind { None, Scalar(String), Text, Ref(String) }
+        enum RetKind {
+            None,
+            Scalar(String),
+            Text,
+            Ref(String),
+        }
         let ret_type_name = p.data.type_name_str(&def.returned);
         let ret_kind = match &def.returned {
             Type::Void | Type::Null => RetKind::None,
@@ -505,17 +512,27 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             .attributes
             .iter()
             .any(|a| matches!(a.typedef, Type::Text(_)));
-        let has_ref_param = def.attributes.iter().any(|a| matches!(
-            a.typedef,
-            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                | Type::Sorted(_, _, _) | Type::Index(_, _, _)
-                | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
-        ));
+        let has_ref_param = def.attributes.iter().any(|a| {
+            matches!(
+                a.typedef,
+                Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Enum(_, true, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        });
         let has_ref_ret = matches!(
             def.returned,
-            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                | Type::Sorted(_, _, _) | Type::Index(_, _, _)
-                | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
         );
 
         // If any param or return is a Ref, prepend LoftStore as first C-ABI param.

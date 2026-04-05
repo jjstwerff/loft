@@ -974,7 +974,6 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
 // HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
 // The cdylib stores the response body in a thread-local, returned via LoftStr.
 
-
 // ── Crypto built-ins (always available) ─────────────────────────────────
 
 fn hex_encode(data: &[u8]) -> String {
