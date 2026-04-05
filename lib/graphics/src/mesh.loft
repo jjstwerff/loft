@@ -152,3 +152,18 @@ pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh {
   }
   sm
 }
+
+// Flatten a mesh to a vector<single> for GL upload.
+// Expands triangles: for each triangle, emits 3 vertices with pos+normal (stride=6).
+// Returns the flat buffer suitable for gl_upload_vertices(data, 6).
+pub fn mesh_to_floats(mf: const Mesh) -> vector<single> {
+  mf_buf = [for mf_dummy in 0..0 { 0.0f }];
+  for mf_tri in mf.triangles {
+    for mf_idx in [mf_tri.a, mf_tri.b, mf_tri.c] {
+      mf_v = mf.vertices[mf_idx];
+      mf_buf += [mf_v.pos.x as single, mf_v.pos.y as single, mf_v.pos.z as single];
+      mf_buf += [mf_v.normal.x as single, mf_v.normal.y as single, mf_v.normal.z as single];
+    }
+  }
+  mf_buf
+}

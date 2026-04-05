@@ -436,55 +436,65 @@ pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1
 
 // --- OpenGL (GL5) ---
 // Native OpenGL functions for window management and rendering.
+// Names match the symbols registered via loft_register_v1 in the cdylib.
 
 // Create a window with an OpenGL 3.3 context. Returns true on success.
 pub fn gl_create_window(width: integer, height: integer, title: text) -> boolean;
-#native "n_gl_create_window"
+#native "loft_gl_create_window"
 
 // Poll window events. Returns false when the window should close.
 pub fn gl_poll_events() -> boolean;
-#native "n_gl_poll_events"
+#native "loft_gl_poll_events"
 
 // Swap buffers (present the frame).
 pub fn gl_swap_buffers();
-#native "n_gl_swap_buffers"
+#native "loft_gl_swap_buffers"
 
 // Clear the screen with an RGBA color (packed as 0xRRGGBBAA).
 pub fn gl_clear(color: integer);
-#native "n_gl_clear"
+#native "loft_gl_clear"
 
 // Destroy the window and OpenGL context.
 pub fn gl_destroy_window();
-#native "n_gl_destroy_window"
+#native "loft_gl_destroy_window"
 
 // Compile and link a shader program. Returns the program ID (0 on failure).
 pub fn gl_create_shader(vertex_source: text, fragment_source: text) -> integer;
-#native "n_gl_create_shader"
+#native "loft_gl_create_shader"
 
 // Use a shader program for subsequent draw calls.
 pub fn gl_use_shader(program: integer);
-#native "n_gl_use_shader"
+#native "loft_gl_use_shader"
 
-// Draw a mesh (VAO with vertex count).
+// Draw a VAO with vertex_count vertices as triangles.
 pub fn gl_draw(vao: integer, vertex_count: integer);
-#native "n_gl_draw"
+#native "loft_gl_draw"
+
+// Upload a vector<single> as a vertex buffer. Returns VAO handle.
+// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
+pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer;
+#native "n_gl_upload_vertices"
+
+// Set a mat4 uniform on a shader program. mat is a Mat4.m vector (16 floats).
+pub fn gl_set_uniform_mat4(program: integer, name: text, mat: vector<float>);
+#native "n_gl_set_uniform_mat4"
 
 // --- Text rendering (GL3) ---
 
 // Load a font from a file path. Returns a font handle (>= 0) or null on error.
 pub fn gl_load_font(path: text) -> integer;
-#native "n_gl_load_font"
+#native "loft_gl_load_font"
 
 // Measure text width in pixels at the given font size.
 pub fn gl_measure_text(font: integer, content: text, size: float) -> float;
-#native "n_gl_measure_text"
+#native "loft_gl_measure_text"
 
 // --- Textures (GL5.5) ---
 
 // Bind a texture to a texture unit (0-based) for rendering.
 pub fn gl_bind_texture(texture_id: integer, unit: integer);
-#native "n_gl_bind_texture"
+#native "loft_gl_bind_texture"
 
 // Delete a texture.
 pub fn gl_delete_texture(texture_id: integer);
-#native "n_gl_delete_texture"
+#native "loft_gl_delete_texture"

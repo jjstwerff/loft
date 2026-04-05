@@ -1,0 +1,30 @@
+// LearnOpenGL Chapter 1: Hello Window
+// https://learnopengl.com/Getting-started/Hello-Window
+//
+// Demonstrates: window creation, clear color, event loop.
+//
+// Run modes:
+//   loft examples/01-hello-window.loft               -- native OpenGL window
+//   loft examples/01-hello-window.loft --mode glb     -- not applicable (no geometry)
+//
+// Loft constructions used:
+//   gl_create_window  — create an OpenGL 3.3 context with a window
+//   gl_poll_events    — pump OS events; returns false on close
+//   gl_clear          — clear framebuffer with RGBA color (0xRRGGBBAA)
+//   gl_swap_buffers   — present the rendered frame
+//   gl_destroy_window — release GL context and window
+use graphics;
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "01 - Hello Window") {
+    println("Failed to create window");
+    return;
+  }
+  // Teal background (matching LearnOpenGL's example color).
+  for hw_frame in 0..300 {
+    if !graphics::gl_poll_events() { break }
+    graphics::gl_clear(rgba(51, 76, 76, 255));
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}

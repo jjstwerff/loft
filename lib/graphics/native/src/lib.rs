@@ -219,6 +219,55 @@ pub unsafe extern "C" fn loft_gl_set_uniform_mat4(
     }
 }
 
+// ── Store-aware GL functions (use LoftStore to read loft vectors) ─────────
+
+/// Upload a vector<single> as a vertex buffer. Returns VAO handle.
+/// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_gl_upload_vertices(
+    store: loft_ffi::LoftStore,
+    data: loft_ffi::LoftRef,
+    stride: i32,
+) -> i32 {
+    let count = unsafe { store.vector_len(&data) } as u32;
+    let n_vertices = count / stride as u32;
+    let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const f32;
+    let mut vao = 0u32;
+    let mut vbo = 0u32;
+    unsafe { loft_gl_upload_mesh(data_ptr, n_vertices, stride as u32, &mut vao, &mut vbo) };
+    vao as i32
+}
+
+/// Set a mat4 uniform from a vector<float> (16 elements, column-major).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_gl_set_uniform_mat4(
+    store: loft_ffi::LoftStore,
+    program: i32,
+    name_ptr: *const u8,
+    name_len: usize,
+    mat: loft_ffi::LoftRef,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    // Mat4.m is stored as vector<float> — 16 f64 values in the store.
+    // OpenGL needs f32, so we convert on the fly.
+    let count = unsafe { store.vector_len(&mat) };
+    if count < 16 {
+        return;
+    }
+    let mut buf = [0.0f32; 16];
+    for i in 0..16 {
+        let val = unsafe { store.get_float(mat.rec, 8 + i as u32 * 8, 0) };
+        buf[i] = val as f32;
+    }
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
+        if loc >= 0 {
+            gl::UniformMatrix4fv(loc, 1, gl::FALSE, buf.as_ptr());
+        }
+    }
+}
+
 // ── Registration ────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
@@ -249,6 +298,8 @@ pub unsafe extern "C" fn loft_register_v1(
         reg!(b"loft_gl_measure_text", loft_gl_measure_text);
         reg!(b"loft_gl_rasterize_text", loft_gl_rasterize_text);
         reg!(b"loft_gl_free_bitmap", loft_gl_free_bitmap);
+        reg!(b"n_gl_upload_vertices", n_gl_upload_vertices);
+        reg!(b"n_gl_set_uniform_mat4", n_gl_set_uniform_mat4);
     }
 }
 
