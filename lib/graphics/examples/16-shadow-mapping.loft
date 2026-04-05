@@ -99,7 +99,7 @@ fn draw_scene(ds_shader: integer, ds_cvao: integer, ds_cnv: integer,
 }
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "15 - Shadow Mapping") {
+  if !graphics::gl_create_window(800, 600, "16 - Shadow Mapping") {
     println("Failed to create window"); return;
   }
   sm_cube = mesh::cube();

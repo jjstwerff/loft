@@ -7,7 +7,7 @@
 // including WASM without WebGL.
 //
 // Run:
-//   loft examples/09-2d-canvas.loft   -- writes 09-canvas-demo.png
+//   loft examples/10-2d-canvas.loft   -- writes 10-canvas-demo.png
 //
 // Loft constructions used:
 //   canvas()          — create a pixel buffer
@@ -58,8 +58,8 @@ fn main() {
   c.fill_circle(55, 95, 20, graphics::rgba(40, 120, 40, 255));
   c.fill_circle(40, 100, 15, graphics::rgba(50, 140, 50, 255));
   c.fill_circle(70, 100, 15, graphics::rgba(50, 140, 50, 255));
-  if c.save_png("09-canvas-demo.png") {
-    println("Saved 09-canvas-demo.png ({c.width}x{c.height})");
+  if c.save_png("10-canvas-demo.png") {
+    println("Saved 10-canvas-demo.png ({c.width}x{c.height})");
   } else {
     println("Failed to save PNG");
   }

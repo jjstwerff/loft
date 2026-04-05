@@ -11,8 +11,8 @@
 // The projection and view matrices are shared.
 //
 // Run:
-//   loft examples/05-coordinate-systems.loft              -- native
-//   loft examples/05-coordinate-systems.loft --mode glb   -- export GLB scene
+//   loft examples/06-coordinate-systems.loft              -- native
+//   loft examples/06-coordinate-systems.loft --mode glb   -- export GLB scene
 //
 // Loft constructions used:
 //   mat4_translate    — position each cube in world space
@@ -65,7 +65,7 @@ fn cube_positions() -> vector<math::Vec3> {
 }
 
 fn render_native_coords() {
-  if !graphics::gl_create_window(800, 600, "05 - Coordinate Systems") {
+  if !graphics::gl_create_window(800, 600, "06 - Coordinate Systems") {
     println("Failed to create window");
     return;
   }
@@ -122,8 +122,8 @@ fn export_glb_coords() {
     position: math::vec3(0.0, 2.0, 8.0),
     target: math::vec3(0.0, 0.0, -5.0)
   });
-  glb::save_scene_glb(cs_s, "05-coordinate-systems.glb");
-  println("Exported 05-coordinate-systems.glb");
+  glb::save_scene_glb(cs_s, "06-coordinate-systems.glb");
+  println("Exported 06-coordinate-systems.glb");
 }
 
 fn main() {

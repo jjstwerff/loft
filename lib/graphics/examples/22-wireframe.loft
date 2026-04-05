@@ -27,7 +27,7 @@ void main() {{ FragColor = vec4(uColor, 1.0); }}
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "21 - Wireframe & Points") {
+  if !graphics::gl_create_window(800, 600, "22 - Wireframe & Points") {
     println("Failed to create window"); return;
   }
   wf_sphere = mesh::sphere("wire_sphere", 1.0, 16, 12);

@@ -70,7 +70,7 @@ void main() {{
 `;
 
 fn render_native_ml() {
-  if !graphics::gl_create_window(800, 600, "11 - Multiple Lights") {
+  if !graphics::gl_create_window(800, 600, "12 - Multiple Lights") {
     println("Failed to create window"); return;
   }
   ml_m = mesh::cube();
@@ -126,8 +126,8 @@ fn export_glb_ml() {
   }
   ml_s.add_camera(scene::Camera { name: "main", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(3.0, 3.0, 5.0), target: math::vec3(0.0, 0.0, 0.0) });
-  glb::save_scene_glb(ml_s, "11-multiple-lights.glb");
-  println("Exported 11-multiple-lights.glb");
+  glb::save_scene_glb(ml_s, "12-multiple-lights.glb");
+  println("Exported 12-multiple-lights.glb");
 }
 
 fn main() {

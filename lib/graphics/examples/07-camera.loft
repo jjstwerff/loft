@@ -10,8 +10,8 @@
 // The camera circles around a cube, showing how the view matrix changes.
 //
 // Run:
-//   loft examples/06-camera.loft              -- native
-//   loft examples/06-camera.loft --mode glb   -- export GLB with camera
+//   loft examples/07-camera.loft              -- native
+//   loft examples/07-camera.loft --mode glb   -- export GLB with camera
 //
 // Loft constructions used:
 //   sin/cos              — compute circular orbit path
@@ -48,7 +48,7 @@ void main() {{
 `;
 
 fn render_native_camera() {
-  if !graphics::gl_create_window(800, 600, "06 - Camera (orbiting)") {
+  if !graphics::gl_create_window(800, 600, "07 - Camera (orbiting)") {
     println("Failed to create window");
     return;
   }
@@ -97,8 +97,8 @@ fn export_glb_camera() {
     position: math::vec3(4.0, 2.0, 0.0),
     target: math::vec3(0.0, 0.0, 0.0)
   });
-  glb::save_scene_glb(ca_s, "06-camera.glb");
-  println("Exported 06-camera.glb");
+  glb::save_scene_glb(ca_s, "07-camera.glb");
+  println("Exported 07-camera.glb");
 }
 
 fn main() {

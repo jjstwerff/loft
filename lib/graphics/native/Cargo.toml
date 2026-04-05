@@ -16,3 +16,4 @@ glutin-winit = "0.5"
 winit = "0.30"
 fontdue = "0.9"
 png = "0.17"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

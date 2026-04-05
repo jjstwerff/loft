@@ -640,6 +640,16 @@ pub fn gl_measure_text(font: integer, content: text, size: float) -> float;
 
 // --- Textures (GL5.5) ---
 
+// Load an image file (PNG, JPG) and upload it as a GL texture.
+// Returns the texture ID (0 on failure).
+pub fn gl_load_texture(path: text) -> integer;
+#native "loft_gl_load_texture"
+
+// Upload Canvas pixel data as a GL texture. Returns the texture ID.
+// Converts 0xAARRGGBB packed integers to RGBA bytes for OpenGL.
+pub fn gl_upload_canvas(data: const vector<integer>, width: integer, height: integer) -> integer;
+#native "loft_gl_upload_canvas"
+
 // Bind a texture to a texture unit (0-based) for rendering.
 pub fn gl_bind_texture(texture_id: integer, unit: integer);
 #native "loft_gl_bind_texture"

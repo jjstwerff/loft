@@ -45,7 +45,7 @@ void main() {{
 `;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "13 - Blending (transparency)") {
+  if !graphics::gl_create_window(800, 600, "14 - Blending (transparency)") {
     println("Failed to create window"); return;
   }
   bl_cube = mesh::cube();

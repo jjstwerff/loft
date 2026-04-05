@@ -61,22 +61,12 @@ fn make_checkerboard() -> graphics::Canvas {
 }
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "19 - Textured Cube (checkerboard)") {
+  if !graphics::gl_create_window(800, 600, "20 - Textured Cube (checkerboard)") {
     println("Failed to create window"); return;
   }
   // Create procedural texture
   tc_check = make_checkerboard();
-  // Upload canvas pixels as RGBA texture
-  // Canvas stores pixels as packed i32 (0xRRGGBBAA) — need to convert for GL
-  // For now, generate raw RGBA bytes
-  tc_pixels = [for _ in 0..0 { 0 }];
-  for tc_p in tc_check.data {
-    tc_r = (tc_p >> 24) & 255;
-    tc_g = (tc_p >> 16) & 255;
-    tc_b = (tc_p >> 8) & 255;
-    tc_a = tc_p & 255;
-    tc_pixels += [tc_r, tc_g, tc_b, tc_a];
-  }
+  // Upload canvas as GL texture
   // Build mesh with UVs
   tc_m = mesh::cube();
   tc_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
@@ -86,10 +76,7 @@ fn main() {
   tc_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
   tc_view = math::mat4_look_at(
     math::vec3(2.0, 2.0, 3.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
-  // We need a color texture from raw RGBA — use gl_create_color_texture + manual upload
-  // For this example, use the existing GL upload texture (needs raw pointer)
-  // TODO: Add proper canvas→GL texture bridge
-  tc_tex = graphics::gl_create_color_texture(64, 64);
+  tc_tex = graphics::gl_upload_canvas(tc_check.data, tc_check.width, tc_check.height);
   tc_start = ticks();
   for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
