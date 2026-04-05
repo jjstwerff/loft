@@ -193,7 +193,7 @@ impl Parser {
                 t = t.depending(self.closure_param);
             }
         } else if self.data.def_nr(name) != u32::MAX
-            && !(self.lexer.peek_token("=") && !self.lexer.peek_token("=="))
+            && (!self.lexer.peek_token("=") || self.lexer.peek_token("=="))
         {
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {

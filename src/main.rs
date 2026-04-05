@@ -1,6 +1,33 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::match_same_arms,
+    clippy::collapsible_if,
+    clippy::redundant_closure,
+    clippy::used_underscore_binding,
+    clippy::doc_markdown,
+    clippy::items_after_statements,
+    clippy::single_match_else,
+    clippy::if_not_else,
+    clippy::implicit_hasher,
+    clippy::unnecessary_wraps,
+    clippy::semicolon_if_nothing_returned,
+    clippy::uninlined_format_args,
+    clippy::let_underscore_untyped,
+    clippy::must_use_candidate,
+    clippy::option_if_let_else,
+    clippy::manual_let_else,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::map_unwrap_or,
+    clippy::format_push_string,
+    clippy::map_entry
+)]
 
 #[macro_use]
 pub mod diagnostics;
@@ -638,7 +665,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         field_modules.push_str(&format!("/// Field offsets for struct `{sname}`.\n"));
         field_modules.push_str(&format!(
             "/// Record size: {total_size} bytes ({} words).\n",
-            (total_size + 7) / 8
+            total_size.div_ceil(8)
         ));
         field_modules.push_str("#[allow(dead_code)]\n");
         field_modules.push_str(&format!("pub mod {sname}_fields {{\n"));
@@ -1242,9 +1269,7 @@ fn main() {
         } else if a == "generate" {
             // PKG.6a: `loft generate` — emit Rust stubs for #native declarations.
             let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                let p = std::path::PathBuf::from(&argv[i]);
-                i += 1;
-                p
+                std::path::PathBuf::from(&argv[i])
             } else {
                 std::env::current_dir().unwrap_or_default()
             };

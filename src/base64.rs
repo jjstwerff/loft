@@ -5,8 +5,10 @@
 
 const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+#[allow(clippy::cast_lossless)]
+#[must_use]
 pub fn encode(data: &[u8]) -> String {
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -28,6 +30,7 @@ pub fn encode(data: &[u8]) -> String {
     result
 }
 
+#[must_use]
 pub fn encode_url(data: &[u8]) -> String {
     encode(data)
         .replace('+', "-")
@@ -36,6 +39,8 @@ pub fn encode_url(data: &[u8]) -> String {
         .to_string()
 }
 
+#[allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
+#[must_use]
 pub fn decode(input: &str) -> Vec<u8> {
     fn val(c: u8) -> u8 {
         match c {

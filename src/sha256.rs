@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! Pure Rust SHA-256 and HMAC-SHA256. No external deps.
-
+#[allow(clippy::unreadable_literal)]
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -14,6 +14,8 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
+#[allow(clippy::unreadable_literal, clippy::many_single_char_names)]
+#[must_use]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
@@ -85,6 +87,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     result
 }
 
+#[must_use]
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     let block_size = 64;
     let mut key_block = vec![0u8; block_size];
@@ -117,7 +120,11 @@ mod tests {
     #[test]
     fn test_sha256_empty() {
         let hash = sha256(b"");
-        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        let hex = hash.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
         assert_eq!(
             hex,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -127,7 +134,11 @@ mod tests {
     #[test]
     fn test_sha256_hello() {
         let hash = sha256(b"hello");
-        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        let hex = hash.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
         assert_eq!(
             hex,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -137,7 +148,11 @@ mod tests {
     #[test]
     fn test_hmac_sha256() {
         let mac = hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog");
-        let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+        let hex = mac.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
         assert_eq!(
             hex,
             "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"

@@ -7,7 +7,7 @@
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
-#[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
+#[cfg(feature = "threading")]
 use crate::parallel::{
     WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_ref,
     run_parallel_text,
@@ -15,6 +15,7 @@ use crate::parallel::{
 use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
+#[cfg(feature = "threading")]
 use std::sync::Arc;
 #[cfg(not(feature = "wasm"))]
 use std::time::SystemTime;
@@ -56,12 +57,19 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_program_directory", n_program_directory),
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
+    #[cfg(feature = "threading")]
     ("n_parallel_for_int", n_parallel_for_int),
+    #[cfg(feature = "threading")]
     ("n_parallel_for", n_parallel_for),
+    #[cfg(feature = "threading")]
     ("n_parallel_for_light", n_parallel_for_light),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_int", n_parallel_get_int),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_long", n_parallel_get_long),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_float", n_parallel_get_float),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_bool", n_parallel_get_bool),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
@@ -410,18 +418,14 @@ fn n_set_store_lock(stores: &mut Stores, stack: &mut DbRef) {
     }
 }
 
+// ── Parallel threading functions (feature = "threading") ──────────────
+
 /// Dispatch a compiled loft function over every row of an input vector,
 /// running `threads` OS threads in parallel.
-///
-/// Loft signature:
-/// ```loft
-/// fn parallel_for_int(func: text, input: reference,
-///                     element_size: integer, threads: integer) -> reference;
-/// ```
-///
 /// The worker function must have the signature `fn f(row: &T) -> integer`.
 /// Returns a `reference` pointing to a freshly allocated vector of integers,
 /// one per input row in the original order.
+#[cfg(feature = "threading")]
 fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
     // Pop arguments (last-pushed first).
     let v_threads = *stores.get::<i32>(stack);
@@ -494,6 +498,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
+#[cfg(feature = "threading")]
 /// Internal `parallel_for` dispatch: pop args from stack, spawn workers, collect results.
 /// `return_size`: 0=text, 1=bool, 4=int, 8=long/float.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
@@ -603,6 +608,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
+#[cfg(feature = "threading")]
 /// A14.7: lightweight variant — borrows stores read-only instead of deep-copying.
 /// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
 fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
@@ -669,6 +675,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
+#[cfg(feature = "threading")]
 /// A14.7: allocate result vector, create pool, dispatch light workers, collect.
 #[allow(clippy::too_many_arguments)]
 fn parallel_light_execute_and_collect(
@@ -717,6 +724,7 @@ fn parallel_light_execute_and_collect(
     }
 }
 
+#[cfg(feature = "threading")]
 /// Allocate a result vector, dispatch workers, and collect results.
 #[allow(clippy::too_many_arguments)]
 fn parallel_execute_and_collect(
@@ -827,15 +835,7 @@ fn parallel_execute_and_collect(
     }
 }
 
-// ── parallel_get_* ────────────────────────────────────────────────────────────
-//
-// Read element `idx` from a parallel_for result reference.
-// The result layout (from n_parallel_for):
-//   header rec, pos=4  → i32 pointing to vec_rec
-//   vec_rec, pos=8+i*S → element i  (S = 4 int / 8 long+float / 1 bool bytes)
-//
-// Emitted by the compiler for `for(a in src) |b = f(a)| * N { ... }`.
-
+#[cfg(feature = "threading")]
 fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -845,6 +845,7 @@ fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
+#[cfg(feature = "threading")]
 fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -854,6 +855,7 @@ fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
+#[cfg(feature = "threading")]
 fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -863,6 +865,7 @@ fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, f64::from_bits(bits as u64));
 }
 
+#[cfg(feature = "threading")]
 fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -977,7 +980,12 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
 // ── Crypto built-ins (always available) ─────────────────────────────────
 
 fn hex_encode(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    let mut out = String::with_capacity(data.len() * 2);
+    for b in data {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 fn n_sha256(stores: &mut Stores, stack: &mut DbRef) {
