@@ -94,6 +94,18 @@ impl Store {
         u64::from(self.size) * 8
     }
 
+    /// Total capacity of this store in 8-byte words.
+    #[must_use]
+    pub fn capacity_words(&self) -> u32 {
+        self.size
+    }
+
+    /// Raw base pointer to the store's memory buffer.
+    #[must_use]
+    pub fn base_ptr(&self) -> *mut u8 {
+        self.ptr
+    }
+
     pub fn new(size: u32) -> Store {
         let l = Layout::from_size_align(size as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc(l) };

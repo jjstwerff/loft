@@ -41,41 +41,61 @@ pub fn to_lowercase(self: text) -> text;
 pub fn to_uppercase(self: text) -> text;
 #rust"@self.to_uppercase()"
 // True if all characters are lowercase letters.
-pub fn is_lowercase(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_lowercase() {{ res = false; }} }}; res"
+pub fn is_lowercase(self: text) -> boolean {
+  for c in self { if !c.is_lowercase() { return false } }
+  true
+}
 // True if the character is a lowercase letter.
 pub fn is_lowercase(self: character) -> boolean;
 #rust"@self.is_lowercase()"
 // True if all characters are uppercase letters.
-pub fn is_uppercase(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_uppercase() {{ res = false; }} }}; res"
+pub fn is_uppercase(self: text) -> boolean {
+  for c in self { if !c.is_uppercase() { return false } }
+  true
+}
 // True if the character is an uppercase letter.
 pub fn is_uppercase(self: character) -> boolean;
 #rust"@self.is_uppercase()"
 // True if all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
-pub fn is_numeric(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_numeric() {{ res = false; }} }}; res"
+pub fn is_numeric(self: text) -> boolean {
+  for c in self { if !c.is_numeric() { return false } }
+  true
+}
 // True if the character is a numeric digit.
 pub fn is_numeric(self: character) -> boolean;
 #rust"@self.is_numeric()"
 // True if all characters are letters or digits. Use to validate identifiers or tokens.
-pub fn is_alphanumeric(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_alphanumeric() {{ res = false; }} }}; res"
+pub fn is_alphanumeric(self: text) -> boolean {
+  for c in self { if !c.is_alphanumeric() { return false } }
+  true
+}
 // True if the character is a letter or digit.
 pub fn is_alphanumeric(self: character) -> boolean;
 #rust"@self.is_alphanumeric()"
 // True if all characters are alphabetic.
-pub fn is_alphabetic(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_alphabetic() {{ res = false; }} }}; res"
+pub fn is_alphabetic(self: text) -> boolean {
+  for c in self { if !c.is_alphabetic() { return false } }
+  true
+}
 // True if the character is alphabetic.
 pub fn is_alphabetic(self: character) -> boolean;
 #rust"@self.is_alphabetic()"
 // True if all characters are whitespace. Use to detect blank lines.
-pub fn is_whitespace(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_whitespace() {{ res = false; }} }}; res"
+pub fn is_whitespace(self: text) -> boolean {
+  for c in self { if !c.is_whitespace() { return false } }
+  true
+}
+// True if the character is whitespace.
+pub fn is_whitespace(self: character) -> boolean;
+#rust"@self.is_whitespace()"
 // True if all characters are control characters.
-pub fn is_control(self: text) -> boolean;
-#rust"let mut res = true; for c in @self.chars() {{ if !c.is_control() {{ res = false; }} }}; res"
+pub fn is_control(self: text) -> boolean {
+  for c in self { if !c.is_control() { return false } }
+  true
+}
+// True if the character is a control character.
+pub fn is_control(self: character) -> boolean;
+#rust"@self.is_control()"
 // Joins parts with sep between each consecutive pair. Returns "" for an empty vector.
 // Use to build comma-separated lists, path segments, or any delimited output.
 pub fn join(parts: vector < text >, sep: text) -> text {

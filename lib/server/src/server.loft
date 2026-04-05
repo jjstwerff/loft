@@ -1,22 +1,25 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// --- HTTP Server ---
-// Minimal blocking HTTP server with polling model.
-// Use `for req in srv` (I13 iterator) to handle requests.
+// --- HTTP Server + WebSocket ---
+// Blocking server with polling model. Use `for req in srv` (I13 iterator).
 
-// A server handle wrapping a TCP listener.
+// --- Types (must come before all functions) ---
+
 pub struct Server {
   handle: integer
 }
 
-// An incoming HTTP request.
+pub struct WebSocket {
+  ws_id: integer
+}
+
 pub struct Request {
   method: text,
   path: text,
   body: text
 }
 
-// --- Internal native functions ---
+// --- Internal natives ---
 
 fn tcp_listen(port: integer) -> integer;
 #native "n_tcp_listen"
@@ -39,15 +42,27 @@ fn tcp_respond(status: integer, body: text);
 fn tcp_close(handle: integer);
 #native "n_tcp_close"
 
-// --- Public API ---
+fn ws_upgrade_native() -> integer;
+#native "n_ws_upgrade"
 
-// Create a server listening on the given port.
+fn ws_recv_native(handle: integer) -> boolean;
+#native "n_ws_recv"
+
+fn ws_message_native() -> text;
+#native "n_ws_message"
+
+fn ws_send_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_send"
+
+fn ws_close_native(handle: integer);
+#native "n_ws_close"
+
+// --- HTTP Server API ---
+
 pub fn listen(port: integer) -> Server {
   Server { handle: tcp_listen(port) }
 }
 
-// Iterator protocol: blocks until a request arrives, returns it.
-// Returns null when the server is shut down.
 pub fn next(self: Server) -> Request {
   if !tcp_accept(self.handle) { return null; }
   Request {
@@ -57,12 +72,31 @@ pub fn next(self: Server) -> Request {
   }
 }
 
-// Send an HTTP response for this request.
 pub fn respond(self: Request, status: integer, body: text) {
   tcp_respond(status, body);
 }
 
-// Stop the server.
 pub fn close(self: Server) {
   tcp_close(self.handle);
+}
+
+// --- WebSocket API ---
+
+pub fn ws_upgrade() -> WebSocket {
+  h = ws_upgrade_native();
+  if h < 0 { return null; }
+  WebSocket { ws_id: h }
+}
+
+pub fn next(self: WebSocket) -> text {
+  if !ws_recv_native(self.ws_id) { return null; }
+  ws_message_native()
+}
+
+pub fn send(self: WebSocket, msg: text) -> boolean {
+  ws_send_native(self.ws_id, msg)
+}
+
+pub fn close(self: WebSocket) {
+  ws_close_native(self.ws_id);
 }

@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+use game_protocol::msg_ping, msg_pong, msg_chat, msg_input, msg_state, msg_error;
+use game_protocol::MsgType;
+
+fn test_ping_pong() {
+  ping = msg_ping(1l);
+  assert(ping.message.msg_type == MsgType.Ping, "ping type");
+  assert(ping.sequence == 1l, "ping seq");
+
+  pong = msg_pong(1l);
+  assert(pong.message.msg_type == MsgType.Pong, "pong type");
+}
+
+fn test_chat() {
+  msg = msg_chat("alice", "hello");
+  assert(msg.sender == "alice", "chat sender");
+  assert(msg.message.payload == "hello", "chat payload");
+  assert(msg.message.msg_type == MsgType.ChatMessage, "chat type");
+}
+
+fn test_input() {
+  msg = msg_input("player1", "move:left");
+  assert(msg.sender == "player1", "input sender");
+  assert(msg.message.payload == "move:left", "input payload");
+}
+
+fn test_state() {
+  msg = msg_state("score:42");
+  assert(msg.message.msg_type == MsgType.StateFullSync, "state type");
+  assert(msg.message.payload == "score:42", "state payload");
+}
+
+fn test_error() {
+  msg = msg_error("invalid move");
+  assert(msg.message.msg_type == MsgType.Error, "error type");
+  assert(msg.message.payload == "invalid move", "error payload");
+}

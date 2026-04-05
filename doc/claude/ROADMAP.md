@@ -50,10 +50,10 @@ All new libraries are built as **packages** using the format designed in
 ### Remaining sprints
 
 ```
-Sprint 17: Server advanced + game protocol
-  SRV.3   WebSocket support (using I13 for msg in ws)
-  SRV.4   Authentication: JWT, session, API key, HTTP Basic
-  SRV.P   game_protocol package: GameEnvelope, WsMessage, Msg* structs
+Sprint 17: Game protocol ✓ + server advanced deferred
+  SRV.P   game_protocol package ✓
+  SRV.3   WebSocket — deferred (needs native WebSocket framing)
+  SRV.4   Authentication — deferred (needs native crypto)
 
 Sprint 18: Server production + game server
   SRV.5   ACME / Let's Encrypt automatic certificate provisioning

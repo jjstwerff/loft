@@ -1,13 +1,24 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Native extension for the imaging package. No loft dependency.
+//! Native PNG decoder using loft-ffi for direct store access.
 
+#![allow(clippy::missing_safety_doc)]
+
+use loft_ffi::{LoftRef, LoftStore};
 use png::Decoder;
 use std::fs::File;
 use std::io::BufReader;
 
-pub fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+/// Field offsets for the Image struct in the loft store.
+mod image_fields {
+    pub const NAME: u16 = 0;  // text (record ref)
+    pub const WIDTH: u16 = 4; // integer
+    pub const HEIGHT: u16 = 8; // integer
+    pub const DATA: u16 = 12; // vector ref (Pixel elements, 3 bytes each)
+}
+
+fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     let file = File::open(path).ok()?;
     let decoder = Decoder::new(BufReader::new(file));
     let mut reader = decoder.read_info().ok()?;
@@ -18,53 +29,32 @@ pub fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     Some((info.width, info.height, pixels))
 }
 
-// ── C-ABI exports ───────────────────────────────────────────────────────
-
+/// Decode a PNG file and write the result directly into an Image struct.
+/// The Image fields (name, width, height, data) are written via LoftStore.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_decode_png(
+pub unsafe extern "C" fn n_load_png(
+    mut store: LoftStore,
     path_ptr: *const u8,
     path_len: usize,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_pixels: *mut *mut u8,
-    out_pixels_len: *mut usize,
+    image: LoftRef,
 ) -> bool {
-    let path = match std::str::from_utf8(unsafe { std::slice::from_raw_parts(path_ptr, path_len) })
-    {
-        Ok(s) => s,
-        Err(_) => return false,
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
+    let (w, h, pixels) = match decode_png(path) {
+        Some(data) => data,
+        None => return false,
     };
-    match decode_png(path) {
-        Some((w, h, mut pixels)) => {
-            unsafe {
-                *out_width = w;
-                *out_height = h;
-                *out_pixels_len = pixels.len();
-                *out_pixels = pixels.as_mut_ptr();
-            }
-            std::mem::forget(pixels);
-            true
-        }
-        None => false,
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_free_pixels(ptr: *mut u8, len: usize) {
-    if !ptr.is_null() && len > 0 {
-        drop(unsafe { Vec::from_raw_parts(ptr, len, len) });
-    }
-}
-
-// ── Registration ────────────────────────────────────────────────────────
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_register_v1(
-    register: unsafe extern "C" fn(*const u8, usize, *const (), *mut ()),
-    ctx: *mut (),
-) {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
     unsafe {
-        register(b"loft_decode_png".as_ptr(), 15, loft_decode_png as *const (), ctx);
-        register(b"loft_free_pixels".as_ptr(), 16, loft_free_pixels as *const (), ctx);
+        // Write Image struct fields.
+        store.set_text(image.rec, image.pos, image_fields::NAME, name);
+        store.set_int(image.rec, image.pos, image_fields::WIDTH, w as i32);
+        store.set_int(image.rec, image.pos, image_fields::HEIGHT, h as i32);
+        // Create pixel vector and bulk-copy RGB data (3 bytes per Pixel).
+        let vec = store.alloc_vector_from_bytes(3, pixels.len() as u32 / 3, pixels.as_ptr(), pixels.len());
+        store.set_int(image.rec, image.pos, image_fields::DATA, vec.rec as i32);
     }
+    true
 }

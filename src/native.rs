@@ -7,8 +7,7 @@
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
-#[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
-use crate::ops;
+#[cfg(feature = "threading")]
 use crate::parallel::{
     WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_ref,
     run_parallel_text,
@@ -16,6 +15,7 @@ use crate::parallel::{
 use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
+#[cfg(feature = "threading")]
 use std::sync::Arc;
 #[cfg(not(feature = "wasm"))]
 use std::time::SystemTime;
@@ -44,62 +44,45 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4text_to_lowercase_dest", t_4text_to_lowercase_dest),
     ("t_4text_to_uppercase", t_4text_to_uppercase),
     ("t_4text_to_uppercase_dest", t_4text_to_uppercase_dest),
-    ("t_4text_is_lowercase", t_4text_is_lowercase),
     ("t_9character_is_lowercase", t_9character_is_lowercase),
-    ("t_4text_is_uppercase", t_4text_is_uppercase),
     ("t_9character_is_uppercase", t_9character_is_uppercase),
-    ("t_4text_is_numeric", t_4text_is_numeric),
     ("t_9character_is_numeric", t_9character_is_numeric),
-    ("t_4text_is_alphanumeric", t_4text_is_alphanumeric),
     ("t_9character_is_alphanumeric", t_9character_is_alphanumeric),
-    ("t_4text_is_alphabetic", t_4text_is_alphabetic),
     ("t_9character_is_alphabetic", t_9character_is_alphabetic),
-    ("t_4text_is_whitespace", t_4text_is_whitespace),
-    ("t_4text_is_control", t_4text_is_control),
+    ("t_9character_is_whitespace", t_9character_is_whitespace),
+    ("t_9character_is_control", t_9character_is_control),
     ("n_arguments", n_arguments),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
+    #[cfg(feature = "threading")]
     ("n_parallel_for_int", n_parallel_for_int),
+    #[cfg(feature = "threading")]
     ("n_parallel_for", n_parallel_for),
+    #[cfg(feature = "threading")]
     ("n_parallel_for_light", n_parallel_for_light),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_int", n_parallel_get_int),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_long", n_parallel_get_long),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_float", n_parallel_get_float),
+    #[cfg(feature = "threading")]
     ("n_parallel_get_bool", n_parallel_get_bool),
-    ("n_rand", n_rand),
-    ("n_rand_seed", n_rand_seed),
-    ("n_rand_indices", n_rand_indices),
-    ("n_load_png", n_load_png),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("i_parse_errors", i_parse_errors),
-    ("n_http_do", n_http_do),
-    ("n_http_body", n_http_body),
-    ("n_gl_create_window", n_gl_create_window),
-    ("n_gl_poll_events", n_gl_poll_events),
-    ("n_gl_swap_buffers", n_gl_swap_buffers),
-    ("n_gl_clear", n_gl_clear),
-    ("n_gl_destroy_window", n_gl_destroy_window),
-    ("n_gl_create_shader", n_gl_create_shader),
-    ("n_gl_use_shader", n_gl_use_shader),
-    ("n_gl_draw", n_gl_draw),
-    ("n_gl_load_font", n_gl_load_font),
-    ("n_gl_measure_text", n_gl_measure_text),
-    ("n_gl_bind_texture", n_gl_bind_texture),
-    ("n_gl_delete_texture", n_gl_delete_texture),
-    ("n_tcp_listen", n_tcp_listen),
-    ("n_tcp_accept", n_tcp_accept),
-    ("n_tcp_method", n_tcp_method),
-    ("n_tcp_path", n_tcp_path),
-    ("n_tcp_body", n_tcp_body),
-    ("n_tcp_respond", n_tcp_respond),
-    ("n_tcp_close", n_tcp_close),
+    ("n_sha256", n_sha256),
+    ("n_hmac_sha256", n_hmac_sha256),
+    ("n_base64_encode", n_base64_encode),
+    ("n_base64_decode", n_base64_decode),
+    ("n_base64url_encode", n_base64url_encode),
+    ("n_hmac_sha256_raw", n_hmac_sha256_raw),
 ];
 
 pub fn init(state: &mut State) {
@@ -354,132 +337,39 @@ fn t_4text_to_uppercase_dest(stores: &mut Stores, stack: &mut DbRef) {
         .push_str(&new_value);
 }
 
-fn t_4text_is_lowercase(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_lowercase() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
-}
-
 fn t_9character_is_lowercase(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<char>(stack);
-    let new_value = { v_self.is_lowercase() };
-    stores.put(stack, new_value);
-}
-
-fn t_4text_is_uppercase(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_uppercase() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
+    stores.put(stack, v_self.is_lowercase());
 }
 
 fn t_9character_is_uppercase(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<char>(stack);
-    let new_value = { v_self.is_uppercase() };
-    stores.put(stack, new_value);
-}
-
-fn t_4text_is_numeric(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_numeric() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
+    stores.put(stack, v_self.is_uppercase());
 }
 
 fn t_9character_is_numeric(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<char>(stack);
-    let new_value = { v_self.is_numeric() };
-    stores.put(stack, new_value);
-}
-
-fn t_4text_is_alphanumeric(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_alphanumeric() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
+    stores.put(stack, v_self.is_numeric());
 }
 
 fn t_9character_is_alphanumeric(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<char>(stack);
-    let new_value = { v_self.is_alphanumeric() };
-    stores.put(stack, new_value);
-}
-
-fn t_4text_is_alphabetic(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_alphabetic() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
+    stores.put(stack, v_self.is_alphanumeric());
 }
 
 fn t_9character_is_alphabetic(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<char>(stack);
-    let new_value = { v_self.is_alphabetic() };
-    stores.put(stack, new_value);
+    stores.put(stack, v_self.is_alphabetic());
 }
 
-fn t_4text_is_whitespace(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_whitespace() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
+fn t_9character_is_whitespace(stores: &mut Stores, stack: &mut DbRef) {
+    let v_self = *stores.get::<char>(stack);
+    stores.put(stack, v_self.is_whitespace());
 }
 
-fn t_4text_is_control(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = {
-        let mut res = true;
-        for c in v_self.str().chars() {
-            if !c.is_control() {
-                res = false;
-            }
-        }
-        res
-    };
-    stores.put(stack, new_value);
+fn t_9character_is_control(stores: &mut Stores, stack: &mut DbRef) {
+    let v_self = *stores.get::<char>(stack);
+    stores.put(stack, v_self.is_control());
 }
 
 fn n_arguments(stores: &mut Stores, stack: &mut DbRef) {
@@ -528,18 +418,14 @@ fn n_set_store_lock(stores: &mut Stores, stack: &mut DbRef) {
     }
 }
 
+// ── Parallel threading functions (feature = "threading") ──────────────
+
 /// Dispatch a compiled loft function over every row of an input vector,
 /// running `threads` OS threads in parallel.
-///
-/// Loft signature:
-/// ```loft
-/// fn parallel_for_int(func: text, input: reference,
-///                     element_size: integer, threads: integer) -> reference;
-/// ```
-///
 /// The worker function must have the signature `fn f(row: &T) -> integer`.
 /// Returns a `reference` pointing to a freshly allocated vector of integers,
 /// one per input row in the original order.
+#[cfg(feature = "threading")]
 fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
     // Pop arguments (last-pushed first).
     let v_threads = *stores.get::<i32>(stack);
@@ -612,6 +498,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
+#[cfg(feature = "threading")]
 /// Internal `parallel_for` dispatch: pop args from stack, spawn workers, collect results.
 /// `return_size`: 0=text, 1=bool, 4=int, 8=long/float.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
@@ -721,6 +608,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
+#[cfg(feature = "threading")]
 /// A14.7: lightweight variant — borrows stores read-only instead of deep-copying.
 /// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
 fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
@@ -787,6 +675,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result_ref);
 }
 
+#[cfg(feature = "threading")]
 /// A14.7: allocate result vector, create pool, dispatch light workers, collect.
 #[allow(clippy::too_many_arguments)]
 fn parallel_light_execute_and_collect(
@@ -835,6 +724,7 @@ fn parallel_light_execute_and_collect(
     }
 }
 
+#[cfg(feature = "threading")]
 /// Allocate a result vector, dispatch workers, and collect results.
 #[allow(clippy::too_many_arguments)]
 fn parallel_execute_and_collect(
@@ -945,15 +835,7 @@ fn parallel_execute_and_collect(
     }
 }
 
-// ── parallel_get_* ────────────────────────────────────────────────────────────
-//
-// Read element `idx` from a parallel_for result reference.
-// The result layout (from n_parallel_for):
-//   header rec, pos=4  → i32 pointing to vec_rec
-//   vec_rec, pos=8+i*S → element i  (S = 4 int / 8 long+float / 1 bool bytes)
-//
-// Emitted by the compiler for `for(a in src) |b = f(a)| * N { ... }`.
-
+#[cfg(feature = "threading")]
 fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -963,6 +845,7 @@ fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
+#[cfg(feature = "threading")]
 fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -972,6 +855,7 @@ fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
+#[cfg(feature = "threading")]
 fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -981,6 +865,7 @@ fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, f64::from_bits(bits as u64));
 }
 
+#[cfg(feature = "threading")]
 fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
@@ -988,217 +873,6 @@ fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
     let vec_rec = store.get_int(v_ref.rec, v_ref.pos) as u32;
     let val = store.get_byte(vec_rec, 8 + v_idx as u32, 0);
     stores.put(stack, val != 0);
-}
-
-/// Return a random integer in [lo, hi] (inclusive); null (`i32::MIN`) if lo > hi.
-fn n_rand(stores: &mut Stores, stack: &mut DbRef) {
-    let v_hi = *stores.get::<i32>(stack);
-    let v_lo = *stores.get::<i32>(stack);
-    let result = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(i32, i32) -> i32>("loft_rand_int")
-    } {
-        f(v_lo, v_hi)
-    } else {
-        #[cfg(feature = "random")]
-        {
-            ops::rand_int(v_lo, v_hi)
-        }
-        #[cfg(not(feature = "random"))]
-        {
-            i32::MIN
-        }
-    };
-    stores.put(stack, result);
-}
-
-/// Seed the thread-local PCG RNG so subsequent `rand()` calls are reproducible.
-fn n_rand_seed(stores: &mut Stores, stack: &mut DbRef) {
-    let v_seed = *stores.get::<i64>(stack);
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(i64)>("loft_rand_seed") }
-    {
-        f(v_seed);
-    } else {
-        #[cfg(feature = "random")]
-        ops::rand_seed(v_seed);
-    }
-}
-
-/// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
-/// Returns an empty vector when `n <= 0` or `n` is null.
-fn n_rand_indices(stores: &mut Stores, stack: &mut DbRef) {
-    let v_n = *stores.get::<i32>(stack);
-    let n = if v_n == i32::MIN || v_n <= 0 {
-        0usize
-    } else {
-        v_n as usize
-    };
-
-    // Get shuffled indices — from cdylib or built-in fallback.
-    let indices: Vec<i32> = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<unsafe extern "C" fn(i32, *mut *mut i32, *mut usize)>(
-            "loft_rand_indices",
-        )
-    } {
-        let mut ptr: *mut i32 = std::ptr::null_mut();
-        let mut len: usize = 0;
-        unsafe {
-            f(
-                v_n,
-                std::ptr::addr_of_mut!(ptr),
-                std::ptr::addr_of_mut!(len),
-            );
-        }
-        if ptr.is_null() || len == 0 {
-            Vec::new()
-        } else {
-            let v = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
-            if let Some(free_fn) = unsafe {
-                crate::extensions::get_native_fn::<unsafe extern "C" fn(*mut i32, usize)>(
-                    "loft_free_indices",
-                )
-            } {
-                unsafe { free_fn(ptr, len) };
-            }
-            v
-        }
-    } else {
-        #[cfg(feature = "random")]
-        {
-            let mut v: Vec<i32> = (0..n as i32).collect();
-            ops::shuffle_ints(&mut v);
-            v
-        }
-        #[cfg(not(feature = "random"))]
-        {
-            Vec::new()
-        }
-    };
-
-    // Write into store.
-    let result_db = stores.null();
-    let vec_words = (n as u32 * 4 + 15) / 8;
-    let vec_words = vec_words.max(1);
-    let vec_cr = stores.claim(&result_db, vec_words);
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, indices.len() as i32);
-        for (i, &val) in indices.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 4, val);
-        }
-        store.set_int(header_rec, 4, vec_rec as i32);
-    }
-
-    let result_ref = DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    };
-    stores.put(stack, result_ref);
-}
-
-/// EXT.1: load a PNG image into an Image struct.
-/// Calls the imaging package's cdylib decode function (resolved at load time),
-/// then writes the raw pixel data into the store.
-fn n_load_png(stores: &mut Stores, stack: &mut DbRef) {
-    let v_image = *stores.get::<DbRef>(stack);
-    let v_path = *stores.get::<Str>(stack);
-
-    let decode_fn = unsafe {
-        crate::extensions::get_native_fn::<
-            unsafe extern "C" fn(
-                *const u8,
-                usize,
-                *mut u32,
-                *mut u32,
-                *mut *mut u8,
-                *mut usize,
-            ) -> bool,
-        >("loft_decode_png")
-    };
-    let result = if let Some(decode) = decode_fn {
-        // Call cdylib's decode function via C-ABI
-        let path = v_path.str();
-        let mut width: u32 = 0;
-        let mut height: u32 = 0;
-        let mut pixels: *mut u8 = std::ptr::null_mut();
-        let mut pixels_len: usize = 0;
-        let ok = unsafe {
-            decode(
-                path.as_ptr(),
-                path.len(),
-                std::ptr::addr_of_mut!(width),
-                std::ptr::addr_of_mut!(height),
-                std::ptr::addr_of_mut!(pixels),
-                std::ptr::addr_of_mut!(pixels_len),
-            )
-        };
-        if ok && !pixels.is_null() {
-            // Write decoded data into the Image struct in the store
-            let pixel_data = unsafe { std::slice::from_raw_parts(pixels, pixels_len) };
-            let wrote =
-                write_image_to_store(stores, &v_image, width, height, pixel_data, v_path.str());
-            // Free the cdylib-allocated buffer
-            if let Some(free_fn) = unsafe {
-                crate::extensions::get_native_fn::<unsafe extern "C" fn(*mut u8, usize)>(
-                    "loft_free_pixels",
-                )
-            } {
-                unsafe { free_fn(pixels, pixels_len) };
-            }
-            wrote
-        } else {
-            false
-        }
-    } else {
-        // Fallback: use built-in png_store if available (png feature)
-        #[cfg(feature = "png")]
-        {
-            stores.get_png(v_path.str(), &v_image)
-        }
-        #[cfg(not(feature = "png"))]
-        {
-            false
-        }
-    };
-    stores.put(stack, result);
-}
-
-/// Write raw RGB pixel data into an Image struct in the store.
-#[allow(clippy::cast_possible_wrap)]
-fn write_image_to_store(
-    stores: &mut Stores,
-    image_ref: &DbRef,
-    width: u32,
-    height: u32,
-    pixels: &[u8],
-    file_path: &str,
-) -> bool {
-    let store = stores.store_mut(image_ref);
-    // Set name field
-    if let Some(name) = std::path::Path::new(file_path).file_name() {
-        let name_pos = store.set_str(name.to_str().unwrap_or(""));
-        store.set_int(image_ref.rec, image_ref.pos, name_pos as i32);
-    }
-    // Set width, height
-    store.set_int(image_ref.rec, image_ref.pos + 4, width as i32);
-    store.set_int(image_ref.rec, image_ref.pos + 8, height as i32);
-    // Allocate vector for pixel data: 8-byte header + pixel bytes
-    let pixel_count = pixels.len() / 3; // 3 bytes per Pixel (r, g, b)
-    let img = store.claim((pixels.len() / 8) as u32 + 2);
-    store.set_int(img, 4, pixel_count as i32);
-    // Copy pixel data after the 8-byte vector header
-    let buf = store.buffer(img);
-    let header_bytes = 8;
-    if buf.len() > header_bytes && buf.len() - header_bytes >= pixels.len() {
-        buf[header_bytes..header_bytes + pixels.len()].copy_from_slice(pixels);
-    }
-    store.set_int(image_ref.rec, image_ref.pos + 12, img as i32);
-    true
 }
 
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
@@ -1300,353 +974,76 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-// ── HTTP client glue (H4) ───────────────────────────────────────────────
+// HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
+// The cdylib stores the response body in a thread-local, returned via LoftStr.
 
-/// Perform an HTTP request. Returns the status code as integer.
-/// The response body is stored in `stores.scratch` for retrieval by `n_http_body`.
-fn n_http_do(stores: &mut Stores, stack: &mut DbRef) {
-    let v_headers = *stores.get::<Str>(stack);
-    let v_body = *stores.get::<Str>(stack);
-    let v_url = *stores.get::<Str>(stack);
-    let v_method = *stores.get::<Str>(stack);
+// ── Crypto built-ins (always available) ─────────────────────────────────
 
-    #[allow(clippy::type_complexity)]
-    let status = if let Some(req_fn) = unsafe {
-        crate::extensions::get_native_fn::<
-            unsafe extern "C" fn(
-                *const u8,
-                usize,
-                *const u8,
-                usize,
-                *const u8,
-                usize,
-                *const u8,
-                usize,
-                *mut i32,
-                *mut *mut u8,
-                *mut usize,
-            ),
-        >("loft_http_request")
-    } {
-        let method = v_method.str();
-        let url = v_url.str();
-        let body = v_body.str();
-        let headers = v_headers.str();
-        let mut out_status: i32 = 0;
-        let mut out_body: *mut u8 = std::ptr::null_mut();
-        let mut out_body_len: usize = 0;
-        let (bp, bl) = if body.is_empty() {
-            (std::ptr::null(), 0)
-        } else {
-            (body.as_ptr(), body.len())
-        };
-        let (hp, hl) = if headers.is_empty() {
-            (std::ptr::null(), 0)
-        } else {
-            (headers.as_ptr(), headers.len())
-        };
-        unsafe {
-            req_fn(
-                method.as_ptr(),
-                method.len(),
-                url.as_ptr(),
-                url.len(),
-                bp,
-                bl,
-                hp,
-                hl,
-                std::ptr::addr_of_mut!(out_status),
-                std::ptr::addr_of_mut!(out_body),
-                std::ptr::addr_of_mut!(out_body_len),
-            );
-        }
-        // Store the response body in scratch for n_http_body to retrieve.
-        stores.scratch.clear();
-        if !out_body.is_null() && out_body_len > 0 {
-            let s = unsafe {
-                std::str::from_utf8_unchecked(std::slice::from_raw_parts(out_body, out_body_len))
-            };
-            stores.scratch.push(s.to_string());
-            if let Some(free_fn) = unsafe {
-                crate::extensions::get_native_fn::<unsafe extern "C" fn(*mut u8, usize)>(
-                    "loft_free_string",
-                )
-            } {
-                unsafe { free_fn(out_body, out_body_len) };
-            }
-        } else {
-            stores.scratch.push(String::new());
-        }
-        out_status
-    } else {
-        i32::MIN // null — cdylib not loaded
-    };
-    stores.put(stack, status);
-}
-
-/// Retrieve the body from the last HTTP request (stored in scratch).
-fn n_http_body(stores: &mut Stores, stack: &mut DbRef) {
-    let body = if stores.scratch.is_empty() {
-        ""
-    } else {
-        &stores.scratch[0]
-    };
-    stores.put(stack, Str::new(body));
-}
-
-// ── OpenGL glue (GL5) ───────────────────────────────────────────────────
-
-fn n_gl_create_window(stores: &mut Stores, stack: &mut DbRef) {
-    let v_title = *stores.get::<Str>(stack);
-    let v_height = *stores.get::<i32>(stack);
-    let v_width = *stores.get::<i32>(stack);
-    let result = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(u32, u32, *const u8, usize) -> bool>(
-            "loft_gl_create_window",
-        )
-    } {
-        f(
-            v_width as u32,
-            v_height as u32,
-            v_title.str().as_ptr(),
-            v_title.str().len(),
-        )
-    } else {
-        false
-    };
-    stores.put(stack, result);
-}
-
-fn n_gl_poll_events(stores: &mut Stores, stack: &mut DbRef) {
-    let result = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn() -> bool>("loft_gl_poll_events")
-    } {
-        f()
-    } else {
-        false
-    };
-    stores.put(stack, result);
-}
-
-fn n_gl_swap_buffers(_stores: &mut Stores, _stack: &mut DbRef) {
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn()>("loft_gl_swap_buffers") }
-    {
-        f();
+fn hex_encode(data: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(data.len() * 2);
+    for b in data {
+        let _ = write!(out, "{b:02x}");
     }
+    out
 }
 
-fn n_gl_clear(stores: &mut Stores, stack: &mut DbRef) {
-    let v_color = *stores.get::<i32>(stack);
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_clear") }
-    {
-        f(v_color as u32);
-    }
+fn n_sha256(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<Str>(stack);
+    let hash = crate::sha256::sha256(v.str().as_bytes());
+    stores.scratch.clear();
+    stores.scratch.push(hex_encode(&hash));
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-fn n_gl_destroy_window(_stores: &mut Stores, _stack: &mut DbRef) {
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn()>("loft_gl_destroy_window") }
-    {
-        f();
-    }
+fn n_hmac_sha256(stores: &mut Stores, stack: &mut DbRef) {
+    let v_data = *stores.get::<Str>(stack);
+    let v_key = *stores.get::<Str>(stack);
+    let mac = crate::sha256::hmac_sha256(v_key.str().as_bytes(), v_data.str().as_bytes());
+    stores.scratch.clear();
+    stores.scratch.push(hex_encode(&mac));
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-fn n_gl_create_shader(stores: &mut Stores, stack: &mut DbRef) {
-    let v_frag = *stores.get::<Str>(stack);
-    let v_vert = *stores.get::<Str>(stack);
-    let result = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(*const u8, usize, *const u8, usize) -> u32>(
-            "loft_gl_create_shader",
-        )
-    } {
-        f(
-            v_vert.str().as_ptr(),
-            v_vert.str().len(),
-            v_frag.str().as_ptr(),
-            v_frag.str().len(),
-        )
-    } else {
-        0
-    };
-    stores.put(stack, result as i32);
+fn n_hmac_sha256_raw(stores: &mut Stores, stack: &mut DbRef) {
+    let v_data = *stores.get::<Str>(stack);
+    let v_key = *stores.get::<Str>(stack);
+    let mac = crate::sha256::hmac_sha256(v_key.str().as_bytes(), v_data.str().as_bytes());
+    stores.scratch.clear();
+    stores
+        .scratch
+        .push(std::str::from_utf8(&mac).unwrap_or("").to_string());
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-fn n_gl_use_shader(stores: &mut Stores, stack: &mut DbRef) {
-    let v_program = *stores.get::<i32>(stack);
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_use_shader") }
-    {
-        f(v_program as u32);
-    }
+fn n_base64_encode(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<Str>(stack);
+    stores.scratch.clear();
+    stores
+        .scratch
+        .push(crate::base64::encode(v.str().as_bytes()));
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-fn n_gl_draw(stores: &mut Stores, stack: &mut DbRef) {
-    let v_count = *stores.get::<i32>(stack);
-    let v_vao = *stores.get::<i32>(stack);
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32, u32)>("loft_gl_draw") }
-    {
-        f(v_vao as u32, v_count as u32);
-    }
+fn n_base64_decode(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<Str>(stack);
+    let decoded = crate::base64::decode(v.str());
+    stores.scratch.clear();
+    stores
+        .scratch
+        .push(String::from_utf8_lossy(&decoded).to_string());
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-fn n_gl_load_font(stores: &mut Stores, stack: &mut DbRef) {
-    let v_path = *stores.get::<Str>(stack);
-    let result = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(*const u8, usize) -> i32>(
-            "loft_gl_load_font",
-        )
-    } {
-        f(v_path.str().as_ptr(), v_path.str().len())
-    } else {
-        i32::MIN
-    };
-    stores.put(stack, result);
+fn n_base64url_encode(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<Str>(stack);
+    stores.scratch.clear();
+    stores
+        .scratch
+        .push(crate::base64::encode_url(v.str().as_bytes()));
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
-fn n_gl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
-    let v_size = *stores.get::<f64>(stack);
-    let v_text = *stores.get::<Str>(stack);
-    let v_font = *stores.get::<i32>(stack);
-    let result = if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(i32, *const u8, usize, f32) -> f32>(
-            "loft_gl_measure_text",
-        )
-    } {
-        f64::from(f(
-            v_font,
-            v_text.str().as_ptr(),
-            v_text.str().len(),
-            v_size as f32,
-        ))
-    } else {
-        0.0
-    };
-    stores.put(stack, result);
-}
-
-fn n_gl_bind_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let v_unit = *stores.get::<i32>(stack);
-    let v_tex = *stores.get::<i32>(stack);
-    if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(u32, u32)>("loft_gl_bind_texture")
-    } {
-        f(v_tex as u32, v_unit as u32);
-    }
-}
-
-fn n_gl_delete_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let v_tex = *stores.get::<i32>(stack);
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32)>("loft_gl_delete_texture") }
-    {
-        f(v_tex as u32);
-    }
-}
-
-// ── TCP server glue (SRV.1) ────────────────────────────────────────────
-
-fn n_tcp_listen(stores: &mut Stores, stack: &mut DbRef) {
-    let v_port = *stores.get::<i32>(stack);
-    let result = if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(u32) -> i32>("loft_tcp_listen") }
-    {
-        f(v_port as u32)
-    } else {
-        i32::MIN
-    };
-    stores.put(stack, result);
-}
-
-fn n_tcp_accept(stores: &mut Stores, stack: &mut DbRef) {
-    let v_handle = *stores.get::<i32>(stack);
-    let result = if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(i32) -> bool>("loft_tcp_accept") }
-    {
-        f(v_handle)
-    } else {
-        false
-    };
-    stores.put(stack, result);
-}
-
-fn n_tcp_method(stores: &mut Stores, stack: &mut DbRef) {
-    if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(*mut *const u8, *mut usize)>(
-            "loft_tcp_method",
-        )
-    } {
-        let mut ptr: *const u8 = std::ptr::null();
-        let mut len: usize = 0;
-        f(std::ptr::addr_of_mut!(ptr), std::ptr::addr_of_mut!(len));
-        if !ptr.is_null() && len > 0 {
-            let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
-            stores.scratch.clear();
-            stores.scratch.push(s.to_string());
-            stores.put(stack, Str::new(&stores.scratch[0]));
-            return;
-        }
-    }
-    stores.put(stack, Str::new(""));
-}
-
-fn n_tcp_path(stores: &mut Stores, stack: &mut DbRef) {
-    if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(*mut *const u8, *mut usize)>(
-            "loft_tcp_path",
-        )
-    } {
-        let mut ptr: *const u8 = std::ptr::null();
-        let mut len: usize = 0;
-        f(std::ptr::addr_of_mut!(ptr), std::ptr::addr_of_mut!(len));
-        if !ptr.is_null() && len > 0 {
-            let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
-            stores.scratch.clear();
-            stores.scratch.push(s.to_string());
-            stores.put(stack, Str::new(&stores.scratch[0]));
-            return;
-        }
-    }
-    stores.put(stack, Str::new(""));
-}
-
-fn n_tcp_body(stores: &mut Stores, stack: &mut DbRef) {
-    if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(*mut *const u8, *mut usize)>(
-            "loft_tcp_body",
-        )
-    } {
-        let mut ptr: *const u8 = std::ptr::null();
-        let mut len: usize = 0;
-        f(std::ptr::addr_of_mut!(ptr), std::ptr::addr_of_mut!(len));
-        if !ptr.is_null() && len > 0 {
-            let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
-            stores.scratch.clear();
-            stores.scratch.push(s.to_string());
-            stores.put(stack, Str::new(&stores.scratch[0]));
-            return;
-        }
-    }
-    stores.put(stack, Str::new(""));
-}
-
-fn n_tcp_respond(stores: &mut Stores, stack: &mut DbRef) {
-    let v_body = *stores.get::<Str>(stack);
-    let v_status = *stores.get::<i32>(stack);
-    if let Some(f) = unsafe {
-        crate::extensions::get_native_fn::<extern "C" fn(u16, *const u8, usize)>("loft_tcp_respond")
-    } {
-        f(v_status as u16, v_body.str().as_ptr(), v_body.str().len());
-    }
-}
-
-fn n_tcp_close(stores: &mut Stores, stack: &mut DbRef) {
-    let v_handle = *stores.get::<i32>(stack);
-    if let Some(f) =
-        unsafe { crate::extensions::get_native_fn::<extern "C" fn(i32)>("loft_tcp_close") }
-    {
-        f(v_handle);
-    }
-}
+// ── WebSocket + TCP + OpenGL + random glue removed ─────────────────────
+// These functions are now auto-marshalled by extensions::wire_native_fns().
+// See EXTERNAL_LIBS.md Phase 5 for design.

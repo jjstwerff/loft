@@ -1,0 +1,64 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- Crypto ---
+// Cryptographic primitives: hashing, HMAC, base64, JWT.
+
+// --- Internal natives ---
+
+fn sha256_native(data: text) -> text;
+#native "n_sha256"
+
+fn hmac_sha256_native(key: text, data: text) -> text;
+#native "n_hmac_sha256"
+
+fn base64_encode_native(data: text) -> text;
+#native "n_base64_encode"
+
+fn base64_decode_native(data: text) -> text;
+#native "n_base64_decode"
+
+fn base64url_encode_native(data: text) -> text;
+#native "n_base64url_encode"
+
+fn hmac_sha256_raw_native(key: text, data: text) -> text;
+#native "n_hmac_sha256_raw"
+
+// --- Public API ---
+
+// SHA-256 hash of a string. Returns 64-char hex string.
+pub fn sha256(data: text) -> text {
+  sha256_native(data)
+}
+
+// HMAC-SHA256 of data with key. Returns 64-char hex string.
+pub fn hmac_sha256(key: text, data: text) -> text {
+  hmac_sha256_native(key, data)
+}
+
+// Base64 encode a string.
+pub fn base64_encode(data: text) -> text {
+  base64_encode_native(data)
+}
+
+// Base64 decode a string.
+pub fn base64_decode(data: text) -> text {
+  base64_decode_native(data)
+}
+
+// Base64url encode (JWT-safe, no padding).
+pub fn base64url_encode(data: text) -> text {
+  base64url_encode_native(data)
+}
+
+// The fixed JWT HS256 header, pre-encoded.
+JWT_HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+
+// Sign a JWT with HS256. Returns the complete JWT string.
+pub fn jwt_sign(payload: text, secret: text) -> text {
+  header = JWT_HEADER;
+  body = base64url_encode_native(payload);
+  signing_input = header + "." + body;
+  sig_raw = hmac_sha256_raw_native(secret, signing_input);
+  sig = base64url_encode_native(sig_raw);
+  signing_input + "." + sig
+}

@@ -614,24 +614,58 @@ because the local gate is skipped.
 
 ### Local CI gate (mandatory before every commit)
 
-Run all three checks and confirm they are clean **before** `git commit`.  Never commit
+Run all four checks and confirm they are clean **before** `git commit`.  Never commit
 when any check fails — fix first, then commit.
 
 ```bash
 make ci   # fmt → clippy → test in order; stops at first failure; output in result.txt
 ```
 
-The `make ci` target runs `cargo fmt --check` and `cargo clippy --tests -- -D warnings`
-**before** `cargo test`.  Fix any fmt or clippy errors first — this avoids re-running
-the slow test suite after a trivial lint fix.
+Or run the checks individually:
+
+```bash
+cargo fmt --check                              # 1. formatting
+cargo clippy --tests -- -D warnings            # 2. pedantic lints as errors
+cargo check --no-default-features              # 3. feature-gated code compiles
+cargo test                                     # 4. all tests pass
+```
+
+**All four checks are required.** Skipping any one causes CI failures after push.
 
 These are the same checks the remote CI runs.  Running them locally catches errors that
 would otherwise only surface after a push, which cannot be taken back.
 
-**When to run:**
+#### Common pitfalls
+
+| Pitfall | Why it fails CI | How to avoid |
+|---------|----------------|--------------|
+| Running `cargo clippy` without `-D warnings` | Project uses `#![warn(clippy::pedantic)]` in `lib.rs` and `main.rs`; CI promotes pedantic warnings to errors | Always use `cargo clippy --tests -- -D warnings` |
+| Skipping `--no-default-features` check | CI tests feature-gated builds; `#[cfg(feature = "...")]` on imports and functions must be correct for stripped builds | Always run `cargo check --no-default-features` |
+| Running `cargo test` but not `cargo fmt --check` | `cargo test` does not check formatting | Run fmt check first |
+| Adding `#[cfg(feature = "X")]` to `FUNCTIONS` table entries | Changing registration order causes `library_names` index mismatch — tests crash with "index out of bounds" | Use `#[cfg]` on array entries to preserve order but conditionally include them |
+| New files with crypto/FFI constants | SHA-256 K-tables, base64 lookup tables trigger `unreadable_literal`, `many_single_char_names`, `cast_lossless` pedantic lints | Add `#[allow(clippy::...)]` on the specific function or constant |
+
+#### When to run
+
 - Before every `git commit` (including amends)
 - Before reporting a branch as done
 - After any stash pop or cherry-pick that brings in new code
+
+#### Workflow: push first, test in parallel
+
+To save wall-clock time, push the branch and create the PR **before** running
+the local test suite.  CI starts immediately on the remote while the local
+tests run in parallel:
+
+```bash
+git push -u origin <branch>       # 1. push
+gh pr create --title "..." ...     # 2. create PR (CI starts)
+cargo test                         # 3. local tests (runs in parallel)
+```
+
+This avoids waiting for local tests before discovering remote CI failures.
+However, the full local gate (fmt + clippy + no-default-features) must still
+pass **before** pushing.
 
 If `cargo clippy --tests -- -D warnings` reports errors for violations that were already present on `main` and in
 code you did not write, suppress them with `#[allow(...)]` on the specific function —
@@ -648,13 +682,15 @@ gh pr create --title "P1: lambda expressions (all 3 phases)" \
              --body "Implements fn(params)->type block inline lambdas with map/filter/reduce integration."
 ```
 
-The CI pipeline (`.github/workflows/ci.yml`) runs three jobs in parallel:
+The CI pipeline (`.github/workflows/ci.yml`) runs five jobs:
 
 | Job | Command | Must pass |
 |---|---|---|
-| Test (ubuntu, macOS, windows) | `cargo test` | All platforms |
-| Clippy | `cargo clippy --tests -- -D warnings` | Zero warnings |
 | Format | `cargo fmt -- --check` | No diff |
+| Clippy | `cargo clippy --tests -- -D warnings` | Zero warnings |
+| Test (ubuntu) | `cargo check --no-default-features` then `cargo test` | Both pass |
+| Test (macOS) | `cargo check --no-default-features` then `cargo test` | Both pass |
+| Test (windows) | `cargo check --no-default-features` then `cargo test` | Both pass |
 
 Do not merge until all three jobs are green on all platforms.  If a job fails:
 

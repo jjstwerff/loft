@@ -9,6 +9,12 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Game protocol (Sprint 17)
+
+- **SRV.P** — `game_protocol` package: `MsgType` enum, `WsMessage`,
+  `GameEnvelope` structs, and message constructors (`msg_ping`, `msg_pong`,
+  `msg_chat`, `msg_input`, `msg_state`, `msg_error`).
+
 ### Parallel threading
 
 - **A15** — `parallel {}` now uses real OS threads via `std::thread::scope`.
