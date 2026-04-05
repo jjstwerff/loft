@@ -6,48 +6,24 @@ render_with_liquid: false
 
 # External Library Support
 
-This document describes the design for separately-packaged Loft libraries, including
-libraries that ship compiled Rust code for features that cannot be expressed in Loft
-itself (e.g. OpenGL, audio, database drivers).
+Separately-packaged loft libraries, including libraries that ship compiled Rust
+code for features that cannot be expressed in loft itself (e.g. HTTP, PNG
+decoding, random number generation, OpenGL).
 
 ---
 
 ## Contents
-- [Overview](#overview)
 - [Package Format](#package-format)
 - [Two Flavours of Library](#two-flavours-of-library)
 - [Discovery and Loading](#discovery-and-loading)
-- [Native Function Registration](#native-function-registration)
-- [OpenGL — Concrete Example](#opengl--concrete-example)
-- [Build Tooling](#build-tooling)
-- [Backwards Compatibility and ABI Stability](#backwards-compatibility-and-abi-stability)
-- [Security and Sandboxing](#security-and-sandboxing)
-- [Phased Rollout](#phased-rollout)
-- [Code Touchpoints Summary](#code-touchpoints-summary)
-
----
-
-## Overview
-
-The interpreter currently supports two categories of built-in functionality:
-
-- **Loft-implemented** — pure `.loft` files in `default/`, loaded by `parse_dir()` in
-  `src/main.rs` before the user script.
-- **Native (Rust)** — declared with `#rust "..."` annotations and backed by Rust
-  functions registered in the `FUNCTIONS` table in `src/native.rs`, installed via
-  `native::init(state)` inside `compile::byte_code()`.
-
-Neither mechanism supports code arriving at runtime from an external directory. This
-document designs a two-phase extension of the existing `use` / `lib_path()` system
-to support separately-packaged libraries, including ones that ship compiled shared
-libraries.
-
-Two existing extension points shape the design:
-- `lib_path()` in `src/parser/mod.rs` — already implements a multi-step search chain
-  ending with `LOFT_LIB`. New package layouts add two candidates there.
-- `state.static_fn(name, call)` in `src/state/mod.rs` — the only official registration
-  path for new `Call = fn(&mut Stores, &mut DbRef)` functions. All plugin registration
-  ultimately calls this.
+- [C-ABI Boundary Design](#c-abi-boundary-design)
+- [Auto-Marshalling Dispatch](#auto-marshalling-dispatch)
+- [loft-ffi Helper Crate](#loft-ffi-helper-crate)
+- [Store Allocation from Native Code](#store-allocation-from-native-code)
+- [Code Generation: loft generate](#code-generation-loft-generate)
+- [Testing Native Packages](#testing-native-packages)
+- [Security](#security)
+- [Shipped Libraries](#shipped-libraries)
 
 ---
 
@@ -55,53 +31,53 @@ Two existing extension points shape the design:
 
 ### Directory Layout
 
-A library named `opengl` lives in a directory whose name is the library identifier:
+A library named `random` lives in a directory whose name is the library identifier:
 
 ```
-opengl/
-  loft.toml            # mandatory for native; optional for pure-loft
+random/
+  loft.toml              # mandatory for native; optional for pure-loft
   src/
-    opengl.loft        # public API surface (types, fn signatures, bodies)
-    internal.loft      # optional additional loft files
+    random.loft          # public API surface
   native/
-    libloft_opengl.so      # Linux shared library (optional)
-    libloft_opengl.dylib   # macOS shared library (optional)
-    loft_opengl.dll        # Windows DLL (optional)
+    Cargo.toml           # Rust crate producing a cdylib + rlib
+    src/
+      lib.rs             # C-ABI implementations
+      generated.rs       # auto-generated stubs (from loft generate)
+  tests/
+    15-random.loft       # package tests
+  docs/
+    21-random.loft       # documentation examples
 ```
-
-The interpreter resolves the entry `.loft` file at `<lib-dir>/<name>/src/<name>.loft`,
-falling back to `<lib-dir>/<name>.loft` for single-file pure-loft libraries (preserving
-the current `lib_path()` behaviour). The `native/` directory is only present when Rust
-code is included.
 
 ### Manifest: `loft.toml`
 
 ```toml
 [package]
-name    = "opengl"
-version = "0.2.1"
-loft    = ">=1.0"          # minimum interpreter version required
+name    = "random"
+version = "0.1.0"
+loft    = ">=0.8"          # minimum interpreter version required
 
 [library]
-# Path to the entry .loft file, relative to the package root.
-# Default: "src/<name>.loft"
-entry = "src/opengl.loft"
-
-# Shared library name stem (without lib prefix or extension).
-# Omit entirely for pure-loft packages.
-native = "loft_opengl"
+entry  = "src/random.loft"   # path to the entry .loft file
+native = "loft_random"       # Cargo crate name stem (omit for pure-loft)
 ```
 
-The manifest is optional for single-file pure-loft libraries. It is mandatory for native
-extension packages.
+The `loft` version field is checked at load time against the interpreter version.
+A major version mismatch is a fatal load-time error.
 
-### Versioning
+### Native Crate Convention
 
-Version strings follow semver. The `loft` field is checked at load time against
-`env!("CARGO_PKG_VERSION")`. A major version mismatch, or a requested minor/patch
-greater than the interpreter's, is a fatal load-time error. This check runs inside the
-new `lib_path_manifest()` helper in `src/parser/mod.rs`, before any parsing or dynamic
-loading occurs.
+The `native/Cargo.toml` produces both a `cdylib` (for interpreter mode) and an
+`rlib` (for `--native` codegen):
+
+```toml
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+loft-ffi = { path = "../../../loft-ffi" }   # optional but recommended
+# external crates only — never depend on the loft interpreter
+```
 
 ---
 
@@ -109,861 +85,426 @@ loading occurs.
 
 ### Pure-Loft Libraries
 
-A pure-loft library is identical in structure to the current `default/` directory but
-packaged separately. It consists exclusively of `.loft` files.
+Consists exclusively of `.loft` files. No build step needed.
+Users write `use mylib;` and the interpreter resolves the entry file.
 
-No changes to the runtime are required. The interpreter reads the entry `.loft` file via
-the existing `parse_dir()` / `parse()` flow. The only change is to `lib_path()`: when it
-finds a directory named `<id>`, it reads `loft.toml` (if present), resolves the `entry`
-field, and returns that path.
-
-**Authoring model:** write ordinary loft code, ship a directory. Users write `use mylib;`.
+Examples: `lib/crypto`, `lib/game_protocol`, `lib/shapes`, `lib/arguments`.
 
 ### Native Extension Libraries
 
-A native extension library ships a shared library alongside its `.loft` API files. The
-shared library exposes a single C-ABI entry point:
+Ships a compiled shared library alongside `.loft` API files. The `.loft` files
+declare function signatures with `#native` annotations; the shared library
+provides the C-ABI implementations.
 
-```c
-// Exported symbol: loft_register_v1
-void loft_register_v1(LoftPluginCtx *ctx);
-```
-
-where `LoftPluginCtx` is defined in the companion crate `loft-plugin-api`. The library
-author links against `loft-plugin-api`, calls the provided `register_fn` callback for each
-native function to expose, and builds a `cdylib`.
-
-The interpreter locates and `dlopen`s the shared library **after** `byte_code()` (so
-that function names declared in `.loft` API files are already known), then calls
-`loft_register_v1`, which populates a staging function table. After the call returns the
-interpreter iterates that table and calls `state.static_fn(name, fn_ptr)` for each
-entry — the same path used by `native::init()` today.
+Examples: `lib/random`, `lib/server`, `lib/web`, `lib/imaging`, `lib/graphics`.
 
 ---
 
 ## Discovery and Loading
 
-### Search Chain (as shipped)
+### Search Chain
 
-`lib_path()` in `src/parser/mod.rs` tries the following candidates in order:
-1. `lib/<id>.loft` relative to CWD
-2. `<id>.loft` relative to CWD
-3. `<cur_dir>/lib/<id>.loft`
-4. `<base_dir>/lib/<id>.loft` (when inside `tests/`)
-5. `<cur_script_stem>/<id>.loft`
-6–7. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags), single-file
-7c. **[pure-loft layout, shipped 2026-03-16]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `lib_dirs` — packaged layout
-7b. Each directory in `LOFT_LIB` (env-var, cross-platform split), single-file
-7d. **[pure-loft layout, shipped 2026-03-16]** `<dir>/<id>/src/<id>.loft` for each `<dir>` in `LOFT_LIB`
-8–9. `<cur_dir>/<id>.loft` / `<base_dir>/<id>.loft`
+`lib_path()` in `src/parser/mod.rs` tries candidates in order:
+1. `lib/<id>.loft` and `<id>.loft` relative to CWD
+2. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags)
+3. Packaged layout: `<dir>/<id>/src/<id>.loft` for each search directory
+4. Each directory in `LOFT_LIB` environment variable
+5. Fallback: `<cur_dir>/<id>.loft` / `<base_dir>/<id>.loft`
 
-The helper `lib_path_manifest(dir, id) -> Option<String>` checks that `<dir>/<id>` is a
-directory, reads `<dir>/<id>/loft.toml` when present, validates the version requirement,
-and returns the resolved entry path (or `None` on mismatch or missing file).
+When a directory `<id>/` is found, `lib_path_manifest()` reads `loft.toml`,
+validates the version requirement, and resolves the entry path.
 
 ### Load-Time Sequencing
 
-No change to `use` syntax. The existing `use <identifier>;` grammar is sufficient.
-
-What changes: `parse_file()` in `src/parser/mod.rs` processes `use` statements.
-Phase 2 will extend `lib_path_manifest()` to also return the parsed manifest when
-a `native = "..."` field is present; the interpreter will then resolve the
-platform-correct shared library path and append it to a new `pending_native_libs:
-Vec<String>` on `Parser`. The actual `dlopen` step happens in `main.rs` after
-`byte_code()`, not during parsing.
-
-Extended startup sequence in `main.rs`:
-
 ```
-parse_dir(default)                           // existing
-parse(user_script)                           // existing — populates pending_native_libs
-scopes::check(data)                          // existing
-State::new(database)                         // existing
-compile::byte_code(state, data)              // existing — native::init() runs here
-extensions::load_all(state, pending_libs)    // NEW — dlopen + register
-state.execute_argv("main", ...)              // existing
+parse_dir(default)                           # load standard library
+parse(user_script)                           # populates pending_native_libs
+scopes::check(data)                          # scope analysis
+State::new(database)                         # create runtime
+compile::byte_code(state, data)              # bytecode gen; native::init() runs
+extensions::load_all(state, pending_libs)    # dlopen cdylibs + auto-marshal
+state.execute_argv("main", ...)              # run
 ```
+
+### Auto-Build
+
+If a cdylib is not found but `native/Cargo.toml` exists, the interpreter
+runs `cargo build --release` automatically via `auto_build_native()`.
 
 ---
 
-## Native Function Registration — Dual-Mode Design
+## C-ABI Boundary Design
 
-Native functions run in two modes depending on how the loft program is executed.
+### The Split: Logic in cdylib, Store Access in Interpreter
 
-### The two modes
-
-| Mode | How it runs | Native function path |
-|------|-------------|---------------------|
-| **Interpreter** (`loft run`, `loft test`) | Bytecode interpreter | cdylib loaded via `dlopen`; C-ABI boundary |
-| **Native codegen** (`loft --native`) | Generated Rust compiled by `rustc` | Direct call via `--extern` rlib linking |
-
-### Why two modes
-
-A Rust `cdylib` embeds its own copy of all dependencies.  Rust does not
-guarantee struct layout (`repr(Rust)`) across compilation units.  Passing
-`&mut Stores` from the interpreter to a cdylib causes segfaults because the
-two copies of `Stores` have different field offsets.
-
-The `--native` path avoids this: the generated Rust source and the package's
-native crate are compiled together by `rustc`, sharing the same `loft` rlib.
-No dynamic loading, no layout mismatch, zero-cost direct calls.
-
-### The C-ABI split: logic in the cdylib, store access in the interpreter
-
-Package native crates (`cdylib`) export pure C-ABI functions that operate on
-**primitives and raw byte buffers only** — never on `Stores` or `DbRef`.
-The interpreter provides a thin glue function (in `src/native.rs`) that:
-
-1. Pops arguments from the loft stack using `stores.get::<T>()`
-2. Calls the cdylib's C-ABI function with primitive values
-3. Writes the result back into the store using `stores.put()` / `store.claim()`
+Package native crates export pure C-ABI functions that operate on **primitives,
+raw byte buffers, and `LoftStore`/`LoftRef` handles** — never on `Stores` or
+`DbRef` directly.
 
 ```
 ┌──────────────────────┐     C-ABI boundary     ┌──────────────────────┐
 │     Interpreter      │ ←──────────────────────→│   Package cdylib     │
 │                      │                         │                      │
-│  n_load_png():       │                         │  loft_decode_png():  │
-│    path = pop(stack) │                         │    decode PNG file   │
-│    call cdylib ──────│── path_ptr, path_len ──→│    return pixels     │
-│    ←─────────────────│── w, h, pixel_ptr ──────│                      │
-│    write to store    │                         │                      │
-│    push(stack, true) │                         │  (depends on: png)   │
-│                      │                         │  (no loft dep)       │
-│  (depends on: loft)  │                         │                      │
-│  (no png dep needed) │                         │                      │
+│  auto-marshal:       │                         │  n_rand(lo, hi):     │
+│    pop args from     │── i32, i32 ────────────→│    PCG64 generate    │
+│    loft stack        │                         │    return i32        │
+│    ←─────────────────│── i32 ──────────────────│                      │
+│    push result       │                         │  (depends on:        │
+│                      │                         │   rand_core, rand_pcg│
+│  (depends on: loft)  │                         │   NOT loft)          │
 └──────────────────────┘                         └──────────────────────┘
 ```
 
-**Key property**: the `png` crate is only a dependency of the cdylib, not of
-the interpreter.  The interpreter loads the cdylib on demand when the imaging
-package is used.
+**Key properties:**
+- External crate dependencies (png, ureq, rand) live only in the cdylib
+- The interpreter loads the cdylib on demand when the package is `use`d
+- No Rust struct layouts are shared across the boundary
+- `LoftStore` provides controlled store access via callback function pointers
 
-### Passing bulk data efficiently via raw pointers
+### Dual-Mode Execution
 
-For functions that process large buffers (textures, audio, network payloads),
-the interpreter can pass **raw pointers into store memory** across the C-ABI
-boundary.  The store's data is contiguous — `DbRef` resolves to a byte offset
-in a flat memory region.
+| Mode | How it runs | Native function path |
+|------|-------------|---------------------|
+| **Interpreter** (`loft run`) | Bytecode + auto-marshal | cdylib via `dlopen`; C-ABI boundary |
+| **Native codegen** (`loft --native`) | Generated Rust | Direct call via `--extern` rlib linking |
 
-**Reading store data from a cdylib** (e.g. OpenGL texture upload):
+In `--native` mode, everything compiles as rlibs in one `rustc` invocation —
+types are shared, calls are direct, zero overhead.
 
-```
-Interpreter:                    cdylib:
-  resolve DbRef → *const u8      receive (ptr, len)
-  pass (ptr, len) via C-ABI      glTexImage2D(ptr, len, ...)
-```
-
-**Writing into store memory from a cdylib** (e.g. PNG decode, network receive):
-
-```
-Interpreter:                    cdylib:
-  store.claim(size)               receive (ptr, len)
-  resolve → *mut u8               write decoded data into ptr
-  pass (ptr, len) via C-ABI       return bytes_written
-  update store metadata
-```
-
-The pointer is valid for the duration of the C-ABI call — the interpreter
-holds the store and does not relocate memory during the call.  This gives
-native code **zero-copy access** to store buffers for both reads and writes.
-
-**No `Stores` type crosses the boundary.**  The interpreter resolves the
-`DbRef` to a raw pointer before calling the cdylib, and updates store metadata
-(vector length, field values) after the call returns.
-
-### Example: PNG decode (imaging package)
-
-**cdylib** (`lib/imaging/native/src/lib.rs`) — depends on `png` only:
-
-```rust
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_decode_png(
-    path_ptr: *const u8, path_len: usize,
-    out_width: *mut u32, out_height: *mut u32,
-    out_pixels: *mut *mut u8, out_pixels_len: *mut usize,
-) -> bool {
-    // Decode using the png crate, return raw RGB bytes
-}
-```
-
-**Interpreter glue** (`src/native.rs`) — no `png` dependency:
-
-```rust
-fn n_load_png(stores: &mut Stores, stack: &mut DbRef) {
-    let path = stores.get::<Str>(stack);
-    // Call cdylib's decode function (resolved via dlopen)
-    let (w, h, pixels) = call_decode_png(path.str());
-    // Write pixel data into the store
-    write_image_to_store(stores, image_ref, w, h, &pixels);
-    stores.put(stack, true);
-}
-```
-
-### Example: OpenGL texture upload (future)
-
-**cdylib** (`lib/opengl/native/src/lib.rs`) — depends on `gl` only:
-
-```rust
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_gl_upload_texture(
-    pixel_ptr: *const u8,    // raw pointer into store memory
-    pixel_len: usize,
-    width: u32,
-    height: u32,
-) -> u32 {
-    // Upload directly from the store buffer — zero copy
-    gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGB as i32,
-        width as i32, height as i32, 0,
-        gl::RGB, gl::UNSIGNED_BYTE, pixel_ptr as *const _);
-    texture_id
-}
-```
-
-**Interpreter glue**:
-
-```rust
-fn n_gl_upload_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let image_ref = stores.get::<DbRef>(stack);
-    // Resolve DbRef to raw pointer — zero copy
-    let (ptr, len) = stores.buffer_ptr(image_ref);
-    let tex_id = call_gl_upload_texture(ptr, len, width, height);
-    stores.put(stack, tex_id as i32);
-}
-```
-
-### How packages declare native functions
+### Declaring Native Functions
 
 ```loft
-fn load_png(path: text, image: Image) -> boolean;
-#native "n_load_png"
+pub fn rand(lo: integer, hi: integer) -> integer;
+#native "n_rand"
 ```
 
-The `#native` annotation tells the compiler:
-- **Interpreter**: register a panic-stub at bytecode time; the real function
-  is loaded via `native::init()` from the `FUNCTIONS` table in `src/native.rs`.
-- **`--native`**: emit a direct Rust call to the symbol in the loft rlib.
+The `#native` annotation tells the compiler to register a panic-stub at
+bytecode time. The real function is loaded from the cdylib via
+`extensions::wire_native_fns()`.
 
-### Naming convention
+**Naming convention:**
+- `n_<fn>` for global functions (e.g. `n_rand`, `n_tcp_listen`)
+- `t_<N><Type>_<method>` for methods (N = char count of type name)
 
-- `n_<fn>` for global functions (e.g. `n_load_png`)
-- `t_<N><Type>_<method>` for methods (e.g. `t_5Image_width`, where 5 = len("Image"))
+---
 
-### `--native` codegen path
+## Auto-Marshalling Dispatch
 
-When compiling with `--native`, the generated Rust source calls native functions
-directly.  The `loft` crate provides built-in glue functions as `pub fn` exports.
-The `rustc` invocation includes `--extern loft=<path>/libloft.rlib`.
+The auto-marshaller in `src/extensions.rs` bridges loft stack values to C-ABI
+calls without per-function glue code.
 
-For packages with their own native crate, the build pipeline additionally passes
-`--extern <pkg>=<path>/lib<pkg>.rlib` so the generated code can call the
-package's functions directly — bypassing the cdylib C-ABI boundary entirely.
-In `--native` mode, the PNG decode function is called as a normal Rust function
-with shared types, not through `dlopen`.
+### How It Works
 
-### Adding a new native function to a package
+1. **`compute_sig()`** reads the `#native` definition's types and produces a
+   compact `NativeSig { params: Vec<ArgT>, ret: Option<ArgT> }`.
 
-1. **cdylib**: implement the pure logic as `extern "C"` functions in
-   `native/src/lib.rs`.  Only depend on external crates (png, gl, ureq) — not loft.
-2. **Interpreter glue**: add a thin wrapper in `src/native.rs` that pops stack
-   args, calls the cdylib function pointer, and writes results into stores.
-3. **extensions.rs**: add the C-ABI function pointer type and symbol resolution.
-4. **Package .loft**: declare with `#native "n_my_func"`.
-5. Works in both interpreter and `--native` modes automatically.
+2. **`wire_native_fns()`** iterates all `#native` definitions, resolves symbols
+   via dlsym, and replaces panic-stubs with the generic `native_auto_dispatch`.
+
+3. **`native_auto_dispatch()`** pops arguments from the loft stack in reverse
+   order, builds typed `ArgVal` values, and calls `dispatch_call()`.
+
+4. **`dispatch_call()`** pattern-matches on the signature and calls the native
+   function pointer with the correct C-ABI cast.
+
+### Type Mapping
+
+| Loft type | ArgT | C-ABI type |
+|-----------|------|-----------|
+| `integer` / `character` | `I32` | `i32` |
+| `long` | `I64` | `i64` |
+| `float` | `F64` | `f64` |
+| `single` | `F32` | `f32` |
+| `boolean` | `Bool` | `bool` |
+| `text` | `Text` | `*const u8, usize` |
+| struct / vector / collection | `Ref` | `LoftRef` (with `LoftStore` prepended) |
+
+When any parameter or return type is `Ref`, a `LoftStore` handle is prepended
+as the first C-ABI argument, giving the native function access to store memory.
+
+For functions returning `Ref` with no `Ref` parameters (e.g. `rand_indices`),
+the dispatcher allocates a fresh store for the result automatically.
+
+### Thread-Local State
+
+During a native call, a thread-local `CURRENT_STORES` holds a raw pointer
+to the interpreter's `Stores`. This enables the `LoftStore` allocation
+callbacks to reach back into the interpreter for `claim()` and `resize()`
+operations.
+
+---
+
+## loft-ffi Helper Crate
+
+The `loft-ffi` crate (`/loft-ffi/`) provides safe building blocks for native
+extension authors. No dependencies.
+
+### Core Types
+
+**`LoftRef`** — Opaque reference to a store object (struct, vector, collection):
+```rust
+#[repr(C)]
+pub struct LoftRef {
+    pub store_nr: u16,
+    pub rec: u32,
+    pub pos: u32,
+}
+```
+
+**`LoftStore`** — Direct memory access to a store buffer, with allocation callbacks:
+```rust
+#[repr(C)]
+pub struct LoftStore {
+    pub ptr: *mut u8,                    // base pointer (may move on alloc)
+    pub size: u32,                       // capacity in 8-byte words
+    pub ctx: LoftStoreCtx,              // opaque context for callbacks
+    pub claim_fn: ...,                   // allocate words → rec
+    pub reload_fn: ...,                  // refresh ptr/size after alloc
+    pub resize_fn: ...,                  // resize record → new rec
+}
+```
+
+**`LoftStr`** — `#[repr(C)]` text return type (borrowed pointer, valid until
+next `ret()` call on the same thread).
+
+### Text Helpers
+
+```rust
+// Convert C-ABI text parameter to &str
+let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+
+// Return a String as LoftStr (stored in thread-local buffer)
+loft_ffi::ret(format!("Hello, {name}!"))
+
+// Return a borrowed &str without copying
+loft_ffi::ret_ref(some_str)
+```
+
+### Field Access
+
+`LoftStore` provides direct read/write methods for store memory:
+- `get_int()` / `set_int()` — `i32` fields
+- `get_long()` / `set_long()` — `i64` fields
+- `get_float()` / `set_float()` — `f64` fields
+- `get_byte()` / `set_byte()` — `u8` fields (boolean, simple enum)
+- `get_text()` — read text field as `(*const u8, usize)`
+- `get_ref()` — read sub-reference field as `LoftRef`
+
+All take `(rec, pos, offset)` and compute byte address as `rec * 8 + pos + offset`.
+
+### Null Sentinels
+
+```rust
+pub const NULL_INT: i32 = i32::MIN;
+pub const NULL_LONG: i64 = i64::MIN;
+```
+
+---
+
+## Store Allocation from Native Code
+
+Native extensions can allocate records and build vectors directly in the store
+via `LoftStore` methods. Each mutating operation automatically reloads the
+store pointer, since allocation may trigger reallocation.
+
+### Low-Level Allocation
+
+```rust
+// Allocate raw words (auto-reloads ptr)
+let rec = unsafe { store.claim(words) };
+
+// Resize a record (may relocate; auto-reloads ptr)
+let new_rec = unsafe { store.resize(rec, new_words) };
+
+// Manually refresh ptr/size
+unsafe { store.reload() };
+```
+
+### Record Allocation
+
+```rust
+// Allocate a struct record (store_nr derived from the LoftStore handle)
+let r = unsafe { store.alloc_record(words) };
+// r.rec = record number, r.pos = 8 (data start)
+```
+
+### Vector Operations
+
+```rust
+// Create an empty vector with pre-allocated capacity
+let mut v = unsafe { store.alloc_vector(elem_size, capacity) };
+
+// Append elements (handles resize automatically)
+unsafe { store.vector_push_int(&mut v, 42) };
+unsafe { store.vector_push_long(&mut v, 123i64) };
+unsafe { store.vector_push_float(&mut v, 3.14) };
+
+// Read current length
+let len = unsafe { store.vector_len(&v) };
+```
+
+The `vector_push_*` methods update `v.rec` in place if the vector record
+moves during resize. The minimum allocation is 11 elements (matching the
+interpreter's convention). The `store_nr` is derived automatically from
+the `LoftStore` handle.
+
+### Callback Architecture
+
+The allocation callbacks bridge native code back into the interpreter:
+
+```
+Native extension                    Interpreter (via thread-local)
+─────────────────                   ──────────────────────────────
+store.claim(words)
+  → claim_fn(ctx, words)    ──→    Store::claim(words) → rec
+  → reload_fn(ctx, &ptr, &size) →  read store.base_ptr(), capacity
+  ← updated ptr, size
+  ← rec
+```
+
+`LoftStoreCtx` encodes the `store_nr`; the thread-local `CURRENT_STORES`
+holds a pointer to the interpreter's `Stores` for the duration of the call.
+
+### Safety Guarantees
+
+The callback infrastructure provides two safety mechanisms:
+
+1. **Panic containment**: All three callbacks (`ffi_claim`, `ffi_resize`,
+   `ffi_reload`) wrap their bodies in `std::panic::catch_unwind` to prevent
+   panics from propagating across the C-ABI boundary. On panic, `claim`
+   returns 0, `resize` returns the original record unchanged, and `reload`
+   is a no-op.
+
+2. **RAII cleanup**: `dispatch_call` uses a guard struct whose `Drop` impl
+   clears `CURRENT_STORES`, ensuring the thread-local is reset even if the
+   native function or a callback panics.
+
+---
+
+## Code Generation: `loft generate`
+
+The `loft generate` command reads a package's `.loft` declarations and produces
+a `native/src/generated.rs` file with correct C-ABI signatures and `todo!()`
+bodies.
+
+### Usage
+
+```sh
+cd lib/random
+loft generate .          # writes native/src/generated.rs
+```
+
+### What It Generates
+
+For each `#native` declaration:
+
+1. **C-ABI function signature** with proper type marshalling:
+   - Scalars pass directly (`i32`, `i64`, `f64`, `f32`, `bool`)
+   - `text` becomes `(name_ptr: *const u8, name_len: usize)` with a
+     `let name = unsafe { loft_ffi::text(...) }` body line
+   - Struct/vector/collection becomes `LoftRef`, with `LoftStore` prepended
+   - Simple enums become `u8`
+
+2. **Return type handling:**
+   - Scalars return directly
+   - `text` returns `LoftStr` with `loft_ffi::ret(result)` pattern
+   - Struct/vector returns `LoftRef`
+
+3. **Field offset modules** for struct types referenced as parameters:
+   ```rust
+   pub mod image_fields {
+       pub const NAME: u16 = 0;   // text (record ref)
+       pub const WIDTH: u16 = 4;  // integer
+       pub const HEIGHT: u16 = 8; // integer
+       pub const DATA: u16 = 12;  // vector ref
+   }
+   ```
+
+4. **`todo!()` bodies** for the developer to fill in.
+
+### Example Output
+
+For `fn rand_indices(n: integer) -> vector<integer>; #native "n_rand_indices"`:
+
+```rust
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_rand_indices(
+    store: loft_ffi::LoftStore,
+    n: i32,
+) -> loft_ffi::LoftRef /* vector<integer> */ {
+    let result: loft_ffi::LoftRef = todo!("implement n_rand_indices(n)");
+    result
+}
+```
 
 ---
 
 ## Testing Native Packages
 
-### Running package tests
-
-From the package directory:
+### From the package directory
 
 ```sh
-cd lib/imaging
+cd lib/random
 loft test                    # runs all tests in tests/
-loft test 14-image           # runs a single test file
+loft test 15-random          # runs a single test file
 ```
 
 `loft test` reads `loft.toml`, adds `src/` to the import path, resolves
-dependencies via the parent directory, and discovers test files in `tests/`.
+dependencies, and discovers test files in `tests/`. Native libraries are
+registered before parsing test files.
 
-For packages with `native = "stem"` in `loft.toml`, the interpreter
-registers the package's own native library path before parsing test files.
-Dependency native libraries are discovered automatically when the parser
-processes `use` statements.
-
-### Testing from the project root
+### From the project root
 
 ```sh
 make test-packages           # discovers lib/*/tests/*.loft and runs loft test
 make ci                      # includes test-packages after cargo test
 ```
 
-`make test-packages` iterates over `lib/*/tests/*.loft`, entering each
-package directory and running `loft test` so that `loft.toml` is found
-and dependencies are resolved correctly.
-
 ---
 
-## OpenGL — Concrete Example
-
-### User Code
-
-```loft
-use opengl;
-
-fn main() {
-    window = gl_create_window(800, 600, "Hello OpenGL");
-    gl_clear(0x002244ff);
-    gl_present(window);
-    gl_destroy_window(window);
-}
-```
-
-No prefix qualification is needed (consistent with how `use mylib;` works today).
-
-### Package on Disk
-
-```
-~/.loft/libs/opengl/
-  loft.toml
-  src/
-    opengl.loft
-  native/
-    libloft_opengl.so      # Linux
-    libloft_opengl.dylib   # macOS
-    loft_opengl.dll        # Windows
-```
-
-`loft.toml`:
-
-```toml
-[package]
-name    = "opengl"
-version = "0.1.0"
-loft    = ">=1.0"
-
-[library]
-entry  = "src/opengl.loft"
-native = "loft_opengl"
-```
-
-### `opengl.loft` — API Surface
-
-```loft
-// Opaque window handle
-type Window size(4);
-
-// Declare functions backed by native Rust implementations.
-// The `#native` annotation names the symbol registered by loft_register_v1.
-pub fn gl_create_window(width: integer, height: integer, title: text) -> Window;
-#native "n_gl_create_window"
-
-pub fn gl_clear(color: integer);
-#native "n_gl_clear"
-
-pub fn gl_present(window: Window);
-#native "n_gl_present"
-
-pub fn gl_destroy_window(window: Window);
-#native "n_gl_destroy_window"
-```
-
-`#native "name"` is a new annotation parallel to the existing `#rust "..."` inline-code
-annotation. At bytecode generation the compiler looks up `name` in `state.library_names`.
-If not found, a fatal diagnostic is emitted: _"native function 'name' was not registered;
-is the extension loaded?"_
-
-### Native Functions
-
-OpenGL functions don't access stores — they call the `gl` crate directly.
-These are independent functions that will use the host callback interface
-(once implemented).  For now, they are registered as interpreter built-ins:
-
-```rust
-// src/native_gl.rs (in the loft interpreter, behind "opengl" feature)
-fn n_gl_create_window(stores: &mut Stores, stack: &mut DbRef) {
-    let title  = *stores.get::<Str>(stack);
-    let height = *stores.get::<i32>(stack);
-    let width  = *stores.get::<i32>(stack);
-    // ... platform-specific window creation ...
-    stores.put(stack, handle as i32);
-}
-```
-
-In `--native` mode, the generated code calls these directly from the loft rlib.
-
-When the host callback interface (LoftHost) is implemented, these functions
-will move to a `lib/opengl/native/` cdylib that only pops/pushes stack values
-through C-ABI callbacks and calls `gl::*` functions independently.
-
----
-
-## Build Tooling
-
-### Pure-Loft Authors
-
-No build step needed. Ship a directory with `.loft` files and an optional `loft.toml`.
-
-### Native Extension Authors
-
-Standard Cargo workflow:
-
-```sh
-cargo build --release --target x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-apple-darwin
-cargo build --release --target x86_64-pc-windows-gnu
-```
-
-The interpreter resolves the platform filename at runtime:
-- Linux: `lib<name>.so`
-- macOS: `lib<name>.dylib`
-- Windows: `<name>.dll`
-
-### Distribution
-
-Ship as a directory tree:
-
-```
-opengl-0.1.0/
-  loft.toml
-  src/
-  native/
-  README.md
-  LICENSE
-```
-
-Users place the directory anywhere in `LOFT_LIB` or in their project's `lib/` directory.
-No package registry is defined at this stage — deferred to Phase 3.
-
----
-
-## Compatibility
-
-### Stable API Surface
-
-| Element | Notes |
-|---------|-------|
-| `fn(&mut Stores, &mut DbRef)` | The `Call` type for store-coupled functions |
-| `stores.get::<T>(stack)` / `stores.put(stack, val)` | Stack accessors for primitives |
-| `DbRef`, `Str` in `keys.rs` | Heap pointer and string view types |
-| `#native "n_func"` annotation | Declares a native-backed function in `.loft` |
-
-**Store-coupled functions** live in `src/native.rs` and are part of the
-interpreter.  They use `Stores`/`DbRef` directly — safe because they run in
-the same compilation unit.
-
-**Independent functions** (future) use a `repr(C)` callback table (`LoftHost`)
-that only passes C-ABI primitives across the cdylib boundary.  No Rust struct
-layouts are shared.
-
-**`--native` mode** links everything as rlibs in one `rustc` invocation — all
-types are shared, all calls are direct, zero overhead.
-
----
-
-## Security and Sandboxing
+## Security
 
 ### Native Extensions Are Fully Trusted
 
-Loading via `dlopen` gives the plugin full process access. There is no sandbox. This is
-the correct tradeoff for a developer-tooling scripting language and mirrors the model of
-Python ctypes, Ruby FFI, and Node.js native addons.
-
-When a native extension is loaded, the interpreter prints to stderr:
-
-```
-loft: loading native extension 'opengl' from /home/user/.loft/libs/opengl/native/libloft_opengl.so
-```
-
-This is suppressible with `--quiet`.
+Loading via `dlopen` gives the plugin full process access. No sandbox. This
+mirrors Python ctypes, Ruby FFI, and Node.js native addons.
 
 ### File-System Sandboxing Is Not Inherited
 
-The `--project` flag sandboxes loft script file I/O. This does NOT apply to native
-extension code. Extension authors are responsible for their own I/O behaviour.
-
-### Future: `--no-native` Flag
-
-A `--no-native` flag would disable all native extension loading for use in CI or
-untrusted-script environments. Implementation: if the flag is set and
-`p.pending_native_libs` is non-empty, exit with a fatal diagnostic before
-`load_native_extensions()` is called. Design this flag into `main.rs` from Phase 2,
-even if not exposed until Phase 3.
-
-### Future: Hash Verification
-
-A `loft.toml` field `native_sha256` could record the expected SHA-256 of each
-platform's shared library for verification before loading. Deferred until a package
-registry exists to make hash distribution meaningful.
+The `--project` flag sandboxes loft script file I/O. This does NOT apply to
+native extension code.
 
 ---
 
-## Phased Rollout
+## Shipped Libraries
 
-### Phase 1 — Pure-Loft Package Layout ✓ shipped (2026-03-16)
-
-**Goal:** A developer can ship a multi-file loft library in a directory with `loft.toml`,
-place it in `LOFT_LIB`, and use it with `use mylib;`.
-
-**Shipped changes:**
-
-1. `src/parser/mod.rs` — `lib_path()` extended with steps 7c/7d for the
-   `<dir>/<id>/src/<id>.loft` layout, in both `lib_dirs` and `LOFT_LIB`.
-2. `src/manifest.rs` (new) — minimal `loft.toml` line-scanner.  Checks the
-   `loft = ">=X.Y"` version requirement; emits a fatal diagnostic on mismatch.
-   Reads the optional `[library] entry` override.
-3. `tests/package_layout.rs` + `tests/lib/testpkg/` — two integration tests
-   (layout discovery and version-mismatch rejection).
-
-No changes to `State`, `Stores`, `native.rs`, or `compile.rs`.
+| Library | Type | Native deps | Functions |
+|---------|------|------------|-----------|
+| `random` | Native | `rand_core`, `rand_pcg` | `rand`, `rand_seed`, `rand_indices` |
+| `server` | Native | std::net only | TCP listen/accept, HTTP parse, WebSocket |
+| `web` | Native | `ureq` | HTTP client (`http_do`) |
+| `imaging` | Native | `png` | PNG decode (`load_png`) |
+| `graphics` | Native | `glutin`, `gl` | OpenGL window/rendering |
+| `crypto` | Pure loft | — | SHA-256, HMAC, base64 |
+| `game_protocol` | Pure loft | — | Multiplayer messaging |
+| `shapes` | Pure loft | — | Shape helpers |
+| `arguments` | Pure loft | — | CLI argument parsing |
 
 ---
 
-### Phase 2 — Native Extension Loading ✓ shipped
+## Key Source Files
 
-**Goal:** A Rust crate compiled to a shared library can register new native functions
-with the interpreter via `use mylib;` in a loft script.
-
-**Shipped changes:**
-
-1. `Cargo.toml` — `libloading` under `native-extensions` feature (now default).
-2. `src/extensions.rs` — `load_all()`, `load_one()` with pure-Rust `loft_register`,
-   `auto_build_native()` for on-demand compilation.
-3. `src/manifest.rs` — parses `native = "..."`, `[native]`, `[native.functions]`,
-   `[native.wasm]` sections.
-4. `src/parser/mod.rs` — `pending_native_libs` populated with auto-build fallback.
-5. `src/main.rs` — calls `extensions::load_all()` between `byte_code()` and execution.
-6. `src/test_runner.rs` — calls `extensions::load_all()` per test function.
-7. `src/compile.rs` — `#native "name"` registers panic-stubs replaced at load time.
+| File | Role |
+|------|------|
+| `src/extensions.rs` | cdylib loader, auto-marshalling dispatcher, allocation callbacks |
+| `src/native.rs` | Built-in function registry (`FUNCTIONS` table, `init()`) |
+| `src/manifest.rs` | `loft.toml` reader and version checker |
+| `src/main.rs` | `generate_native_stubs()` for `loft generate` |
+| `loft-ffi/src/lib.rs` | `LoftRef`, `LoftStore`, `LoftStr`, allocation helpers |
 
 ---
 
-### Phase 3 — Registry and Install (target: 0.8.4)
-
-Full design in [REGISTRY.md](REGISTRY.md).
-
-#### Phase 3a — Registry lookup and download
-
-A plain text registry file (`~/.loft/registry.txt` or `LOFT_REGISTRY`) maps
-package names and versions to `.zip` download URLs:
-
-```
-# name  version  url
-graphics 0.1.0  https://example.com/graphics-0.1.0.zip
-graphics 0.2.0  https://example.com/graphics-0.2.0.zip
-opengl   0.1.0  https://example.com/opengl-0.1.0.zip
-```
-
-New CLI behaviour:
-- `loft install graphics` — find latest version in registry, download zip, install
-- `loft install graphics@0.1.0` — install specific version
-- `loft install .` / `loft install /path` — local install unchanged (Phase 1)
-
-New source file: `src/registry.rs` with `read_registry()`, `find_package()`, and
-`download_and_extract()` (feature-gated under `registry`).
-
-New Cargo deps (optional, `registry` feature, on by default):
-- `ureq = "2"` — blocking HTTP download
-- `zip  = "2"` — zip extraction
-
-#### Phase 3b — Registry management commands (future)
-
-- `loft registry list` / `search` / `fetch <url>` / `add`
-
-### Phase 4 — Generic Native Dispatch (target: 0.9.0)
-
-**Goal:** Library authors ship a cdylib that the interpreter loads without any changes
-to interpreter source code.  See detailed design in
-[Phase 4 — Generic Native Dispatch](#phase-4--generic-native-dispatch-eliminates-recompilation).
-
-- **4a**: `LoftHostVTable`, generic `load_one()`, `wire_plugins()`, `loft-plugin-api` crate
-- **4b**: Migrate existing libraries (web, imaging, random) to vtable ABI
-- **4c**: Remove hardcoded symbols from `extensions.rs` and per-function glue from `native.rs`
-
-#### Deferred
-
-- SHA-256 hash verification of downloaded zips.
-- `--no-native` flag for sandboxed environments.
-- Cross-platform pre-built binary packages distributed by library authors.
-- Documentation generation from external package `.loft` API files.
-
----
-
-## Phase 4 — Generic Native Dispatch (eliminates recompilation)
-
-### Problem statement
-
-The Phase 2 implementation in `extensions.rs` is a **closed registry**.  Every C-ABI
-symbol is hardcoded: a dedicated `OnceLock<SpecificFnType>`, a getter function, and
-a probe in `load_one()`.  The glue in `native.rs` (`n_http_do`, `n_load_png`, etc.)
-is also hand-written per function.  Adding any new native library requires changes to
-three files and a recompile of the interpreter.
-
-The pure-loft side already works generically — `use database;` resolves through the
-search chain, reads `loft.toml`, and loads `.loft` files without any compiler changes.
-The bottleneck is **only** the native (cdylib) side.
-
-### Design goal
-
-A library author ships a cdylib + `.loft` declarations.  The interpreter loads and
-calls it without any code changes to `extensions.rs`, `native.rs`, or any other
-interpreter source file.
-
-### What already works
-
-| Component | Generic? | Notes |
-|-----------|----------|-------|
-| `#native "symbol"` declarations | Yes | Parser handles any symbol name |
-| `register_native_stubs()` | Yes | Registers panic-stubs for any `#native` symbol |
-| `replace_static_fn()` | Yes | Can swap any stub with a real function pointer |
-| `loft.toml` manifest | Yes | Declares `native = "stem"` |
-| `auto_build_native()` | Yes | Builds any cdylib on demand |
-| `load_one()` in `extensions.rs` | **No** | Hardcoded symbol list |
-| Glue in `native.rs` | **No** | Hand-written per function |
-
-### Architecture: universal calling convention + self-registering cdylib
-
-The design has three parts that together remove all per-library coupling from
-the interpreter.
-
-#### Part 1 — Universal native function signature
-
-Instead of each cdylib function having a unique C signature, all native functions
-use a single stack-based calling convention.  The interpreter already uses a stack
-(`DbRef`-based) for all function calls — the native function simply receives access
-to that same stack region through a callback table.
-
-```c
-// loft-plugin-api.h — the stable C-ABI interface
-
-typedef struct {
-    // Pop an integer from the loft stack
-    int32_t  (*pop_int)(void* ctx);
-    int64_t  (*pop_long)(void* ctx);
-    double   (*pop_float)(void* ctx);
-    // Pop a text value — returns (ptr, len) valid until next pop/push
-    void     (*pop_text)(void* ctx, const uint8_t** out_ptr, size_t* out_len);
-    // Pop a boolean
-    int32_t  (*pop_bool)(void* ctx);
-
-    // Push results back onto the loft stack
-    void     (*push_int)(void* ctx, int32_t val);
-    void     (*push_long)(void* ctx, int64_t val);
-    void     (*push_float)(void* ctx, double val);
-    void     (*push_text)(void* ctx, const uint8_t* ptr, size_t len);
-    void     (*push_bool)(void* ctx, int32_t val);
-    void     (*push_null)(void* ctx, int32_t type_size);
-} LoftHostVTable;
-
-// Every native function gets this uniform signature
-typedef void (*LoftNativeFn)(void* ctx, const LoftHostVTable* host);
-```
-
-The `void* ctx` is an opaque pointer to `(&mut Stores, &mut DbRef)` — the cdylib
-never sees Rust types.  The vtable callbacks are thin wrappers around the existing
-`stores.get::<T>()` / `stores.put()` calls.
-
-**Why a vtable instead of libffi?**  The vtable approach requires no external
-dependency, is trivially portable, and matches how the interpreter already works.
-Each callback is 2-3 lines of Rust wrapping the existing stack accessors.
-
-#### Part 2 — Self-registering cdylib via `loft_register`
-
-Each cdylib exports exactly one symbol:
-
-```c
-typedef void (*RegisterFn)(const char* name, LoftNativeFn fn_ptr);
-
-// Exported by the cdylib
-void loft_register(RegisterFn register_fn);
-```
-
-When the interpreter loads the cdylib, it calls `loft_register`, passing a callback.
-The cdylib calls `register_fn` for each native function it provides:
-
-```c
-// In lib/web/native/src/lib.rs (after migration)
-static void http_do_impl(void* ctx, const LoftHostVTable* host) {
-    // Pop arguments in reverse declaration order (stack is LIFO)
-    const uint8_t* body_ptr; size_t body_len;
-    host->pop_text(ctx, &body_ptr, &body_len);
-    const uint8_t* url_ptr; size_t url_len;
-    host->pop_text(ctx, &url_ptr, &url_len);
-    const uint8_t* method_ptr; size_t method_len;
-    host->pop_text(ctx, &method_ptr, &method_len);
-
-    // Do the actual work (ureq call, etc.)
-    int32_t status = /* ... */;
-
-    // Push result
-    host->push_int(ctx, status);
-}
-
-void loft_register(RegisterFn reg) {
-    reg("n_http_do", http_do_impl);
-    reg("n_http_body", http_body_impl);
-}
-```
-
-#### Part 3 — Generic loader replaces hardcoded `extensions.rs`
-
-The new `load_one()` becomes fully generic:
-
-```rust
-// extensions.rs — new generic loader (replaces hardcoded OnceLock approach)
-
-type LoftNativeFn = unsafe extern "C" fn(*mut c_void, *const LoftHostVTable);
-
-/// Function pointer table populated by loft_register callbacks.
-static PLUGIN_FNS: Mutex<HashMap<String, LoftNativeFn>> = Mutex::new(HashMap::new());
-
-fn load_one(path: &str) {
-    let lib = Library::new(path)?;
-
-    // Look for the self-registration entry point
-    if let Ok(register) = lib.get::<extern "C" fn(RegisterFn)>(b"loft_register\0") {
-        register(register_callback);
-    }
-    std::mem::forget(lib);
-}
-
-extern "C" fn register_callback(name: *const c_char, fn_ptr: LoftNativeFn) {
-    let name = unsafe { CStr::from_ptr(name) }.to_str().unwrap();
-    PLUGIN_FNS.lock().unwrap().insert(name.to_owned(), fn_ptr);
-}
-```
-
-After all cdylibs are loaded, the interpreter wires registered functions into the
-existing `State` mechanism:
-
-```rust
-pub fn wire_plugins(state: &mut State) {
-    let fns = PLUGIN_FNS.lock().unwrap();
-    for (name, fn_ptr) in fns.iter() {
-        let ptr = *fn_ptr;
-        // Create a closure that sets up the vtable and calls the plugin fn
-        let call: Call = move |stores: &mut Stores, stack: &mut DbRef| {
-            let vtable = build_host_vtable();
-            let ctx = (stores as *mut Stores, stack as *mut DbRef);
-            unsafe { ptr(ctx as *mut c_void, &vtable) };
-        };
-        state.replace_static_fn(name, call);
-    }
-}
-```
-
-### How a library author's workflow changes
-
-**Before (Phase 2) — requires interpreter recompilation:**
-
-1. Write cdylib with unique C-ABI signature per function
-2. Add type alias + `OnceLock` + getter in `extensions.rs`
-3. Add symbol probe in `load_one()`
-4. Write glue function in `native.rs` that marshals stack ↔ C-ABI
-5. Recompile interpreter
-
-**After (Phase 4) — no interpreter changes:**
-
-1. Write cdylib using the `LoftHostVTable` callbacks
-2. Export `loft_register` that self-registers all functions
-3. Write `.loft` declarations with `#native "n_my_func"`
-4. Ship directory with `loft.toml` + cdylib + `.loft` files
-5. Done — interpreter loads and calls it generically
-
-### Migration path for existing libraries
-
-The hardcoded symbols in `extensions.rs` become **legacy compat**.  Existing
-libraries (imaging, random, web) continue working as-is.  The generic loader
-checks for `loft_register` first, then falls back to probing hardcoded symbols.
-
-Migration per library:
-1. Add `loft_register` export that registers the same functions via the vtable ABI
-2. Keep old `extern "C"` exports temporarily for backwards compat
-3. Remove glue from `native.rs` once the generic path handles that library
-4. Eventually remove all hardcoded symbols from `extensions.rs`
-
-### Vtable implementation in Rust
-
-The host vtable callbacks are thin wrappers.  Example for `pop_int`:
-
-```rust
-unsafe extern "C" fn pop_int(ctx: *mut c_void) -> i32 {
-    let (stores, stack) = &mut *(ctx as *mut (&mut Stores, &mut DbRef));
-    *stores.get::<i32>(stack)
-}
-```
-
-The full vtable is ~30 lines — one wrapper per primitive type, each 2-3 lines.
-
-### Pop order convention
-
-The `.loft` declaration determines argument order.  For:
-
-```loft
-fn http_do(method: text, url: text, body: text) -> integer;
-#native "n_http_do"
-```
-
-The bytecode pushes arguments left-to-right (method, url, body).  The native
-function pops them in **reverse order** (body, url, method) because the stack
-is LIFO.  This matches the existing convention used by all `native.rs` glue
-functions today — no change for library authors who read the existing code.
-
-### Returning complex types
-
-For functions that return text or structs, the vtable provides `push_text`
-(copies bytes into a store-allocated string) and can be extended with
-`push_record` / `claim_buffer` for structured data.  The key constraint
-remains: **no `Stores` or `DbRef` types cross the C-ABI boundary**.
-
-### Scope estimate
-
-| Component | Lines | Phase |
-|-----------|-------|-------|
-| `LoftHostVTable` definition + callbacks | ~60 | 4a |
-| Generic `load_one()` + `register_callback` | ~40 | 4a |
-| `wire_plugins()` to connect to `State` | ~20 | 4a |
-| `loft-plugin-api` C header + Rust helper crate | ~80 | 4a |
-| Migrate `lib/web` to vtable ABI | ~40 | 4b |
-| Migrate `lib/imaging` to vtable ABI | ~50 | 4b |
-| Migrate `lib/random` to vtable ABI | ~30 | 4b |
-| Remove hardcoded symbols from `extensions.rs` | -100 | 4c |
-| Remove per-function glue from `native.rs` | -80 | 4c |
-
-Net result: ~150 lines of generic infrastructure replaces ~180 lines of
-per-library boilerplate, and no future library ever touches interpreter source.
-
-### Relation to `--native` codegen
-
-The `--native` path is unaffected.  It compiles everything as rlibs in one
-`rustc` invocation — types are shared, calls are direct.  The vtable ABI
-is exclusively for the interpreter's `dlopen` path.
-
----
-
-## Code Touchpoints Summary
-
-| File | Change | Phase |
-|------|--------|-------|
-| `src/parser/mod.rs` | Extend `lib_path()` for directory layout; add `lib_path_manifest()`; add `pending_native_libs` to `Parser`; populate in `use` loop | 1 + 2 |
-| `src/manifest.rs` | New: minimal `loft.toml` reader, version check | 1 |
-| `src/main.rs` | Add `extensions::load_all()` call between `byte_code()` and `execute_argv()` | 2 |
-| `src/extensions.rs` | New: `load_all()`, `load_one()`, trampoline | 2 |
-| `src/compile.rs` | Handle `#native "name"` annotation in `byte_code()` | 2 |
-| `Cargo.toml` | Add `libloading` under `native-extensions` feature | 2 |
-| `src/extensions.rs` | Generic `load_one()` with `loft_register` entry point; `LoftHostVTable` definition + callbacks; `wire_plugins()` | 4a |
-| `plugin-api/` | New workspace member: `loft-plugin-api` crate with C header and Rust helpers | 4a |
-| `lib/web/native/src/lib.rs` | Migrate to vtable ABI, export `loft_register` | 4b |
-| `lib/imaging/native/src/lib.rs` | Migrate to vtable ABI, export `loft_register` | 4b |
-| `lib/random/native/src/lib.rs` | Migrate to vtable ABI, export `loft_register` | 4b |
-| `src/extensions.rs` | Remove hardcoded `OnceLock` symbols and `load_one()` probes | 4c |
-| `src/native.rs` | Remove per-library glue functions (`n_http_do`, `n_load_png`, `n_rand*`) | 4c |
-
----
-
-## See also
-- [PLANNING.md](PLANNING.md) — Version milestones and priority-ordered backlog
+## See Also
 - [COMPILER.md](COMPILER.md) — `lib_path()` and `parse_file()` internals
 - [INTERNALS.md](INTERNALS.md) — `State::static_fn()` and `native::init()` details
-- [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process and quality gates
+- [REGISTRY.md](REGISTRY.md) — Package registry design
