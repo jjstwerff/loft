@@ -4,7 +4,6 @@
 use super::State;
 use crate::data::{Block, Context, Data, I32, Type, Value};
 use crate::stack::Stack;
-use crate::variables::Function;
 use crate::variables::size;
 use std::collections::HashSet;
 use std::sync::Arc;

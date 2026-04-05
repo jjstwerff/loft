@@ -275,10 +275,15 @@ pub unsafe extern "C" fn loft_gl_set_uniform_mat4(
     }
 }
 
-// ── Store-aware GL functions (use LoftStore to read loft vectors) ─────────
+// ── Store-aware GL functions (interpreter cdylib path — LoftStore/LoftRef) ───
+//
+// These are called at runtime by the interpreter via dynamic library loading.
+// The interpreter's auto-marshalling passes LoftStore + LoftRef for vector args.
+// Do NOT call these from native-compiled Rust code (loft_ffi version conflict).
 
 /// Upload a vector<single> as a vertex buffer. Returns VAO handle.
 /// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
+/// Interpreter path: receives LoftStore + LoftRef for the data vector.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_gl_upload_vertices(
     store: loft_ffi::LoftStore,
@@ -295,6 +300,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
 }
 
 /// Set a mat4 uniform from a vector<float> (16 elements, column-major).
+/// Interpreter path: receives LoftStore + LoftRef for the mat vector.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_gl_set_uniform_mat4(
     store: loft_ffi::LoftStore,
@@ -315,6 +321,54 @@ pub unsafe extern "C" fn n_gl_set_uniform_mat4(
         let val = unsafe { store.get_float(mat.rec, 8 + i as u32 * 8, 0) };
         buf[i] = val as f32;
     }
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
+        if loc >= 0 {
+            gl::UniformMatrix4fv(loc, 1, gl::FALSE, buf.as_ptr());
+        }
+    }
+}
+
+// ── Raw-pointer GL functions (native compilation path) ────────────────────
+//
+// These are called from loft-generated Rust code (--native).  The codegen
+// extracts (*const ELEM_TYPE, count: u32) pairs from the stores directly,
+// so no LoftStore or LoftRef is involved — no loft_ffi version conflict.
+
+/// Upload a vertex buffer from a raw f32 pointer.  Returns VAO handle.
+/// data_ptr/count: elements in the vector<single>; stride: floats per vertex.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn loft_gl_upload_vertices(
+    data_ptr: *const f32,
+    count: u32,
+    stride: i32,
+) -> i32 {
+    let n_vertices = if stride == 0 { 0 } else { count / stride as u32 };
+    let mut vao = 0u32;
+    let mut vbo = 0u32;
+    unsafe { loft_gl_upload_mesh(data_ptr, n_vertices, stride as u32, &mut vao, &mut vbo) };
+    vao as i32
+}
+
+/// Set a mat4 uniform from a raw f64 pointer (vector<float> element type).
+/// Converts the 16 f64 values to f32 before passing to OpenGL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn loft_gl_set_mat4(
+    program: i32,
+    name_ptr: *const u8,
+    name_len: usize,
+    mat_ptr: *const f64,
+    mat_count: u32,
+) {
+    if mat_count < 16 {
+        return;
+    }
+    let mut buf = [0.0f32; 16];
+    for i in 0..16usize {
+        buf[i] = unsafe { *mat_ptr.add(i) } as f32;
+    }
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
         let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
@@ -770,15 +824,16 @@ pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i32
 }
 
 /// Measure text width in pixels at the given font size.
+/// Takes and returns f64 to match loft's `float` type.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_measure_text(
     font_idx: i32,
     text_ptr: *const u8,
     text_len: usize,
-    size: f32,
-) -> f32 {
+    size: f64,
+) -> f64 {
     let s = unsafe { loft_ffi::text(text_ptr, text_len) };
-    text::measure_text(font_idx, s, size)
+    text::measure_text(font_idx, s, size as f32) as f64
 }
 
 /// Rasterize text into an alpha bitmap.

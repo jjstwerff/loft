@@ -850,6 +850,7 @@ fn returned_var(expr: &Value) -> u16 {
 
 /// Recursively collect every variable freed by `OpFreeRef` in `ir`.
 /// Used by `check_ref_leaks` to verify no Reference variable is leaked.
+#[cfg(debug_assertions)]
 fn collect_freed_vars(ir: &Value, free_ref_nr: u32, result: &mut HashSet<u16>) {
     match ir {
         Value::Call(d_nr, args) if *d_nr == free_ref_nr => {

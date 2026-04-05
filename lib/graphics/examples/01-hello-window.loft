@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL Chapter 1: Hello Window
 // https://learnopengl.com/Getting-started/Hello-Window
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

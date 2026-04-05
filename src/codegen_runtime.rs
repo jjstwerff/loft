@@ -24,6 +24,16 @@ use crate::database::{ShowDb, Stores};
 use crate::keys::{Content, DbRef, Key, Str};
 use crate::ops;
 use crate::tree;
+
+/// Convert a DbRef to a loft_ffi::LoftRef for passing to native C-ABI functions.
+/// Both types have identical layout (u16 + u32 + u32).
+pub fn to_loft_ref(db: DbRef) -> loft_ffi::LoftRef {
+    loft_ffi::LoftRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: db.pos,
+    }
+}
 use crate::vector;
 use std::cell::RefCell;
 #[cfg(not(feature = "wasm"))]
@@ -1778,23 +1788,26 @@ pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
 // When native codegen calls `extern "C"` functions that take `LoftStore`,
 // it needs to build one from `&mut Stores`.  These helpers provide that.
 
-#[cfg(feature = "native-extensions")]
+std::thread_local! {
+    static CODEGEN_STORES: std::cell::Cell<*mut Stores> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
 unsafe extern "C" fn _ffi_claim(ctx: loft_ffi::LoftStoreCtx, words: u32) -> u32 {
     let store_nr = ctx._opaque as usize as u16;
-    crate::extensions::CURRENT_STORES.with(|c| {
+    CODEGEN_STORES.with(|c| {
         let stores = unsafe { &mut *c.get() };
         stores.allocations[store_nr as usize].claim(words)
     })
 }
 
-#[cfg(feature = "native-extensions")]
 unsafe extern "C" fn _ffi_reload(
     ctx: loft_ffi::LoftStoreCtx,
     out_ptr: *mut *mut u8,
     out_size: *mut u32,
 ) {
     let store_nr = ctx._opaque as usize as u16;
-    crate::extensions::CURRENT_STORES.with(|c| {
+    CODEGEN_STORES.with(|c| {
         let stores = unsafe { &*c.get() };
         let store = &stores.allocations[store_nr as usize];
         unsafe {
@@ -1804,22 +1817,19 @@ unsafe extern "C" fn _ffi_reload(
     });
 }
 
-#[cfg(feature = "native-extensions")]
 unsafe extern "C" fn _ffi_resize(ctx: loft_ffi::LoftStoreCtx, rec: u32, words: u32) -> u32 {
     let store_nr = ctx._opaque as usize as u16;
-    crate::extensions::CURRENT_STORES.with(|c| {
+    CODEGEN_STORES.with(|c| {
         let stores = unsafe { &mut *c.get() };
         stores.allocations[store_nr as usize].resize(rec, words)
     })
 }
 
 /// Build a `LoftStore` handle for calling `extern "C"` native functions that
-/// need store access.  Sets the thread-local `CURRENT_STORES` pointer so the
-/// FFI callbacks can reach back into the interpreter's stores.
-#[cfg(feature = "native-extensions")]
+/// need store access.  Sets a thread-local pointer so the FFI callbacks can
+/// reach back into the stores.
 pub fn make_loft_store(stores: &mut Stores, store_nr: u16) -> loft_ffi::LoftStore {
-    // Set thread-local so FFI callbacks can find stores.
-    crate::extensions::CURRENT_STORES.with(|c| c.set(std::ptr::from_mut::<Stores>(stores)));
+    CODEGEN_STORES.with(|c| c.set(std::ptr::from_mut::<Stores>(stores)));
     let store = &stores.allocations[store_nr as usize];
     loft_ffi::LoftStore {
         ptr: store.base_ptr(),

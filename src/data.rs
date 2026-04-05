@@ -1330,7 +1330,7 @@ impl Data {
         if self.def_nr(&fld) == u32::MAX {
             let d = self.add_def(&fld, lexer.pos(), DefType::Vector);
             self.definitions[d as usize].returned = fld_tp;
-            self.definitions[d as usize].parent = self.def_nr(&tp.name(self));
+            self.definitions[d as usize].parent = self.type_def_nr(tp);
         }
         let name = format!("main_vector<{}>", tp.name(self));
         let d_nr = self.def_nr(&name);

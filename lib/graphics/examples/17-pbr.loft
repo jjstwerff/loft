@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL: PBR (Physically Based Rendering)
 // https://learnopengl.com/PBR/Theory
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

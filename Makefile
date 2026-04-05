@@ -26,8 +26,11 @@ install: check-targets all
 	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
 	sudo cp -r default /usr/local/share/loft/
 	sudo install -m 644 target/release/libloft.rlib /usr/local/share/loft/
+	sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
 	sudo cp target/release/deps/*.rlib /usr/local/share/loft/deps/
+	sudo cp target/release/deps/*.so /usr/local/share/loft/deps/ 2>/dev/null || true
 	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
+	sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
 	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
 	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
 		sudo install -m 755 target/release/loft /usr/local/bin/loft; \

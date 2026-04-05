@@ -472,12 +472,14 @@ pub fn gl_draw(vao: integer, vertex_count: integer);
 
 // Upload a vector<single> as a vertex buffer. Returns VAO handle.
 // stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
+// Native codegen: loft_gl_upload_vertices(data_ptr: *const f32, count: u32, stride: i32) -> i32
 pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer;
-#native "n_gl_upload_vertices"
+#native "loft_gl_upload_vertices"
 
 // Set a mat4 uniform on a shader program. mat is a Mat4.m vector (16 floats).
+// Native codegen: loft_gl_set_mat4(program: i32, name_ptr, name_len, mat_ptr: *const f64, count: u32)
 pub fn gl_set_uniform_mat4(program: integer, name: text, mat: vector<float>);
-#native "n_gl_set_uniform_mat4"
+#native "loft_gl_set_mat4"
 
 // --- Uniforms ---
 

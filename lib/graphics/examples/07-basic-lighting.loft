@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL Chapter 9: Basic Lighting
 // https://learnopengl.com/Lighting/Basic-Lighting
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

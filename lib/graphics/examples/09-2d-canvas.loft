@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // Software Rendering: 2D Canvas
 //
 // Demonstrates the pure-loft 2D canvas rasterizer — no GPU needed.

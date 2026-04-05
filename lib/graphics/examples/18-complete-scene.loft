@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // Complete Scene: Combining All Techniques
 //
 // Demonstrates: a full scene using most of the graphics library features.

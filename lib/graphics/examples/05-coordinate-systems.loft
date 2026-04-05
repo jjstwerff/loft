@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL Chapter 6: Coordinate Systems
 // https://learnopengl.com/Getting-started/Coordinate-Systems
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

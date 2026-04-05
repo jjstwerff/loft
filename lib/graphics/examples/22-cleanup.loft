@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // GPU Resource Cleanup
 //
 // Demonstrates: proper cleanup of GPU resources.
