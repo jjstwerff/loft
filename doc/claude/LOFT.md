@@ -429,9 +429,44 @@ See [THREADING.md](THREADING.md) § fn Expression for how function references ar
 
 ---
 
+## String literals
+
+Loft has two string literal syntaxes. Both support `{expr}` interpolation.
+
+### Double-quoted strings (`"..."`)
+
+Single-line. Supports `\n`, `\t`, `\\`, `\"` escapes.
+
+```
+"hello {name}"           // interpolation
+"line1\nline2"           // escape sequences
+"literal {{braces}}"     // escape { } by doubling
+```
+
+### Backtick strings (`` `...` ``)
+
+**Multi-line.** Bare `"` is literal inside backtick strings (no escaping needed).
+Auto-strips common leading indentation based on the closing backtick's column.
+First and last lines are trimmed if they contain only whitespace.
+
+```
+shader = `
+  #version 330 core
+  layout (location = 0) in vec3 aPos;
+  void main() {
+      gl_Position = vec4(aPos, 1.0);
+  }
+`;
+
+msg = `Hello, {name}!
+  You have {count} messages.`;
+```
+
+Use backtick strings for GLSL shaders, multi-line templates, or text containing `"`.
+
 ## String formatting
 
-Strings support inline expressions and format specifiers using `{...}`:
+Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:
 
 ```
 "Value: {x}"             // embed variable

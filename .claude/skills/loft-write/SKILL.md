@@ -237,18 +237,48 @@ x as float                         // cast integer to float
 
 ---
 
-## String / text formatting
+## String / text literals
+
+Loft has **two** string literal syntaxes:
+
+### Double-quoted strings (`"..."`)
+
+Single-line only. Supports `{expr}` interpolation and `\n`, `\t`, `\\`, `\"` escapes.
 
 ```loft
-say("hello {name}");          // basic interpolation
-say("hex={n:#x}");            // hex with 0x prefix
-say("float={f:4.2}");         // width 4, 2 decimal places
-say("json={o:j}");            // JSON format
-say("pretty={o:#}");          // pretty-printed multi-line
-say("padded={n:>5}");         // right-align width 5
-say("zero={n:03}");           // zero-padded width 3
-say("{{literal braces}}");    // escape { } by doubling
+println("hello {name}");          // basic interpolation
+println("hex={n:#x}");            // hex with 0x prefix
+println("float={f:4.2}");         // width 4, 2 decimal places
+println("json={o:j}");            // JSON format
+println("pretty={o:#}");          // pretty-printed multi-line
+println("padded={n:>5}");         // right-align width 5
+println("zero={n:03}");           // zero-padded width 3
+println("{{literal braces}}");    // escape { } by doubling
 ```
+
+### Backtick strings (`` `...` ``)
+
+**Multi-line.** Supports `{expr}` interpolation. Bare `"` is literal (no escaping needed).
+Auto-strips common leading indentation (based on closing backtick column).
+First and last lines are trimmed if whitespace-only.
+
+```loft
+SHADER = `
+  #version 330 core
+  void main() {
+      gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+  }
+`;
+
+greeting = `Hello, {name}!
+  You have {count} messages.`;
+```
+
+**Use backtick strings for:**
+- GLSL shader source code
+- Multi-line templates (HTML, JSON, SQL)
+- Any text containing `"` characters
+- Heredoc-style blocks
 
 **Use `println()`** for line-oriented output and `print()` for output without a newline. The function `say()` does not exist in the stdlib — it appears in some older documentation examples but will produce a "not found" error at runtime.
 
