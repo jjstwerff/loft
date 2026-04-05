@@ -1,0 +1,79 @@
+// LearnOpenGL: Depth Testing
+// https://learnopengl.com/Advanced-OpenGL/Depth-testing
+//
+// Demonstrates: depth buffer visualization.
+// Renders overlapping cubes and a plane. A second pass visualizes the
+// depth buffer as grayscale to show near=white, far=black.
+//
+// Loft constructions used:
+//   gl_create_framebuffer, gl_framebuffer_texture — render to texture
+//   gl_create_color_texture — off-screen render target
+//   gl_draw_fullscreen_quad — post-process pass
+//   gl_viewport — match FBO resolution
+use graphics;
+use mesh;
+use math;
+
+VERT_DEPTH = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
+";
+
+FRAG_DEPTH_VIS = "
+#version 330 core
+out vec4 FragColor;
+void main() {
+    float d = gl_FragCoord.z;
+    // Linearize depth for visualization
+    float near = 0.1; float far = 50.0;
+    float ndc = d * 2.0 - 1.0;
+    float linear = (2.0 * near * far) / (far + near - ndc * (far - near));
+    float brightness = linear / far;
+    FragColor = vec4(vec3(1.0 - brightness), 1.0);
+}
+";
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "12 - Depth Testing Visualization") {
+    println("Failed to create window"); return;
+  }
+  dt_cube = mesh::cube();
+  dt_plane = mesh::plane("floor", 8.0, 8.0);
+  dt_shader = graphics::gl_create_shader(VERT_DEPTH, FRAG_DEPTH_VIS);
+  dt_cd = mesh::mesh_to_floats(dt_cube);
+  dt_pd = mesh::mesh_to_floats(dt_plane);
+  dt_cvao = graphics::gl_upload_vertices(dt_cd, 6);
+  dt_pvao = graphics::gl_upload_vertices(dt_pd, 6);
+  dt_cnv = dt_cube.triangles.len() * 3;
+  dt_pnv = dt_plane.triangles.len() * 3;
+  dt_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 50.0);
+  dt_view = math::mat4_look_at(
+    math::vec3(3.0, 3.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  dt_start = ticks();
+  for dt_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    dt_t = (ticks() - dt_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(0, 0, 0, 255));
+    graphics::gl_use_shader(dt_shader);
+    // Floor
+    dt_fm = math::mat4_identity();
+    dt_fmvp = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_fm));
+    graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_fmvp.m);
+    graphics::gl_draw(dt_pvao, dt_pnv);
+    // Cube 1 — near
+    dt_m1 = math::mat4_mul(math::mat4_translate(-1.0, 0.5, 1.0), math::mat4_rotate_y(dt_t * 0.5));
+    dt_mvp1 = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_m1));
+    graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_mvp1.m);
+    graphics::gl_draw(dt_cvao, dt_cnv);
+    // Cube 2 — far
+    dt_m2 = math::mat4_mul(math::mat4_translate(1.5, 0.5, -2.0), math::mat4_rotate_y(dt_t * 0.3));
+    dt_mvp2 = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_m2));
+    graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_mvp2.m);
+    graphics::gl_draw(dt_cvao, dt_cnv);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}

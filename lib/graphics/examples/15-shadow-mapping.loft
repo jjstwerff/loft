@@ -1,0 +1,152 @@
+// LearnOpenGL: Shadow Mapping
+// https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping
+//
+// Demonstrates: two-pass shadow mapping with depth texture.
+// Pass 1: render scene from light's perspective into a depth FBO.
+// Pass 2: render scene from camera, sampling the shadow map.
+//
+// Loft constructions used:
+//   gl_create_framebuffer       — off-screen render target
+//   gl_create_depth_texture     — depth-only texture for shadow map
+//   gl_framebuffer_texture      — attach depth texture to FBO
+//   gl_bind_framebuffer         — switch between shadow pass and screen
+//   gl_viewport                 — shadow map resolution differs from screen
+//   gl_set_uniform_int          — bind shadow map sampler
+use graphics;
+use mesh;
+use math;
+
+SHADOW_MAP_SIZE = 1024;
+
+VERT_SHADOW = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uLightMVP;
+void main() { gl_Position = uLightMVP * vec4(aPos, 1.0); }
+";
+
+FRAG_SHADOW = "
+#version 330 core
+void main() {}
+";
+
+VERT_SCENE = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform mat4 uLightMVP;
+out vec3 vFragPos;
+out vec3 vNormal;
+out vec4 vLightSpacePos;
+void main() {
+    vFragPos = vec3(uModel * vec4(aPos, 1.0));
+    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
+    vLightSpacePos = uLightMVP * vec4(vFragPos, 1.0);
+    gl_Position = uProj * uView * vec4(vFragPos, 1.0);
+}
+";
+
+FRAG_SCENE = "
+#version 330 core
+in vec3 vFragPos;
+in vec3 vNormal;
+in vec4 vLightSpacePos;
+out vec4 FragColor;
+uniform sampler2D uShadowMap;
+uniform vec3 uLightDir;
+uniform vec3 uObjectColor;
+float shadow_calc(vec4 lsp) {
+    vec3 proj = lsp.xyz / lsp.w;
+    proj = proj * 0.5 + 0.5;
+    if (proj.z > 1.0) return 0.0;
+    float closest = texture(uShadowMap, proj.xy).r;
+    float current = proj.z;
+    float bias = max(0.005 * (1.0 - dot(normalize(vNormal), normalize(-uLightDir))), 0.001);
+    return current - bias > closest ? 0.6 : 0.0;
+}
+void main() {
+    vec3 norm = normalize(vNormal);
+    vec3 ld = normalize(-uLightDir);
+    float diff = max(dot(norm, ld), 0.0);
+    float shadow = shadow_calc(vLightSpacePos);
+    vec3 result = (0.15 + (1.0 - shadow) * diff) * uObjectColor;
+    FragColor = vec4(result, 1.0);
+}
+";
+
+fn draw_scene(ds_shader: integer, ds_cvao: integer, ds_cnv: integer,
+              ds_pvao: integer, ds_pnv: integer, ds_t: float) {
+  // Floor
+  ds_fm = math::mat4_identity();
+  graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_fm.m);
+  graphics::gl_draw(ds_pvao, ds_pnv);
+  // Cube 1
+  ds_cm1 = math::mat4_mul(math::mat4_translate(-1.0, 0.5, 0.0), math::mat4_rotate_y(ds_t * 0.5));
+  graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_cm1.m);
+  graphics::gl_draw(ds_cvao, ds_cnv);
+  // Cube 2
+  ds_cm2 = math::mat4_mul(math::mat4_translate(1.5, 0.5, -1.0), math::mat4_rotate_y(ds_t * 0.3));
+  graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_cm2.m);
+  graphics::gl_draw(ds_cvao, ds_cnv);
+}
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "15 - Shadow Mapping") {
+    println("Failed to create window"); return;
+  }
+  sm_cube = mesh::cube();
+  sm_plane = mesh::plane("floor", 10.0, 10.0);
+  sm_shadow_shader = graphics::gl_create_shader(VERT_SHADOW, FRAG_SHADOW);
+  sm_scene_shader = graphics::gl_create_shader(VERT_SCENE, FRAG_SCENE);
+  sm_cd = mesh::mesh_to_floats(sm_cube);
+  sm_pd = mesh::mesh_to_floats(sm_plane);
+  sm_cvao = graphics::gl_upload_vertices(sm_cd, 6);
+  sm_pvao = graphics::gl_upload_vertices(sm_pd, 6);
+  sm_cnv = sm_cube.triangles.len() * 3;
+  sm_pnv = sm_plane.triangles.len() * 3;
+  // Shadow FBO
+  sm_depth_tex = graphics::gl_create_depth_texture(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+  sm_fbo = graphics::gl_create_framebuffer();
+  graphics::gl_framebuffer_texture(sm_fbo, 1, sm_depth_tex);
+  // Camera
+  sm_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  sm_view = math::mat4_look_at(
+    math::vec3(4.0, 4.0, 6.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  // Light (directional, from upper-left)
+  sm_light_dir = math::vec3(-2.0, -4.0, -1.0);
+  sm_light_proj = math::mat4_perspective(1.2, 1.0, 1.0, 20.0);
+  sm_light_view = math::mat4_look_at(
+    math::vec3(2.0, 4.0, 1.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  sm_light_vp = math::mat4_mul(sm_light_proj, sm_light_view);
+  sm_start = ticks();
+  graphics::gl_enable(GL_CULL_FACE);
+  for sm_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    sm_t = (ticks() - sm_start) as float / 1000000.0;
+    // Pass 1: shadow map
+    graphics::gl_viewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    graphics::gl_bind_framebuffer(sm_fbo);
+    graphics::gl_clear(rgba(0, 0, 0, 255));
+    graphics::gl_use_shader(sm_shadow_shader);
+    graphics::gl_set_uniform_mat4(sm_shadow_shader, "uLightMVP", sm_light_vp.m);
+    draw_scene(sm_shadow_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
+    // Pass 2: render with shadows
+    graphics::gl_bind_framebuffer(0);
+    graphics::gl_viewport(0, 0, 800, 600);
+    graphics::gl_clear(rgba(20, 20, 25, 255));
+    graphics::gl_use_shader(sm_scene_shader);
+    graphics::gl_set_uniform_mat4(sm_scene_shader, "uView", sm_view.m);
+    graphics::gl_set_uniform_mat4(sm_scene_shader, "uProj", sm_proj.m);
+    graphics::gl_set_uniform_mat4(sm_scene_shader, "uLightMVP", sm_light_vp.m);
+    graphics::gl_set_uniform_vec3(sm_scene_shader, "uLightDir", sm_light_dir.x, sm_light_dir.y, sm_light_dir.z);
+    graphics::gl_set_uniform_vec3(sm_scene_shader, "uObjectColor", 0.7, 0.7, 0.75);
+    graphics::gl_bind_texture(sm_depth_tex, 0);
+    graphics::gl_set_uniform_int(sm_scene_shader, "uShadowMap", 0);
+    draw_scene(sm_scene_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
