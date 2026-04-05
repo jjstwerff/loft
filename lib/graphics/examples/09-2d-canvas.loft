@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // Software Rendering: 2D Canvas
 //
 // Demonstrates the pure-loft 2D canvas rasterizer — no GPU needed.
@@ -57,6 +58,9 @@ fn main() {
   c.fill_circle(55, 95, 20, graphics::rgba(40, 120, 40, 255));
   c.fill_circle(40, 100, 15, graphics::rgba(50, 140, 50, 255));
   c.fill_circle(70, 100, 15, graphics::rgba(50, 140, 50, 255));
-  println("Drew 2D scene to canvas (400x300)");
-  println("Canvas pixel count: {c.data.len()}");
+  if c.save_png("09-canvas-demo.png") {
+    println("Saved 09-canvas-demo.png ({c.width}x{c.height})");
+  } else {
+    println("Failed to save PNG");
+  }
 }

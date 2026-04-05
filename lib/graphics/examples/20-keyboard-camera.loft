@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // Interactive Camera with WASD + Mouse
 //
 // Demonstrates: keyboard input for first-person camera movement.

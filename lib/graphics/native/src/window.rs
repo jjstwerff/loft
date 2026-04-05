@@ -21,15 +21,26 @@ pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, 
 
     let window_attrs = WindowAttributes::default()
         .with_title(title)
+        .with_transparent(false)
         .with_inner_size(LogicalSize::new(width, height));
 
-    let config_template = ConfigTemplateBuilder::new().with_alpha_size(8);
+    let config_template = ConfigTemplateBuilder::new();
 
     let (window, gl_config) = DisplayBuilder::new()
         .with_window_attributes(Some(window_attrs))
         .build(&event_loop, config_template, |configs| {
+            // Strongly prefer configs without an alpha channel — an alpha
+            // channel makes the compositor treat the window as transparent.
             configs
                 .reduce(|a, b| {
+                    let a_opaque = a.alpha_size() == 0;
+                    let b_opaque = b.alpha_size() == 0;
+                    if a_opaque && !b_opaque {
+                        return a;
+                    }
+                    if b_opaque && !a_opaque {
+                        return b;
+                    }
                     if a.num_samples() > b.num_samples() {
                         a
                     } else {
@@ -74,8 +85,30 @@ pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, 
 
     unsafe {
         gl::Enable(gl::DEPTH_TEST);
+        gl::Enable(gl::CULL_FACE);
         gl::Viewport(0, 0, width as i32, height as i32);
+        // Clear both front and back buffers to opaque black before the window
+        // becomes visible, preventing see-through artifacts on compositors.
+        gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
+    // Force alpha=1.0 before presenting (same as loft_gl_swap_buffers does).
+    unsafe {
+        gl::ColorMask(gl::FALSE, gl::FALSE, gl::FALSE, gl::TRUE);
+        gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT);
+        gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
+    }
+    let _ = surface.swap_buffers(&context);
+    unsafe {
+        gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+        gl::ColorMask(gl::FALSE, gl::FALSE, gl::FALSE, gl::TRUE);
+        gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT);
+        gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
+    }
+    let _ = surface.swap_buffers(&context);
 
     let _ = surface.set_swap_interval(
         &context,

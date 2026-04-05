@@ -1,0 +1,305 @@
+// Copyright (c) 2024 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tests for the arguments library.
+use arguments;
+
+// Handler functions: called when specific options are selected
+fn on_verbose(val: text) -> text {
+  "verbose_activated"
+}
+
+fn on_output(path: text) -> text {
+  "output:" + path
+}
+
+fn on_count(num: text) -> text {
+  "count:" + num
+}
+
+fn main() {
+  // --- create ---
+  a = arguments::create("myapp", "2.0", "A test application");
+  assert(a.name == "myapp", "create: name");
+  assert(a.version == "2.0", "create: version");
+  assert(a.description == "A test application", "create: description");
+  assert(a.ok(), "create: ok before parse");
+
+  // --- flag: long form ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Be verbose");
+  a.flag("d", "debug", "Debug mode");
+  assert(a.parse(["--verbose"]), "long flag: parse ok");
+  assert(a.has("verbose"), "long flag: verbose set");
+  assert(!a.has("debug"), "long flag: debug not set");
+  assert(a.get("verbose") == "true", "long flag: value is true");
+
+  // --- flag: short form ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Be verbose");
+  a.flag("d", "debug", "Debug mode");
+  assert(a.parse(["-v"]), "short flag: parse ok");
+  assert(a.has("verbose"), "short flag: verbose set");
+  assert(!a.has("debug"), "short flag: debug not set");
+
+  // --- combined short flags ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Be verbose");
+  a.flag("d", "debug", "Debug mode");
+  assert(a.parse(["-vd"]), "combined flags: parse ok");
+  assert(a.has("verbose"), "combined flags: verbose set");
+  assert(a.has("debug"), "combined flags: debug set");
+
+  // --- option with = ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output file");
+  assert(a.parse(["--output=test.txt"]), "option=: parse ok");
+  assert(a.has("output"), "option=: output set");
+  assert(a.get("output") == "test.txt", "option=: value");
+
+  // --- option with space ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output file");
+  assert(a.parse(["--output", "test.txt"]), "option space: parse ok");
+  assert(a.get("output") == "test.txt", "option space: value");
+
+  // --- short option with space ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output file");
+  assert(a.parse(["-o", "test.txt"]), "short option: parse ok");
+  assert(a.get("output") == "test.txt", "short option: value");
+
+  // --- short option glued value (-ofile.txt) ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output file");
+  assert(a.parse(["-otest.txt"]), "glued short: parse ok");
+  assert(a.get("output") == "test.txt", "glued short: value");
+
+  // --- combined short flag + short option value ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  a.option("o", "output", "FILE", "Output");
+  assert(a.parse(["-vo", "out.txt"]), "combo flag+opt: parse ok");
+  assert(a.has("verbose"), "combo flag+opt: flag set");
+  assert(a.get("output") == "out.txt", "combo flag+opt: value");
+
+  // --- positional arguments ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(a.parse(["--verbose", "file1.txt", "file2.txt"]), "positional: parse ok");
+  assert(a.has("verbose"), "positional: flag set");
+  assert(len(a.positionals) == 2, "positional: count");
+  assert(a.positionals[0] == "file1.txt", "positional: first");
+  assert(a.positionals[1] == "file2.txt", "positional: second");
+
+  // --- -- separator stops option parsing ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(a.parse(["--verbose", "--", "--not-an-option"]), "separator: parse ok");
+  assert(a.has("verbose"), "separator: flag set");
+  assert(len(a.positionals) == 1, "separator: one positional");
+  assert(a.positionals[0] == "--not-an-option", "separator: value preserved");
+
+  // --- required option: present ---
+  a = arguments::create("app", "1.0", "Test");
+  a.required("c", "config", "PATH", "Config file");
+  assert(a.parse(["--config=app.conf"]), "required present: parse ok");
+  assert(a.get("config") == "app.conf", "required present: value");
+
+  // --- required option: missing ---
+  a = arguments::create("app", "1.0", "Test");
+  a.required("c", "config", "PATH", "Config file");
+  assert(!a.parse([]), "required missing: parse fails");
+  assert(!a.ok(), "required missing: not ok");
+  assert(a.error_msg().contains("config"), "required missing: error mentions name");
+
+  // --- unknown long option ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(!a.parse(["--unknown"]), "unknown long: parse fails");
+  assert(a.error_msg().contains("unknown"), "unknown long: error message");
+
+  // --- unknown short option ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(!a.parse(["-x"]), "unknown short: parse fails");
+
+  // --- option missing its value ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output file");
+  assert(!a.parse(["--output"]), "missing value: parse fails");
+  assert(a.error_msg().contains("output"), "missing value: error message");
+
+  // --- empty argv ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(a.parse([]), "empty: parse ok");
+  assert(!a.has("verbose"), "empty: no flags set");
+  assert(len(a.positionals) == 0, "empty: no positionals");
+
+  // --- multiple options together ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  a.option("o", "output", "FILE", "Output file");
+  a.option("n", "count", "NUM", "Count");
+  assert(a.parse(["--verbose", "--output=out.txt", "-n", "42"]), "multi: parse ok");
+  assert(a.has("verbose"), "multi: verbose");
+  assert(a.get("output") == "out.txt", "multi: output");
+  assert(a.get("count") == "42", "multi: count");
+
+  // --- get for unset option returns null ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output");
+  a.parse([]);
+  assert(!a.get("output"), "unset: get returns null");
+  assert(!a.has("output"), "unset: has returns false");
+
+  // --- get for nonexistent option returns null ---
+  assert(!a.get("nonexistent"), "nonexistent: get returns null");
+  assert(!a.has("nonexistent"), "nonexistent: has returns false");
+
+  // --- option without short name ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("", "verbose", "Verbose");
+  assert(a.parse(["--verbose"]), "no short: parse ok");
+  assert(a.has("verbose"), "no short: flag set");
+
+  // --- help text ---
+  a = arguments::create("myapp", "1.0", "My application");
+  a.flag("v", "verbose", "Enable verbose output");
+  a.option("o", "output", "FILE", "Output file path");
+  a.required("c", "config", "PATH", "Configuration file");
+  help_text = a.help();
+  assert(help_text.contains("myapp"), "help: program name");
+  assert(help_text.contains("1.0"), "help: version");
+  assert(help_text.contains("verbose"), "help: flag listed");
+  assert(help_text.contains("<FILE>"), "help: arg name shown");
+  assert(help_text.contains("required"), "help: required marker");
+  assert(help_text.contains("Usage:"), "help: usage line");
+
+  // --- handler dispatch pattern ---
+  // Demonstrates calling functions when options are selected.
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  a.option("o", "output", "FILE", "Output");
+  a.option("n", "count", "NUM", "Count");
+  a.parse(["--verbose", "--output=report.txt", "--count=5"]);
+  v_result = "";
+  o_result = "";
+  n_result = "";
+  if a.has("verbose") { v_result = on_verbose(a.get("verbose")); }
+  if a.has("output") { o_result = on_output(a.get("output")); }
+  if a.has("count") { n_result = on_count(a.get("count")); }
+  assert(v_result == "verbose_activated", "handler: verbose called");
+  assert(o_result == "output:report.txt", "handler: output called");
+  assert(n_result == "count:5", "handler: count called");
+
+  // --- handlers NOT called for unset options ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  a.option("o", "output", "FILE", "Output");
+  a.parse(["--verbose"]);
+  skip_v = "";
+  skip_o = "";
+  if a.has("verbose") { skip_v = on_verbose(a.get("verbose")); }
+  if a.has("output") { skip_o = on_output(a.get("output")); }
+  assert(skip_v == "verbose_activated", "skip handler: verbose called");
+  assert(skip_o == "", "skip handler: output NOT called");
+
+  // --- option with empty value (--output=) ---
+  a = arguments::create("app", "1.0", "Test");
+  a.option("o", "output", "FILE", "Output");
+  assert(a.parse(["--output="]), "empty value: parse ok");
+  assert(a.has("output"), "empty value: has returns true");
+  assert(a.get("output") == "", "empty value: get returns empty");
+
+  println("All argument tests passed");
+}
+
+fn test_flag_long() {
+  tf = arguments::create("app", "1.0", "Test");
+  tf.flag("v", "verbose", "Verbose");
+  assert(tf.parse(["--verbose"]), "long flag");
+  assert(tf.has("verbose"), "flag was set");
+}
+
+fn test_flag_short() {
+  ts = arguments::create("app", "1.0", "Test");
+  ts.flag("v", "verbose", "Verbose");
+  assert(ts.parse(["-v"]), "short flag");
+  assert(ts.has("verbose"), "flag was set");
+}
+
+fn test_option_equals() {
+  te = arguments::create("app", "1.0", "Test");
+  te.option("o", "output", "FILE", "Output");
+  assert(te.parse(["--output=file.txt"]), "option=value");
+  assert(te.get("output") == "file.txt", "value correct");
+}
+
+fn test_option_space() {
+  tsp = arguments::create("app", "1.0", "Test");
+  tsp.option("o", "output", "FILE", "Output");
+  assert(tsp.parse(["--output", "file.txt"]), "option value");
+  assert(tsp.get("output") == "file.txt", "value correct");
+}
+
+fn test_required_missing() {
+  trm = arguments::create("app", "1.0", "Test");
+  trm.required("c", "config", "PATH", "Config");
+  assert(!trm.parse([]), "missing required fails");
+  assert(!trm.ok(), "not ok");
+}
+
+fn test_combined_flags() {
+  tcf = arguments::create("app", "1.0", "Test");
+  tcf.flag("a", "alpha", "Alpha");
+  tcf.flag("b", "beta", "Beta");
+  tcf.flag("g", "gamma", "Gamma");
+  assert(tcf.parse(["-abg"]), "combined parse ok");
+  assert(tcf.has("alpha"), "alpha set");
+  assert(tcf.has("beta"), "beta set");
+  assert(tcf.has("gamma"), "gamma set");
+}
+
+fn test_positional_args() {
+  tp = arguments::create("app", "1.0", "Test");
+  assert(tp.parse(["one", "two", "three"]), "positional parse ok");
+  assert(len(tp.positionals) == 3, "three positionals");
+  assert(tp.positionals[0] == "one", "first arg");
+}
+
+fn test_separator() {
+  tse = arguments::create("app", "1.0", "Test");
+  tse.flag("v", "verbose", "Verbose");
+  assert(tse.parse(["--", "-v"]), "separator parse");
+  assert(!tse.has("verbose"), "verbose not set after --");
+  assert(len(tse.positionals) == 1, "one positional");
+  assert(tse.positionals[0] == "-v", "-v as positional");
+}
+
+fn test_handler_dispatch() {
+  th = arguments::create("app", "1.0", "Test");
+  th.flag("v", "verbose", "Verbose");
+  th.option("o", "output", "FILE", "Output");
+  th.parse(["--verbose", "-o", "out.txt"]);
+  th_v = "";
+  th_o = "";
+  if th.has("verbose") { th_v = on_verbose(th.get("verbose")); }
+  if th.has("output") { th_o = on_output(th.get("output")); }
+  assert(th_v == "verbose_activated", "verbose handler called");
+  assert(th_o == "output:out.txt", "output handler called");
+}
+
+fn test_help_text() {
+  tht = arguments::create("prog", "3.0", "A program");
+  tht.flag("v", "verbose", "Enable verbose output");
+  tht.option("o", "output", "FILE", "Output file path");
+  tht.required("c", "config", "PATH", "Configuration file");
+  tht_help = tht.help();
+  assert(tht_help.contains("prog"), "name in help");
+  assert(tht_help.contains("3.0"), "version in help");
+  assert(tht_help.contains("-v"), "short flag in help");
+  assert(tht_help.contains("--verbose"), "long flag in help");
+  assert(tht_help.contains("<FILE>"), "arg name in help");
+  assert(tht_help.contains("required"), "required marker in help");
+}

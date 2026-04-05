@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL: Framebuffers (Post-Processing)
 // https://learnopengl.com/Advanced-OpenGL/Framebuffers
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

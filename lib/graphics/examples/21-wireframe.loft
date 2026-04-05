@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // Wireframe and Point Rendering
 //
 // Demonstrates: alternative draw modes (lines, points).

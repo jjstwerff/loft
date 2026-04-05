@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL Chapter 2: Hello Triangle
 // https://learnopengl.com/Getting-started/Hello-Triangle
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

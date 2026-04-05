@@ -9,23 +9,30 @@
 //!
 //! See `EXTERNAL_LIBS.md` for the full design.
 
+/// Load all pending native extension libraries.
+#[cfg(feature = "native-extensions")]
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Wrapper for `*const ()` that is Send — function pointers from cdylibs are
 /// valid for the process lifetime (the Library handle is leaked).
+#[cfg(feature = "native-extensions")]
 #[derive(Clone, Copy)]
 struct FnPtr(*const ());
+#[cfg(feature = "native-extensions")]
 unsafe impl Send for FnPtr {}
 
 /// Global registry of native function pointers loaded from cdylibs.
+#[cfg(feature = "native-extensions")]
 static NATIVE_REGISTRY: Mutex<Option<HashMap<String, FnPtr>>> = Mutex::new(None);
 
 /// The C-ABI registration callback type.
+#[cfg(feature = "native-extensions")]
 type RegisterFn =
     unsafe extern "C" fn(unsafe extern "C" fn(*const u8, usize, *const (), *mut ()), *mut ());
 
 /// The registration callback: called once per symbol by the cdylib.
+#[cfg(feature = "native-extensions")]
 unsafe extern "C" fn collect(
     name_ptr: *const u8,
     name_len: usize,
@@ -38,7 +45,6 @@ unsafe extern "C" fn collect(
     collected.push((name.to_string(), fn_ptr));
 }
 
-/// Load all pending native extension libraries.
 #[cfg(feature = "native-extensions")]
 pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
     for path in paths {
@@ -132,6 +138,7 @@ fn try_dlsym(name: &str) -> Option<*const ()> {
 // ── Auto-marshal: wire cdylib functions via type-driven dispatch ────────
 
 /// Argument type tag for auto-marshalling.
+#[cfg(feature = "native-extensions")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ArgT {
     I32,
@@ -144,6 +151,7 @@ enum ArgT {
 }
 
 /// Mirror of `loft_ffi::LoftStr` — `#[repr(C)]` so layout matches.
+#[cfg(feature = "native-extensions")]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct LoftStr {
@@ -152,6 +160,7 @@ struct LoftStr {
 }
 
 /// Mirror of `loft_ffi::LoftRef` — `#[repr(C)]` so layout matches.
+#[cfg(feature = "native-extensions")]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct LoftRef {
@@ -161,6 +170,7 @@ struct LoftRef {
 }
 
 /// Mirror of `loft_ffi::LoftStoreCtx` — `#[repr(C)]` so layout matches.
+#[cfg(feature = "native-extensions")]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct LoftStoreCtx {
@@ -168,6 +178,7 @@ struct LoftStoreCtx {
 }
 
 /// Mirror of `loft_ffi::LoftStore` — `#[repr(C)]` so layout matches.
+#[cfg(feature = "native-extensions")]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct LoftStore {
@@ -180,6 +191,7 @@ struct LoftStore {
 }
 
 /// Compact native signature: parameter types + return type.
+#[cfg(feature = "native-extensions")]
 #[derive(Clone, Debug)]
 struct NativeSig {
     params: Vec<ArgT>,
@@ -188,11 +200,13 @@ struct NativeSig {
 
 /// Side table: library index → (native symbol name, signature).
 /// Populated by `wire_native_fns`, read by the generic dispatcher.
+#[cfg(feature = "native-extensions")]
 static NATIVE_SIGS: Mutex<Option<HashMap<u16, (String, NativeSig)>>> = Mutex::new(None);
 
 /// Compute the argument type list and return type from a definition's signature.
 /// Returns `None` if the signature contains types that can't be auto-marshalled
 /// (e.g. struct references, vectors).
+#[cfg(feature = "native-extensions")]
 fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     use crate::data::Type;
     let def = data.def(d_nr);
@@ -489,6 +503,7 @@ pub fn set_current_lib_idx(idx: u16) {
 }
 
 /// Look up a raw function pointer by symbol name.
+#[cfg(feature = "native-extensions")]
 unsafe fn get_native_fn_raw(name: &str) -> Option<*const ()> {
     let guard = NATIVE_REGISTRY
         .lock()

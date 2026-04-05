@@ -500,7 +500,7 @@ pub fn run_parallel_int(
 /// # Panics
 /// Panics if any row index exceeds `i32::MAX`.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)] // A14.6 will wire this into the parser
+#[allow(dead_code, unused_variables)] // A14.6 will wire this into the parser
 pub fn run_parallel_light(
     stores: &Stores,
     program: WorkerProgram,

@@ -6,11 +6,16 @@
 
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::data::{Context, Data, Type, Value};
+#[cfg(any(debug_assertions, test))]
+use crate::data::Value;
+use crate::data::{Context, Data, Type};
+#[cfg(any(debug_assertions, test))]
 use std::collections::HashMap;
 use std::io::{Error, Write};
 
-use super::{Function, Variable, size};
+#[cfg(any(debug_assertions, test))]
+use super::Variable;
+use super::{Function, size};
 
 fn short_type(tp: &Type) -> String {
     match tp {

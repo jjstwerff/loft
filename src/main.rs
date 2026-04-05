@@ -1017,14 +1017,45 @@ fn registry_age_str(path: &std::path::Path) -> String {
     }
 }
 
+/// Collect crate names → rlib paths from a deps directory
+/// (e.g. `libfoo-<hash>.rlib` → `("foo", "/path/to/libfoo-<hash>.rlib")`).
+fn rlibs_in_dir(dir: &std::path::Path) -> std::collections::HashMap<String, std::path::PathBuf> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+            {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if let Some(rest) = fname.strip_prefix("lib") {
+                    if let Some(dash_pos) = rest.rfind('-') {
+                        map.insert(rest[..dash_pos].to_string(), path);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 /// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
 /// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
 /// otherwise looks for native rlibs in `native/target/release/`.
+///
+/// Uses `-L dependency=` for the native package's deps so deep transitive deps
+/// resolve. For any crate that also appears in loft's own deps, adds an explicit
+/// `--extern name=<loft's copy>` so rustc uses a single copy, avoiding
+/// StableCrateId collisions.
 fn add_native_extern_flags(
     cmd: &mut std::process::Command,
     data: &data::Data,
     target: Option<&str>,
+    loft_deps_dir: Option<&std::path::Path>,
 ) {
+    let loft_rlibs = loft_deps_dir.map(|d| rlibs_in_dir(d)).unwrap_or_default();
+
     for (crate_name, pkg_dir) in &data.native_packages {
         // Look for the compiled rlib in the package's native crate output.
         let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
@@ -1053,20 +1084,25 @@ fn add_native_extern_flags(
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
                 .arg(format!("{}={}", extern_name, rlib_path.display()));
-            // Add the native crate's deps directory so transitive deps (loft_ffi etc.) resolve.
+            // Add the native crate's deps directory so transitive deps (GL, glutin, etc.)
+            // resolve. Use `dependency` search scope so these crates are only found as
+            // transitive deps of the native crate, not as direct deps.
             let deps_dir = rlib_path.parent().unwrap().join("deps");
             if deps_dir.is_dir() {
-                cmd.arg("-L").arg(&deps_dir);
-                // Also add --extern loft_ffi if present in deps.
-                for e in std::fs::read_dir(&deps_dir).into_iter().flatten().flatten() {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    if name.starts_with("libloft_ffi-")
-                        && std::path::Path::new(&name)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
-                    {
-                        cmd.arg("--extern")
-                            .arg(format!("loft_ffi={}", e.path().display()));
+                cmd.arg("-L")
+                    .arg(format!("dependency={}", deps_dir.display()));
+                // Pin any crate that also exists in loft's deps to loft's copy,
+                // preventing StableCrateId collisions from duplicate rlibs.
+                if !loft_rlibs.is_empty() {
+                    let pkg_crates = rlibs_in_dir(&deps_dir);
+                    for (dep_name, loft_path) in &loft_rlibs {
+                        if pkg_crates.contains_key(dep_name) {
+                            cmd.arg("--extern").arg(format!(
+                                "{}={}",
+                                dep_name,
+                                loft_path.display()
+                            ));
+                        }
                     }
                 }
             }
@@ -1567,13 +1603,22 @@ fn main() {
             .arg("-o")
             .arg(wasm_out)
             .arg(&rs_path);
-        if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-wasip2")) {
+        let wasm_deps_dir = if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-wasip2")) {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            cmd.arg("-L").arg(lib_dir.join("deps"));
-        }
+            let deps = lib_dir.join("deps");
+            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+            Some(deps)
+        } else {
+            None
+        };
         // PKG.5: add --extern flags for native packages (WASM target).
-        add_native_extern_flags(&mut cmd, &p.data, Some("wasm32-wasip2"));
+        add_native_extern_flags(
+            &mut cmd,
+            &p.data,
+            Some("wasm32-wasip2"),
+            wasm_deps_dir.as_deref(),
+        );
         let status = cmd.status();
         let _ = std::fs::remove_file(&rs_path);
         match status {
@@ -1648,45 +1693,124 @@ fn main() {
         if native_emit.is_some() {
             return; // --native-emit: just write the file, don't compile
         }
-        // --native / --native-release: compile with rustc and run
-        let binary = std::env::temp_dir().join("loft_native_bin");
-        let mut cmd = std::process::Command::new("rustc");
-        cmd.arg("--edition=2024")
-            .arg("-o")
-            .arg(&binary)
-            .arg(&emit_path);
-        if native_release {
-            cmd.arg("-O");
-        }
-        if let Some(lib_dir) = loft_lib_dir() {
-            cmd.arg("--extern")
-                .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            cmd.arg("-L").arg(lib_dir.join("deps"));
-        }
-        // PKG.4: add --extern flags for native packages.
-        add_native_extern_flags(&mut cmd, &p.data, None);
-        let status = cmd.status();
-        let status = match status {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("loft: rustc not found; install the Rust toolchain to use --native mode");
-                std::process::exit(1);
+        // --native / --native-release: compile with rustc and run.
+        // Cache compiled binaries in .loft/cache/ next to the source file,
+        // keyed by a hash of the generated Rust source so recompilation is
+        // skipped when the output hasn't changed.
+        let source_bytes = std::fs::read(&emit_path).unwrap_or_default();
+        let source_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            source_bytes.hash(&mut h);
+            // Include the release flag in the hash so debug/release don't collide.
+            native_release.hash(&mut h);
+            // Include modification times of native package rlibs and loft's
+            // own rlib so the cache invalidates when dependencies are rebuilt.
+            if let Some(lib_dir) = loft_lib_dir() {
+                if let Ok(meta) = std::fs::metadata(lib_dir.join("libloft.rlib")) {
+                    meta.modified().ok().hash(&mut h);
+                }
             }
-            Err(e) => {
-                eprintln!("loft: failed to launch rustc: {e}");
-                std::process::exit(1);
+            for (_crate_name, pkg_dir) in &p.data.native_packages {
+                let rlib_name = format!("lib{}.rlib", _crate_name.replace('-', "_"));
+                let rlib_path = std::path::PathBuf::from(pkg_dir)
+                    .join("native/target/release")
+                    .join(&rlib_name);
+                if let Ok(meta) = std::fs::metadata(&rlib_path) {
+                    meta.modified().ok().hash(&mut h);
+                }
             }
+            format!("{:016x}", h.finish())
         };
-        if !status.success() {
-            eprintln!(
-                "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
-            );
-            std::process::exit(1);
-        }
+        let cache_dir = std::path::Path::new(&abs_file)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(".loft")
+            .join("cache");
+        let source_stem = std::path::Path::new(&abs_file)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let cached_binary = cache_dir.join(format!("{source_stem}-{source_hash}"));
+
+        // Use cached binary if it exists, otherwise compile and cache.
+        let binary = if cached_binary.exists() {
+            cached_binary.clone()
+        } else {
+            let binary = std::env::temp_dir().join("loft_native_bin");
+            let mut cmd = std::process::Command::new("rustc");
+            cmd.arg("--edition=2024")
+                .arg("-o")
+                .arg(&binary)
+                .arg(&emit_path);
+            if native_release {
+                cmd.arg("-O");
+            }
+            let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
+                cmd.arg("--extern")
+                    .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+                let deps = lib_dir.join("deps");
+                cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+                if let Ok(rd) = std::fs::read_dir(&deps) {
+                    for e in rd.flatten() {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with("libloft_ffi-")
+                            && std::path::Path::new(&name)
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+                        {
+                            cmd.arg("--extern")
+                                .arg(format!("loft_ffi={}", e.path().display()));
+                            break;
+                        }
+                    }
+                }
+                Some(deps)
+            } else {
+                None
+            };
+            // PKG.4: add --extern flags for native packages.
+            add_native_extern_flags(&mut cmd, &p.data, None, native_deps_dir.as_deref());
+            let status = cmd.status();
+            let status = match status {
+                Ok(s) => s,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "loft: rustc not found; install the Rust toolchain to use --native mode"
+                    );
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("loft: failed to launch rustc: {e}");
+                    std::process::exit(1);
+                }
+            };
+            if !status.success() {
+                eprintln!(
+                    "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
+                );
+                std::process::exit(1);
+            }
+            // Store in cache for next run.
+            if std::fs::create_dir_all(&cache_dir).is_ok() {
+                // Remove stale cached binaries for THIS source file only.
+                let prefix = format!("{source_stem}-");
+                if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+                    for entry in entries.flatten() {
+                        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+                let _ = std::fs::copy(&binary, &cached_binary);
+            }
+            binary
+        };
+        let _ = std::fs::remove_file(&emit_path);
+
         if check_only {
             // --check --native: compile succeeded, report ok and exit.
-            let _ = std::fs::remove_file(&emit_path);
-            let _ = std::fs::remove_file(&binary);
             println!("ok {abs_file}");
             return;
         }
@@ -1697,8 +1821,10 @@ fn main() {
                 eprintln!("loft: failed to run native binary: {e}");
                 std::process::exit(1);
             });
-        let _ = std::fs::remove_file(&emit_path);
-        let _ = std::fs::remove_file(&binary);
+        // Clean up temp binary (not the cached copy).
+        if binary != cached_binary {
+            let _ = std::fs::remove_file(&binary);
+        }
         if !run_status.success() {
             std::process::exit(run_status.code().unwrap_or(1));
         }

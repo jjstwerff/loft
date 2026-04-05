@@ -403,9 +403,6 @@ extern crate loft;"
             let ident = crate_name.replace('-', "_");
             writeln!(w, "extern crate {ident};")?;
         }
-        if !data.native_symbol_crates.is_empty() {
-            writeln!(w, "extern crate loft_ffi;")?;
-        }
         writeln!(w, "use loft::database::Stores;")?;
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
         writeln!(w, "use loft::ops;")?;
@@ -550,7 +547,8 @@ extern crate loft;"
             for a in &def.attributes.clone() {
                 let c_nr = match &a.typedef {
                     Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
-                        Some(*c_nr)
+                        // Guard matches the Vector convention: skip unresolved (u32::MAX) content types.
+                        (*c_nr != u32::MAX).then_some(*c_nr)
                     }
                     Type::Vector(c_type, _) => {
                         let n = self.data.type_def_nr(c_type);
@@ -626,12 +624,25 @@ extern crate loft;"
                 }
             }
         }
+        if dnr == u32::MAX {
+            eprintln!(
+                "codegen warning: skipping type_id={type_id} — definition number is unresolved (u32::MAX)"
+            );
+            return Ok(());
+        }
         let def = self.data.def(dnr);
         if matches!(def.def_type, DefType::Struct) {
             self.output_struct(w, dnr, 0)?;
         } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
             // Determine the 1-based position in the parent enum's attributes.
             let parent_nr = def.parent;
+            if parent_nr == u32::MAX {
+                eprintln!(
+                    "codegen warning: EnumValue '{}' (dnr={dnr}) has no parent — skipping",
+                    def.name
+                );
+                return Ok(());
+            }
             let parent = self.data.def(parent_nr);
             let enum_value = parent
                 .attributes
@@ -643,11 +654,25 @@ extern crate loft;"
         } else if def.def_type == DefType::Enum {
             output_enum(w, dnr, self.data)?;
         } else if def.def_type == DefType::Vector {
-            writeln!(
-                w,
-                "    db.vector({});",
+            // Determine the content type's known_type for the db.vector() call.
+            // Prefer def.parent (set by check_vector/vector_def), but fall back to
+            // extracting the content type from the definition's returned Type when
+            // parent is unresolved (u32::MAX) due to cross-source scoping.
+            let content_known = if def.parent != u32::MAX {
                 self.data.def(def.parent).known_type
-            )?;
+            } else if let Type::Vector(ref c_type, _) = def.returned {
+                let c_dnr = self.data.type_def_nr(c_type);
+                if c_dnr != u32::MAX {
+                    self.data.def(c_dnr).known_type
+                } else {
+                    u16::MAX
+                }
+            } else {
+                u16::MAX
+            };
+            if content_known != u16::MAX {
+                writeln!(w, "    db.vector({content_known});")?;
+            }
         }
         Ok(())
     }
@@ -970,9 +995,18 @@ extern crate loft;"
     ///
     /// Conversions:
     /// - `text` (`&str`) → `ptr, len` (two C args)
-    /// - `vector<single>` (`DbRef`) → `LoftStore, LoftRef` via stores
-    /// - `vector<float>` (`DbRef`) → `LoftStore, LoftRef` via stores
+    /// - `vector<T>` → `(*const ELEM_TYPE, count: u32)` pair via direct store access
+    /// - `text` → `(ptr, len)` pointer pair
     /// - scalars pass through with casts where needed
+    ///
+    /// `vector<T>` args never use `LoftStore`/`LoftRef`.  Instead the codegen
+    /// extracts the raw element pointer and count from the store's memory buffer
+    /// directly.  This avoids the E0308 "two different loft_ffi" error that arises
+    /// when loft and the native package are compiled as separate Cargo projects.
+    ///
+    /// Native functions that take `vector<T>` args must declare their C signature
+    /// with `(*const ELEM_TYPE, count: u32)` pairs in place of each vector argument
+    /// (no `LoftStore` or `LoftRef` involved).
     ///
     /// The return value is converted back to the loft type.
     fn output_native_direct_call(
@@ -982,31 +1016,38 @@ extern crate loft;"
         qualified_symbol: &str,
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
-        // Check if any arg is a store-aware type (vector/reference).
-        let has_store_arg = def.attributes.iter().any(|a| {
-            !a.name.starts_with("__")
-                && matches!(a.typedef, Type::Vector(_, _) | Type::Reference(_, _))
-        });
         writeln!(w, "{{")?;
-        if has_store_arg {
-            // Build a LoftStore from the first store-aware argument.
-            let store_var = def
-                .attributes
-                .iter()
-                .find(|a| {
-                    !a.name.starts_with("__")
-                        && matches!(a.typedef, Type::Vector(_, _) | Type::Reference(_, _))
-                })
-                .map(|a| sanitize(&a.name))
-                .unwrap();
-            writeln!(
-                w,
-                "  let _ls = loft::codegen_runtime::make_loft_store(stores, var_{store_var}.store_nr);"
-            )?;
+
+        // Pre-declare per-vector extraction variables before the call expression
+        // so that raw pointers are stable for the duration of the unsafe block.
+        for attr in &def.attributes {
+            if attr.name.starts_with("__") {
+                continue;
+            }
+            if let Type::Vector(elem_tp, _) = &attr.typedef {
+                let var = sanitize(&attr.name);
+                let elem = Self::vector_elem_rust_type(elem_tp);
+                writeln!(
+                    w,
+                    "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_int(var_{var}.rec, var_{var}.pos) as u32;"
+                )?;
+                writeln!(
+                    w,
+                    "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_int(_vr_{var}, 4) as u32 }};"
+                )?;
+                writeln!(
+                    w,
+                    "  let _vp_{var}: *const {elem} = if _vr_{var} == 0 {{ std::ptr::null() }} else {{ loft::keys::store(&var_{var}, &stores.allocations).addr::<{elem}>(_vr_{var}, 8) as *const {elem} }};"
+                )?;
+            }
         }
-        // Emit: unsafe { symbol(args...) }
-        // All extern "C" functions may need unsafe (pointer args, GL calls).
-        write!(w, "  unsafe {{ {qualified_symbol}(")?;
+
+        let needs_ret_cast = matches!(&def.returned, Type::Integer(_, _, _));
+        if needs_ret_cast {
+            write!(w, "  (unsafe {{ {qualified_symbol}(")?;
+        } else {
+            write!(w, "  unsafe {{ {qualified_symbol}(")?;
+        }
         let mut first = true;
         for attr in &def.attributes {
             if attr.name.starts_with("__") {
@@ -1021,27 +1062,20 @@ extern crate loft;"
                     first = false;
                     write!(w, "var_{var}.as_ptr(), var_{var}.len()")?;
                 }
-                Type::Vector(_, _) | Type::Reference(_, _) => {
+                Type::Vector(_, _) => {
+                    // Pass as (*const ELEM_TYPE, count: u32) — no LoftStore/LoftRef.
                     if !first {
                         write!(w, ", ")?;
                     }
                     first = false;
-                    // First store-aware arg also injects LoftStore.
-                    if has_store_arg {
-                        write!(
-                            w,
-                            "_ls, loft_ffi::LoftRef {{ store_nr: var_{var}.store_nr, rec: var_{var}.rec, pos: var_{var}.pos }}"
-                        )?;
-                    } else {
-                        write!(w, "var_{var}.store_nr, var_{var}.rec, var_{var}.pos")?;
-                    }
+                    write!(w, "_vp_{var}, _vc_{var}")?;
                 }
                 Type::Integer(_, _, _) | Type::Character => {
                     if !first {
                         write!(w, ", ")?;
                     }
                     first = false;
-                    write!(w, "var_{var}")?;
+                    write!(w, "var_{var} as _")?;
                 }
                 Type::Float => {
                     if !first {
@@ -1066,12 +1100,31 @@ extern crate loft;"
                 }
             }
         }
-        write!(w, ") }}")?;
-        // Cast return value if needed.
-        if matches!(&def.returned, Type::Integer(_, _, _)) {
-            write!(w, " as i32")?;
+        if needs_ret_cast {
+            write!(w, ") }}) as i32")?;
+        } else {
+            write!(w, ") }}")?;
         }
         writeln!(w, "\n}}")
+    }
+
+    /// Map a loft vector element type to the Rust primitive type used for the
+    /// raw-pointer calling convention.
+    ///
+    /// Native functions that accept `vector<T>` args receive a `*const ELEM_TYPE`
+    /// pointer.  This function returns the Rust type name for each loft element type.
+    fn vector_elem_rust_type(tp: &Type) -> &'static str {
+        match tp {
+            Type::Single => "f32",
+            Type::Float => "f64",
+            Type::Long => "i64",
+            Type::Boolean => "u8",
+            Type::Character => "u32",
+            // Integer: loft uses i32 as the canonical runtime integer type.
+            Type::Integer(_, _, _) => "i32",
+            // Fallback for struct/enum elements: opaque bytes.
+            _ => "u8",
+        }
     }
 }
 

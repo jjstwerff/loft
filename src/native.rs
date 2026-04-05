@@ -14,6 +14,7 @@ use crate::parallel::{
 };
 use crate::platform::sep;
 use crate::state::{Call, State};
+#[cfg(feature = "threading")]
 use crate::vector;
 #[cfg(feature = "threading")]
 use std::sync::Arc;

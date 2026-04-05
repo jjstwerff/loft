@@ -1,3 +1,4 @@
+#!/usr/bin/env -S loft --native
 // LearnOpenGL Chapter 7: Camera
 // https://learnopengl.com/Getting-started/Camera
 // Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)

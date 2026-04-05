@@ -2059,7 +2059,21 @@ impl Parser {
             for l in &self.lib_dirs {
                 let candidate = format!("{l}/{id}.loft");
                 if std::path::Path::new(&candidate).exists() {
-                    f = candidate;
+                    f.clone_from(&candidate);
+                    // Check for loft.toml in ancestor directories to register
+                    // native crate info (the file was found directly, not via
+                    // lib_path_manifest, so native packages wouldn't be registered).
+                    let mut search = std::path::Path::new(&candidate)
+                        .parent()
+                        .map(std::path::Path::to_path_buf);
+                    while let Some(dir) = search {
+                        let manifest = dir.join("loft.toml");
+                        if manifest.exists() {
+                            self.register_native_manifest(&manifest, &dir);
+                            break;
+                        }
+                        search = dir.parent().map(std::path::Path::to_path_buf);
+                    }
                     break;
                 }
             }
@@ -2119,6 +2133,43 @@ impl Parser {
             f = format!("{base_dir}/{id}.loft");
         }
         f
+    }
+
+    /// Register native crate info from a loft.toml manifest.
+    /// Called when a .loft file was found directly via lib_dirs (not through
+    /// lib_path_manifest), so the manifest's native crate registration would
+    /// otherwise be skipped.
+    fn register_native_manifest(
+        &mut self,
+        manifest_path: &std::path::Path,
+        pkg_dir: &std::path::Path,
+    ) {
+        let Some(m) = manifest::read_manifest(manifest_path.to_str().unwrap_or("")) else {
+            return;
+        };
+        let pkg_dir = pkg_dir.to_string_lossy().to_string();
+        if let Some(ref crate_name) = m.native_crate {
+            let rust_crate = crate_name.replace('-', "_");
+            if !self
+                .data
+                .native_packages
+                .iter()
+                .any(|(c, _)| c == crate_name)
+            {
+                self.data
+                    .native_packages
+                    .push((crate_name.clone(), pkg_dir));
+            }
+            // Map all #native symbols from already-parsed definitions to this crate.
+            for d_nr in 0..self.data.definitions() {
+                let sym = &self.data.def(d_nr).native;
+                if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(sym) {
+                    self.data
+                        .native_symbol_crates
+                        .insert(sym.clone(), rust_crate.clone());
+                }
+            }
+        }
     }
 
     /// Check whether `<dir>/<id>` contains a valid loft package layout.
