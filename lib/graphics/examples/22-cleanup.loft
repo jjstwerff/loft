@@ -1,0 +1,74 @@
+// GPU Resource Cleanup
+//
+// Demonstrates: proper cleanup of GPU resources.
+// Creates and destroys shaders, VAOs, textures, and FBOs to show
+// the full lifecycle of GPU objects.
+//
+// Loft constructions used:
+//   gl_delete_shader      — free shader program
+//   gl_delete_vao         — free vertex array object
+//   gl_delete_texture     — free texture
+//   gl_delete_framebuffer — free framebuffer object
+use graphics;
+use mesh;
+use math;
+
+VERT_CLEANUP = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() { gl_Position = uMVP * vec4(aPos, 1.0); vNormal = aNormal; }
+";
+
+FRAG_CLEANUP = "
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+void main() {
+    vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
+    float d = max(dot(normalize(vNormal), ld), 0.0);
+    FragColor = vec4(vec3(0.4, 0.7, 0.9) * (0.3 + 0.7 * d), 1.0);
+}
+";
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "22 - Resource Cleanup") {
+    println("Failed to create window"); return;
+  }
+  // Create resources
+  cl_shader = graphics::gl_create_shader(VERT_CLEANUP, FRAG_CLEANUP);
+  cl_m = mesh::cube();
+  cl_vao = graphics::gl_upload_vertices(mesh::mesh_to_floats(cl_m), 6);
+  cl_nv = cl_m.triangles.len() * 3;
+  cl_tex = graphics::gl_create_color_texture(256, 256);
+  cl_depth = graphics::gl_create_depth_texture(256, 256);
+  cl_fbo = graphics::gl_create_framebuffer();
+  graphics::gl_framebuffer_texture(cl_fbo, 0, cl_tex);
+  graphics::gl_framebuffer_texture(cl_fbo, 1, cl_depth);
+  println("Created: shader={cl_shader} vao={cl_vao} tex={cl_tex} depth={cl_depth} fbo={cl_fbo}");
+  // Render a few frames
+  cl_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  cl_view = math::mat4_look_at(
+    math::vec3(2.0, 2.0, 3.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  cl_start = ticks();
+  for cl_frame in 0..120 {
+    if !graphics::gl_poll_events() { break }
+    cl_t = (ticks() - cl_start) as float / 1000000.0;
+    cl_mvp = math::mat4_mul(cl_proj, math::mat4_mul(cl_view, math::mat4_rotate_y(cl_t)));
+    graphics::gl_clear(rgba(30, 30, 35, 255));
+    graphics::gl_use_shader(cl_shader);
+    graphics::gl_set_uniform_mat4(cl_shader, "uMVP", cl_mvp.m);
+    graphics::gl_draw(cl_vao, cl_nv);
+    graphics::gl_swap_buffers();
+  }
+  // Cleanup all GPU resources
+  graphics::gl_delete_framebuffer(cl_fbo);
+  graphics::gl_delete_texture(cl_depth);
+  graphics::gl_delete_texture(cl_tex);
+  graphics::gl_delete_vao(cl_vao);
+  graphics::gl_delete_shader(cl_shader);
+  graphics::gl_destroy_window();
+  println("All GPU resources cleaned up");
+}
