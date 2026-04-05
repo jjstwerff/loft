@@ -3,7 +3,8 @@
 
 //! Native OpenGL support for the graphics package.
 //! Uses glutin for window/context and gl for OpenGL bindings.
-//! No loft dependency.
+
+#![allow(clippy::missing_safety_doc)]
 
 use glutin::prelude::*;
 use std::cell::RefCell;
@@ -64,9 +65,7 @@ pub extern "C" fn loft_gl_create_window(
     title_ptr: *const u8,
     title_len: usize,
 ) -> bool {
-    let title = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(title_ptr, title_len))
-    };
+    let title = unsafe { loft_ffi::text(title_ptr, title_len) };
     match window::create_gl_state(width, height, title) {
         Ok(state) => {
             GL.with(|cell| *cell.borrow_mut() = Some(state));
@@ -127,12 +126,8 @@ pub extern "C" fn loft_gl_create_shader(
     frag_ptr: *const u8,
     frag_len: usize,
 ) -> u32 {
-    let vert = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(vert_ptr, vert_len))
-    };
-    let frag = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(frag_ptr, frag_len))
-    };
+    let vert = unsafe { loft_ffi::text(vert_ptr, vert_len) };
+    let frag = unsafe { loft_ffi::text(frag_ptr, frag_len) };
     shader::compile_program(vert, frag).unwrap_or(0)
 }
 
@@ -214,9 +209,7 @@ pub unsafe extern "C" fn loft_gl_set_uniform_mat4(
     name_len: usize,
     data: *const f32,
 ) {
-    let name = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len))
-    };
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = CString::new(name).unwrap_or_default();
     unsafe {
         let loc = gl::GetUniformLocation(program, c_name.as_ptr());
@@ -264,9 +257,7 @@ pub unsafe extern "C" fn loft_register_v1(
 /// Load a font from a file path. Returns font index (>= 0) or -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i32 {
-    let path = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(path_ptr, path_len))
-    };
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     match std::fs::read(path) {
         Ok(data) => text::load_font_bytes(&data),
         Err(_) => -1,
@@ -281,9 +272,7 @@ pub extern "C" fn loft_gl_measure_text(
     text_len: usize,
     size: f32,
 ) -> f32 {
-    let s = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(text_ptr, text_len))
-    };
+    let s = unsafe { loft_ffi::text(text_ptr, text_len) };
     text::measure_text(font_idx, s, size)
 }
 
@@ -300,9 +289,7 @@ pub unsafe extern "C" fn loft_gl_rasterize_text(
     out_pixels: *mut *mut u8,
     out_pixels_len: *mut usize,
 ) {
-    let s = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(text_ptr, text_len))
-    };
+    let s = unsafe { loft_ffi::text(text_ptr, text_len) };
     let (w, h, mut pixels) = text::rasterize_text(font_idx, s, size);
     unsafe {
         *out_width = w;
