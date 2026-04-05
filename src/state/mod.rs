@@ -311,6 +311,8 @@ impl State {
         }
         let mut stack = self.stack_cur;
         stack.pos = 8 + self.stack_pos;
+        // PKG.5: set library index for auto-marshal dispatch.
+        crate::extensions::set_current_lib_idx(call);
         self.library[call as usize](&mut self.database, &mut stack);
         self.stack_pos = stack.pos - 8;
     }

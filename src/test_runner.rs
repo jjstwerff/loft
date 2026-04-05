@@ -946,6 +946,8 @@ pub(crate) fn run_tests(
                         compile::byte_code(&mut state, &mut data_copy);
                         // Load native extensions for packages with #native functions.
                         crate::extensions::load_all(&mut state, pending_native.clone());
+                        // PKG.5: wire auto-marshalled native functions.
+                        crate::extensions::wire_native_fns(&mut state, &data_copy);
 
                         // Set up logger if @ARGS requested --production or --log-conf.
                         if production || log_conf.is_some() {

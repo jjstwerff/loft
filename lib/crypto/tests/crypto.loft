@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+use crypto;
+
+fn test_sha256() {
+  hash = crypto::sha256("hello");
+  assert(hash == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "sha256={hash}");
+}
+
+fn test_sha256_empty() {
+  hash = crypto::sha256("");
+  assert(hash == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256 empty");
+}
+
+fn test_hmac_sha256() {
+  mac = crypto::hmac_sha256("key", "The quick brown fox jumps over the lazy dog");
+  assert(mac == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8", "hmac");
+}
+
+fn test_base64_roundtrip() {
+  encoded = crypto::base64_encode("hello world");
+  assert(encoded == "aGVsbG8gd29ybGQ=", "b64 encode");
+  decoded = crypto::base64_decode(encoded);
+  assert(decoded == "hello world", "b64 decode");
+}
+
+fn test_base64url() {
+  encoded = crypto::base64url_encode("hello world");
+  assert(encoded == "aGVsbG8gd29ybGQ", "b64url");
+}

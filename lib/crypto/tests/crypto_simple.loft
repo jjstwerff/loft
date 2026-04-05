@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+use crypto::sha256, hmac_sha256, base64_encode, base64_decode;
+
+fn main() {
+  digest = sha256("hello");
+  assert(digest == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "sha256");
+
+  enc = base64_encode("hello world");
+  assert(enc == "aGVsbG8gd29ybGQ=", "b64 encode");
+
+  dec = base64_decode(enc);
+  assert(dec == "hello world", "b64 decode");
+
+  mac = hmac_sha256("key", "The quick brown fox jumps over the lazy dog");
+  assert(mac == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8", "hmac");
+}

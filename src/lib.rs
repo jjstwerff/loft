@@ -4,6 +4,7 @@
 
 #[macro_use]
 pub mod diagnostics;
+pub mod base64;
 mod calc;
 pub mod data;
 pub mod database;
@@ -12,6 +13,7 @@ pub mod keys;
 mod lexer;
 pub mod native;
 pub mod scopes;
+pub mod sha256;
 mod variables;
 pub mod vector;
 

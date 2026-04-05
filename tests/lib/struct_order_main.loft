@@ -1,0 +1,20 @@
+use struct_order;
+
+fn main() {
+  c = struct_order::make_conn(42);
+  assert(c.id == 42, "conn id");
+
+  s = struct_order::make_session("abc", 7);
+  assert(s.token == "abc", "token");
+  assert(s.user_id == 7, "uid");
+
+  r = struct_order::make_request("GET", "/test");
+  assert(r.method == "GET", "method");
+
+  // Null path
+  c2 = struct_order::make_conn(-1);
+  assert(!c2, "null conn");
+
+  s2 = struct_order::make_session("x", -1);
+  assert(!s2, "null session");
+}

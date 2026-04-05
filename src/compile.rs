@@ -37,6 +37,7 @@ fn register_native_stubs(state: &mut State, data: &Data) {
     use crate::database::Stores;
     use crate::keys::DbRef;
 
+    let mut stub_syms = std::collections::HashSet::new();
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if def.native.is_empty() {
@@ -47,6 +48,7 @@ fn register_native_stubs(state: &mut State, data: &Data) {
         if state.library_names.contains_key(sym) {
             continue;
         }
+        stub_syms.insert(sym.clone());
         // Register a stub that panics with a descriptive message.
         let stub: fn(&mut Stores, &mut DbRef) = {
             // We can't capture sym_owned in a fn pointer, so use a single
@@ -58,6 +60,8 @@ fn register_native_stubs(state: &mut State, data: &Data) {
         };
         state.static_fn(sym, stub);
     }
+    // Store the set of stub symbols so wire_native_fns knows which to replace.
+    crate::extensions::set_stub_symbols(stub_syms);
 }
 
 /// Dump byte code result to the given writer, filtered by `config`.

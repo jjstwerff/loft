@@ -47,3 +47,20 @@ fn package_layout_version_mismatch_is_fatal() {
         "Expected a version-mismatch error"
     );
 }
+
+/// Regression: struct field types in use-loaded packages must resolve correctly.
+/// Multiple structs + #native declarations + functions with return null.
+#[test]
+fn struct_fields_resolve_in_use_loaded_package() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}struct_order_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "Struct field types should resolve in use-loaded packages; errors: {:?}",
+        p.diagnostics.lines()
+    );
+}

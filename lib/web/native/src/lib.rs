@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Native HTTP client. No loft dependency — uses ureq only.
+//! Native HTTP client. No loft dependency — uses ureq + loft-ffi only.
+
+use loft_ffi::LoftStr;
 
 fn do_request(
     method: &str,
@@ -38,7 +40,6 @@ fn do_request(
     }
 }
 
-/// Parse newline-separated "Key: Value" header text into pairs.
 fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
     header_text
         .split('\n')
@@ -54,10 +55,10 @@ fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
 
 // ── C-ABI exports ───────────────────────────────────────────────────────
 
-/// HTTP request with optional body and headers.
-/// Headers are newline-separated "Key: Value" text.
+/// HTTP request. Returns status code; response body available via n_http_body.
+/// This function stores the body in a thread-local for the interpreter to retrieve.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_http_request(
+pub unsafe extern "C" fn n_http_do(
     method_ptr: *const u8,
     method_len: usize,
     url_ptr: *const u8,
@@ -66,66 +67,28 @@ pub unsafe extern "C" fn loft_http_request(
     body_len: usize,
     headers_ptr: *const u8,
     headers_len: usize,
-    out_status: *mut i32,
-    out_body: *mut *mut u8,
-    out_body_len: *mut usize,
-) {
-    let method = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(method_ptr, method_len))
-    };
-    let url =
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(url_ptr, url_len)) };
-    let body = if body_ptr.is_null() || body_len == 0 {
-        None
-    } else {
-        Some(unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(body_ptr, body_len))
-        })
-    };
-    let headers_text = if headers_ptr.is_null() || headers_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(headers_ptr, headers_len))
-        }
-    };
+) -> i32 {
+    let method = unsafe { loft_ffi::text(method_ptr, method_len) };
+    let url = unsafe { loft_ffi::text(url_ptr, url_len) };
+    let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) };
+    let headers_text = unsafe { loft_ffi::text_opt(headers_ptr, headers_len) }.unwrap_or("");
     let headers = parse_headers(headers_text);
     let (status, response_body) = do_request(method, url, body, &headers);
-    unsafe {
-        *out_status = status;
-        let mut bytes = response_body.into_bytes();
-        *out_body_len = bytes.len();
-        *out_body = bytes.as_mut_ptr();
-        std::mem::forget(bytes);
-    }
+    // Store body for n_http_body to return.
+    LAST_BODY.with(|b| *b.borrow_mut() = response_body);
+    status
 }
 
+/// Return the body from the last HTTP request.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_free_string(ptr: *mut u8, len: usize) {
-    if !ptr.is_null() && len > 0 {
-        drop(unsafe { Vec::from_raw_parts(ptr, len, len) });
-    }
+pub extern "C" fn n_http_body() -> LoftStr {
+    LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
 }
 
-// ── Registration ────────────────────────────────────────────────────────
+use std::cell::RefCell;
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_register_v1(
-    register: unsafe extern "C" fn(*const u8, usize, *const (), *mut ()),
-    ctx: *mut (),
-) {
-    unsafe {
-        register(
-            b"loft_http_request".as_ptr(),
-            17,
-            loft_http_request as *const (),
-            ctx,
-        );
-        register(
-            b"loft_free_string".as_ptr(),
-            16,
-            loft_free_string as *const (),
-            ctx,
-        );
-    }
+thread_local! {
+    static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
 }
+
+// No loft_register_v1 needed — the interpreter finds n_* exports via dlsym.

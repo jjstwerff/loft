@@ -1,0 +1,104 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- Game Protocol ---
+// Shared message types for client-server game communication.
+
+// Message types for the game protocol envelope.
+pub enum MsgType {
+  StateFullSync,
+  StateDelta,
+  PlayerInput,
+  Ping,
+  Pong,
+  ChatMessage,
+  LobbyJoin,
+  LobbyLeave,
+  LobbyList,
+  MatchStart,
+  MatchEnd,
+  Error
+}
+
+// A WebSocket message wrapper for game communication.
+pub struct WsMessage {
+  msg_type: MsgType,
+  payload: text
+}
+
+// The outer envelope for all game messages.
+// Contains routing info + the actual message.
+pub struct GameEnvelope {
+  sender: text,
+  recipient: text,
+  sequence: long,
+  timestamp: long,
+  message: WsMessage
+}
+
+// --- Message constructors ---
+
+// Create a ping message.
+pub fn msg_ping(seq: long) -> GameEnvelope {
+  GameEnvelope {
+    sender: "",
+    recipient: "",
+    sequence: seq,
+    timestamp: now(),
+    message: WsMessage { msg_type: MsgType.Ping, payload: "" }
+  }
+}
+
+// Create a pong response.
+pub fn msg_pong(seq: long) -> GameEnvelope {
+  GameEnvelope {
+    sender: "",
+    recipient: "",
+    sequence: seq,
+    timestamp: now(),
+    message: WsMessage { msg_type: MsgType.Pong, payload: "" }
+  }
+}
+
+// Create a chat message.
+pub fn msg_chat(sender: text, content: text) -> GameEnvelope {
+  GameEnvelope {
+    sender: sender,
+    recipient: "",
+    sequence: 0l,
+    timestamp: now(),
+    message: WsMessage { msg_type: MsgType.ChatMessage, payload: content }
+  }
+}
+
+// Create a player input message.
+pub fn msg_input(sender: text, input_data: text) -> GameEnvelope {
+  GameEnvelope {
+    sender: sender,
+    recipient: "",
+    sequence: 0l,
+    timestamp: now(),
+    message: WsMessage { msg_type: MsgType.PlayerInput, payload: input_data }
+  }
+}
+
+// Create a state sync message.
+pub fn msg_state(state_data: text) -> GameEnvelope {
+  GameEnvelope {
+    sender: "",
+    recipient: "",
+    sequence: 0l,
+    timestamp: now(),
+    message: WsMessage { msg_type: MsgType.StateFullSync, payload: state_data }
+  }
+}
+
+// Create an error message.
+pub fn msg_error(error_text: text) -> GameEnvelope {
+  GameEnvelope {
+    sender: "",
+    recipient: "",
+    sequence: 0l,
+    timestamp: now(),
+    message: WsMessage { msg_type: MsgType.Error, payload: error_text }
+  }
+}

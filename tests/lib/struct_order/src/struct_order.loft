@@ -1,0 +1,33 @@
+// Regression: struct field types must resolve in use-loaded files.
+// All structs, then all natives, then all functions.
+
+pub struct Conn {
+  id: integer
+}
+
+pub struct Session {
+  token: text,
+  user_id: integer
+}
+
+pub struct Request {
+  method: text,
+  path: text
+}
+
+fn native_fn() -> integer;
+#native "n_ticks"
+
+pub fn make_conn(x: integer) -> Conn {
+  if x < 0 { return null; }
+  Conn { id: x }
+}
+
+pub fn make_session(t: text, uid: integer) -> Session {
+  if uid < 0 { return null; }
+  Session { token: t, user_id: uid }
+}
+
+pub fn make_request(m: text, p: text) -> Request {
+  Request { method: m, path: p }
+}
