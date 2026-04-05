@@ -1,5 +1,9 @@
 // LearnOpenGL: PBR (Physically Based Rendering)
 // https://learnopengl.com/PBR/Theory
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: simplified PBR shader with metallic/roughness workflow.
 // A grid of spheres with varying metallic (columns) and roughness (rows).

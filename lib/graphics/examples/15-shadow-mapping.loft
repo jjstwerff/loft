@@ -1,5 +1,9 @@
 // LearnOpenGL: Shadow Mapping
 // https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: two-pass shadow mapping with depth texture.
 // Pass 1: render scene from light's perspective into a depth FBO.

@@ -1,5 +1,9 @@
 // LearnOpenGL: Textures
 // https://learnopengl.com/Getting-started/Textures
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: UV-mapped textured cube using a procedural checkerboard.
 // Since we can't load PNG→GL directly yet, we generate a checkerboard

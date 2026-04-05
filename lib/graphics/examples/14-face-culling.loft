@@ -1,5 +1,9 @@
 // LearnOpenGL: Face Culling
 // https://learnopengl.com/Advanced-OpenGL/Face-culling
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: back-face culling to skip invisible triangles.
 // Shows the same rotating cube with and without culling — with culling

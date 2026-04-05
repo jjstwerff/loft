@@ -1,5 +1,9 @@
 // LearnOpenGL Chapter 2: Hello Triangle
 // https://learnopengl.com/Getting-started/Hello-Triangle
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: vertex data, shaders, VAO/VBO, drawing triangles.
 // Two modes:

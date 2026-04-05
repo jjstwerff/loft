@@ -1,5 +1,9 @@
 // LearnOpenGL: Blending
 // https://learnopengl.com/Advanced-OpenGL/Blending
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: alpha blending with transparent objects.
 // Renders opaque cubes first, then transparent planes sorted back-to-front.
