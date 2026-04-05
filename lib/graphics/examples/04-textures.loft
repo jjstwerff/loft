@@ -7,14 +7,13 @@
 // This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: texture mapping with UV coordinates.
-// A procedural checkerboard texture is applied to a rectangle.
+// A brick wall texture (wall.jpg) is mapped onto a rectangle.
 //
 // Run:
 //   loft examples/04-textures.loft
 //
 // Loft constructions used:
-//   canvas()              — procedural texture generation
-//   gl_upload_canvas      — upload Canvas pixel data as GL texture
+//   gl_load_texture       — load image file (JPG/PNG) as GL texture
 //   gl_bind_texture       — bind texture to a sampler unit
 //   gl_set_uniform_int    — bind sampler2D to texture unit
 //   GLSL sampler2D        — sample texture in fragment shader
@@ -42,25 +41,19 @@ void main() {{
 }}
 `;
 
-fn make_checkerboard() -> graphics::Canvas {
-  tx_c = graphics::canvas(64, 64, graphics::rgba(230, 230, 230, 255));
-  for tx_y in 0..64 {
-    for tx_x in 0..64 {
-      if (tx_x / 8 + tx_y / 8) % 2 == 0 {
-        tx_c.set_pixel(tx_x, tx_y, graphics::rgba(60, 60, 60, 255));
-      }
-    }
-  }
-  tx_c
-}
-
 fn main() {
-  if !graphics::gl_create_window(800, 600, "04 - Textures (checkerboard)") {
+  if !graphics::gl_create_window(800, 600, "04 - Textures (wall.jpg)") {
     println("Failed to create window"); return;
   }
-  // Generate and upload checkerboard texture
-  tx_check = make_checkerboard();
-  tx_tex = graphics::gl_upload_canvas(tx_check.data, tx_check.width, tx_check.height);
+  // Load the brick wall texture from the LearnOpenGL tutorial
+  tx_tex = graphics::gl_load_texture("examples/wall.jpg");
+  if tx_tex == 0 {
+    // Try from current directory if running from examples/
+    tx_tex = graphics::gl_load_texture("wall.jpg");
+  }
+  if tx_tex == 0 {
+    println("Failed to load wall.jpg"); return;
+  }
   tx_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
   // Textured rectangle: pos(3) + normal(3) + uv(2) = stride 8
   // Two triangles forming a rectangle

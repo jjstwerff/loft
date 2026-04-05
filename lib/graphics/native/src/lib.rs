@@ -814,6 +814,21 @@ pub extern "C" fn loft_save_png(
     }
 }
 
+/// Load an image file (PNG, JPG) and upload it as a GL texture. Returns texture ID (0 on failure).
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_load_texture(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
+    let img = match image::open(path) {
+        Ok(img) => img.to_rgba8(),
+        Err(_) => return 0,
+    };
+    let (w, h) = img.dimensions();
+    unsafe { loft_gl_upload_texture(img.as_raw().as_ptr(), w, h) as i32 }
+}
+
 /// Upload Canvas pixel data (0xAARRGGBB packed i32s) as a GL RGBA texture.
 /// Native compilation path: receives raw pointer + count.
 #[unsafe(no_mangle)]
@@ -919,6 +934,8 @@ pub unsafe extern "C" fn loft_register_v1(
         // Rendering hints
         reg!(b"loft_gl_line_width", loft_gl_line_width);
         reg!(b"loft_gl_point_size", loft_gl_point_size);
+        // Texture loading
+        reg!(b"loft_gl_load_texture", loft_gl_load_texture);
         // Canvas → GL texture
         reg!(b"loft_gl_upload_canvas", loft_gl_upload_canvas);
         // PNG export
