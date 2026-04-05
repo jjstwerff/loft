@@ -1058,13 +1058,15 @@ fn add_native_extern_flags(
             if deps_dir.is_dir() {
                 cmd.arg("-L").arg(&deps_dir);
                 // Also add --extern loft_ffi if present in deps.
-                for entry in std::fs::read_dir(&deps_dir).into_iter().flatten() {
-                    if let Ok(e) = entry {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        if name.starts_with("libloft_ffi-") && name.ends_with(".rlib") {
-                            cmd.arg("--extern")
-                                .arg(format!("loft_ffi={}", e.path().display()));
-                        }
+                for e in std::fs::read_dir(&deps_dir).into_iter().flatten().flatten() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with("libloft_ffi-")
+                        && std::path::Path::new(&name)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+                    {
+                        cmd.arg("--extern")
+                            .arg(format!("loft_ffi={}", e.path().display()));
                     }
                 }
             }

@@ -2171,9 +2171,7 @@ impl Parser {
                 // Definitions parsed so far include this package's functions.
                 for d_nr in 0..self.data.definitions() {
                     let sym = &self.data.def(d_nr).native;
-                    if !sym.is_empty()
-                        && !self.data.native_symbol_crates.contains_key(sym)
-                    {
+                    if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(sym) {
                         self.data
                             .native_symbol_crates
                             .insert(sym.clone(), rust_crate.clone());

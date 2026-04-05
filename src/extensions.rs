@@ -989,7 +989,9 @@ fn dispatch_call(
         // (Bool) -> void  (e.g. gl_depth_mask)
         (&[ArgT::Bool], None) => {
             let f: extern "C" fn(bool) = unsafe { std::mem::transmute(fp) };
-            match &args[0] { ArgVal::Bool(v) => f(*v), _ => unreachable!() };
+            if let ArgVal::Bool(v) = &args[0] {
+                f(*v);
+            }
         }
         // (F64) -> void  (e.g. gl_line_width, gl_point_size)
         (&[ArgT::F64], None) => {
@@ -1011,15 +1013,13 @@ fn dispatch_call(
         }
         // (I32, Text, F64) -> void  (e.g. gl_set_uniform_float)
         (&[ArgT::I32, ArgT::Text, ArgT::F64], None) => {
-            let f: extern "C" fn(i32, *const u8, usize, f64) =
-                unsafe { std::mem::transmute(fp) };
+            let f: extern "C" fn(i32, *const u8, usize, f64) = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
             f(i32_arg!(0), p, l, f64_arg!(2));
         }
         // (I32, Text, I32) -> void  (e.g. gl_set_uniform_int)
         (&[ArgT::I32, ArgT::Text, ArgT::I32], None) => {
-            let f: extern "C" fn(i32, *const u8, usize, i32) =
-                unsafe { std::mem::transmute(fp) };
+            let f: extern "C" fn(i32, *const u8, usize, i32) = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
             f(i32_arg!(0), p, l, i32_arg!(2));
         }

@@ -1819,7 +1819,7 @@ unsafe extern "C" fn _ffi_resize(ctx: loft_ffi::LoftStoreCtx, rec: u32, words: u
 #[cfg(feature = "native-extensions")]
 pub fn make_loft_store(stores: &mut Stores, store_nr: u16) -> loft_ffi::LoftStore {
     // Set thread-local so FFI callbacks can find stores.
-    crate::extensions::CURRENT_STORES.with(|c| c.set(stores as *mut Stores));
+    crate::extensions::CURRENT_STORES.with(|c| c.set(std::ptr::from_mut::<Stores>(stores)));
     let store = &stores.allocations[store_nr as usize];
     loft_ffi::LoftStore {
         ptr: store.base_ptr(),

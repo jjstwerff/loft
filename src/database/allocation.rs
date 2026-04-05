@@ -225,8 +225,7 @@ impl Stores {
             debug_assert!(
                 !self.allocations[r.store_nr as usize].free,
                 "Locking a freed store (store_nr={}, rec={})",
-                r.store_nr,
-                r.rec
+                r.store_nr, r.rec
             );
             self.allocations[r.store_nr as usize].lock();
         }

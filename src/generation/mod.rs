@@ -985,10 +985,7 @@ extern crate loft;"
         // Check if any arg is a store-aware type (vector/reference).
         let has_store_arg = def.attributes.iter().any(|a| {
             !a.name.starts_with("__")
-                && matches!(
-                    a.typedef,
-                    Type::Vector(_, _) | Type::Reference(_, _)
-                )
+                && matches!(a.typedef, Type::Vector(_, _) | Type::Reference(_, _))
         });
         writeln!(w, "{{")?;
         if has_store_arg {
@@ -1018,12 +1015,16 @@ extern crate loft;"
             let var = sanitize(&attr.name);
             match &attr.typedef {
                 Type::Text(_) => {
-                    if !first { write!(w, ", ")?; }
+                    if !first {
+                        write!(w, ", ")?;
+                    }
                     first = false;
                     write!(w, "var_{var}.as_ptr(), var_{var}.len()")?;
                 }
                 Type::Vector(_, _) | Type::Reference(_, _) => {
-                    if !first { write!(w, ", ")?; }
+                    if !first {
+                        write!(w, ", ")?;
+                    }
                     first = false;
                     // First store-aware arg also injects LoftStore.
                     if has_store_arg {
@@ -1036,22 +1037,30 @@ extern crate loft;"
                     }
                 }
                 Type::Integer(_, _, _) | Type::Character => {
-                    if !first { write!(w, ", ")?; }
+                    if !first {
+                        write!(w, ", ")?;
+                    }
                     first = false;
                     write!(w, "var_{var}")?;
                 }
                 Type::Float => {
-                    if !first { write!(w, ", ")?; }
+                    if !first {
+                        write!(w, ", ")?;
+                    }
                     first = false;
                     write!(w, "var_{var}")?;
                 }
                 Type::Boolean => {
-                    if !first { write!(w, ", ")?; }
+                    if !first {
+                        write!(w, ", ")?;
+                    }
                     first = false;
                     write!(w, "var_{var}")?;
                 }
                 _ => {
-                    if !first { write!(w, ", ")?; }
+                    if !first {
+                        write!(w, ", ")?;
+                    }
                     first = false;
                     write!(w, "var_{var}")?;
                 }
@@ -1059,9 +1068,8 @@ extern crate loft;"
         }
         write!(w, ") }}")?;
         // Cast return value if needed.
-        match &def.returned {
-            Type::Integer(_, _, _) => write!(w, " as i32")?,
-            _ => {}
+        if matches!(&def.returned, Type::Integer(_, _, _)) {
+            write!(w, " as i32")?;
         }
         writeln!(w, "\n}}")
     }
