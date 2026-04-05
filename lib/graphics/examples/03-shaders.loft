@@ -1,5 +1,9 @@
 // LearnOpenGL Chapter 3: Shaders
 // https://learnopengl.com/Getting-started/Shaders
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: vertex colors, varying interpolation.
 // The vertex shader passes per-vertex colors to the fragment shader.

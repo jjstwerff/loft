@@ -1,5 +1,9 @@
 // LearnOpenGL Chapter 6: Coordinate Systems
 // https://learnopengl.com/Getting-started/Coordinate-Systems
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: multiple cubes at different positions using the same mesh.
 // Each cube gets its own model matrix (translation + rotation).

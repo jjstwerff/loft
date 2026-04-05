@@ -1,5 +1,9 @@
 // LearnOpenGL: Multiple Lights
 // https://learnopengl.com/Lighting/Multiple-lights
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: point light + directional light in one shader.
 // Three cubes lit by a directional sun and an orbiting point light.

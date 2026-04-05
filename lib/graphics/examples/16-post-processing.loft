@@ -1,5 +1,9 @@
 // LearnOpenGL: Framebuffers (Post-Processing)
 // https://learnopengl.com/Advanced-OpenGL/Framebuffers
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: render-to-texture with post-processing effects.
 // Renders the scene to an off-screen FBO, then draws a fullscreen quad

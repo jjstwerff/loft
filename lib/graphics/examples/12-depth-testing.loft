@@ -1,5 +1,9 @@
 // LearnOpenGL: Depth Testing
 // https://learnopengl.com/Advanced-OpenGL/Depth-testing
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: depth buffer visualization.
 // Renders overlapping cubes and a plane. A second pass visualizes the

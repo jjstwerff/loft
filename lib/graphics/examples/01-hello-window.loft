@@ -1,5 +1,9 @@
 // LearnOpenGL Chapter 1: Hello Window
 // https://learnopengl.com/Getting-started/Hello-Window
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: window creation, clear color, event loop.
 //

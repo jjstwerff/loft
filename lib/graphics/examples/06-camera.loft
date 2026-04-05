@@ -1,5 +1,9 @@
 // LearnOpenGL Chapter 7: Camera
 // https://learnopengl.com/Getting-started/Camera
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
 //
 // Demonstrates: orbiting camera using mat4_look_at with animated eye position.
 // The camera circles around a cube, showing how the view matrix changes.
