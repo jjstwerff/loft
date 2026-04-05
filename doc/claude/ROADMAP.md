@@ -43,22 +43,13 @@ All new libraries are built as **packages** using the format designed in
 - **Sprint 11** — Native codegen for packages (PKG.4, PKG.5)
 - **Sprint 12** — Stdlib extraction + caveat fixes (EXT.1, EXT.2, C15, C16)
 - **Sprint 13/14** — HTTP client (H4.1–H4.5, loft_register_v1)
+- **Sprint 15** — Graphics native (GL3, GL5.1–GL5.5: OpenGL + fontdue)
+- **Sprint 16** — HTTP server (SRV.1: polling model + iterator protocol)
+- **A15 fix** — `parallel {}` real OS threads via `std::thread::scope`
 
 ### Remaining sprints
 
 ```
-Sprint 15: Graphics native ✓
-  GL5.1   window + event loop (glutin + winit pump_app_events) ✓
-  GL5.2   shader compile + link ✓
-  GL5.3   VBO/VAO upload ✓
-  GL5.4   draw call + render loop ✓
-  GL5.5   texture upload/bind/delete ✓
-  GL3     font loading + text measurement + rasterization (fontdue) ✓
-
-Sprint 16: Server core ✓ + WebGL deferred
-  SRV.1   blocking HTTP server with polling model (iterator protocol) ✓
-  GL6.1-4 WebGL2 equivalents — deferred (requires WASM target)
-
 Sprint 17: Server advanced + game protocol
   SRV.3   WebSocket support (using I13 for msg in ws)
   SRV.4   Authentication: JWT, session, API key, HTTP Basic
