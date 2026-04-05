@@ -19,7 +19,7 @@ use graphics;
 use mesh;
 use math;
 
-VERT_SCENE = "
+VERT_SCENE = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -27,49 +27,49 @@ uniform mat4 uMVP;
 uniform mat4 uModel;
 out vec3 vNormal;
 out vec3 vFragPos;
-void main() {
+void main() {{
     vFragPos = vec3(uModel * vec4(aPos, 1.0));
     vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     gl_Position = uMVP * vec4(aPos, 1.0);
-}
-";
+}}
+`;
 
-FRAG_SCENE = "
+FRAG_SCENE = `
 #version 330 core
 in vec3 vNormal;
 in vec3 vFragPos;
 out vec4 FragColor;
 uniform vec3 uColor;
-void main() {
+void main() {{
     vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
     float d = max(dot(normalize(vNormal), ld), 0.0);
     FragColor = vec4(uColor * (0.2 + 0.8 * d), 1.0);
-}
-";
+}}
+`;
 
-VERT_POST = "
+VERT_POST = `
 #version 330 core
 layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aUV;
 out vec2 vUV;
-void main() { gl_Position = vec4(aPos, 0.0, 1.0); vUV = aUV; }
-";
+void main() {{ gl_Position = vec4(aPos, 0.0, 1.0); vUV = aUV; }}
+`;
 
-FRAG_POST_GRAY = "
+FRAG_POST_GRAY = `
 #version 330 core
 in vec2 vUV;
 out vec4 FragColor;
 uniform sampler2D uScreen;
 uniform float uTime;
-void main() {
+void main() {{
     vec4 c = texture(uScreen, vUV);
     // Animated effect: lerp between color and grayscale
     float gray = dot(c.rgb, vec3(0.299, 0.587, 0.114));
     float t = sin(uTime) * 0.5 + 0.5;
     vec3 result = mix(c.rgb, vec3(gray), t);
     FragColor = vec4(result, 1.0);
-}
-";
+}}
+`;
 
 fn main() {
   if !graphics::gl_create_window(800, 600, "16 - Post-Processing (grayscale)") {
@@ -95,12 +95,12 @@ fn main() {
   pp_view = math::mat4_look_at(
     math::vec3(3.0, 2.5, 4.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   pp_start = ticks();
-  for pp_frame in 0..3000 {
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     pp_t = (ticks() - pp_start) as float / 1000000.0;
     // Pass 1: render scene to FBO
     graphics::gl_bind_framebuffer(pp_fbo);
-    graphics::gl_clear(rgba(30, 30, 40, 255));
+    graphics::gl_clear(graphics::rgba(30, 30, 40, 255));
     graphics::gl_use_shader(pp_scene_shader);
     // Cube
     pp_cm = math::mat4_mul(math::mat4_translate(-1.0, 0.5, 0.0), math::mat4_rotate_y(pp_t));
@@ -118,7 +118,7 @@ fn main() {
     graphics::gl_draw(pp_svao, pp_snv);
     // Pass 2: fullscreen post-process
     graphics::gl_bind_framebuffer(0);
-    graphics::gl_clear(rgba(0, 0, 0, 255));
+    graphics::gl_clear(graphics::rgba(0, 0, 0, 255));
     graphics::gl_use_shader(pp_post_shader);
     graphics::gl_bind_texture(pp_color_tex, 0);
     graphics::gl_set_uniform_int(pp_post_shader, "uScreen", 0);

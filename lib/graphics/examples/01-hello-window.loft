@@ -25,9 +25,9 @@ fn main() {
     return;
   }
   // Teal background (matching LearnOpenGL's example color).
-  for hw_frame in 0..300 {
+  for _ in 0..300 {
     if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(rgba(51, 76, 76, 255));
+    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
     graphics::gl_swap_buffers();
   }
   graphics::gl_destroy_window();

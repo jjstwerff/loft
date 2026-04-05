@@ -13,25 +13,25 @@ use graphics;
 use mesh;
 use math;
 
-VERT_CLEANUP = "
+VERT_CLEANUP = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
 out vec3 vNormal;
-void main() { gl_Position = uMVP * vec4(aPos, 1.0); vNormal = aNormal; }
-";
+void main() {{ gl_Position = uMVP * vec4(aPos, 1.0); vNormal = aNormal; }}
+`;
 
-FRAG_CLEANUP = "
+FRAG_CLEANUP = `
 #version 330 core
 in vec3 vNormal;
 out vec4 FragColor;
-void main() {
+void main() {{
     vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
     float d = max(dot(normalize(vNormal), ld), 0.0);
     FragColor = vec4(vec3(0.4, 0.7, 0.9) * (0.3 + 0.7 * d), 1.0);
-}
-";
+}}
+`;
 
 fn main() {
   if !graphics::gl_create_window(800, 600, "22 - Resource Cleanup") {
@@ -53,11 +53,11 @@ fn main() {
   cl_view = math::mat4_look_at(
     math::vec3(2.0, 2.0, 3.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   cl_start = ticks();
-  for cl_frame in 0..120 {
+  for _ in 0..120 {
     if !graphics::gl_poll_events() { break }
     cl_t = (ticks() - cl_start) as float / 1000000.0;
     cl_mvp = math::mat4_mul(cl_proj, math::mat4_mul(cl_view, math::mat4_rotate_y(cl_t)));
-    graphics::gl_clear(rgba(30, 30, 35, 255));
+    graphics::gl_clear(graphics::rgba(30, 30, 35, 255));
     graphics::gl_use_shader(cl_shader);
     graphics::gl_set_uniform_mat4(cl_shader, "uMVP", cl_mvp.m);
     graphics::gl_draw(cl_vao, cl_nv);

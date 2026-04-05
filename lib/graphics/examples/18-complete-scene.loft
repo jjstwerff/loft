@@ -18,7 +18,7 @@ use math;
 use glb;
 use scene;
 
-VERT_FINAL = "
+VERT_FINAL = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -27,14 +27,14 @@ uniform mat4 uView;
 uniform mat4 uProj;
 out vec3 vWorldPos;
 out vec3 vNormal;
-void main() {
+void main() {{
     vWorldPos = vec3(uModel * vec4(aPos, 1.0));
     vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     gl_Position = uProj * uView * vec4(vWorldPos, 1.0);
-}
-";
+}}
+`;
 
-FRAG_FINAL = "
+FRAG_FINAL = `
 #version 330 core
 in vec3 vWorldPos;
 in vec3 vNormal;
@@ -44,7 +44,7 @@ uniform vec3 uLightPos;
 uniform vec3 uColor;
 uniform float uMetallic;
 uniform float uRoughness;
-void main() {
+void main() {{
     vec3 N = normalize(vNormal);
     vec3 V = normalize(uCamPos - vWorldPos);
     vec3 L = normalize(uLightPos - vWorldPos);
@@ -56,8 +56,8 @@ void main() {
     vec3 diffuse = uColor * diff * (1.0 - uMetallic);
     vec3 specular = mix(vec3(0.04), uColor, uMetallic) * spec * (1.0 + fresnel);
     FragColor = vec4(ambient + diffuse + specular, 1.0);
-}
-";
+}}
+`;
 
 fn render_native_complete() {
   if !graphics::gl_create_window(800, 600, "18 - Complete Scene") {
@@ -75,16 +75,16 @@ fn render_native_complete() {
   fn_snv = fn_sphere.triangles.len() * 3;
   fn_fnv = fn_floor.triangles.len() * 3;
   fn_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
-  graphics::gl_enable(GL_CULL_FACE);
+  graphics::gl_enable(graphics::GL_CULL_FACE);
   fn_start = ticks();
-  for fn_frame in 0..5000 {
+  for _ in 0..5000 {
     if !graphics::gl_poll_events() { break }
     fn_t = (ticks() - fn_start) as float / 1000000.0;
     // Orbiting camera
     fn_eye = math::vec3(sin(fn_t * 0.2) * 8.0, 4.0, cos(fn_t * 0.2) * 8.0);
     fn_view = math::mat4_look_at(fn_eye, math::vec3(0.0, 0.5, 0.0), math::vec3(0.0, 1.0, 0.0));
     fn_light = math::vec3(sin(fn_t * 0.5) * 4.0, 5.0, cos(fn_t * 0.5) * 4.0);
-    graphics::gl_clear(rgba(15, 15, 20, 255));
+    graphics::gl_clear(graphics::rgba(15, 15, 20, 255));
     graphics::gl_use_shader(fn_shader);
     graphics::gl_set_uniform_mat4(fn_shader, "uView", fn_view.m);
     graphics::gl_set_uniform_mat4(fn_shader, "uProj", fn_proj.m);

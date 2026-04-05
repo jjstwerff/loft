@@ -22,19 +22,19 @@ use math;
 
 SHADOW_MAP_SIZE = 1024;
 
-VERT_SHADOW = "
+VERT_SHADOW = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 uniform mat4 uLightMVP;
-void main() { gl_Position = uLightMVP * vec4(aPos, 1.0); }
-";
+void main() {{ gl_Position = uLightMVP * vec4(aPos, 1.0); }}
+`;
 
-FRAG_SHADOW = "
+FRAG_SHADOW = `
 #version 330 core
-void main() {}
-";
+void main() {{}}
+`;
 
-VERT_SCENE = "
+VERT_SCENE = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -45,15 +45,15 @@ uniform mat4 uLightMVP;
 out vec3 vFragPos;
 out vec3 vNormal;
 out vec4 vLightSpacePos;
-void main() {
+void main() {{
     vFragPos = vec3(uModel * vec4(aPos, 1.0));
     vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     vLightSpacePos = uLightMVP * vec4(vFragPos, 1.0);
     gl_Position = uProj * uView * vec4(vFragPos, 1.0);
-}
-";
+}}
+`;
 
-FRAG_SCENE = "
+FRAG_SCENE = `
 #version 330 core
 in vec3 vFragPos;
 in vec3 vNormal;
@@ -62,7 +62,7 @@ out vec4 FragColor;
 uniform sampler2D uShadowMap;
 uniform vec3 uLightDir;
 uniform vec3 uObjectColor;
-float shadow_calc(vec4 lsp) {
+float shadow_calc(vec4 lsp) {{
     vec3 proj = lsp.xyz / lsp.w;
     proj = proj * 0.5 + 0.5;
     if (proj.z > 1.0) return 0.0;
@@ -70,16 +70,16 @@ float shadow_calc(vec4 lsp) {
     float current = proj.z;
     float bias = max(0.005 * (1.0 - dot(normalize(vNormal), normalize(-uLightDir))), 0.001);
     return current - bias > closest ? 0.6 : 0.0;
-}
-void main() {
+}}
+void main() {{
     vec3 norm = normalize(vNormal);
     vec3 ld = normalize(-uLightDir);
     float diff = max(dot(norm, ld), 0.0);
     float shadow = shadow_calc(vLightSpacePos);
     vec3 result = (0.15 + (1.0 - shadow) * diff) * uObjectColor;
     FragColor = vec4(result, 1.0);
-}
-";
+}}
+`;
 
 fn draw_scene(ds_shader: integer, ds_cvao: integer, ds_cnv: integer,
               ds_pvao: integer, ds_pnv: integer, ds_t: float) {
@@ -126,21 +126,21 @@ fn main() {
     math::vec3(2.0, 4.0, 1.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   sm_light_vp = math::mat4_mul(sm_light_proj, sm_light_view);
   sm_start = ticks();
-  graphics::gl_enable(GL_CULL_FACE);
-  for sm_frame in 0..3000 {
+  graphics::gl_enable(graphics::GL_CULL_FACE);
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     sm_t = (ticks() - sm_start) as float / 1000000.0;
     // Pass 1: shadow map
     graphics::gl_viewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     graphics::gl_bind_framebuffer(sm_fbo);
-    graphics::gl_clear(rgba(0, 0, 0, 255));
+    graphics::gl_clear(graphics::rgba(0, 0, 0, 255));
     graphics::gl_use_shader(sm_shadow_shader);
     graphics::gl_set_uniform_mat4(sm_shadow_shader, "uLightMVP", sm_light_vp.m);
     draw_scene(sm_shadow_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
     // Pass 2: render with shadows
     graphics::gl_bind_framebuffer(0);
     graphics::gl_viewport(0, 0, 800, 600);
-    graphics::gl_clear(rgba(20, 20, 25, 255));
+    graphics::gl_clear(graphics::rgba(20, 20, 25, 255));
     graphics::gl_use_shader(sm_scene_shader);
     graphics::gl_set_uniform_mat4(sm_scene_shader, "uView", sm_view.m);
     graphics::gl_set_uniform_mat4(sm_scene_shader, "uProj", sm_proj.m);

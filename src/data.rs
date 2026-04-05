@@ -1331,6 +1331,8 @@ impl Data {
         let d_nr = self.def_nr(&name);
         if d_nr == u32::MAX {
             let vd = self.add_def(&name, lexer.pos(), DefType::Struct);
+            // Also register globally (source=0) so other files can find it.
+            self.def_names.entry((name.clone(), 0)).or_insert(vd);
             self.add_attribute(
                 lexer,
                 vd,

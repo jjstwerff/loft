@@ -25,22 +25,22 @@ use mesh;
 use math;
 use glb;
 
-VERT_SRC = "
+VERT_SRC = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
-void main() {
+void main() {{
     gl_Position = vec4(aPos, 1.0);
-}
-";
+}}
+`;
 
-FRAG_SRC = "
+FRAG_SRC = `
 #version 330 core
 out vec4 FragColor;
-void main() {
+void main() {{
     FragColor = vec4(1.0, 0.5, 0.2, 1.0);
-}
-";
+}}
+`;
 
 fn build_triangle() -> mesh::Mesh {
   ht_m = mesh::mesh("triangle");
@@ -62,9 +62,9 @@ fn render_native(nt_m: const mesh::Mesh) {
   nt_shader = graphics::gl_create_shader(VERT_SRC, FRAG_SRC);
   nt_data = mesh::mesh_to_floats(nt_m);
   nt_vao = graphics::gl_upload_vertices(nt_data, 6);
-  for nt_frame in 0..300 {
+  for _ in 0..300 {
     if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(rgba(51, 76, 76, 255));
+    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
     graphics::gl_use_shader(nt_shader);
     graphics::gl_draw(nt_vao, 3);
     graphics::gl_swap_buffers();

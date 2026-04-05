@@ -18,7 +18,7 @@ use graphics;
 use mesh;
 use math;
 
-VERT_TEX = "
+VERT_TEX = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -26,33 +26,33 @@ layout (location = 2) in vec2 aUV;
 uniform mat4 uMVP;
 out vec2 vUV;
 out vec3 vNormal;
-void main() {
+void main() {{
     gl_Position = uMVP * vec4(aPos, 1.0);
     vUV = aUV;
     vNormal = aNormal;
-}
-";
+}}
+`;
 
-FRAG_TEX = "
+FRAG_TEX = `
 #version 330 core
 in vec2 vUV;
 in vec3 vNormal;
 out vec4 FragColor;
 uniform sampler2D uTexture;
-void main() {
+void main() {{
     vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
     float diff = max(dot(normalize(vNormal), ld), 0.0);
     vec4 texColor = texture(uTexture, vUV);
     FragColor = vec4(texColor.rgb * (0.3 + 0.7 * diff), 1.0);
-}
-";
+}}
+`;
 
 fn make_checkerboard() -> graphics::Canvas {
-  tc_c = graphics::canvas(64, 64, rgba(255, 255, 255, 255));
+  tc_c = graphics::canvas(64, 64, graphics::rgba(255, 255, 255, 255));
   for tc_y in 0..64 {
     for tc_x in 0..64 {
       if (tc_x / 8 + tc_y / 8) % 2 == 0 {
-        tc_c.set_pixel(tc_x, tc_y, rgba(80, 80, 80, 255));
+        tc_c.set_pixel(tc_x, tc_y, graphics::rgba(80, 80, 80, 255));
       }
     }
   }
@@ -68,7 +68,7 @@ fn main() {
   // Upload canvas pixels as RGBA texture
   // Canvas stores pixels as packed i32 (0xRRGGBBAA) — need to convert for GL
   // For now, generate raw RGBA bytes
-  tc_pixels = [for tc_dummy in 0..0 { 0 }];
+  tc_pixels = [for _ in 0..0 { 0 }];
   for tc_p in tc_check.data {
     tc_r = (tc_p >> 24) & 255;
     tc_g = (tc_p >> 16) & 255;
@@ -90,12 +90,12 @@ fn main() {
   // TODO: Add proper canvas→GL texture bridge
   tc_tex = graphics::gl_create_color_texture(64, 64);
   tc_start = ticks();
-  for tc_frame in 0..3000 {
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     tc_t = (ticks() - tc_start) as float / 1000000.0;
     tc_model = math::mat4_rotate_y(tc_t * 0.5);
     tc_mvp = math::mat4_mul(tc_proj, math::mat4_mul(tc_view, tc_model));
-    graphics::gl_clear(rgba(30, 30, 35, 255));
+    graphics::gl_clear(graphics::rgba(30, 30, 35, 255));
     graphics::gl_use_shader(tc_shader);
     graphics::gl_set_uniform_mat4(tc_shader, "uMVP", tc_mvp.m);
     graphics::gl_bind_texture(tc_tex, 0);

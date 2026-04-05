@@ -24,29 +24,29 @@ use math;
 use glb;
 use scene;
 
-VERT_MVP = "
+VERT_MVP = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
 out vec3 vNormal;
-void main() {
+void main() {{
     gl_Position = uMVP * vec4(aPos, 1.0);
     vNormal = aNormal;
-}
-";
+}}
+`;
 
-FRAG_LIT = "
+FRAG_LIT = `
 #version 330 core
 in vec3 vNormal;
 out vec4 FragColor;
-void main() {
+void main() {{
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.8));
     float diff = max(dot(normalize(vNormal), lightDir), 0.0);
     vec3 color = vec3(0.4, 0.7, 1.0) * (0.3 + 0.7 * diff);
     FragColor = vec4(color, 1.0);
-}
-";
+}}
+`;
 
 fn cube_positions() -> vector<math::Vec3> {
   [
@@ -80,10 +80,10 @@ fn render_native_coords() {
     math::vec3(0.0, 1.0, 0.0));
   cs_positions = cube_positions();
   cs_start = ticks();
-  for cs_frame in 0..3000 {
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     cs_t = (ticks() - cs_start) as float / 1000000.0;
-    graphics::gl_clear(rgba(30, 30, 30, 255));
+    graphics::gl_clear(graphics::rgba(30, 30, 30, 255));
     graphics::gl_use_shader(cs_shader);
     for cs_pos in cs_positions {
       cs_angle = cs_t * (0.5 + cs_pos#index as float * 0.2);
