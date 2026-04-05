@@ -322,6 +322,19 @@ impl LoftStore {
         unsafe { self.get_int(vec.rec, 0, 4) as u32 }
     }
 
+    /// Raw pointer to the first element of a vector's data area.
+    ///
+    /// The data starts 8 bytes into the vector record (after the header + length).
+    /// Valid for `vector_len(vec) * elem_size` bytes. The pointer is only valid
+    /// for the duration of the C-ABI call and becomes stale if the store reallocates.
+    ///
+    /// # Safety
+    /// `vec` must point to a valid vector record in this store.
+    #[inline]
+    pub unsafe fn vector_data_ptr(&self, vec: &LoftRef) -> *const u8 {
+        unsafe { self.ptr.add(vec.rec as usize * 8 + 8) }
+    }
+
     /// Ensure the vector has room for one more element, resizing if needed.
     /// Returns the (possibly updated) `vec_rec` — the record may have moved.
     unsafe fn vector_grow(&mut self, vec_rec: u32, elem_size: u32) -> u32 {

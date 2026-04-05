@@ -1,0 +1,62 @@
+// Software Rendering: 2D Canvas
+//
+// Demonstrates the pure-loft 2D canvas rasterizer — no GPU needed.
+// Draws shapes to a Canvas and exports as a PNG image.
+// This tests the software rendering path that works everywhere
+// including WASM without WebGL.
+//
+// Run:
+//   loft examples/09-2d-canvas.loft   -- writes 09-canvas-demo.png
+//
+// Loft constructions used:
+//   canvas()          — create a pixel buffer
+//   fill_rect         — filled rectangle
+//   draw_rect         — outlined rectangle
+//   draw_line         — Bresenham line (all octants)
+//   draw_circle       — Midpoint circle outline
+//   fill_circle       — filled circle via scanlines
+//   draw_aa_line      — Wu's anti-aliased line
+//   fill_triangle     — scanline triangle fill
+//   draw_bezier       — adaptive de Casteljau curve
+use graphics;
+
+fn main() {
+  c = graphics::canvas(400, 300, rgba(240, 240, 245, 255));
+  // Sky gradient (simplified as horizontal bands)
+  for cd_y in 0..150 {
+    cd_blue = 200 + cd_y / 3;
+    c.hline(0, 400, cd_y, rgba(135, 180, cd_blue, 255));
+  }
+  // Ground
+  c.fill_rect(0, 150, 400, 150, rgba(80, 140, 60, 255));
+  // House body
+  c.fill_rect(120, 100, 160, 100, rgba(180, 100, 60, 255));
+  // Roof (triangle)
+  c.fill_triangle(100, 100, 200, 30, 300, 100, rgba(120, 40, 40, 255));
+  // Door
+  c.fill_rect(175, 150, 50, 50, rgba(100, 60, 30, 255));
+  // Windows
+  c.fill_rect(140, 120, 30, 25, rgba(180, 220, 255, 255));
+  c.draw_rect(140, 120, 30, 25, rgba(80, 80, 80, 255));
+  c.fill_rect(230, 120, 30, 25, rgba(180, 220, 255, 255));
+  c.draw_rect(230, 120, 30, 25, rgba(80, 80, 80, 255));
+  // Sun
+  c.fill_circle(340, 40, 25, rgba(255, 220, 50, 255));
+  // Sun rays (anti-aliased lines)
+  for cd_ray in 0..8 {
+    cd_angle = cd_ray as float * 0.785;
+    cd_dx = cos(cd_angle) * 40.0;
+    cd_dy = sin(cd_angle) * 40.0;
+    c.draw_aa_line(340, 40, 340 + cd_dx as integer, 40 + cd_dy as integer, rgba(255, 200, 0, 180));
+  }
+  // Path (bezier curve)
+  c.draw_bezier(200, 200, 250, 280, 350, 220, 380, 290, rgba(160, 140, 100, 255));
+  // Tree trunk
+  c.fill_rect(50, 110, 10, 40, rgba(100, 70, 40, 255));
+  // Tree canopy (overlapping circles)
+  c.fill_circle(55, 95, 20, rgba(40, 120, 40, 255));
+  c.fill_circle(40, 100, 15, rgba(50, 140, 50, 255));
+  c.fill_circle(70, 100, 15, rgba(50, 140, 50, 255));
+  println("Drew 2D scene to canvas (400x300)");
+  println("Canvas pixel count: {c.data.len()}");
+}
