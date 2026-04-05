@@ -1,0 +1,179 @@
+// Copyright (c) 2024 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- Arguments ---
+// Command-line argument parsing library.
+
+enum ArgKind { Flag, Value }
+
+struct Arg {
+  short_name: text,
+  long_name: text,
+  arg_name: text,
+  kind: ArgKind,
+  mandatory: boolean,
+  description: text
+}
+
+struct Args {
+  name: text,
+  version: text,
+  description: text,
+  options: vector<Arg>,
+  results: vector<text>,
+  positionals: vector<text>,
+  err: text
+}
+
+pub fn create(name: text, version: text, description: text) -> Args {
+  Args { name: name, version: version, description: description, options: [], results: [], positionals: [], err: "" }
+}
+
+pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text) {
+  self.options += [Arg { short_name: opt_short, long_name: opt_long, arg_name: "", kind: ArgKind.Flag, mandatory: false, description: desc }];
+  self.results += null;
+}
+
+pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
+  self.options += [Arg { short_name: opt_short, long_name: opt_long, arg_name: arg_name, kind: ArgKind.Value, mandatory: false, description: desc }];
+  self.results += null;
+}
+
+pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
+  self.options += [Arg { short_name: opt_short, long_name: opt_long, arg_name: arg_name, kind: ArgKind.Value, mandatory: true, description: desc }];
+  self.results += null;
+}
+
+fn find_long_opt(self: Args, fname: text) -> integer {
+  for fo in self.options {
+    if fo.long_name == fname { return fo#index }
+  }
+  -1
+}
+
+fn find_short_opt(self: Args, fch: character) -> integer {
+  for fso in self.options {
+    if len(fso.short_name) > 0 {
+      if fch == fso.short_name { return fso#index }
+    }
+  }
+  -1
+}
+
+pub fn parse(self: Args, argv: vector<text>) -> boolean {
+  self.err = "";
+  p_pending = -1;
+  p_past = false;
+  for pa in argv {
+    if p_pending >= 0 {
+      self.results[p_pending] = pa;
+      p_pending = -1;
+    } else if p_past {
+      self.positionals += [pa];
+    } else if pa == "--" {
+      p_past = true;
+    } else if pa.starts_with("--") {
+      p_long = pa[2..];
+      p_eq = p_long.find("=");
+      if !p_eq {
+        p_idx = self.find_long_opt(p_long);
+        if p_idx < 0 {
+          self.err = "Unknown option: --{p_long}";
+          return false
+        }
+        if self.options[p_idx].kind == ArgKind.Flag {
+          self.results[p_idx] = "true";
+        } else {
+          p_pending = p_idx;
+        }
+      } else {
+        p_name = p_long[0..p_eq];
+        p_val = p_long[p_eq + 1..];
+        p_idx = self.find_long_opt(p_name);
+        if p_idx < 0 {
+          self.err = "Unknown option: --{p_name}";
+          return false
+        }
+        self.results[p_idx] = p_val;
+      }
+    } else if len(pa) > 1 && pa.starts_with("-") {
+      for pc in pa[1..] {
+        if p_pending >= 0 {
+          self.results[p_pending] = pa[pc#index + 1..];
+          p_pending = -1;
+          break
+        }
+        p_si = self.find_short_opt(pc);
+        if p_si < 0 {
+          self.err = "Unknown option: -{pc}";
+          return false
+        }
+        if self.options[p_si].kind == ArgKind.Flag {
+          self.results[p_si] = "true";
+        } else {
+          p_pending = p_si;
+        }
+      }
+    } else {
+      self.positionals += [pa];
+    }
+  }
+  if p_pending >= 0 {
+    self.err = "Option --{self.options[p_pending].long_name} requires a value";
+    return false
+  }
+  for pm in self.options {
+    if pm.mandatory {
+      if !self.results[pm#index] {
+        self.err = "Required option --{pm.long_name} is missing";
+        return false
+      }
+    }
+  }
+  true
+}
+
+pub fn has(self: Args, name: text) -> boolean {
+  for ho in self.options {
+    if ho.long_name == name {
+      if !self.results[ho#index] { return false }
+      return true
+    }
+  }
+  false
+}
+
+pub fn get(self: Args, name: text) -> text {
+  get_r: text = null;
+  for go in self.options {
+    if go.long_name == name { get_r = self.results[go#index]; }
+  }
+  get_r
+}
+
+pub fn ok(self: Args) -> boolean {
+  !self.err || len(self.err) == 0
+}
+
+pub fn error_msg(self: Args) -> text {
+  self.err
+}
+
+pub fn help(self: Args) -> text {
+  h = self.name + " " + self.version + "\n" + self.description + "\n";
+  h = h + "\nUsage: " + self.name + " [OPTIONS] [ARGS]\n\nOptions:\n";
+  for hp in self.options {
+    h = h + "  ";
+    if !hp.short_name || len(hp.short_name) == 0 {
+      h = h + "    ";
+    } else {
+      h = h + "-" + hp.short_name + ", ";
+    }
+    h = h + "--" + hp.long_name;
+    if hp.kind == ArgKind.Value {
+      h = h + " <" + hp.arg_name + ">";
+    }
+    if hp.mandatory { h = h + " (required)" }
+    h = h + "\n        " + hp.description + "\n";
+  }
+  h
+}
