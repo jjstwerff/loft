@@ -106,9 +106,12 @@ impl Test {
     /// `spec` is a space-separated list of `name(scope)=slot` tokens, e.g.:
     /// `"_t(4L)=0  b(4L)=4"` — `_t` in loop scope 4 at slot 0, `b` in loop scope 4 at slot 4.
     /// Scope suffix "L" asserts a loop scope; no suffix asserts a regular (non-loop) scope.
-    #[cfg(debug_assertions)]
     pub fn slots(&mut self, spec: &str) -> &mut Test {
-        self.expected_slots = Some(spec.to_string());
+        #[cfg(debug_assertions)]
+        {
+            self.expected_slots = Some(spec.to_string());
+        }
+        let _ = spec;
         self
     }
 

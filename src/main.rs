@@ -1017,14 +1017,45 @@ fn registry_age_str(path: &std::path::Path) -> String {
     }
 }
 
+/// Collect crate names → rlib paths from a deps directory
+/// (e.g. `libfoo-<hash>.rlib` → `("foo", "/path/to/libfoo-<hash>.rlib")`).
+fn rlibs_in_dir(dir: &std::path::Path) -> std::collections::HashMap<String, std::path::PathBuf> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+            {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if let Some(rest) = fname.strip_prefix("lib") {
+                    if let Some(dash_pos) = rest.rfind('-') {
+                        map.insert(rest[..dash_pos].to_string(), path);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 /// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
 /// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
 /// otherwise looks for native rlibs in `native/target/release/`.
+///
+/// Uses `-L dependency=` for the native package's deps so deep transitive deps
+/// resolve. For any crate that also appears in loft's own deps, adds an explicit
+/// `--extern name=<loft's copy>` so rustc uses a single copy, avoiding
+/// StableCrateId collisions.
 fn add_native_extern_flags(
     cmd: &mut std::process::Command,
     data: &data::Data,
     target: Option<&str>,
+    loft_deps_dir: Option<&std::path::Path>,
 ) {
+    let loft_rlibs = loft_deps_dir.map(|d| rlibs_in_dir(d)).unwrap_or_default();
+
     for (crate_name, pkg_dir) in &data.native_packages {
         // Look for the compiled rlib in the package's native crate output.
         let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
@@ -1055,12 +1086,25 @@ fn add_native_extern_flags(
                 .arg(format!("{}={}", extern_name, rlib_path.display()));
             // Add the native crate's deps directory so transitive deps (GL, glutin, etc.)
             // resolve. Use `dependency` search scope so these crates are only found as
-            // transitive deps of the native crate, not as direct deps that could collide
-            // with crates already provided by loft's own -L path.
+            // transitive deps of the native crate, not as direct deps.
             let deps_dir = rlib_path.parent().unwrap().join("deps");
             if deps_dir.is_dir() {
                 cmd.arg("-L")
                     .arg(format!("dependency={}", deps_dir.display()));
+                // Pin any crate that also exists in loft's deps to loft's copy,
+                // preventing StableCrateId collisions from duplicate rlibs.
+                if !loft_rlibs.is_empty() {
+                    let pkg_crates = rlibs_in_dir(&deps_dir);
+                    for (dep_name, loft_path) in &loft_rlibs {
+                        if pkg_crates.contains_key(dep_name) {
+                            cmd.arg("--extern").arg(format!(
+                                "{}={}",
+                                dep_name,
+                                loft_path.display()
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1559,13 +1603,22 @@ fn main() {
             .arg("-o")
             .arg(wasm_out)
             .arg(&rs_path);
-        if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-wasip2")) {
+        let wasm_deps_dir = if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-wasip2")) {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            cmd.arg("-L").arg(format!("dependency={}", lib_dir.join("deps").display()));
-        }
+            let deps = lib_dir.join("deps");
+            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+            Some(deps)
+        } else {
+            None
+        };
         // PKG.5: add --extern flags for native packages (WASM target).
-        add_native_extern_flags(&mut cmd, &p.data, Some("wasm32-wasip2"));
+        add_native_extern_flags(
+            &mut cmd,
+            &p.data,
+            Some("wasm32-wasip2"),
+            wasm_deps_dir.as_deref(),
+        );
         let status = cmd.status();
         let _ = std::fs::remove_file(&rs_path);
         match status {
@@ -1651,6 +1704,22 @@ fn main() {
             source_bytes.hash(&mut h);
             // Include the release flag in the hash so debug/release don't collide.
             native_release.hash(&mut h);
+            // Include modification times of native package rlibs and loft's
+            // own rlib so the cache invalidates when dependencies are rebuilt.
+            if let Some(lib_dir) = loft_lib_dir() {
+                if let Ok(meta) = std::fs::metadata(lib_dir.join("libloft.rlib")) {
+                    meta.modified().ok().hash(&mut h);
+                }
+            }
+            for (_crate_name, pkg_dir) in &p.data.native_packages {
+                let rlib_name = format!("lib{}.rlib", _crate_name.replace('-', "_"));
+                let rlib_path = std::path::PathBuf::from(pkg_dir)
+                    .join("native/target/release")
+                    .join(&rlib_name);
+                if let Ok(meta) = std::fs::metadata(&rlib_path) {
+                    meta.modified().ok().hash(&mut h);
+                }
+            }
             format!("{:016x}", h.finish())
         };
         let cache_dir = std::path::Path::new(&abs_file)
@@ -1678,7 +1747,7 @@ fn main() {
             if native_release {
                 cmd.arg("-O");
             }
-            if let Some(lib_dir) = loft_lib_dir() {
+            let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
                 let deps = lib_dir.join("deps");
@@ -1697,9 +1766,12 @@ fn main() {
                         }
                     }
                 }
-            }
+                Some(deps)
+            } else {
+                None
+            };
             // PKG.4: add --extern flags for native packages.
-            add_native_extern_flags(&mut cmd, &p.data, None);
+            add_native_extern_flags(&mut cmd, &p.data, None, native_deps_dir.as_deref());
             let status = cmd.status();
             let status = match status {
                 Ok(s) => s,

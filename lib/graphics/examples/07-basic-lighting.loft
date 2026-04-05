@@ -89,23 +89,9 @@ fn render_native_lighting() {
     graphics::gl_set_uniform_mat4(bl_shader, "uModel", bl_model.m);
     graphics::gl_set_uniform_mat4(bl_shader, "uView", bl_view.m);
     graphics::gl_set_uniform_mat4(bl_shader, "uProj", bl_proj.m);
-    // Pass light and view positions as vec3 uniforms (packed as 3-float mat row)
-    // Using mat4 uniform with only first 3 elements used as a vec3 workaround
-    bl_light_mat = math::Mat4 { m: [
-      bl_light_pos.x, bl_light_pos.y, bl_light_pos.z, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    ] };
-    bl_view_mat = math::Mat4 { m: [
-      bl_eye.x, bl_eye.y, bl_eye.z, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    ] };
-    bl_color_mat = math::Mat4 { m: [
-      1.0, 0.5, 0.31, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    ] };
-    graphics::gl_set_uniform_mat4(bl_shader, "uLightPos", bl_light_mat.m);
-    graphics::gl_set_uniform_mat4(bl_shader, "uViewPos", bl_view_mat.m);
-    graphics::gl_set_uniform_mat4(bl_shader, "uObjectColor", bl_color_mat.m);
+    graphics::gl_set_uniform_vec3(bl_shader, "uLightPos", bl_light_pos.x, bl_light_pos.y, bl_light_pos.z);
+    graphics::gl_set_uniform_vec3(bl_shader, "uViewPos", bl_eye.x, bl_eye.y, bl_eye.z);
+    graphics::gl_set_uniform_vec3(bl_shader, "uObjectColor", 1.0, 0.5, 0.31);
     graphics::gl_draw(bl_vao, bl_n_verts);
     graphics::gl_swap_buffers();
   }

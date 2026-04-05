@@ -434,6 +434,16 @@ pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1
   }
 }
 
+// Native: write packed pixel data to a PNG file.
+fn save_png_raw(path: text, width: integer, height: integer, data: const vector<integer>) -> boolean;
+#native "loft_save_png"
+
+// Save canvas as a PNG file. Automatically uses RGBA if any pixel has alpha < 255,
+// otherwise uses RGB. Returns true on success.
+pub fn save_png(self: const Canvas, path: text) -> boolean {
+  save_png_raw(path, self.width, self.height, self.data)
+}
+
 // --- OpenGL (GL5) ---
 // Native OpenGL functions for window management and rendering.
 // Names match the symbols registered via loft_register_v1 in the cdylib.

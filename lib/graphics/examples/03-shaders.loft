@@ -50,9 +50,10 @@ fn render_native_colored() {
     return;
   }
   // Flat vertex data: pos(3) + normal(3) + color(4) = stride 10
+  // Matches LearnOpenGL: bottom-left=red, bottom-right=green, top=blue
   sc_data = [
-    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
-     0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 1.0f, 0.0f, 1.0f,
+     0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
+    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 1.0f, 0.0f, 1.0f,
      0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f
   ];
   sc_shader = graphics::gl_create_shader(VERT_COLOR_SRC, FRAG_COLOR_SRC);

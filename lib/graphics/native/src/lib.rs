@@ -23,6 +23,7 @@ mod window;
 // ── Thread-local GL state ───────────────────────────────────────────────
 
 struct GlState {
+    #[allow(dead_code)] // kept alive to prevent window destruction
     window: winit::window::Window,
     surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
     context: glutin::context::PossiblyCurrentContext,
@@ -49,6 +50,8 @@ thread_local! {
     static MOUSE_X: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     static MOUSE_Y: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     static MOUSE_BTN: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// Pending resize from a WindowEvent::Resized, applied after pump_app_events.
+    static PENDING_RESIZE: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
 }
 
 // Map winit key codes to a simple 0-255 index.
@@ -105,6 +108,13 @@ impl ApplicationHandler for JsonApp {
                     else { c.set(c.get() & !bit); }
                 });
             }
+            WindowEvent::Resized(size) => {
+                let w = size.width;
+                let h = size.height;
+                if w > 0 && h > 0 {
+                    PENDING_RESIZE.with(|c| c.set(Some((w, h))));
+                }
+            }
             _ => {}
         }
     }
@@ -144,6 +154,16 @@ pub extern "C" fn loft_gl_poll_events() -> bool {
         if handler.should_close || matches!(status, PumpStatus::Exit(_)) {
             s.should_close = true;
         }
+        // Apply any pending resize — the handler can't borrow GlState directly.
+        if let Some((w, h)) = PENDING_RESIZE.with(|c| c.take()) {
+            if let (Some(nw), Some(nh)) = (
+                std::num::NonZeroU32::new(w),
+                std::num::NonZeroU32::new(h),
+            ) {
+                s.surface.resize(&s.context, nw, nh);
+                unsafe { gl::Viewport(0, 0, w as i32, h as i32); }
+            }
+        }
         !s.should_close
     })
     .unwrap_or(false)
@@ -151,6 +171,15 @@ pub extern "C" fn loft_gl_poll_events() -> bool {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_swap_buffers() {
+    // On Wayland the compositor uses framebuffer alpha for window
+    // transparency. Force the alpha channel to 1.0 (opaque) on every
+    // frame before presenting, regardless of what shaders wrote.
+    unsafe {
+        gl::ColorMask(gl::FALSE, gl::FALSE, gl::FALSE, gl::TRUE);
+        gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT);
+        gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
+    }
     with_gl(|s| {
         let _ = s.surface.swap_buffers(&s.context);
     });
@@ -158,10 +187,11 @@ pub extern "C" fn loft_gl_swap_buffers() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_clear(color: u32) {
-    let r = ((color >> 24) & 0xFF) as f32 / 255.0;
-    let g = ((color >> 16) & 0xFF) as f32 / 255.0;
-    let b = ((color >> 8) & 0xFF) as f32 / 255.0;
-    let a = (color & 0xFF) as f32 / 255.0;
+    // Color is packed as 0xAARRGGBB by graphics::rgba().
+    let a = ((color >> 24) & 0xFF) as f32 / 255.0;
+    let r = ((color >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((color >> 8) & 0xFF) as f32 / 255.0;
+    let b = (color & 0xFF) as f32 / 255.0;
     unsafe {
         gl::ClearColor(r, g, b, a);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
@@ -724,8 +754,64 @@ pub extern "C" fn loft_gl_text_texture(
         *out_width = w as i32;
         *out_height = h as i32;
     }
-    let tex = unsafe { loft_gl_upload_alpha_texture(pixels.as_ptr(), w as i32, h as i32) };
-    tex
+    loft_gl_upload_alpha_texture(pixels.as_ptr(), w as i32, h as i32)
+}
+
+/// Save pixel data as a PNG file.
+/// Pixels are packed as 0xAARRGGBB integers.
+/// Native compilation path: receives raw pointer + count.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_save_png(
+    path_ptr: *const u8,
+    path_len: usize,
+    width: i32,
+    height: i32,
+    data_ptr: *const i32,
+    data_count: u32,
+) -> bool {
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
+    let w = width as u32;
+    let h = height as u32;
+    if w == 0 || h == 0 || data_count < w * h {
+        return false;
+    }
+    let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
+    // Check if any pixel has alpha < 255 to decide RGB vs RGBA output.
+    let has_alpha = pixels.iter().any(|&px| ((px >> 24) & 0xFF) != 0xFF_u32 as i32);
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    encoder.set_depth(png::BitDepth::Eight);
+    if has_alpha {
+        encoder.set_color(png::ColorType::Rgba);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for &px in pixels {
+            rgba.push(((px >> 16) & 0xFF) as u8); // R
+            rgba.push(((px >> 8) & 0xFF) as u8);  // G
+            rgba.push((px & 0xFF) as u8);          // B
+            rgba.push(((px >> 24) & 0xFF) as u8);  // A
+        }
+        let mut writer = match encoder.write_header() {
+            Ok(w) => w,
+            Err(_) => return false,
+        };
+        writer.write_image_data(&rgba).is_ok()
+    } else {
+        encoder.set_color(png::ColorType::Rgb);
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for &px in pixels {
+            rgb.push(((px >> 16) & 0xFF) as u8); // R
+            rgb.push(((px >> 8) & 0xFF) as u8);  // G
+            rgb.push((px & 0xFF) as u8);          // B
+        }
+        let mut writer = match encoder.write_header() {
+            Ok(w) => w,
+            Err(_) => return false,
+        };
+        writer.write_image_data(&rgb).is_ok()
+    }
 }
 
 /// Set line width for GL_LINES rendering.
@@ -808,6 +894,8 @@ pub unsafe extern "C" fn loft_register_v1(
         // Rendering hints
         reg!(b"loft_gl_line_width", loft_gl_line_width);
         reg!(b"loft_gl_point_size", loft_gl_point_size);
+        // PNG export
+        reg!(b"loft_save_png", loft_save_png);
     }
 }
 

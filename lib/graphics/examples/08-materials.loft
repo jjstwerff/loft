@@ -83,34 +83,23 @@ fn render_native_materials() {
     mt_t = (ticks() - mt_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(20, 20, 25, 255));
     graphics::gl_use_shader(mt_shader);
-    // Pass light position
-    mt_lm = math::Mat4 { m: [mt_light.x, mt_light.y, mt_light.z, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
-    graphics::gl_set_uniform_mat4(mt_shader, "uLightPos", mt_lm.m);
+    graphics::gl_set_uniform_vec3(mt_shader, "uLightPos", mt_light.x, mt_light.y, mt_light.z);
     // Cube: rough red material on the left
     mt_cube_model = math::mat4_mul(
       math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(mt_t * 0.3));
     mt_cube_mvp = math::mat4_mul(mt_proj, math::mat4_mul(mt_view, mt_cube_model));
     graphics::gl_set_uniform_mat4(mt_shader, "uMVP", mt_cube_mvp.m);
     graphics::gl_set_uniform_mat4(mt_shader, "uModel", mt_cube_model.m);
-    mt_red = math::Mat4 { m: [0.8, 0.2, 0.1, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
-    graphics::gl_set_uniform_mat4(mt_shader, "uObjectColor", mt_red.m);
-    mt_shin1 = math::Mat4 { m: [8.0, 0.0, 0.0, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
-    graphics::gl_set_uniform_mat4(mt_shader, "uShininess", mt_shin1.m);
+    graphics::gl_set_uniform_vec3(mt_shader, "uObjectColor", 0.8, 0.2, 0.1);
+    graphics::gl_set_uniform_float(mt_shader, "uShininess", 8.0);
     graphics::gl_draw(mt_cube_vao, mt_cube_verts);
     // Sphere: shiny gold material on the right
     mt_sphere_model = math::mat4_translate(1.5, 0.0, 0.0);
     mt_sphere_mvp = math::mat4_mul(mt_proj, math::mat4_mul(mt_view, mt_sphere_model));
     graphics::gl_set_uniform_mat4(mt_shader, "uMVP", mt_sphere_mvp.m);
     graphics::gl_set_uniform_mat4(mt_shader, "uModel", mt_sphere_model.m);
-    mt_gold = math::Mat4 { m: [1.0, 0.84, 0.0, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
-    graphics::gl_set_uniform_mat4(mt_shader, "uObjectColor", mt_gold.m);
-    mt_shin2 = math::Mat4 { m: [128.0, 0.0, 0.0, 0.0,
-      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
-    graphics::gl_set_uniform_mat4(mt_shader, "uShininess", mt_shin2.m);
+    graphics::gl_set_uniform_vec3(mt_shader, "uObjectColor", 1.0, 0.84, 0.0);
+    graphics::gl_set_uniform_float(mt_shader, "uShininess", 128.0);
     graphics::gl_draw(mt_sphere_vao, mt_sphere_verts);
     graphics::gl_swap_buffers();
   }

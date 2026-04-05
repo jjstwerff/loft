@@ -22,13 +22,17 @@ check-targets:
 
 install: check-targets all
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
+	# Build library in isolated target dir so deps/ contains exactly one copy
+	# of each crate — no binary-only duplicates (e.g. libloading) that cause
+	# StableCrateId collisions during native compilation.
+	cargo build --release --lib --no-default-features --features mmap,random,threading --target-dir target/install-lib
 	sudo install -d /usr/local/share/loft/deps
 	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
 	sudo cp -r default /usr/local/share/loft/
-	sudo install -m 644 target/release/libloft.rlib /usr/local/share/loft/
+	sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
 	sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
-	sudo cp target/release/deps/*.rlib /usr/local/share/loft/deps/
-	sudo cp target/release/deps/*.so /usr/local/share/loft/deps/ 2>/dev/null || true
+	sudo cp target/install-lib/release/deps/*.rlib /usr/local/share/loft/deps/
+	sudo cp target/install-lib/release/deps/*.so /usr/local/share/loft/deps/ 2>/dev/null || true
 	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
 	sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
 	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
