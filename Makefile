@@ -97,6 +97,7 @@ ci:
 	-rm -f /tmp/loft_native_*
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
+	cargo check --no-default-features >> result.txt 2>&1 && \
 	cargo test >> result.txt 2>&1 && \
 	$(MAKE) test-packages >> result.txt 2>&1
 
@@ -104,11 +105,9 @@ run-tests:
 	cargo test > result.txt 2>&1
 
 clippy:
-	cargo clippy -- -D warnings -W clippy::all > result.txt 2>&1
-	cargo clippy --tests -- -D warnings -W clippy::all >> result.txt 2>&1
-	rustfmt src/*.rs --edition 2024
-	rustfmt tests/*.rs --edition 2024
-	cargo run --bin gendoc
+	cargo fmt -- --check > result.txt 2>&1
+	cargo clippy --tests -- -D warnings >> result.txt 2>&1
+	cargo check --no-default-features >> result.txt 2>&1
 
 memory:
 	cargo test --test vectors -- --nocapture 2>&1 | valgrind --tool=memcheck
