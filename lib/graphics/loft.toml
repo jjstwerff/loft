@@ -6,3 +6,6 @@ loft = ">=0.8"
 [library]
 entry = "src/graphics.loft"
 native = "loft_graphics_native"
+
+[native]
+crate = "loft-graphics-native"

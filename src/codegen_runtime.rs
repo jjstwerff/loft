@@ -1773,3 +1773,62 @@ pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
     }
     vec
 }
+
+// ── LoftStore construction for native codegen ───────────────────────────
+// When native codegen calls `extern "C"` functions that take `LoftStore`,
+// it needs to build one from `&mut Stores`.  These helpers provide that.
+
+#[cfg(feature = "native-extensions")]
+unsafe extern "C" fn _ffi_claim(ctx: loft_ffi::LoftStoreCtx, words: u32) -> u32 {
+    let store_nr = ctx._opaque as usize as u16;
+    crate::extensions::CURRENT_STORES.with(|c| {
+        let stores = unsafe { &mut *c.get() };
+        stores.allocations[store_nr as usize].claim(words)
+    })
+}
+
+#[cfg(feature = "native-extensions")]
+unsafe extern "C" fn _ffi_reload(
+    ctx: loft_ffi::LoftStoreCtx,
+    out_ptr: *mut *mut u8,
+    out_size: *mut u32,
+) {
+    let store_nr = ctx._opaque as usize as u16;
+    crate::extensions::CURRENT_STORES.with(|c| {
+        let stores = unsafe { &*c.get() };
+        let store = &stores.allocations[store_nr as usize];
+        unsafe {
+            *out_ptr = store.base_ptr();
+            *out_size = store.capacity_words();
+        }
+    });
+}
+
+#[cfg(feature = "native-extensions")]
+unsafe extern "C" fn _ffi_resize(ctx: loft_ffi::LoftStoreCtx, rec: u32, words: u32) -> u32 {
+    let store_nr = ctx._opaque as usize as u16;
+    crate::extensions::CURRENT_STORES.with(|c| {
+        let stores = unsafe { &mut *c.get() };
+        stores.allocations[store_nr as usize].resize(rec, words)
+    })
+}
+
+/// Build a `LoftStore` handle for calling `extern "C"` native functions that
+/// need store access.  Sets the thread-local `CURRENT_STORES` pointer so the
+/// FFI callbacks can reach back into the interpreter's stores.
+#[cfg(feature = "native-extensions")]
+pub fn make_loft_store(stores: &mut Stores, store_nr: u16) -> loft_ffi::LoftStore {
+    // Set thread-local so FFI callbacks can find stores.
+    crate::extensions::CURRENT_STORES.with(|c| c.set(std::ptr::from_mut::<Stores>(stores)));
+    let store = &stores.allocations[store_nr as usize];
+    loft_ffi::LoftStore {
+        ptr: store.base_ptr(),
+        size: store.capacity_words(),
+        ctx: loft_ffi::LoftStoreCtx {
+            _opaque: store_nr as usize as *mut (),
+        },
+        claim_fn: Some(_ffi_claim),
+        reload_fn: Some(_ffi_reload),
+        resize_fn: Some(_ffi_resize),
+    }
+}

@@ -429,9 +429,44 @@ See [THREADING.md](THREADING.md) § fn Expression for how function references ar
 
 ---
 
+## String literals
+
+Loft has two string literal syntaxes. Both support `{expr}` interpolation.
+
+### Double-quoted strings (`"..."`)
+
+Single-line. Supports `\n`, `\t`, `\\`, `\"` escapes.
+
+```
+"hello {name}"           // interpolation
+"line1\nline2"           // escape sequences
+"literal {{braces}}"     // escape { } by doubling
+```
+
+### Backtick strings (`` `...` ``)
+
+**Multi-line.** Bare `"` is literal inside backtick strings (no escaping needed).
+Auto-strips common leading indentation based on the closing backtick's column.
+First and last lines are trimmed if they contain only whitespace.
+
+```
+shader = `
+  #version 330 core
+  layout (location = 0) in vec3 aPos;
+  void main() {
+      gl_Position = vec4(aPos, 1.0);
+  }
+`;
+
+msg = `Hello, {name}!
+  You have {count} messages.`;
+```
+
+Use backtick strings for GLSL shaders, multi-line templates, or text containing `"`.
+
 ## String formatting
 
-Strings support inline expressions and format specifiers using `{...}`:
+Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:
 
 ```
 "Value: {x}"             // embed variable
@@ -691,7 +726,9 @@ data = configuration as Program
 ## Vectors
 
 ```
-v = [1, 2, 3]               // create
+v = [1, 2, 3]               // create with literal
+v: vector<integer> = []     // empty vector with type annotation
+buf: vector<single> = []    // empty vector of f32
 v += [4]                    // append one element
 v += [5, 6]                 // append multiple elements
 for x in v { }             // iterate
@@ -704,6 +741,9 @@ v[..end]                    // open-start slice from 0 to end (exclusive)
 [for n in 1..7 { n * 2 }]  // vector comprehension (builds [2, 4, 6, 8, 10, 12])
 [for n in 1..10 if n % 2 == 0 { n }]  // comprehension with filter
 ```
+
+**Empty vectors** require a type annotation so the compiler knows the element type.
+Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.
 
 To remove elements while iterating, use `v#remove` inside a filtered loop (see [For loops](#for-loops)).
 

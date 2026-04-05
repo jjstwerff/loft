@@ -430,7 +430,7 @@ std::thread_local! {
 // Set before calling a native function, cleared after it returns.
 #[cfg(feature = "native-extensions")]
 std::thread_local! {
-    static CURRENT_STORES: std::cell::Cell<*mut crate::database::Stores> =
+    pub(crate) static CURRENT_STORES: std::cell::Cell<*mut crate::database::Stores> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
@@ -985,6 +985,50 @@ fn dispatch_call(
         (&[ArgT::F32, ArgT::F32], Some(ArgT::F32)) => {
             let f: extern "C" fn(f32, f32) -> f32 = unsafe { std::mem::transmute(fp) };
             stores.put(stack, f64::from(f(f32_arg!(0), f32_arg!(1))));
+        }
+        // (Bool) -> void  (e.g. gl_depth_mask)
+        (&[ArgT::Bool], None) => {
+            let f: extern "C" fn(bool) = unsafe { std::mem::transmute(fp) };
+            if let ArgVal::Bool(v) = &args[0] {
+                f(*v);
+            }
+        }
+        // (F64) -> void  (e.g. gl_line_width, gl_point_size)
+        (&[ArgT::F64], None) => {
+            let f: extern "C" fn(f64) = unsafe { std::mem::transmute(fp) };
+            f(f64_arg!(0));
+        }
+        // (I32, I32, I32, I32) -> void  (e.g. gl_viewport)
+        (&[ArgT::I32, ArgT::I32, ArgT::I32, ArgT::I32], None) => {
+            let f: extern "C" fn(i32, i32, i32, i32) = unsafe { std::mem::transmute(fp) };
+            f(i32_arg!(0), i32_arg!(1), i32_arg!(2), i32_arg!(3));
+        }
+        // (I32, Text, Ref) -> void  (e.g. gl_set_uniform_mat4: program, name, vec_ref)
+        (&[ArgT::I32, ArgT::Text, ArgT::Ref], None) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, i32, *const u8, usize, LoftRef) =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(ls, i32_arg!(0), p, l, ref_arg!(2));
+        }
+        // (I32, Text, F64) -> void  (e.g. gl_set_uniform_float)
+        (&[ArgT::I32, ArgT::Text, ArgT::F64], None) => {
+            let f: extern "C" fn(i32, *const u8, usize, f64) = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i32_arg!(0), p, l, f64_arg!(2));
+        }
+        // (I32, Text, I32) -> void  (e.g. gl_set_uniform_int)
+        (&[ArgT::I32, ArgT::Text, ArgT::I32], None) => {
+            let f: extern "C" fn(i32, *const u8, usize, i32) = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i32_arg!(0), p, l, i32_arg!(2));
+        }
+        // (I32, Text, F64, F64, F64) -> void  (e.g. gl_set_uniform_vec3)
+        (&[ArgT::I32, ArgT::Text, ArgT::F64, ArgT::F64, ArgT::F64], None) => {
+            let f: extern "C" fn(i32, *const u8, usize, f64, f64, f64) =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i32_arg!(0), p, l, f64_arg!(2), f64_arg!(3), f64_arg!(4));
         }
         _ => {
             let sig_str: Vec<String> = params.iter().map(|t| format!("{t:?}")).collect();

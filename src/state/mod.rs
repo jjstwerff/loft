@@ -1290,7 +1290,7 @@ impl State {
                 step += 1;
             }
             #[cfg(debug_assertions)]
-            if step >= 10_000_000 {
+            if step >= 100_000_000 {
                 use std::fmt::Write as _;
                 let mut msg = String::from("Too many operations (infinite loop?). Last 16 ops:\n");
                 for i in 0..16usize {

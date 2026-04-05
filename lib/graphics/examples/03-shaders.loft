@@ -22,26 +22,26 @@ use mesh;
 use math;
 use glb;
 
-VERT_COLOR_SRC = "
+VERT_COLOR_SRC = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec4 aColor;
 out vec4 vColor;
-void main() {
+void main() {{
     gl_Position = vec4(aPos, 1.0);
     vColor = aColor;
-}
-";
+}}
+`;
 
-FRAG_COLOR_SRC = "
+FRAG_COLOR_SRC = `
 #version 330 core
 in vec4 vColor;
 out vec4 FragColor;
-void main() {
+void main() {{
     FragColor = vColor;
-}
-";
+}}
+`;
 
 fn render_native_colored() {
   if !graphics::gl_create_window(800, 600, "03 - Shaders (vertex colors)") {
@@ -56,9 +56,9 @@ fn render_native_colored() {
   ];
   sc_shader = graphics::gl_create_shader(VERT_COLOR_SRC, FRAG_COLOR_SRC);
   sc_vao = graphics::gl_upload_vertices(sc_data, 10);
-  for sc_frame in 0..300 {
+  for _ in 0..300 {
     if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(rgba(51, 76, 76, 255));
+    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
     graphics::gl_use_shader(sc_shader);
     graphics::gl_draw(sc_vao, 3);
     graphics::gl_swap_buffers();

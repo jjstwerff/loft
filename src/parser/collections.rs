@@ -885,6 +885,14 @@ use #count instead"
             let orig_coll_expr = expr.clone();
             if matches!(in_type, Type::Vector(_, _)) {
                 let vec_var = self.create_unique("vector", &in_type);
+                // On the second pass in_type may carry __vdb_N dependencies that
+                // were not present on the first pass (vector_db only runs on pass 2).
+                // Update the temp variable's type so that get_free_vars sees the
+                // deps and does NOT emit OpFreeRef for the temp — the __vdb_N
+                // variable at the outer scope owns the store and will free it.
+                if !self.first_pass {
+                    self.vars.set_type(vec_var, in_type.clone());
+                }
                 in_type = in_type.depending(vec_var);
                 fill = v_set(vec_var, expr);
                 expr = Value::Var(vec_var);

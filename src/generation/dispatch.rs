@@ -6,6 +6,7 @@
 use crate::data::{Context, Type, Value};
 use std::io::Write;
 
+use super::calls::contains_op_database;
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
@@ -105,6 +106,53 @@ impl Output<'_> {
             self.output_code_inner(w, &ops[ops.len() - 1])?;
             return Ok(());
         }
+        // Hoist call arguments that mutate stores into temporaries to prevent
+        // double-mutable-borrow of `stores` in the call expression.
+        if let Value::Call(call_dnr, args) = to
+            && args.iter().any(|a| contains_op_database(a, self.data))
+        {
+            let def_fn = self.data.def(*call_dnr);
+            let mut hoisted: Vec<Option<String>> = vec![None; args.len()];
+            for (idx, arg) in args.iter().enumerate() {
+                if contains_op_database(arg, self.data) {
+                    let param_tp = if idx < def_fn.attributes.len() {
+                        rust_type(&def_fn.attributes[idx].typedef, &Context::Argument)
+                    } else {
+                        "DbRef".to_string()
+                    };
+                    let tmp = format!("_harg_{name}_{idx}");
+                    write!(w, "let {tmp}: {param_tp} = ")?;
+                    self.output_code_inner(w, arg)?;
+                    writeln!(w, ";")?;
+                    self.indent(w)?;
+                    hoisted[idx] = Some(tmp);
+                }
+            }
+            if self.declared.contains(&var) {
+                write!(w, "var_{name} = ")?;
+            } else {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                write!(w, "let mut var_{name}: {tp_str} = ")?;
+            }
+            write!(w, "{}(stores", def_fn.name)?;
+            for (idx, arg) in args.iter().enumerate() {
+                write!(w, ", ")?;
+                if let Some(ref tmp) = hoisted[idx] {
+                    write!(w, "{tmp}")?;
+                } else if let Some(vr) = self.create_stack_var(arg) {
+                    let sn = sanitize(variables.name(vr));
+                    write!(w, "&mut var_{sn}")?;
+                } else {
+                    self.output_code_inner(w, arg)?;
+                }
+            }
+            write!(w, ")")?;
+            if needs_to_string {
+                write!(w, ".to_string()")?;
+            }
+            return Ok(());
+        }
         if self.declared.contains(&var) {
             write!(w, "var_{name} = ")?;
         } else {
@@ -153,9 +201,25 @@ impl Output<'_> {
                 if is_fn_ref_var && !wrap_fn_ref {
                     self.fn_ref_context = true;
                 }
-                self.output_code_inner(w, to)?;
+                // When assigning to a String variable from a text-local source,
+                // output_code_inner emits `&var_name` (borrow to &str), and
+                // appending `.to_string()` yields `&String` not `String`.
+                // Detect this case and emit `.clone()` on the owned String directly.
+                let text_local_clone = needs_to_string
+                    && matches!(to, Value::Var(v) if {
+                        let vars = &self.data.def(self.def_nr).variables;
+                        !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Text(_))
+                    });
+                if text_local_clone {
+                    if let Value::Var(v) = to {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        write!(w, "var_{src_name}.clone()")?;
+                    }
+                } else {
+                    self.output_code_inner(w, to)?;
+                }
                 self.fn_ref_context = prev_ctx;
-                if needs_to_string {
+                if needs_to_string && !text_local_clone {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {
                     write!(

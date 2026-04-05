@@ -377,7 +377,7 @@ impl Output<'_> {
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).
-    fn emit_file_header(w: &mut dyn Write) -> std::io::Result<()> {
+    fn emit_file_header(w: &mut dyn Write, data: &Data) -> std::io::Result<()> {
         writeln!(
             w,
             "\
@@ -394,9 +394,18 @@ impl Output<'_> {
 #![allow(unused_braces)]
 #![allow(clippy::double_parens)]
 #![allow(clippy::unused_unit)]
+#![allow(unused_unsafe)]
 
 extern crate loft;"
         )?;
+        // Emit extern crate declarations for native packages.
+        for (crate_name, _) in &data.native_packages {
+            let ident = crate_name.replace('-', "_");
+            writeln!(w, "extern crate {ident};")?;
+        }
+        if !data.native_symbol_crates.is_empty() {
+            writeln!(w, "extern crate loft_ffi;")?;
+        }
         writeln!(w, "use loft::database::Stores;")?;
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
         writeln!(w, "use loft::ops;")?;
@@ -424,7 +433,7 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
-        Self::emit_file_header(w)?;
+        Self::emit_file_header(w, self.data)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
@@ -448,7 +457,7 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
-        Self::emit_file_header(w)?;
+        Self::emit_file_header(w, self.data)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
@@ -895,8 +904,21 @@ extern crate loft;"
             // PKG.4: check if this function has a native symbol from a package manifest.
             let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
             if let Some(rust_symbol) = self.data.native_symbols.get(user_name) {
-                // Emit a call to the native Rust function.
-                self.output_native_extern_call(w, def_nr, rust_symbol)?;
+                // Emit a call to the native Rust function with type marshalling.
+                self.output_native_api_call(w, def_nr, rust_symbol)?;
+            } else if !def.native.is_empty() {
+                // #native "symbol" with a known crate — emit direct call with
+                // type marshalling derived from the loft function signature.
+                if let Some(krate) = self.data.native_symbol_crates.get(&def.native) {
+                    let qualified = format!("{}::{}", krate, def.native);
+                    self.output_native_direct_call(w, def_nr, &qualified)?;
+                } else {
+                    writeln!(w, "{{")?;
+                    if def.returned != Type::Void {
+                        writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                    }
+                    writeln!(w, "}}")?;
+                }
             } else {
                 // Internal i_ functions have implementations in codegen_runtime.rs;
                 // all others get a todo!() stub.
@@ -924,7 +946,7 @@ extern crate loft;"
     /// PKG.4: emit a call to an external native Rust function from a package.
     /// The generated code calls `rust_symbol(stores, arg1, arg2, ...)` and
     /// returns the result.
-    fn output_native_extern_call(
+    fn output_native_api_call(
         &self,
         w: &mut dyn Write,
         d_nr: u32,
@@ -932,7 +954,6 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
         writeln!(w, "{{")?;
-        // Build argument list: first arg is always `stores: &mut Stores`.
         write!(w, "  {rust_symbol}(stores")?;
         for attr in &def.attributes {
             if attr.name.starts_with("__") {
@@ -941,6 +962,115 @@ extern crate loft;"
             write!(w, ", var_{}", sanitize(&attr.name))?;
         }
         write!(w, ")")?;
+        writeln!(w, "\n}}")
+    }
+
+    /// Emit a direct call to a native `extern "C"` function with automatic
+    /// type marshalling derived from the loft function signature.
+    ///
+    /// Conversions:
+    /// - `text` (`&str`) → `ptr, len` (two C args)
+    /// - `vector<single>` (`DbRef`) → `LoftStore, LoftRef` via stores
+    /// - `vector<float>` (`DbRef`) → `LoftStore, LoftRef` via stores
+    /// - scalars pass through with casts where needed
+    ///
+    /// The return value is converted back to the loft type.
+    fn output_native_direct_call(
+        &self,
+        w: &mut dyn Write,
+        d_nr: u32,
+        qualified_symbol: &str,
+    ) -> std::io::Result<()> {
+        let def = self.data.def(d_nr);
+        // Check if any arg is a store-aware type (vector/reference).
+        let has_store_arg = def.attributes.iter().any(|a| {
+            !a.name.starts_with("__")
+                && matches!(a.typedef, Type::Vector(_, _) | Type::Reference(_, _))
+        });
+        writeln!(w, "{{")?;
+        if has_store_arg {
+            // Build a LoftStore from the first store-aware argument.
+            let store_var = def
+                .attributes
+                .iter()
+                .find(|a| {
+                    !a.name.starts_with("__")
+                        && matches!(a.typedef, Type::Vector(_, _) | Type::Reference(_, _))
+                })
+                .map(|a| sanitize(&a.name))
+                .unwrap();
+            writeln!(
+                w,
+                "  let _ls = loft::codegen_runtime::make_loft_store(stores, var_{store_var}.store_nr);"
+            )?;
+        }
+        // Emit: unsafe { symbol(args...) }
+        // All extern "C" functions may need unsafe (pointer args, GL calls).
+        write!(w, "  unsafe {{ {qualified_symbol}(")?;
+        let mut first = true;
+        for attr in &def.attributes {
+            if attr.name.starts_with("__") {
+                continue;
+            }
+            let var = sanitize(&attr.name);
+            match &attr.typedef {
+                Type::Text(_) => {
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(w, "var_{var}.as_ptr(), var_{var}.len()")?;
+                }
+                Type::Vector(_, _) | Type::Reference(_, _) => {
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    // First store-aware arg also injects LoftStore.
+                    if has_store_arg {
+                        write!(
+                            w,
+                            "_ls, loft_ffi::LoftRef {{ store_nr: var_{var}.store_nr, rec: var_{var}.rec, pos: var_{var}.pos }}"
+                        )?;
+                    } else {
+                        write!(w, "var_{var}.store_nr, var_{var}.rec, var_{var}.pos")?;
+                    }
+                }
+                Type::Integer(_, _, _) | Type::Character => {
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(w, "var_{var}")?;
+                }
+                Type::Float => {
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(w, "var_{var}")?;
+                }
+                Type::Boolean => {
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(w, "var_{var}")?;
+                }
+                _ => {
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(w, "var_{var}")?;
+                }
+            }
+        }
+        write!(w, ") }}")?;
+        // Cast return value if needed.
+        if matches!(&def.returned, Type::Integer(_, _, _)) {
+            write!(w, " as i32")?;
+        }
         writeln!(w, "\n}}")
     }
 }

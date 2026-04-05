@@ -29,30 +29,30 @@ use math;
 use glb;
 use scene;
 
-VERT_MVP_SRC = "
+VERT_MVP_SRC = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
 out vec3 vNormal;
-void main() {
+void main() {{
     gl_Position = uMVP * vec4(aPos, 1.0);
     vNormal = aNormal;
-}
-";
+}}
+`;
 
-FRAG_LIT_SRC = "
+FRAG_LIT_SRC = `
 #version 330 core
 in vec3 vNormal;
 out vec4 FragColor;
-void main() {
+void main() {{
     // Simple directional light from upper-right
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.8));
     float diff = max(dot(normalize(vNormal), lightDir), 0.0);
     vec3 color = vec3(1.0, 0.5, 0.2) * (0.3 + 0.7 * diff);
     FragColor = vec4(color, 1.0);
-}
-";
+}}
+`;
 
 fn render_native_cube() {
   if !graphics::gl_create_window(800, 600, "04 - Transformations (spinning cube)") {
@@ -70,12 +70,12 @@ fn render_native_cube() {
     math::vec3(0.0, 0.0, 0.0),
     math::vec3(0.0, 1.0, 0.0));
   tc_start = ticks();
-  for tc_frame in 0..3000 {
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     tc_t = (ticks() - tc_start) as float / 1000000.0;
     tc_model = math::mat4_rotate_y(tc_t);
     tc_mvp = math::mat4_mul(tc_proj, math::mat4_mul(tc_view, tc_model));
-    graphics::gl_clear(rgba(30, 30, 30, 255));
+    graphics::gl_clear(graphics::rgba(30, 30, 30, 255));
     graphics::gl_use_shader(tc_shader);
     graphics::gl_set_uniform_mat4(tc_shader, "uMVP", tc_mvp.m);
     graphics::gl_draw(tc_vao, tc_n_verts);

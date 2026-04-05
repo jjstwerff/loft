@@ -18,7 +18,7 @@ use math;
 use glb;
 use scene;
 
-VERT_ML = "
+VERT_ML = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -27,14 +27,14 @@ uniform mat4 uView;
 uniform mat4 uProj;
 out vec3 vFragPos;
 out vec3 vNormal;
-void main() {
+void main() {{
     vFragPos = vec3(uModel * vec4(aPos, 1.0));
     vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     gl_Position = uProj * uView * vec4(vFragPos, 1.0);
-}
-";
+}}
+`;
 
-FRAG_ML = "
+FRAG_ML = `
 #version 330 core
 in vec3 vFragPos;
 in vec3 vNormal;
@@ -47,7 +47,7 @@ uniform vec3 uDirLightColor;
 // Point light
 uniform vec3 uPointLightPos;
 uniform vec3 uPointLightColor;
-void main() {
+void main() {{
     vec3 norm = normalize(vNormal);
     vec3 viewDir = normalize(uViewPos - vFragPos);
     // Directional light contribution
@@ -65,8 +65,8 @@ void main() {
     float pSpec = pow(max(dot(viewDir, pRefl), 0.0), 32.0);
     vec3 point = (pDiff + 0.5 * pSpec) * pAtten * uPointLightColor;
     FragColor = vec4((dir + point) * uObjectColor, 1.0);
-}
-";
+}}
+`;
 
 fn render_native_ml() {
   if !graphics::gl_create_window(800, 600, "11 - Multiple Lights") {
@@ -83,10 +83,10 @@ fn render_native_ml() {
   ml_start = ticks();
   ml_colors = [math::vec3(1.0, 0.3, 0.3), math::vec3(0.3, 1.0, 0.3), math::vec3(0.3, 0.3, 1.0)];
   ml_positions = [math::vec3(-2.0, 0.0, 0.0), math::vec3(0.0, 0.0, 0.0), math::vec3(2.0, 0.0, 0.0)];
-  for ml_frame in 0..3000 {
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     ml_t = (ticks() - ml_start) as float / 1000000.0;
-    graphics::gl_clear(rgba(15, 15, 20, 255));
+    graphics::gl_clear(graphics::rgba(15, 15, 20, 255));
     graphics::gl_use_shader(ml_shader);
     graphics::gl_set_uniform_vec3(ml_shader, "uViewPos", ml_eye.x, ml_eye.y, ml_eye.z);
     graphics::gl_set_uniform_vec3(ml_shader, "uDirLightDir", -0.2, -1.0, -0.3);

@@ -28,6 +28,11 @@ impl Stores {
         if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
         } else {
+            // A free slot may still carry a stale lock if set_store_lock was
+            // called with a dangling DbRef after the store was freed.  Clear
+            // the lock before reinitialising to prevent a spurious panic in
+            // Store::init().
+            self.allocations[slot as usize].unlock();
             self.allocations[slot as usize].init();
         }
         if slot == self.max {
@@ -170,6 +175,10 @@ impl Stores {
 
     pub fn clear(&mut self, db: &DbRef) {
         let store = &mut self.allocations[db.store_nr as usize];
+        // Clear any stale lock before reinitialising — OpDatabase may
+        // reinitialise a store that was previously locked by a const
+        // parameter in a prior function call within the same loop iteration.
+        store.unlock();
         store.init();
     }
 
@@ -213,6 +222,11 @@ impl Stores {
     /// The lock persists until explicitly cleared via `unlock_store`.
     pub fn lock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
+            debug_assert!(
+                !self.allocations[r.store_nr as usize].free,
+                "Locking a freed store (store_nr={}, rec={})",
+                r.store_nr, r.rec
+            );
             self.allocations[r.store_nr as usize].lock();
         }
     }

@@ -22,7 +22,7 @@ use math;
 use glb;
 use scene;
 
-VERT_MAT = "
+VERT_MAT = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -30,14 +30,14 @@ uniform mat4 uMVP;
 uniform mat4 uModel;
 out vec3 vFragPos;
 out vec3 vNormal;
-void main() {
+void main() {{
     vFragPos = vec3(uModel * vec4(aPos, 1.0));
     vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     gl_Position = uMVP * vec4(aPos, 1.0);
-}
-";
+}}
+`;
 
-FRAG_MAT = "
+FRAG_MAT = `
 #version 330 core
 in vec3 vFragPos;
 in vec3 vNormal;
@@ -45,7 +45,7 @@ out vec4 FragColor;
 uniform vec3 uLightPos;
 uniform vec3 uObjectColor;
 uniform float uShininess;
-void main() {
+void main() {{
     vec3 norm = normalize(vNormal);
     vec3 lightDir = normalize(uLightPos - vFragPos);
     float diff = max(dot(norm, lightDir), 0.0);
@@ -54,8 +54,8 @@ void main() {
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), uShininess);
     vec3 result = (0.15 + diff + 0.5 * spec) * uObjectColor;
     FragColor = vec4(result, 1.0);
-}
-";
+}}
+`;
 
 fn render_native_materials() {
   if !graphics::gl_create_window(800, 600, "08 - Materials") {
@@ -77,10 +77,10 @@ fn render_native_materials() {
     math::vec3(3.0, 3.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   mt_light = math::vec3(3.0, 4.0, 2.0);
   mt_start = ticks();
-  for mt_frame in 0..3000 {
+  for _ in 0..3000 {
     if !graphics::gl_poll_events() { break }
     mt_t = (ticks() - mt_start) as float / 1000000.0;
-    graphics::gl_clear(rgba(20, 20, 25, 255));
+    graphics::gl_clear(graphics::rgba(20, 20, 25, 255));
     graphics::gl_use_shader(mt_shader);
     // Pass light position
     mt_lm = math::Mat4 { m: [mt_light.x, mt_light.y, mt_light.z, 0.0,

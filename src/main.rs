@@ -130,8 +130,13 @@ fn print_help() {
     );
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings in --tests output");
+    println!(
+        "  --check                       parse and compile only; report errors without running
+                                can be combined with --native to also verify rustc compilation"
+    );
     println!();
     println!("Subcommands:");
+    println!("  check <file>                  same as --check <file>");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
@@ -1048,6 +1053,23 @@ fn add_native_extern_flags(
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
                 .arg(format!("{}={}", extern_name, rlib_path.display()));
+            // Add the native crate's deps directory so transitive deps (loft_ffi etc.) resolve.
+            let deps_dir = rlib_path.parent().unwrap().join("deps");
+            if deps_dir.is_dir() {
+                cmd.arg("-L").arg(&deps_dir);
+                // Also add --extern loft_ffi if present in deps.
+                for e in std::fs::read_dir(&deps_dir).into_iter().flatten().flatten() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with("libloft_ffi-")
+                        && std::path::Path::new(&name)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+                    {
+                        cmd.arg("--extern")
+                            .arg(format!("loft_ffi={}", e.path().display()));
+                    }
+                }
+            }
         }
     }
 }
@@ -1077,6 +1099,7 @@ fn main() {
     let mut tests_dir: Option<String> = None;
     let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
+    let mut check_only = false;
     let mut user_args: Vec<String> = Vec::new();
 
     while i < argv.len() {
@@ -1162,6 +1185,8 @@ fn main() {
             tests_dir = Some(path);
         } else if a == "--no-warnings" {
             no_warnings = true;
+        } else if a == "--check" || a == "check" {
+            check_only = true;
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
@@ -1398,6 +1423,53 @@ fn main() {
                 .to_string(),
         );
     }
+    // Auto-detect loft.toml by walking up from the script file's directory.
+    // This lets `loft lib/graphics/examples/01.loft` find the graphics package
+    // without requiring the user to cd into the package directory first.
+    if !abs_file.is_empty() {
+        let script_dir = std::path::Path::new(&abs_file).parent();
+        if let Some(mut search) = script_dir.map(std::path::Path::to_path_buf) {
+            loop {
+                let candidate = search.join("loft.toml");
+                if candidate.exists() {
+                    if let Some(manifest) =
+                        manifest::read_manifest(candidate.to_str().unwrap_or("loft.toml"))
+                    {
+                        // Add the package's src/ directory to lib_dirs.
+                        let entry = manifest.entry.unwrap_or_else(|| "src".to_string());
+                        let src_dir = std::path::Path::new(&entry)
+                            .parent()
+                            .unwrap_or(std::path::Path::new("src"));
+                        let abs_src = search.join(src_dir).to_string_lossy().to_string();
+                        if !lib_dirs.contains(&abs_src) {
+                            lib_dirs.push(abs_src);
+                        }
+                        // Add parent directory so sibling packages (deps) are found.
+                        if !manifest.dependencies.is_empty() {
+                            if let Ok(parent) = search.join("..").canonicalize() {
+                                let ps = parent.to_string_lossy().to_string();
+                                if !lib_dirs.contains(&ps) {
+                                    lib_dirs.push(ps);
+                                }
+                            }
+                        }
+                        // Register native lib path for auto-build/loading.
+                        if let Some(ref stem) = manifest.native {
+                            let pkg_dir = search.to_string_lossy().to_string();
+                            if let Some(so_path) = extensions::auto_build_native(&pkg_dir, stem) {
+                                native_lib_paths.push(so_path);
+                            }
+                        }
+                    }
+                    break;
+                }
+                if !search.pop() {
+                    break;
+                }
+            }
+        }
+    }
+
     let mut p = parser::Parser::new();
     p.lib_dirs = lib_dirs;
     p.parse_dir(&(dir + "default"), true, false).unwrap();
@@ -1417,9 +1489,24 @@ fn main() {
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut p.data);
     // A7.2: load native extension shared libraries registered during parsing.
-    extensions::load_all(&mut state, std::mem::take(&mut p.pending_native_libs));
+    // Also include any native libs discovered via loft.toml auto-detection.
+    let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
+    for nlp in &native_lib_paths {
+        if !all_native_libs.contains(nlp) {
+            all_native_libs.push(nlp.clone());
+        }
+    }
+    extensions::load_all(&mut state, all_native_libs);
     // PKG.5: wire auto-marshalled native functions from loaded cdylibs.
     extensions::wire_native_fns(&mut state, &p.data);
+
+    // --check: parse + compile only, report errors and exit.
+    // When combined with --native, fall through to the native pipeline
+    // which will compile but not run the binary.
+    if check_only && !native_mode && native_emit.is_none() {
+        println!("ok {abs_file}");
+        return;
+    }
 
     // WASM codegen pipeline: --native-wasm
     if let Some(ref wasm_out) = native_wasm {
@@ -1595,6 +1682,13 @@ fn main() {
                 "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
             );
             std::process::exit(1);
+        }
+        if check_only {
+            // --check --native: compile succeeded, report ok and exit.
+            let _ = std::fs::remove_file(&emit_path);
+            let _ = std::fs::remove_file(&binary);
+            println!("ok {abs_file}");
+            return;
         }
         let run_status = std::process::Command::new(&binary)
             .args(&user_args)

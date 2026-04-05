@@ -4,7 +4,7 @@
 // WASD to move, Q/E to go up/down. Escape to close.
 //
 // Loft constructions used:
-//   gl_key_pressed(KEY_W) — real-time keyboard state polling
+//   gl_key_pressed(graphics::KEY_W) — real-time keyboard state polling
 //   gl_mouse_x/y           — cursor position tracking
 //   gl_mouse_button        — mouse button state
 //   ticks()                — frame-independent movement speed
@@ -12,29 +12,29 @@ use graphics;
 use mesh;
 use math;
 
-VERT_CAM = "
+VERT_CAM = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
 out vec3 vNormal;
-void main() {
+void main() {{
     gl_Position = uMVP * vec4(aPos, 1.0);
     vNormal = aNormal;
-}
-";
+}}
+`;
 
-FRAG_CAM = "
+FRAG_CAM = `
 #version 330 core
 in vec3 vNormal;
 out vec4 FragColor;
 uniform vec3 uColor;
-void main() {
+void main() {{
     vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
     float d = max(dot(normalize(vNormal), ld), 0.0);
     FragColor = vec4(uColor * (0.2 + 0.8 * d), 1.0);
-}
-";
+}}
+`;
 
 fn main() {
   if !graphics::gl_create_window(800, 600, "20 - Keyboard Camera (WASD + Q/E)") {
@@ -55,10 +55,10 @@ fn main() {
   kc_cam_z = 8.0;
   kc_cam_yaw = 0.0;
   kc_last_tick = ticks();
-  graphics::gl_enable(GL_CULL_FACE);
-  for kc_frame in 0..100000 {
+  graphics::gl_enable(graphics::GL_CULL_FACE);
+  for _ in 0..100000 {
     if !graphics::gl_poll_events() { break }
-    if graphics::gl_key_pressed(KEY_ESCAPE) { break }
+    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break }
     // Delta time
     kc_now = ticks();
     kc_dt = (kc_now - kc_last_tick) as float / 1000000.0;
@@ -67,30 +67,30 @@ fn main() {
     // Camera movement
     kc_fwd_x = sin(kc_cam_yaw);
     kc_fwd_z = -cos(kc_cam_yaw);
-    if graphics::gl_key_pressed(KEY_W) {
+    if graphics::gl_key_pressed(graphics::KEY_W) {
       kc_cam_x += kc_fwd_x * kc_speed;
       kc_cam_z += kc_fwd_z * kc_speed;
     }
-    if graphics::gl_key_pressed(KEY_S) {
+    if graphics::gl_key_pressed(graphics::KEY_S) {
       kc_cam_x -= kc_fwd_x * kc_speed;
       kc_cam_z -= kc_fwd_z * kc_speed;
     }
-    if graphics::gl_key_pressed(KEY_A) {
+    if graphics::gl_key_pressed(graphics::KEY_A) {
       kc_cam_x -= kc_fwd_z * kc_speed;
       kc_cam_z += kc_fwd_x * kc_speed;
     }
-    if graphics::gl_key_pressed(KEY_D) {
+    if graphics::gl_key_pressed(graphics::KEY_D) {
       kc_cam_x += kc_fwd_z * kc_speed;
       kc_cam_z -= kc_fwd_x * kc_speed;
     }
-    if graphics::gl_key_pressed(KEY_Q) { kc_cam_y -= kc_speed }
-    if graphics::gl_key_pressed(KEY_E) { kc_cam_y += kc_speed }
-    if graphics::gl_key_pressed(KEY_LEFT) { kc_cam_yaw -= 2.0 * kc_dt }
-    if graphics::gl_key_pressed(KEY_RIGHT) { kc_cam_yaw += 2.0 * kc_dt }
+    if graphics::gl_key_pressed(graphics::KEY_Q) { kc_cam_y -= kc_speed }
+    if graphics::gl_key_pressed(graphics::KEY_E) { kc_cam_y += kc_speed }
+    if graphics::gl_key_pressed(graphics::KEY_LEFT) { kc_cam_yaw -= 2.0 * kc_dt }
+    if graphics::gl_key_pressed(graphics::KEY_RIGHT) { kc_cam_yaw += 2.0 * kc_dt }
     kc_eye = math::vec3(kc_cam_x, kc_cam_y, kc_cam_z);
     kc_target = math::vec3(kc_cam_x + kc_fwd_x, kc_cam_y, kc_cam_z + kc_fwd_z);
     kc_view = math::mat4_look_at(kc_eye, kc_target, math::vec3(0.0, 1.0, 0.0));
-    graphics::gl_clear(rgba(40, 50, 60, 255));
+    graphics::gl_clear(graphics::rgba(40, 50, 60, 255));
     graphics::gl_use_shader(kc_shader);
     // Floor
     kc_fmvp = math::mat4_mul(kc_proj, kc_view);
