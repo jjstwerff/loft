@@ -55,15 +55,11 @@ fn main() {
     println("Failed to load wall.jpg"); return;
   }
   tx_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
-  // Textured rectangle: pos(3) + normal(3) + uv(2) = stride 8
-  // Two triangles forming a rectangle
+  // Textured triangle: pos(3) + normal(3) + uv(2) = stride 8
   tx_data = [
-    -0.8f, -0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f,
-     0.8f, -0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
-     0.8f,  0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 1.0f,
-    -0.8f, -0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f,
-     0.8f,  0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 1.0f,
-    -0.8f,  0.6f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 1.0f
+    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f,
+     0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+     0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f
   ];
   tx_vao = graphics::gl_upload_vertices(tx_data, 8);
   for _ in 0..300 {
@@ -72,7 +68,7 @@ fn main() {
     graphics::gl_use_shader(tx_shader);
     graphics::gl_bind_texture(tx_tex, 0);
     graphics::gl_set_uniform_int(tx_shader, "uTexture", 0);
-    graphics::gl_draw(tx_vao, 6);
+    graphics::gl_draw(tx_vao, 3);
     graphics::gl_swap_buffers();
   }
   graphics::gl_delete_texture(tx_tex);
