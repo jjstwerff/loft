@@ -4,6 +4,7 @@
 
 #[macro_use]
 pub mod diagnostics;
+mod base64;
 mod calc;
 mod codegen_runtime;
 mod compile;
@@ -29,6 +30,7 @@ mod platform;
 #[cfg(feature = "png")]
 mod png_store;
 mod scopes;
+mod sha256;
 mod stack;
 mod state;
 mod store;
@@ -121,6 +123,8 @@ fn print_help() {
     );
     println!("                                list             — browse all packages in registry");
     println!("                                list --installed — show only installed packages");
+    println!("  generate [path]               generate Rust stubs for #native declarations");
+    println!("                                writes native/src/generated.rs in the package");
     println!("  doc [path]                    generate HTML documentation for a package");
     println!("                                doc          — generate docs for package in cwd");
     println!("                                doc lib/pkg  — generate docs for lib/pkg");
@@ -337,6 +341,342 @@ fn extract_toml_version(content: &str) -> String {
         }
     }
     String::new()
+}
+
+/// PKG.6a: Generate Rust stubs for all `#native` declarations in a package.
+///
+/// Reads the package's `.loft` entry file, finds all `#native "symbol"`
+/// declarations, and emits a Rust source file with the correct C-ABI
+/// signatures plus `todo!()` bodies.
+fn generate_native_stubs(pkg_path: &std::path::Path) {
+    use crate::data::{DefType, Type};
+
+    let toml_path = pkg_path.join("loft.toml");
+    if !toml_path.exists() {
+        eprintln!("Error: no loft.toml in {}", pkg_path.display());
+        std::process::exit(1);
+    }
+    let manifest = match crate::manifest::read_manifest(&toml_path.to_string_lossy()) {
+        Some(m) => m,
+        None => {
+            eprintln!("Error: cannot read {}", toml_path.display());
+            std::process::exit(1);
+        }
+    };
+    let entry = manifest
+        .entry
+        .as_deref()
+        .map(|e| pkg_path.join(e))
+        .unwrap_or_else(|| {
+            let name = manifest.name.as_deref().unwrap_or("lib");
+            pkg_path.join(format!("src/{name}.loft"))
+        });
+    if !entry.exists() {
+        eprintln!("Error: entry file {} not found", entry.display());
+        std::process::exit(1);
+    }
+
+    // Parse just enough to read definitions.
+    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+    let default_dir = dir.join("../default");
+    let default_str = if default_dir.exists() {
+        default_dir.to_string_lossy().to_string()
+    } else {
+        "default".to_string()
+    };
+
+    let mut p = parser::Parser::new();
+    if let Some(src_dir) = entry.parent() {
+        p.lib_dirs.push(src_dir.to_string_lossy().to_string());
+    }
+    // Load default definitions so types are known.
+    let _ = p.parse_dir(&default_str, true, false);
+    p.parse(&abs.to_string_lossy(), false);
+
+    // Collect #native declarations.
+    let mut stubs: Vec<String> = Vec::new();
+    // Map struct name → (d_nr, fields) for generating field offset constants.
+    let mut struct_field_mods: std::collections::HashMap<String, (u32, Vec<(String, usize, Type)>)> =
+        std::collections::HashMap::new();
+    for d_nr in 0..p.data.definitions() {
+        let def = p.data.def(d_nr);
+        if def.native.is_empty() || !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        let sym = &def.native;
+
+        let mut c_params: Vec<String> = Vec::new();
+        let mut body_lines: Vec<String> = Vec::new();
+        let mut param_names: Vec<String> = Vec::new();
+
+        for attr in &def.attributes {
+            let name = &attr.name;
+            match &attr.typedef {
+                Type::Integer(_, _, _) | Type::Character => {
+                    c_params.push(format!("{name}: i32"));
+                    param_names.push(name.clone());
+                }
+                Type::Long => {
+                    c_params.push(format!("{name}: i64"));
+                    param_names.push(name.clone());
+                }
+                Type::Float => {
+                    c_params.push(format!("{name}: f64"));
+                    param_names.push(name.clone());
+                }
+                Type::Single => {
+                    c_params.push(format!("{name}: f32"));
+                    param_names.push(name.clone());
+                }
+                Type::Boolean => {
+                    c_params.push(format!("{name}: bool"));
+                    param_names.push(name.clone());
+                }
+                Type::Text(_) => {
+                    c_params.push(format!("{name}_ptr: *const u8, {name}_len: usize"));
+                    body_lines.push(format!(
+                        "    let {name} = unsafe {{ loft_ffi::text({name}_ptr, {name}_len) }};"
+                    ));
+                    param_names.push(name.clone());
+                }
+                Type::Enum(_, false, _) => {
+                    // Simple enum (tag only) — passed as u8.
+                    c_params.push(format!("{name}: u8"));
+                    param_names.push(name.clone());
+                }
+                Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _) => {
+                    let type_name = p.data.type_name_str(&attr.typedef);
+                    c_params.push(format!("{name}: loft_ffi::LoftRef /* {type_name} */"));
+                    param_names.push(name.clone());
+                }
+                other => {
+                    let type_name = p.data.type_name_str(other);
+                    c_params.push(format!(
+                        "{name}: () /* {type_name} — not supported in native */"
+                    ));
+                    param_names.push(name.clone());
+                }
+            }
+        }
+
+        // Return type classification: text, ref, or scalar.
+        enum RetKind { None, Scalar(String), Text, Ref(String) }
+        let ret_type_name = p.data.type_name_str(&def.returned);
+        let ret_kind = match &def.returned {
+            Type::Void | Type::Null => RetKind::None,
+            Type::Integer(_, _, _) | Type::Character => RetKind::Scalar(" -> i32".into()),
+            Type::Long => RetKind::Scalar(" -> i64".into()),
+            Type::Float => RetKind::Scalar(" -> f64".into()),
+            Type::Single => RetKind::Scalar(" -> f32".into()),
+            Type::Boolean => RetKind::Scalar(" -> bool".into()),
+            Type::Text(_) => RetKind::Text,
+            Type::Enum(_, false, _) => RetKind::Scalar(" -> u8".into()),
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _) => {
+                RetKind::Ref(format!(" -> loft_ffi::LoftRef /* {ret_type_name} */"))
+            }
+            _ => RetKind::Scalar(format!(
+                " -> () /* {ret_type_name} — not supported in native */"
+            )),
+        };
+        let ret_ty = match &ret_kind {
+            RetKind::None => String::new(),
+            RetKind::Scalar(s) | RetKind::Ref(s) => s.clone(),
+            RetKind::Text => " -> loft_ffi::LoftStr".into(),
+        };
+        let has_return = !matches!(ret_kind, RetKind::None);
+
+        let has_text_param = def
+            .attributes
+            .iter()
+            .any(|a| matches!(a.typedef, Type::Text(_)));
+        let has_ref_param = def.attributes.iter().any(|a| matches!(
+            a.typedef,
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                | Type::Sorted(_, _, _) | Type::Index(_, _, _)
+                | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
+        ));
+        let has_ref_ret = matches!(
+            def.returned,
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                | Type::Sorted(_, _, _) | Type::Index(_, _, _)
+                | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
+        );
+
+        // If any param or return is a Ref, prepend LoftStore as first C-ABI param.
+        if has_ref_param || has_ref_ret {
+            c_params.insert(0, "store: loft_ffi::LoftStore".to_string());
+        }
+
+        let needs_unsafe = has_text_param || has_ref_param || has_ref_ret;
+        let unsafe_kw = if needs_unsafe { "unsafe " } else { "" };
+
+        // Collect struct types referenced as params for field offset generation.
+        for attr in &def.attributes {
+            if let Type::Reference(d_nr, _) = &attr.typedef {
+                let struct_def = p.data.def(*d_nr);
+                if !struct_def.attributes.is_empty() {
+                    let sname = struct_def.name.to_lowercase();
+                    if !struct_field_mods.contains_key(&sname) {
+                        let mut fields = Vec::new();
+                        for (i, f) in struct_def.attributes.iter().enumerate() {
+                            fields.push((f.name.clone(), i, f.typedef.clone()));
+                        }
+                        struct_field_mods.insert(sname, (*d_nr, fields));
+                    }
+                }
+            }
+        }
+
+        // Format parameter list — wrap if longer than 90 chars.
+        let params_joined = c_params.join(", ");
+        let sig_line = format!("pub {unsafe_kw}extern \"C\" fn {sym}({params_joined}){ret_ty}");
+        let params_str = if sig_line.len() > 95 && c_params.len() > 1 {
+            format!("\n    {},\n", c_params.join(",\n    "))
+        } else {
+            params_joined
+        };
+
+        let mut stub = format!(
+            "#[unsafe(no_mangle)]\npub {unsafe_kw}extern \"C\" fn {sym}({params_str}){ret_ty} {{\n"
+        );
+        for line in &body_lines {
+            stub.push_str(line);
+            stub.push('\n');
+        }
+
+        let args = param_names.join(", ");
+        match &ret_kind {
+            RetKind::Text => {
+                stub.push_str(&format!(
+                    "    let result: String = todo!(\"implement {sym}({args})\");\n"
+                ));
+                stub.push_str("    loft_ffi::ret(result)\n");
+            }
+            RetKind::Ref(_) => {
+                stub.push_str(&format!(
+                    "    let result: loft_ffi::LoftRef = todo!(\"implement {sym}({args})\");\n"
+                ));
+                stub.push_str("    result\n");
+            }
+            _ if has_return => {
+                stub.push_str(&format!("    todo!(\"implement {sym}({args})\")\n"));
+            }
+            _ if !param_names.is_empty() => {
+                stub.push_str(&format!("    todo!(\"implement {sym}({args})\")\n"));
+            }
+            _ => {}
+        }
+        stub.push_str("}\n");
+        stubs.push(stub);
+    }
+
+    if stubs.is_empty() {
+        println!("No #native declarations found.");
+        return;
+    }
+
+    // Generate field offset modules for referenced struct types.
+    let mut field_modules = String::new();
+    for (sname, (_d_nr, fields)) in &struct_field_mods {
+        // Compute store-side sizes: in the store, text/ref/vector are 4-byte record refs.
+        let sizes: Vec<(u16, u8)> = fields
+            .iter()
+            .map(|(_, _, tp)| match tp {
+                Type::Long | Type::Float => (8u16, 8u8),
+                Type::Integer(_, _, _) | Type::Character | Type::Single => (4, 4),
+                Type::Boolean | Type::Enum(_, false, _) => (1, 1),
+                // In the store, text/ref/vector/collections are stored as 4-byte record refs.
+                Type::Text(_)
+                | Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _) => (4, 4),
+                _ => (4, 4), // fallback
+            })
+            .collect();
+        let mut total_size = 0u16;
+        let mut alignment = 0u8;
+        let positions =
+            crate::calc::calculate_positions(&sizes, false, &mut total_size, &mut alignment);
+
+        field_modules.push_str(&format!("/// Field offsets for struct `{sname}`.\n"));
+        field_modules.push_str(&format!(
+            "/// Record size: {total_size} bytes ({} words).\n",
+            (total_size + 7) / 8
+        ));
+        field_modules.push_str("#[allow(dead_code)]\n");
+        field_modules.push_str(&format!("pub mod {sname}_fields {{\n"));
+        for (i, (fname, _, tp)) in fields.iter().enumerate() {
+            let offset = positions[i];
+            let type_comment = match tp {
+                Type::Integer(_, _, _) => "integer",
+                Type::Long => "long",
+                Type::Float => "float",
+                Type::Single => "single",
+                Type::Boolean => "boolean",
+                Type::Text(_) => "text (record ref)",
+                Type::Reference(_, _) => "struct ref",
+                Type::Vector(_, _) => "vector ref",
+                _ => "other",
+            };
+            let upper = fname.to_uppercase();
+            field_modules.push_str(&format!(
+                "    pub const {upper}: u16 = {offset}; // {type_comment}\n"
+            ));
+        }
+        field_modules.push_str("}\n\n");
+    }
+
+    let mut output = String::from(
+        "// Auto-generated by `loft generate`. Fill in the todo!() bodies.\n\
+         // Functions with text parameters use loft_ffi helpers.\n\
+         // Struct field offsets are in *_fields modules.\n\n\
+         #![allow(clippy::missing_safety_doc)]\n\n",
+    );
+    if stubs.iter().any(|s| s.contains("loft_ffi")) {
+        output.push_str("// Add to Cargo.toml: loft-ffi = { path = \"../../../loft-ffi\" }\n\n");
+    }
+
+    // Emit field offset modules first.
+    output.push_str(&field_modules);
+
+    for (i, stub) in stubs.iter().enumerate() {
+        if i > 0 {
+            output.push('\n');
+        }
+        output.push_str(stub);
+    }
+
+    let out_dir = pkg_path.join("native/src");
+    if out_dir.exists() {
+        let out_file = out_dir.join("generated.rs");
+        std::fs::write(&out_file, &output).unwrap_or_else(|e| {
+            eprintln!("Error writing {}: {e}", out_file.display());
+            std::process::exit(1);
+        });
+        println!("Wrote {} stubs to {}", stubs.len(), out_file.display());
+    } else {
+        print!("{output}");
+    }
 }
 
 /// REG.3/REG.4: Handle `loft registry <subcommand>`.
@@ -882,6 +1222,17 @@ fn main() {
         } else if a == "registry" {
             handle_registry(&argv, &mut i);
             return;
+        } else if a == "generate" {
+            // PKG.6a: `loft generate` — emit Rust stubs for #native declarations.
+            let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                let p = std::path::PathBuf::from(&argv[i]);
+                i += 1;
+                p
+            } else {
+                std::env::current_dir().unwrap_or_default()
+            };
+            generate_native_stubs(&pkg_path);
+            return;
         } else if a == "doc" {
             // PKG.8: `loft doc [path]` — generate HTML docs for a package.
             let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
@@ -1025,6 +1376,8 @@ fn main() {
     compile::byte_code(&mut state, &mut p.data);
     // A7.2: load native extension shared libraries registered during parsing.
     extensions::load_all(&mut state, std::mem::take(&mut p.pending_native_libs));
+    // PKG.5: wire auto-marshalled native functions from loaded cdylibs.
+    extensions::wire_native_fns(&mut state, &p.data);
 
     // WASM codegen pipeline: --native-wasm
     if let Some(ref wasm_out) = native_wasm {
