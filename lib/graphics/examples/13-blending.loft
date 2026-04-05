@@ -1,0 +1,101 @@
+// LearnOpenGL: Blending
+// https://learnopengl.com/Advanced-OpenGL/Blending
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: alpha blending with transparent objects.
+// Renders opaque cubes first, then transparent planes sorted back-to-front.
+//
+// Loft constructions used:
+//   gl_enable(GL_BLEND)                              — enable alpha blending
+//   gl_blend_func(BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA) — standard transparency
+//   gl_depth_mask(false)                             — disable depth writes for transparent pass
+//   Render order: opaque first, transparent back-to-front
+use graphics;
+use mesh;
+use math;
+
+VERT_BLEND = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNormal = aNormal;
+}
+";
+
+FRAG_BLEND = "
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uColor;
+uniform float uAlpha;
+void main() {
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.8));
+    float diff = max(dot(normalize(vNormal), lightDir), 0.0);
+    vec3 lit = uColor * (0.3 + 0.7 * diff);
+    FragColor = vec4(lit, uAlpha);
+}
+";
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "13 - Blending (transparency)") {
+    println("Failed to create window"); return;
+  }
+  bl_cube = mesh::cube();
+  bl_plane = mesh::plane("glass", 2.0, 2.0);
+  bl_shader = graphics::gl_create_shader(VERT_BLEND, FRAG_BLEND);
+  bl_cd = mesh::mesh_to_floats(bl_cube);
+  bl_pd = mesh::mesh_to_floats(bl_plane);
+  bl_cvao = graphics::gl_upload_vertices(bl_cd, 6);
+  bl_pvao = graphics::gl_upload_vertices(bl_pd, 6);
+  bl_cnv = bl_cube.triangles.len() * 3;
+  bl_pnv = bl_plane.triangles.len() * 3;
+  bl_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  bl_view = math::mat4_look_at(
+    math::vec3(3.0, 2.5, 5.0), math::vec3(0.0, 0.5, 0.0), math::vec3(0.0, 1.0, 0.0));
+  bl_start = ticks();
+  for bl_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    bl_t = (ticks() - bl_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(30, 30, 40, 255));
+    graphics::gl_use_shader(bl_shader);
+    // Pass 1: opaque objects (depth write on)
+    graphics::gl_depth_mask(true);
+    graphics::gl_disable(GL_BLEND);
+    // Opaque cube
+    bl_cm = math::mat4_mul(math::mat4_translate(0.0, 0.5, 0.0), math::mat4_rotate_y(bl_t * 0.3));
+    bl_cmvp = math::mat4_mul(bl_proj, math::mat4_mul(bl_view, bl_cm));
+    graphics::gl_set_uniform_mat4(bl_shader, "uMVP", bl_cmvp.m);
+    graphics::gl_set_uniform_vec3(bl_shader, "uColor", 0.8, 0.4, 0.2);
+    graphics::gl_set_uniform_float(bl_shader, "uAlpha", 1.0);
+    graphics::gl_draw(bl_cvao, bl_cnv);
+    // Pass 2: transparent planes (depth write off, blend on)
+    graphics::gl_enable(GL_BLEND);
+    graphics::gl_blend_func(BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA);
+    graphics::gl_depth_mask(false);
+    // Back plane (draw first — further away)
+    bl_pm2 = math::mat4_mul(math::mat4_translate(0.0, 1.0, -1.5), math::mat4_rotate_x(1.57));
+    bl_pmvp2 = math::mat4_mul(bl_proj, math::mat4_mul(bl_view, bl_pm2));
+    graphics::gl_set_uniform_mat4(bl_shader, "uMVP", bl_pmvp2.m);
+    graphics::gl_set_uniform_vec3(bl_shader, "uColor", 0.2, 0.4, 0.9);
+    graphics::gl_set_uniform_float(bl_shader, "uAlpha", 0.4);
+    graphics::gl_draw(bl_pvao, bl_pnv);
+    // Front plane (draw second — closer)
+    bl_pm1 = math::mat4_mul(math::mat4_translate(0.0, 1.0, 1.0), math::mat4_rotate_x(1.57));
+    bl_pmvp1 = math::mat4_mul(bl_proj, math::mat4_mul(bl_view, bl_pm1));
+    graphics::gl_set_uniform_mat4(bl_shader, "uMVP", bl_pmvp1.m);
+    graphics::gl_set_uniform_vec3(bl_shader, "uColor", 0.2, 0.9, 0.4);
+    graphics::gl_set_uniform_float(bl_shader, "uAlpha", 0.5);
+    graphics::gl_draw(bl_pvao, bl_pnv);
+    // Restore depth write
+    graphics::gl_depth_mask(true);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}

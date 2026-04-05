@@ -1,0 +1,130 @@
+// LearnOpenGL Chapter 5: Transformations
+// https://learnopengl.com/Getting-started/Transformations
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: model/view/projection matrices, rotating cube.
+// Two modes:
+//   native — renders a spinning cube in an OpenGL window
+//   glb    — exports the cube as a .glb file with a camera
+//
+// Run:
+//   loft examples/04-transformations.loft              -- native
+//   loft examples/04-transformations.loft --mode glb   -- export GLB
+//
+// Loft constructions used:
+//   cube()               — unit cube mesh primitive (24 vertices, 12 triangles)
+//   mat4_perspective      — projection matrix from fov, aspect, near, far
+//   mat4_look_at          — view matrix from eye, target, up
+//   mat4_rotate_y         — rotation matrix around Y axis
+//   mat4_mul              — matrix multiplication for MVP
+//   gl_set_uniform_mat4   — pass Mat4 to GLSL uniform
+//   ticks()               — monotonic timer for animation
+//   Scene, save_scene_glb — scene graph export for GLB mode
+use graphics;
+use mesh;
+use math;
+use glb;
+use scene;
+
+VERT_MVP_SRC = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNormal = aNormal;
+}
+";
+
+FRAG_LIT_SRC = "
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+void main() {
+    // Simple directional light from upper-right
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.8));
+    float diff = max(dot(normalize(vNormal), lightDir), 0.0);
+    vec3 color = vec3(1.0, 0.5, 0.2) * (0.3 + 0.7 * diff);
+    FragColor = vec4(color, 1.0);
+}
+";
+
+fn render_native_cube() {
+  if !graphics::gl_create_window(800, 600, "04 - Transformations (spinning cube)") {
+    println("Failed to create window");
+    return;
+  }
+  tc_m = mesh::cube();
+  tc_shader = graphics::gl_create_shader(VERT_MVP_SRC, FRAG_LIT_SRC);
+  tc_data = mesh::mesh_to_floats(tc_m);
+  tc_vao = graphics::gl_upload_vertices(tc_data, 6);
+  tc_n_verts = tc_m.triangles.len() * 3;
+  tc_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  tc_view = math::mat4_look_at(
+    math::vec3(0.0, 1.5, 3.0),
+    math::vec3(0.0, 0.0, 0.0),
+    math::vec3(0.0, 1.0, 0.0));
+  tc_start = ticks();
+  for tc_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    tc_t = (ticks() - tc_start) as float / 1000000.0;
+    tc_model = math::mat4_rotate_y(tc_t);
+    tc_mvp = math::mat4_mul(tc_proj, math::mat4_mul(tc_view, tc_model));
+    graphics::gl_clear(rgba(30, 30, 30, 255));
+    graphics::gl_use_shader(tc_shader);
+    graphics::gl_set_uniform_mat4(tc_shader, "uMVP", tc_mvp.m);
+    graphics::gl_draw(tc_vao, tc_n_verts);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
+
+fn export_glb_cube() {
+  tc_s = scene::Scene { name: "spinning_cube" };
+  tc_m = mesh::cube();
+  tc_mi = tc_s.add_mesh(tc_m);
+  tc_mat = scene::Material {
+    name: "orange",
+    base_color_r: 1.0,
+    base_color_g: 0.5,
+    base_color_b: 0.2,
+    base_color_a: 1.0,
+    metallic: 0.0,
+    roughness: 0.8
+  };
+  tc_mati = tc_s.add_material(tc_mat);
+  tc_s.add_node(scene::Node {
+    name: "cube",
+    mesh_idx: tc_mi,
+    material_idx: tc_mati,
+    transform: math::mat4_identity()
+  });
+  tc_s.add_camera(scene::Camera {
+    name: "main",
+    fov: 45.0,
+    near: 0.1,
+    far: 100.0,
+    position: math::vec3(0.0, 1.5, 3.0),
+    target: math::vec3(0.0, 0.0, 0.0)
+  });
+  glb::save_scene_glb(tc_s, "04-transformations.glb");
+  println("Exported 04-transformations.glb");
+}
+
+fn main() {
+  tc_mode = "native";
+  for tc_arg in arguments() {
+    if tc_arg == "--mode" { tc_mode = "" }
+    else if tc_mode == "" { tc_mode = tc_arg }
+  }
+  if tc_mode == "glb" {
+    export_glb_cube();
+  } else {
+    render_native_cube();
+  }
+}

@@ -1,0 +1,65 @@
+// Wireframe and Point Rendering
+//
+// Demonstrates: alternative draw modes (lines, points).
+// Renders a sphere as wireframe (GL_LINES) and a cube as points.
+//
+// Loft constructions used:
+//   gl_draw_mode(vao, n, DRAW_LINES)   — wireframe rendering
+//   gl_draw_mode(vao, n, DRAW_POINTS)  — point cloud rendering
+//   gl_line_width, gl_point_size       — rendering hints
+use graphics;
+use mesh;
+use math;
+
+VERT_WIRE = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
+";
+
+FRAG_WIRE = "
+#version 330 core
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() { FragColor = vec4(uColor, 1.0); }
+";
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "21 - Wireframe & Points") {
+    println("Failed to create window"); return;
+  }
+  wf_sphere = mesh::sphere("wire_sphere", 1.0, 16, 12);
+  wf_cube = mesh::cube();
+  wf_shader = graphics::gl_create_shader(VERT_WIRE, FRAG_WIRE);
+  wf_svao = graphics::gl_upload_vertices(mesh::mesh_to_floats(wf_sphere), 6);
+  wf_cvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(wf_cube), 6);
+  wf_snv = wf_sphere.triangles.len() * 3;
+  wf_cnv = wf_cube.triangles.len() * 3;
+  wf_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  wf_view = math::mat4_look_at(
+    math::vec3(3.0, 2.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  graphics::gl_line_width(1.5);
+  graphics::gl_point_size(4.0);
+  wf_start = ticks();
+  for wf_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    wf_t = (ticks() - wf_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(20, 20, 25, 255));
+    graphics::gl_use_shader(wf_shader);
+    // Wireframe sphere on the left
+    wf_sm = math::mat4_mul(math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(wf_t * 0.3));
+    wf_smvp = math::mat4_mul(wf_proj, math::mat4_mul(wf_view, wf_sm));
+    graphics::gl_set_uniform_mat4(wf_shader, "uMVP", wf_smvp.m);
+    graphics::gl_set_uniform_vec3(wf_shader, "uColor", 0.2, 0.8, 1.0);
+    graphics::gl_draw_mode(wf_svao, wf_snv, DRAW_LINES);
+    // Point cloud cube on the right
+    wf_cm = math::mat4_mul(math::mat4_translate(1.5, 0.0, 0.0), math::mat4_rotate_y(wf_t * 0.5));
+    wf_cmvp = math::mat4_mul(wf_proj, math::mat4_mul(wf_view, wf_cm));
+    graphics::gl_set_uniform_mat4(wf_shader, "uMVP", wf_cmvp.m);
+    graphics::gl_set_uniform_vec3(wf_shader, "uColor", 1.0, 0.5, 0.2);
+    graphics::gl_draw_mode(wf_cvao, wf_cnv, DRAW_POINTS);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}

@@ -436,55 +436,216 @@ pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1
 
 // --- OpenGL (GL5) ---
 // Native OpenGL functions for window management and rendering.
+// Names match the symbols registered via loft_register_v1 in the cdylib.
 
 // Create a window with an OpenGL 3.3 context. Returns true on success.
 pub fn gl_create_window(width: integer, height: integer, title: text) -> boolean;
-#native "n_gl_create_window"
+#native "loft_gl_create_window"
 
 // Poll window events. Returns false when the window should close.
 pub fn gl_poll_events() -> boolean;
-#native "n_gl_poll_events"
+#native "loft_gl_poll_events"
 
 // Swap buffers (present the frame).
 pub fn gl_swap_buffers();
-#native "n_gl_swap_buffers"
+#native "loft_gl_swap_buffers"
 
 // Clear the screen with an RGBA color (packed as 0xRRGGBBAA).
 pub fn gl_clear(color: integer);
-#native "n_gl_clear"
+#native "loft_gl_clear"
 
 // Destroy the window and OpenGL context.
 pub fn gl_destroy_window();
-#native "n_gl_destroy_window"
+#native "loft_gl_destroy_window"
 
 // Compile and link a shader program. Returns the program ID (0 on failure).
 pub fn gl_create_shader(vertex_source: text, fragment_source: text) -> integer;
-#native "n_gl_create_shader"
+#native "loft_gl_create_shader"
 
 // Use a shader program for subsequent draw calls.
 pub fn gl_use_shader(program: integer);
-#native "n_gl_use_shader"
+#native "loft_gl_use_shader"
 
-// Draw a mesh (VAO with vertex count).
+// Draw a VAO with vertex_count vertices as triangles.
 pub fn gl_draw(vao: integer, vertex_count: integer);
-#native "n_gl_draw"
+#native "loft_gl_draw"
+
+// Upload a vector<single> as a vertex buffer. Returns VAO handle.
+// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
+pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer;
+#native "n_gl_upload_vertices"
+
+// Set a mat4 uniform on a shader program. mat is a Mat4.m vector (16 floats).
+pub fn gl_set_uniform_mat4(program: integer, name: text, mat: vector<float>);
+#native "n_gl_set_uniform_mat4"
+
+// --- Uniforms ---
+
+// Set a float uniform.
+pub fn gl_set_uniform_float(program: integer, name: text, val: float);
+#native "loft_gl_set_uniform_float"
+
+// Set an integer uniform (also used for sampler2D texture unit bindings).
+pub fn gl_set_uniform_int(program: integer, name: text, val: integer);
+#native "loft_gl_set_uniform_int"
+
+// Set a vec3 uniform (e.g. light position, color).
+pub fn gl_set_uniform_vec3(program: integer, name: text, x: float, y: float, z: float);
+#native "loft_gl_set_uniform_vec3"
+
+// --- GL state ---
+
+// Capability constants for gl_enable/gl_disable:
+GL_DEPTH_TEST = 1;
+GL_BLEND = 2;
+GL_CULL_FACE = 3;
+
+// Enable a GL capability (use GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE constants).
+pub fn gl_enable(cap: integer);
+#native "loft_gl_enable"
+
+// Disable a GL capability.
+pub fn gl_disable(cap: integer);
+#native "loft_gl_disable"
+
+// Blend factor constants for gl_blend_func:
+BLEND_ZERO = 0;
+BLEND_ONE = 1;
+BLEND_SRC_ALPHA = 2;
+BLEND_ONE_MINUS_SRC_ALPHA = 3;
+BLEND_DST_ALPHA = 4;
+BLEND_ONE_MINUS_DST_ALPHA = 5;
+
+// Set blend function (e.g. gl_blend_func(BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA)).
+pub fn gl_blend_func(src: integer, dst: integer);
+#native "loft_gl_blend_func"
+
+// Set which face to cull (0=back, 1=front).
+pub fn gl_cull_face(face: integer);
+#native "loft_gl_cull_face"
+
+// Enable/disable depth buffer writing.
+pub fn gl_depth_mask(write: boolean);
+#native "loft_gl_depth_mask"
+
+// Set the viewport rectangle (used for FBO render passes).
+pub fn gl_viewport(x: integer, y: integer, w: integer, h: integer);
+#native "loft_gl_viewport"
+
+// --- Framebuffer objects ---
+
+// Create a framebuffer object. Returns FBO handle.
+pub fn gl_create_framebuffer() -> integer;
+#native "loft_gl_create_framebuffer"
+
+// Bind a framebuffer (0 = default screen framebuffer).
+pub fn gl_bind_framebuffer(fbo: integer);
+#native "loft_gl_bind_framebuffer"
+
+// Attach a texture to an FBO (attachment: 0=color, 1=depth).
+pub fn gl_framebuffer_texture(fbo: integer, attachment: integer, tex: integer);
+#native "loft_gl_framebuffer_texture"
+
+// Create a depth-only texture for shadow mapping.
+pub fn gl_create_depth_texture(width: integer, height: integer) -> integer;
+#native "loft_gl_create_depth_texture"
+
+// Create an empty RGBA texture for render-to-texture.
+pub fn gl_create_color_texture(width: integer, height: integer) -> integer;
+#native "loft_gl_create_color_texture"
+
+// Draw a fullscreen quad (for post-processing). Uses built-in VAO with UV coords.
+// Vertex shader receives: layout(location=0) vec2 aPos, layout(location=1) vec2 aUV.
+pub fn gl_draw_fullscreen_quad();
+#native "loft_gl_draw_fullscreen_quad"
+
+// --- Draw modes ---
+
+// Draw mode constants for gl_draw_mode and gl_draw_elements:
+DRAW_TRIANGLES = 0;
+DRAW_LINES = 1;
+DRAW_POINTS = 2;
+
+// Draw a VAO with explicit mode (DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS).
+pub fn gl_draw_mode(vao: integer, vertex_count: integer, mode: integer);
+#native "loft_gl_draw_mode"
+
+// Draw using an index buffer (EBO). mode: DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS.
+pub fn gl_draw_elements(vao: integer, index_count: integer, mode: integer);
+#native "loft_gl_draw_elements"
+
+// Set line width for DRAW_LINES rendering.
+pub fn gl_line_width(width: float);
+#native "loft_gl_line_width"
+
+// Set point size for DRAW_POINTS rendering.
+pub fn gl_point_size(size: float);
+#native "loft_gl_point_size"
+
+// --- Input ---
+
+// Key code constants for gl_key_pressed:
+KEY_W = 119;
+KEY_A = 97;
+KEY_S = 115;
+KEY_D = 100;
+KEY_Q = 113;
+KEY_E = 101;
+KEY_SPACE = 32;
+KEY_ESCAPE = 27;
+KEY_UP = 128;
+KEY_DOWN = 129;
+KEY_LEFT = 130;
+KEY_RIGHT = 131;
+KEY_SHIFT = 132;
+KEY_CTRL = 133;
+
+// Returns true if the key is currently pressed (use KEY_* constants).
+pub fn gl_key_pressed(key_code: integer) -> boolean;
+#native "loft_gl_key_pressed"
+
+// Mouse position X (pixels from left edge of window).
+pub fn gl_mouse_x() -> float;
+#native "loft_gl_mouse_x"
+
+// Mouse position Y (pixels from top edge of window).
+pub fn gl_mouse_y() -> float;
+#native "loft_gl_mouse_y"
+
+// Mouse button bitmask: 1=left, 2=right, 4=middle.
+pub fn gl_mouse_button() -> integer;
+#native "loft_gl_mouse_button"
 
 // --- Text rendering (GL3) ---
 
 // Load a font from a file path. Returns a font handle (>= 0) or null on error.
 pub fn gl_load_font(path: text) -> integer;
-#native "n_gl_load_font"
+#native "loft_gl_load_font"
 
 // Measure text width in pixels at the given font size.
 pub fn gl_measure_text(font: integer, content: text, size: float) -> float;
-#native "n_gl_measure_text"
+#native "loft_gl_measure_text"
 
 // --- Textures (GL5.5) ---
 
 // Bind a texture to a texture unit (0-based) for rendering.
 pub fn gl_bind_texture(texture_id: integer, unit: integer);
-#native "n_gl_bind_texture"
+#native "loft_gl_bind_texture"
 
 // Delete a texture.
 pub fn gl_delete_texture(texture_id: integer);
-#native "n_gl_delete_texture"
+#native "loft_gl_delete_texture"
+
+// --- GPU resource cleanup ---
+
+// Delete a shader program.
+pub fn gl_delete_shader(program: integer);
+#native "loft_gl_delete_shader"
+
+// Delete a vertex array object.
+pub fn gl_delete_vao(vao: integer);
+#native "loft_gl_delete_vao"
+
+// Delete a framebuffer object.
+pub fn gl_delete_framebuffer(fbo: integer);
+#native "loft_gl_delete_framebuffer"

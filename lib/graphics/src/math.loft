@@ -138,3 +138,52 @@ pub fn mat4_transform(tm: const Mat4, tv: const Vec3) -> Vec3 {
     z: tm.m[2] * tv.x + tm.m[6] * tv.y + tm.m[10] * tv.z + tm.m[14]
   }
 }
+
+// Perspective projection matrix.
+// fov_y = vertical field of view in radians, aspect = width/height.
+pub fn mat4_perspective(fov_y: float, aspect: float, near: float, far: float) -> Mat4 {
+  per_f = 1.0 / tan(fov_y / 2.0);
+  Mat4 { m: [
+    per_f / aspect, 0.0, 0.0, 0.0,
+    0.0, per_f, 0.0, 0.0,
+    0.0, 0.0, (far + near) / (near - far), -1.0,
+    0.0, 0.0, (2.0 * far * near) / (near - far), 0.0
+  ] }
+}
+
+// View matrix looking from eye towards target with up direction.
+pub fn mat4_look_at(eye: const Vec3, target: const Vec3, up: const Vec3) -> Mat4 {
+  la_f = normalize3(sub3(target, eye));
+  la_s = normalize3(cross(la_f, up));
+  la_u = cross(la_s, la_f);
+  Mat4 { m: [
+    la_s.x,  la_u.x,  -la_f.x, 0.0,
+    la_s.y,  la_u.y,  -la_f.y, 0.0,
+    la_s.z,  la_u.z,  -la_f.z, 0.0,
+    -dot3(la_s, eye), -dot3(la_u, eye), dot3(la_f, eye), 1.0
+  ] }
+}
+
+// Rotation around the Y axis by angle radians.
+pub fn mat4_rotate_y(angle: float) -> Mat4 {
+  ry_c = cos(angle);
+  ry_s = sin(angle);
+  Mat4 { m: [
+    ry_c,  0.0, ry_s, 0.0,
+    0.0,   1.0, 0.0,  0.0,
+    -ry_s, 0.0, ry_c, 0.0,
+    0.0,   0.0, 0.0,  1.0
+  ] }
+}
+
+// Rotation around the X axis by angle radians.
+pub fn mat4_rotate_x(angle: float) -> Mat4 {
+  rx_c = cos(angle);
+  rx_s = sin(angle);
+  Mat4 { m: [
+    1.0, 0.0,   0.0,  0.0,
+    0.0, rx_c, -rx_s, 0.0,
+    0.0, rx_s,  rx_c, 0.0,
+    0.0, 0.0,   0.0,  1.0
+  ] }
+}

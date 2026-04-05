@@ -42,7 +42,39 @@ fn with_gl_mut<R>(f: impl FnOnce(&mut GlState) -> R) -> Option<R> {
     GL.with(|cell| cell.borrow_mut().as_mut().map(f))
 }
 
-// Minimal event handler for pump_app_events
+// ── Input state ────────────────────────────────────────────────────────
+
+thread_local! {
+    static KEYS: RefCell<[bool; 256]> = const { RefCell::new([false; 256]) };
+    static MOUSE_X: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    static MOUSE_Y: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    static MOUSE_BTN: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+// Map winit key codes to a simple 0-255 index.
+fn key_index(key: &winit::keyboard::Key) -> Option<u8> {
+    use winit::keyboard::NamedKey;
+    match key {
+        winit::keyboard::Key::Character(c) => {
+            let ch = c.chars().next()?;
+            if ch.is_ascii() { Some(ch.to_ascii_lowercase() as u8) } else { None }
+        }
+        winit::keyboard::Key::Named(n) => match n {
+            NamedKey::Space => Some(b' '),
+            NamedKey::Enter => Some(b'\r'),
+            NamedKey::Escape => Some(27),
+            NamedKey::ArrowUp => Some(128),
+            NamedKey::ArrowDown => Some(129),
+            NamedKey::ArrowLeft => Some(130),
+            NamedKey::ArrowRight => Some(131),
+            NamedKey::Shift => Some(132),
+            NamedKey::Control => Some(133),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 struct JsonApp {
     should_close: bool,
 }
@@ -50,8 +82,30 @@ struct JsonApp {
 impl ApplicationHandler for JsonApp {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
     fn window_event(&mut self, _el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        if matches!(event, WindowEvent::CloseRequested) {
-            self.should_close = true;
+        match event {
+            WindowEvent::CloseRequested => self.should_close = true,
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(idx) = key_index(&event.logical_key) {
+                    KEYS.with(|k| k.borrow_mut()[idx as usize] = event.state.is_pressed());
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                MOUSE_X.with(|c| c.set(position.x));
+                MOUSE_Y.with(|c| c.set(position.y));
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let bit = match button {
+                    winit::event::MouseButton::Left => 1u8,
+                    winit::event::MouseButton::Right => 2,
+                    winit::event::MouseButton::Middle => 4,
+                    _ => 0,
+                };
+                MOUSE_BTN.with(|c| {
+                    if state.is_pressed() { c.set(c.get() | bit); }
+                    else { c.set(c.get() & !bit); }
+                });
+            }
+            _ => {}
         }
     }
 }
@@ -175,15 +229,17 @@ pub unsafe extern "C" fn loft_gl_upload_mesh(
             );
             gl::EnableVertexAttribArray(1);
         }
-        // Color: location 2, 4 floats at offset 24
+        // UV: location 2, 2 floats at offset 24 (when stride == 8: pos+normal+uv)
+        if stride == 8 {
+            gl::VertexAttribPointer(
+                2, 2, gl::FLOAT, gl::FALSE, (stride * 4) as i32, (6 * 4) as *const _,
+            );
+            gl::EnableVertexAttribArray(2);
+        }
+        // Color: location 2, 4 floats at offset 24 (when stride >= 10: pos+normal+color)
         if stride >= 10 {
             gl::VertexAttribPointer(
-                2,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                (stride * 4) as i32,
-                (6 * 4) as *const _,
+                2, 4, gl::FLOAT, gl::FALSE, (stride * 4) as i32, (6 * 4) as *const _,
             );
             gl::EnableVertexAttribArray(2);
         }
@@ -219,6 +275,417 @@ pub unsafe extern "C" fn loft_gl_set_uniform_mat4(
     }
 }
 
+// ── Store-aware GL functions (use LoftStore to read loft vectors) ─────────
+
+/// Upload a vector<single> as a vertex buffer. Returns VAO handle.
+/// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_gl_upload_vertices(
+    store: loft_ffi::LoftStore,
+    data: loft_ffi::LoftRef,
+    stride: i32,
+) -> i32 {
+    let count = unsafe { store.vector_len(&data) } as u32;
+    let n_vertices = count / stride as u32;
+    let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const f32;
+    let mut vao = 0u32;
+    let mut vbo = 0u32;
+    unsafe { loft_gl_upload_mesh(data_ptr, n_vertices, stride as u32, &mut vao, &mut vbo) };
+    vao as i32
+}
+
+/// Set a mat4 uniform from a vector<float> (16 elements, column-major).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_gl_set_uniform_mat4(
+    store: loft_ffi::LoftStore,
+    program: i32,
+    name_ptr: *const u8,
+    name_len: usize,
+    mat: loft_ffi::LoftRef,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    // Mat4.m is stored as vector<float> — 16 f64 values in the store.
+    // OpenGL needs f32, so we convert on the fly.
+    let count = unsafe { store.vector_len(&mat) };
+    if count < 16 {
+        return;
+    }
+    let mut buf = [0.0f32; 16];
+    for i in 0..16 {
+        let val = unsafe { store.get_float(mat.rec, 8 + i as u32 * 8, 0) };
+        buf[i] = val as f32;
+    }
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
+        if loc >= 0 {
+            gl::UniformMatrix4fv(loc, 1, gl::FALSE, buf.as_ptr());
+        }
+    }
+}
+
+// ── Uniform helpers ────────────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_uniform_float(
+    program: u32, name_ptr: *const u8, name_len: usize, val: f64,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        if loc >= 0 { gl::Uniform1f(loc, val as f32); }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_uniform_int(
+    program: u32, name_ptr: *const u8, name_len: usize, val: i32,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        if loc >= 0 { gl::Uniform1i(loc, val); }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_uniform_vec3(
+    program: u32, name_ptr: *const u8, name_len: usize,
+    x: f64, y: f64, z: f64,
+) {
+    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+    let c_name = std::ffi::CString::new(name).unwrap_or_default();
+    unsafe {
+        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        if loc >= 0 { gl::Uniform3f(loc, x as f32, y as f32, z as f32); }
+    }
+}
+
+// ── GL state management ───────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_enable(cap: i32) {
+    let gl_cap = match cap {
+        1 => gl::DEPTH_TEST,
+        2 => gl::BLEND,
+        3 => gl::CULL_FACE,
+        _ => return,
+    };
+    unsafe { gl::Enable(gl_cap); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_disable(cap: i32) {
+    let gl_cap = match cap {
+        1 => gl::DEPTH_TEST,
+        2 => gl::BLEND,
+        3 => gl::CULL_FACE,
+        _ => return,
+    };
+    unsafe { gl::Disable(gl_cap); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_blend_func(src: i32, dst: i32) {
+    let map = |v: i32| -> u32 {
+        match v {
+            0 => gl::ZERO, 1 => gl::ONE,
+            2 => gl::SRC_ALPHA, 3 => gl::ONE_MINUS_SRC_ALPHA,
+            4 => gl::DST_ALPHA, 5 => gl::ONE_MINUS_DST_ALPHA,
+            _ => gl::ONE,
+        }
+    };
+    unsafe { gl::BlendFunc(map(src), map(dst)); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_cull_face(face: i32) {
+    let f = if face == 0 { gl::BACK } else { gl::FRONT };
+    unsafe { gl::CullFace(f); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_depth_mask(write: bool) {
+    unsafe { gl::DepthMask(if write { gl::TRUE } else { gl::FALSE }); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_viewport(x: i32, y: i32, w: i32, h: i32) {
+    unsafe { gl::Viewport(x, y, w, h); }
+}
+
+// ── Framebuffer objects ───────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_framebuffer() -> i32 {
+    let mut fbo = 0u32;
+    unsafe { gl::GenFramebuffers(1, &mut fbo); }
+    fbo as i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_bind_framebuffer(fbo: i32) {
+    unsafe { gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32); }
+}
+
+/// Attach a texture as the color (attachment=0) or depth (attachment=1) target.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i32) {
+    let att = if attachment == 0 { gl::COLOR_ATTACHMENT0 } else { gl::DEPTH_ATTACHMENT };
+    unsafe {
+        gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32);
+        gl::FramebufferTexture2D(gl::FRAMEBUFFER, att, gl::TEXTURE_2D, tex as u32, 0);
+        if attachment == 1 {
+            // Depth-only FBO: no color draw/read
+            gl::DrawBuffer(gl::NONE);
+            gl::ReadBuffer(gl::NONE);
+        }
+        gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+    }
+}
+
+/// Create a depth-only texture (for shadow mapping).
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
+    let mut tex = 0u32;
+    unsafe {
+        gl::GenTextures(1, &mut tex);
+        gl::BindTexture(gl::TEXTURE_2D, tex);
+        gl::TexImage2D(
+            gl::TEXTURE_2D, 0, gl::DEPTH_COMPONENT as i32,
+            width, height, 0,
+            gl::DEPTH_COMPONENT, gl::FLOAT, std::ptr::null(),
+        );
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+    }
+    tex as i32
+}
+
+/// Create an empty RGBA texture (for render-to-texture / post-processing).
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
+    let mut tex = 0u32;
+    unsafe {
+        gl::GenTextures(1, &mut tex);
+        gl::BindTexture(gl::TEXTURE_2D, tex);
+        gl::TexImage2D(
+            gl::TEXTURE_2D, 0, gl::RGBA as i32,
+            width, height, 0,
+            gl::RGBA, gl::UNSIGNED_BYTE, std::ptr::null(),
+        );
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+    }
+    tex as i32
+}
+
+/// Draw a fullscreen quad (for post-processing passes). Uses a built-in VAO.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_draw_fullscreen_quad() {
+    thread_local! {
+        static QUAD_VAO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let vao = QUAD_VAO.with(|c| {
+        let mut v = c.get();
+        if v == 0 {
+            let verts: [f32; 24] = [
+                -1.0, -1.0, 0.0, 0.0,
+                 1.0, -1.0, 1.0, 0.0,
+                -1.0,  1.0, 0.0, 1.0,
+                 1.0, -1.0, 1.0, 0.0,
+                 1.0,  1.0, 1.0, 1.0,
+                -1.0,  1.0, 0.0, 1.0,
+            ];
+            unsafe {
+                let mut vbo = 0u32;
+                gl::GenVertexArrays(1, &mut v);
+                gl::GenBuffers(1, &mut vbo);
+                gl::BindVertexArray(v);
+                gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+                gl::BufferData(gl::ARRAY_BUFFER, 96, verts.as_ptr().cast(), gl::STATIC_DRAW);
+                gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 16, std::ptr::null());
+                gl::EnableVertexAttribArray(0);
+                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 16, 8 as *const _);
+                gl::EnableVertexAttribArray(1);
+                gl::BindVertexArray(0);
+            }
+            c.set(v);
+        }
+        v
+    });
+    unsafe {
+        gl::BindVertexArray(vao);
+        gl::DrawArrays(gl::TRIANGLES, 0, 6);
+        gl::BindVertexArray(0);
+    }
+}
+
+// ── Input queries ─────────────────────────────────────────────────────
+
+/// Returns true if the key (ASCII code or special code) is currently pressed.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_key_pressed(key_code: i32) -> bool {
+    if key_code < 0 || key_code > 255 { return false; }
+    KEYS.with(|k| k.borrow()[key_code as usize])
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_mouse_x() -> f64 { MOUSE_X.with(|c| c.get()) }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_mouse_y() -> f64 { MOUSE_Y.with(|c| c.get()) }
+
+/// Returns bitmask: 1=left, 2=right, 4=middle.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_mouse_button() -> i32 { MOUSE_BTN.with(|c| c.get() as i32) }
+
+// ── Indexed drawing (EBO) ─────────────────────────────────────────────
+
+/// Upload vertex data + index buffer. Returns VAO handle.
+/// Indices are u32, n_indices = number of index values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn loft_gl_upload_indexed_mesh(
+    vert_ptr: *const f32, n_vertices: u32, stride: u32,
+    idx_ptr: *const u32, n_indices: u32,
+    out_vao: *mut u32,
+) {
+    let mut vao = 0u32;
+    let mut vbo = 0u32;
+    let mut ebo = 0u32;
+    unsafe {
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::GenBuffers(1, &mut ebo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+        gl::BufferData(gl::ARRAY_BUFFER, (n_vertices * stride * 4) as isize,
+            vert_ptr.cast(), gl::STATIC_DRAW);
+        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+        gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, (n_indices * 4) as isize,
+            idx_ptr.cast(), gl::STATIC_DRAW);
+        // Same attribute layout as loft_gl_upload_mesh
+        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, (stride * 4) as i32, std::ptr::null());
+        gl::EnableVertexAttribArray(0);
+        if stride >= 6 {
+            gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, (stride * 4) as i32, (3 * 4) as *const _);
+            gl::EnableVertexAttribArray(1);
+        }
+        if stride == 8 {
+            gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, (stride * 4) as i32, (6 * 4) as *const _);
+            gl::EnableVertexAttribArray(2);
+        }
+        if stride >= 10 {
+            gl::VertexAttribPointer(2, 4, gl::FLOAT, gl::FALSE, (stride * 4) as i32, (6 * 4) as *const _);
+            gl::EnableVertexAttribArray(2);
+        }
+        gl::BindVertexArray(0);
+        *out_vao = vao;
+    }
+}
+
+/// Draw using index buffer (EBO). mode: 0=triangles, 1=lines, 2=points.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_draw_elements(vao: i32, n_indices: i32, mode: i32) {
+    let gl_mode = match mode { 1 => gl::LINES, 2 => gl::POINTS, _ => gl::TRIANGLES };
+    unsafe {
+        gl::BindVertexArray(vao as u32);
+        gl::DrawElements(gl_mode, n_indices, gl::UNSIGNED_INT, std::ptr::null());
+        gl::BindVertexArray(0);
+    }
+}
+
+/// Draw with explicit mode: 0=triangles, 1=lines, 2=points.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_draw_mode(vao: i32, n_vertices: i32, mode: i32) {
+    let gl_mode = match mode { 1 => gl::LINES, 2 => gl::POINTS, _ => gl::TRIANGLES };
+    unsafe {
+        gl::BindVertexArray(vao as u32);
+        gl::DrawArrays(gl_mode, 0, n_vertices);
+        gl::BindVertexArray(0);
+    }
+}
+
+// ── GPU resource cleanup ──────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_delete_shader(program: i32) {
+    unsafe { gl::DeleteProgram(program as u32); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_delete_vao(vao: i32) {
+    let v = vao as u32;
+    unsafe { gl::DeleteVertexArrays(1, &v); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_delete_framebuffer(fbo: i32) {
+    let f = fbo as u32;
+    unsafe { gl::DeleteFramebuffers(1, &f); }
+}
+
+// ── Texture from alpha bitmap (for text rendering) ────────────────────
+
+/// Upload an alpha-only bitmap as a GL texture with swizzle to white+alpha.
+/// Used for text rendering: the font rasterizer produces alpha bitmaps.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_upload_alpha_texture(
+    data_ptr: *const u8, width: i32, height: i32,
+) -> i32 {
+    let mut tex = 0u32;
+    unsafe {
+        gl::GenTextures(1, &mut tex);
+        gl::BindTexture(gl::TEXTURE_2D, tex);
+        gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as i32,
+            width, height, 0, gl::RED, gl::UNSIGNED_BYTE, data_ptr.cast());
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+        // Swizzle: sample as (1,1,1,r) so alpha comes from the red channel
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_SWIZZLE_A, gl::RED as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_SWIZZLE_R, gl::ONE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_SWIZZLE_G, gl::ONE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_SWIZZLE_B, gl::ONE as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+    }
+    tex as i32
+}
+
+/// Rasterize text and upload directly as a GL texture. Returns (tex_id, width, height).
+/// Combines loft_gl_rasterize_text + loft_gl_upload_alpha_texture.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_text_texture(
+    font_idx: i32, text_ptr: *const u8, text_len: usize, size: f32,
+    out_width: *mut i32, out_height: *mut i32,
+) -> i32 {
+    let s = unsafe { loft_ffi::text(text_ptr, text_len) };
+    let (w, h, pixels) = text::rasterize_text(font_idx, s, size);
+    unsafe {
+        *out_width = w as i32;
+        *out_height = h as i32;
+    }
+    let tex = unsafe { loft_gl_upload_alpha_texture(pixels.as_ptr(), w as i32, h as i32) };
+    tex
+}
+
+/// Set line width for GL_LINES rendering.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_line_width(width: f64) {
+    unsafe { gl::LineWidth(width as f32); }
+}
+
+/// Set point size for GL_POINTS rendering.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_point_size(size: f64) {
+    unsafe { gl::PointSize(size as f32); }
+}
+
 // ── Registration ────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
@@ -249,6 +716,44 @@ pub unsafe extern "C" fn loft_register_v1(
         reg!(b"loft_gl_measure_text", loft_gl_measure_text);
         reg!(b"loft_gl_rasterize_text", loft_gl_rasterize_text);
         reg!(b"loft_gl_free_bitmap", loft_gl_free_bitmap);
+        reg!(b"n_gl_upload_vertices", n_gl_upload_vertices);
+        reg!(b"n_gl_set_uniform_mat4", n_gl_set_uniform_mat4);
+        // Uniform helpers
+        reg!(b"loft_gl_set_uniform_float", loft_gl_set_uniform_float);
+        reg!(b"loft_gl_set_uniform_int", loft_gl_set_uniform_int);
+        reg!(b"loft_gl_set_uniform_vec3", loft_gl_set_uniform_vec3);
+        // GL state
+        reg!(b"loft_gl_enable", loft_gl_enable);
+        reg!(b"loft_gl_disable", loft_gl_disable);
+        reg!(b"loft_gl_blend_func", loft_gl_blend_func);
+        reg!(b"loft_gl_cull_face", loft_gl_cull_face);
+        reg!(b"loft_gl_depth_mask", loft_gl_depth_mask);
+        reg!(b"loft_gl_viewport", loft_gl_viewport);
+        // Framebuffer objects
+        reg!(b"loft_gl_create_framebuffer", loft_gl_create_framebuffer);
+        reg!(b"loft_gl_bind_framebuffer", loft_gl_bind_framebuffer);
+        reg!(b"loft_gl_framebuffer_texture", loft_gl_framebuffer_texture);
+        reg!(b"loft_gl_create_depth_texture", loft_gl_create_depth_texture);
+        reg!(b"loft_gl_create_color_texture", loft_gl_create_color_texture);
+        reg!(b"loft_gl_draw_fullscreen_quad", loft_gl_draw_fullscreen_quad);
+        // Input
+        reg!(b"loft_gl_key_pressed", loft_gl_key_pressed);
+        reg!(b"loft_gl_mouse_x", loft_gl_mouse_x);
+        reg!(b"loft_gl_mouse_y", loft_gl_mouse_y);
+        reg!(b"loft_gl_mouse_button", loft_gl_mouse_button);
+        // Indexed drawing & draw modes
+        reg!(b"loft_gl_draw_elements", loft_gl_draw_elements);
+        reg!(b"loft_gl_draw_mode", loft_gl_draw_mode);
+        // Cleanup
+        reg!(b"loft_gl_delete_shader", loft_gl_delete_shader);
+        reg!(b"loft_gl_delete_vao", loft_gl_delete_vao);
+        reg!(b"loft_gl_delete_framebuffer", loft_gl_delete_framebuffer);
+        // Text texture
+        reg!(b"loft_gl_upload_alpha_texture", loft_gl_upload_alpha_texture);
+        reg!(b"loft_gl_text_texture", loft_gl_text_texture);
+        // Rendering hints
+        reg!(b"loft_gl_line_width", loft_gl_line_width);
+        reg!(b"loft_gl_point_size", loft_gl_point_size);
     }
 }
 

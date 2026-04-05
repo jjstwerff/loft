@@ -1,0 +1,79 @@
+// Scene Graph: Multi-Object GLB Export
+//
+// Demonstrates building a complete 3D scene with the loft scene graph
+// and exporting to GLB. This is the pure-data path that works without
+// any GPU or windowing system — ideal for headless/server rendering.
+//
+// Run:
+//   loft examples/10-scene-graph.loft   -- exports 10-scene.glb
+//
+// Loft constructions used:
+//   Scene, Node, Camera, Material — scene graph types
+//   cube(), sphere(), plane()     — mesh primitives
+//   mat4_translate, mat4_scale, mat4_mul — node transforms
+//   save_scene_glb                — binary GLB 2.0 export
+//
+// Open the output in any glTF viewer (Blender, https://gltf-viewer.donmccurdy.com)
+use mesh;
+use math;
+use scene;
+use glb;
+
+fn main() {
+  sg_s = scene::Scene { name: "demo_scene" };
+  // Meshes
+  sg_floor_i = sg_s.add_mesh(mesh::plane("floor", 10.0, 10.0));
+  sg_cube_i = sg_s.add_mesh(mesh::cube());
+  sg_sphere_i = sg_s.add_mesh(mesh::sphere("ball", 0.5, 20, 12));
+  // Materials
+  sg_floor_mat = sg_s.add_material(scene::Material {
+    name: "floor", base_color_r: 0.3, base_color_g: 0.3, base_color_b: 0.35,
+    base_color_a: 1.0, metallic: 0.0, roughness: 0.9 });
+  sg_red_mat = sg_s.add_material(scene::Material {
+    name: "red_plastic", base_color_r: 0.9, base_color_g: 0.1, base_color_b: 0.1,
+    base_color_a: 1.0, metallic: 0.0, roughness: 0.6 });
+  sg_blue_mat = sg_s.add_material(scene::Material {
+    name: "blue_metal", base_color_r: 0.1, base_color_g: 0.3, base_color_b: 0.9,
+    base_color_a: 1.0, metallic: 0.8, roughness: 0.2 });
+  sg_gold_mat = sg_s.add_material(scene::Material {
+    name: "gold", base_color_r: 1.0, base_color_g: 0.84, base_color_b: 0.0,
+    base_color_a: 1.0, metallic: 1.0, roughness: 0.1 });
+  // Nodes
+  sg_s.add_node(scene::Node {
+    name: "floor", mesh_idx: sg_floor_i, material_idx: sg_floor_mat,
+    transform: math::mat4_identity() });
+  // Red cube on the left
+  sg_s.add_node(scene::Node {
+    name: "red_cube", mesh_idx: sg_cube_i, material_idx: sg_red_mat,
+    transform: math::mat4_mul(
+      math::mat4_translate(-2.0, 0.5, 0.0),
+      math::mat4_rotate_y(0.5)) });
+  // Blue metallic cube in the center, taller
+  sg_s.add_node(scene::Node {
+    name: "blue_pillar", mesh_idx: sg_cube_i, material_idx: sg_blue_mat,
+    transform: math::mat4_mul(
+      math::mat4_translate(0.0, 1.0, 0.0),
+      math::mat4_scale(0.6, 2.0, 0.6)) });
+  // Gold sphere on the right
+  sg_s.add_node(scene::Node {
+    name: "gold_ball", mesh_idx: sg_sphere_i, material_idx: sg_gold_mat,
+    transform: math::mat4_translate(2.0, 0.5, 0.0) });
+  // Small spheres forming an arc
+  for sg_i in 0..5 {
+    sg_angle = -0.6 + sg_i as float * 0.3;
+    sg_x = sin(sg_angle) * 3.5;
+    sg_z = cos(sg_angle) * 3.5 - 2.0;
+    sg_s.add_node(scene::Node {
+      name: "arc_{sg_i}", mesh_idx: sg_sphere_i, material_idx: sg_red_mat,
+      transform: math::mat4_mul(
+        math::mat4_translate(sg_x, 0.25, sg_z),
+        math::mat4_scale(0.5, 0.5, 0.5)) });
+  }
+  // Camera
+  sg_s.add_camera(scene::Camera {
+    name: "main", fov: 50.0, near: 0.1, far: 100.0,
+    position: math::vec3(5.0, 4.0, 6.0),
+    target: math::vec3(0.0, 0.5, 0.0) });
+  glb::save_scene_glb(sg_s, "10-scene.glb");
+  println("Exported 10-scene.glb (floor + 3 objects + 5 arc spheres + camera)");
+}

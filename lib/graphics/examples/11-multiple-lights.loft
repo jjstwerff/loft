@@ -1,0 +1,140 @@
+// LearnOpenGL: Multiple Lights
+// https://learnopengl.com/Lighting/Multiple-lights
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: point light + directional light in one shader.
+// Three cubes lit by a directional sun and an orbiting point light.
+//
+// Loft constructions used:
+//   gl_set_uniform_vec3  — pass light positions/colors directly
+//   gl_set_uniform_float — pass material shininess
+//   Multiple draw calls  — same shader, different model matrices
+use graphics;
+use mesh;
+use math;
+use glb;
+use scene;
+
+VERT_ML = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProj;
+out vec3 vFragPos;
+out vec3 vNormal;
+void main() {
+    vFragPos = vec3(uModel * vec4(aPos, 1.0));
+    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
+    gl_Position = uProj * uView * vec4(vFragPos, 1.0);
+}
+";
+
+FRAG_ML = "
+#version 330 core
+in vec3 vFragPos;
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uViewPos;
+uniform vec3 uObjectColor;
+// Directional light
+uniform vec3 uDirLightDir;
+uniform vec3 uDirLightColor;
+// Point light
+uniform vec3 uPointLightPos;
+uniform vec3 uPointLightColor;
+void main() {
+    vec3 norm = normalize(vNormal);
+    vec3 viewDir = normalize(uViewPos - vFragPos);
+    // Directional light contribution
+    vec3 ld = normalize(-uDirLightDir);
+    float dDiff = max(dot(norm, ld), 0.0);
+    vec3 dRefl = reflect(-ld, norm);
+    float dSpec = pow(max(dot(viewDir, dRefl), 0.0), 32.0);
+    vec3 dir = (0.1 + dDiff + 0.3 * dSpec) * uDirLightColor;
+    // Point light contribution
+    vec3 lp = normalize(uPointLightPos - vFragPos);
+    float pDist = length(uPointLightPos - vFragPos);
+    float pAtten = 1.0 / (1.0 + 0.09 * pDist + 0.032 * pDist * pDist);
+    float pDiff = max(dot(norm, lp), 0.0);
+    vec3 pRefl = reflect(-lp, norm);
+    float pSpec = pow(max(dot(viewDir, pRefl), 0.0), 32.0);
+    vec3 point = (pDiff + 0.5 * pSpec) * pAtten * uPointLightColor;
+    FragColor = vec4((dir + point) * uObjectColor, 1.0);
+}
+";
+
+fn render_native_ml() {
+  if !graphics::gl_create_window(800, 600, "11 - Multiple Lights") {
+    println("Failed to create window"); return;
+  }
+  ml_m = mesh::cube();
+  ml_shader = graphics::gl_create_shader(VERT_ML, FRAG_ML);
+  ml_data = mesh::mesh_to_floats(ml_m);
+  ml_vao = graphics::gl_upload_vertices(ml_data, 6);
+  ml_nv = ml_m.triangles.len() * 3;
+  ml_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  ml_eye = math::vec3(3.0, 3.0, 5.0);
+  ml_view = math::mat4_look_at(ml_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  ml_start = ticks();
+  ml_colors = [math::vec3(1.0, 0.3, 0.3), math::vec3(0.3, 1.0, 0.3), math::vec3(0.3, 0.3, 1.0)];
+  ml_positions = [math::vec3(-2.0, 0.0, 0.0), math::vec3(0.0, 0.0, 0.0), math::vec3(2.0, 0.0, 0.0)];
+  for ml_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    ml_t = (ticks() - ml_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(15, 15, 20, 255));
+    graphics::gl_use_shader(ml_shader);
+    graphics::gl_set_uniform_vec3(ml_shader, "uViewPos", ml_eye.x, ml_eye.y, ml_eye.z);
+    graphics::gl_set_uniform_vec3(ml_shader, "uDirLightDir", -0.2, -1.0, -0.3);
+    graphics::gl_set_uniform_vec3(ml_shader, "uDirLightColor", 0.4, 0.4, 0.5);
+    ml_pl = math::vec3(sin(ml_t) * 3.0, 1.5, cos(ml_t) * 3.0);
+    graphics::gl_set_uniform_vec3(ml_shader, "uPointLightPos", ml_pl.x, ml_pl.y, ml_pl.z);
+    graphics::gl_set_uniform_vec3(ml_shader, "uPointLightColor", 1.0, 0.9, 0.7);
+    graphics::gl_set_uniform_mat4(ml_shader, "uView", ml_view.m);
+    graphics::gl_set_uniform_mat4(ml_shader, "uProj", ml_proj.m);
+    for ml_i in 0..3 {
+      ml_model = math::mat4_mul(
+        math::mat4_translate(ml_positions[ml_i].x, ml_positions[ml_i].y, ml_positions[ml_i].z),
+        math::mat4_rotate_y(ml_t * (0.5 + ml_i as float * 0.3)));
+      graphics::gl_set_uniform_mat4(ml_shader, "uModel", ml_model.m);
+      ml_c = ml_colors[ml_i];
+      graphics::gl_set_uniform_vec3(ml_shader, "uObjectColor", ml_c.x, ml_c.y, ml_c.z);
+      graphics::gl_draw(ml_vao, ml_nv);
+    }
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
+
+fn export_glb_ml() {
+  ml_s = scene::Scene { name: "multiple_lights" };
+  ml_mi = ml_s.add_mesh(mesh::cube());
+  ml_mats = [
+    ml_s.add_material(scene::Material { name: "red", base_color_r: 1.0, base_color_g: 0.3, base_color_b: 0.3, base_color_a: 1.0, metallic: 0.0, roughness: 0.5 }),
+    ml_s.add_material(scene::Material { name: "green", base_color_r: 0.3, base_color_g: 1.0, base_color_b: 0.3, base_color_a: 1.0, metallic: 0.0, roughness: 0.5 }),
+    ml_s.add_material(scene::Material { name: "blue", base_color_r: 0.3, base_color_g: 0.3, base_color_b: 1.0, base_color_a: 1.0, metallic: 0.0, roughness: 0.5 })
+  ];
+  for ml_n in 0..3 {
+    ml_x = (ml_n - 1) as float * 2.0;
+    ml_s.add_node(scene::Node { name: "cube_{ml_n}", mesh_idx: ml_mi, material_idx: ml_mats[ml_n],
+      transform: math::mat4_translate(ml_x, 0.0, 0.0) });
+  }
+  ml_s.add_camera(scene::Camera { name: "main", fov: 45.0, near: 0.1, far: 100.0,
+    position: math::vec3(3.0, 3.0, 5.0), target: math::vec3(0.0, 0.0, 0.0) });
+  glb::save_scene_glb(ml_s, "11-multiple-lights.glb");
+  println("Exported 11-multiple-lights.glb");
+}
+
+fn main() {
+  ml_mode = "native";
+  for ml_a in arguments() {
+    if ml_a == "--mode" { ml_mode = "" }
+    else if ml_mode == "" { ml_mode = ml_a }
+  }
+  if ml_mode == "glb" { export_glb_ml() }
+  else { render_native_ml() }
+}

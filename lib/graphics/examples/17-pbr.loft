@@ -1,0 +1,162 @@
+// LearnOpenGL: PBR (Physically Based Rendering)
+// https://learnopengl.com/PBR/Theory
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: simplified PBR shader with metallic/roughness workflow.
+// A grid of spheres with varying metallic (columns) and roughness (rows).
+//
+// Loft constructions used:
+//   Nested loops         — 5x5 grid of spheres with different material params
+//   gl_set_uniform_float — metallic/roughness per-object
+//   gl_set_uniform_vec3  — albedo, light position/color
+//   PBR GLSL: Cook-Torrance BRDF (GGX + Schlick + Smith)
+use graphics;
+use mesh;
+use math;
+use glb;
+use scene;
+
+VERT_PBR = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProj;
+out vec3 vWorldPos;
+out vec3 vNormal;
+void main() {
+    vWorldPos = vec3(uModel * vec4(aPos, 1.0));
+    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
+    gl_Position = uProj * uView * vec4(vWorldPos, 1.0);
+}
+";
+
+FRAG_PBR = "
+#version 330 core
+in vec3 vWorldPos;
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uAlbedo;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform vec3 uCamPos;
+uniform vec3 uLightPos;
+uniform vec3 uLightColor;
+const float PI = 3.14159265359;
+float DistributionGGX(vec3 N, vec3 H, float r) {
+    float a = r * r; float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0); float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float r) {
+    float k = (r + 1.0) * (r + 1.0) / 8.0;
+    float nv = max(dot(N, V), 0.0); float nl = max(dot(N, L), 0.0);
+    return (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
+}
+vec3 FresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(uCamPos - vWorldPos);
+    vec3 F0 = mix(vec3(0.04), uAlbedo, uMetallic);
+    vec3 L = normalize(uLightPos - vWorldPos);
+    vec3 H = normalize(V + L);
+    float dist = length(uLightPos - vWorldPos);
+    vec3 radiance = uLightColor * (50.0 / (dist * dist));
+    float NDF = DistributionGGX(N, H, uRoughness);
+    float G = GeometrySmith(N, V, L, uRoughness);
+    vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+    vec3 num = NDF * G * F;
+    float denom = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    vec3 spec = num / denom;
+    vec3 kD = (vec3(1.0) - F) * (1.0 - uMetallic);
+    float NdotL = max(dot(N, L), 0.0);
+    vec3 Lo = (kD * uAlbedo / PI + spec) * radiance * NdotL;
+    vec3 ambient = vec3(0.03) * uAlbedo;
+    vec3 color = ambient + Lo;
+    color = color / (color + vec3(1.0)); // HDR tonemap
+    color = pow(color, vec3(1.0 / 2.2)); // gamma
+    FragColor = vec4(color, 1.0);
+}
+";
+
+fn render_native_pbr() {
+  if !graphics::gl_create_window(800, 600, "17 - PBR (metallic/roughness grid)") {
+    println("Failed to create window"); return;
+  }
+  pb_sp = mesh::sphere("pbr_sphere", 0.4, 32, 24);
+  pb_shader = graphics::gl_create_shader(VERT_PBR, FRAG_PBR);
+  pb_data = mesh::mesh_to_floats(pb_sp);
+  pb_vao = graphics::gl_upload_vertices(pb_data, 6);
+  pb_nv = pb_sp.triangles.len() * 3;
+  pb_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  pb_eye = math::vec3(0.0, 0.0, 8.0);
+  pb_view = math::mat4_look_at(pb_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  pb_start = ticks();
+  for pb_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    pb_t = (ticks() - pb_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(10, 10, 12, 255));
+    graphics::gl_use_shader(pb_shader);
+    graphics::gl_set_uniform_mat4(pb_shader, "uView", pb_view.m);
+    graphics::gl_set_uniform_mat4(pb_shader, "uProj", pb_proj.m);
+    graphics::gl_set_uniform_vec3(pb_shader, "uCamPos", pb_eye.x, pb_eye.y, pb_eye.z);
+    graphics::gl_set_uniform_vec3(pb_shader, "uLightPos", sin(pb_t) * 5.0, 3.0, cos(pb_t) * 5.0);
+    graphics::gl_set_uniform_vec3(pb_shader, "uLightColor", 300.0, 300.0, 300.0);
+    graphics::gl_set_uniform_vec3(pb_shader, "uAlbedo", 0.9, 0.2, 0.2);
+    // 5x5 grid: rows = roughness 0.1..0.9, columns = metallic 0.0..1.0
+    for pb_row in 0..5 {
+      for pb_col in 0..5 {
+        pb_x = (pb_col - 2) as float * 1.2;
+        pb_y = (pb_row - 2) as float * 1.2;
+        pb_model = math::mat4_translate(pb_x, pb_y, 0.0);
+        pb_mvp = math::mat4_mul(pb_proj, math::mat4_mul(pb_view, pb_model));
+        graphics::gl_set_uniform_mat4(pb_shader, "uModel", pb_model.m);
+        graphics::gl_set_uniform_float(pb_shader, "uMetallic", pb_col as float / 4.0);
+        graphics::gl_set_uniform_float(pb_shader, "uRoughness", 0.1 + pb_row as float * 0.2);
+        graphics::gl_draw(pb_vao, pb_nv);
+      }
+    }
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
+
+fn export_glb_pbr() {
+  pb_s = scene::Scene { name: "pbr_grid" };
+  pb_si = pb_s.add_mesh(mesh::sphere("pbr_sphere", 0.4, 32, 24));
+  for pb_r in 0..5 {
+    for pb_c in 0..5 {
+      pb_mi = pb_s.add_material(scene::Material {
+        name: "m_{pb_r}_{pb_c}",
+        base_color_r: 0.9, base_color_g: 0.2, base_color_b: 0.2, base_color_a: 1.0,
+        metallic: pb_c as float / 4.0,
+        roughness: 0.1 + pb_r as float * 0.2 });
+      pb_x = (pb_c - 2) as float * 1.2;
+      pb_y = (pb_r - 2) as float * 1.2;
+      pb_s.add_node(scene::Node {
+        name: "s_{pb_r}_{pb_c}", mesh_idx: pb_si, material_idx: pb_mi,
+        transform: math::mat4_translate(pb_x, pb_y, 0.0) });
+    }
+  }
+  pb_s.add_camera(scene::Camera {
+    name: "main", fov: 45.0, near: 0.1, far: 100.0,
+    position: math::vec3(0.0, 0.0, 8.0), target: math::vec3(0.0, 0.0, 0.0) });
+  glb::save_scene_glb(pb_s, "17-pbr.glb");
+  println("Exported 17-pbr.glb (5x5 metallic/roughness grid)");
+}
+
+fn main() {
+  pb_mode = "native";
+  for pb_a in arguments() {
+    if pb_a == "--mode" { pb_mode = "" }
+    else if pb_mode == "" { pb_mode = pb_a }
+  }
+  if pb_mode == "glb" { export_glb_pbr() }
+  else { render_native_pbr() }
+}

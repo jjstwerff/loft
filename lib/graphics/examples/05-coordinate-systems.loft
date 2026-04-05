@@ -1,0 +1,136 @@
+// LearnOpenGL Chapter 6: Coordinate Systems
+// https://learnopengl.com/Getting-started/Coordinate-Systems
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: multiple cubes at different positions using the same mesh.
+// Each cube gets its own model matrix (translation + rotation).
+// The projection and view matrices are shared.
+//
+// Run:
+//   loft examples/05-coordinate-systems.loft              -- native
+//   loft examples/05-coordinate-systems.loft --mode glb   -- export GLB scene
+//
+// Loft constructions used:
+//   mat4_translate    — position each cube in world space
+//   mat4_rotate_x/y   — orient each cube differently
+//   mat4_mul          — compose model = translate * rotate
+//   Scene with multiple nodes — same mesh, different transforms
+use graphics;
+use mesh;
+use math;
+use glb;
+use scene;
+
+VERT_MVP = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNormal = aNormal;
+}
+";
+
+FRAG_LIT = "
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+void main() {
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.8));
+    float diff = max(dot(normalize(vNormal), lightDir), 0.0);
+    vec3 color = vec3(0.4, 0.7, 1.0) * (0.3 + 0.7 * diff);
+    FragColor = vec4(color, 1.0);
+}
+";
+
+fn cube_positions() -> vector<math::Vec3> {
+  [
+    math::vec3( 0.0,  0.0,  0.0),
+    math::vec3( 2.0,  5.0, -15.0),
+    math::vec3(-1.5, -2.2, -2.5),
+    math::vec3(-3.8, -2.0, -12.3),
+    math::vec3( 2.4, -0.4, -3.5),
+    math::vec3(-1.7,  3.0, -7.5),
+    math::vec3( 1.3, -2.0, -2.5),
+    math::vec3( 1.5,  2.0, -2.5),
+    math::vec3( 1.5,  0.2, -1.5),
+    math::vec3(-1.3,  1.0, -1.5)
+  ]
+}
+
+fn render_native_coords() {
+  if !graphics::gl_create_window(800, 600, "05 - Coordinate Systems") {
+    println("Failed to create window");
+    return;
+  }
+  cs_m = mesh::cube();
+  cs_shader = graphics::gl_create_shader(VERT_MVP, FRAG_LIT);
+  cs_data = mesh::mesh_to_floats(cs_m);
+  cs_vao = graphics::gl_upload_vertices(cs_data, 6);
+  cs_n_verts = cs_m.triangles.len() * 3;
+  cs_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  cs_view = math::mat4_look_at(
+    math::vec3(0.0, 2.0, 8.0),
+    math::vec3(0.0, 0.0, -5.0),
+    math::vec3(0.0, 1.0, 0.0));
+  cs_positions = cube_positions();
+  cs_start = ticks();
+  for cs_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    cs_t = (ticks() - cs_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(30, 30, 30, 255));
+    graphics::gl_use_shader(cs_shader);
+    for cs_pos in cs_positions {
+      cs_angle = cs_t * (0.5 + cs_pos#index as float * 0.2);
+      cs_model = math::mat4_mul(
+        math::mat4_translate(cs_pos.x, cs_pos.y, cs_pos.z),
+        math::mat4_rotate_y(cs_angle));
+      cs_mvp = math::mat4_mul(cs_proj, math::mat4_mul(cs_view, cs_model));
+      graphics::gl_set_uniform_mat4(cs_shader, "uMVP", cs_mvp.m);
+      graphics::gl_draw(cs_vao, cs_n_verts);
+    }
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
+
+fn export_glb_coords() {
+  cs_s = scene::Scene { name: "coordinate_systems" };
+  cs_m = mesh::cube();
+  cs_mi = cs_s.add_mesh(cs_m);
+  cs_mat = scene::Material {
+    name: "blue", base_color_r: 0.4, base_color_g: 0.7, base_color_b: 1.0,
+    base_color_a: 1.0, metallic: 0.0, roughness: 0.6
+  };
+  cs_mati = cs_s.add_material(cs_mat);
+  cs_positions = cube_positions();
+  for cs_p in cs_positions {
+    cs_s.add_node(scene::Node {
+      name: "cube_{cs_p#index}",
+      mesh_idx: cs_mi, material_idx: cs_mati,
+      transform: math::mat4_translate(cs_p.x, cs_p.y, cs_p.z)
+    });
+  }
+  cs_s.add_camera(scene::Camera {
+    name: "main", fov: 45.0, near: 0.1, far: 100.0,
+    position: math::vec3(0.0, 2.0, 8.0),
+    target: math::vec3(0.0, 0.0, -5.0)
+  });
+  glb::save_scene_glb(cs_s, "05-coordinate-systems.glb");
+  println("Exported 05-coordinate-systems.glb");
+}
+
+fn main() {
+  cs_mode = "native";
+  for cs_a in arguments() {
+    if cs_a == "--mode" { cs_mode = "" }
+    else if cs_mode == "" { cs_mode = cs_a }
+  }
+  if cs_mode == "glb" { export_glb_coords() }
+  else { render_native_coords() }
+}

@@ -1,0 +1,94 @@
+// LearnOpenGL Chapter 3: Shaders
+// https://learnopengl.com/Getting-started/Shaders
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: vertex colors, varying interpolation.
+// The vertex shader passes per-vertex colors to the fragment shader.
+// GL interpolates colors across the triangle automatically.
+//
+// Run:
+//   loft examples/03-shaders.loft              -- native
+//   loft examples/03-shaders.loft --mode glb   -- export GLB with vertex colors
+//
+// Loft constructions used:
+//   vector<single> literal     — inline vertex data as flat float buffer
+//   gl_upload_vertices stride  — stride=10: pos(3) + normal(3) + color(4)
+//   GLSL layout locations      — location 0=pos, 1=normal, 2=color
+use graphics;
+use mesh;
+use math;
+use glb;
+
+VERT_COLOR_SRC = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec4 aColor;
+out vec4 vColor;
+void main() {
+    gl_Position = vec4(aPos, 1.0);
+    vColor = aColor;
+}
+";
+
+FRAG_COLOR_SRC = "
+#version 330 core
+in vec4 vColor;
+out vec4 FragColor;
+void main() {
+    FragColor = vColor;
+}
+";
+
+fn render_native_colored() {
+  if !graphics::gl_create_window(800, 600, "03 - Shaders (vertex colors)") {
+    println("Failed to create window");
+    return;
+  }
+  // Flat vertex data: pos(3) + normal(3) + color(4) = stride 10
+  sc_data = [
+    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
+     0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 1.0f, 0.0f, 1.0f,
+     0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f
+  ];
+  sc_shader = graphics::gl_create_shader(VERT_COLOR_SRC, FRAG_COLOR_SRC);
+  sc_vao = graphics::gl_upload_vertices(sc_data, 10);
+  for sc_frame in 0..300 {
+    if !graphics::gl_poll_events() { break }
+    graphics::gl_clear(rgba(51, 76, 76, 255));
+    graphics::gl_use_shader(sc_shader);
+    graphics::gl_draw(sc_vao, 3);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
+
+fn export_glb_colored() {
+  // GLB with vertex colors: build a simple triangle mesh
+  sc_m = mesh::mesh("colored_triangle");
+  sc_m.add_vertex(mesh::vertex(
+    math::vec3(-0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 0.0)));
+  sc_m.add_vertex(mesh::vertex(
+    math::vec3( 0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 0.0)));
+  sc_m.add_vertex(mesh::vertex(
+    math::vec3( 0.0,  0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.5, 1.0)));
+  sc_m.add_triangle(0, 1, 2);
+  glb::save_glb(sc_m, "03-shaders.glb");
+  println("Exported 03-shaders.glb");
+}
+
+fn main() {
+  sc_mode = "native";
+  for sc_arg in arguments() {
+    if sc_arg == "--mode" { sc_mode = "" }
+    else if sc_mode == "" { sc_mode = sc_arg }
+  }
+  if sc_mode == "glb" {
+    export_glb_colored();
+  } else {
+    render_native_colored();
+  }
+}

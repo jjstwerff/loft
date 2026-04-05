@@ -1,0 +1,151 @@
+// LearnOpenGL Chapter 10: Materials
+// https://learnopengl.com/Lighting/Materials
+// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
+// Original tutorials licensed under CC BY-NC 4.0
+// https://creativecommons.org/licenses/by-nc/4.0/
+// This loft implementation is an independent adaptation for the loft graphics library.
+//
+// Demonstrates: multiple objects with different material properties.
+// A sphere and cube side by side with different metallic/roughness values.
+//
+// Run:
+//   loft examples/08-materials.loft              -- native (simplified Phong)
+//   loft examples/08-materials.loft --mode glb   -- export GLB with PBR materials
+//
+// Loft constructions used:
+//   sphere()          — UV sphere mesh primitive
+//   Multiple Scene nodes — each with different material properties
+//   PBR material fields — metallic, roughness control appearance in GLB viewers
+use graphics;
+use mesh;
+use math;
+use glb;
+use scene;
+
+VERT_MAT = "
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+uniform mat4 uModel;
+out vec3 vFragPos;
+out vec3 vNormal;
+void main() {
+    vFragPos = vec3(uModel * vec4(aPos, 1.0));
+    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+";
+
+FRAG_MAT = "
+#version 330 core
+in vec3 vFragPos;
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uLightPos;
+uniform vec3 uObjectColor;
+uniform float uShininess;
+void main() {
+    vec3 norm = normalize(vNormal);
+    vec3 lightDir = normalize(uLightPos - vFragPos);
+    float diff = max(dot(norm, lightDir), 0.0);
+    vec3 viewDir = normalize(vec3(3.0, 3.0, 5.0) - vFragPos);
+    vec3 reflectDir = reflect(-lightDir, norm);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), uShininess);
+    vec3 result = (0.15 + diff + 0.5 * spec) * uObjectColor;
+    FragColor = vec4(result, 1.0);
+}
+";
+
+fn render_native_materials() {
+  if !graphics::gl_create_window(800, 600, "08 - Materials") {
+    println("Failed to create window");
+    return;
+  }
+  // Build meshes
+  mt_cube = mesh::cube();
+  mt_sphere = mesh::sphere("sphere", 0.8, 24, 16);
+  mt_shader = graphics::gl_create_shader(VERT_MAT, FRAG_MAT);
+  mt_cube_data = mesh::mesh_to_floats(mt_cube);
+  mt_sphere_data = mesh::mesh_to_floats(mt_sphere);
+  mt_cube_vao = graphics::gl_upload_vertices(mt_cube_data, 6);
+  mt_sphere_vao = graphics::gl_upload_vertices(mt_sphere_data, 6);
+  mt_cube_verts = mt_cube.triangles.len() * 3;
+  mt_sphere_verts = mt_sphere.triangles.len() * 3;
+  mt_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  mt_view = math::mat4_look_at(
+    math::vec3(3.0, 3.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+  mt_light = math::vec3(3.0, 4.0, 2.0);
+  mt_start = ticks();
+  for mt_frame in 0..3000 {
+    if !graphics::gl_poll_events() { break }
+    mt_t = (ticks() - mt_start) as float / 1000000.0;
+    graphics::gl_clear(rgba(20, 20, 25, 255));
+    graphics::gl_use_shader(mt_shader);
+    // Pass light position
+    mt_lm = math::Mat4 { m: [mt_light.x, mt_light.y, mt_light.z, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+    graphics::gl_set_uniform_mat4(mt_shader, "uLightPos", mt_lm.m);
+    // Cube: rough red material on the left
+    mt_cube_model = math::mat4_mul(
+      math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(mt_t * 0.3));
+    mt_cube_mvp = math::mat4_mul(mt_proj, math::mat4_mul(mt_view, mt_cube_model));
+    graphics::gl_set_uniform_mat4(mt_shader, "uMVP", mt_cube_mvp.m);
+    graphics::gl_set_uniform_mat4(mt_shader, "uModel", mt_cube_model.m);
+    mt_red = math::Mat4 { m: [0.8, 0.2, 0.1, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+    graphics::gl_set_uniform_mat4(mt_shader, "uObjectColor", mt_red.m);
+    mt_shin1 = math::Mat4 { m: [8.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+    graphics::gl_set_uniform_mat4(mt_shader, "uShininess", mt_shin1.m);
+    graphics::gl_draw(mt_cube_vao, mt_cube_verts);
+    // Sphere: shiny gold material on the right
+    mt_sphere_model = math::mat4_translate(1.5, 0.0, 0.0);
+    mt_sphere_mvp = math::mat4_mul(mt_proj, math::mat4_mul(mt_view, mt_sphere_model));
+    graphics::gl_set_uniform_mat4(mt_shader, "uMVP", mt_sphere_mvp.m);
+    graphics::gl_set_uniform_mat4(mt_shader, "uModel", mt_sphere_model.m);
+    mt_gold = math::Mat4 { m: [1.0, 0.84, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+    graphics::gl_set_uniform_mat4(mt_shader, "uObjectColor", mt_gold.m);
+    mt_shin2 = math::Mat4 { m: [128.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+    graphics::gl_set_uniform_mat4(mt_shader, "uShininess", mt_shin2.m);
+    graphics::gl_draw(mt_sphere_vao, mt_sphere_verts);
+    graphics::gl_swap_buffers();
+  }
+  graphics::gl_destroy_window();
+}
+
+fn export_glb_materials() {
+  mt_s = scene::Scene { name: "materials" };
+  mt_ci = mt_s.add_mesh(mesh::cube());
+  mt_si = mt_s.add_mesh(mesh::sphere("sphere", 0.8, 24, 16));
+  mt_rm = mt_s.add_material(scene::Material {
+    name: "rough_red", base_color_r: 0.8, base_color_g: 0.2, base_color_b: 0.1,
+    base_color_a: 1.0, metallic: 0.0, roughness: 0.9 });
+  mt_gm = mt_s.add_material(scene::Material {
+    name: "shiny_gold", base_color_r: 1.0, base_color_g: 0.84, base_color_b: 0.0,
+    base_color_a: 1.0, metallic: 1.0, roughness: 0.1 });
+  mt_s.add_node(scene::Node {
+    name: "cube", mesh_idx: mt_ci, material_idx: mt_rm,
+    transform: math::mat4_translate(-1.5, 0.0, 0.0) });
+  mt_s.add_node(scene::Node {
+    name: "sphere", mesh_idx: mt_si, material_idx: mt_gm,
+    transform: math::mat4_translate(1.5, 0.0, 0.0) });
+  mt_s.add_camera(scene::Camera {
+    name: "main", fov: 45.0, near: 0.1, far: 100.0,
+    position: math::vec3(3.0, 3.0, 5.0),
+    target: math::vec3(0.0, 0.0, 0.0) });
+  glb::save_scene_glb(mt_s, "08-materials.glb");
+  println("Exported 08-materials.glb");
+}
+
+fn main() {
+  mt_mode = "native";
+  for mt_a in arguments() {
+    if mt_a == "--mode" { mt_mode = "" }
+    else if mt_mode == "" { mt_mode = mt_a }
+  }
+  if mt_mode == "glb" { export_glb_materials() }
+  else { render_native_materials() }
+}
