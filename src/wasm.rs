@@ -524,6 +524,23 @@ const DEFAULT_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Embedded graphics library files.  Added to VIRT_FS so `use graphics;` etc.
+/// resolve under WASM without a native cdylib.
+const GRAPHICS_LIB_FILES: &[(&str, &str)] = &[
+    (
+        "graphics.loft",
+        include_str!("../lib/graphics/src/graphics.loft"),
+    ),
+    ("math.loft", include_str!("../lib/graphics/src/math.loft")),
+    ("mesh.loft", include_str!("../lib/graphics/src/mesh.loft")),
+    ("scene.loft", include_str!("../lib/graphics/src/scene.loft")),
+    (
+        "render.loft",
+        include_str!("../lib/graphics/src/render.loft"),
+    ),
+    ("glb.loft", include_str!("../lib/graphics/src/glb.loft")),
+];
+
 /// Run a loft program supplied as a JSON array of `{name, content}` file objects.
 ///
 /// Returns a JSON string: `{"output": "...", "diagnostics": [...], "success": true|false}`.
@@ -555,9 +572,10 @@ pub fn compile_and_run(files_json: &str) -> String {
         }
     };
 
-    // Populate VIRT_FS with default files + user files.
+    // Populate VIRT_FS with default files + graphics library + user files.
     let mut all_files: Vec<(String, String)> = DEFAULT_FILES
         .iter()
+        .chain(GRAPHICS_LIB_FILES.iter())
         .map(|(n, c)| (n.to_string(), (*c).to_string()))
         .collect();
     for (name, content) in &files {
@@ -568,14 +586,31 @@ pub fn compile_and_run(files_json: &str) -> String {
     let _ = output_take();
 
     // Build and run.
-    let (diag, had_error) = run_pipeline();
+    let (diag, had_error, asserts) = run_pipeline();
 
     // Collect results.
     let output = output_take();
     virt_fs_clear();
 
+    // Build asserts JSON array.
+    let asserts_json = if asserts.is_empty() {
+        "[]".to_string()
+    } else {
+        let items: Vec<String> = asserts
+            .iter()
+            .map(|(pass, msg, file, line)| {
+                format!(
+                    "{{\"pass\":{pass},\"message\":{},\"file\":{},\"line\":{line}}}",
+                    json_str(msg),
+                    json_str(file),
+                )
+            })
+            .collect();
+        format!("[{}]", items.join(","))
+    };
+
     format!(
-        "{{\"output\":{},\"diagnostics\":{},\"success\":{}}}",
+        "{{\"output\":{},\"diagnostics\":{},\"asserts\":{asserts_json},\"success\":{}}}",
         json_str(&output),
         json_str(&diag),
         !had_error,
@@ -691,7 +726,10 @@ fn json_str(s: &str) -> String {
 /// Execute the full pipeline using files in VIRT_FS.
 /// Returns `(diagnostic_string, had_error)`.  Warnings produce a non-empty
 /// diagnostic string but `had_error = false`; errors set `had_error = true`.
-fn run_pipeline() -> (String, bool) {
+/// Assert result: (passed, message, file, line).
+type AssertResult = (bool, String, String, u32);
+
+fn run_pipeline() -> (String, bool, Vec<AssertResult>) {
     use crate::compile::byte_code;
     use crate::diagnostics::Level;
     use crate::parser::Parser;
@@ -699,15 +737,13 @@ fn run_pipeline() -> (String, bool) {
     use crate::state::State;
 
     let mut p = Parser::new();
-    // Parse default standard library (embedded in VIRT_FS under "default/").
     for (name, _) in DEFAULT_FILES {
         p.parse(name, true);
         let lvl = p.diagnostics.level();
         if lvl == Level::Error || lvl == Level::Fatal {
-            return (p.diagnostics.to_string(), true);
+            return (p.diagnostics.to_string(), true, Vec::new());
         }
     }
-    // Find the user's main file (first file not in default/).
     let main_name = VIRT_FS.with(|fs| {
         fs.borrow()
             .keys()
@@ -716,23 +752,29 @@ fn run_pipeline() -> (String, bool) {
             .cloned()
     });
     let Some(main_name) = main_name else {
-        return ("no user file found".to_string(), true);
+        return ("no user file found".to_string(), true, Vec::new());
     };
     p.parse(&main_name, false);
     let lvl = p.diagnostics.level();
     if lvl == Level::Error || lvl == Level::Fatal {
-        return (p.diagnostics.to_string(), true);
+        return (p.diagnostics.to_string(), true, Vec::new());
     }
     scopes::check(&mut p.data);
     let lvl = p.diagnostics.level();
     if lvl == Level::Error || lvl == Level::Fatal {
-        return (p.diagnostics.to_string(), true);
+        return (p.diagnostics.to_string(), true, Vec::new());
     }
     let diag = p.diagnostics.to_string();
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
+    // GL6.1–GL6.3: register WebGL bridge functions for graphics library.
+    crate::wasm_gl::register_wgl_natives(&mut state);
+    // Enable assert reporting for the playground.
+    state.database.report_asserts = true;
     state.execute_argv("main", &p.data, &[]);
-    (diag, false)
+    let asserts = std::mem::take(&mut state.database.assert_results);
+    let had_fatal = state.database.had_fatal;
+    (diag, had_fatal, asserts)
 }
 
 // ── W1.2  Output capture ─────────────────────────────────────────────────────

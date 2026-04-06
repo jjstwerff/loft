@@ -1699,6 +1699,18 @@ impl State {
                 if value == &Value::Text(String::new()) {
                     return;
                 }
+                // For loop iteration variables (text_return converted them to
+                // RefVar(Text) work buffers), clear the buffer before each
+                // assignment so it holds only the current iteration's value,
+                // not accumulated text from all iterations.
+                let var_name = stack.function.name(var).to_string();
+                let index_name = format!("{var_name}#index");
+                let is_loop_var = stack.function.var(&index_name) != u16::MAX;
+                if is_loop_var {
+                    let var_pos = stack.position - stack.function.stack(var);
+                    stack.add_op("OpClearStackText", self);
+                    self.code_add(var_pos);
+                }
                 self.generate(value, stack, false);
                 let var_pos = stack.position - stack.function.stack(var);
                 stack.add_op("OpAppendStackText", self);

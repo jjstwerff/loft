@@ -53,13 +53,7 @@ Items marked 🌐 produce something publicly visible on GitHub Pages or itch.io.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| GL6.1  | Canvas element + WebGL2 context (web-sys + `#native`)  | M  | ✓      | WEB_EXAMPLES.md            |
-| GL6.2  | Shader compile + link (WebGL2 API)                     | S  | ✓      | WEB_EXAMPLES.md            |
-| GL6.3  | Buffer upload + draw + requestAnimationFrame           | S  | ✓      | WEB_EXAMPLES.md            |
-| GL6.4  | Texture upload from Canvas (WebGL)                     | S  | ✓      | WEB_EXAMPLES.md            |
-| GL6.5  | Shader version patching (330 core → 300 es)            | S  | ✓      | WEB_EXAMPLES.md            |
 | GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
-| GAL.2  | 🌐 **Live graphics demos** — examples in WebGL on GH Pages | M  | ✓      | WEB_EXAMPLES.md            |
 
 ### Step 5: Game infrastructure + first game
 

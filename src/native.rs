@@ -97,6 +97,18 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     let v_test = *stores.get::<bool>(stack);
+    if stores.report_asserts {
+        stores.assert_results.push((
+            v_test,
+            v_message.str().to_string(),
+            v_file.str().to_string(),
+            v_line as u32,
+        ));
+        if !v_test {
+            stores.had_fatal = true;
+        }
+        return;
+    }
     if v_test {
         return;
     }
