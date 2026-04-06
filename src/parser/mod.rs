@@ -1877,7 +1877,17 @@ impl Parser {
                     continue;
                 }
                 let f = self.lib_path(&id);
-                if std::path::Path::new(&f).exists() {
+                let f_exists = std::path::Path::new(&f).exists() || {
+                    #[cfg(feature = "wasm")]
+                    {
+                        crate::wasm::virt_fs_get(&f).is_some()
+                    }
+                    #[cfg(not(feature = "wasm"))]
+                    {
+                        false
+                    }
+                };
+                if f_exists {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&id);
