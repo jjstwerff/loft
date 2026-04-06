@@ -238,6 +238,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
 | [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
 | [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
+| [RENDERER.md](doc/claude/RENDERER.md) | High-level renderer design — scene-driven PBR with shadows, helper abstractions |
+| [WEB_EXAMPLES.md](doc/claude/WEB_EXAMPLES.md) | Web gallery + unified rendering: native OpenGL / WebGL / GLB from one API |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---

@@ -852,12 +852,16 @@ pub extern "C" fn loft_gl_upload_canvas(
         return 0;
     }
     let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
+    // Flip rows: canvas (0,0) is top-left, GL texture (0,0) is bottom-left.
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for &px in pixels {
-        rgba.push(((px >> 16) & 0xFF) as u8); // R
-        rgba.push(((px >> 8) & 0xFF) as u8);  // G
-        rgba.push((px & 0xFF) as u8);          // B
-        rgba.push(((px >> 24) & 0xFF) as u8);  // A
+    for y in (0..h).rev() {
+        for x in 0..w {
+            let px = pixels[(y * w + x) as usize];
+            rgba.push(((px >> 16) & 0xFF) as u8); // R
+            rgba.push(((px >> 8) & 0xFF) as u8);  // G
+            rgba.push((px & 0xFF) as u8);          // B
+            rgba.push(((px >> 24) & 0xFF) as u8);  // A
+        }
     }
     unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
 }
