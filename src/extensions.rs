@@ -641,17 +641,27 @@ fn dispatch_call(
         }
     }
 
-    // Helper: convert a LoftRef back to DbRef and push onto the stack.
-    #[inline]
+    // Helper: convert a LoftRef from a native cdylib back to DbRef and push
+    // onto the stack.  Native cdylibs return a direct vector reference
+    // (rec=data_rec, pos=8) but the interpreter expects an indirect layout
+    // where a header record at pos contains a pointer to the data record.
+    // Allocate a header record in the same store and wrap the reference.
     fn push_loft_ref(
         stores: &mut crate::database::Stores,
         stack: &mut crate::keys::DbRef,
         r: LoftRef,
     ) {
+        let base = crate::keys::DbRef {
+            store_nr: r.store_nr,
+            rec: 0,
+            pos: 0,
+        };
+        let header = stores.claim(&base, 1);
+        stores.store_mut(&base).set_int(header.rec, 4, r.rec as i32);
         let dbref = crate::keys::DbRef {
             store_nr: r.store_nr,
-            rec: r.rec,
-            pos: r.pos,
+            rec: header.rec,
+            pos: 4,
         };
         stores.put(stack, dbref);
     }
