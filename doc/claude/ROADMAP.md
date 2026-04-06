@@ -196,6 +196,22 @@ Design documents:
 | W5     | Docs & examples browser                                | M  | ✓      | WEB_IDE.md M5    |
 | W6     | Export/import ZIP + PWA offline                         | M  | ✓      | WEB_IDE.md M6    |
 
+### Scene scripting — IDE + live game integration
+
+DMs and players write loft scripts in the browser IDE to add custom behaviour
+to scenes: triggered events, puzzle logic, NPC dialogue, environmental effects.
+Scripts compile to WASM in-browser and run inside the live game session.
+
+| ID     | Title                                                  | E  | Design | Depends on         |
+|--------|--------------------------------------------------------|----|--------|--------------------|
+| SC.1   | Scene script API — hooks for hex enter/exit/interact   | M  | ✓      | MO.3, W2           |
+| SC.2   | IDE panel in scene editor — edit scripts per hex/scene  | M  | ✓      | W2, MO.E1          |
+| SC.3   | In-browser compile: script → WASM, hot-reload into game | M  | ✓      | W1, SC.1            |
+| SC.4   | Script sandbox — limited API, no file/network access   | S  | ✓      | SC.3               |
+| SC.5   | Built-in script templates (trap, door, dialogue, timer) | S  | ✓      | SC.1               |
+| SC.6   | Script sharing — attach scripts to scene JSON, load on join | S  | ✓ | SC.3, MO.2         |
+| SC.P   | 🌐 **Scriptable scenes** — DMs add custom logic in browser | S  | ✓ | SC.3, MO.P         |
+
 ### Multiplayer (server + client)
 
 | ID     | Title                                                  | E  | Design | Source              |
