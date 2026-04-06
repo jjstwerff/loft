@@ -23,28 +23,15 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ## Completed (not on roadmap)
 
-Unified renderer design (R1–R4), WASM build + playground (W1, W1.P),
-WebGL2 bridge with shader patching (GL6.1–GL6.5), gallery page (GAL.2),
-playground assert reporting, grouped examples, syntax highlighting,
-frame yield (FY.1–FY.3), keyboard+mouse input (GL6.6), asset loading
-(GL7.1–GL7.4), renderer in WebGL (GL8.1), text self-concat fix (P114
-partial), 🌐 **live graphics gallery with all 24 examples** (GAL.3).
+Renderer (R1–R4), WASM + playground (W1, W1.P), WebGL bridge (GL6.1–GL6.5),
+frame yield (FY.1–FY.3), input (GL6.6), asset loading (GL7.1–GL7.4),
+🌐 **live graphics gallery** (GAL.3), language bug fixes (P110–P114).
 
 ---
 
-## 0.8.4 — Bug fixes + all 24 OpenGL examples in browser
+## 0.8.4 — First playable game
 
-### 0. Language bug fixes (text + vector)
-
-Two remaining bugs that produce silent data corruption. P111, P113, P114
-are fixed. These two need deeper slot allocator / codegen work.
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| P110   | Vector push in for loop: shifted/garbage values        | H  | ✓      | PROBLEMS.md #110           |
-| P112   | Text return accumulation in functions                  | M  | ✓      | PROBLEMS.md #112           |
-
-### 1. Game infrastructure + first game
+### Game infrastructure + first game
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
