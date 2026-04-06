@@ -352,7 +352,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
                     } else if attr.name.starts_with("__ref_") {
                         let wname = format!("_r_{user_name}_{i}");
                         writeln!(buf, "    let mut {wname} = stores.null_named(\"{wname}\");")?;
-                        work_args.push(format!("{wname}"));
+                        work_args.push(wname.to_string());
                     }
                 }
                 if work_args.is_empty() {

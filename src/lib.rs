@@ -73,3 +73,4 @@ pub mod formatter;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
+pub mod wasm_gl;

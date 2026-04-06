@@ -222,7 +222,17 @@ impl Parser {
             }
             if operator.is_empty() {
                 if !ls.is_empty() {
-                    if matches!(current_type, Type::Text(_) | Type::Character) {
+                    // Unwrap RefVar(Text) for text_return work buffer loop variables
+                    let effective_type = if let Type::RefVar(inner) = &current_type {
+                        if matches!(**inner, Type::Text(_)) {
+                            *inner.clone()
+                        } else {
+                            current_type.clone()
+                        }
+                    } else {
+                        current_type.clone()
+                    };
+                    if matches!(effective_type, Type::Text(_) | Type::Character) {
                         if current_type == Type::Character {
                             // a Character variable cannot serve as an OpAppendText
                             // destination.  Prepend it to the parts list and use an empty
@@ -258,9 +268,19 @@ impl Parser {
                     "'++' is not a valid operator — use '+' for concatenation or addition"
                 );
             }
+            // Unwrap RefVar(Text) for the + text concatenation check
+            let eff_type_for_plus = if let Type::RefVar(inner) = &current_type {
+                if matches!(**inner, Type::Text(_)) {
+                    *inner.clone()
+                } else {
+                    current_type.clone()
+                }
+            } else {
+                current_type.clone()
+            };
             if operator == "+"
                 && matches!(
-                    current_type,
+                    eff_type_for_plus,
                     Type::Text(_) | Type::Character | Type::Vector(_, _)
                 )
             {

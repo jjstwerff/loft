@@ -130,4 +130,27 @@ fn test_string_scope() {
   assert("{a} via {b}" == "136 via n:1=1 n:2=12 n:3=122 ", "string scope");
 }
 
+// Regression: iterating vector<text> in a text-returning function.
+// text_return converts the loop var to a RefVar(Text) work buffer.
+// The work buffer must be cleared before each iteration (not appended).
+fn tr_find(items: vector<text>) -> text {
+  for item in items {
+    if item.starts_with("x") { return item; }
+  }
+  ""
+}
+
+fn tr_join(items: vector<text>) -> text {
+  r = "";
+  for item in items {
+    r += "[{item}]";
+  }
+  r
+}
+
+fn test_loop_var_text_return() {
+  assert(tr_find(["a", "x1", "b"]) == "x1", "find={tr_find(["a", "x1", "b"])}");
+  assert(tr_find(["a", "b"]) == "", "no match");
+  assert(tr_join(["a", "b"]) == "[a][b]", "join={tr_join(["a", "b"])}");
+}
 

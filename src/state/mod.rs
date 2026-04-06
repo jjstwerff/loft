@@ -186,6 +186,16 @@ impl State {
         lib.push(call);
     }
 
+    /// Replace the implementation of an already-registered native function.
+    /// Used by the WASM GL bridge to replace panic stubs with real implementations.
+    /// No-op if `name` is not registered.
+    pub fn replace_native(&mut self, name: &str, call: Call) {
+        if let Some(&nr) = self.library_names.get(name) {
+            let lib = Arc::make_mut(&mut self.library);
+            lib[nr as usize] = call;
+        }
+    }
+
     /// Register a native Rust function under `symbol` for use by `#native "symbol"` loft
     /// functions.  Alias for `static_fn` with an external-extension naming convention.
     pub fn register_native(&mut self, symbol: &str, call: Call) {

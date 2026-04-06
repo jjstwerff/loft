@@ -9,6 +9,29 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### WebGL graphics gallery
+
+- **GL6.1** — Graphics library .loft files embedded in WASM binary; `use graphics;`
+  resolves under WASM without a native cdylib.
+- **GL6.2–GL6.3** — WebGL2 bridge (`wasm_gl.rs`): 43 native gl_* functions read
+  interpreter stack arguments and forward to JavaScript via `host_call`.
+  `State::replace_native()` swaps panic stubs with real implementations.
+- **GL6.5** — Shader version patching: GLSL `#version 330 core` automatically
+  converted to `#version 300 es` with precision qualifiers for WebGL2.
+- **GAL.2** — Graphics gallery page (`doc/gallery.html`) with WebGL2 canvas,
+  example selector, source viewer, and complete JavaScript GL implementation.
+
+### Playground improvements
+
+- Assert results rendered with checkmarks/crosses and pass/fail summary.
+- Examples split into categorized groups (Getting Started, Basics, Collections,
+  Types & Patterns, Advanced, System, Performance) with `<optgroup>`.
+- FizzBuzz default example added; 4 performance benchmarks (Fibonacci, Sieve,
+  Mandelbrot, Collatz).
+- Syntax highlighting fix: parentheses and punctuation now visible.
+- Success status shows "Ok" instead of "error []".
+- Diagnostics Display outputs clean newline-separated text instead of debug format.
+
 ### Game protocol (Sprint 17)
 
 - **SRV.P** — `game_protocol` package: `MsgType` enum, `WsMessage`,

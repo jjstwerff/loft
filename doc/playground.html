@@ -99,7 +99,7 @@ select {
   inset: 0;
   pointer-events: none;
   overflow: hidden;
-  color: transparent;
+  color: var(--text);
 }
 #editor {
   position: relative;
@@ -120,6 +120,33 @@ select {
 .hl-cm { color: var(--subtext); font-style: italic; }
 .hl-fn { color: var(--blue); }
 .hl-op { color: var(--teal); }
+/* Assert results */
+.assert-pane {
+  overflow: auto;
+  background: var(--surface);
+  flex-shrink: 0;
+  max-height: 200px;
+}
+.assert-pane:empty { display: none; }
+.assert-item {
+  padding: 2px 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  gap: 8px;
+}
+.assert-pass .assert-icon { color: var(--green); }
+.assert-fail .assert-icon { color: var(--red); }
+.assert-expr { color: var(--text); }
+.assert-loc { color: var(--subtext); }
+.assert-summary {
+  padding: 4px 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+}
 /* Output */
 #output {
   flex: 1;
@@ -227,6 +254,7 @@ select {
   <div class="output-col">
     <div class="pane-header">Output</div>
     <div id="output"></div>
+    <div id="asserts" class="assert-pane"></div>
     <div class="resize-handle" id="resize-handle"></div>
     <div class="pane-header">Diagnostics</div>
     <div class="diag-pane" id="diagnostics"></div>
@@ -241,7 +269,7 @@ select {
 
 <script type="module">
 import init, { compile_and_run } from './pkg/loft.js';
-import { EXAMPLES, EXAMPLE_LIST } from './examples.js';
+import { EXAMPLES, EXAMPLE_GROUPS } from './examples.js';
 
 // ── Syntax highlighting ──────────────────────────────────────────────
 const KEYWORDS = new Set([
@@ -373,6 +401,33 @@ function renderDiagnostics(items) {
   }
 }
 
+function renderAsserts(asserts) {
+  const el = document.getElementById('asserts');
+  el.innerHTML = '';
+  if (!asserts || asserts.length === 0) return;
+  const passed = asserts.filter(a => a.pass).length;
+  const failed = asserts.length - passed;
+  for (const a of asserts) {
+    const div = document.createElement('div');
+    div.className = `assert-item ${a.pass ? 'assert-pass' : 'assert-fail'}`;
+    const loc = a.line > 0 ? `${a.file}:${a.line}` : '';
+    div.innerHTML = `<span class="assert-icon">${a.pass ? '\u2713' : '\u2717'}</span>`
+      + `<span class="assert-expr">${esc(a.message)}</span>`
+      + (loc ? `<span class="assert-loc">${esc(loc)}</span>` : '');
+    el.appendChild(div);
+  }
+  const summary = document.createElement('div');
+  summary.className = 'assert-summary';
+  if (failed === 0) {
+    summary.style.color = 'var(--green)';
+    summary.textContent = `All ${passed} test${passed > 1 ? 's' : ''} passed`;
+  } else {
+    summary.style.color = 'var(--red)';
+    summary.textContent = `${failed} failed, ${passed} passed of ${asserts.length} test${asserts.length > 1 ? 's' : ''}`;
+  }
+  el.appendChild(summary);
+}
+
 function goToLine(line, col) {
   const ed = document.getElementById('editor');
   const lines = ed.value.split('\n');
@@ -439,12 +494,17 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-// Examples
-for (const ex of EXAMPLE_LIST) {
-  const opt = document.createElement('option');
-  opt.value = ex.key;
-  opt.textContent = ex.name;
-  exampleSelect.appendChild(opt);
+// Examples (grouped with optgroup)
+for (const grp of EXAMPLE_GROUPS) {
+  const og = document.createElement('optgroup');
+  og.label = grp.group;
+  for (const ex of grp.items) {
+    const opt = document.createElement('option');
+    opt.value = ex.key;
+    opt.textContent = ex.name;
+    og.appendChild(opt);
+  }
+  exampleSelect.appendChild(og);
 }
 exampleSelect.addEventListener('change', () => {
   const key = exampleSelect.value;
@@ -453,6 +513,7 @@ exampleSelect.addEventListener('change', () => {
     syncHighlight();
     output.textContent = '';
     renderDiagnostics([]);
+    renderAsserts([]);
     status.textContent = 'Ready';
     status.className = 'info';
     timing.textContent = '';
@@ -483,6 +544,7 @@ window.run = function() {
   if (!loftReady) return;
   output.textContent = '';
   renderDiagnostics([]);
+  renderAsserts([]);
   status.textContent = 'Running…';
   status.className = 'info';
   timing.textContent = '';
@@ -502,11 +564,24 @@ window.run = function() {
   output.textContent = result.output || '';
   const diags = parseDiagnostics(result.diagnostics);
   renderDiagnostics(diags);
-  if (result.success) {
-    status.textContent = diags.length ? `Done (${diags.length} warning${diags.length>1?'s':''})` : 'Success';
+  const asserts = result.asserts || [];
+  renderAsserts(asserts);
+  const assertsFailed = asserts.filter(a => !a.pass).length;
+  if (result.success && assertsFailed === 0) {
+    if (asserts.length > 0) {
+      status.textContent = `Ok — ${asserts.length} test${asserts.length > 1 ? 's' : ''} passed`;
+    } else if (diags.length > 0) {
+      status.textContent = `Done (${diags.length} warning${diags.length>1?'s':''})`;
+    } else {
+      status.textContent = 'Ok';
+    }
     status.className = diags.length ? 'info' : 'ok';
   } else {
-    status.textContent = `Failed (${diags.filter(d=>d.level==='error').length} error${diags.filter(d=>d.level==='error').length>1?'s':''})`;
+    const errors = diags.filter(d=>d.level==='error').length;
+    const parts = [];
+    if (errors > 0) parts.push(`${errors} error${errors>1?'s':''}`);
+    if (assertsFailed > 0) parts.push(`${assertsFailed} test${assertsFailed>1?'s':''} failed`);
+    status.textContent = parts.length > 0 ? `Failed — ${parts.join(', ')}` : 'Failed';
     status.className = 'err';
   }
   timing.textContent = elapsed + ' ms';
