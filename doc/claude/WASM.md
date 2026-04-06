@@ -2905,21 +2905,161 @@ The yield check is one `if` per opcode — a predictable branch that is almost
 always not-taken.  Cost: ~1 ns per opcode on modern CPUs, invisible compared
 to the opcode dispatch itself.
 
+### Safety analysis and mitigations
+
+#### M1. Data ownership — raw pointer to borrowed Data (HIGH)
+
+**Risk:** `execute_argv` stores `data_ptr = std::ptr::from_ref::<Data>(data)` where
+`data` is a borrow from the caller.  If the caller drops `Data` between yield and
+resume, the pointer dangles.
+
+**Mitigation:** `GameSession` **owns** `Data` (moved in, not borrowed).  The current
+`run_pipeline` already owns `p.data` — `compile_and_start` moves it into the session.
+`execute_argv` is replaced by a wrapper that borrows `&session.data` for each resume,
+keeping the borrow live only while the interpreter runs.
+
+```rust
+struct GameSession {
+    state: State,
+    data: Data,         // owned, not borrowed
+}
+```
+
+#### M2. Cleanup after natural completion (MEDIUM)
+
+**Risk:** `execute_argv` lines 1333–1335 pop the synthetic call frame and clear
+`parallel_ctx` after the main loop exits.  With frame-yield, the loop returns early
+on each yield, so cleanup runs only when the program finishes its last frame.
+
+**Mitigation:** Split the loop body into `execute_loop` (the `while` loop only) and
+move cleanup into `finalize()`.  `resume_frame` calls `execute_loop`; when it returns
+without the yield flag set, the program is done — call `finalize` and drop the session.
+
+```rust
+// In resume_frame:
+session.state.execute_loop();
+if session.state.is_finished() {
+    session.state.finalize();
+    *session_slot = None;  // drop the session
+    return false;
+}
+true
+```
+
+#### M3. Re-run disposes old session (MEDIUM)
+
+**Risk:** User clicks "Run" while a game session is still alive.  The old State
+holds GL resource handles (VAOs, shaders, FBOs) that leak if not freed.
+
+**Mitigation:** `compile_and_start` checks the thread-local for an existing session.
+If one exists, it calls `loftHost.gl_destroy_window()` (which frees all GL resources
+on the JS side) and drops the old session before creating the new one.
+
+```rust
+pub fn compile_and_start(files_json: &str) -> String {
+    GAME_STATE.with(|gs| {
+        let mut slot = gs.borrow_mut();
+        if slot.is_some() {
+            // Dispose previous session's GL resources
+            host_call("gl_destroy_window", &js_sys::Array::new());
+            *slot = None;
+        }
+        // ... parse, compile, create new session ...
+    })
+}
+```
+
+#### M4. Panic during resume (MEDIUM)
+
+**Risk:** An opcode panics inside `resume_frame`.  Without cleanup, the session
+remains in the thread-local in an inconsistent state; a subsequent resume would
+access corrupt State.
+
+**Mitigation:** Wrap the resume body in `std::panic::catch_unwind`.  On panic,
+dispose the session, report the error to JavaScript, and return `false`.
+
+```rust
+pub fn resume_frame() -> String {
+    GAME_STATE.with(|gs| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut slot = gs.borrow_mut();
+            let Some(session) = slot.as_mut() else { return false };
+            session.state.execute_loop();
+            if session.state.is_finished() {
+                session.state.finalize();
+                *slot = None;
+                return false;
+            }
+            true
+        }));
+        match result {
+            Ok(running) => /* return status */,
+            Err(panic) => {
+                // Dispose the broken session
+                *gs.borrow_mut() = None;
+                host_call("gl_destroy_window", &js_sys::Array::new());
+                /* return error JSON */
+            }
+        }
+    })
+}
+```
+
+#### M5. Window close / tab navigation (LOW)
+
+**Risk:** `gl_poll_events` always returns `true` in the browser.  The loft program
+loops forever if it uses `if !gl_poll_events() { break }` as the exit condition.
+Navigating away orphans the session.
+
+**Mitigation:** Add a `should_close` flag on the JavaScript side, set by a "Stop"
+button or `beforeunload` event.  `loftHost.gl_poll_events()` returns `false` when
+the flag is set, causing the loft loop to break naturally.
+
+```javascript
+let shouldClose = false;
+document.getElementById('stop-btn').onclick = () => { shouldClose = true; };
+window.addEventListener('beforeunload', () => { shouldClose = true; });
+
+loftHost.gl_poll_events = () => !shouldClose;
+```
+
+#### M6. Debug step counter overflow (LOW)
+
+**Risk:** The `#[cfg(debug_assertions)]` step counter in `execute_argv` accumulates
+across all frames.  At 60fps with ~1000 ops/frame, the 100M limit triggers after
+~28 minutes of gameplay, killing the program.
+
+**Mitigation:** Reset `step = 0` at the start of each `execute_loop` entry (i.e.,
+each `resume_frame` call).  This counts ops-per-frame rather than ops-total, which
+is the useful diagnostic anyway.
+
+### Invariants preserved across yield
+
+These are safe by construction and require no mitigation:
+
+| Component | Why safe |
+|---|---|
+| **Interpreter stack** | Owned by State, heap-allocated, persists between calls |
+| **Call frames** | `call_stack: Vec<CallFrame>` owned by State |
+| **Store/heap records** | `Stores.allocations` owned by State.database |
+| **Text buffers** | `Str` pointers reference store records; no reallocation during yield |
+| **Coroutine frames** | `State.coroutines: Vec<Option<CoroutineFrame>>` persists |
+| **Scope-based freeing** | Yield is inside a scope; `OpFreeRef`/`OpFreeText` emit at scope exit, which hasn't happened |
+| **WebGL context** | GL state persists across JS event loop iterations |
+| **For-loop state** | Counter, limit, jump target are bytecodes — pausing between iterations is safe |
+
 ### Limitations
 
-- **One game session at a time.** The thread-local holds a single `State`.
+- **One game session at a time.** The thread-local holds a single State.
   Multiple simultaneous games would need a session ID or separate Web Workers.
 - **No input between opcodes.** Input is sampled at `gl_poll_events`, not
   continuously.  This is identical to native behaviour and standard for games.
-- **Error handling across yields.** A panic inside the interpreter during
-  `resume_frame` must be caught and reported to JavaScript. The existing
-  `catch_unwind` pattern in `compile_and_run` applies here too.
 
 ### Effort
 
-**S–M** — The interpreter change is ~20 lines. The WASM exports are ~40 lines.
-The gallery JavaScript is ~15 lines.  The main work is testing and edge cases
-(program completion, error recovery, multiple runs).
+**S–M** — The interpreter change is ~20 lines.  The WASM exports are ~60 lines
+(including catch_unwind and session lifecycle).  The gallery JavaScript is ~20 lines.
+Mitigations M1–M4 are structural (ownership, error handling) and add minimal code.
 
 ---
 
