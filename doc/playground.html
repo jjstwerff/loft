@@ -6,16 +6,20 @@
 <title>Loft Playground</title>
 <style>
 :root {
-  --bg: #1a1a2e;
-  --panel: #16213e;
-  --border: #2a3a5e;
-  --text: #e0e0e0;
-  --accent: #4fc3f7;
-  --btn: #2563eb;
-  --btn-hover: #3b82f6;
-  --output-bg: #0f0f1a;
-  --error: #ef5350;
-  --success: #66bb6a;
+  --bg: #1e1e2e;
+  --panel: #181825;
+  --surface: #11111b;
+  --border: #313244;
+  --text: #cdd6f4;
+  --subtext: #6c7086;
+  --accent: #89b4fa;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --yellow: #f9e2af;
+  --blue: #89b4fa;
+  --mauve: #cba6f7;
+  --teal: #94e2d5;
+  --peach: #fab387;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -25,88 +29,155 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px;
+  gap: 12px;
+  padding: 6px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
-header h1 { font-size: 18px; color: var(--accent); }
-header .subtitle { font-size: 13px; color: #8899aa; }
+header h1 { font-size: 16px; color: var(--accent); font-weight: 600; }
 .toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 button {
-  background: var(--btn);
-  color: white;
+  background: var(--accent);
+  color: var(--surface);
   border: none;
-  padding: 6px 16px;
+  padding: 5px 14px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
 }
-button:hover { background: var(--btn-hover); }
-button:disabled { opacity: 0.5; cursor: default; }
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.4; cursor: default; }
 select {
-  background: var(--panel);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
   padding: 4px 8px;
   border-radius: 4px;
-  font-size: 13px;
-}
-.panels {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
-.editor-panel, .output-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.editor-panel { border-right: 1px solid var(--border); }
-.panel-header {
-  padding: 6px 12px;
   font-size: 12px;
+}
+.main { flex: 1; display: flex; min-height: 0; }
+.editor-col { flex: 1; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
+.output-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.pane-header {
+  padding: 4px 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #8899aa;
+  color: var(--subtext);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
-textarea {
+/* Editor with syntax highlighting */
+.editor-wrap {
   flex: 1;
-  background: var(--output-bg);
-  color: var(--text);
-  border: none;
-  padding: 12px;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 14px;
-  line-height: 1.5;
-  resize: none;
-  tab-size: 2;
+  position: relative;
+  overflow: auto;
+  background: var(--surface);
 }
-textarea:focus { outline: none; }
-#output {
+#highlight, #editor {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 10px;
+  tab-size: 2;
   white-space: pre-wrap;
   word-wrap: break-word;
+  border: none;
+  margin: 0;
 }
-.status {
-  padding: 4px 12px;
+#highlight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  color: transparent;
+}
+#editor {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  resize: none;
+  z-index: 1;
+}
+#editor::selection { background: rgba(137, 180, 250, 0.3); }
+/* Syntax colors */
+.hl-kw { color: var(--mauve); }
+.hl-ty { color: var(--yellow); }
+.hl-str { color: var(--green); }
+.hl-num { color: var(--peach); }
+.hl-cm { color: var(--subtext); font-style: italic; }
+.hl-fn { color: var(--blue); }
+.hl-op { color: var(--teal); }
+/* Output */
+#output {
+  flex: 1;
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  border: none;
+  resize: none;
+}
+/* Resizable divider between output and diagnostics */
+.resize-handle {
+  height: 4px;
+  background: var(--border);
+  cursor: ns-resize;
+  flex-shrink: 0;
+}
+.resize-handle:hover { background: var(--accent); }
+/* Diagnostics pane */
+.diag-pane {
+  height: 120px;
+  min-height: 40px;
+  overflow: auto;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.diag-item {
+  padding: 3px 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+}
+.diag-item:hover { background: var(--panel); }
+.diag-error .diag-level { color: var(--red); }
+.diag-warning .diag-level { color: var(--yellow); }
+.diag-loc { color: var(--accent); text-decoration: underline; white-space: nowrap; }
+.diag-msg { color: var(--text); }
+.status-bar {
+  padding: 3px 10px;
+  font-size: 11px;
   background: var(--panel);
   border-top: 1px solid var(--border);
   display: flex;
   gap: 16px;
+  flex-shrink: 0;
 }
-.status .ok { color: var(--success); }
-.status .err { color: var(--error); }
-.status .info { color: #8899aa; }
+.status-bar .ok { color: var(--green); }
+.status-bar .err { color: var(--red); }
+.status-bar .info { color: var(--subtext); }
 #loading {
   position: fixed;
   inset: 0;
@@ -114,7 +185,7 @@ textarea:focus { outline: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   color: var(--accent);
   z-index: 100;
 }
@@ -125,19 +196,18 @@ textarea:focus { outline: none; }
 
 <header>
   <h1>Loft Playground</h1>
-  <span class="subtitle">Write loft code, run it instantly</span>
   <div class="toolbar">
-    <select id="examples">
-      <option value="">— Load example —</option>
-    </select>
+    <select id="examples"><option value="">— Examples —</option></select>
     <button id="run-btn" onclick="run()" disabled>▶ Run</button>
   </div>
 </header>
 
-<div class="panels">
-  <div class="editor-panel">
-    <div class="panel-header">Source</div>
-    <textarea id="editor" spellcheck="false">fn main() {
+<div class="main">
+  <div class="editor-col">
+    <div class="pane-header">Source</div>
+    <div class="editor-wrap">
+      <pre id="highlight" aria-hidden="true"></pre>
+      <textarea id="editor" spellcheck="false">fn main() {
   println("Hello from Loft!");
 
   for i in 1..11 {
@@ -152,43 +222,237 @@ textarea:focus { outline: none; }
     }
   }
 }</textarea>
+    </div>
   </div>
-  <div class="output-panel">
-    <div class="panel-header">Output</div>
-    <textarea id="output" readonly></textarea>
+  <div class="output-col">
+    <div class="pane-header">Output</div>
+    <div id="output"></div>
+    <div class="resize-handle" id="resize-handle"></div>
+    <div class="pane-header">Diagnostics</div>
+    <div class="diag-pane" id="diagnostics"></div>
   </div>
 </div>
 
-<div class="status">
+<div class="status-bar">
   <span id="status" class="info">Ready</span>
   <span id="timing" class="info"></span>
+  <span class="info" style="margin-left:auto">Ctrl+Enter to run</span>
 </div>
 
 <script type="module">
 import init, { compile_and_run } from './pkg/loft.js';
 import { EXAMPLES, EXAMPLE_LIST } from './examples.js';
 
+// ── Syntax highlighting ──────────────────────────────────────────────
+const KEYWORDS = new Set([
+  'fn','if','else','for','in','return','break','continue','struct','enum',
+  'pub','use','match','and','or','not','as','const','true','false','null',
+  'assert','println','let','mut','while','loop','yield','from','import',
+]);
+const TYPES = new Set([
+  'integer','float','single','long','text','boolean','character','vector',
+  'sorted','index','hash','iterator','File','Canvas',
+]);
+
+function highlight(code) {
+  let html = '';
+  let i = 0;
+  const len = code.length;
+  while (i < len) {
+    const c = code[i];
+    // Comments
+    if (c === '/' && code[i+1] === '/') {
+      let end = code.indexOf('\n', i);
+      if (end === -1) end = len;
+      html += `<span class="hl-cm">${esc(code.slice(i, end))}</span>`;
+      i = end;
+      continue;
+    }
+    // Strings
+    if (c === '"' || c === '`') {
+      const q = c;
+      let j = i + 1;
+      while (j < len && code[j] !== q) {
+        if (code[j] === '\\') j++;
+        j++;
+      }
+      j = Math.min(j + 1, len);
+      html += `<span class="hl-str">${esc(code.slice(i, j))}</span>`;
+      i = j;
+      continue;
+    }
+    // Character literals
+    if (c === "'" && i + 2 < len) {
+      let j = i + 1;
+      if (code[j] === '\\') j++;
+      j++;
+      if (j < len && code[j] === "'") {
+        j++;
+        html += `<span class="hl-str">${esc(code.slice(i, j))}</span>`;
+        i = j;
+        continue;
+      }
+    }
+    // Numbers
+    if (/[0-9]/.test(c)) {
+      let j = i;
+      while (j < len && /[0-9._xXa-fA-FeE]/.test(code[j])) j++;
+      if (j < len && code[j] === 'f') j++; // single suffix
+      html += `<span class="hl-num">${esc(code.slice(i, j))}</span>`;
+      i = j;
+      continue;
+    }
+    // Identifiers and keywords
+    if (/[a-zA-Z_]/.test(c)) {
+      let j = i;
+      while (j < len && /[a-zA-Z0-9_]/.test(code[j])) j++;
+      const word = code.slice(i, j);
+      if (KEYWORDS.has(word)) {
+        html += `<span class="hl-kw">${esc(word)}</span>`;
+      } else if (TYPES.has(word)) {
+        html += `<span class="hl-ty">${esc(word)}</span>`;
+      } else if (j < len && code[j] === '(') {
+        html += `<span class="hl-fn">${esc(word)}</span>`;
+      } else {
+        html += esc(word);
+      }
+      i = j;
+      continue;
+    }
+    // Operators
+    if ('+-*/%=<>!&|^~?#@'.includes(c)) {
+      html += `<span class="hl-op">${esc(c)}</span>`;
+      i++;
+      continue;
+    }
+    html += esc(c);
+    i++;
+  }
+  return html + '\n'; // trailing newline keeps scroll in sync
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Diagnostics parsing ──────────────────────────────────────────────
+function parseDiagnostics(text) {
+  if (!text) return [];
+  const items = [];
+  for (const line of text.split('\n')) {
+    const m = line.match(/^(Error|Warning):\s*(.+?)\s+at\s+(.+?):(\d+):(\d+)$/);
+    if (m) {
+      items.push({
+        level: m[1].toLowerCase(),
+        message: m[2],
+        file: m[3],
+        line: parseInt(m[4]),
+        col: parseInt(m[5]),
+      });
+    } else if (line.trim()) {
+      items.push({ level: 'error', message: line.trim(), file: '', line: 0, col: 0 });
+    }
+  }
+  return items;
+}
+
+function renderDiagnostics(items) {
+  const el = document.getElementById('diagnostics');
+  el.innerHTML = '';
+  for (const d of items) {
+    const div = document.createElement('div');
+    div.className = `diag-item diag-${d.level}`;
+    const loc = d.line > 0 ? `${d.line}:${d.col}` : '';
+    div.innerHTML = `<span class="diag-level">${d.level}</span>`
+      + (loc ? `<span class="diag-loc">${loc}</span>` : '')
+      + `<span class="diag-msg">${esc(d.message)}</span>`;
+    if (d.line > 0) {
+      div.addEventListener('click', () => goToLine(d.line, d.col));
+    }
+    el.appendChild(div);
+  }
+}
+
+function goToLine(line, col) {
+  const ed = document.getElementById('editor');
+  const lines = ed.value.split('\n');
+  let pos = 0;
+  for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+    pos += lines[i].length + 1;
+  }
+  pos += Math.max(0, col - 1);
+  ed.focus();
+  ed.setSelectionRange(pos, pos);
+  // Scroll into view
+  const lineHeight = 20.8; // approx
+  ed.scrollTop = Math.max(0, (line - 5) * lineHeight);
+}
+
+// ── Resizable diagnostics pane ───────────────────────────────────────
+const resizeHandle = document.getElementById('resize-handle');
+const diagPane = document.getElementById('diagnostics');
+let resizing = false;
+resizeHandle.addEventListener('mousedown', (e) => {
+  resizing = true;
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!resizing) return;
+  const outputCol = document.querySelector('.output-col');
+  const rect = outputCol.getBoundingClientRect();
+  const newHeight = rect.bottom - e.clientY - 24; // 24 for pane header
+  diagPane.style.height = Math.max(40, Math.min(400, newHeight)) + 'px';
+});
+document.addEventListener('mouseup', () => { resizing = false; });
+
+// ── Editor sync ──────────────────────────────────────────────────────
 const editor = document.getElementById('editor');
+const highlightEl = document.getElementById('highlight');
 const output = document.getElementById('output');
 const status = document.getElementById('status');
 const timing = document.getElementById('timing');
 const runBtn = document.getElementById('run-btn');
 const exampleSelect = document.getElementById('examples');
-const loading = document.getElementById('loading');
 
-// Populate example dropdown from the generated list.
+function syncHighlight() {
+  highlightEl.innerHTML = highlight(editor.value);
+}
+
+editor.addEventListener('input', syncHighlight);
+editor.addEventListener('scroll', () => {
+  highlightEl.scrollTop = editor.scrollTop;
+  highlightEl.scrollLeft = editor.scrollLeft;
+});
+
+// Tab inserts spaces
+editor.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    run();
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const start = editor.selectionStart;
+    editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(editor.selectionEnd);
+    editor.selectionStart = editor.selectionEnd = start + 2;
+    syncHighlight();
+  }
+});
+
+// Examples
 for (const ex of EXAMPLE_LIST) {
   const opt = document.createElement('option');
   opt.value = ex.key;
   opt.textContent = ex.name;
   exampleSelect.appendChild(opt);
 }
-
 exampleSelect.addEventListener('change', () => {
   const key = exampleSelect.value;
   if (key && EXAMPLES[key]) {
     editor.value = EXAMPLES[key];
-    output.value = '';
+    syncHighlight();
+    output.textContent = '';
+    renderDiagnostics([]);
     status.textContent = 'Ready';
     status.className = 'info';
     timing.textContent = '';
@@ -196,21 +460,7 @@ exampleSelect.addEventListener('change', () => {
   exampleSelect.value = '';
 });
 
-// Ctrl+Enter to run
-editor.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault();
-    run();
-  }
-  // Tab inserts 2 spaces
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const start = editor.selectionStart;
-    editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(editor.selectionEnd);
-    editor.selectionStart = editor.selectionEnd = start + 2;
-  }
-});
-
+// ── Run ──────────────────────────────────────────────────────────────
 let loftReady = false;
 
 async function initLoft() {
@@ -218,19 +468,21 @@ async function initLoft() {
     await init();
     loftReady = true;
     runBtn.disabled = false;
-    loading.style.display = 'none';
-    status.textContent = 'Ready — Ctrl+Enter to run';
+    document.getElementById('loading').style.display = 'none';
+    status.textContent = 'Ready';
     status.className = 'ok';
+    syncHighlight();
   } catch (e) {
-    loading.textContent = 'Failed to load: ' + e.message;
-    status.textContent = 'Failed to load WASM';
+    document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
+    status.textContent = 'Failed';
     status.className = 'err';
   }
 }
 
 window.run = function() {
   if (!loftReady) return;
-  output.value = '';
+  output.textContent = '';
+  renderDiagnostics([]);
   status.textContent = 'Running…';
   status.className = 'info';
   timing.textContent = '';
@@ -241,24 +493,20 @@ window.run = function() {
   try {
     result = JSON.parse(compile_and_run(files));
   } catch (e) {
-    output.value = 'Internal error: ' + e.message;
+    output.textContent = 'Internal error: ' + e.message;
     status.textContent = 'Error';
     status.className = 'err';
     return;
   }
   const elapsed = (performance.now() - t0).toFixed(1);
-  if (result.output) {
-    output.value = result.output;
-  }
-  if (result.diagnostics) {
-    if (output.value) output.value += '\n';
-    output.value += result.diagnostics;
-  }
+  output.textContent = result.output || '';
+  const diags = parseDiagnostics(result.diagnostics);
+  renderDiagnostics(diags);
   if (result.success) {
-    status.textContent = 'Success';
-    status.className = 'ok';
+    status.textContent = diags.length ? `Done (${diags.length} warning${diags.length>1?'s':''})` : 'Success';
+    status.className = diags.length ? 'info' : 'ok';
   } else {
-    status.textContent = 'Failed';
+    status.textContent = `Failed (${diags.filter(d=>d.level==='error').length} error${diags.filter(d=>d.level==='error').length>1?'s':''})`;
     status.className = 'err';
   }
   timing.textContent = elapsed + ' ms';
