@@ -53,8 +53,8 @@ void main() {{
     float diff = max(dot(N, L), 0.0);
     float spec = pow(max(dot(N, H), 0.0), mix(8.0, 128.0, 1.0 - uRoughness));
     float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
-    vec3 ambient = uColor * 0.08;
-    vec3 diffuse = uColor * diff * (1.0 - uMetallic);
+    vec3 ambient = uColor * mix(0.15, 0.08, uMetallic);
+    vec3 diffuse = uColor * diff * (1.0 - uMetallic * 0.7);
     vec3 specular = mix(vec3(0.04), uColor, uMetallic) * spec * (1.0 + fresnel);
     FragColor = vec4(ambient + diffuse + specular, 1.0);
 }}
@@ -98,7 +98,7 @@ fn render_native_complete() {
     graphics::gl_set_uniform_float(fn_shader, "uRoughness", 0.9);
     graphics::gl_draw(fn_fvao, fn_fnv);
     // Center pedestal (tall blue cube)
-    fn_pm = math::mat4_mul(math::mat4_translate(0.0, 1.0, 0.0), math::mat4_scale(0.5, 2.0, 0.5));
+    fn_pm = math::mat4_trs(0.0, 1.0, 0.0, 0.0, 0.5, 2.0, 0.5);
     graphics::gl_set_uniform_mat4(fn_shader, "uModel", fn_pm.m);
     graphics::gl_set_uniform_vec3(fn_shader, "uColor", 0.15, 0.3, 0.6);
     graphics::gl_set_uniform_float(fn_shader, "uMetallic", 0.7);
@@ -116,9 +116,7 @@ fn render_native_complete() {
       fn_ca = fn_t * 0.4 + fn_ci as float * 1.5708;
       fn_cx = sin(fn_ca) * 3.0;
       fn_cz = cos(fn_ca) * 3.0;
-      fn_cm = math::mat4_mul(
-        math::mat4_translate(fn_cx, 0.5, fn_cz),
-        math::mat4_rotate_y(fn_t + fn_ci as float));
+      fn_cm = math::mat4_trs(fn_cx, 0.5, fn_cz, fn_t + fn_ci as float, 1.0, 1.0, 1.0);
       graphics::gl_set_uniform_mat4(fn_shader, "uModel", fn_cm.m);
       graphics::gl_set_uniform_vec3(fn_shader, "uColor", 0.9, 0.2, 0.15);
       graphics::gl_set_uniform_float(fn_shader, "uMetallic", 0.0);
@@ -150,12 +148,8 @@ fn export_glb_complete() {
   fn_floor_m = fn_s.add_material(scene::Material { name: "floor",
     base_color_r: 0.3, base_color_g: 0.3, base_color_b: 0.35, base_color_a: 1.0,
     metallic: 0.0, roughness: 0.9 });
-  fn_ped_m = fn_s.add_material(scene::Material { name: "pedestal",
-    base_color_r: 0.15, base_color_g: 0.3, base_color_b: 0.6, base_color_a: 1.0,
-    metallic: 0.7, roughness: 0.2 });
-  fn_gold_m = fn_s.add_material(scene::Material { name: "gold",
-    base_color_r: 1.0, base_color_g: 0.84, base_color_b: 0.0, base_color_a: 1.0,
-    metallic: 1.0, roughness: 0.1 });
+  fn_ped_m = fn_s.add_material(scene::material_metal("pedestal", 0.15, 0.3, 0.6, 0.2));
+  fn_gold_m = fn_s.add_material(scene::material_metal("gold", 1.0, 0.84, 0.0, 0.1));
   fn_red_m = fn_s.add_material(scene::Material { name: "red",
     base_color_r: 0.9, base_color_g: 0.2, base_color_b: 0.15, base_color_a: 1.0,
     metallic: 0.0, roughness: 0.6 });
@@ -163,22 +157,17 @@ fn export_glb_complete() {
     base_color_r: 0.2, base_color_g: 0.8, base_color_b: 0.4, base_color_a: 1.0,
     metallic: 0.3, roughness: 0.4 });
   // Nodes
-  fn_s.add_node(scene::Node { name: "floor", mesh_idx: fn_fi, material_idx: fn_floor_m,
-    transform: math::mat4_identity() });
-  fn_s.add_node(scene::Node { name: "pedestal", mesh_idx: fn_ci, material_idx: fn_ped_m,
-    transform: math::mat4_mul(math::mat4_translate(0.0, 1.0, 0.0), math::mat4_scale(0.5, 2.0, 0.5)) });
-  fn_s.add_node(scene::Node { name: "gold_ball", mesh_idx: fn_si, material_idx: fn_gold_m,
-    transform: math::mat4_translate(0.0, 2.5, 0.0) });
+  fn_s.add_node(scene::node_at("floor", fn_fi, fn_floor_m, math::mat4_identity()));
+  fn_s.add_node(scene::node_at("pedestal", fn_ci, fn_ped_m, math::mat4_trs(0.0, 1.0, 0.0, 0.0, 0.5, 2.0, 0.5)));
+  fn_s.add_node(scene::node_at("gold_ball", fn_si, fn_gold_m, math::mat4_translate(0.0, 2.5, 0.0)));
   for fn_ei in 0..4 {
     fn_ea = fn_ei as float * 1.5708;
-    fn_s.add_node(scene::Node { name: "red_{fn_ei}", mesh_idx: fn_ci, material_idx: fn_red_m,
-      transform: math::mat4_translate(sin(fn_ea) * 3.0, 0.5, cos(fn_ea) * 3.0) });
+    fn_s.add_node(scene::node_at("red_{fn_ei}", fn_ci, fn_red_m, math::mat4_translate(sin(fn_ea) * 3.0, 0.5, cos(fn_ea) * 3.0)));
   }
   for fn_gi in 0..4 {
     fn_gx = if fn_gi % 2 == 0 { -4.0 } else { 4.0 };
     fn_gz = if fn_gi < 2 { -4.0 } else { 4.0 };
-    fn_s.add_node(scene::Node { name: "corner_{fn_gi}", mesh_idx: fn_si, material_idx: fn_green_m,
-      transform: math::mat4_translate(fn_gx, 0.5, fn_gz) });
+    fn_s.add_node(scene::node_at("corner_{fn_gi}", fn_si, fn_green_m, math::mat4_translate(fn_gx, 0.5, fn_gz)));
   }
   fn_s.add_camera(scene::Camera { name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(8.0, 4.0, 0.0), target: math::vec3(0.0, 0.5, 0.0) });

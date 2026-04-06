@@ -616,12 +616,13 @@ impl Stores {
 
     pub fn db_type(&mut self, tp: &crate::data::Type, data: &crate::data::Data) -> u16 {
         match tp {
-            crate::data::Type::Integer(minimum, _, _) => {
-                let s = tp.size(true);
+            crate::data::Type::Integer(minimum, _, not_null) => {
+                let nullable = !not_null;
+                let s = tp.size(nullable);
                 if s == 1 {
-                    self.byte(*minimum, true)
+                    self.byte(*minimum, nullable)
                 } else if s == 2 {
-                    self.short(*minimum, true)
+                    self.short(*minimum, nullable)
                 } else {
                     self.name("integer")
                 }

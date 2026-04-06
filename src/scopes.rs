@@ -443,10 +443,31 @@ impl Scopes {
         self.find_first_ref_vars(t_val, function, &mut pre_inits);
         self.find_first_ref_vars(f_val, function, &mut pre_inits);
 
+        // Also find small variables assigned in BOTH branches (or an else-if chain).
+        let mut small_both: Vec<u16> = Vec::new();
+        let mut t_vars: Vec<u16> = Vec::new();
+        let mut f_vars: Vec<u16> = Vec::new();
+        Self::find_assigned_vars(t_val, &self.var_mapping, &mut t_vars);
+        Self::find_assigned_vars(f_val, &self.var_mapping, &mut f_vars);
+        for &v in &t_vars {
+            if f_vars.contains(&v)
+                && !self.var_scope.contains_key(&v)
+                && !pre_inits.contains(&v)
+                && !needs_pre_init(function.tp(v))
+            {
+                small_both.push(v);
+            }
+        }
+
         // Register pre-inited vars in var_scope BEFORE scanning branches so that
         // the branch scans see them as already assigned and use the set_var/OpPutRef
         // re-assignment path instead of claim().
         for &v in &pre_inits {
+            self.var_scope.insert(v, self.scope);
+            self.var_order.push(v);
+        }
+        // Register small variables assigned in both branches at the parent scope too.
+        for &v in &small_both {
             self.var_scope.insert(v, self.scope);
             self.var_order.push(v);
         }
@@ -474,6 +495,42 @@ impl Scopes {
         }
         stmts.push(scanned_if);
         Value::Insert(stmts)
+    }
+
+    fn find_assigned_vars(val: &Value, mapping: &HashMap<u16, u16>, result: &mut Vec<u16>) {
+        match val {
+            Value::Set(v, inner) => {
+                let resolved = *mapping.get(v).unwrap_or(v);
+                if !result.contains(&resolved) {
+                    result.push(resolved);
+                }
+                Self::find_assigned_vars(inner, mapping, result);
+            }
+            Value::Block(bl) => {
+                for op in &bl.operators {
+                    Self::find_assigned_vars(op, mapping, result);
+                }
+            }
+            Value::If(c, t, f) => {
+                Self::find_assigned_vars(c, mapping, result);
+                Self::find_assigned_vars(t, mapping, result);
+                Self::find_assigned_vars(f, mapping, result);
+            }
+            Value::Insert(ops) => {
+                for op in ops {
+                    Self::find_assigned_vars(op, mapping, result);
+                }
+            }
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args {
+                    Self::find_assigned_vars(a, mapping, result);
+                }
+            }
+            Value::Drop(inner) | Value::Return(inner) => {
+                Self::find_assigned_vars(inner, mapping, result);
+            }
+            _ => {}
+        }
     }
 
     /// Convert the content of loops and blocks
@@ -602,8 +659,9 @@ impl Scopes {
                 // declared return type.  When a closure escapes via implicit return,
                 // the block result type may lack the dep that was propagated to the
                 // function's declared return type (vectors.rs:704-711).
-                let in_ret =
-                    tp.depend().contains(&v) || data.def(self.d_nr).returned.depend().contains(&v);
+                let in_ret = tp.depend().contains(&v)
+                    || data.def(self.d_nr).returned.depend().contains(&v)
+                    || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
                 let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
@@ -910,12 +968,19 @@ fn check_ref_leaks(
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, free_ref_nr, &mut freed);
 
-    let ret_deps: HashSet<u16> = ret_type.depend().into_iter().collect();
+    let mut ret_deps: HashSet<u16> = ret_type.depend().into_iter().collect();
     // The directly-returned variable (e.g. the owned struct constructed by a function
     // whose return type is Reference) passes ownership to the caller — no FreeRef is
     // emitted for it and that is correct.  Exclude it so check_ref_leaks does not
     // false-positive on `fn foo() -> S { S { ... } }`.
     let direct_ret_var = returned_var(ir);
+    // Transitive: if the returned variable depends on another variable, that
+    // variable's store must also survive — include it in ret_deps.
+    if direct_ret_var != u16::MAX {
+        for d in function.tp(direct_ret_var).depend() {
+            ret_deps.insert(d);
+        }
+    }
 
     for (&v, &scope) in var_scope {
         if scope == 0 {

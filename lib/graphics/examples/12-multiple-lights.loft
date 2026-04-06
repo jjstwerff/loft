@@ -98,9 +98,7 @@ fn render_native_ml() {
     graphics::gl_set_uniform_mat4(ml_shader, "uView", ml_view.m);
     graphics::gl_set_uniform_mat4(ml_shader, "uProj", ml_proj.m);
     for ml_i in 0..3 {
-      ml_model = math::mat4_mul(
-        math::mat4_translate(ml_positions[ml_i].x, ml_positions[ml_i].y, ml_positions[ml_i].z),
-        math::mat4_rotate_y(ml_t * (0.5 + ml_i as float * 0.3)));
+      ml_model = math::mat4_trs(ml_positions[ml_i].x, ml_positions[ml_i].y, ml_positions[ml_i].z, ml_t * (0.5 + ml_i as float * 0.3), 1.0, 1.0, 1.0);
       graphics::gl_set_uniform_mat4(ml_shader, "uModel", ml_model.m);
       ml_c = ml_colors[ml_i];
       graphics::gl_set_uniform_vec3(ml_shader, "uObjectColor", ml_c.x, ml_c.y, ml_c.z);
@@ -115,14 +113,13 @@ fn export_glb_ml() {
   ml_s = scene::Scene { name: "multiple_lights" };
   ml_mi = ml_s.add_mesh(mesh::cube());
   ml_mats = [
-    ml_s.add_material(scene::Material { name: "red", base_color_r: 1.0, base_color_g: 0.3, base_color_b: 0.3, base_color_a: 1.0, metallic: 0.0, roughness: 0.5 }),
-    ml_s.add_material(scene::Material { name: "green", base_color_r: 0.3, base_color_g: 1.0, base_color_b: 0.3, base_color_a: 1.0, metallic: 0.0, roughness: 0.5 }),
-    ml_s.add_material(scene::Material { name: "blue", base_color_r: 0.3, base_color_g: 0.3, base_color_b: 1.0, base_color_a: 1.0, metallic: 0.0, roughness: 0.5 })
+    ml_s.add_material(scene::material_color("red", 1.0, 0.3, 0.3)),
+    ml_s.add_material(scene::material_color("green", 0.3, 1.0, 0.3)),
+    ml_s.add_material(scene::material_color("blue", 0.3, 0.3, 1.0))
   ];
   for ml_n in 0..3 {
     ml_x = (ml_n - 1) as float * 2.0;
-    ml_s.add_node(scene::Node { name: "cube_{ml_n}", mesh_idx: ml_mi, material_idx: ml_mats[ml_n],
-      transform: math::mat4_translate(ml_x, 0.0, 0.0) });
+    ml_s.add_node(scene::node_at("cube_{ml_n}", ml_mi, ml_mats[ml_n], math::mat4_translate(ml_x, 0.0, 0.0)));
   }
   ml_s.add_camera(scene::Camera { name: "main", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(3.0, 3.0, 5.0), target: math::vec3(0.0, 0.0, 0.0) });

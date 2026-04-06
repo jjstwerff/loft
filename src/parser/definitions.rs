@@ -493,7 +493,7 @@ impl Parser {
                     "Expected type variable name after '<'"
                 );
             }
-            self.lexer.token(">");
+            self.lexer.closing_angle();
         }
         let mut arguments = Vec::new();
         if self.lexer.token("(") {
@@ -1000,7 +1000,7 @@ impl Parser {
                         Type::Hash(sub_nr, f, Vec::new())
                     }
                     "vector" => {
-                        self.lexer.token(">");
+                        self.lexer.closing_angle();
                         Type::Vector(Box::new(tp), Vec::new())
                     }
                     "sorted" => {
@@ -1009,7 +1009,7 @@ impl Parser {
                     }
                     "spacial" => {
                         // Consume remaining ", field, ..." tokens up to the closing >.
-                        while !self.lexer.has_token(">") {
+                        while !self.lexer.has_closing_angle() {
                             self.lexer.has_token(",");
                             self.lexer.has_identifier();
                         }
@@ -1021,7 +1021,7 @@ impl Parser {
                         Type::Unknown(0)
                     }
                     "reference" => {
-                        self.lexer.token(">");
+                        self.lexer.closing_angle();
                         self.data.set_referenced(sub_nr, on_d, Value::Null);
                         Type::Reference(sub_nr, Vec::new())
                     }
@@ -1045,7 +1045,7 @@ impl Parser {
                                 diagnostic!(self.lexer, Level::Error, "Expect an iterator type");
                             }
                         }
-                        self.lexer.token(">");
+                        self.lexer.closing_angle();
                         Type::Iterator(Box::new(tp), Box::new(it_tp))
                     }
                     _ => {
@@ -1105,7 +1105,7 @@ impl Parser {
             }
         }
         self.lexer.token("]");
-        self.lexer.token(">");
+        self.lexer.closing_angle();
     }
 
     // <field_limit> ::= 'limit' '(' [ '-' ] <min-integer> ',' [ '-' ] <max-integer> ')'
@@ -1434,6 +1434,12 @@ impl Parser {
                     self.lexer.token(")");
                 } else if let Some(tp) = self.parse_type(d_nr, &id, false) {
                     defined = true;
+                    // If the type carries a not-null flag (e.g. integer not null),
+                    // propagate it to the field's nullable flag so is_null and
+                    // redundant-null-check warnings work correctly.
+                    if let Type::Integer(_, _, true) = &tp {
+                        nullable = false;
+                    }
                     a_type = tp;
                     // '= expr' shorthand for a field default value
                     if self.lexer.has_token("=") {

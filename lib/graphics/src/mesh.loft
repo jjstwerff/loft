@@ -110,7 +110,7 @@ pub fn plane(pn: text, pw: float, pd: float) -> Mesh {
   pv1 = pm.add_vertex(vertex(math::vec3( hw, 0.0, -hd), pn_v, math::vec2(1.0, 0.0)));
   pv2 = pm.add_vertex(vertex(math::vec3( hw, 0.0,  hd), pn_v, math::vec2(1.0, 1.0)));
   pv3 = pm.add_vertex(vertex(math::vec3(-hw, 0.0,  hd), pn_v, math::vec2(0.0, 1.0)));
-  pm.add_quad(pv0, pv1, pv2, pv3);
+  pm.add_quad(pv0, pv3, pv2, pv1);
   pm
 }
 

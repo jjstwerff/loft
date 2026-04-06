@@ -82,19 +82,38 @@ void main() {{
 }}
 `;
 
-fn draw_scene(ds_shader: integer, ds_cvao: integer, ds_cnv: integer,
-              ds_pvao: integer, ds_pnv: integer, ds_t: float) {
+fn draw_scene_depth(ds_shader: integer, ds_cvao: integer, ds_cnv: integer,
+                    ds_pvao: integer, ds_pnv: integer, ds_t: float) {
   // Floor
   ds_fm = math::mat4_identity();
   graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_fm.m);
   graphics::gl_draw(ds_pvao, ds_pnv);
   // Cube 1
-  ds_cm1 = math::mat4_mul(math::mat4_translate(-1.0, 0.5, 0.0), math::mat4_rotate_y(ds_t * 0.5));
+  ds_cm1 = math::mat4_trs(-1.0, 0.5, 0.0, ds_t * 0.5, 1.0, 1.0, 1.0);
   graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_cm1.m);
   graphics::gl_draw(ds_cvao, ds_cnv);
   // Cube 2
-  ds_cm2 = math::mat4_mul(math::mat4_translate(1.5, 0.5, -1.0), math::mat4_rotate_y(ds_t * 0.3));
+  ds_cm2 = math::mat4_trs(1.5, 0.5, -1.0, ds_t * 0.3, 1.0, 1.0, 1.0);
   graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_cm2.m);
+  graphics::gl_draw(ds_cvao, ds_cnv);
+}
+
+fn draw_scene_color(ds_shader: integer, ds_cvao: integer, ds_cnv: integer,
+                    ds_pvao: integer, ds_pnv: integer, ds_t: float) {
+  // Floor
+  ds_fm = math::mat4_identity();
+  graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_fm.m);
+  graphics::gl_set_uniform_vec3(ds_shader, "uObjectColor", 0.6, 0.6, 0.65);
+  graphics::gl_draw(ds_pvao, ds_pnv);
+  // Cube 1
+  ds_cm1 = math::mat4_trs(-1.0, 0.5, 0.0, ds_t * 0.5, 1.0, 1.0, 1.0);
+  graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_cm1.m);
+  graphics::gl_set_uniform_vec3(ds_shader, "uObjectColor", 0.85, 0.2, 0.15);
+  graphics::gl_draw(ds_cvao, ds_cnv);
+  // Cube 2
+  ds_cm2 = math::mat4_trs(1.5, 0.5, -1.0, ds_t * 0.3, 1.0, 1.0, 1.0);
+  graphics::gl_set_uniform_mat4(ds_shader, "uModel", ds_cm2.m);
+  graphics::gl_set_uniform_vec3(ds_shader, "uObjectColor", 0.2, 0.35, 0.85);
   graphics::gl_draw(ds_cvao, ds_cnv);
 }
 
@@ -122,9 +141,9 @@ fn main() {
     math::vec3(4.0, 4.0, 6.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   // Light (directional, from upper-left)
   sm_light_dir = math::vec3(-2.0, -4.0, -1.0);
-  sm_light_proj = math::mat4_perspective(1.2, 1.0, 1.0, 20.0);
+  sm_light_proj = math::mat4_ortho(-8.0, 8.0, -8.0, 8.0, 0.1, 20.0);
   sm_light_view = math::mat4_look_at(
-    math::vec3(2.0, 4.0, 1.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+    math::vec3(4.0, 8.0, 2.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   sm_light_vp = math::mat4_mul(sm_light_proj, sm_light_view);
   sm_start = ticks();
   graphics::gl_enable(graphics::GL_CULL_FACE);
@@ -137,7 +156,7 @@ fn main() {
     graphics::gl_clear(graphics::rgba(0, 0, 0, 255));
     graphics::gl_use_shader(sm_shadow_shader);
     graphics::gl_set_uniform_mat4(sm_shadow_shader, "uLightMVP", sm_light_vp.m);
-    draw_scene(sm_shadow_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
+    draw_scene_depth(sm_shadow_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
     // Pass 2: render with shadows
     graphics::gl_bind_framebuffer(0);
     graphics::gl_viewport(0, 0, 800, 600);
@@ -147,10 +166,9 @@ fn main() {
     graphics::gl_set_uniform_mat4(sm_scene_shader, "uProj", sm_proj.m);
     graphics::gl_set_uniform_mat4(sm_scene_shader, "uLightMVP", sm_light_vp.m);
     graphics::gl_set_uniform_vec3(sm_scene_shader, "uLightDir", sm_light_dir.x, sm_light_dir.y, sm_light_dir.z);
-    graphics::gl_set_uniform_vec3(sm_scene_shader, "uObjectColor", 0.7, 0.7, 0.75);
     graphics::gl_bind_texture(sm_depth_tex, 0);
     graphics::gl_set_uniform_int(sm_scene_shader, "uShadowMap", 0);
-    draw_scene(sm_scene_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
+    draw_scene_color(sm_scene_shader, sm_cvao, sm_cnv, sm_pvao, sm_pnv, sm_t);
     graphics::gl_swap_buffers();
   }
   graphics::gl_destroy_window();

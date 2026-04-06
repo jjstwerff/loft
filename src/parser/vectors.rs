@@ -1426,7 +1426,14 @@ impl Parser {
                 )
             };
             ls.push(v_set(elm, app_v));
-            if let Type::Reference(inner_nr, _) = in_t {
+            if matches!(
+                in_t,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) {
+                let inner_nr = match in_t {
+                    Type::Reference(nr, _) => *nr,
+                    _ => self.data.type_def_nr(in_t),
+                };
                 if let Value::Insert(steps) = p {
                     // Inline struct initialization: the steps already write fields into elm.
                     for l in steps {
@@ -1438,7 +1445,7 @@ impl Parser {
                     let type_nr = if self.first_pass {
                         Value::Int(i32::from(u16::MAX))
                     } else {
-                        Value::Int(i32::from(self.data.def(*inner_nr).known_type))
+                        Value::Int(i32::from(self.data.def(inner_nr).known_type))
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }

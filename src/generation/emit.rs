@@ -383,6 +383,7 @@ impl Output<'_> {
         true_v: &Value,
         false_v: &Value,
     ) -> std::io::Result<()> {
+        self.pre_declare_branch_vars(w, true_v, false_v)?;
         write!(w, "if ")?;
         let b_true = matches!(*true_v, Value::Block(_));
         let b_false = matches!(*false_v, Value::Block(_));
@@ -422,6 +423,65 @@ impl Output<'_> {
             write!(w, "}}")?;
         }
         Ok(())
+    }
+
+    fn pre_declare_branch_vars(
+        &mut self,
+        w: &mut dyn Write,
+        true_v: &Value,
+        false_v: &Value,
+    ) -> std::io::Result<()> {
+        let mut t_vars: Vec<u16> = Vec::new();
+        let mut f_vars: Vec<u16> = Vec::new();
+        Self::collect_set_vars(true_v, &mut t_vars);
+        Self::collect_set_vars(false_v, &mut f_vars);
+        let variables = &self.data.def(self.def_nr).variables;
+        for &v in &t_vars {
+            if f_vars.contains(&v) && !self.declared.contains(&v) {
+                let name = sanitize(variables.name(v));
+                let tp_str = rust_type(variables.tp(v), &Context::Variable);
+                let default = default_native_value(variables.tp(v));
+                writeln!(w, "let mut var_{name}: {tp_str} = {default};")?;
+                self.indent(w)?;
+                self.declared.insert(v);
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_set_vars(val: &Value, result: &mut Vec<u16>) {
+        match val {
+            Value::Set(v, inner) => {
+                if !result.contains(v) {
+                    result.push(*v);
+                }
+                Self::collect_set_vars(inner, result);
+            }
+            Value::Block(bl) => {
+                for op in &bl.operators {
+                    Self::collect_set_vars(op, result);
+                }
+            }
+            Value::If(c, t, f) => {
+                Self::collect_set_vars(c, result);
+                Self::collect_set_vars(t, result);
+                Self::collect_set_vars(f, result);
+            }
+            Value::Insert(ops) => {
+                for op in ops {
+                    Self::collect_set_vars(op, result);
+                }
+            }
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args {
+                    Self::collect_set_vars(a, result);
+                }
+            }
+            Value::Drop(inner) | Value::Return(inner) => {
+                Self::collect_set_vars(inner, result);
+            }
+            _ => {}
+        }
     }
 
     /// Use this to emit a scoped sequence of operators with an optional return value.

@@ -7,7 +7,7 @@
 fn my_native_add(a: integer, b: integer) -> integer;
 #native "n_my_native_add"
 
-// @EXPECT_FAIL: native function 'n_my_native_add' not loaded
+// @EXPECT_FAIL: native function not loaded
 fn test_native_stub_panics() {
   result = my_native_add(1, 2);
   assert(result == 3, "should not reach here");

@@ -415,7 +415,7 @@ impl Stores {
             self.store_mut(to).set_int(to.rec, to.pos, 0);
             return;
         }
-        let into = self.store_mut(to).claim(1 + (size * cur).div_ceil(8));
+        let into = self.store_mut(to).claim(1 + (size * length).div_ceil(8));
         debug_assert!(
             i32::try_from(into).is_ok(),
             "vector allocation offset overflow: {into}"

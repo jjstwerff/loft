@@ -1790,6 +1790,9 @@ impl Parser {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
                         let wv = self.vars.work_text(&mut self.lexer);
+                        // A5.6f: clear the work buffer before each call so loop
+                        // iterations start fresh (matches fn-ref path in control.rs).
+                        ls.push(v_set(wv, Value::Text(String::new())));
                         if default != Value::Null
                             && if let Value::Text(t) = &default {
                                 !t.is_empty()

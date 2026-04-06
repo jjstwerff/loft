@@ -85,8 +85,7 @@ fn render_native_materials() {
     graphics::gl_use_shader(mt_shader);
     graphics::gl_set_uniform_vec3(mt_shader, "uLightPos", mt_light.x, mt_light.y, mt_light.z);
     // Cube: rough red material on the left
-    mt_cube_model = math::mat4_mul(
-      math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(mt_t * 0.3));
+    mt_cube_model = math::mat4_trs(-1.5, 0.0, 0.0, mt_t * 0.3, 1.0, 1.0, 1.0);
     mt_cube_mvp = math::mat4_mul(mt_proj, math::mat4_mul(mt_view, mt_cube_model));
     graphics::gl_set_uniform_mat4(mt_shader, "uMVP", mt_cube_mvp.m);
     graphics::gl_set_uniform_mat4(mt_shader, "uModel", mt_cube_model.m);
@@ -113,15 +112,9 @@ fn export_glb_materials() {
   mt_rm = mt_s.add_material(scene::Material {
     name: "rough_red", base_color_r: 0.8, base_color_g: 0.2, base_color_b: 0.1,
     base_color_a: 1.0, metallic: 0.0, roughness: 0.9 });
-  mt_gm = mt_s.add_material(scene::Material {
-    name: "shiny_gold", base_color_r: 1.0, base_color_g: 0.84, base_color_b: 0.0,
-    base_color_a: 1.0, metallic: 1.0, roughness: 0.1 });
-  mt_s.add_node(scene::Node {
-    name: "cube", mesh_idx: mt_ci, material_idx: mt_rm,
-    transform: math::mat4_translate(-1.5, 0.0, 0.0) });
-  mt_s.add_node(scene::Node {
-    name: "sphere", mesh_idx: mt_si, material_idx: mt_gm,
-    transform: math::mat4_translate(1.5, 0.0, 0.0) });
+  mt_gm = mt_s.add_material(scene::material_metal("shiny_gold", 1.0, 0.84, 0.0, 0.1));
+  mt_s.add_node(scene::node_at("cube", mt_ci, mt_rm, math::mat4_translate(-1.5, 0.0, 0.0)));
+  mt_s.add_node(scene::node_at("sphere", mt_si, mt_gm, math::mat4_translate(1.5, 0.0, 0.0)));
   mt_s.add_camera(scene::Camera {
     name: "main", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(3.0, 3.0, 5.0),

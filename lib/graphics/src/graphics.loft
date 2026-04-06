@@ -638,6 +638,37 @@ pub fn gl_load_font(path: text) -> integer;
 pub fn gl_measure_text(font: integer, content: text, size: float) -> float;
 #native "loft_gl_measure_text"
 
+// Return the line height in pixels for a font at the given size.
+pub fn gl_text_height(font: integer, size: float) -> integer;
+#native "loft_text_height"
+
+// Rasterize text into a pre-allocated integer buffer of alpha values (0-255).
+fn rasterize_text_into(font: integer, content: text, size: float, buf: vector<integer>) -> integer;
+#native "loft_rasterize_text_into"
+
+pub fn draw_text(self: Canvas, font: integer, content: text, size: float,
+                 dt_x: integer, dt_y: integer, color: integer) {
+  dt_tw = gl_measure_text(font, content, size) as integer + 1;
+  dt_th = gl_text_height(font, size);
+  if dt_tw <= 0 or dt_th <= 0 { return; }
+  dt_buf = [for _ in 0..dt_tw * dt_th { 0 }];
+  dt_bw = rasterize_text_into(font, content, size, dt_buf);
+  if dt_bw <= 0 { return; }
+  dt_cr = color_r(color);
+  dt_cg = color_g(color);
+  dt_cb = color_b(color);
+  for dt_by in 0..dt_th {
+    for dt_bx in 0..dt_bw {
+      dt_idx = dt_by * dt_bw + dt_bx;
+      if dt_idx >= dt_buf.len() { break; }
+      dt_a = dt_buf[dt_idx];
+      if dt_a > 0 {
+        self.blend_pixel(dt_x + dt_bx, dt_y + dt_by, rgba(dt_cr, dt_cg, dt_cb, dt_a));
+      }
+    }
+  }
+}
+
 // --- Textures (GL5.5) ---
 
 // Load an image file (PNG, JPG) and upload it as a GL texture.
@@ -647,7 +678,7 @@ pub fn gl_load_texture(path: text) -> integer;
 
 // Upload Canvas pixel data as a GL texture. Returns the texture ID.
 // Converts 0xAARRGGBB packed integers to RGBA bytes for OpenGL.
-pub fn gl_upload_canvas(data: const vector<integer>, width: integer, height: integer) -> integer;
+pub fn gl_upload_canvas(data: vector<integer>, width: integer, height: integer) -> integer;
 #native "loft_gl_upload_canvas"
 
 // Bind a texture to a texture unit (0-based) for rendering.

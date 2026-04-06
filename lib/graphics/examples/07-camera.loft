@@ -88,10 +88,7 @@ fn export_glb_camera() {
     base_color_a: 1.0, metallic: 0.0, roughness: 0.6
   };
   ca_mati = ca_s.add_material(ca_mat);
-  ca_s.add_node(scene::Node {
-    name: "cube", mesh_idx: ca_mi, material_idx: ca_mati,
-    transform: math::mat4_identity()
-  });
+  ca_s.add_node(scene::node_at("cube", ca_mi, ca_mati, math::mat4_identity()));
   ca_s.add_camera(scene::Camera {
     name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(4.0, 2.0, 0.0),
