@@ -1426,8 +1426,10 @@ impl Parser {
                 )
             };
             ls.push(v_set(elm, app_v));
-            if matches!(in_t, Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _))
-            {
+            if matches!(
+                in_t,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) {
                 let inner_nr = match in_t {
                     Type::Reference(nr, _) => *nr,
                     _ => self.data.type_def_nr(in_t),
