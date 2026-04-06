@@ -332,6 +332,7 @@ impl Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
             #[cfg(not(feature = "wasm"))]
@@ -395,6 +396,7 @@ impl Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
             #[cfg(not(feature = "wasm"))]

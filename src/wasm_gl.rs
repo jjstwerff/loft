@@ -160,6 +160,8 @@ fn wgl_swap_buffers(_stores: &mut Stores, _stack: &mut DbRef) {
     {
         let args = js_sys::Array::new();
         gl_call("gl_swap_buffers", &args);
+        // FY.1: signal the interpreter to yield back to JavaScript.
+        _stores.frame_yield = true;
     }
 }
 

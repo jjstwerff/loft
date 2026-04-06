@@ -24,6 +24,20 @@
 export function compile_and_run(files_json: string): string;
 
 /**
+ * Start a game session: parse, compile, execute until the first frame yield.
+ * Returns JSON `{"ok":true}` on success or `{"ok":false,"error":"..."}` on failure.
+ */
+export function compile_and_start(files_json: string): string;
+
+/**
+ * Resume execution after a frame yield.  Returns JSON:
+ * `{"running":true}` — yielded again, call on next requestAnimationFrame
+ * `{"running":false,"output":"..."}` — program finished
+ * `{"running":false,"error":"..."}` — program crashed
+ */
+export function resume_frame(): string;
+
+/**
  * W1.18-2: Entry point called by each Worker Thread.  The JS worker loop calls
  * this with the function index and element range.  The worker reads from the
  * shared WASM memory (Store heap) and writes results directly back.
@@ -39,6 +53,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly compile_and_run: (a: number, b: number) => [number, number];
+    readonly compile_and_start: (a: number, b: number) => [number, number];
+    readonly resume_frame: () => [number, number];
     readonly worker_entry: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

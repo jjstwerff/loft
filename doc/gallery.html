@@ -149,6 +149,7 @@ select {
   <div class="toolbar">
     <select id="examples"><option value="">-- Select example --</option></select>
     <button id="run-btn" onclick="runExample()" disabled>&#9654; Run</button>
+    <button onclick="shouldClose=true">&#9632; Stop</button>
   </div>
 </header>
 
@@ -170,7 +171,7 @@ select {
 </div>
 
 <script type="module">
-import init, { compile_and_run } from './pkg/loft.js';
+import init, { compile_and_run, compile_and_start, resume_frame } from './pkg/loft.js';
 
 // ── Graphics examples (embedded) ────────────────────────────────────────────
 const EXAMPLES = {
@@ -313,8 +314,7 @@ Object.assign(window.loftHost, {
   },
 
   gl_poll_events() {
-    frameCount++;
-    return true;  // no close button in browser
+    return !shouldClose;
   },
 
   gl_swap_buffers() {
@@ -602,11 +602,35 @@ Object.assign(window.loftHost, {
     }
   },
 
-  gl_key_pressed(keyCode) { return false; },
-  gl_mouse_x() { return 0.0; },
-  gl_mouse_y() { return 0.0; },
-  gl_mouse_button() { return 0; },
+  gl_key_pressed(keyCode) { return keys.has(keyCode); },
+  gl_mouse_x() { return mouseX; },
+  gl_mouse_y() { return mouseY; },
+  gl_mouse_button() { return mouseBtn; },
 });
+
+// ── GL6.6 Keyboard + mouse input ────────────────────────────────────────────
+const keys = new Set();
+let mouseX = 0, mouseY = 0, mouseBtn = 0;
+let shouldClose = false;
+
+function mapKeyCode(code) {
+  if (code.startsWith('Key')) return code.charCodeAt(3);
+  if (code.startsWith('Digit')) return code.charCodeAt(5);
+  const special = { ArrowUp:128, ArrowDown:129, ArrowLeft:130, ArrowRight:131,
+                    ShiftLeft:132, ShiftRight:132, ControlLeft:133, ControlRight:133,
+                    Space:32, Enter:13, Escape:27, Tab:9 };
+  return special[code] || 0;
+}
+canvas.tabIndex = 0;
+canvas.addEventListener('keydown', e => { keys.add(mapKeyCode(e.code)); e.preventDefault(); });
+canvas.addEventListener('keyup', e => keys.delete(mapKeyCode(e.code)));
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouseX = e.clientX - r.left;
+  mouseY = e.clientY - r.top;
+});
+canvas.addEventListener('mousedown', e => { mouseBtn |= (1 << e.button); });
+canvas.addEventListener('mouseup', e => { mouseBtn &= ~(1 << e.button); });
 
 // ── UI ───────────────────────────────────────────────────────────────────────
 const exampleSelect = document.getElementById('examples');
@@ -659,38 +683,75 @@ async function initLoft() {
   }
 }
 
+let animFrame = 0;
+let frameCount = 0;
+
 window.runExample = function() {
   if (!loftReady || !currentSource) return;
+  // Stop previous session
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = 0; }
+  shouldClose = false;
   outputEl.textContent = '';
-  statusEl.textContent = 'Running...';
+  statusEl.textContent = 'Compiling...';
   statusEl.className = 'info';
   timingEl.textContent = '';
+  frameCount = 0;
 
   const files = JSON.stringify([{ name: 'main.loft', content: currentSource }]);
-  const t0 = performance.now();
   let result;
   try {
-    result = JSON.parse(compile_and_run(files));
+    result = JSON.parse(compile_and_start(files));
   } catch (e) {
     outputEl.textContent = 'Internal error: ' + e.message;
     statusEl.textContent = 'Error';
     statusEl.className = 'err';
     return;
   }
-  const elapsed = (performance.now() - t0).toFixed(1);
 
-  let out = result.output || '';
-  if (result.diagnostics) out += result.diagnostics;
-  outputEl.textContent = out;
-
-  if (result.success) {
-    statusEl.textContent = 'Ok';
-    statusEl.className = 'ok';
-  } else {
+  if (!result.ok) {
+    outputEl.textContent = result.error || 'Compilation failed';
     statusEl.textContent = 'Failed';
     statusEl.className = 'err';
+    return;
   }
-  timingEl.textContent = elapsed + ' ms';
+
+  if (!result.running) {
+    // Program finished without yielding (no render loop)
+    outputEl.textContent = result.output || '';
+    statusEl.textContent = 'Ok';
+    statusEl.className = 'ok';
+    return;
+  }
+
+  // Frame loop
+  statusEl.textContent = 'Running';
+  statusEl.className = 'ok';
+  canvas.focus();
+
+  function frame() {
+    frameCount++;
+    let r;
+    try {
+      r = JSON.parse(resume_frame());
+    } catch (e) {
+      outputEl.textContent = 'Runtime error: ' + e.message;
+      statusEl.textContent = 'Error';
+      statusEl.className = 'err';
+      animFrame = 0;
+      return;
+    }
+    if (r.running && !shouldClose) {
+      timingEl.textContent = `frame ${frameCount}`;
+      animFrame = requestAnimationFrame(frame);
+    } else {
+      animFrame = 0;
+      outputEl.textContent = r.output || r.error || '';
+      statusEl.textContent = r.error ? 'Error' : 'Done';
+      statusEl.className = r.error ? 'err' : 'ok';
+      timingEl.textContent = `${frameCount} frames`;
+    }
+  }
+  animFrame = requestAnimationFrame(frame);
 };
 
 initLoft();

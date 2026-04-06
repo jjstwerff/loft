@@ -133,6 +133,9 @@ pub struct Stores {
     /// (where the error is logged instead of aborting).  `main.rs` checks this after
     /// execution and exits with code 1 so shell scripts can detect failure.
     pub had_fatal: bool,
+    /// FY.1: When true, the interpreter loop yields back to the caller.
+    /// Set by `gl_swap_buffers` in WASM mode; cleared by `resume_frame`.
+    pub frame_yield: bool,
     /// When true, assert() reports results (pass/fail) to `assert_results`
     /// instead of panicking on failure.  Used by the WASM playground.
     pub report_asserts: bool,
@@ -179,6 +182,7 @@ impl Clone for Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
             #[cfg(not(feature = "wasm"))]
@@ -434,6 +438,7 @@ impl Stores {
             parallel_ctx: None,
             logger: None,
             had_fatal: false,
+            frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
             #[cfg(not(feature = "wasm"))]
