@@ -216,23 +216,26 @@ fn patch_shader(src: &str) -> String {
         if let Some(pos) = result.find("#version 300 es") {
             let end = pos + "#version 300 es".len();
             let newline_end = result[end..].find('\n').map_or(end, |p| end + p + 1);
-            result.insert_str(newline_end, "precision highp float;\nprecision highp int;\n");
+            result.insert_str(
+                newline_end,
+                "precision highp float;\nprecision highp int;\n",
+            );
         }
     } else if result.contains("#version 330") {
         result = result.replace("#version 330", "#version 300 es");
         if let Some(pos) = result.find("#version 300 es") {
             let end = pos + "#version 300 es".len();
             let newline_end = result[end..].find('\n').map_or(end, |p| end + p + 1);
-            result.insert_str(newline_end, "precision highp float;\nprecision highp int;\n");
+            result.insert_str(
+                newline_end,
+                "precision highp float;\nprecision highp int;\n",
+            );
         }
     }
     // WebGL requires gl_PointSize in vertex shaders for point rendering.
     // If the shader sets gl_Position but not gl_PointSize, inject a default.
     if result.contains("gl_Position") && !result.contains("gl_PointSize") {
-        result = result.replace(
-            "gl_Position =",
-            "gl_PointSize = 4.0; gl_Position =",
-        );
+        result = result.replace("gl_Position =", "gl_PointSize = 4.0; gl_Position =");
     }
     result
 }
